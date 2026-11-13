@@ -118,6 +118,8 @@ pub struct HyprlandDisplay {
     /// Whose display this is. Set by `set_client_identity` before `create`, so the
     /// per-device topology (`design/web-console-overhaul.md` §6.1) can be resolved here.
     client_fp: Option<[u8; 32]>,
+    /// The session's topology ([`VirtualDisplay::set_topology`]).
+    topology: Option<crate::policy::Topology>,
     /// The identity slot `create` resolves for `client_fp`, peeked by `set_client_identity`
     /// before it: the owner key of this output once kept, and the budget's own-display exemption.
     last_slot: Option<u32>,
@@ -185,6 +187,7 @@ impl HyprlandDisplay {
     pub fn new() -> Result<Self> {
         Ok(HyprlandDisplay {
             client_fp: None,
+            topology: None,
             last_slot: None,
             hw_cursor: false,
             last_cursor_mode: None,
@@ -281,6 +284,14 @@ impl VirtualDisplay for HyprlandDisplay {
         self.client_fp = fingerprint;
         let default = crate::policy::Identity::Shared;
         self.last_slot = crate::identity::peek_slot(fingerprint, (0, 0), default);
+    }
+
+    fn set_topology(&mut self, topology: Option<crate::policy::Topology>) {
+        self.topology = topology;
+    }
+
+    fn topology(&self) -> Option<crate::policy::Topology> {
+        Some(crate::create_topology(self.topology, self.client_fp))
     }
 
     fn last_identity_slot(&self) -> Option<u32> {
@@ -440,7 +451,7 @@ impl VirtualDisplay for HyprlandDisplay {
             "hyprland headless output ready"
         );
         // Last: nothing fails after this, so no path darkens heads and then unwinds.
-        if crate::backend::exclusive_wanted("hyprland", self.client_fp) {
+        if crate::backend::exclusive_wanted("hyprland", self.topology, self.client_fp) {
             disable_other_heads(&name, &mut self.pending_undo);
         }
         // Hyprland gives each replacement an empty workspace. Carry the active

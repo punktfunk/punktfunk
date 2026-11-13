@@ -45,6 +45,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,10 +55,15 @@ import androidx.compose.ui.unit.sp
 import coil3.ImageLoader
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import io.unom.punktfunk.kit.HostText
+import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Say
 import io.unom.punktfunk.kit.library.Download
 import io.unom.punktfunk.kit.library.GameEnd
 import io.unom.punktfunk.kit.library.GameEntry
 import io.unom.punktfunk.kit.library.LibraryClient
+import io.unom.punktfunk.kit.say
 import io.unom.punktfunk.kit.security.IdentityHolder
 import io.unom.punktfunk.models.LaunchHold
 import kotlinx.coroutines.Dispatchers
@@ -77,17 +83,17 @@ private const val LAUNCH_NO_LEASE_S = 15.0
 /**
  * Why the hold is giving up, in one sentence, or null while it should keep waiting.
  *
- * [state] is the host's own `games[]` word for this title, null when the host lists nothing for it
- * at all — which is what a refused launch looks like from here. Every sentence this returns ends
- * the hold with a message and its three actions; `running`, `untracked` and `grace` return null
- * and the caller shows the stream, because those are launches that worked.
+ * [why] is the host's own reason nothing started — its refusal, or a download that stopped — and
+ * is said at once. Else [state] is the host's `games[]` word for this title, null when the host
+ * lists nothing for it at all — which is what a refusal it said nothing about looks like. Every
+ * sentence this returns ends the hold with a message and its three actions; `running`, `untracked`
+ * and `grace` return null and the caller shows the stream, because those are launches that worked.
  */
-internal fun launchGaveUp(title: String, state: String?, elapsed: Double): String? = when {
-    state == null && elapsed >= LAUNCH_NO_LEASE_S ->
-        "The host didn't start $title \u2014 nothing is running for it."
-    state == "launching" && elapsed >= LAUNCH_HOLD_MAX_S ->
-        "$title is still starting after 2 minutes."
-    state == "exited" -> "$title closed right after starting."
+internal fun launchGaveUp(title: String, state: String?, elapsed: Double, why: Say? = null): Say? = when {
+    why != null -> why
+    state == null && elapsed >= LAUNCH_NO_LEASE_S -> say(R.string.lib_hold_gave_up_not_started, title)
+    state == "launching" && elapsed >= LAUNCH_HOLD_MAX_S -> say(R.string.lib_hold_gave_up_slow, title)
+    state == "exited" -> say(R.string.lib_hold_gave_up_exited, title)
     else -> null
 }
 
@@ -126,20 +132,21 @@ object TileFrames {
  * game is actually up.
  *
  * Opaque, so the launcher and desktop behind it are never seen — that is the whole job. Polls the
- * host's `/status` once a second (the Resume badge's lane) and calls [onShow] once the title is up;
- * a tap does the same. When the launch did not produce a game it says so and offers the three moves
+ * host's `/status` once a second (the Resume badge's lane) and session [handle]'s launch verdict,
+ * and calls [onShow] once the title is up; a tap does the same. When the launch did not produce a
+ * game it says so, in the host's words when it sent some, and offers the three moves
  * ([launchGaveUp]), rather than sliding away and leaving the player on a desktop.
  */
 @Composable
-fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit) {
+fun LaunchHoldOverlay(hold: LaunchHold, handle: Long, onRetry: () -> Unit, onShow: () -> Unit) {
     val context = LocalContext.current
     val density = LocalDensity.current
     var loader by remember(hold) { mutableStateOf<ImageLoader?>(null) }
     val flight = remember(hold) { Animatable(0f) }
     var rootInWindow by remember(hold) { mutableStateOf(Rect.Zero) }
     // Non-null replaces the spinner with the message and its actions; the hold stops polling then.
-    var gaveUp by remember(hold) { mutableStateOf<String?>(null) }
-    var ending by remember(hold) { mutableStateOf<String?>(null) }
+    var gaveUp by remember(hold) { mutableStateOf<Say?>(null) }
+    var ending by remember(hold) { mutableStateOf<Say?>(null) }
     var windowWait by remember(hold) { mutableStateOf(false) }
     var download by remember(hold) { mutableStateOf<Download?>(null) }
     val scope = rememberCoroutineScope()
@@ -170,9 +177,11 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
             val game = status.games.firstOrNull { it.appId == hold.game.id }
             val state = game?.state
             val dl = status.downloads.firstOrNull { it.appId == hold.game.id }
+            // The host's own sentence for a launch it did not start: nothing outwaits it.
+            val refused = HostText.launch(NativeBridge.nativeLaunchRefusal(handle))
             // The host fetches the title's files before it starts it: no cap while they come, and
             // the clocks start over once they are in.
-            if (dl?.live == true) {
+            if (refused == null && dl?.live == true) {
                 download = dl
                 began = SystemClock.elapsedRealtime()
                 delay(1_000)
@@ -183,7 +192,7 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
             val stopped = dl?.takeIf { state == null || state == "launching" }
                 ?.stopped(hold.game.title)
             val elapsed = (SystemClock.elapsedRealtime() - began) / 1000.0
-            val said = stopped ?: launchGaveUp(hold.game.title, state, elapsed)
+            val said = launchGaveUp(hold.game.title, state, elapsed, refused ?: stopped)
             if (said != null) {
                 gaveUp = said
                 return@LaunchedEffect
@@ -316,7 +325,7 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
             val facts = listOfNotNull(
                 hold.game.platform,
                 hold.game.releaseYear?.toString(),
-                hold.game.storeLabel,
+                hold.game.storeLabel.asString(),
             ).joinToString(" · ")
             if (facts.isNotEmpty()) {
                 Text(
@@ -331,6 +340,14 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
                 Text(
                     it,
                     color = Color.White.copy(alpha = 0.45f),
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            hold.game.overrides?.summaryWords(context.resources)?.let {
+                Text(
+                    stringResource(R.string.lib_host_override, it),
+                    color = Color.White.copy(alpha = 0.62f),
                     fontSize = 13.sp,
                     modifier = Modifier.padding(top = 4.dp),
                 )
@@ -363,14 +380,17 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
                         modifier = Modifier.padding(top = 24.dp).widthIn(max = 360.dp).fillMaxWidth(),
                     )
                 }
+                // "Downloading" and the segments of the line, joined here.
+                val line = (if (dl.state == "downloading") listOf(say(R.string.lib_hold_downloading)) else emptyList()) +
+                    dl.line()
                 Text(
-                    if (dl.state == "downloading") "Downloading · ${dl.line()}" else dl.line(),
+                    line.joinToString(" · ") { it.words(context.resources) },
                     color = Color.White.copy(alpha = 0.7f),
                     fontSize = 13.sp,
                     modifier = Modifier.padding(top = 10.dp),
                 )
                 Text(
-                    "Leaving won't stop the download.",
+                    stringResource(R.string.lib_hold_leaving),
                     color = Color.White.copy(alpha = 0.4f),
                     fontSize = 12.sp,
                     modifier = Modifier.padding(top = 4.dp),
@@ -386,18 +406,18 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
                         strokeWidth = 2.dp,
                     )
                     Text(
-                        if (windowWait) "Waiting for the game's window\u2026" else "Connecting\u2026",
+                        stringResource(if (windowWait) R.string.lib_hold_waiting_window else R.string.lib_hold_connecting),
                         color = Color.White.copy(alpha = 0.5f),
                         fontSize = 13.sp,
                         modifier = Modifier.padding(start = 9.dp),
                     )
                 }
                 TextButton(onClick = onShow, modifier = Modifier.padding(top = 8.dp)) {
-                    Text("Show stream", color = Color.White)
+                    Text(stringResource(R.string.lib_hold_show_stream), color = Color.White)
                 }
             } else {
                 Text(
-                    said,
+                    said.asString(),
                     color = Color.White.copy(alpha = 0.85f),
                     fontSize = 15.sp,
                     lineHeight = 21.sp,
@@ -405,7 +425,7 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
                 )
                 ending?.let {
                     Text(
-                        it,
+                        it.asString(),
                         color = Color.White.copy(alpha = 0.5f),
                         fontSize = 13.sp,
                         modifier = Modifier.padding(top = 8.dp),
@@ -413,21 +433,21 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
                 }
                 // Stacked, not a row: three labels this long wrap to nothing readable on a phone.
                 TextButton(onClick = onRetry, modifier = Modifier.padding(top = 10.dp)) {
-                    Text("Retry", color = Color.White)
+                    Text(stringResource(R.string.common_retry), color = Color.White)
                 }
                 TextButton(onClick = onShow) {
-                    Text("Show the desktop anyway", color = Color.White)
+                    Text(stringResource(R.string.lib_hold_show_desktop), color = Color.White)
                 }
                 TextButton(
                     enabled = ending == null,
                     onClick = {
-                        ending = "Ending it\u2026"
+                        ending = say(R.string.lib_hold_ending)
                         scope.launch {
                             val id = withContext(Dispatchers.IO) {
                                 IdentityHolder.shared(context).await()
                             }
                             val outcome = if (id == null) {
-                                GameEnd.Failed("this device has no identity yet")
+                                GameEnd.Failed(say(R.string.android_lib_error_no_identity))
                             } else {
                                 withContext(Dispatchers.IO) {
                                     LibraryClient.endGame(
@@ -436,14 +456,14 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
                                 }
                             }
                             ending = when (outcome) {
-                                GameEnd.Ended -> "Ended it \u2014 press Retry to start it again."
-                                GameEnd.NotRunning -> "The host had nothing running for it."
+                                GameEnd.Ended -> say(R.string.lib_hold_ended)
+                                GameEnd.NotRunning -> say(R.string.lib_hold_not_running)
                                 else -> outcome.notice(hold.game.title)
                             }
                         }
                     },
                 ) {
-                    Text("End it on the host", color = Color.White)
+                    Text(stringResource(R.string.lib_hold_end_on_host), color = Color.White)
                 }
             }
         }

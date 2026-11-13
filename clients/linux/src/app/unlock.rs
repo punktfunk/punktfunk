@@ -1,10 +1,12 @@
-//! The password prompt in front of a dial to a profile on a person's own account, and its
-//! return when the host refuses the unlock. The rules are `pf_client_core::unlock`. Linux has
-//! no device keys, so the prompt's one switch is "Stay signed in on this device".
+//! The prompt in front of a dial to a profile on a person's own account, which asks for its
+//! password, or to a locked profile, which asks for its PIN; and its return when the host
+//! refuses the unlock. The rules are `pf_client_core::unlock`. Linux has no device keys, so the
+//! prompt's one switch is "Stay signed in on this device".
 
 use super::*;
 use pf_client_core::profiles;
 use pf_client_core::unlock::{self, Gate};
+use pf_l10n::{client, common};
 use punktfunk_core::quic::v2::msg::Zeroizing;
 
 impl AppModel {
@@ -100,9 +102,9 @@ impl AppModel {
         }
     }
 
-    /// The prompt: a masked field, the one switch (off), and `error` from the host above the
-    /// field. Sign In spawns the session with the unlock on its stdin; Cancel and Escape dial
-    /// nothing.
+    /// The prompt: a masked field for the password, or the PIN where `row` is locked, the one
+    /// switch (off), and `error` from the host above the field. Sign In spawns the session with
+    /// the unlock on its stdin; what was typed is wiped then. Cancel and Escape dial nothing.
     pub(super) fn unlock_prompt(
         &self,
         req: ConnectRequest,
@@ -112,15 +114,20 @@ impl AppModel {
         error: Option<String>,
         sender: &ComponentSender<Self>,
     ) {
+        let pin = row.unlock.pin();
         let Prompt {
             dialog,
             entry,
             stay,
-        } = prompt(&row.display_name, &req.host.name, error.as_deref());
+        } = prompt((&row.display_name, &req.host.name), pin, error.as_deref());
         let out = sender.input_sender().clone();
         dialog.connect_response(Some("unlock"), move |_, _| {
-            let password = take_password(&entry);
-            let msg = match unlock::prompt_unlock(password, stay.is_active(), None) {
+            let typed = take_password(&entry);
+            let made = match pin {
+                true => unlock::pin_unlock(&typed, stay.is_active(), None),
+                false => unlock::prompt_unlock(typed, stay.is_active(), None),
+            };
+            let msg = match made {
                 Ok(u) => AppMsg::StartSession {
                     req: req.clone(),
                     fp_hex: fp_hex.clone(),
@@ -152,9 +159,9 @@ struct Prompt {
     stay: gtk::Switch,
 }
 
-/// The dialog for profile `name` on `host`. Its responses are `cancel`, also its close
-/// response, and `unlock`.
-fn prompt(name: &str, host: &str, error: Option<&str>) -> Prompt {
+/// The dialog for profile `name` on `host`, asking for its PIN when `pin`. Its responses are
+/// `cancel`, also its close response, and `unlock`.
+fn prompt((name, host): (&str, &str), pin: bool, error: Option<&str>) -> Prompt {
     let fields = gtk::Box::new(gtk::Orientation::Vertical, 6);
     if let Some(error) = error {
         fields.append(
@@ -167,21 +174,32 @@ fn prompt(name: &str, host: &str, error: Option<&str>) -> Prompt {
         );
     }
     let caption = gtk::Label::builder()
-        .label("Password")
+        .label(match pin {
+            true => client::unlock_pin(),
+            false => client::unlock_password(),
+        })
         .halign(gtk::Align::Start)
         .css_classes(["caption", "dim-label"])
         .build();
-    let entry = gtk::PasswordEntry::builder()
+    let mut entry = gtk::PasswordEntry::builder()
         .show_peek_icon(true)
-        .activates_default(true)
-        .build();
+        .activates_default(true);
+    if pin {
+        entry = entry.placeholder_text(client::unlock_pin_placeholder());
+    }
+    let entry = entry.build();
+    // A touch keyboard opens on its digits.
+    let text = entry.delegate().and_downcast::<gtk::Text>();
+    if let Some(text) = text.filter(|_| pin) {
+        text.set_input_purpose(gtk::InputPurpose::Pin);
+    }
     entry.update_relation(&[gtk::accessible::Relation::LabelledBy(&[
         caption.upcast_ref()
     ])]);
     fields.append(&caption);
     fields.append(&entry);
     let stay_label = gtk::Label::builder()
-        .label("Stay signed in on this device")
+        .label(client::unlock_stay_signed_in())
         .hexpand(true)
         .xalign(0.0)
         .wrap(true)
@@ -196,12 +214,16 @@ fn prompt(name: &str, host: &str, error: Option<&str>) -> Prompt {
     stay_line.append(&stay);
     fields.append(&stay_line);
 
-    let dialog = adw::AlertDialog::new(
-        Some(&format!("Sign in as {name}")),
-        Some(&format!("Enter the password for this account on {host}.")),
-    );
+    let intro = match pin {
+        true => client::unlock_pin_intro(host),
+        false => client::unlock_intro(host),
+    };
+    let dialog = adw::AlertDialog::new(Some(&client::unlock_title(name)), Some(&intro));
     dialog.set_extra_child(Some(&fields));
-    dialog.add_responses(&[("cancel", "Cancel"), ("unlock", "Sign In")]);
+    dialog.add_responses(&[
+        ("cancel", common::common_cancel()),
+        ("unlock", client::unlock_sign_in()),
+    ]);
     dialog.set_response_appearance("unlock", adw::ResponseAppearance::Suggested);
     dialog.set_default_response(Some("unlock"));
     dialog.set_close_response("cancel");
@@ -242,7 +264,7 @@ mod tests {
     fn the_prompt_reads_its_password_once_and_cancel_sends_nothing() {
         assert!(gtk::init().is_ok(), "no display");
         adw::init().unwrap();
-        let p = prompt("Kid", "Desk", Some("Wrong password."));
+        let p = prompt(("Kid", "Desk"), false, Some("Wrong password."));
         assert!(!p.stay.is_active());
         p.entry.set_text(" s3cret pw ");
         assert_eq!(take_password(&p.entry).as_slice(), b" s3cret pw ");

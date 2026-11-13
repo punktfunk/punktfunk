@@ -19,13 +19,10 @@ struct PunktfunkSessionLiveActivity: Widget {
             LockScreenView(context: context)
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
-            // Island layout (2026-07 rebuild): the EXPANDED island leads with identity (brand
-            // glyph + host), keeps the elapsed clock at the trailing edge, and gives the bottom
-            // region one purposeful row — session status + the live numbers on the left, the
-            // End action on the right. COMPACT shows the one number worth a glance: live
-            // latency while streaming (the sparse ~30 s pushes), the disconnect countdown while
-            // backgrounded, a state glyph otherwise. Brand purple is the identity accent
-            // everywhere `.tint` used to leak system blue.
+            // The EXPANDED island leads with identity (brand glyph + host), keeps the elapsed
+            // clock at the trailing edge, and gives the bottom region the session status and
+            // the End action. COMPACT shows one number: the elapsed clock while streaming, the
+            // disconnect countdown while backgrounded, a state glyph otherwise.
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 6) {
@@ -47,23 +44,14 @@ struct PunktfunkSessionLiveActivity: Widget {
                         .padding(.trailing, 4)
                         .padding(.top, 2)
                 }
-                DynamicIslandExpandedRegion(.center) {
-                    if let title = context.attributes.launchTitle {
-                        Text(title)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
                 DynamicIslandExpandedRegion(.bottom) {
-                    // The expanded island's height is there to be used: one info row (status
-                    // leading, live numbers trailing — the mode string stays on the Lock
-                    // Screen), then the platform-conventional LARGE full-width action button.
+                    // The expanded island's height is there to be used: the status row (the
+                    // mode string stays on the Lock Screen), then the platform-conventional
+                    // LARGE full-width action button.
                     VStack(spacing: 10) {
                         HStack {
                             StatusLine(state: context.state)
                             Spacer(minLength: 8)
-                            StatsLine(state: context.state, showMode: false)
                         }
                         Spacer(minLength: 0) // any slack height goes here — button hugs the bottom
                         EndButton(fullWidth: true)
@@ -104,11 +92,11 @@ private struct LockScreenView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
-                if let title = context.attributes.launchTitle {
-                    Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
                 StatusLine(state: context.state)
-                StatsLine(state: context.state)
+                Text(context.state.modeLine)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
             if context.state.stage == .background {
                 EndButton()
@@ -162,7 +150,6 @@ private struct StatusLine: View {
         switch state.stage {
         case .streaming: return .green
         case .background: return .orange
-        case .reconnecting: return .yellow
         case .ending: return .secondary
         }
     }
@@ -170,79 +157,33 @@ private struct StatusLine: View {
     @ViewBuilder private var label: some View {
         switch state.stage {
         case .streaming:
-            Text("Streaming")
+            Text(L10n.appleLiveStreaming)
         case .background:
             if let deadline = state.backgroundDeadline {
                 HStack(spacing: 3) {
-                    Text("Background · ends in")
+                    Text(L10n.appleLiveBackgroundEndsIn)
                     CountdownClock(deadline: deadline)
                 }
             } else {
-                Text("Running in background")
+                Text(L10n.appleLiveBackground)
             }
-        case .reconnecting:
-            Text("Reconnecting…")
         case .ending:
-            Text("Session ended")
+            Text(L10n.appleLiveEnded)
         }
     }
 }
 
-/// The live numbers, one quiet line: latency and bitrate (the sparse ~30 s pushes) ahead of the
-/// mode (`showMode` false on the island, where the row shares space with the status line).
-/// Anything unreported simply doesn't appear.
-private struct StatsLine: View {
-    let state: PunktfunkSessionAttributes.ContentState
-    var showMode = true
-
-    var body: some View {
-        HStack(spacing: 8) {
-            if let ms = state.latencyMs {
-                stat("bolt.fill", "\(ms) ms")
-            }
-            if let mbps = state.mbps {
-                stat("arrow.down", String(format: "%.0f Mb/s", mbps))
-            }
-            if showMode {
-                Text(state.modeLine)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-        }
-    }
-
-    private func stat(_ icon: String, _ text: String) -> some View {
-        HStack(spacing: 3) {
-            Image(systemName: icon)
-                .font(.system(size: 8, weight: .semibold))
-            Text(text)
-                .font(.caption2)
-                .monospacedDigit()
-        }
-        .foregroundStyle(.secondary)
-    }
-}
-
-/// The compact trailing readout — the island's one glanceable number. Streaming: the live
-/// latency once the app has reported one, the elapsed clock until then. Backgrounded: the
-/// auto-disconnect countdown. Off-nominal stages show a state glyph instead of a number.
+/// The compact trailing readout — the island's one glanceable number. Streaming: the elapsed
+/// clock. Backgrounded: the auto-disconnect countdown. Ending shows a state glyph.
 private struct CompactReadout: View {
     let state: PunktfunkSessionAttributes.ContentState
 
     var body: some View {
         switch state.stage {
         case .streaming:
-            if let ms = state.latencyMs {
-                Text("\(ms) ms")
-                    .font(.caption2.weight(.medium))
-                    .monospacedDigit()
-                    .foregroundStyle(.green)
-            } else {
-                ElapsedClock(startedAt: state.startedAt)
-                    .font(.caption2)
-                    .frame(maxWidth: 48)
-            }
+            ElapsedClock(startedAt: state.startedAt)
+                .font(.caption2)
+                .frame(maxWidth: 48)
         case .background:
             if let deadline = state.backgroundDeadline {
                 CountdownClock(deadline: deadline)
@@ -253,8 +194,6 @@ private struct CompactReadout: View {
             } else {
                 Image(systemName: "moon.fill").foregroundStyle(.orange)
             }
-        case .reconnecting:
-            Image(systemName: "wifi.exclamationmark").foregroundStyle(.yellow)
         case .ending:
             Image(systemName: "stop.fill").foregroundStyle(.secondary)
         }
@@ -270,7 +209,7 @@ private struct EndButton: View {
     var body: some View {
         if fullWidth {
             Button(intent: EndStreamIntent()) {
-                Label("End Session", systemImage: "stop.fill")
+                Label(L10n.appleLiveEndSession, systemImage: "stop.fill")
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 2)
@@ -279,7 +218,7 @@ private struct EndButton: View {
             .buttonStyle(.bordered)
         } else {
             Button(intent: EndStreamIntent()) {
-                Label("End", systemImage: "stop.fill")
+                Label(L10n.appleLiveEnd, systemImage: "stop.fill")
                     .font(.caption).bold()
             }
             .tint(.red)
@@ -290,16 +229,13 @@ private struct EndButton: View {
 
 // MARK: - Previews (Xcode canvas)
 //
-// Select the PunktfunkWidgetsExtension scheme and open the canvas (⌥⌘↩) — the activity
-// `#Preview(as:using:)` form renders every surface WITHOUT running the app or starting a real
-// Activity: `.content` is the Lock Screen banner, `.dynamicIsland(.expanded/.compact/.minimal)`
-// the island states (canvas device must be a Dynamic Island phone for those). Each listed
-// content state becomes a frame in the canvas timeline strip, so all four session stages are one
-// click apart. Sample state lives here (fileprivate), never in PunktfunkShared.
+// The PunktfunkWidgetsExtension scheme's canvas renders every surface without starting an
+// Activity; the island states need a Dynamic Island phone as the canvas device. Each content
+// state is one frame of the timeline strip. Sample state stays fileprivate.
 
 extension PunktfunkSessionAttributes {
     fileprivate static var preview: PunktfunkSessionAttributes {
-        PunktfunkSessionAttributes(hostID: UUID(), hostName: "Studio", launchTitle: "Hades II")
+        PunktfunkSessionAttributes(hostID: UUID(), hostName: "Studio")
     }
 }
 
@@ -307,18 +243,13 @@ extension PunktfunkSessionAttributes.ContentState {
     fileprivate static var streaming: Self {
         .init(
             stage: .streaming, startedAt: .now.addingTimeInterval(-754),
-            modeLine: "2752×2064 @120 · HEVC · HDR", latencyMs: 8, mbps: 84.2)
+            modeLine: "2752×2064 @120 · HEVC · HDR")
     }
     fileprivate static var backgrounded: Self {
         .init(
             stage: .background, startedAt: .now.addingTimeInterval(-1975),
             modeLine: "2752×2064 @120 · HEVC · HDR",
             backgroundDeadline: .now.addingTimeInterval(9 * 60))
-    }
-    fileprivate static var reconnecting: Self {
-        .init(
-            stage: .reconnecting, startedAt: .now.addingTimeInterval(-754),
-            modeLine: "2752×2064 @120 · HEVC · HDR")
     }
     fileprivate static var ended: Self {
         .init(
@@ -332,7 +263,6 @@ extension PunktfunkSessionAttributes.ContentState {
 } contentStates: {
     PunktfunkSessionAttributes.ContentState.streaming
     PunktfunkSessionAttributes.ContentState.backgrounded
-    PunktfunkSessionAttributes.ContentState.reconnecting
     PunktfunkSessionAttributes.ContentState.ended
 }
 

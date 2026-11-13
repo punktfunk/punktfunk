@@ -1,13 +1,16 @@
-//! A preset's own screens, reached from the Presets tab: its menu, its name, and its
-//! settings. The console never writes the catalog itself; each change leaves as
+//! A preset's own screens, reached from the Presets tab: where a new one starts, its menu, its
+//! name, and its settings. The console never writes the catalog itself; each change leaves as
 //! [`ConsoleCmd::SavePreset`] or [`ConsoleCmd::DeletePreset`] and comes back as the host's
 //! next catalog push.
 //!
 //! The editor shows every row a preset can hold, at the preset's value over the global one.
 //! A step pins that row's field ([`SettingsOverlay::pin`]), even at the global value; X clears
-//! it, so the row follows the global value again.
+//! it, so the row follows the global value again. A row that is a page of its own (Shortcuts,
+//! Quick actions) opens that page in the preset's [`Scope`].
 
-use super::settings::rows::{adjust, advanced, overrides_row, preset_field, preset_rows, row_spec};
+use super::settings::rows::{
+    adjust, advanced, overrides_row, preset_field, preset_rows, row_spec, Section,
+};
 use crate::glyphs::{Hint, HintKey};
 use crate::model::ConsoleCmd;
 use crate::pointer::Pointer;
@@ -15,9 +18,12 @@ use crate::screens::{Ctx, EditField, Outbox, Screen, ScreenView, TextEntry};
 use crate::theme::Fonts;
 use crate::widgets::{blurb, field_key, type_text, Entry, ListMsg, MenuList, RowSpec};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
-use pf_client_core::presets::SettingsOverlay;
+use pf_client_core::presets::{SettingsOverlay, StreamPreset};
 use pf_client_core::trust::Settings;
+use pf_l10n::{client, common, console};
 use skia_safe::{Canvas, Rect};
+use std::borrow::Cow;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 fn save(id: &str, name: &str, overlay: &SettingsOverlay) -> ConsoleCmd {
     ConsoleCmd::SavePreset {
@@ -27,9 +33,60 @@ fn save(id: &str, name: &str, overlay: &SettingsOverlay) -> ConsoleCmd {
     }
 }
 
-/// `“name”`, as every preset screen names it.
-fn quoted(name: &str) -> String {
-    format!("\u{201c}{name}\u{201d}")
+/// A preset under edit. Its editor and every page it opens share one, so each save carries
+/// all the changes made under it.
+pub(crate) struct PresetDraft {
+    pub id: String,
+    pub name: String,
+    pub overlay: SettingsOverlay,
+}
+
+/// Where a page reads and writes its settings: the device's, or a preset's over them.
+#[derive(Clone, Default)]
+pub(crate) enum Scope {
+    #[default]
+    Global,
+    Preset(Arc<Mutex<PresetDraft>>),
+}
+
+fn lock(draft: &Mutex<PresetDraft>) -> MutexGuard<'_, PresetDraft> {
+    draft.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl Scope {
+    /// The settings the page shows: in preset scope, the preset's over the global ones.
+    pub(crate) fn settings<'a>(&self, ctx: &'a Ctx) -> Cow<'a, Settings> {
+        match self {
+            Scope::Global => Cow::Borrowed(&*ctx.settings),
+            Scope::Preset(d) => Cow::Owned(lock(d).overlay.apply(ctx.settings)),
+        }
+    }
+
+    /// Runs `f` over the scope's settings and keeps what it did to `field`: the device's
+    /// file, or the preset's overlay, sent to the host.
+    pub(crate) fn write(
+        &self,
+        field: &str,
+        ctx: &mut Ctx,
+        fx: &mut Outbox,
+        f: impl FnOnce(&mut Settings),
+    ) {
+        match self {
+            Scope::Global => {
+                ctx.write(|c| {
+                    f(c.settings);
+                    true
+                });
+            }
+            Scope::Preset(d) => {
+                let mut d = lock(d);
+                let mut s = d.overlay.apply(ctx.settings);
+                f(&mut s);
+                d.overlay.pin(field, &s);
+                fx.cmds.push(save(&d.id, &d.name, &d.overlay));
+            }
+        }
+    }
 }
 
 // --- the menu --------------------------------------------------------------------------------
@@ -112,7 +169,7 @@ impl PresetMenu {
                 fx.cmds.push(ConsoleCmd::DeletePreset {
                     id: self.id.clone(),
                 });
-                fx.toast = Some(format!("Deleted {}", quoted(&self.name)));
+                fx.toast = Some(console::console_preset_deleted(&self.name));
                 fx.pop();
             }
         }
@@ -122,7 +179,7 @@ impl PresetMenu {
 
 impl ScreenView for PresetMenu {
     fn title(&self) -> String {
-        format!("Preset {}", quoted(&self.name))
+        console::console_preset_title(&self.name)
     }
 
     fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
@@ -145,8 +202,8 @@ impl ScreenView for PresetMenu {
 
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         vec![
-            Hint::new(HintKey::Confirm, "Select"),
-            Hint::new(HintKey::Back, "Back"),
+            Hint::new(HintKey::Confirm, common::common_select()),
+            Hint::new(HintKey::Back, common::common_back()),
         ]
     }
 
@@ -175,11 +232,11 @@ impl ScreenView for PresetMenu {
             .map(|item| {
                 let mut row = RowSpec::action(
                     match item {
-                        Item::Edit => "Edit settings\u{2026}",
-                        Item::Rename => "Rename\u{2026}",
-                        Item::Pin => "Pin to hosts\u{2026}",
-                        Item::Delete if self.armed => "Delete preset \u{2014} press again",
-                        Item::Delete => "Delete preset",
+                        Item::Edit => console::console_preset_menu_edit_settings(),
+                        Item::Rename => client::preset_menu_rename(),
+                        Item::Pin => console::console_preset_menu_pin(),
+                        Item::Delete if self.armed => console::console_preset_delete_confirm(),
+                        Item::Delete => console::console_preset_delete(),
                     },
                     true,
                 );
@@ -189,6 +246,105 @@ impl ScreenView for PresetMenu {
             .collect();
         self.list
             .render(canvas, ui, rect, &rows, fonts, k, dt, true);
+    }
+
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
+    }
+}
+
+// --- the starter -----------------------------------------------------------------------------
+
+/// Where a new preset starts: Empty names it first; Second screen saves the starter under a
+/// free name and opens its settings, two presses from the Presets tab.
+pub(crate) struct PresetStarter {
+    list: MenuList,
+}
+
+/// Empty, then Second screen.
+const STARTERS: usize = 2;
+
+impl PresetStarter {
+    pub(crate) fn new() -> PresetStarter {
+        PresetStarter {
+            list: MenuList::new(),
+        }
+    }
+
+    fn run(&self, ctx: &Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if self.list.cursor == 0 {
+            fx.replace(Screen::PresetName(PresetName::new()));
+            return Some(MenuPulse::Confirm);
+        }
+        let presets = ctx.store.presets();
+        let p = StreamPreset::second_screen(|n| {
+            (presets.iter()).any(|(_, other)| other.eq_ignore_ascii_case(n))
+        });
+        fx.cmds.push(save(&p.id, &p.name, &p.overrides));
+        fx.replace(Screen::PresetEdit(PresetEdit::new(
+            p.id,
+            p.name,
+            p.overrides,
+        )));
+        Some(MenuPulse::Confirm)
+    }
+}
+
+impl ScreenView for PresetStarter {
+    fn title(&self) -> String {
+        client::preset_new_title().into()
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if ev == MenuEvent::Back {
+            fx.pop();
+            return None;
+        }
+        match self.list.menu(ev, STARTERS) {
+            (ListMsg::Activate, _) => self.run(ctx, fx),
+            (ListMsg::Adjust(_), _) => Some(MenuPulse::Boundary),
+            (ListMsg::None, pulse) => pulse,
+        }
+    }
+
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        let (msg, pulse) = self.list.pointer(p, STARTERS);
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        if matches!(msg, ListMsg::Activate) {
+            self.run(ctx, fx);
+        }
+        true
+    }
+
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+        vec![
+            Hint::new(HintKey::Confirm, common::common_select()),
+            Hint::new(HintKey::Back, common::common_back()),
+        ]
+    }
+
+    fn render(
+        &mut self,
+        canvas: &Canvas,
+        rect: Rect,
+        k: f64,
+        dt: f64,
+        fonts: &Fonts,
+        ctx: &mut Ctx,
+    ) {
+        let rows = [
+            RowSpec::action(client::preset_starter_empty(), true),
+            RowSpec::action(client::screen_role_second(), true)
+                .with_note(client::screen_role_second_hint()),
+        ];
+        self.list
+            .render(canvas, ctx.ui, rect, &rows, fonts, k, dt, true);
     }
 
     fn press(&mut self) {
@@ -258,7 +414,7 @@ impl PresetName {
         let taken = (ctx.store.presets().iter())
             .any(|(id, other)| Some(id) != self.id.as_ref() && other.eq_ignore_ascii_case(&name));
         if taken {
-            self.error = Some(format!("A preset is already called {}.", quoted(&name)));
+            self.error = Some(client::preset_name_taken(&name));
             self.editing = false;
             return Some(MenuPulse::Boundary);
         }
@@ -281,8 +437,8 @@ impl PresetName {
 impl ScreenView for PresetName {
     fn title(&self) -> String {
         match self.id {
-            Some(_) => "Rename Preset".into(),
-            None => "New Preset".into(),
+            Some(_) => client::preset_rename_title().into(),
+            None => client::preset_new_title().into(),
         }
     }
 
@@ -292,7 +448,7 @@ impl ScreenView for PresetName {
 
     fn edit_field(&self) -> Option<EditField> {
         let field = EditField {
-            label: "Name".into(),
+            label: client::preset_name().into(),
             text: self.name.clone(),
             digits: false,
             secure: false,
@@ -385,11 +541,11 @@ impl ScreenView for PresetName {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing {
-            return self.keyboard.hints(ctx.device, "Save");
+            return self.keyboard.hints(ctx.device, common::common_save());
         }
         vec![
-            Hint::new(HintKey::Confirm, "Select"),
-            Hint::new(HintKey::Back, "Cancel"),
+            Hint::new(HintKey::Confirm, common::common_select()),
+            Hint::new(HintKey::Back, common::common_cancel()),
         ]
     }
 
@@ -403,10 +559,7 @@ impl ScreenView for PresetName {
         ctx: &mut Ctx,
     ) {
         let ui = ctx.ui;
-        let text = self.error.as_deref().unwrap_or(
-            "Name it for what it is for: Couch, Low latency, Travel. The name shows on the \
-             cards it is pinned to.",
-        );
+        let text = (self.error.as_deref()).unwrap_or(console::console_preset_name_hint());
         let below = blurb(canvas, ui, fonts, text, rect, k);
         self.keyboard.seat(self.editing, ctx.device, dt);
         let tray_h = self.keyboard.reserve(k);
@@ -416,9 +569,17 @@ impl ScreenView for PresetName {
             rect.right,
             rect.bottom - tray_h as f32,
         );
-        let mut field = RowSpec::field("Name", self.name.clone(), "Preset name");
+        let mut field = RowSpec::field(
+            client::preset_name(),
+            self.name.clone(),
+            client::preset_name_placeholder(),
+        );
         field.caret = self.editing;
-        let action = if self.id.is_some() { "Save" } else { "Create" };
+        let action = if self.id.is_some() {
+            common::common_save()
+        } else {
+            common::common_create()
+        };
         let rows = [field, RowSpec::action(action, !self.name.trim().is_empty())];
         self.list.lift = self.keyboard.lift(rect, k);
         self.list
@@ -438,25 +599,46 @@ impl ScreenView for PresetName {
 // --- the settings ----------------------------------------------------------------------------
 
 pub(crate) struct PresetEdit {
-    id: String,
-    name: String,
-    overlay: SettingsOverlay,
+    draft: Arc<Mutex<PresetDraft>>,
     list: MenuList,
 }
 
 impl PresetEdit {
     pub(crate) fn new(id: String, name: String, overlay: SettingsOverlay) -> PresetEdit {
         PresetEdit {
-            id,
-            name,
-            overlay,
+            draft: Arc::new(Mutex::new(PresetDraft { id, name, overlay })),
             list: MenuList::new(),
         }
     }
 
+    fn overlay(&self) -> SettingsOverlay {
+        lock(&self.draft).overlay.clone()
+    }
+
+    fn save(&self) -> ConsoleCmd {
+        let d = lock(&self.draft);
+        save(&d.id, &d.name, &d.overlay)
+    }
+
+    /// A row that is a page of its own opens that page over this preset.
+    fn open(&self, id: super::settings::rows::RowId, ctx: &Ctx, fx: &mut Outbox) -> bool {
+        use super::settings::rows::RowId;
+        let scope = Scope::Preset(self.draft.clone());
+        match id {
+            RowId::ShortcutsPage => fx.push(Screen::Shortcuts(
+                super::shortcuts::ShortcutsScreen::new(ctx, scope),
+            )),
+            RowId::QuickActions => fx.push(Screen::RingEditor(Box::new(
+                super::ring_editor::RingEditorScreen::new(ctx, scope),
+            ))),
+            _ => return false,
+        }
+        true
+    }
+
     /// `f` sees `ctx.settings` as the preset streams them: the overlay over the global.
     fn in_preset<R>(&self, ctx: &mut Ctx, f: impl FnOnce(&mut Ctx) -> R) -> R {
-        let preset = self.overlay.apply(ctx.settings);
+        let preset = self.overlay().apply(ctx.settings);
         let global = std::mem::replace(ctx.settings, preset);
         let out = f(ctx);
         *ctx.settings = global;
@@ -465,12 +647,12 @@ impl PresetEdit {
 
     /// The preset's rows. An advanced one shows under Show advanced, or while this preset
     /// overrides it, so no override is ever out of sight.
-    fn rows(&self, ctx: &mut Ctx) -> Vec<(&'static str, super::settings::rows::RowId)> {
-        let overlay = &self.overlay;
+    fn rows(&self, ctx: &mut Ctx) -> Vec<(Section, super::settings::rows::RowId)> {
+        let overlay = self.overlay();
         self.in_preset(ctx, |ctx| {
             let all = ctx.settings.show_advanced;
             (preset_rows(ctx).into_iter())
-                .filter(|(_, id)| all || !advanced(*id) || overrides_row(*id, overlay))
+                .filter(|(_, id)| all || !advanced(*id) || overrides_row(*id, &overlay))
                 .collect()
         })
     }
@@ -492,7 +674,7 @@ impl PresetEdit {
             o.pin(field, s);
             o
         };
-        let before = self.overlay.apply(ctx.settings);
+        let before = self.overlay().apply(ctx.settings);
         let after = self.in_preset(ctx, |ctx| {
             if !adjust(id, delta, wrap, ctx) {
                 return None;
@@ -508,16 +690,16 @@ impl PresetEdit {
             return Some(MenuPulse::Boundary);
         };
         if held(&before) != held(&after) {
-            self.overlay.pin(field, &after);
+            lock(&self.draft).overlay.pin(field, &after);
         }
-        fx.cmds.push(save(&self.id, &self.name, &self.overlay));
+        fx.cmds.push(self.save());
         Some(MenuPulse::Move)
     }
 }
 
 impl ScreenView for PresetEdit {
     fn title(&self) -> String {
-        format!("Preset {}", quoted(&self.name))
+        console::console_preset_title(&lock(&self.draft).name)
     }
 
     fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
@@ -529,10 +711,10 @@ impl ScreenView for PresetEdit {
         let focused = rows.get(self.list.cursor).map(|(_, id)| *id);
         if ev == MenuEvent::Tertiary {
             let field = focused.and_then(preset_field)?;
-            if !self.overlay.clear(field) {
+            if !lock(&self.draft).overlay.clear(field) {
                 return Some(MenuPulse::Boundary);
             }
-            fx.cmds.push(save(&self.id, &self.name, &self.overlay));
+            fx.cmds.push(self.save());
             return Some(MenuPulse::Confirm);
         }
         let (msg, pulse) = self.list.menu(ev, rows.len());
@@ -544,6 +726,9 @@ impl ScreenView for PresetEdit {
         let Some(id) = focused else {
             return pulse;
         };
+        if msg == ListMsg::Activate && self.open(id, ctx, fx) {
+            return Some(MenuPulse::Confirm);
+        }
         self.step(id, delta, wrap, ctx, fx)
     }
 
@@ -554,7 +739,9 @@ impl ScreenView for PresetEdit {
             return false;
         }
         if let (ListMsg::Activate, Some((_, id))) = (msg, rows.get(self.list.cursor)) {
-            self.step(*id, 1, true, ctx, fx);
+            if !self.open(*id, ctx, fx) {
+                self.step(*id, 1, true, ctx, fx);
+            }
         }
         true
     }
@@ -562,9 +749,9 @@ impl ScreenView for PresetEdit {
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         let _ = ctx;
         vec![
-            Hint::new(HintKey::Adjust, "Change"),
-            Hint::new(HintKey::Tertiary, "Use global"),
-            Hint::new(HintKey::Back, "Done"),
+            Hint::new(HintKey::Adjust, common::common_change()),
+            Hint::new(HintKey::Tertiary, console::console_hint_use_global()),
+            Hint::new(HintKey::Back, common::common_done()),
         ]
     }
 
@@ -578,24 +765,18 @@ impl ScreenView for PresetEdit {
         ctx: &mut Ctx,
     ) {
         let ui = ctx.ui;
-        let below = blurb(
-            canvas,
-            ui,
-            fonts,
-            "A dot marks what this preset changes; everything else follows Settings. X puts a \
-             row back on the global value.",
-            rect,
-            k,
-        );
-        let overlay = self.overlay.clone();
+        // The Tertiary button's name is data, never part of the message.
+        let hint = console::console_preset_editor_hint("X");
+        let below = blurb(canvas, ui, fonts, &hint, rect, k);
+        let overlay = self.overlay();
         let listed = self.rows(ctx);
         let rows: Vec<RowSpec> = self.in_preset(ctx, |ctx| {
-            let mut last = "";
+            let mut last = None;
             (listed.into_iter())
-                .map(|(tab, id)| {
+                .map(|(section, id)| {
                     let mut spec = row_spec(id, ctx, &[], &Default::default());
-                    spec.header = (tab != last).then_some(tab);
-                    last = tab;
+                    spec.header = (Some(section) != last).then(|| section.name());
+                    last = Some(section);
                     spec.dot = overrides_row(id, &overlay);
                     spec
                 })
@@ -715,6 +896,93 @@ mod tests {
         );
         assert!(
             matches!(fx.nav, Some(Nav::Replace(ref b)) if matches!(**b, Screen::PresetEdit(_)))
+        );
+    }
+
+    /// Second screen saves the starter and opens its settings in one press; Empty names first.
+    #[test]
+    fn the_second_screen_starter_saves_and_opens_its_settings() {
+        let mut s = PresetStarter::new();
+        let mut fx = Outbox::default();
+        with_ctx(|ctx| s.menu(MenuEvent::Confirm, ctx, &mut fx));
+        assert!(fx.cmds.is_empty());
+        assert!(
+            matches!(fx.nav, Some(Nav::Replace(ref b)) if matches!(**b, Screen::PresetName(_)))
+        );
+
+        let mut fx = Outbox::default();
+        with_ctx(|ctx| {
+            s.menu(MenuEvent::Move(MenuDir::Down), ctx, &mut fx);
+            s.menu(MenuEvent::Confirm, ctx, &mut fx)
+        });
+        let Some(ConsoleCmd::SavePreset { name, .. }) = fx.cmds.last() else {
+            panic!("no save: {:?}", fx.cmds);
+        };
+        assert_eq!(name, "Second screen");
+        let only_the_screen = SettingsOverlay {
+            host_screen: Some("second".into()),
+            ..Default::default()
+        };
+        assert_eq!(saved(&fx), only_the_screen);
+        assert!(
+            matches!(fx.nav, Some(Nav::Replace(ref b)) if matches!(**b, Screen::PresetEdit(_)))
+        );
+    }
+
+    /// The Host screen row steps from the host card's pick through the roles to each known
+    /// host's monitors; back on the first it pins nothing.
+    #[test]
+    fn the_host_screen_row_steps_through_the_roles_and_monitors() {
+        use pf_client_core::display_targets::{Target, Targets};
+        let mut s = PresetEdit::new("p1".into(), "Couch".into(), SettingsOverlay::default());
+        let tower = crate::model::HostRow {
+            screens: Some(Targets {
+                targets: vec![Target {
+                    id: "HDMI-A-1".into(),
+                    label: "LG TV".into(),
+                    ..Target::default()
+                }],
+                ..Targets::default()
+            }),
+            ..crate::model::HostRow::fixture("aa", "Tower")
+        };
+        let hosts = [tower];
+        let mut settings = Settings::default();
+        let library = crate::library::LibraryShared::default();
+        let mut ctx = Ctx {
+            hosts: &hosts,
+            ..Ctx::test(&mut settings, &library)
+        };
+        fn value(s: &PresetEdit, ctx: &mut Ctx) -> Option<String> {
+            let spec = s.in_preset(ctx, |ctx| {
+                row_spec(RowId::HostScreen, ctx, &[], &Default::default())
+            });
+            spec.value
+        }
+        let row = s
+            .rows(&mut ctx)
+            .iter()
+            .position(|(_, id)| *id == RowId::HostScreen);
+        s.list.cursor = row.expect("a preset row on the desktop");
+        assert_eq!(value(&s, &mut ctx).as_deref(), Some("As on the host card"));
+        let mut fx = Outbox::default();
+        let mut picks = Vec::new();
+        for _ in 0..4 {
+            s.menu(MenuEvent::Move(MenuDir::Right), &mut ctx, &mut fx);
+            picks.push(saved(&fx).host_screen.unwrap_or_default());
+        }
+        assert_eq!(picks, ["only", "main", "second", "monitor:HDMI-A-1"]);
+        assert_eq!(
+            value(&s, &mut ctx).as_deref(),
+            Some("LG TV \u{b7} HDMI-A-1 \u{2014} Tower")
+        );
+        for _ in 0..4 {
+            s.menu(MenuEvent::Move(MenuDir::Left), &mut ctx, &mut fx);
+        }
+        assert_eq!(
+            saved(&fx),
+            SettingsOverlay::default(),
+            "the card's pick is no pin"
         );
     }
 

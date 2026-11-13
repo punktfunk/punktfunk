@@ -65,6 +65,19 @@ Do not add a player-facing setting without the maintainer's yes. First make it a
 the OS, or fix the detection. Automatic means automatic; never override what the player picked.
 Rules and examples: `docs/settings.md`.
 
+## Localization
+
+Text a person reads is a message in `l10n/messages`, never a new literal. How, and what stays
+English: `docs/l10n.md`. Wording rules: `docs/writing.md` §4d.
+
+- Add messages; never reword or rename one that exists without the maintainer's yes. A key is
+  unique across every part, `web` included: search them all first.
+- Text is never identity. Do not compare, parse or key a map on a message; give it an id.
+- One message is one whole sentence. A count is a plural message. No button, key chord or device
+  in prose.
+- `cargo run -p pf-l10n -- check` and `python3 scripts/l10n-census.py . --check` stay green. The
+  census only falls: after moving text, run it with `--update`.
+
 ## Identifiers
 
 Reverse-DNS IDs are lowercase `io.unom.punktfunk`, with a lowercase suffix. Adding or renaming an

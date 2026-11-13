@@ -80,7 +80,8 @@ impl<'a> AuView<'a> {
             driver_status: u32_at(offset_of!(AuHeader, driver_status)),
             driver_status_detail: u32_at(offset_of!(AuHeader, driver_status_detail)),
             applied_bitrate_kbps: u32_at(offset_of!(AuHeader, applied_bitrate_kbps)),
-            _reserved: [0; 28],
+            frames_input: u32_at(offset_of!(AuHeader, frames_input)),
+            _reserved: [0; 24],
         }
     }
 

@@ -8,7 +8,8 @@
 //!   0 is EOF (peer closed), and a serialized message is never empty.
 //! - **Process rails.** Spawn on a pinned executable with the socket on fd 3,
 //!   `PR_SET_PDEATHSIG` so host death kills children, reap without blocking a
-//!   caller behind a driver ioctl.
+//!   caller behind a driver ioctl. The signal follows the thread that forked, so one
+//!   process-lifetime thread forks every child.
 //!
 //! The zerocopy worker execs this process's own image ([`self_exe`]). The
 //! encode worker is a **separate file** — a shared inode would share the file
@@ -27,7 +28,7 @@ use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// 64 KiB ceiling. Real bodies (a modifier list) sit far below; a message
@@ -319,8 +320,42 @@ pub fn resolve_worker_path() -> WorkerPath {
 /// **fd 3**. Returns the host end and the child.
 ///
 /// `argv0` is what `ps` shows — `exe` is usually opaque `/proc/self/fd/<n>`.
+///
+/// The fork runs on the process-lifetime spawner thread, not the caller's. A child's
+/// `PR_SET_PDEATHSIG` fires when the thread that forked it exits, and a capture thread exits
+/// at every capturer drop, ahead of the frames still reading the worker's memory.
 pub fn spawn_worker(exe: &Path, argv0: &str, args: &[&str]) -> io::Result<(OwnedFd, Child)> {
     sweep_reaper();
+    let (reply, answer) = mpsc::sync_channel(1);
+    let (exe, argv0) = (exe.to_owned(), argv0.to_owned());
+    let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
+    let job: SpawnJob = Box::new(move || {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let _ = reply.send(fork_worker(&exe, &argv0, &args));
+    });
+    let gone = || io::Error::other("worker spawner thread is gone");
+    spawner()?.send(job).map_err(|_| gone())?;
+    answer.recv().map_err(|_| gone())?
+}
+
+type SpawnJob = Box<dyn FnOnce() + Send>;
+
+/// The queue of the one thread that forks workers; started on first use, never exits.
+fn spawner() -> io::Result<mpsc::Sender<SpawnJob>> {
+    static SPAWNER: Mutex<Option<mpsc::Sender<SpawnJob>>> = Mutex::new(None);
+    let mut slot = SPAWNER.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(tx) = slot.as_ref() {
+        return Ok(tx.clone());
+    }
+    let (tx, rx) = mpsc::channel::<SpawnJob>();
+    std::thread::Builder::new()
+        .name("pf-worker-spawn".into())
+        .spawn(move || rx.into_iter().for_each(|job| job()))?;
+    Ok(slot.insert(tx).clone())
+}
+
+/// The fork and exec behind [`spawn_worker`]; the spawner thread is its only caller.
+fn fork_worker(exe: &Path, argv0: &str, args: &[&str]) -> io::Result<(OwnedFd, Child)> {
     let (host_end, worker_end) = socketpair_seqpacket()?;
     let mut cmd = Command::new(exe);
     cmd.arg0(argv0);
@@ -687,6 +722,30 @@ mod tests {
         assert_eq!(got, "pong");
         assert!(fds.is_empty());
         child.wait().unwrap();
+    }
+
+    /// The child outlives the thread that asked for it; the death signal follows the forking
+    /// thread, which is the spawner and not the caller.
+    #[test]
+    fn a_worker_outlives_the_thread_that_spawned_it() {
+        let (host, mut child) = std::thread::spawn(|| {
+            spawn_worker(
+                Path::new("/bin/sh"),
+                "pf-test-worker",
+                &["-c", "cat <&3 >&3"],
+            )
+            .unwrap()
+        })
+        .join()
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(child.try_wait().unwrap().is_none(), "worker died early");
+        send(host.as_fd(), &"ping", None).unwrap();
+        let mut buf = Vec::new();
+        let (echo, _) = recv_fds::<String>(host.as_fd(), &mut buf).unwrap();
+        assert_eq!(echo, "ping");
+        drop(host);
+        assert!(child.wait().unwrap().success());
     }
 
     /// Only an open socket at fd 3 or above is adopted; anything else is left to its owner.

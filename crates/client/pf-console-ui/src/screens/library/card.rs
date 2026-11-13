@@ -233,12 +233,12 @@ pub(super) fn store_badge(
     );
 }
 
-/// `RESUME` in `rect`'s top-right, opposite the store badge. Fixed green on every palette;
-/// `alpha` is the cover's.
+/// The running badge in `rect`'s top-right, opposite the store badge. Fixed green on every
+/// palette; `alpha` is the cover's.
 pub(super) fn running_badge(canvas: &Canvas, fonts: &Fonts, rect: Rect, k: f64, alpha: f32) {
-    const LABEL: &str = "RESUME";
+    let label = pf_l10n::client::lib_badge_running();
     let size = 11.0 * k;
-    let tw = f64::from(fonts.measure(LABEL, W::SemiBold, size));
+    let tw = f64::from(fonts.measure(label, W::SemiBold, size));
     let (bw, bh) = (tw + 14.0 * k, 19.0 * k);
     let pad = 7.0 * k;
     let x = f64::from(rect.right) - pad - bw;
@@ -251,7 +251,7 @@ pub(super) fn running_badge(canvas: &Canvas, fonts: &Fonts, rect: Rect, k: f64, 
     let ink = Color4f::new(0.04, 0.10, 0.05, alpha);
     fonts.draw(
         canvas,
-        LABEL,
+        label,
         x + 7.0 * k,
         y + bh / 2.0 + size * 0.36,
         W::SemiBold,
@@ -352,9 +352,9 @@ pub(super) fn desk_tile(canvas: &Canvas, ui: &Frame, fonts: &Fonts, h: &HostRow,
     let w = f64::from(r.width()) - 2.0 * pad;
     let status_base = f64::from(r.bottom) - pad - 2.0 * k;
     let (line, ink) = if h.running.is_empty() {
-        ("Desktop".to_string(), ui.fg(0.62))
+        (pf_l10n::client::lib_desktop().to_string(), ui.fg(0.62))
     } else {
-        (format!("Resume {}", h.running), ui.live())
+        (pf_l10n::client::lib_resume_title(&h.running), ui.live())
     };
     fonts.draw_clipped(canvas, &line, l, status_base, W::Medium, 13.5 * k, ink, w);
     let name_base = status_base - 21.0 * k;

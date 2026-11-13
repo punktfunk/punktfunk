@@ -4,9 +4,9 @@
 //! The box resolves the profile first (`profiles.rs`); placement only routes, and a person's own
 //! Linux account only once the supervisor unlocked it (`native/unlock.rs`). The owner and a
 //! profile that shares the box's desktop play on the box, or on the owner's row when the box is
-//! a door, which streams nothing itself. A device the box redirects holds its seat for
-//! [`RESERVE`], so a second device racing in finds the seat taken before the first lands. A
-//! device whose overlay says **A second device connects → Shares the screen** is redirected to
+//! a door, which streams nothing itself. A device the box redirects holds its seat until the seat
+//! lists it, at most [`LANDING`], so a second device racing in finds the seat taken before the
+//! first lands. A device whose overlay says **A second device connects → Shares the screen** is redirected to
 //! an occupied seat too; the seat host's admission joins it.
 
 use super::Occupant;
@@ -18,8 +18,13 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// How long a redirected device holds its seat before it lands there.
-const RESERVE: Duration = Duration::from_secs(10);
+/// How long a redirected device may take to be listed on its seat: it dials, then the seat brings
+/// the picture up before it lists the session. The wait `native.rs`'s `SEAT_LANDING` gives a
+/// redirected guest.
+const LANDING: Duration = Duration::from_secs(120);
+
+/// How often a held seat's host is asked whether its device is listed yet.
+const LANDING_POLL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Placement {
@@ -51,7 +56,8 @@ pub(crate) fn here(account: &crate::profiles::OsAccount) -> bool {
 /// A door streams nothing itself, so it places every profile: the owner and a profile that
 /// shares the owner's desktop on the owner's row, a full seat on its own. A profile no row
 /// serves, because the box has no owner row yet, is refused rather than played here. Only the
-/// profile's own seat host is asked: a hung host of another seat costs this connect nothing.
+/// profile's own seat host is asked, and never under [`RESERVED`]: a hung seat host costs this
+/// connect alone.
 pub(crate) fn place(
     profile: &crate::profiles::Resolved,
     asker: &Asker,
@@ -60,52 +66,116 @@ pub(crate) fn place(
     let Some(seat_id) = snap.row_of(&profile.os_account) else {
         return Placement::Refuse(RejectReason::SeatUnavailable);
     };
-    let occupants = snap
+    let running = snap
         .seat(seat_id)
-        .filter(|(seat, _)| seat.runtime.state == RuntimeState::Running)
+        .filter(|(seat, _)| seat.runtime.state == RuntimeState::Running);
+    let occupants = running
         .and_then(|(seat, _)| super::occupants(seat))
         .unwrap_or_default();
+    let plane = running
+        .filter(|_| asker.browser)
+        .and_then(|(seat, _)| browser_plane(seat));
     let mut held = RESERVED.lock().unwrap_or_else(|e| e.into_inner());
-    held.retain(|_, (_, until)| *until > Instant::now());
-    let held_by = held.get(seat_id).map(|(fp, _)| fp.as_str());
+    let now = Instant::now();
+    let held_by = live_holder(&mut held, seat_id, now).map(str::to_owned);
     let placed = decide(
         &profile.id,
         asker,
         snap.on,
         snap.seat(seat_id),
         &occupants,
-        held_by,
+        held_by.as_deref(),
     );
-    let placed = match (placed, snap.seat(seat_id)) {
-        (Placement::Redirect(to), Some((seat, _))) if asker.browser => with_browser_plane(to, seat),
-        (placed, _) => placed,
+    let placed = match placed {
+        Placement::Redirect(to) if asker.browser => with_browser_plane(to, plane),
+        placed => placed,
     };
     if matches!(placed, Placement::Redirect(_)) {
         PLACED
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(seat_id.to_string(), Instant::now());
-        if let Some(fp) = asker.fp {
-            held.insert(
-                seat_id.to_string(),
-                (fp.to_string(), Instant::now() + RESERVE),
-            );
+        if let Some(fp) = asker.fp
+            && hold(&mut held, seat_id, fp, now)
+            && let Some((seat, _)) = snap.seat(seat_id)
+        {
+            watch_landing(seat.clone());
         }
     }
     placed
 }
 
-/// `to` with the certificate hash `seat`'s browser plane serves under, which the browser pins
-/// and binds its credential to. A seat whose plane doesn't answer on the port the redirect names,
-/// as one started before the box streamed to browsers, is unavailable.
-fn with_browser_plane(mut to: Redirect, seat: &Seat) -> Placement {
+/// Seat id → the device redirected to it and until when it holds it.
+type Holds = BTreeMap<String, (String, Instant)>;
+
+/// The device holding `seat_id` at `now`. Lapsed holds go.
+fn live_holder<'a>(held: &'a mut Holds, seat_id: &str, now: Instant) -> Option<&'a str> {
+    held.retain(|_, (_, until)| *until > now);
+    held.get(seat_id).map(|(fp, _)| fp.as_str())
+}
+
+/// Holds `seat_id` for `fp` until `now` + [`LANDING`]. `true` when no hold was live, so nothing
+/// watches the seat yet.
+fn hold(held: &mut Holds, seat_id: &str, fp: &str, now: Instant) -> bool {
+    let fresh = live_holder(held, seat_id, now).is_none();
+    held.insert(seat_id.to_string(), (fp.to_string(), now + LANDING));
+    fresh
+}
+
+/// Lets `seat_id`'s hold go when `fp` still holds it.
+fn release(held: &mut Holds, seat_id: &str, fp: &str) {
+    if held.get(seat_id).is_some_and(|(holder, _)| holder == fp) {
+        held.remove(seat_id);
+    }
+}
+
+/// Asks `seat`'s host every [`LANDING_POLL`] whether the device holding it is listed, and lets
+/// the hold go once it is: from then on the seat's own occupants keep it, and a device that
+/// lands and leaves frees the seat. Ends with the hold.
+fn watch_landing(seat: Seat) {
+    let spawned = std::thread::Builder::new()
+        .name("seat-landing".into())
+        .spawn(move || {
+            let id = seat.id.as_str();
+            loop {
+                std::thread::sleep(LANDING_POLL);
+                let fp = {
+                    let mut held = RESERVED.lock().unwrap_or_else(|e| e.into_inner());
+                    match live_holder(&mut held, id, Instant::now()) {
+                        Some(fp) => fp.to_owned(),
+                        None => return,
+                    }
+                };
+                let listed = super::occupants(&seat).is_some_and(|there| {
+                    there
+                        .iter()
+                        .any(|o| crate::session_status::is_client(&o.client, &fp))
+                });
+                if listed {
+                    let mut held = RESERVED.lock().unwrap_or_else(|e| e.into_inner());
+                    release(&mut held, id, &fp);
+                    return;
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "seat landing watch did not start");
+    }
+}
+
+/// `seat`'s browser plane as its host's `/webtransport` answers, `None` when it doesn't. Blocking.
+fn browser_plane(seat: &Seat) -> Option<serde_json::Value> {
     let call = crate::mgmt::owner::Forwarded::get("webtransport".into());
-    let plane = match super::forward(seat, call) {
-        Some(crate::mgmt::owner::Answer::Reply(200, _, body)) => {
-            serde_json::from_slice::<serde_json::Value>(&body).ok()
-        }
+    match super::forward(seat, call) {
+        Some(crate::mgmt::owner::Answer::Reply(200, _, body)) => serde_json::from_slice(&body).ok(),
         _ => None,
-    };
+    }
+}
+
+/// `to` with the certificate hash its seat's browser `plane` serves under, which the browser
+/// pins and binds its credential to. A plane that didn't answer on the port the redirect names,
+/// as one started before the box streamed to browsers, is unavailable.
+fn with_browser_plane(mut to: Redirect, plane: Option<serde_json::Value>) -> Placement {
     let hash = plane
         .filter(|p| p["port"].as_u64() == Some(u64::from(to.port)))
         .and_then(|p| p["cert_hash_sha256"].as_str().map(str::to_ascii_lowercase));
@@ -143,8 +213,7 @@ fn plays_here(role: HostRole, own_row: bool) -> bool {
     }
 }
 
-/// Seat id → the device redirected to it and until when it holds it.
-static RESERVED: Mutex<BTreeMap<String, (String, Instant)>> = Mutex::new(BTreeMap::new());
+static RESERVED: Mutex<Holds> = Mutex::new(BTreeMap::new());
 
 /// A profile whose seat is a ledger row of its own: the row [`row_in`](super::row_in) names
 /// with no owner row, so the owner's profile has none.
@@ -330,6 +399,25 @@ mod tests {
         );
     }
 
+    /// The browser pins the hash its seat's plane serves on the redirect's port; a plane on
+    /// another port, or none, leaves the seat unavailable.
+    #[test]
+    fn a_browser_redirect_carries_its_plane_s_hash() {
+        let s = seat(RuntimeState::Running);
+        let Placement::Redirect(to) = decide("kid", &asker(true, false), true, on(&s), &[], None)
+        else {
+            panic!("a running seat is redirected to");
+        };
+        let plane = |port: u16| Some(serde_json::json!({"port": port, "cert_hash_sha256": "AB12"}));
+        let Placement::Redirect(r) = with_browser_plane(to.clone(), plane(9778)) else {
+            panic!("the plane answers on the redirect's port");
+        };
+        assert_eq!(r.cert_hash, "ab12");
+        let refused = Placement::Refuse(RejectReason::SeatUnavailable);
+        assert_eq!(with_browser_plane(to.clone(), plane(9784)), refused);
+        assert_eq!(with_browser_plane(to, None), refused);
+    }
+
     fn on(seat: &Seat) -> Option<(&Seat, u8)> {
         Some((seat, 1))
     }
@@ -398,6 +486,31 @@ mod tests {
             panic!("a joiner is redirected");
         };
         assert_eq!(r.occupant, "Ben's Apple TV");
+    }
+
+    /// A redirect holds its seat through a cold seat's start, until its device is listed there or
+    /// the landing wait ends; another device's landing leaves it.
+    #[test]
+    fn a_hold_lasts_until_its_device_is_listed_or_the_landing_wait_ends() {
+        let mut held = Holds::new();
+        let now = Instant::now();
+        assert!(
+            hold(&mut held, "a", ME, now),
+            "nothing watches a fresh hold"
+        );
+        assert!(!hold(&mut held, "a", ME, now), "its watch goes on");
+        let starting = now + Duration::from_secs(60);
+        assert_eq!(live_holder(&mut held, "a", starting), Some(ME));
+        release(&mut held, "a", THEM);
+        assert_eq!(live_holder(&mut held, "a", now), Some(ME));
+        release(&mut held, "a", ME);
+        assert_eq!(live_holder(&mut held, "a", now), None, "listed");
+        hold(&mut held, "a", ME, now);
+        assert_eq!(
+            live_holder(&mut held, "a", now + LANDING),
+            None,
+            "never came"
+        );
     }
 
     #[test]

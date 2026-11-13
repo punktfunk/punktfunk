@@ -17,11 +17,11 @@ class VirtualPadTest {
                 val ctls = padControls(layout, w, h)
                 for (c in ctls) {
                     val r = c.rect
-                    assertTrue("$layout ${c.label} inside ${w}x$h: $r", r.x >= 0f && r.y >= 0f && r.x + r.w <= w && r.y + r.h <= h)
+                    assertTrue("$layout ${c.id} inside ${w}x$h: $r", r.x >= 0f && r.y >= 0f && r.x + r.w <= w && r.y + r.h <= h)
                 }
                 for (i in ctls.indices) for (j in i + 1 until ctls.size) {
                     assertTrue(
-                        "$layout ${ctls[i].label} overlaps ${ctls[j].label} at ${w}x$h",
+                        "$layout ${ctls[i].id} overlaps ${ctls[j].id} at ${w}x$h",
                         !ctls[i].rect.overlaps(ctls[j].rect),
                     )
                 }
@@ -31,24 +31,17 @@ class VirtualPadTest {
 
     @Test
     fun presets_carry_the_controls_the_design_names() {
-        fun labels(layout: String) = padControls(layout, 933f, 420f).map { it.label }.toSet()
-        val full = labels("full")
+        fun ids(layout: String) = padControls(layout, 933f, 420f).map { it.id }.toSet()
+        val full = ids("full")
         assertEquals(14, full.size)
-        assertTrue(
-            full.containsAll(
-                listOf(
-                    "Left stick", "Right stick", "D-pad", "Face buttons", "Left trigger", "Right bumper", "Start",
-                    "Left stick click", "Right stick click",
-                ),
-            ),
-        )
-        val sticks = labels("sticks")
-        assertTrue(sticks.containsAll(listOf("Left stick", "Right stick", "Left bumper", "Right trigger")))
-        assertTrue("D-pad" !in sticks && "Face buttons" !in sticks)
-        val dpad = labels("dpad")
-        assertTrue(dpad.containsAll(listOf("D-pad", "Face buttons")))
-        assertTrue("Left stick" !in dpad && "Left trigger" !in dpad && "Left stick click" !in dpad)
-        assertEquals(full, labels("bogus"))
+        assertTrue(full.containsAll(listOf("ls", "rs", "dpad", "face", "lt", "rb", "start", "l3", "r3")))
+        val sticks = ids("sticks")
+        assertTrue(sticks.containsAll(listOf("ls", "rs", "lb", "rt")))
+        assertTrue("dpad" !in sticks && "face" !in sticks)
+        val dpad = ids("dpad")
+        assertTrue(dpad.containsAll(listOf("dpad", "face")))
+        assertTrue("ls" !in dpad && "lt" !in dpad && "l3" !in dpad)
+        assertEquals(full, ids("bogus"))
     }
 
     @Test

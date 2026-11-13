@@ -14,11 +14,12 @@
 
 use pf_fluent::motion::Tween;
 use pf_fluent::{Palette, Token};
+use pf_l10n::{common, tools};
 use punktfunk_setup::choices::{LAN_BIND, LOOPBACK_BIND};
 use punktfunk_setup::platform::windows::choices::NetworkAnswer;
 use punktfunk_setup::platform::windows::demo::WinPreset;
 use punktfunk_setup::platform::windows::plan::{self, Artifact};
-use punktfunk_setup::platform::windows::screen::{Editor, Field, WinScreen, WizStep};
+use punktfunk_setup::platform::windows::screen::{Editor, Field, Section, WinScreen, WizStep};
 use punktfunk_setup::platform::windows::{choices::WinChoices, report as win_report};
 use punktfunk_setup::ui::Reporter;
 use std::rc::Rc;
@@ -305,7 +306,7 @@ impl Component for Wizard {
             Msg::Network(choice) => {
                 let answer = match choice {
                     None => return,
-                    Some(0) => NetworkAnswer::MakePrivate(self.network_name()),
+                    Some(0) => NetworkAnswer::MakePrivate(self.network_name().unwrap_or_default()),
                     Some(1) => NetworkAnswer::OpenPublicRules,
                     Some(_) => NetworkAnswer::Skip,
                 };
@@ -336,7 +337,7 @@ impl Component for Wizard {
     }
 
     fn view(&self, _input: &WizardInput, cx: &mut ViewContext<'_, Self>) -> View {
-        cx.window_title("Punktfunk Setup");
+        cx.window_title(tools::wizard_window_title());
         // One size: every page is laid out for 980×700, so min = max pins the frame.
         let mut visuals = WindowVisuals::new()
             .backdrop(WindowBackdrop::Mica)
@@ -386,23 +387,23 @@ impl Wizard {
             .skip_while(|s| *s != cur)
             .nth(1);
         if next == Some(WizStep::Install) {
-            "Install"
+            tools::wizard_install()
         } else {
-            "Continue"
+            tools::wizard_continue()
         }
     }
 
     /// The public network the Network step names: the one already chosen, else the first.
-    fn network_name(&self) -> String {
+    /// `None` when the box has no Public network, which the step's sentences word whole.
+    fn network_name(&self) -> Option<String> {
         match &self.screen.choices.network {
-            NetworkAnswer::MakePrivate(n) if !n.is_empty() => n.clone(),
+            NetworkAnswer::MakePrivate(n) if !n.is_empty() => Some(n.clone()),
             _ => self
                 .screen
                 .facts
                 .public_networks()
                 .first()
-                .map(|n| n.name.clone())
-                .unwrap_or_else(|| "this network".into()),
+                .map(|n| n.name.clone()),
         }
     }
 
@@ -549,7 +550,7 @@ fn note(w: &Wizard, text: impl AsRef<str>) -> TextBlock {
 /// The Install step is the teardown on an uninstall run, and its dot says so.
 fn step_title(step: WizStep, uninstall: bool) -> &'static str {
     match step {
-        WizStep::Install if uninstall => "Uninstall",
+        WizStep::Install if uninstall => tools::wizard_step_uninstall(),
         _ => step.title(),
     }
 }
@@ -684,7 +685,7 @@ fn continue_button(cx: &ViewContext<'_, Wizard>, cur: WizStep, label: &str) -> V
 
 fn back_button(cx: &ViewContext<'_, Wizard>, cur: WizStep) -> View {
     Button::new()
-        .content("Back")
+        .content(common::common_back())
         .min_width(92.0)
         .on_click(cx.message(Msg::Back(cur)))
         .into()
@@ -692,12 +693,13 @@ fn back_button(cx: &ViewContext<'_, Wizard>, cur: WizStep) -> View {
 
 /// The real window over a preset (canned or probed) and the seams its install runs on.
 pub fn run(preset: WinPreset, seams: Seams) -> windows::core::Result<()> {
+    pf_l10n::set_languages(&pf_l10n::os_languages());
     // Self-contained: the runtime DLLs sit beside the exe (build.rs), which reactor finds
     // without an installed framework.
     App::run_component_with_policy::<Wizard>(
         WizardInput { preset, seams },
         WindowPolicy::new()
-            .title("Punktfunk Setup")
+            .title(tools::wizard_window_title())
             .client_size(WINDOW_W, WINDOW_H),
     )
 }

@@ -114,6 +114,7 @@ on:
       - 'crates/core/pf-fluent/**'
       - 'crates/core/pf-update-check/**'
       - 'crates/core/punktfunk-core/**'
+      - 'l10n/**'
       - 'Cargo.lock'
       - 'Cargo.toml'
       - 'scripts/ci/pf-version.ps1'
@@ -136,6 +137,7 @@ on:
       - 'crates/core/pf-fluent/**'
       - 'crates/core/pf-update-check/**'
       - 'crates/core/punktfunk-core/**'
+      - 'l10n/**'
       - 'Cargo.lock'
       - 'Cargo.toml'
       - 'scripts/ci/pf-version.ps1'
@@ -288,6 +290,13 @@ jobs:
           if ($code -ne 0) {
             Write-Warning "sccache daemon failed to start - building this leg without the cache"
             "RUSTC_WRAPPER=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+          # A probe that failed on an earlier run stays pinned in the target dir and fails every
+          # build after it, whatever the daemon does now. Drop it so cargo probes again.
+          $info = Join-Path $env:CARGO_TARGET_DIR '.rustc_info.json'
+          if ((Test-Path $info) -and (Select-String -Path $info -SimpleMatch '"success":false' -Quiet)) {
+            Remove-Item $info -Force
+            Write-Warning "dropped a failed compiler probe cached in $info"
           }
 
       # All three client binaries, ONCE, in release. The shell spawns punktfunk-session.exe (a

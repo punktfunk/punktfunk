@@ -97,6 +97,8 @@ final class HostWaker: ObservableObject {
                     onOnline()
                     return
                 }
+                // A probe cancelled mid-flight answers false: no packet for a wait that ended.
+                guard !Task.isCancelled else { return }
                 if elapsed >= timeout {
                     self?.waking?.timedOut = true
                     self?.loop = nil
@@ -110,6 +112,7 @@ final class HostWaker: ObservableObject {
                     Self.sendPacket(macs: macs, lastIP: lastIP)
                 }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
                 self?.waking?.seconds = Int(Date().timeIntervalSince(started))
             }
         }

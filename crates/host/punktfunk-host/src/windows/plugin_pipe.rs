@@ -4,14 +4,15 @@
 
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 
-/// SYSTEM and Administrators in full; LocalService — the runner, and the user half of a
-/// container's check — may open, read and write, as may the plugin's own package when it has
-/// one. `P`: nothing inherited. Never `ALL APPLICATION PACKAGES`.
-fn pipe_sddl(package_sid: Option<&str>) -> String {
+/// SYSTEM and Administrators in full; the runner's account `runner` (`LS`, or a seat's account
+/// SID) — the runner, and the user half of a container's check — may open, read and write, as
+/// may the plugin's own package when it has one. `P`: nothing inherited. Never
+/// `ALL APPLICATION PACKAGES`.
+fn pipe_sddl(runner: &str, package_sid: Option<&str>) -> String {
     let package = package_sid
         .map(|sid| format!("(A;;FRFW;;;{sid})"))
         .unwrap_or_default();
-    format!("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFW;;;LS){package}")
+    format!("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFW;;;{runner}){package}")
 }
 
 /// One instance of `name` under [`pipe_sddl`]. `first` claims the name: a second server on
@@ -20,9 +21,10 @@ fn pipe_sddl(package_sid: Option<&str>) -> String {
 pub(crate) fn create_plugin_pipe(
     name: &str,
     first: bool,
+    runner: &str,
     package_sid: Option<&str>,
 ) -> std::io::Result<NamedPipeServer> {
-    let sa = pf_paths_win::SecurityAttributes::new(&pipe_sddl(package_sid))
+    let sa = pf_paths_win::SecurityAttributes::new(&pipe_sddl(runner, package_sid))
         .map_err(std::io::Error::other)?;
     // SAFETY: `sa` outlives the call, which copies the descriptor into the pipe and writes
     // nothing through the pointer.
@@ -36,16 +38,21 @@ pub(crate) fn create_plugin_pipe(
 
 #[cfg(test)]
 mod tests {
-    /// A package gets its own ACE after the fixed three; none means the three alone.
+    /// A package gets its own ACE after the fixed three; none means the three alone. A seat's
+    /// pipe names its account where the box's names LocalService.
     #[test]
-    fn the_dacl_names_the_package_when_there_is_one() {
+    fn the_dacl_names_the_runner_and_the_package_when_there_is_one() {
         assert_eq!(
-            super::pipe_sddl(None),
+            super::pipe_sddl("LS", None),
             "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFW;;;LS)"
         );
         assert_eq!(
-            super::pipe_sddl(Some("S-1-15-2-1-2-3")),
+            super::pipe_sddl("LS", Some("S-1-15-2-1-2-3")),
             "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFW;;;LS)(A;;FRFW;;;S-1-15-2-1-2-3)"
+        );
+        assert_eq!(
+            super::pipe_sddl("S-1-5-21-1-2-3-1001", None),
+            "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFW;;;S-1-5-21-1-2-3-1001)"
         );
     }
 
@@ -54,7 +61,8 @@ mod tests {
     #[tokio::test]
     async fn the_first_instance_claims_the_name() {
         let name = format!(r"\\.\pipe\pf-plugin-pipe-test-{}", std::process::id());
-        let _first = super::create_plugin_pipe(&name, true, None).expect("create the pipe");
-        assert!(super::create_plugin_pipe(&name, true, None).is_err());
+        let first = super::create_plugin_pipe(&name, true, "LS", None);
+        let _first = first.expect("create the pipe");
+        assert!(super::create_plugin_pipe(&name, true, "LS", None).is_err());
     }
 }

@@ -81,6 +81,12 @@ pub(crate) struct CursorModel {
     /// Last `client_draws` told to the host; `None` = nothing sent yet. Edge-detected so
     /// chord, auto-flip, and engage/release share one path.
     sent_client_draws: Option<bool>,
+    /// The hint's flip to relative came under a held button: a game's press-to-look. It
+    /// flips back the moment the pointer returns.
+    press_grab: bool,
+    /// Desktop motion went out as deltas under a press; the local cursor rejoins the
+    /// host's pointer when it returns.
+    rejoin: bool,
 }
 
 impl CursorModel {
@@ -92,7 +98,22 @@ impl CursorModel {
             last_user_motion: now,
             warp_echo_until: now,
             sent_client_draws: None,
+            press_grab: false,
+            rejoin: false,
         }
+    }
+
+    /// Desktop motion goes out as deltas while a host app hides the pointer under a held
+    /// button and the settle has not flipped the model yet: positions would spin a camera
+    /// that recentres the pointer each frame. Once started they last until the pointer
+    /// returns, past the release.
+    pub(crate) fn takes_deltas(&mut self, desktop: bool, buttons_held: bool) -> bool {
+        let deltas = desktop
+            && (buttons_held || self.rejoin)
+            && !self.hint_override
+            && self.last_hint == Some(true);
+        self.rejoin |= deltas;
+        deltas
     }
 
     /// The mouse moved. The echo of our own follow-warp is not the user moving.
@@ -132,13 +153,21 @@ impl CursorModel {
             self.hint_override = false;
             self.hint_since = now;
         }
-        // The hint must hold with no button down (Windows hides the pointer for a click or
-        // a keystroke), and a grab needs the pointer over this window.
+        // A hide must hold (Windows hides the pointer for a click or a keystroke), and a grab
+        // needs the pointer over this window. The flip back waits for no button down, but a
+        // press-to-look lets go at once.
         let settled = now.saturating_duration_since(self.hint_since) >= HINT_SETTLE;
         let over = !h.relative_hint || i.over_us;
-        if let Some(c) = i.capture.filter(|_| !self.hint_override && settled) {
+        if let Some(c) = i.capture.filter(|_| !self.hint_override) {
+            let ready = if h.relative_hint {
+                settled
+            } else {
+                self.press_grab || settled && !c.buttons_held
+            };
             let flips = c.desktop == h.relative_hint;
-            if flips && c.captured && !c.buttons_held && over && !i.ring_open {
+            if flips && ready && c.captured && over && !i.ring_open {
+                self.press_grab = h.relative_hint && c.buttons_held;
+                self.rejoin = false;
                 a.want_desktop = Some(!h.relative_hint);
             }
         }
@@ -146,17 +175,20 @@ impl CursorModel {
     }
 
     /// Whether the local cursor goes where the host put the pointer. Something else moved
-    /// it (controller mouse, a trackpad gesture, an app warping it); the user's own mouse
-    /// has been still for longer than a round trip.
+    /// it (controller mouse, a trackpad gesture, an app warping it) and the user's own mouse
+    /// has been still for longer than a round trip, or the pointer returns after
+    /// [`Self::takes_deltas`] moved only the host's.
     pub(crate) fn follow(&mut self, i: &Inputs, now: Instant) -> bool {
         let (Some(h), Some(c), true) = (i.host, i.capture, i.video) else {
             return false;
         };
+        let rejoin = !h.relative_hint && std::mem::take(&mut self.rejoin);
         let still = now.saturating_duration_since(self.last_user_motion) >= FOLLOW_HOST_AFTER;
         let drifted = c.last_abs.is_some_and(|(x, y)| {
             (x - h.pos.0).abs() > FOLLOW_SLACK_PX || (y - h.pos.1).abs() > FOLLOW_SLACK_PX
         });
-        let follow = c.captured && c.desktop && h.visible && i.over_us && still && drifted;
+        let follow =
+            c.captured && c.desktop && h.visible && i.over_us && (rejoin || still && drifted);
         if follow {
             self.warp_echo_until = now + WARP_ECHO;
         }
@@ -206,6 +238,8 @@ mod tests {
         },
         Moved(u64),
         Chord,
+        /// A motion event with the button held or not, and whether it goes out as deltas.
+        Motion(bool, bool),
     }
 
     fn tick(ms: u64, inputs: Inputs, want: Actions, follow: bool) -> Op {
@@ -232,6 +266,13 @@ mod tests {
             match op {
                 Op::Moved(ms) => m.user_moved(t0 + Duration::from_millis(*ms)),
                 Op::Chord => m.manual_flip(),
+                Op::Motion(held, deltas) => {
+                    assert_eq!(
+                        m.takes_deltas(true, *held),
+                        *deltas,
+                        "{fix}: step {n} deltas"
+                    );
+                }
                 Op::Tick {
                     ms,
                     inputs,
@@ -265,6 +306,10 @@ mod tests {
             buttons_held: true,
             ..captured(true)
         };
+        let held_relative = CaptureFacts {
+            buttons_held: true,
+            ..captured(false)
+        };
         let ring = Inputs {
             ring_open: true,
             ..inputs(captured(true), true)
@@ -296,7 +341,6 @@ mod tests {
                         false,
                     ),
                     tick(249, inputs(captured(true), true), act(None, None), false),
-                    tick(250, inputs(held, true), act(None, None), false),
                     tick(250, not_over, act(None, None), false),
                     tick(250, ring, act(None, None), false),
                     tick(
@@ -305,8 +349,10 @@ mod tests {
                         act(None, Some(false)),
                         false,
                     ),
-                    // Releasing to desktop needs no pointer over the window.
+                    // Releasing to desktop needs no pointer over the window; it waits for the
+                    // buttons.
                     tick(300, inputs(captured(false), false), act(None, None), false),
+                    tick(550, inputs(held_relative, false), act(None, None), false),
                     tick(
                         550,
                         Inputs {
@@ -316,6 +362,45 @@ mod tests {
                         act(None, Some(true)),
                         false,
                     ),
+                ],
+            ),
+            (
+                "a pointer hidden under a held button is a press-to-look",
+                vec![
+                    tick(0, inputs(held, true), act(Some(true), None), false),
+                    Op::Motion(true, true),
+                    tick(249, inputs(held, true), act(None, None), false),
+                    tick(250, inputs(held, true), act(None, Some(false)), false),
+                    tick(300, inputs(held_relative, true), act(None, None), false),
+                    // The pointer is back: no settle, and the press need not end.
+                    tick(
+                        400,
+                        inputs(held_relative, false),
+                        act(None, Some(true)),
+                        false,
+                    ),
+                ],
+            ),
+            (
+                "a flick shorter than the settle rejoins the host's pointer",
+                vec![
+                    tick(
+                        0,
+                        inputs(captured(true), true),
+                        act(Some(true), None),
+                        false,
+                    ),
+                    // A hide without a press stays on positions.
+                    Op::Motion(false, false),
+                    Op::Motion(true, true),
+                    Op::Moved(100),
+                    // Released, but the host has not shown the pointer yet.
+                    Op::Motion(false, true),
+                    tick(150, inputs(captured(true), true), act(None, None), false),
+                    // Neither still nor drifted: the rejoin alone warps.
+                    tick(160, inputs(captured(true), false), act(None, None), true),
+                    Op::Motion(false, false),
+                    tick(170, inputs(captured(true), false), act(None, None), false),
                 ],
             ),
             (

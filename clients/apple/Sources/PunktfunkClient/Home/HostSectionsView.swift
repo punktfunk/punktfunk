@@ -26,6 +26,7 @@ struct HostSectionsView: View {
     let handOff: (HostPageRequest) -> Void
     @ObservedObject private var presets = PresetStore.shared
     @ObservedObject private var hostPower = HostPowerStore.shared
+    @ObservedObject private var hostScreens = HostScreenStore.shared
     @Environment(\.dismiss) private var dismiss
     @State private var section: HostSection
     @State private var confirmPower: PendingHostAction?
@@ -60,7 +61,7 @@ struct HostSectionsView: View {
                 .navigationTitle(store.hosts.first { $0.id == hostID }?.displayName ?? "")
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
+                        Button(L10n.commonDone) { dismiss() }
                     }
                 }
                 #endif
@@ -73,11 +74,11 @@ struct HostSectionsView: View {
             #endif
         }
         .alert(
-            confirmPower.map { "\($0.action.label)?" } ?? "",
+            confirmPower.map { L10n.hostPowerConfirmTitle(action: $0.action.label) } ?? "",
             isPresented: Binding(
                 get: { confirmPower != nil }, set: { if !$0 { confirmPower = nil } })
         ) {
-            Button("Cancel", role: .cancel) { confirmPower = nil }
+            Button(L10n.commonCancel, role: .cancel) { confirmPower = nil }
             if let pending = confirmPower {
                 Button(pending.action.label, role: .destructive) {
                     confirmPower = nil
@@ -87,20 +88,22 @@ struct HostSectionsView: View {
         } message: {
             Text(
                 confirmPower.map {
-                    "This ends every stream from \($0.host.displayName) and anything running "
-                        + "on it. You'll need to wake or start it again."
+                    L10n.hostcardActionConfirmBody(host: $0.host.displayName)
                 } ?? "")
         }
         .alert(
             outcome?.title ?? "",
             isPresented: Binding(get: { outcome != nil }, set: { if !$0 { outcome = nil } })
         ) {
-            Button("OK", role: .cancel) {}
+            Button(L10n.commonOk, role: .cancel) {}
         } message: {
             Text(outcome?.message ?? "")
         }
         .onAppear {
-            if let host = store.hosts.first(where: { $0.id == hostID }) { hostPower.refresh(host) }
+            if let host = store.hosts.first(where: { $0.id == hostID }) {
+                hostPower.refresh(host)
+                hostScreens.refresh(host)
+            }
         }
         #if os(macOS)
         // System type sizes, like the Settings window: the touch UI's 17 pt Geist makes a Mac
@@ -130,15 +133,21 @@ struct HostSectionsView: View {
                     #endif
             } else {
                 ContentUnavailableView(
-                    "Pair First", systemImage: "lock",
-                    description: Text("Pair with \(host.displayName) to test the network speed."))
+                    String(localized: L10n.hostcardPairFirst), systemImage: "lock",
+                    description: Text(
+                        L10n.appleHostcardSpeedTestPairFirstBody(host: host.displayName)))
             }
         }
     }
 
-    /// The sidebar's rows. The demo host has no speed test to run.
+    /// The sidebar's rows. The demo host has no speed test to run; a host that offers this
+    /// device no screens has no Screen row.
     private var sections: [HostSection] {
-        HostSection.allCases.filter { $0 != .speedTest || hostID != DemoMode.hostID }
+        let offersScreens = store.hosts.first { $0.id == hostID }
+            .flatMap(hostScreens.targets(for:))?.hasSection == true
+        return HostSection.allCases.filter {
+            ($0 != .speedTest || hostID != DemoMode.hostID) && ($0 != .screen || offersScreens)
+        }
     }
 
     /// A click on empty space deselects a List; the page always shows a section.
@@ -151,6 +160,7 @@ struct HostSectionsView: View {
         HostActions(
             host: host, pinned: nil, online: store.probedOnline.contains(host.id), store: store,
             presets: presets.presets, power: hostPower.actions(for: host),
+            screens: hostScreens.targets(for: host),
             surface: HostActionSurface(
                 connect: { handOff(.connect(host.id, $0)) },
                 pair: { handOff(.pair(host.id)) },
@@ -159,33 +169,40 @@ struct HostSectionsView: View {
                 sendLogs: {
                     Task {
                         let sent = await SendLogs.toHost(host)
-                        outcome = (sent.ok ? "Logs sent" : "Couldn't send logs", sent.message)
+                        outcome = (
+                            String(
+                                localized: sent.ok
+                                    ? L10n.appleHostcardLogsSentTitle
+                                    : L10n.appleHostcardLogsFailedTitle),
+                            sent.message)
                     }
                 },
                 wake: { handOff(.wake(host.id)) },
                 showDetails: {},
-                runPower: { power($0, on: host) }))
+                runPower: { power($0, on: host) },
+                screenRefused: {
+                    outcome = (String(localized: L10n.appleHostcardActionFailedTitle), $0)
+                }))
     }
 
-    /// Explain an unavailable action, confirm a destructive one, run the rest — as the grid does.
+    /// A power action on its `HostOffers.route`, as the grid runs it.
     private func power(_ action: HostAction, on host: StoredHost) {
-        guard action.available else {
-            outcome = (
-                "Couldn't do that",
-                action.unavailableReason ?? "\(action.label) isn't available right now")
-            return
-        }
-        if action.danger {
-            confirmPower = PendingHostAction(host: host, action: action)
-        } else {
-            run(action, on: host)
+        switch HostOffers.route(action: action) {
+        case .explain(let why):
+            outcome = (String(localized: L10n.appleHostcardActionFailedTitle), why)
+        case .confirm: confirmPower = PendingHostAction(host: host, action: action)
+        case .run: run(action, on: host)
         }
     }
 
     private func run(_ action: HostAction, on host: StoredHost) {
         Task {
             let done = await hostPower.invoke(action, on: host)
-            outcome = (done.ok ? "On its way" : "Couldn't do that", done.message)
+            outcome = (
+                String(
+                    localized: done.ok
+                        ? L10n.appleHostcardActionDoneTitle : L10n.appleHostcardActionFailedTitle),
+                done.message)
         }
     }
 }

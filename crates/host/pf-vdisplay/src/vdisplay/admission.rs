@@ -5,8 +5,10 @@
 //! mid-build failure:
 //!
 //! * `separate` — fresh display at the requested mode (Linux default).
-//! * `join` — admit onto the live display: its mode, compositor and route
-//!   (Welcome carries the real mode).
+//! * `join` — admit onto the live display: its mode, compositor, route and colour
+//!   (Welcome carries the real mode). A joiner that can't take an HDR display, or the format
+//!   of a capture it shares ([`joined_format`]), is refused. A connect inside another's
+//!   bring-up waits for it to stream ([`JOIN_WAIT`]).
 //! * `steal` — signal victim stop flags, wait for their release ([`all_gone`]), then serve.
 //! * `reject` — handshake error naming the live mode and client.
 //!
@@ -15,9 +17,13 @@
 //! once it streams; the session drops [`LiveGuard`] on end. [`decide`] is pure over that slice.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use crate::policy::{self, ModeConflict};
+
+/// Half the native handshake's 10 s: the first connect registers inside its own handshake.
+pub const JOIN_WAIT: Duration = Duration::from_secs(5);
 
 /// The display a live session streams, which a `join` session takes as its own.
 #[derive(Clone, Debug, Default)]
@@ -30,6 +36,82 @@ pub struct LiveDisplay {
     /// `node.name` of the sink this session captures, published once its capturer is open.
     /// A joiner on the shared path taps it instead of claiming a second default sink.
     pub audio_sink: Arc<Mutex<Option<String>>>,
+    /// The display shows HDR. Its owner republishes it on a codec change ([`publish_hdr`]).
+    pub hdr: bool,
+    /// What its capture hands every session, where one stream feeds them all (gamescope).
+    /// `None`: each session casts the display itself, at a format of its own.
+    pub format: Option<SampleFormat>,
+}
+
+/// What a joiner refused by [`joined_hdr`] reads.
+pub const JOIN_NEEDS_HDR: &str = "Couldn't join the shared screen — it's in HDR, and this device \
+     isn't streaming in HDR. Turn on HDR in this app's settings, or ask whoever connected first \
+     to turn it off.";
+
+/// The colour a joiner streams the owner's display at: the owner's. `None` when that display
+/// is HDR and the joiner can't carry HDR: its capture would read PQ as SDR, so it is refused.
+pub fn joined_hdr(owner_hdr: bool, joiner_can_hdr: bool) -> Option<bool> {
+    (!owner_hdr || joiner_can_hdr).then_some(owner_hdr)
+}
+
+/// The samples one capture stream hands every session on its display.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SampleFormat {
+    pub bit_depth: u8,
+    pub chroma_444: bool,
+    pub full_range: bool,
+}
+
+/// What a joiner's device can't take of a shared [`SampleFormat`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FormatGap {
+    Depth,
+    Chroma,
+    Range,
+}
+
+impl FormatGap {
+    /// The message id and the sentence a joiner refused for this reads.
+    pub fn said(self) -> (&'static str, &'static str) {
+        match self {
+            FormatGap::Depth => (
+                "close_join_needs_10bit",
+                "Couldn't join the shared screen — it streams in 10-bit color, and this \
+                 device can't. Connect this device first and let the other one join it.",
+            ),
+            FormatGap::Chroma => (
+                "close_join_needs_444",
+                "Couldn't join the shared screen — it streams in full color detail (4:4:4), \
+                 and this device can't. Connect this device first and let the other one join it.",
+            ),
+            FormatGap::Range => (
+                "close_join_range",
+                "Couldn't join the shared screen — its color range is one this device can't \
+                 show. Connect this device first and let the other one join it.",
+            ),
+        }
+    }
+}
+
+/// Whether every session on a display of `compositor` takes its frames from one capture.
+pub fn shares_capture(compositor: Option<crate::Compositor>) -> bool {
+    compositor == Some(crate::Compositor::Gamescope)
+}
+
+/// The format a joiner streams a shared capture at: the capture's, as no session converts
+/// it. `can` is what the joiner's session resolves to with that format as its ceiling;
+/// `Err` names the first thing it misses.
+pub fn joined_format(shared: SampleFormat, can: SampleFormat) -> Result<SampleFormat, FormatGap> {
+    if can.bit_depth != shared.bit_depth {
+        return Err(FormatGap::Depth);
+    }
+    if can.chroma_444 != shared.chroma_444 {
+        return Err(FormatGap::Chroma);
+    }
+    if can.full_range != shared.full_range {
+        return Err(FormatGap::Range);
+    }
+    Ok(shared)
 }
 
 #[derive(Clone)]
@@ -63,6 +145,9 @@ fn table() -> &'static Mutex<Vec<LiveSession>> {
     static T: OnceLock<Mutex<Vec<LiveSession>>> = OnceLock::new();
     T.get_or_init(|| Mutex::new(Vec::new()))
 }
+
+/// Signalled on [`table`] when a row registers its display or leaves.
+static CHANGED: Condvar = Condvar::new();
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -112,6 +197,24 @@ pub fn decide(
     }
 }
 
+/// The row a connect holding row `own` waits for under `join` while no other client's session
+/// streams: the oldest other client's connect in bring-up older than `own`, so a first connect
+/// never waits on a later one.
+fn awaited(
+    conflict: ModeConflict,
+    req_identity: Option<[u8; 32]>,
+    live: &[LiveSession],
+    own: u64,
+) -> Option<u64> {
+    let others = live
+        .iter()
+        .filter(|s| !same_client(s.identity, req_identity));
+    if conflict != ModeConflict::Join || others.clone().any(|s| s.display.is_some()) {
+        return None;
+    }
+    others.filter(|s| s.id < own).map(|s| s.id).min()
+}
+
 /// Console `mode_conflict` for THIS client, default `Separate` when unconfigured.
 ///
 /// Per device (`design/web-console-overhaul.md` §6.1): the TV wants to take over,
@@ -129,29 +232,54 @@ pub fn effective_conflict(fp: Option<[u8; 32]>) -> ModeConflict {
         .mode_conflict
 }
 
-/// [`decide`] under `conflict` against the live set, and this connect's [`Reservation`] in it,
+/// This connect's [`Reservation`] in the live set and [`decide`] under `conflict` against it,
 /// under one lock, so a second connect inside this one's bring-up conflicts with it. A row
 /// holding `stop` is the requester's own (GameStream's plane has one flag) and never conflicts
-/// with it. No display budget: [`admit`] adds that. A refusal still returns the reservation:
-/// drop it before answering.
+/// with it. Under `join`, a connect another's bring-up holds up ([`awaited`]) waits up to
+/// [`JOIN_WAIT`] for it, off the lock, then decides: a join once it streams, else as it would
+/// have. Blocks for that long, so an async caller runs it off its workers. No display budget:
+/// [`admit`] adds that. A refusal still returns the reservation: drop it before answering.
 pub fn admit_under(
     conflict: ModeConflict,
     req_identity: Option<[u8; 32]>,
     mode: (u32, u32, u32),
     stop: Arc<AtomicBool>,
 ) -> (Admission, Reservation) {
-    let mut live = table().lock().unwrap();
-    let theirs: Vec<LiveSession> = (live.iter())
-        .filter(|s| !Arc::ptr_eq(&s.stop, &stop))
-        .cloned()
-        .collect();
-    let decision = decide(conflict, req_identity, &theirs);
-    (decision, reserve(&mut live, req_identity, mode, stop))
+    admit_within(conflict, req_identity, mode, stop, JOIN_WAIT)
 }
 
-/// [`admit_under`] this client's [`effective_conflict`]. When `Separate` would mint a second
-/// display, also apply `max_displays`. Fail-closed: a display we cannot afford is declined
-/// here, never admitted then degrading a live sibling
+/// [`admit_under`] with `wait` for its bound.
+fn admit_within(
+    conflict: ModeConflict,
+    req_identity: Option<[u8; 32]>,
+    mode: (u32, u32, u32),
+    stop: Arc<AtomicBool>,
+    wait: Duration,
+) -> (Admission, Reservation) {
+    let deadline = Instant::now() + wait;
+    let mut live = table().lock().unwrap();
+    let reservation = reserve(&mut live, req_identity, mode, stop.clone());
+    loop {
+        let theirs: Vec<LiveSession> = (live.iter())
+            .filter(|s| !Arc::ptr_eq(&s.stop, &stop))
+            .cloned()
+            .collect();
+        let left = deadline.saturating_duration_since(Instant::now());
+        let waits_on = awaited(conflict, req_identity, &theirs, reservation.id);
+        if left.is_zero() || waits_on.is_none() {
+            return (decide(conflict, req_identity, &theirs), reservation);
+        }
+        tracing::debug!(
+            row = ?waits_on,
+            "mode-conflict: JOIN — waiting for a connect in bring-up to stream"
+        );
+        live = CHANGED.wait_timeout(live, left).unwrap().0;
+    }
+}
+
+/// [`admit_under`] this client's [`effective_conflict`], so it may wait as that does. When
+/// `Separate` would mint a second display, also apply `max_displays`. Fail-closed: a display we
+/// cannot afford is declined here, never admitted then degrading a live sibling
 /// (`design/windows-parallel-virtual-displays.md`).
 pub fn admit(
     req_identity: Option<[u8; 32]>,
@@ -297,6 +425,36 @@ pub fn register(
     reservation.register(mode, label, display, resume_id)
 }
 
+/// The colour the display of the session holding `stop` now shows, for the next joiner.
+pub fn publish_hdr(stop: &Arc<AtomicBool>, hdr: bool) {
+    let mut live = table().lock().unwrap();
+    for s in live.iter_mut().filter(|s| Arc::ptr_eq(&s.stop, stop)) {
+        if let Some(d) = s.display.as_mut() {
+            d.hdr = hdr;
+        }
+    }
+}
+
+/// The format the shared capture of the session holding `stop` now delivers, for the next
+/// joiner. A display whose sessions cast it themselves keeps none.
+pub fn publish_format(stop: &Arc<AtomicBool>, format: SampleFormat) {
+    let mut live = table().lock().unwrap();
+    for s in live.iter_mut().filter(|s| Arc::ptr_eq(&s.stop, stop)) {
+        if let Some(f) = s.display.as_mut().and_then(|d| d.format.as_mut()) {
+            *f = format;
+        }
+    }
+}
+
+/// The mode the display of the session holding `stop` now runs, for the next joiner: it is
+/// admitted at this mode, and the Linux pool joins only a display at it.
+pub fn publish_mode(stop: &Arc<AtomicBool>, mode: (u32, u32, u32)) {
+    let mut live = table().lock().unwrap();
+    for s in live.iter_mut().filter(|s| Arc::ptr_eq(&s.stop, stop)) {
+        s.mode = mode;
+    }
+}
+
 /// Is this identity streaming right now? Asked before the host pre-warms that seat: a live
 /// session already owns its planes, and a second compositor under the same id fights for them.
 pub fn has_live_session(identity: [u8; 32]) -> bool {
@@ -315,7 +473,7 @@ pub struct Reservation {
 
 impl Reservation {
     /// The session streams: later clients see its mode, label and display, a `join` shares it,
-    /// and a `punktfunk/2` resume finds it by `resume_id`.
+    /// a connect waiting on it wakes, and a `punktfunk/2` resume finds it by `resume_id`.
     pub fn register(
         self,
         mode: (u32, u32, u32),
@@ -329,13 +487,16 @@ impl Reservation {
             s.display = Some(display);
             s.resume_id = resume_id;
         }
+        CHANGED.notify_all();
         LiveGuard { _row: self }
     }
 }
 
+/// The row leaves, and a connect waiting on it wakes.
 impl Drop for Reservation {
     fn drop(&mut self) {
         table().lock().unwrap().retain(|s| s.id != self.id);
+        CHANGED.notify_all();
     }
 }
 
@@ -467,6 +628,99 @@ mod tests {
         }
     }
 
+    /// Under `join` only, and only while no other client's session streams: a connect waits
+    /// for the oldest other client's connect in bring-up that is older than its own row.
+    #[test]
+    fn a_join_waits_only_for_an_older_connect_in_bring_up() {
+        use ModeConflict::{Join, Reject, Separate, Steal};
+        let row = |id, identity, streams: bool| LiveSession {
+            id,
+            display: streams.then(LiveDisplay::default),
+            ..pending(identity, MODE)
+        };
+        let live = [row(1, Some(1), false), row(2, Some(2), false)];
+        assert_eq!(awaited(Join, fp(3), &live, 9), Some(1), "the oldest");
+        assert_eq!(
+            awaited(Join, fp(3), &live, 2),
+            Some(1),
+            "older than its own row"
+        );
+        assert_eq!(
+            awaited(Join, fp(3), &live, 1),
+            None,
+            "the first waits on nobody"
+        );
+        assert_eq!(awaited(Join, fp(1), &live[..1], 9), None, "its own client");
+        let streaming = [row(1, Some(1), false), row(3, Some(4), true)];
+        assert_eq!(awaited(Join, fp(3), &streaming, 9), None, "one streams");
+        for policy in [Separate, Steal, Reject] {
+            assert_eq!(awaited(policy, fp(3), &live, 9), None, "{policy:?}");
+        }
+    }
+
+    /// Two devices at once under `join`: the second waits out the first one's bring-up and
+    /// shares its display.
+    #[test]
+    fn a_connect_inside_the_first_ones_bring_up_joins_it_once_it_streams() {
+        let name = "a_connect_inside_the_first_ones_bring_up_joins_it_once_it_streams";
+        crate::fake::in_child(module_path!(), name, &[], || {
+            configure("join");
+            let (first, row) = admit(fp(1), MODE, Arc::default());
+            assert_eq!(verdict(first), "separate");
+            let second =
+                std::thread::spawn(|| verdict(admit(fp(2), (1280, 720, 60), Arc::default()).0));
+            // The second reserves and waits under one lock: its row means it is waiting.
+            while rows() < 2 {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let _live = row.register(MODE, "first".into(), LiveDisplay::default(), None);
+            assert_eq!(second.join().unwrap(), "join 1920x1080@60");
+        });
+    }
+
+    /// A connect that leaves in bring-up, or one that outlasts the bound, leaves the waiting
+    /// connect to decide as it did before: a display of its own.
+    #[test]
+    fn a_waiting_connect_is_separate_once_the_first_leaves_or_the_bound_passes() {
+        let name = "a_waiting_connect_is_separate_once_the_first_leaves_or_the_bound_passes";
+        crate::fake::in_child(module_path!(), name, &[], || {
+            configure("join");
+            let (_, row) = admit(fp(1), MODE, Arc::default());
+            let second = std::thread::spawn(|| verdict(admit(fp(2), MODE, Arc::default()).0));
+            while rows() < 2 {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            drop(row);
+            assert_eq!(second.join().unwrap(), "separate");
+
+            let (_, _first) = admit(fp(1), MODE, Arc::default());
+            let bound = Duration::from_millis(30);
+            let asked = Instant::now();
+            let (late, _row) = admit_within(ModeConflict::Join, fp(2), MODE, Arc::default(), bound);
+            assert_eq!(verdict(late), "separate");
+            assert!(asked.elapsed() >= bound);
+        });
+    }
+
+    /// An owner's resize reaches the next joiner through its row.
+    #[test]
+    fn a_published_mode_reaches_the_next_join() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let display = LiveDisplay::default();
+        let _guard = register(
+            Some([0xEC; 32]),
+            MODE,
+            stop.clone(),
+            "m".into(),
+            display,
+            None,
+        );
+        publish_mode(&stop, (2560, 1440, 60));
+        let live = table().lock().unwrap();
+        let row = live.iter().find(|s| Arc::ptr_eq(&s.stop, &stop));
+        assert_eq!(row.map(|s| s.mode), Some((2560, 1440, 60)));
+    }
+
     #[test]
     fn same_identity_stops_targets_own_zombie_only() {
         let live = [
@@ -494,6 +748,91 @@ mod tests {
         // The joiner takes the owner's display, not only its mode.
         assert_eq!(display.compositor, Some(crate::Compositor::Gamescope));
         assert_eq!(display.route, Some(crate::GamescopeRoute::Spawn));
+    }
+
+    /// A joiner streams at the owner's colour: SDR under an SDR display whatever it could
+    /// carry, HDR under an HDR one, and nothing when it can't carry that HDR.
+    #[test]
+    fn a_joiner_follows_the_owners_colour() {
+        assert_eq!(joined_hdr(false, true), Some(false));
+        assert_eq!(joined_hdr(false, false), Some(false));
+        assert_eq!(joined_hdr(true, true), Some(true));
+        assert_eq!(joined_hdr(true, false), None);
+    }
+
+    /// An owner's codec change reaches the next joiner through its row.
+    #[test]
+    fn a_published_colour_reaches_the_next_join() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let display = LiveDisplay {
+            hdr: true,
+            ..LiveDisplay::default()
+        };
+        let _guard = register(
+            Some([0xED; 32]),
+            MODE,
+            stop.clone(),
+            "hdr".into(),
+            display,
+            None,
+        );
+        let row_hdr = || {
+            let live = table().lock().unwrap();
+            let row = live.iter().find(|s| Arc::ptr_eq(&s.stop, &stop)).cloned();
+            row.and_then(|s| s.display).map(|d| d.hdr)
+        };
+        assert_eq!(row_hdr(), Some(true));
+        publish_hdr(&stop, false);
+        assert_eq!(row_hdr(), Some(false));
+    }
+
+    #[test]
+    fn a_joiner_takes_a_shared_captures_format_or_the_gap_is_named() {
+        let fmt = |bit_depth, chroma_444, full_range| SampleFormat {
+            bit_depth,
+            chroma_444,
+            full_range,
+        };
+        let shared = fmt(10, true, true);
+        assert_eq!(joined_format(shared, shared), Ok(shared));
+        let gap = |can| joined_format(shared, can).unwrap_err();
+        assert_eq!(gap(fmt(8, false, false)), FormatGap::Depth, "depth first");
+        assert_eq!(gap(fmt(10, false, false)), FormatGap::Chroma);
+        assert_eq!(gap(fmt(10, true, false)), FormatGap::Range);
+        // A limited-range capture refuses a session that stays full range, too.
+        let limited = fmt(8, false, false);
+        assert_eq!(
+            joined_format(limited, fmt(8, false, true)),
+            Err(FormatGap::Range)
+        );
+        for gap in [FormatGap::Depth, FormatGap::Chroma, FormatGap::Range] {
+            let (id, text) = gap.said();
+            assert!(id.starts_with("close_join_"), "{id}");
+            assert!(text.len() <= punktfunk_core::quic::REFUSED_REASON_MAX);
+        }
+    }
+
+    #[test]
+    fn only_a_shared_captures_row_takes_a_published_format() {
+        let fmt = |bit_depth| SampleFormat {
+            bit_depth,
+            chroma_444: false,
+            full_range: true,
+        };
+        let row = |format| {
+            let stop = Arc::new(AtomicBool::new(false));
+            let display = LiveDisplay {
+                format,
+                ..LiveDisplay::default()
+            };
+            let guard = register(None, MODE, stop.clone(), "f".into(), display, None);
+            publish_format(&stop, fmt(10));
+            let live = table().lock().unwrap();
+            let row = live.iter().find(|s| Arc::ptr_eq(&s.stop, &stop)).cloned();
+            (row.and_then(|s| s.display).and_then(|d| d.format), guard)
+        };
+        assert_eq!(row(Some(fmt(8))).0, Some(fmt(10)));
+        assert_eq!(row(None).0, None, "its sessions cast it themselves");
     }
 
     #[test]

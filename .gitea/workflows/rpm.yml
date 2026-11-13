@@ -59,7 +59,9 @@ on:
       - 'clients/session/**'
       - 'clients/shared/**'
       - 'clients/cli/**'
+      - 'l10n/**'
       - 'web/**'
+      - 'l10n/messages/**'
       - 'sdk/**'
       - 'api/openapi.json'
       - 'packaging/rpm/**'
@@ -69,6 +71,7 @@ on:
       - 'packaging/linux/*.conf'
       - 'packaging/linux/*.desktop'
       - 'packaging/linux/*.generator'
+      - 'packaging/linux/*.pam'
       - 'packaging/linux/apparmor/**'
       - 'packaging/linux/*.rules'
       - 'packaging/linux/*.service'
@@ -76,6 +79,7 @@ on:
       - 'packaging/linux/*.tmpfiles'
       - 'packaging/linux/*.sysusers'
       - 'packaging/linux/payload.txt'
+      - 'packaging/linux/90-punktfunk-frame-adapter'
       - 'packaging/linux/seat-*'
       - 'packaging/linux/door-*'
       - 'packaging/linux/*.xml'
@@ -102,6 +106,7 @@ on:
       - 'scripts/punktfunk-kde-session.service'
       - 'scripts/punktfunk-modules.conf'
       - 'scripts/punktfunk-scripting.service'
+      - 'scripts/punktfunk-scripting-seat@.service'
       - 'scripts/punktfunk-web-init.service'
       - 'scripts/punktfunk-web.service'
       - 'scripts/web-init.sh'
@@ -244,7 +249,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: web/.output
-          key: web-console-linux-bun${{ env.bunver }}-${{ hashFiles('web/**', 'sdk/**') }}
+          key: web-console-linux-bun${{ env.bunver }}-${{ hashFiles('web/**', 'sdk/**', 'l10n/messages/**') }}
 
       - name: Build the web console (cache miss only)
         if: steps.webconsole.outputs.cache-hit != 'true'

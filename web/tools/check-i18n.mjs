@@ -1,12 +1,9 @@
-// Guard: assert paraglide actually compiled our translations.
+// Guard: Paraglide compiled every message the source files hold.
 //
-// The inlang SDK treats a failed plugin import as a WARNING, not an error: if the
-// message-format plugin can't be loaded, `paraglide-js compile` still prints
-// "Successfully compiled" and exits 0 — having emitted an empty message set. vite
-// then happily bundles that, and the console only dies at SSR time, deep inside
-// renderToReadableStream, because every `m.foo()` is undefined. That shipped once
-// (a Nix build, where the plugin was fetched from a CDN in a network-off sandbox),
-// so the build now fails loudly instead.
+// A plugin that fails to import is only a warning to the inlang SDK: `paraglide-js compile`
+// then exits 0 with no messages, and the console dies at SSR on the first `m.foo()`. A
+// message file the build cannot reach is skipped the same way. So this counts the output.
+// Budgets, parity and key rules are `cargo run -p pf-l10n -- check` (l10n/rules.json).
 //
 //   node tools/check-i18n.mjs          # run from web/, after `paraglide-js compile`
 //
@@ -28,9 +25,8 @@ const settingsPath = join(project, "settings.json");
 if (!existsSync(settingsPath)) fail(`no inlang settings at ${settingsPath}`);
 const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
 
-// Every plugin must resolve offline. A remote module makes the build depend on a CDN
-// at compile time, which silently yields zero messages in any sandbox without network
-// (Nix, air-gapped CI) — see the header.
+// A remote module needs the network at compile time, so an offline build (Nix, air-gapped
+// CI) compiles zero messages.
 for (const mod of settings.modules ?? []) {
 	if (/^https?:/i.test(mod)) {
 		fail(
@@ -45,20 +41,22 @@ for (const mod of settings.modules ?? []) {
 		);
 }
 
-// The base-locale source file is the source of truth for how many messages we expect.
-const pathPattern = settings["plugin.inlang.messageFormat"]?.pathPattern;
-if (!pathPattern)
+// Every part's base-locale file must be there: the SDK skips a missing one silently.
+const pattern = settings["plugin.inlang.messageFormat"]?.pathPattern;
+if (!pattern)
 	fail("settings.json has no plugin.inlang.messageFormat.pathPattern");
-const basePath = resolve(
-	project,
-	"..",
-	pathPattern.replace("{locale}", settings.baseLocale),
-);
-if (!existsSync(basePath)) fail(`base-locale messages missing at ${basePath}`);
-const expected = Object.keys(JSON.parse(readFileSync(basePath, "utf8"))).filter(
-	(k) => !k.startsWith("$"),
-).length;
-if (expected === 0) fail(`base-locale messages at ${basePath} are empty`);
+const keys = new Set();
+for (const p of [pattern].flat()) {
+	const path = resolve(
+		project,
+		"..",
+		p.replace("{locale}", settings.baseLocale),
+	);
+	if (!existsSync(path)) fail(`base-locale messages missing at ${path}`);
+	for (const k of Object.keys(JSON.parse(readFileSync(path, "utf8"))))
+		if (!k.startsWith("$")) keys.add(k);
+}
+if (keys.size === 0) fail("the base-locale message files are empty");
 
 const messagesDir = join(outdir, "messages");
 if (!existsSync(messagesDir))
@@ -68,83 +66,13 @@ const emitted = readdirSync(messagesDir).filter(
 	(f) => f.endsWith(".js") && f !== "_index.js",
 ).length;
 
-if (emitted < expected) {
+if (emitted < keys.size) {
 	fail(
-		`paraglide emitted ${emitted} messages but ${basePath} defines ${expected}. ` +
+		`paraglide emitted ${emitted} messages but the base-locale files define ${keys.size}. ` +
 			`The message-format plugin most likely failed to import — check the compile output for PluginImportError.`,
 	);
 }
 
-// The UI copy budget (design/web-console-overhaul.md D2, docs/writing.md §4b). A control is
-// made clear by its options, not by a paragraph under it — the measured baseline was 47 strings
-// over 120 characters, three of them over 550, each sitting under a two-button toggle.
-//
-// Anything an operator might still want to know goes to docs-site behind a `Docs ↗` link.
-const HINT = /(_help|_hint|_note|_intro)$/;
-const HINT_MAX = 110;
-const OTHER_MAX = 200;
-// Translations get 20% more room: German runs longer than English for the same sentence, and
-// squeezing it back under an English budget buys stilted German, not a clearer control. The
-// base locale is where the copy is authored, so that is where the real limit bites.
-const TRANSLATION_SLACK = 1.2;
-
-// Legal and security texts, where the exact wording is the point and a Docs link is not a
-// substitute for reading it. Every entry here is a debt line in the design doc §2.2.
-const LONG_OK = new Set([
-	"store_spec_lead", // installing from a raw package registry: no catalog, no review
-	"store_install_external_note", // third-party catalog code runs with the runner's privileges
-	"store_update_all_external_note", // the same, for a bulk update
-]);
-
-const limit = (key, isBase) =>
-	Math.round(
-		(HINT.test(key) ? HINT_MAX : OTHER_MAX) * (isBase ? 1 : TRANSLATION_SLACK),
-	);
-
-const tooLong = [];
-const keys = {};
-for (const locale of settings.locales) {
-	const path = resolve(project, "..", pathPattern.replace("{locale}", locale));
-	if (!existsSync(path))
-		fail(`messages for locale "${locale}" missing at ${path}`);
-	const messages = JSON.parse(readFileSync(path, "utf8"));
-	keys[locale] = Object.keys(messages).filter((k) => !k.startsWith("$"));
-	for (const [key, value] of Object.entries(messages)) {
-		if (key.startsWith("$") || typeof value !== "string") continue;
-		if (LONG_OK.has(key)) continue;
-		const max = limit(key, locale === settings.baseLocale);
-		if (value.length > max) {
-			tooLong.push(`  ${locale}/${key}: ${value.length} chars (max ${max})`);
-		}
-	}
-}
-if (tooLong.length > 0) {
-	fail(
-		`${tooLong.length} message(s) over the UI copy budget — shorten them, or move the detail ` +
-			`into docs-site behind a Docs link (docs/writing.md §4b):\n${tooLong.join("\n")}`,
-	);
-}
-
-// Locale parity. A key only a translation has is one the base locale dropped or never had, and
-// nothing renders it: that fails. A key a translation lacks is reported and passes — translating
-// it is work of its own, and the count is what shows the gap growing.
-const base = new Set(keys[settings.baseLocale]);
-const lacking = [];
-for (const locale of settings.locales) {
-	if (locale === settings.baseLocale) continue;
-	const orphans = keys[locale].filter((k) => !base.has(k));
-	if (orphans.length > 0) {
-		fail(
-			`${orphans.length} key(s) exist only in "${locale}" — remove them, or add them to ` +
-				`"${settings.baseLocale}":\n${orphans.map((k) => `  ${k}`).join("\n")}`,
-		);
-	}
-	const missing = base.size - keys[locale].length;
-	if (missing > 0) lacking.push(`${locale} lacks ${missing} of ${base.size}`);
-}
-
 console.log(
-	`✔ i18n check: ${emitted} compiled messages for ${settings.locales.join(", ")}, all within the copy budget`,
+	`✔ i18n check: ${emitted} compiled messages for ${settings.locales.join(", ")}`,
 );
-if (lacking.length > 0)
-	console.log(`  untranslated: ${lacking.join(", ")} keys`);

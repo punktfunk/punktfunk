@@ -11,10 +11,22 @@ use crate::ipc::{Diagnostic, SeatingStatus};
 use crate::model::{Ledger, RuntimeStatus, Seat};
 use crate::secret::Secret;
 use crate::unlock::DeviceList;
+use std::collections::BTreeMap;
 
 pub trait PlatformBackend: Send + Sync + 'static {
     fn provision(&self, seat: &Seat) -> Result<(), BackendError>;
     fn start(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError>;
+
+    /// [`Self::start`] of a seat its person proved the start for with `password`. Linux may open
+    /// their session with it; nothing keeps it past the start.
+    fn start_with_password(
+        &self,
+        seat: &Seat,
+        _password: &Secret,
+    ) -> Result<RuntimeStatus, BackendError> {
+        self.start(seat)
+    }
+
     fn stop(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError>;
     fn remove(&self, seat: &Seat) -> Result<(), BackendError>;
     /// A pure read of `seat`'s state.
@@ -39,6 +51,12 @@ pub trait PlatformBackend: Send + Sync + 'static {
         Err(UnsupportedBackend::unavailable())
     }
 
+    /// Linux: the uid of the owner whose row this backend last prepared, by [`Self::adopt`] or at
+    /// the supervisor's start. `None` before then, and on other platforms.
+    fn owner_uid(&self) -> Option<u32> {
+        None
+    }
+
     /// Linux: the uid of `account`, an existing user a new row may adopt, or why it may not. The
     /// uid is the backend's own reading, never the caller's. `ledger` holds the rows that exist:
     /// the box owner's account and any account another row holds are refused.
@@ -53,10 +71,9 @@ pub trait PlatformBackend: Send + Sync + 'static {
     }
 
     /// Make `seat`, a new adopted row, ready to run on its person's account with `password`. A
-    /// refusal undoes its own steps. `Ok(true)`: adopt put the account in Remote Desktop Users.
-    /// Windows verifies the password here and seals it; Linux has had [`Self::check_password`]
-    /// pass and ignores it.
-    fn adopt_account(&self, _seat: &Seat, _password: &Secret) -> Result<bool, BackendError> {
+    /// refusal undoes its own steps; the answer is what release must take back. Windows verifies
+    /// the password here and seals it; Linux has had [`Self::check_password`] pass and ignores it.
+    fn adopt_account(&self, _seat: &Seat, _password: &Secret) -> Result<Adopted, BackendError> {
         Err(UnsupportedBackend::unavailable())
     }
 
@@ -127,6 +144,16 @@ pub trait PlatformBackend: Send + Sync + 'static {
     }
 }
 
+/// What [`PlatformBackend::adopt_account`] found and changed on a person's account. The row keeps
+/// both, so release takes back only what adopt gave.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Adopted {
+    /// Adopt put the account in Remote Desktop Users.
+    pub rdp_granted: bool,
+    /// The account already held the console deny before adopt.
+    pub console_deny_kept: bool,
+}
+
 fn no_flatpaks() -> BackendError {
     BackendError::new("not_supported", "box-wide Flatpaks are Linux's")
 }
@@ -136,6 +163,10 @@ fn no_flatpaks() -> BackendError {
 pub struct BackendError {
     pub code: String,
     pub message: String,
+    /// When `message` is a sentence for a person: the code of the host message
+    /// `apierr_<said>` it is the English of, worded with `params`.
+    pub said: Option<String>,
+    pub params: BTreeMap<String, String>,
 }
 
 impl BackendError {
@@ -143,7 +174,21 @@ impl BackendError {
         Self {
             code: code.into(),
             message: message.into(),
+            said: None,
+            params: BTreeMap::new(),
         }
+    }
+
+    /// Marks `message` as the English of the host message `apierr_<code>`.
+    pub fn said(mut self, code: &str) -> Self {
+        self.said = Some(code.to_string());
+        self
+    }
+
+    /// Fills the placeholder `name` of that message.
+    pub fn param(mut self, name: &str, value: impl ToString) -> Self {
+        self.params.insert(name.to_string(), value.to_string());
+        self
     }
 }
 

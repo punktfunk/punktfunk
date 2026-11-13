@@ -11,6 +11,7 @@
 //! exactly this, with its own confirmation) is the intended upgrade there.
 
 use adw::prelude::*;
+use pf_l10n::{client, common, desktop};
 use std::path::PathBuf;
 
 /// Create the shortcut, or — sandboxed — show the URL to place by hand. `Some` is the toast to
@@ -18,15 +19,15 @@ use std::path::PathBuf;
 pub fn create(parent: &impl IsA<gtk::Widget>, label: &str, url: &str) -> Option<String> {
     if sandboxed() {
         let dialog = adw::AlertDialog::new(
-            Some("Create Shortcut"),
-            Some(
-                "Punktfunk is sandboxed here, so it can't add the shortcut itself. Copy this \
-                 link and make a launcher for it \u{2014} it opens the same stream.",
-            ),
+            Some(desktop::desktop_shortcut_title()),
+            Some(desktop::desktop_shortcut_sandboxed_body()),
         );
         let entry = gtk::Entry::builder().text(url).editable(false).build();
         dialog.set_extra_child(Some(&entry));
-        dialog.add_responses(&[("close", "Close"), ("copy", "Copy link")]);
+        dialog.add_responses(&[
+            ("close", common::common_close()),
+            ("copy", client::hostcard_copy_link()),
+        ]);
         dialog.set_response_appearance("copy", adw::ResponseAppearance::Suggested);
         dialog.set_default_response(Some("copy"));
         dialog.set_close_response("close");
@@ -40,10 +41,10 @@ pub fn create(parent: &impl IsA<gtk::Widget>, label: &str, url: &str) -> Option<
         return None;
     }
     Some(match write_desktop_entry(label, url) {
-        Ok(_) => format!("Shortcut for \u{201c}{label}\u{201d} added to your applications"),
+        Ok(_) => desktop::desktop_shortcut_added_body(label),
         Err(e) => {
             tracing::warn!(error = %e, "shortcut not written");
-            format!("Couldn't create the shortcut \u{2014} {e}")
+            desktop::desktop_shortcut_failed(e)
         }
     })
 }

@@ -1,15 +1,15 @@
 //! Profiles: the people on this box, in `profiles.json` beside the pairing store.
 //!
-//! The schema is `multi-user-profiles.md` §4 with one more account kind, [`OsAccount::Seat`].
+//! The schema is the part of `multi-user-profiles.md` §4 the host reads, with one more account
+//! kind, [`OsAccount::Seat`]. A key it doesn't know is dropped on load and gone at the next save.
 //! The owner profile is the box's own session; [`Profiles::ensure_owner`] creates it at start.
-//! A profile is not a trust boundary: the device stays the principal, and any paired device may
-//! name any profile.
+//! The device stays the principal. An open profile is any paired device's to name; a locked one
+//! opens only for the devices on its list ([`Profiles::opens`], [`locks`]).
 //!
 //! Two file rules hold. A file that does not parse keeps its bytes and refuses every mutation, so
 //! a save never overwrites what could not be read. A save that fails is a mutation that failed:
 //! memory keeps the old file.
 
-use crate::library::CustomEntry;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -19,8 +19,12 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use utoipa::ToSchema;
 
+/// Which paired devices may open each profile.
+pub(crate) mod locks;
 /// Take-turns profiles: a profile bound to a Windows account that takes the console in turn.
 pub(crate) mod take_turns;
+
+pub(crate) use pf_seats::locks::Opens;
 
 /// Bumped on a breaking change to a field's meaning; `serde(default)` covers additions.
 pub const PROFILES_SCHEMA_VERSION: u32 = 1;
@@ -35,6 +39,8 @@ pub const DISPLAY_NAME_MAX: usize = 32;
 /// The largest avatar the host stores.
 pub const AVATAR_MAX_BYTES: usize = 1024 * 1024;
 const OWNER_ACCENT: &str = "#3b82f6";
+/// 60 s. The warm-seat pick and the console's "last played" read a connect to the minute.
+const TOUCH_GRANULARITY_SECS: u64 = 60;
 
 /// Host-minted, 12 lowercase hex.
 pub type ProfileId = String;
@@ -69,26 +75,10 @@ pub struct Profile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_device: Option<String>,
     #[serde(default)]
-    pub assigned_fingerprints: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub passcode: Option<PasscodeHash>,
-    #[serde(default)]
-    pub require_passcode_even_when_assigned: bool,
-    #[serde(default)]
-    pub allow_shared_view: bool,
-    #[serde(default)]
-    pub tvos_user_ids: Vec<String>,
-    #[serde(default)]
-    pub library_scope: LibraryScope,
-    #[serde(default)]
-    pub custom_entries: Vec<CustomEntry>,
-    #[serde(default)]
-    pub session_defaults: SessionDefaults,
-    #[serde(default)]
     pub created_unix: u64,
     #[serde(default)]
     pub updated_unix: u64,
-    /// When a session last resolved to this profile. `0`: never.
+    /// When a session last resolved to this profile, to the minute. `0`: never.
     #[serde(default)]
     pub last_used_unix: u64,
 }
@@ -105,13 +95,8 @@ pub enum OsAccount {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seat: Option<String>,
     },
-    /// Reserved for the OS-user increment: resolves to [`ProfileError::SessionUnavailable`].
-    Linux {
-        username: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        uid: Option<u32>,
-    },
-    /// Reserved for the OS-user increment: resolves to [`ProfileError::SessionUnavailable`].
+    /// A take-turns profile: a local Windows account that takes the console in turn. It plays
+    /// on that account's SID when one is stored, else on the name alone.
     Windows {
         account_name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,49 +115,12 @@ pub enum Home {
     Bigpicture,
 }
 
-/// Names a secret in an OS vault; never the secret.
+/// Where a take-turns account's secret would live. Only `none` exists: the console switches
+/// accounts without a password. Still written, because an older host requires the key.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "source", rename_all = "snake_case")]
 pub enum CredentialRef {
     None,
-    CredentialManager { target: String },
-    LsaSecret { key: String },
-    DpapiBlob { path: String },
-}
-
-/// Argon2id PHC string. Unused in this increment.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct PasscodeHash {
-    pub phc: String,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "mode", rename_all = "snake_case")]
-pub enum LibraryScope {
-    #[default]
-    All,
-    Allow {
-        ids: Vec<String>,
-    },
-    Deny {
-        ids: Vec<String>,
-    },
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct SessionDefaults {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_width: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_height: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_refresh_hz: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_bitrate_kbps: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compositor: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gamepad: Option<String>,
 }
 
 /// The profile a connect lands in.
@@ -183,6 +131,8 @@ pub struct Resolved {
     pub os_account: OsAccount,
     pub home: Home,
     pub via: ResolveVia,
+    /// The owner: the box's own session, which plays the box's library as it is.
+    pub owner: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -212,6 +162,8 @@ pub enum EditError {
     NotFound,
     /// The body breaks a rule; the sentence says which.
     Invalid(String),
+    /// The name is empty once trimmed.
+    NameMissing,
     /// Another profile has that name.
     NameTaken,
     /// The box already has [`PROFILES_MAX`].
@@ -227,9 +179,10 @@ impl std::fmt::Display for EditError {
         match self {
             EditError::NotFound => f.write_str("no profile with that id"),
             EditError::Invalid(why) => f.write_str(why),
-            EditError::NameTaken => f.write_str("another profile has that name"),
-            EditError::Full => write!(f, "a host holds at most {PROFILES_MAX} profiles"),
-            EditError::Owner => f.write_str("the owner profile can't be removed"),
+            EditError::NameMissing => f.write_str("A profile needs a name"),
+            EditError::NameTaken => f.write_str("Another profile has that name"),
+            EditError::Full => write!(f, "A host holds at most {PROFILES_MAX} profiles"),
+            EditError::Owner => f.write_str("The owner profile can't be removed"),
             EditError::Store(e) => write!(f, "{e:#}"),
         }
     }
@@ -333,6 +286,8 @@ pub struct Profiles {
     /// This seat host is the box owner's, behind the door: it also serves the profiles that
     /// share the owner's desktop.
     owner_host: bool,
+    /// `profile-locks.json` beside the file.
+    locks: locks::LockStore,
 }
 
 impl Profiles {
@@ -342,6 +297,7 @@ impl Profiles {
         let (file, unparsed) = read(&path);
         let legacy = legacy_index(&file);
         Profiles {
+            locks: locks::LockStore::open(path.with_file_name(pf_seats::locks::FILE), false),
             state: Mutex::new(State {
                 path,
                 file,
@@ -360,6 +316,7 @@ impl Profiles {
     pub fn load_box(path: PathBuf, seat: Option<String>) -> Profiles {
         let (file, unparsed) = parse(&path, std::fs::read(&path).ok());
         Profiles {
+            locks: locks::LockStore::open(path.with_file_name(pf_seats::locks::FILE), true),
             state: Mutex::new(State {
                 stamp: mtime(&path),
                 legacy: legacy_index(&file),
@@ -392,11 +349,12 @@ impl Profiles {
         default_profile(&self.lock().file).map(|p| p.id.clone())
     }
 
-    /// The name [`create`](Self::create) would take `input` under, or what it would refuse. The
-    /// caller asks before it makes a seat's account for the profile.
+    /// The name [`create`](Self::create) would take `input` under, or what it would refuse, a
+    /// store it can't write included. The caller asks before it makes a seat's account for the
+    /// profile.
     pub fn vet_create(&self, input: &ProfileCreate) -> Result<String, EditError> {
-        let name = clean_name(&input.display_name)
-            .ok_or_else(|| EditError::Invalid("a profile needs a name".into()))?;
+        self.writable().map_err(EditError::Store)?;
+        let name = clean_name(&input.display_name).ok_or(EditError::NameMissing)?;
         if let Some(accent) = &input.accent {
             valid_accent(accent.clone())?;
         }
@@ -411,8 +369,7 @@ impl Profiles {
         input: ProfileCreate,
         os_account: OsAccount,
     ) -> Result<Profile, EditError> {
-        let name = clean_name(&input.display_name)
-            .ok_or_else(|| EditError::Invalid("a profile needs a name".into()))?;
+        let name = clean_name(&input.display_name).ok_or(EditError::NameMissing)?;
         let accent = input.accent.map(valid_accent).transpose()?;
         let mut made = None;
         self.edit(|file| {
@@ -427,14 +384,6 @@ impl Profiles {
                 os_account,
                 home: input.home.unwrap_or_default(),
                 legacy_device: None,
-                assigned_fingerprints: Vec::new(),
-                passcode: None,
-                require_passcode_even_when_assigned: false,
-                allow_shared_view: false,
-                tvos_user_ids: Vec::new(),
-                library_scope: LibraryScope::All,
-                custom_entries: Vec::new(),
-                session_defaults: SessionDefaults::default(),
                 created_unix: now,
                 updated_unix: now,
                 last_used_unix: 0,
@@ -451,9 +400,7 @@ impl Profiles {
         let name = input
             .display_name
             .as_deref()
-            .map(|n| {
-                clean_name(n).ok_or_else(|| EditError::Invalid("a profile needs a name".into()))
-            })
+            .map(|n| clean_name(n).ok_or(EditError::NameMissing))
             .transpose()?;
         let accent = input.accent.map(valid_accent).transpose()?;
         let mut out = None;
@@ -487,8 +434,10 @@ impl Profiles {
         out.ok_or(EditError::NotFound)
     }
 
-    /// Removes `id`. `erase` also deletes its Steam home and picture; without it the home stays
-    /// for the console to list. Sessions playing as it hear [`removed`].
+    /// Removes `id`. `erase` also deletes its Steam home and picture ([`Self::erase`]); without it
+    /// the home stays for the console to list. Its library layer and its lock go too, a seat's
+    /// only in [`Self::erase`]: a seat that won't stop is [`Self::restore`]d, locked as it was.
+    /// Sessions playing as it hear [`removed`].
     pub fn delete(&self, id: &str, erase: bool) -> Result<Profile, EditError> {
         let mut gone = None;
         self.edit(|file| {
@@ -513,23 +462,51 @@ impl Profiles {
             Ok(())
         })?;
         let gone = gone.ok_or(EditError::NotFound)?;
-        if erase && safe_id(id) {
-            let state = self.lock();
-            remove_avatar_files(&state.path.with_file_name("profiles"), id, None);
-            drop(state);
-            #[cfg(target_os = "linux")]
-            {
-                let _ = std::fs::remove_dir_all(pf_paths::seat_home(id));
-                let _ = std::fs::remove_file(pf_paths::seat_record(id));
-            }
+        if erase {
+            self.erase(id);
+        } else if !matches!(gone.os_account, OsAccount::Seat { seat: Some(_) }) {
+            crate::library::forget_profile(id);
+            self.locks.forget(id);
         }
         announce_removed(id);
         Ok(gone)
     }
 
+    /// Deletes the Steam home, picture, library layer and lock of `id`, which the store no longer
+    /// holds.
+    pub fn erase(&self, id: &str) {
+        crate::library::forget_profile(id);
+        self.locks.forget(id);
+        if !safe_id(id) {
+            return;
+        }
+        let state = self.lock();
+        remove_avatar_files(&state.path.with_file_name("profiles"), id, None);
+        drop(state);
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::fs::remove_dir_all(pf_paths::seat_home(id));
+            let _ = std::fs::remove_file(pf_paths::seat_record(id));
+        }
+    }
+
+    /// Puts back `p`, which [`Self::delete`] took out, when what had to follow failed. `default`
+    /// makes it the default again.
+    pub fn restore(&self, p: Profile, default: bool) -> Result<(), EditError> {
+        self.edit(|file| {
+            refuse_new(file, &p.display_name)?;
+            if default {
+                file.default_profile_id = Some(p.id.clone());
+            }
+            file.profiles.push(p);
+            Ok(())
+        })
+    }
+
     /// A seat host's copy follows the box's file, so a profile the box deletes never runs
-    /// [`Self::delete`] here. Sends [`removed`] for each id that left the file since `known`,
-    /// then keeps the ids as they are. A file that is empty or doesn't parse says nothing.
+    /// [`Self::delete`] here. Sends [`removed`] for each id that left the file since `known`, and
+    /// on the owner's host, which writes the library, removes its layer. Then keeps the ids as
+    /// they are. A file that is empty or doesn't parse says nothing.
     pub fn announce_removals(&self, known: &mut std::collections::HashSet<ProfileId>) {
         let now: std::collections::HashSet<ProfileId> = {
             let state = self.lock();
@@ -540,6 +517,7 @@ impl Profiles {
         };
         for gone in known.difference(&now) {
             announce_removed(gone);
+            crate::library::forget_profile(gone);
         }
         *known = now;
     }
@@ -557,13 +535,21 @@ impl Profiles {
         })
     }
 
-    /// Stamps `last_used_unix`. Best-effort: a connect never fails on it.
+    /// Stamps `last_used_unix`. Best-effort: a connect never fails on it. A stamp under
+    /// [`TOUCH_GRANULARITY_SECS`] old stays, so a reconnect burst saves the file once.
     pub fn touch(&self, id: &str) {
-        let known = self.lock().file.profiles.iter().any(|p| p.id == id);
-        if known {
+        let now = now_unix();
+        let due = self
+            .lock()
+            .file
+            .profiles
+            .iter()
+            .find(|p| p.id == id)
+            .is_some_and(|p| now.abs_diff(p.last_used_unix) >= TOUCH_GRANULARITY_SECS);
+        if due {
             let _ = self.mutate(|file| {
                 if let Some(p) = file.profiles.iter_mut().find(|p| p.id == id) {
-                    p.last_used_unix = now_unix();
+                    p.last_used_unix = now;
                 }
                 Ok(())
             });
@@ -625,14 +611,6 @@ impl Profiles {
                     os_account: OsAccount::Operator,
                     home: Home::Desktop,
                     legacy_device: None,
-                    assigned_fingerprints: Vec::new(),
-                    passcode: None,
-                    require_passcode_even_when_assigned: false,
-                    allow_shared_view: false,
-                    tvos_user_ids: Vec::new(),
-                    library_scope: LibraryScope::All,
-                    custom_entries: Vec::new(),
-                    session_defaults: SessionDefaults::default(),
                     created_unix: now,
                     updated_unix: now,
                     last_used_unix: 0,
@@ -701,14 +679,6 @@ impl Profiles {
                 os_account: OsAccount::Operator,
                 home: Home::Desktop,
                 legacy_device: legacy,
-                assigned_fingerprints: Vec::new(),
-                passcode: None,
-                require_passcode_even_when_assigned: false,
-                allow_shared_view: false,
-                tvos_user_ids: Vec::new(),
-                library_scope: LibraryScope::All,
-                custom_entries: Vec::new(),
-                session_defaults: SessionDefaults::default(),
                 created_unix: now,
                 updated_unix: now,
                 last_used_unix: 0,
@@ -766,9 +736,68 @@ impl Profiles {
         }
     }
 
-    /// The profile a connect from `fp` asking for `asked` lands in (`profiles-and-seats.md`
-    /// §6.2). `asked` is read before trust: it is only ever compared against stored ids.
+    /// What device `fp` needs to open profile `id`: the one check every way into a profile asks
+    /// ([`locks`]), under [`Self::lock_holder`]'s lock. The owner's stand-in, while
+    /// `profiles.json` doesn't read, opens nothing once any profile is locked: its lock is the
+    /// owner's, under an id this host can't read.
+    pub fn opens(&self, id: &str, fp: Option<&str>) -> Opens {
+        if id == OPERATOR_PROFILE_ID && self.locks.any_locked() {
+            return Opens::No;
+        }
+        self.locks.opens((id, &self.lock_holder(id)), fp)
+    }
+
+    /// The profile whose lock opens `id`: the owner's for one that shares the owner's desktop,
+    /// since one desktop has one lock, else its own.
+    pub(crate) fn lock_holder(&self, id: &str) -> String {
+        let state = self.lock();
+        let mut desktop = state.file.profiles.iter().filter(|p| is_owner(p));
+        match desktop.next() {
+            Some(owner) if owner.id != id && desktop.any(|p| p.id == id) => owner.id.clone(),
+            _ => id.to_string(),
+        }
+    }
+
+    pub(crate) fn locks(&self) -> &locks::LockStore {
+        &self.locks
+    }
+
+    /// Whether this is a seat host's read-only copy of the box's profiles.
+    pub(crate) fn reads_box(&self) -> bool {
+        self.lock().read_only
+    }
+
+    /// The profile a connect from `fp` asking for `asked` lands in and plays now
+    /// (`profiles-and-seats.md` §6.2): [`Self::pick`], refused while its account can't play.
     pub fn resolve(&self, fp: Option<&str>, asked: Option<&str>) -> Result<Resolved, ProfileError> {
+        let resolved = self.pick(fp, asked)?;
+        // A take-turns profile plays here only once its account is the console. The client waits
+        // on the seat state (`mgmt`) until it is, so a dial that lands early is refused, not
+        // played under the wrong account.
+        match &resolved.os_account {
+            OsAccount::Windows {
+                account_name, sid, ..
+            } => {
+                let on_console = take_turns::holds_console(
+                    account_name,
+                    sid.as_deref(),
+                    take_turns::console_account().as_deref(),
+                    sid.as_ref()
+                        .and_then(|_| take_turns::session_sid())
+                        .as_deref(),
+                );
+                if !on_console {
+                    return Err(ProfileError::SessionUnavailable);
+                }
+            }
+            OsAccount::Operator | OsAccount::Seat { .. } => {}
+        }
+        Ok(resolved)
+    }
+
+    /// The profile a connect from `fp` asking for `asked` lands in, whether or not its account
+    /// can play now. `asked` is read before trust: it is only ever compared against stored ids.
+    pub fn pick(&self, fp: Option<&str>, asked: Option<&str>) -> Result<Resolved, ProfileError> {
         let state = self.lock();
         let file = &state.file;
         let (profile, via) = match asked {
@@ -814,28 +843,17 @@ impl Profiles {
                 os_account: OsAccount::Operator,
                 home: Home::Desktop,
                 via,
+                owner: true,
             });
         };
-        // A take-turns profile plays here only once its account is the console. The client waits
-        // on the seat state (`mgmt`) until it is, so a dial that lands early is refused, not
-        // played under the wrong account. Linux's own-user kind is still unbuilt.
-        match &profile.os_account {
-            OsAccount::Linux { .. } => return Err(ProfileError::SessionUnavailable),
-            OsAccount::Windows { account_name, .. } => {
-                let on_console = take_turns::console_account()
-                    .is_some_and(|user| user.eq_ignore_ascii_case(account_name));
-                if !on_console {
-                    return Err(ProfileError::SessionUnavailable);
-                }
-            }
-            OsAccount::Operator | OsAccount::Seat { .. } => {}
-        }
+        let owner = file.profiles.iter().find(|p| is_owner(p)).map(|p| &p.id);
         Ok(Resolved {
             id: profile.id.clone(),
             display_name: profile.display_name.clone(),
             os_account: profile.os_account.clone(),
             home: profile.home,
             via,
+            owner: owner == Some(&profile.id),
         })
     }
 
@@ -918,12 +936,6 @@ impl Profiles {
     fn mutate(&self, change: impl FnOnce(&mut ProfilesFile) -> Result<()>) -> Result<()> {
         self.writable()?;
         let mut state = self.lock();
-        if state.unparsed.is_some() {
-            bail!(
-                "{} did not parse; fix or remove it before changing profiles",
-                state.path.display()
-            );
-        }
         let mut next = state.file.clone();
         change(&mut next)?;
         next.version = PROFILES_SCHEMA_VERSION;
@@ -935,10 +947,17 @@ impl Profiles {
         Ok(())
     }
 
-    /// The box's own host writes profiles; a seat's copy is read only.
+    /// The box's own host writes profiles while its file parses; a seat's copy is read only.
     fn writable(&self) -> Result<()> {
-        if self.lock().read_only {
+        let state = self.lock();
+        if state.read_only {
             bail!("profiles are the box's; a seat host never edits them");
+        }
+        if state.unparsed.is_some() {
+            bail!(
+                "{} did not parse; fix or remove it before changing profiles",
+                state.path.display()
+            );
         }
         Ok(())
     }
@@ -1050,7 +1069,12 @@ fn refuse_new(file: &ProfilesFile, name: &str) -> Result<(), EditError> {
 fn name_taken(profiles: &[Profile], name: &str, except: Option<&str>) -> bool {
     profiles
         .iter()
-        .any(|p| Some(p.id.as_str()) != except && p.display_name.eq_ignore_ascii_case(name))
+        .any(|p| Some(p.id.as_str()) != except && same_name(&p.display_name, name))
+}
+
+/// Whether two names are one, case folded as the seat ledger folds its rows' names.
+pub fn same_name(a: &str, b: &str) -> bool {
+    a.to_lowercase() == b.to_lowercase()
 }
 
 /// `#RRGGBB`, lowercased.
@@ -1065,11 +1089,7 @@ fn valid_accent(accent: String) -> Result<String, EditError> {
 
 /// `name`, or `name 2`, `name 3`…: display names are unique ignoring case.
 fn unique_name(profiles: &[Profile], name: &str) -> String {
-    let taken = |n: &str| {
-        profiles
-            .iter()
-            .any(|p| p.display_name.eq_ignore_ascii_case(n))
-    };
+    let taken = |n: &str| name_taken(profiles, n, None);
     if !taken(name) {
         return name.to_string();
     }

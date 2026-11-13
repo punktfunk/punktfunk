@@ -3,8 +3,8 @@
 //! Type **`_punktfunk._udp.local.`** (UDP: the protocol is QUIC). Port is the QUIC
 //! control/data port a client `--connect`s. TXT:
 //!
-//! - `proto` — service id ([`NATIVE_PROTO`]). Clients drop an advert with another value, so it
-//!   stays `punktfunk/1` while the protocol itself moves; `wire` names the protocol.
+//! - `proto` — service id ([`NATIVE_PROTO`], `punktfunk/2`). Clients drop an advert with another
+//!   value, and 0.43 and older accept only `punktfunk/1`. `wire` names the protocols answered.
 //! - `fp` — host cert SHA-256 (lowercase hex). mDNS is unauthenticated, so this is advisory;
 //!   TOFU still verifies on connect.
 //! - `pair` — `required` or `optional`.
@@ -34,15 +34,17 @@ pub(crate) fn mdns_enabled() -> bool {
     pf_host_config::row_bool("PUNKTFUNK_MDNS")
 }
 
-pub const NATIVE_PROTO: &str = "punktfunk/1";
+pub const NATIVE_PROTO: &str = "punktfunk/2";
 
 /// A-record target (`<label>.local.`), not the service instance name. Instance may be free
 /// text (`PUNKTFUNK_HOST_NAME`); a host name may not. `mdns-sd` rejects the whole `ServiceInfo`
 /// if the target is illegal, which takes discovery down rather than looking wrong. Already-legal
-/// names pass through; anything outside `[A-Za-z0-9.-]` becomes `-`.
+/// names pass through; anything outside `[A-Za-z0-9.-]` becomes `-`. A non-ASCII name also gets
+/// `-` and 6 hex of its SHA-256, so two all-CJK hosts on one LAN do not answer for one label.
 pub(crate) fn dns_label(name: &str) -> String {
+    let name = name.trim();
     let mut out = String::new();
-    for c in name.trim().chars() {
+    for c in name.chars() {
         if out.len() >= 63 {
             break;
         }
@@ -52,12 +54,17 @@ pub(crate) fn dns_label(name: &str) -> String {
             '-'
         });
     }
-    let out = out.trim_matches(['-', '.']).to_string();
-    if out.is_empty() {
-        "punktfunk-host".to_string()
-    } else {
-        out
+    let out = match out.trim_matches(['-', '.']) {
+        "" => "punktfunk-host",
+        out => out,
+    };
+    if name.is_ascii() {
+        return out.to_string();
     }
+    use sha2::Digest as _;
+    let tag = hex::encode(&sha2::Sha256::digest(name.as_bytes())[..3]);
+    let base = out[..out.len().min(63 - 7)].trim_end_matches(['-', '.']);
+    format!("{base}-{tag}")
 }
 
 /// Holds the mDNS daemon; dropping it unregisters the service and stops the re-announce loop.
@@ -70,27 +77,36 @@ pub struct Advert {
 
 const IP_RECHECK: Duration = Duration::from_secs(10);
 
-/// Loopback only while the machine still has none.
-fn current_ip() -> IpAddr {
-    crate::host::primary_local_ip().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+/// The addresses an advert carries: the routed one first (loopback while the machine has none),
+/// then this machine's address on a Steam Frame adapter network, which no default route names.
+/// mdns-sd sends each address only on the interface that holds it.
+fn current_addrs() -> Vec<IpAddr> {
+    let routed = crate::host::primary_local_ip().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    let mut addrs = vec![routed];
+    for ip in punktfunk_core::discovery::frame_adapter_ips() {
+        if IpAddr::V4(ip) != routed {
+            addrs.push(IpAddr::V4(ip));
+        }
+    }
+    addrs
 }
 
-/// Register `build(ip)` for the current address and again whenever it changes. Shared by
-/// [`advertise_native`] and [`crate::gamestream::mdns`].
+/// Register `build(addrs)` for the current [`current_addrs`] and again whenever they change.
+/// Shared by [`advertise_native`] and [`crate::gamestream::mdns`].
 ///
-/// mDNS records are pushed: the address true at `register()` keeps being announced until a
-/// newer one is registered. A second `register()` of the same fullname is an update.
+/// mDNS records are pushed: the addresses true at `register()` keep being announced until a
+/// newer set is registered. A second `register()` of the same fullname is an update.
 ///
-/// Poll the *routed* address; do not subscribe to the daemon's `IpAdd` events. The NIC often
-/// already has an address and only the default route lands late, so no interface event fires.
+/// Poll the addresses; do not subscribe to the daemon's `IpAdd` events. The NIC often already
+/// has an address and only the default route lands late, so no interface event fires.
 pub(crate) fn advertise_live(
     service: &'static str,
-    build: impl Fn(IpAddr) -> Result<ServiceInfo> + Send + 'static,
+    build: impl Fn(&[IpAddr]) -> Result<ServiceInfo> + Send + 'static,
 ) -> Result<Advert> {
     let daemon = ServiceDaemon::new().context("create mDNS daemon")?;
-    let registered = current_ip();
+    let registered = current_addrs();
     daemon
-        .register(build(registered)?)
+        .register(build(&registered)?)
         .with_context(|| format!("register {service} mDNS service"))?;
 
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
@@ -102,15 +118,15 @@ pub(crate) fn advertise_live(
             stop_rx.recv_timeout(IP_RECHECK),
             Err(mpsc::RecvTimeoutError::Timeout)
         ) {
-            let now = current_ip();
+            let now = current_addrs();
             if now == announced {
                 continue;
             }
-            match build(now)
+            match build(&now)
                 .and_then(|info| bg_daemon.register(info).context("re-register mDNS service"))
             {
                 Ok(()) => {
-                    tracing::info!(service, from = %announced, to = %now, "host address changed — re-announced");
+                    tracing::info!(service, from = ?announced, to = ?now, "host address changed — re-announced");
                     announced = now;
                 }
                 // Keep the previous record and retry next tick rather than going dark.
@@ -170,7 +186,8 @@ pub fn advertise_native(
         pair = if require_pairing { "required" } else { "optional" },
         "native punktfunk mDNS advertising"
     );
-    advertise_live(NATIVE_SERVICE, move |ip| {
+    advertise_live(NATIVE_SERVICE, move |addrs| {
+        let ip = addrs[0];
         let mut props = fixed.clone();
         // Re-read on each rebuild: the routed NIC (and its MAC) may have changed.
         let macs = crate::wol::wake_macs(ip);
@@ -180,7 +197,7 @@ pub fn advertise_native(
         props.insert("addr".into(), ip.to_string());
         // Detect and warn only. Re-check on address change: the routed NIC may be a different one.
         crate::wol::warn_if_not_armed(ip);
-        ServiceInfo::new(NATIVE_SERVICE, &instance, &host_name, ip, port, props)
+        ServiceInfo::new(NATIVE_SERVICE, &instance, &host_name, addrs, port, props)
             .context("build native mDNS ServiceInfo")
     })
 }
@@ -198,10 +215,22 @@ mod tests {
         // Free-text display names become a legal label instead of poisoning the record.
         assert_eq!(dns_label("Living Room PC"), "Living-Room-PC");
         assert_eq!(dns_label("  Ben's Rig!  "), "Ben-s-Rig");
-        assert_eq!(dns_label("Wohnzimmer-PC ☕"), "Wohnzimmer-PC");
         assert_eq!(dns_label("***"), "punktfunk-host");
         assert_eq!(dns_label(""), "punktfunk-host");
         // DNS caps a label at 63 bytes.
-        assert!(dns_label(&"a".repeat(200)).len() <= 63);
+        assert_eq!(dns_label(&"a".repeat(200)), "a".repeat(63));
+    }
+
+    /// A non-ASCII name keeps a label of its own: two all-CJK hosts would otherwise both answer
+    /// for `punktfunk-host.local.`. The suffix is the name's SHA-256, so it never moves.
+    #[test]
+    fn dns_label_tells_non_ascii_names_apart() {
+        assert_eq!(dns_label("客厅电脑"), "punktfunk-host-dce017");
+        assert_eq!(dns_label("書斎"), "punktfunk-host-c4cdbc");
+        assert_eq!(dns_label(" 거실 PC "), "PC-673531");
+        assert_eq!(dns_label("Wohnzimmer-PC ☕"), "Wohnzimmer-PC-055666");
+        let long = dns_label(&format!("{}漢", "a".repeat(200)));
+        assert_eq!(long.len(), 63);
+        assert!(long.starts_with(&"a".repeat(56)), "{long}");
     }
 }

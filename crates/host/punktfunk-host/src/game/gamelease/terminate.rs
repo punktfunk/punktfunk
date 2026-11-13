@@ -90,8 +90,9 @@ fn reap_child(owned: Option<OwnedChild>) -> bool {
     unsafe { libc::waitpid(c.pid as i32, &mut status, libc::WNOHANG) != 0 }
 }
 
-/// SIGTERM, wait, SIGKILL, reap. Targets are fixed at entry and re-verified
-/// by start time before each signal ([`crate::procscan::Scanner::alive`]).
+/// SIGTERM, wait, SIGKILL, reap. Targets are fixed at entry. Each matcher hit is
+/// re-verified by start time before a signal ([`crate::procscan::Scanner::alive`]),
+/// the child only while the lease still holds it.
 #[cfg(target_os = "linux")]
 fn unix_term_ladder(shared: &LeaseShared) {
     let scanner = crate::procscan::Scanner::system();
@@ -99,8 +100,13 @@ fn unix_term_ladder(shared: &LeaseShared) {
 
     // Group-signal the child when it leads one: that reaches a shell
     // wrapper's grandchildren (the game). A per-pid sweep would miss them.
+    // A non-leader's pid is free once the lease forgets it (reaped); a leader's
+    // group id stays reserved while the group has members.
     let signal_child = |sig: i32| -> bool {
         let Some(c) = owned else { return false };
+        if !c.group_leader && shared.owned_child().is_none() {
+            return false;
+        }
         let target = if c.group_leader {
             -(c.pid as i32)
         } else {

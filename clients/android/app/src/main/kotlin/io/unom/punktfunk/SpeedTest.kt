@@ -1,6 +1,10 @@
 package io.unom.punktfunk
 
+import android.content.res.Resources
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Say
+import io.unom.punktfunk.kit.say
 import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.KnownHost
 import java.math.BigDecimal
@@ -113,37 +117,34 @@ fun parseNetworkCheck(v: DoubleArray): SpeedTestPhase.Done? {
 }
 
 /**
- * A finding in words — what did not happen, then the next move — the same sentences every
- * shell shows, pinned by `clients/shared/finding-vectors.json`.
+ * A finding as a message and its figures — the same sentences every shell shows, pinned by
+ * `clients/shared/finding-vectors.json`. Figures are written with a `.` in every language.
  */
-fun findingText(id: Int, numbers: List<Int>): String {
+fun findingMessage(id: Int, numbers: List<Int>): Say {
     val a = numbers.getOrElse(0) { 0 }
     val b = numbers.getOrElse(1) { 0 }
     val pct = { x: Int -> fixed(x / 100.0, 1) }
     return when (id) {
         1 -> if (a > 0 && b > 0) {
-            "The host's port is faster than this device's ($a vs $b Mbit/s), so bursts overflow " +
-                "the switch between them."
+            say(R.string.finding_speed_mismatch_body, a, b)
         } else {
-            "The host's port is faster than this device's, so bursts overflow the switch between them."
+            say(R.string.finding_speed_mismatch_unknown_body)
         }
-        2 -> "This device drops the start of every burst (${pct(a)} % lost) — the adapter's power " +
-            "saving is the usual cause."
+        2 -> say(R.string.finding_burst_intolerant_body, pct(a))
         3 -> if (a > 0) {
-            "This device's own receive buffer dropped $a packets; the system caps it at $b KB."
+            Say.Plural(R.plurals.finding_receive_buffer_body, a, listOf(a, b))
         } else {
-            "The system caps this device's receive buffer at $b KB."
+            say(R.string.finding_receive_buffer_cap_body, b)
         }
-        4 -> "Loss at a rate no link refuses (${pct(a)} %): check the cable, the port or the adapter driver."
-        5 -> "Something on the path buffers instead of dropping (${fixed(a / 1000.0, 0)} ms spread); " +
-            "keep the bitrate under ${fixed(b / 1000.0, 0)} Mbit/s."
+        4 -> say(R.string.finding_link_fault_body, pct(a))
+        5 -> say(R.string.finding_queue_build_up_body, fixed(a / 1000.0, 0), fixed(b / 1000.0, 0))
         6 -> if (a > 0) {
-            "The host's send buffer refused $a packets; raise its limit."
+            Say.Plural(R.plurals.finding_host_send_buffer_body, a, listOf(a))
         } else {
-            "The host's send buffer is capped at $b KB; raise its limit."
+            say(R.string.finding_host_send_buffer_cap_body, b)
         }
-        7 -> if (a > 0) "This device is on Wi-Fi; bursts lose ${pct(a)} %." else "This device is on Wi-Fi."
-        else -> "Finding $id."
+        7 -> if (a > 0) say(R.string.finding_wifi_loss_body, pct(a)) else say(R.string.finding_wifi_body)
+        else -> say(R.string.finding_unknown_body, id)
     }
 }
 
@@ -152,8 +153,11 @@ fun findingText(id: Int, numbers: List<Int>): String {
  * ties to even, `.` in every locale. `String.format` rounds the shortest decimal half-up instead,
  * so 0.15 would read 0.2 here and 0.1 in the console.
  */
-private fun fixed(x: Double, places: Int): String =
+internal fun fixed(x: Double, places: Int): String =
     BigDecimal(x).setScale(places, RoundingMode.HALF_EVEN).toPlainString()
+
+/** [mbps] as a readout, `940 Mbit/s`: the unit stays as written in every language. */
+internal fun mbitRate(mbps: Double): String = fixed(mbps, 0) + " Mbit/s"
 
 /**
  * Connect to [host]:[port] through [services] as a diagnostic session, run the network check, and
@@ -171,6 +175,8 @@ suspend fun runSpeedTest(
     host: String,
     port: Int,
     pinHex: String,
+    // Words a refusal for [onPhase].
+    res: Resources,
     // Kept for the console's graph; the check reports once, when it is done.
     @Suppress("UNUSED_PARAMETER") onProgress: (Int) -> Unit = {},
     onPhase: (SpeedTestPhase) -> Unit,
@@ -192,7 +198,11 @@ suspend fun runSpeedTest(
     val handle = when (val opened = services.open(spec)) {
         is HostServices.Open -> opened.handle
         is HostServices.Failed -> {
-            onPhase(SpeedTestPhase.Failed(ConnectErrors.connectMessage(opened.token, requestAccess = false)))
+            onPhase(
+                SpeedTestPhase.Failed(
+                    res.getString(ConnectErrors.connectMessage(opened.token, requestAccess = false)),
+                ),
+            )
             return
         }
         // No ticket: nothing cancels it.
@@ -202,7 +212,7 @@ suspend fun runSpeedTest(
         onPhase(SpeedTestPhase.Measuring)
         val report = withContext(Dispatchers.IO) { NativeBridge.nativeNetworkCheck(handle) }
         val done = report?.let(::parseNetworkCheck)
-        onPhase(done ?: SpeedTestPhase.Failed("The host wouldn't run the measurement."))
+        onPhase(done ?: SpeedTestPhase.Failed(res.getString(R.string.speedtest_no_result_body)))
     } finally {
         withContext(Dispatchers.IO) { NativeBridge.nativeClose(handle) }
     }
@@ -211,10 +221,22 @@ suspend fun runSpeedTest(
 /** `EXT_DELIVERY_PROBE_ONLY`: a diagnostic session that builds no pipeline. */
 const val DELIVERY_PROBE_ONLY = 2
 
+/** The layer a speed test wrote its bitrate to. */
+sealed interface SpeedTestWrote {
+    data object Default : SpeedTestWrote
+    data class Preset(val name: String) : SpeedTestWrote
+}
+
+/** The confirmation after a write: [rate] is a readout (see [mbitRate]) and [wrote] says where it went. */
+fun speedTestApplied(wrote: SpeedTestWrote, rate: String): Say = when (wrote) {
+    SpeedTestWrote.Default -> say(R.string.speedtest_applied_default, rate)
+    is SpeedTestWrote.Preset -> say(R.string.speedtest_applied_preset, rate, wrote.name)
+}
+
 /**
  * Write a measured bitrate into the layer [target] names. [toPreset] picks the side of a
  * [SpeedTestTarget.Ask]; it is ignored for the other targets, which have only one answer. Returns
- * a human phrase naming where it went, for the confirmation.
+ * where it went, for the confirmation.
  */
 fun applySpeedTestResult(
     kbps: Int,
@@ -223,7 +245,7 @@ fun applySpeedTestResult(
     presets: PresetStore,
     settings: Settings,
     onGlobalChange: (Settings) -> Unit,
-): String {
+): SpeedTestWrote {
     val preset = when (target) {
         is SpeedTestTarget.Preset -> target.preset
         is SpeedTestTarget.Ask -> target.preset.takeIf { toPreset }
@@ -231,14 +253,14 @@ fun applySpeedTestResult(
     }
     return if (preset == null) {
         onGlobalChange(settings.copy(bitrateKbps = kbps))
-        "the default bitrate"
+        SpeedTestWrote.Default
     } else {
         // Only the bitrate moves — a speed test has nothing to say about the rest of the preset.
         // Re-read rather than trusting the copy this dialog was opened with, so a rename or another
         // edit in between isn't clobbered.
         val live = presets.byId(preset.id) ?: preset
         presets.save(live.copy(overrides = live.overrides.copy(bitrateKbps = kbps)))
-        "“${live.name}”"
+        SpeedTestWrote.Preset(live.name)
     }
 }
 

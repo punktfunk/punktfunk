@@ -10,7 +10,7 @@ struct TitleDetailSheet: View {
     let game: GameEntry
     let artLoader: (any LibraryArtSource)?
     /// Play, Resume (the title is up on the host) or Connect (the desktop entry).
-    var playLabel = "Play"
+    var playLabel = String(localized: L10n.commonPlay)
     /// nil hides the heart: favorites belong to the Library tab.
     var isFavorite: Bool?
     var onToggleFavorite: () -> Void = {}
@@ -69,7 +69,7 @@ struct TitleDetailSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button(L10n.commonDone) { dismiss() }
                 }
             }
         }
@@ -102,17 +102,17 @@ struct TitleDetailSheet: View {
                     Image(systemName: isFavorite ? "heart.fill" : "heart")
                 }
                 .buttonStyle(.bordered)
-                .accessibilityLabel(isFavorite ? "Remove from Favorites" : "Add to Favorites")
+                .accessibilityLabel(isFavorite ? L10n.libFavoriteRemove : L10n.libFavoriteAdd)
             }
             if let onCopyLink {
                 Button(action: onCopyLink) { Image(systemName: "link") }
                     .buttonStyle(.bordered)
-                    .accessibilityLabel("Copy Link")
+                    .accessibilityLabel(L10n.hostcardCopyLink)
             }
             if let onEndGame {
                 Button(role: .destructive, action: onEndGame) { Image(systemName: "xmark.circle") }
                     .buttonStyle(.bordered)
-                    .accessibilityLabel("End Game")
+                    .accessibilityLabel(L10n.libEndGame)
             }
         }
         #if os(tvOS)
@@ -180,27 +180,29 @@ struct TitleDetailSheet: View {
     }
 
     private struct Fact: Identifiable {
+        let id: String
         let label: String
         let value: String
-        var id: String { label }
     }
 
     /// One row per fact the host sent, in reading order.
     private var tvFacts: [Fact] {
-        let rows: [(String, String?)] = [
-            ("Host", host?.displayName),
-            ("Developer", game.developer),
-            ("Publisher", game.publisher == game.developer ? nil : game.publisher),
-            ("Released", game.releaseYear.map { String($0) }),
-            ("Genres", game.genres?.joined(separator: ", ")),
-            ("Last played", PlayStatsText.lastPlayed(game.stats)),
-            ("Last session", PlayStatsText.lastSession(game.stats)),
-            ("Play time", PlayStatsText.playTime(game.stats)),
-            ("Launches", game.stats.flatMap { $0.launchCount > 0 ? String($0.launchCount) : nil }),
+        let rows: [(id: String, label: LocalizedStringResource, value: String?)] = [
+            ("host", L10n.libFactHost, host?.displayName),
+            ("hostSets", L10n.libFactHostSets, game.overrides?.summary),
+            ("developer", L10n.libFactDeveloper, game.developer),
+            ("publisher", L10n.libFactPublisher, game.publisher == game.developer ? nil : game.publisher),
+            ("released", L10n.libFactReleased, game.releaseYear.map { String($0) }),
+            ("genres", L10n.libFactGenres, game.genres?.joined(separator: ", ")),
+            ("lastPlayed", L10n.libFactLastPlayed, PlayStatsText.lastPlayed(game.stats)),
+            ("lastSession", L10n.libFactLastSession, PlayStatsText.lastSession(game.stats)),
+            ("playTime", L10n.libFactPlayTime, PlayStatsText.playTime(game.stats)),
+            ("launches", L10n.libFactLaunches,
+             game.stats.flatMap { $0.launchCount > 0 ? String($0.launchCount) : nil }),
         ]
-        return rows.compactMap { label, value in
-            guard let value, !value.isEmpty else { return nil }
-            return Fact(label: label, value: value)
+        return rows.compactMap { row in
+            guard let value = row.value, !value.isEmpty else { return nil }
+            return Fact(id: row.id, label: String(localized: row.label), value: value)
         }
     }
     #else
@@ -217,20 +219,21 @@ struct TitleDetailSheet: View {
         }
     }
 
-    /// Store · platform, the credits, the genres (tags when there are none), then the player
-    /// count: a line only when it has something.
+    /// Store · platform, the credits, the genres (tags when there are none), the player count,
+    /// then what the host sets for it: a line only when it has something.
     private var facts: [String] {
         let credits = [
             game.developer, game.publisher == game.developer ? nil : game.publisher,
             game.releaseYear.map { String($0) },
         ]
         let kinds = (game.genres ?? []).isEmpty ? (game.tags ?? []) : (game.genres ?? [])
-        let players = game.players.flatMap { $0 > 1 ? "Up to \($0) players" : nil }
+        let players = game.players.flatMap { $0 > 1 ? L10n.libPlayersUpTo(count: $0) : nil }
         return [
             origin ?? "",
             credits.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " \u{b7} "),
             kinds.joined(separator: ", "),
             players ?? "",
+            game.overrides?.hostLine ?? "",
         ].filter { !$0.isEmpty }
     }
     #endif

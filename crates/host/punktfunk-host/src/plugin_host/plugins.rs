@@ -10,7 +10,8 @@
 //!
 //! The task runs as `NT AUTHORITY\LocalService`, not SYSTEM. `enable` converges the
 //! principal and grants LocalService read on `plugin-token` plus the TLS-pin cert
-//! (`native-cert.pem` or legacy `cert.pem`) — never `mgmt-token`.
+//! (`native-cert.pem` or legacy `cert.pem`) — never `mgmt-token`. A Windows seat's runner is no
+//! task: its host starts it as the seat's account ([`seat_runner`]).
 //!
 //! Runner discovery is pinned in this module's tests.
 
@@ -25,6 +26,8 @@ pub mod access;
 #[cfg(any(test, target_os = "windows"))]
 mod ace_plan;
 pub mod manifest;
+#[cfg(any(test, target_os = "windows"))]
+mod registry_keys;
 pub(crate) mod walks;
 #[cfg(target_os = "windows")]
 mod windows;
@@ -110,9 +113,14 @@ fn plugins_dir_of(args: &[String]) -> std::path::PathBuf {
         .unwrap_or_else(crate::store::plugins_dir)
 }
 
-/// Run `plugins <args…>`. `delete_titles` clears a removed plugin's library titles.
+/// Run `plugins <args…>`. `delete_titles` clears a removed plugin's library titles. On a person's
+/// own account it only reads: their own console changes their plugins.
 pub fn main(args: &[String], delete_titles: super::DeleteTitles) -> Result<()> {
-    match parse(args)? {
+    let action = parse(args)?;
+    if person_runner() && changes(&action) {
+        bail!("change plugins here: on a person's own account only their own console does");
+    }
+    match action {
         Action::Package { listing, removing } => {
             package_op(args, listing, &removing, delete_titles)
         }
@@ -133,6 +141,16 @@ pub fn main(args: &[String], delete_titles: super::DeleteTitles) -> Result<()> {
             print_usage();
             Ok(())
         }
+    }
+}
+
+/// Whether `action` installs, removes, switches or grants: what [`main`] leaves to a person's own
+/// console on their own account.
+fn changes(action: &Action<'_>) -> bool {
+    match action {
+        Action::Package { listing, .. } => !listing,
+        Action::Enable | Action::Disable | Action::Grant(..) | Action::Revoke(..) => true,
+        Action::Status | Action::Spawn(_) | Action::Access(_) | Action::Help => false,
     }
 }
 
@@ -317,7 +335,8 @@ fn access_list(flags: &[String]) -> Result<()> {
 
 /// `plugins spawn --package <id> -- <exe> [args…]`: the runner's way into a plugin's
 /// AppContainer. Runs as the runner's account, which owns the profile; exits with the
-/// plugin's own code. The capabilities come from the installed manifest, never from argv.
+/// plugin's own code. The capabilities come from the manifest of a plugin that runner runs,
+/// never from argv.
 #[cfg(windows)]
 fn spawn(args: &[String]) -> Result<()> {
     let (id, rest) = match args {
@@ -328,7 +347,7 @@ fn spawn(args: &[String]) -> Result<()> {
     let Some((exe, exe_args)) = rest.split_first() else {
         bail!("usage: punktfunk-host plugins spawn --package <id> -- <exe> [args…]");
     };
-    let Some(manifest) = manifest::installed().remove(id) else {
+    let Some(manifest) = manifest::runner_plugins().remove(id) else {
         bail!("{id} is not an installed plugin with a manifest");
     };
     let code = crate::windows::app_container::spawn(
@@ -429,12 +448,8 @@ fn forward_to_runner(args: &[String]) -> Result<()> {
 }
 
 /// The runner's launch line. Also the store job executor ([`crate::store::jobs`]): console
-/// installs use this same invocation so the box has one "install a plugin" path. None where no
-/// runner is driven ([`runner_here`]).
+/// installs use this same invocation so the box has one "install a plugin" path.
 pub(crate) fn runner_command() -> Result<(std::path::PathBuf, Vec<String>)> {
-    if !runner_here() {
-        bail!("run the plugin runner: not on a person's own Linux account");
-    }
     plat::runner_command()
 }
 
@@ -480,33 +495,81 @@ pub(crate) struct RuntimeStatus {
     pub detail: String,
 }
 
-/// Whether this host drives a plugin runner. Not a seat on a person's own Linux account: the
-/// runner there is their own user unit, which the host never queries, writes or restarts.
-fn runner_here() -> bool {
-    !(cfg!(target_os = "linux") && pf_paths::seat::own_account())
+/// Whether this host's runner is a person's own: a seat on their own account. On Linux that is
+/// the seat's instance of their user manager's `punktfunk-scripting-seat@`, on Windows
+/// [`seat_runner`]'s. Only their own lane switches it, installs into it or reads its state.
+pub(crate) fn person_runner() -> bool {
+    pf_paths::seat::own_account()
 }
 
-/// The runner's state. Where no runner is driven ([`runner_here`]) it reads as not installed,
-/// so nothing mints its tokens, converges its roots or restarts it.
+/// Whether this host starts its runner itself, at each start it is on, and its seat's stop ends
+/// it: a person's own seat, or any Windows seat. A Windows seat's runner runs as the seat's
+/// account, which the host (SYSTEM) launches into the seat's session.
+pub(crate) fn seat_runner() -> bool {
+    person_runner() || (cfg!(windows) && pf_paths::seat::role().is_seat_host())
+}
+
+/// The runner's account as a SID string: LocalService, or a Windows seat's account once it has
+/// signed in to the seat's session.
+#[cfg(windows)]
+pub(crate) fn runner_sid() -> Option<String> {
+    plat::runner_sid()
+}
+
+/// `f` with the seat account's rights alone. A Windows seat host is SYSTEM, so it runs `f` as
+/// the account signed in to the seat's session; any other host already is the account it acts
+/// for. An error is a seat account this host couldn't act as.
+pub(crate) fn as_seat_account<R>(f: impl FnOnce() -> R) -> std::io::Result<R> {
+    #[cfg(test)]
+    SEAT_HAND.with(|calls| calls.set(calls.get() + 1));
+    #[cfg(windows)]
+    if system_seat_host() {
+        return crate::windows::interactive::as_session_user(f)
+            .map_err(|e| std::io::Error::other(format!("{e:#}")));
+    }
+    Ok(f())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How often this thread asked [`as_seat_account`].
+    pub(crate) static SEAT_HAND: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A Windows seat host: SYSTEM, for a runner that runs as the seat's account.
+pub(crate) fn system_seat_host() -> bool {
+    #[cfg(windows)]
+    return seat_runner() && crate::hooks::running_as_system();
+    #[cfg(not(windows))]
+    false
+}
+
+/// The runner's state, which tokens, roots and restarts follow.
 pub(crate) fn runtime_status() -> RuntimeStatus {
-    if !runner_here() {
+    plat::runtime_status()
+}
+
+/// [`runtime_status`] as a caller reads it, `person` when on the seat's person lane. Any other
+/// lane reads a person's own runner ([`person_runner`]) as not installed.
+pub(crate) fn runtime_status_as(person: bool) -> RuntimeStatus {
+    if person_runner() && !person {
         return RuntimeStatus {
             installed: false,
             enabled: false,
             running: false,
             unit: "punktfunk-scripting",
             principal: None,
-            detail: "Plugins don't run on a profile that uses an existing Linux account.".into(),
+            detail: "This profile's plugins are installed by its person, from their own desktop."
+                .into(),
         };
     }
-    plat::runtime_status()
+    runtime_status()
 }
 
-/// Has the operator turned the per-plugin sandbox off for the runner? Never where no runner is
-/// driven ([`runner_here`]).
+/// Has the operator turned the per-plugin sandbox off for the runner?
 #[cfg(any(target_os = "linux", windows))]
 pub(crate) fn runner_sandbox_off() -> bool {
-    runner_here() && plat::runner_sandbox_off()
+    plat::runner_sandbox_off()
 }
 
 /// Why the runner stopped at its last start instead of running a plugin unsandboxed, in its own
@@ -528,11 +591,9 @@ fn sandbox_refusal_in(config_dir: &std::path::Path) -> Option<String> {
 }
 
 /// [`enable`]/[`disable`], also `POST /store/runtime`. Windows: the SYSTEM service
-/// already clears the elevation bar the CLI checks. Refused where no runner is driven.
+/// already clears the elevation bar the CLI checks. On a person's own account the route's gate
+/// admits their lane alone.
 pub(crate) fn set_runtime_enabled(enabled: bool) -> Result<()> {
-    if !runner_here() {
-        bail!("switch the plugin runner: not on a person's own Linux account");
-    }
     if enabled {
         plat::enable()
     } else {
@@ -541,8 +602,9 @@ pub(crate) fn set_runtime_enabled(enabled: bool) -> Result<()> {
 }
 
 /// The ACL half of a grant, as `io::Error` for [`access::AccessStore`]: the runner's account,
-/// and `plugin`'s files capability when it is named, in one walk of the folder. POSIX needs
-/// none: the runner is the operator's own user unit.
+/// and `plugin`'s files capability when it is named, in one walk of the folder. A Windows seat's
+/// account already reaches what it may, so there only the capability's ACE lands, placed as that
+/// account. POSIX needs none: the runner is the operator's own user unit.
 pub(crate) fn grant_acl(
     plugin: Option<&str>,
     dir: &std::path::Path,
@@ -630,12 +692,13 @@ pub(crate) fn converge_runner_data_dir(dir: &std::path::Path) -> Result<()> {
 ///
 /// Discovery runs once at runner startup ([`sdk/src/runner.ts`]); this restart is
 /// how a newly installed plugin becomes active. An enabled runner that is not running
-/// (installed after login, crashed out) is started, not skipped. The unit's roots are
-/// converged first: a new manifest may name paths the runner cannot see yet.
+/// (installed after login, crashed out) is started, not skipped, and a running one is
+/// restarted however it started: a made seat's starts with its account's login. The unit's
+/// roots are converged first: a new manifest may name paths the runner cannot see yet.
 pub(crate) fn restart_runtime() -> Result<bool> {
     converge_runner_roots();
     let st = runtime_status();
-    if !st.installed || !st.enabled {
+    if !st.installed || !(st.enabled || st.running) {
         return Ok(false);
     }
     plat::restart_runtime()?;
@@ -668,10 +731,12 @@ pub(crate) fn recheck_runner_roots() {
     plat::recheck_next();
 }
 
-/// The minute's converge, which also reads every folder ACE off its folder. It sits out a store
-/// job: while `bun` rewrites the tree an installed plugin reads as gone, and its ACEs go with it.
+/// The minute's converge, which also reads every folder ACE off its folder, and starts a
+/// Windows seat's runner again when it failed. The converge sits out a store job: while `bun`
+/// rewrites the tree an installed plugin reads as gone, and its ACEs go with it.
 #[cfg(windows)]
 pub(crate) fn heal_runner_roots() {
+    plat::restart_failed_seat_runner();
     if crate::store::jobs::busy() {
         return;
     }
@@ -689,7 +754,8 @@ pub(crate) fn publish_sandbox_override() {
 /// Give the runner every root a plugin declared or was granted: on Linux the unit's drop-in,
 /// which bwrap binds from and whose empty home hides the rest, restarting the runner when the
 /// set changed; on Windows an ACE per root for the runner's account, stripped when its plugin
-/// goes. `true` when a root or ACE changed.
+/// goes. On Linux a declared write outside `/tmp` first files the request the operator answers.
+/// `true` when a root or ACE changed.
 pub(crate) fn converge_runner_roots() -> bool {
     // Tests never touch the operator's systemd config or a folder's ACL; macOS has no runner.
     if cfg!(test) || !(cfg!(target_os = "linux") || cfg!(windows)) || !runtime_status().installed {
@@ -702,7 +768,12 @@ pub(crate) fn converge_runner_roots() -> bool {
         return false;
     };
     let manifests = manifest::runner_plugins();
-    let roots = access::AccessStore::open(pf_paths::config_dir()).runner_roots(&manifests);
+    let store = access::AccessStore::open(pf_paths::config_dir());
+    #[cfg(target_os = "linux")]
+    if let Err(e) = store.request_declared_writes(&manifests) {
+        tracing::warn!(error = %e, "declared plugin writes not filed as requests");
+    }
+    let roots = store.runner_roots(&manifests);
     match plat::converge_runner_roots(&roots, &home, &manifests) {
         Ok(true) => {
             tracing::info!(roots = roots.len(), "plugin runner roots updated");
@@ -870,6 +941,27 @@ mod tests {
                 removing: removing.to_vec(),
             };
             assert_eq!(parse(&args).unwrap(), want, "{args:?}");
+        }
+    }
+
+    /// What the CLI leaves to a person's own console on their own account: every change.
+    #[test]
+    fn a_person_s_own_account_leaves_the_cli_its_reads() {
+        let rows: [(&[&str], bool); 10] = [
+            (&["add", "x"], true),
+            (&["remove", "x"], true),
+            (&["enable"], true),
+            (&["disable"], true),
+            (&["grant", "p", "d"], true),
+            (&["revoke", "p", "d"], true),
+            (&["list"], false),
+            (&["status"], false),
+            (&["access"], false),
+            (&["help"], false),
+        ];
+        for (args, want) in rows {
+            let args = argv(args);
+            assert_eq!(changes(&parse(&args).unwrap()), want, "{args:?}");
         }
     }
 

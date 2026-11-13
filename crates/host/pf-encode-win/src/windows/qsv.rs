@@ -105,6 +105,46 @@ fn split_rate(bps: u64) -> (u16, u16) {
     ((kbps / mult as u64) as u16, mult)
 }
 
+/// Rate-control fields the runtime reports, in real units: `BRCParamMultiplier` is applied.
+struct RateReadback {
+    buffer_kb: u32,
+    initial_delay_kb: u32,
+    target_kbps: u32,
+    max_kbps: u32,
+}
+
+impl RateReadback {
+    fn of(mfx: &mut vpl::mfxInfoMFX) -> Self {
+        let mult = mfx.BRCParamMultiplier.max(1) as u32;
+        let e = enc_of(mfx);
+        // SAFETY: every member of these three unions is an `mfxU16`, so any of them reads as
+        // a valid value; CBR uses InitialDelayInKB, TargetKbps and MaxKbps.
+        let (delay, target, max) = unsafe {
+            (
+                e.__bindgen_anon_1.InitialDelayInKB,
+                e.__bindgen_anon_2.TargetKbps,
+                e.__bindgen_anon_3.MaxKbps,
+            )
+        };
+        RateReadback {
+            buffer_kb: e.BufferSizeInKB as u32 * mult,
+            initial_delay_kb: delay as u32 * mult,
+            target_kbps: target as u32 * mult,
+            max_kbps: max as u32 * mult,
+        }
+    }
+
+    /// Bytes for one pooled bitstream buffer: the runtime's worst-case AU, 256 KiB at least.
+    fn pool_bytes(&self) -> usize {
+        (self.buffer_kb as usize * 1000).max(256 * 1024)
+    }
+
+    /// One frame at the target rate, in the unit of the buffer fields (1 KB = 1000 bytes).
+    fn frame_kb(&self, fps: u32) -> f64 {
+        self.target_kbps as f64 / 8.0 / fps.max(1) as f64
+    }
+}
+
 const fn align16(v: u32) -> u16 {
     (v.div_ceil(16) * 16) as u16
 }
@@ -131,7 +171,8 @@ fn ltr_disabled() -> bool {
     crate::knobs::get().no_qsv_ltr != 0
 }
 
-/// Frames between LTR marks. Default ~1/4 s so a loss usually finds a recent slot.
+/// Frames between LTR marks while the client sends no confirmations. Default ~1/4 s so a loss
+/// usually finds a recent slot.
 fn ltr_mark_interval(fps: u32) -> i64 {
     super::policy::ltr_interval().unwrap_or_else(|| (fps as i64 / 4).max(1))
 }
@@ -740,9 +781,16 @@ impl Retrieve {
             RetrieveThread::spawn("punktfunk-qsv-out", move |stop| sync_loop(s, &t_q, &stop))?;
         Ok(Self { q, thread })
     }
+
+    /// Queue `p` behind the frames in flight and wake the sync thread if it is parked.
+    fn push(&self, p: Pending) {
+        self.q.lock().pending.push_back(p);
+        self.thread.wake();
+    }
 }
 
-/// How long one `SyncOperation` may block before the loop looks at the stop flag.
+/// How long one `SyncOperation` may block, or the loop sleep on an empty queue, before it looks
+/// at the stop flag.
 const SYNC_WAIT_MS: u32 = 50;
 
 /// Sync finished frames and hand their AUs to the encode thread. The session travels as `usize`;
@@ -754,8 +802,9 @@ fn sync_loop(session: usize, q: &OutQueue, stop: &AtomicBool) {
         // The front's sync point, copied out so the lock is not held across the wait. Only this
         // thread pops, so the entry it names is still the front when the lock comes back.
         let Some(syncp) = q.lock().pending.front().map(|p| p.syncp) else {
-            // Nothing owed: wait for `submit` rather than spin on an empty queue.
-            std::thread::sleep(std::time::Duration::from_micros(250));
+            // Nothing owed: park until `Retrieve::push` wakes us. A push between the check and
+            // the park leaves the wake pending, so the park returns at once.
+            std::thread::park_timeout(std::time::Duration::from_millis(SYNC_WAIT_MS.into()));
             continue;
         };
         // SAFETY: `session` is live until this thread is joined, and `syncp` belongs to an
@@ -911,6 +960,8 @@ pub struct QsvEncoder {
     ltr_mark_interval: i64,
     /// The newest frame the client confirmed, while the host holds confirmed references.
     reference_floor: Option<crate::Acked>,
+    /// What the client confirmed it decoded clean, whatever the link: the kept pair's marks.
+    confirmed: Option<crate::Acked>,
     ltr_test_force_at: Option<i64>,
     /// Refuse this frame after the LTR decision, as a failed surface fetch would.
     #[cfg(test)]
@@ -990,6 +1041,7 @@ impl QsvEncoder {
             ltr: LtrMirror::default(),
             ltr_mark_interval: ltr_mark_interval(fps),
             reference_floor: None,
+            confirmed: None,
             ltr_test_force_at: ltr_test_force_at(),
             #[cfg(test)]
             fail_submit_at: None,
@@ -1034,9 +1086,10 @@ impl QsvEncoder {
         }
     }
 
-    /// Query-gate LTR/IR, Init, then size the bitstream pool from `BufferSizeInKB`. Also
-    /// returns the `FrameInfo` the encoder took, which surfaces of ours must carry. A runtime
-    /// that refuses VDEnc for this codec (HEVC on Gen9) gets the whole sequence again without it.
+    /// Query-gate LTR/IR, Init, then size the bitstream pool from `BufferSizeInKB`, which it
+    /// logs with the rest of the rate control. Also returns the `FrameInfo` the encoder took,
+    /// which surfaces of ours must carry. A runtime that refuses VDEnc for this codec (HEVC on
+    /// Gen9) gets the whole sequence again without it.
     fn init_encode(
         &mut self,
         session: vpl::mfxSession,
@@ -1094,17 +1147,26 @@ impl QsvEncoder {
         // Asked-for, not installed — confirmed by GetVideoParam below.
         let ir_requested = cfg.intra_refresh && set.co2.is_some();
         // SAFETY: `session` is live; `got` and its (empty) ext chain outlive the call.
-        let (bs_bytes, info) = unsafe {
+        let (rate, info) = unsafe {
             let mut got = vpl::mfxVideoParam::default();
             vpl_ok(
                 vpl::MFXVideoENCODE_GetVideoParam(session, &mut got),
                 "MFXVideoENCODE_GetVideoParam",
             )?;
             let m = &mut got.__bindgen_anon_1.mfx;
-            let mult = m.BRCParamMultiplier.max(1) as usize;
-            let kb = enc_of(m).BufferSizeInKB as usize;
-            ((kb * mult * 1000).max(256 * 1024), m.FrameInfo)
+            (RateReadback::of(m), m.FrameInfo)
         };
+        let bs_bytes = rate.pool_bytes();
+        // The runtime's own buffer bound next to one frame at the target rate.
+        tracing::info!(
+            codec = ?cfg.codec,
+            buffer_kb = rate.buffer_kb,
+            initial_delay_kb = rate.initial_delay_kb,
+            target_kbps = rate.target_kbps,
+            max_kbps = rate.max_kbps,
+            frame_kb = %format_args!("{:.1}", rate.frame_kb(cfg.fps)),
+            "QSV rate-control buffer read back"
+        );
         // Query/Init can warn INCOMPATIBLE_VIDEO_PARAM and still drop the wave
         // (`IntRefType=0`). `ir_active` feeds `EncoderCaps::intra_refresh`; a false
         // true stops the client asking for IDRs. Separate GetVideoParam so a dislike
@@ -1346,7 +1408,7 @@ impl QsvEncoder {
             // Releases here; the runtime holds its own reference for the in-flight encode.
             FrameInput::Runtime(_) => None,
         };
-        inner.retrieve.q.lock().pending.push_back(Pending {
+        inner.retrieve.push(Pending {
             syncp,
             bs,
             pts_ns: captured.pts_ns,
@@ -1368,8 +1430,9 @@ impl QsvEncoder {
         }
         let floor = self.reference_floor.filter(|_| self.codec != Codec::Av1);
         let interval = self.ltr_mark_interval;
+        let confirmed = self.confirmed.as_ref();
         self.ltr
-            .step(forced, cur_idx, interval, floor, false, false)
+            .step(forced, cur_idx, interval, confirmed, floor, false, false)
     }
 }
 
@@ -1738,6 +1801,10 @@ impl Encoder for QsvEncoder {
         self.reference_floor = acked;
     }
 
+    fn note_confirmed(&mut self, acked: Option<crate::Acked>) {
+        self.confirmed = acked;
+    }
+
     /// Withdraw anchor trust from every live LTR and drop a queued force
     /// ([`LtrMirror::distrust`]); the trait docs carry the why.
     fn distrust_references(&mut self) {
@@ -1947,14 +2014,19 @@ impl Encoder for QsvEncoder {
         let refreshed = unsafe {
             let mut got = vpl::mfxVideoParam::default();
             let sts = vpl::MFXVideoENCODE_GetVideoParam(session, &mut got);
-            (sts >= vpl::MFX_ERR_NONE).then(|| {
-                let m = &mut got.__bindgen_anon_1.mfx;
-                let mult = m.BRCParamMultiplier.max(1) as usize;
-                let kb = enc_of(m).BufferSizeInKB as usize;
-                (kb * mult * 1000).max(256 * 1024)
-            })
+            (sts >= vpl::MFX_ERR_NONE).then(|| RateReadback::of(&mut got.__bindgen_anon_1.mfx))
         };
-        match (refreshed, self.inner.as_mut()) {
+        if let Some(rate) = &refreshed {
+            tracing::debug!(
+                buffer_kb = rate.buffer_kb,
+                initial_delay_kb = rate.initial_delay_kb,
+                target_kbps = rate.target_kbps,
+                max_kbps = rate.max_kbps,
+                frame_kb = %format_args!("{:.1}", rate.frame_kb(cfg.fps)),
+                "QSV rate-control buffer after retarget"
+            );
+        }
+        match (refreshed.map(|r| r.pool_bytes()), self.inner.as_mut()) {
             (Some(bytes), Some(inner)) if bytes > inner.bs_bytes => {
                 tracing::debug!(
                     old_bytes = inner.bs_bytes,
@@ -1993,7 +2065,7 @@ impl Encoder for QsvEncoder {
                 if sts < vpl::MFX_ERR_NONE || syncp.is_null() {
                     break; // MFX_ERR_MORE_DATA = drained
                 }
-                inner.retrieve.q.lock().pending.push_back(Pending {
+                inner.retrieve.push(Pending {
                     syncp,
                     bs,
                     pts_ns: 0,

@@ -18,7 +18,7 @@ impl StreamState {
         native_refresh_hz: u32,
         knobs: &crate::knobs::Knobs,
     ) -> StreamState {
-        let preset = params.preset.clone();
+        let preset = params.hud_preset();
         // Rate we asked for, until Welcome resolves it. No frames flow before that,
         // so this only has to be sane, not right.
         let source_interval_ns = frame_interval_ns(params.mode.refresh_hz, native_refresh_hz);
@@ -50,6 +50,7 @@ impl StreamState {
             access: pf_client_core::access::SessionAccess::default(),
             session_notice: None,
             ending_game: None,
+            host_notice: None,
             touch_mouse: crate::touch::SteamTouchMouse::new(in_gamescope()),
             cursor: crate::cursor_model::CursorModel::new(Instant::now()),
             force_software,
@@ -91,6 +92,7 @@ impl StreamState {
             resize_sent_at: None,
             resize_requested: None,
             shown_mode: None,
+            titled: None,
             resize_overlay: ResizeIndicator::default(),
             last_video: None,
             screens: Default::default(),
@@ -101,11 +103,15 @@ impl StreamState {
     /// Stop the pump and join its thread before any device-wide idle: the pump submits
     /// decode work to the shared device. The presenter lets go of the decoder's frame
     /// first, so the decoder's teardown gets it back instead of freeing it under a redraw.
-    /// The pump notices `stop` within its 20 ms receive timeout.
+    /// The queued frames go before the join too: the pump's decoder waits for their tokens
+    /// while this thread joins it. The pump notices `stop` within its 20 ms receive timeout.
     pub(super) fn shutdown(mut self, presenter: &mut Presenter) {
         self.screens = Default::default();
         self.handle.stop.store(true, Ordering::SeqCst);
         presenter.drop_video();
+        self.store.clear();
+        drop_queued(&self.frames);
+        drop_queued(&self.handle.frames);
         if let Some(t) = self.handle.thread.take() {
             let _ = t.join();
         }
@@ -124,9 +130,18 @@ impl StreamState {
     }
 }
 
-/// Replace the params' requested w/h with the window's physical pixel size —
-/// even-floored (the host's `validate_dimensions` rejects odd) and clamped to a
-/// sane minimum — keeping the resolved refresh. Fullscreen, the window is the display.
+/// Close a frame channel and drop what it still holds. A frame's release guard returns its
+/// decoder slot as it drops, so the decoder's teardown never waits on a queue nobody reads;
+/// a producer that sends after this gets its frame back and drops it.
+pub(super) fn drop_queued<T>(frames: &async_channel::Receiver<T>) {
+    frames.close();
+    while frames.try_recv().is_ok() {}
+}
+
+/// Replace the params' requested w/h with the window's physical pixel size × the render
+/// scale — even-floored (the host's `validate_dimensions` rejects odd) and clamped to a
+/// sane minimum — keeping the resolved refresh. Above 1x the view is the window's own
+/// pixels. Fullscreen, the window is the display.
 pub(super) fn apply_match_window(
     params: &mut SessionParams,
     window: &sdl3::video::Window,
@@ -134,19 +149,35 @@ pub(super) fn apply_match_window(
     max_dim: u32,
 ) {
     let (pw, ph) = window.size_in_pixels();
-    // × the render scale (even + codec-clamped) so match-window supersamples like the
-    // fixed-mode path; 1.0 leaves the window's native pixels.
-    let (w, h) = punktfunk_core::render_scale::apply(pw, ph, render_scale, max_dim);
+    let ((w, h), view) = window_mode(pw, ph, render_scale, max_dim);
     params.mode.width = w;
     params.mode.height = h;
+    params.view = view;
     tracing::info!(
         w,
         h,
+        ?view,
         "match-window: requesting the scaled window pixel size"
     );
 }
 
-/// Follow the live mode slot (any accepted ack — follower, another trigger, or rollback).
+/// The mode a `pw`×`ph` pixel window asks for at `render_scale`, and the view beside it:
+/// `None` at 1x and below, which also clears a view asked for before.
+pub(super) fn window_mode(
+    pw: u32,
+    ph: u32,
+    render_scale: f64,
+    max_dim: u32,
+) -> ((u32, u32), Option<(u32, u32)>) {
+    use punktfunk_core::render_scale::{apply, view};
+    (
+        apply(pw, ph, render_scale, max_dim),
+        view(pw, ph, render_scale, max_dim),
+    )
+}
+
+/// Follow the live mode slot (any accepted ack — follower, another trigger, or rollback), and
+/// title the window with the picture on screen.
 pub(super) fn hud_mode_tick(
     st: &mut StreamState,
     window: &mut sdl3::video::Window,
@@ -156,10 +187,16 @@ pub(super) fn hud_mode_tick(
         return;
     };
     let m = c.mode();
+    // The title names the picture on screen: a host that scales sends less than its mode.
+    let picture = st.last_video.unwrap_or((m.width, m.height));
+    if st.titled != Some((picture, m.refresh_hz)) {
+        st.titled = Some((picture, m.refresh_hz));
+        let (w, h) = picture;
+        let _ = window.set_title(&format!("{title_base} · {w}×{h}@{}", m.refresh_hz));
+    }
     if st.shown_mode.is_some_and(|prev| prev != m) {
         st.mode_line = format!("{}×{}@{}", m.width, m.height, m.refresh_hz);
         tracing::info!(mode = %st.mode_line, "stream mode switched");
-        let _ = window.set_title(&format!("{title_base} · {}", st.mode_line));
         // A switch is a full host-side rebuild: the interval the cushion is bounded by
         // can change, and the gap must re-anchor the cadence estimate rather than slew over.
         st.source_interval_ns = frame_interval_ns(m.refresh_hz, 0);
@@ -169,9 +206,10 @@ pub(super) fn hud_mode_tick(
 }
 
 /// Fire the debounced `Reconfigure` once ~400 ms pass with no further resize events.
-/// Physical pixels, even-floored, clamped ≥ 320×200; ≥ 1 s between requests (the accept
-/// ack round-trips in milliseconds, so the spacing also keeps ~one request outstanding);
-/// each distinct size requested at most once (rejected sizes and host-side rollbacks).
+/// Physical pixels × the render scale, even-floored, clamped ≥ 320×200, with the view
+/// [`window_mode`] pairs with them; ≥ 1 s between requests (the accept ack round-trips in
+/// milliseconds, so the spacing also keeps ~one request outstanding); each distinct size
+/// requested at most once (rejected sizes and host-side rollbacks).
 pub(super) fn resize_tick(
     st: &mut StreamState,
     window: &mut sdl3::video::Window,
@@ -184,17 +222,16 @@ pub(super) fn resize_tick(
         return; // not connected yet — the pending stamp survives until we are
     };
     let m = c.mode();
-    // × the render scale so a resize under Match-window targets the same supersampled
-    // space the live mode is in. resize_decision re-normalizes idempotently.
+    // resize_decision re-normalizes idempotently.
     let (pw, ph) = window.size_in_pixels();
-    let pixel_size = punktfunk_core::render_scale::apply(pw, ph, render_scale, max_dim);
+    let (pixel_size, view) = window_mode(pw, ph, render_scale, max_dim);
     match resize_decision(
         Instant::now(),
         &mut st.resize_pending,
         st.resize_sent_at,
         st.resize_requested,
-        (m.width, m.height),
-        pixel_size,
+        ((m.width, m.height), st.params.view),
+        (pixel_size, view),
     ) {
         ResizeAction::Wait => {}
         ResizeAction::Settled(target) => {
@@ -205,46 +242,51 @@ pub(super) fn resize_tick(
                 let (lw, lh) = window.size();
                 persist(lw, lh);
             }
-            let Some((w, h)) = target else { return };
-            tracing::info!(w, h, "window resized — requesting mode switch");
-            if c.request_mode(Mode {
+            let Some(((w, h), view)) = target else { return };
+            tracing::info!(w, h, ?view, "window resized — requesting mode switch");
+            let mode = Mode {
                 width: w,
                 height: h,
                 refresh_hz: m.refresh_hz,
-            })
-            .is_err()
-            {
+            };
+            if c.request_mode_view(mode, view).is_err() {
                 tracing::warn!("mode-switch request dropped — control channel closed");
             }
-            st.resize_requested = Some((w, h));
+            // A redial asks for the connector's mode; the view rides beside it.
+            st.params.view = view;
+            st.resize_requested = Some(((w, h), view));
             st.resize_sent_at = Some(Instant::now());
             // Scrim + spinner until a frame at this size lands: the live drag stays
             // sharp; only the host's rebuild gap is covered.
-            st.resize_overlay.steering(w, h, Instant::now());
+            st.resize_overlay.steering((w, h), view, Instant::now());
         }
     }
 }
+
+/// A mode ask's size and the view it is shown at (`None` = the mode itself).
+pub(super) type SizeAsk = ((u32, u32), Option<(u32, u32)>);
 
 /// What one [`resize_decision`] tick decided.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum ResizeAction {
     /// Nothing to do yet — the pending stamp is kept so a later tick retries.
     Wait,
-    /// Debounce settled (caller persists the window size). `None` when the size needs no
-    /// switch (equal to the streamed mode, or this exact size was already requested).
-    Settled(Option<(u32, u32)>),
+    /// Debounce settled (caller persists the window size). `None` when the ask needs no
+    /// switch (equal to the streamed mode and view, or this exact ask was already sent).
+    Settled(Option<SizeAsk>),
 }
 
 /// Debounce to resize-end, ≥ 1 s between requests, physical pixels even-floored and
-/// clamped ≥ 320×200, skip when equal to the streamed mode, each distinct size at most
-/// once (covers rejected sizes and host-side rollbacks).
+/// clamped ≥ 320×200, skip when the mode and view are what streams, each distinct ask at
+/// most once (covers rejected sizes and host-side rollbacks). A clamped mode still moves
+/// its view.
 pub(super) fn resize_decision(
     now: Instant,
     pending: &mut Option<Instant>,
     sent_at: Option<Instant>,
-    requested: Option<(u32, u32)>,
-    current: (u32, u32),
-    pixel_size: (u32, u32),
+    requested: Option<SizeAsk>,
+    current: SizeAsk,
+    (pixel_size, view): SizeAsk,
 ) -> ResizeAction {
     const DEBOUNCE: Duration = Duration::from_millis(400);
     const SPACING: Duration = Duration::from_secs(1);
@@ -258,7 +300,10 @@ pub(super) fn resize_decision(
         return ResizeAction::Wait; // keep the pending stamp — a later tick retries
     }
     *pending = None;
-    let target = ((pixel_size.0 & !1).max(320), (pixel_size.1 & !1).max(200));
+    let target = (
+        ((pixel_size.0 & !1).max(320), (pixel_size.1 & !1).max(200)),
+        view,
+    );
     if current == target || requested == Some(target) {
         return ResizeAction::Settled(None);
     }
@@ -270,20 +315,24 @@ pub(super) fn resize_decision(
 /// on. A scrim + spinner from request until the sharp new-resolution frame is on screen.
 ///
 /// Driven by signals the presenter already has (no new protocol):
-/// * START — [`resize_tick`] reports the size it just requested (`steering`).
-/// * END — decode reports each frame's dimensions; when they reach the target
-///   (`decoded`). The accepted-switch ack alone cannot end it: the ack round-trips in
-///   milliseconds, ahead of the host's rebuild.
-/// * TIMEOUT — a switch that never delivers the exact target (reject, cap, or
-///   corrective ack); `tick` clears it after [`ResizeIndicator::TIMEOUT`].
+/// * START — [`resize_tick`] reports the mode and view it just requested (`steering`).
+/// * END — decode reports each frame's dimensions; when they reach either (`decoded`): a
+///   host that reads the view encodes it, any other host the mode. The accepted-switch ack
+///   alone cannot end it: the ack round-trips in milliseconds, ahead of the host's rebuild.
+/// * REFUSED — the host refused a switch (`refusals`): no frame at the target is coming.
+/// * TIMEOUT — a switch that never delivers the exact target (cap, or corrective ack);
+///   `tick` clears it after [`ResizeIndicator::TIMEOUT`].
 ///
 /// Pure + clock-injected so the transition logic is unit-tested without a live session.
 #[derive(Default)]
 pub(super) struct ResizeIndicator {
-    /// Size the follower is steering toward — `Some` ⇔ show the scrim + spinner.
-    target: Option<(u32, u32)>,
+    /// The mode and the view the follower is steering toward — `Some` ⇔ show the scrim +
+    /// spinner. Without a view both are the mode.
+    target: Option<[(u32, u32); 2]>,
     /// When the current active span began — the timeout is measured from here.
     since: Option<Instant>,
+    /// The connector's refusal count as last read.
+    refused: u32,
 }
 
 impl ResizeIndicator {
@@ -294,18 +343,29 @@ impl ResizeIndicator {
         self.target.is_some()
     }
 
-    /// A switch to `w`×`h` was just requested. The timeout re-arms only when the target
-    /// actually changes, so a drag through several sizes never trips it mid-gesture.
-    pub(super) fn steering(&mut self, w: u32, h: u32, now: Instant) {
-        if self.target != Some((w, h)) {
+    /// A switch to `mode`, shown at `view`, was just requested. The timeout re-arms only when
+    /// the target actually changes, so a drag through several sizes never trips it
+    /// mid-gesture.
+    pub(super) fn steering(&mut self, mode: (u32, u32), view: Option<(u32, u32)>, now: Instant) {
+        let target = [mode, view.unwrap_or(mode)];
+        if self.target != Some(target) {
             self.since = Some(now);
         }
-        self.target = Some((w, h));
+        self.target = Some(target);
     }
 
-    /// A decoded frame at `w`×`h`. Clears once it matches the steered target.
+    /// A decoded frame at `w`×`h`. Clears once it matches the steered mode or view.
     pub(super) fn decoded(&mut self, w: u32, h: u32) {
-        if self.target == Some((w, h)) {
+        if self.target.is_some_and(|t| t.contains(&(w, h))) {
+            self.target = None;
+            self.since = None;
+        }
+    }
+
+    /// The connector's [`mode_refusals`](NativeClient::mode_refusals): a new
+    /// refusal drops the scrim at once.
+    pub(super) fn refusals(&mut self, count: u32) {
+        if std::mem::replace(&mut self.refused, count) != count {
             self.target = None;
             self.since = None;
         }
@@ -354,6 +414,9 @@ pub(super) fn ring_facts(
         pad_mouse: c.pad_mouse_mode(target),
         audio_mute: c.audio_mute(),
         pointer_granted: c.access_grants() & punktfunk_core::quic::GRANT_POINTER != 0,
+        // Gamescope owns the one surface: nothing to minimize or leave fullscreen into.
+        windowed: !in_gamescope(),
+        pointer_capture: st.capture.is_some(),
         pad_type,
         mode: (m.width, m.height, m.refresh_hz),
         native_mode: st.native_mode,
@@ -367,7 +430,11 @@ pub(super) fn ring_facts(
 
 /// The game this device launched that this stream plays, from the running cache. Keeps
 /// the cache fresh too: [`pf_client_core::library::refresh_running`] is TTL-gated.
-fn streamed_game(addr: &str, (mgmt, port): (u16, u16), fp_hex: &str) -> Option<(String, String)> {
+pub(super) fn streamed_game(
+    addr: &str,
+    (mgmt, port): (u16, u16),
+    fp_hex: &str,
+) -> Option<(String, String)> {
     pf_client_core::library::refresh_running(addr, mgmt, port, fp_hex);
     pf_client_core::library::running(fp_hex)
         .into_iter()
@@ -635,7 +702,7 @@ impl Shell {
             && c.host_caps2() & punktfunk_core::quic::HOST_CAP2_TOUCH == 0
         {
             st.session_notice = Some((
-                "This host does not accept touch — using the trackpad model".into(),
+                pf_l10n::client::notice_touch_unsupported().into(),
                 Instant::now(),
             ));
             TouchMode::Trackpad
@@ -705,6 +772,8 @@ impl Shell {
         if self.pacing_active {
             self.present_priority = p.present_priority;
         }
+        let ring = self.overlay.is_some();
+        (self.shortcuts, self.keys) = super::shortcuts::adopt(&p.shortcuts, &self.gamepad, ring);
         let o = &mut self.opts;
         o.touch_mode = p.touch_mode;
         o.mouse_mode = p.mouse_mode;
@@ -855,6 +924,9 @@ impl Shell {
         }
         // A switch the host rejected/capped never delivers the exact target frame —
         // drop the scrim so it cannot linger.
+        if let Some(c) = &st.connector {
+            st.resize_overlay.refusals(c.mode_refusals());
+        }
         st.resize_overlay.tick(Instant::now());
         // Touch long-press: a still finger raises no SDL event, so the gesture engine
         // needs the clock — SDL ticks, the millisecond base the finger timestamps use.
@@ -863,8 +935,7 @@ impl Shell {
         }
     }
 
-    /// The ring's commands this pass. Stats tier, keyboard, pad mouse, controller type, stream
-    /// mute and system buttons are the loop's; the rest go to [`Shell::ring_command`].
+    /// The ring's commands this pass ([`Shell::run_ring_command`]).
     pub(super) fn ring_tick(&mut self, stream: &mut Option<StreamState>) {
         let mut ring_cmds = Vec::new();
         if let (Some(o), true) = (self.overlay.as_mut(), stream.is_some()) {
@@ -874,36 +945,47 @@ impl Shell {
         }
         for cmd in ring_cmds {
             tracing::info!(?cmd, "ring");
-            match cmd {
-                RingCommand::CycleStats => {
-                    bump_stats_tier(&mut self.stats_verbosity, stream);
+            self.run_ring_command(stream, cmd, self.ring_opener);
+        }
+    }
+
+    /// One command from the ring or a shortcut. Stats tier, keyboard, pad mouse, controller
+    /// type, stream mute and system buttons are the loop's; the rest go to
+    /// [`Shell::ring_command`]. `opener` is the pad the command came from.
+    pub(super) fn run_ring_command(
+        &mut self,
+        stream: &mut Option<StreamState>,
+        cmd: RingCommand,
+        opener: Option<u8>,
+    ) {
+        match cmd {
+            RingCommand::CycleStats => {
+                bump_stats_tier(&mut self.stats_verbosity, stream);
+            }
+            RingCommand::Keyboard => self.ring_keyboard = !self.ring_keyboard,
+            RingCommand::CyclePadMouse => {
+                if let Some(c) = stream.as_ref().and_then(|st| st.connector.as_ref()) {
+                    cycle_pad_mouse(c, opener);
                 }
-                RingCommand::Keyboard => self.ring_keyboard = !self.ring_keyboard,
-                RingCommand::CyclePadMouse => {
-                    if let Some(c) = stream.as_ref().and_then(|st| st.connector.as_ref()) {
-                        cycle_pad_mouse(c, self.ring_opener);
-                    }
+            }
+            RingCommand::ToggleStreamMute => {
+                if let Some(c) = stream.as_ref().and_then(|st| st.connector.as_ref()) {
+                    let on = c.audio_mute() & punktfunk_core::client::AUDIO_MUTE_LOCAL != 0;
+                    c.set_audio_muted(!on);
                 }
-                RingCommand::ToggleStreamMute => {
-                    if let Some(c) = stream.as_ref().and_then(|st| st.connector.as_ref()) {
-                        let on = c.audio_mute() & punktfunk_core::client::AUDIO_MUTE_LOCAL != 0;
-                        c.set_audio_muted(!on);
-                    }
-                }
-                // The pad worker owns the wire index and the owed release, so this one is
-                // the service's, not `ring_command`'s.
-                RingCommand::TapButton(bit) => self.gamepad.tap_button(bit),
-                // This stream only: the next connect reads the saved setting again.
-                RingCommand::CyclePadType => {
-                    let next = pf_client_core::overlay_actions::next_pad_type(
-                        self.gamepad.kind_override(),
-                    );
-                    self.gamepad.set_kind_override(next);
-                }
-                other => {
-                    if let Some(st) = stream.as_mut() {
-                        self.ring_command(other, st);
-                    }
+            }
+            // The pad worker owns the wire index and the owed release, so this one is
+            // the service's, not `ring_command`'s.
+            RingCommand::TapButton(bit) => self.gamepad.tap_button(bit),
+            // This stream only: the next connect reads the saved setting again.
+            RingCommand::CyclePadType => {
+                let next =
+                    pf_client_core::overlay_actions::next_pad_type(self.gamepad.kind_override());
+                self.gamepad.set_kind_override(next);
+            }
+            other => {
+                if let Some(st) = stream.as_mut() {
+                    self.ring_command(other, st);
                 }
             }
         }
@@ -912,7 +994,7 @@ impl Shell {
 
 impl Shell {
     /// Run one ring command against the live session (stats tier, keyboard, system buttons,
-    /// controller mouse and controller type are the loop's own, handled at the call site).
+    /// controller mouse and controller type are [`Shell::run_ring_command`]'s).
     pub(super) fn ring_command(&mut self, cmd: RingCommand, st: &mut StreamState) {
         match cmd {
             RingCommand::EndStream => {
@@ -980,18 +1062,24 @@ impl Shell {
                     cap.set_touch_mode(next);
                 }
             }
+            // The ring picks the host's mode itself: a new size is shown at it, with no view. A
+            // rate pick keeps the size, and core keeps its view.
             RingCommand::RequestMode {
                 width,
                 height,
                 refresh_hz,
             } => {
                 if let Some(c) = &st.connector {
+                    let live = c.mode();
                     if let Err(e) = c.request_mode(punktfunk_core::config::Mode {
                         width,
                         height,
                         refresh_hz,
                     }) {
                         tracing::warn!(error = %e, "ring: mode request");
+                    }
+                    if (live.width, live.height) != (width, height) {
+                        st.params.view = None;
                     }
                 }
             }
@@ -1005,6 +1093,16 @@ impl Shell {
                         cap.send_chord(&vks);
                     }
                 }
+            }
+            RingCommand::ToggleCapture => self.toggle_capture(st),
+            RingCommand::ToggleMouseMode => self.toggle_mouse_mode(st),
+            RingCommand::ToggleFullscreen => self.toggle_fullscreen(Some(st)),
+            RingCommand::Minimize => {
+                if let Some(cap) = &mut st.capture {
+                    cap.release(true);
+                }
+                self.capture_off();
+                self.window.minimize();
             }
             RingCommand::CycleStats
             | RingCommand::Keyboard
@@ -1024,10 +1122,11 @@ mod tests {
     fn resize_decision_follows_the_d2_discipline() {
         let t0 = Instant::now();
         let ms = Duration::from_millis;
+        let at = |w, h| ((w, h), None);
 
         let mut pending = None;
         assert_eq!(
-            resize_decision(t0, &mut pending, None, None, (1280, 720), (1000, 600)),
+            resize_decision(t0, &mut pending, None, None, at(1280, 720), at(1000, 600)),
             ResizeAction::Wait
         );
 
@@ -1039,8 +1138,8 @@ mod tests {
                 &mut pending,
                 None,
                 None,
-                (1280, 720),
-                (1000, 600)
+                ((1280, 720), None),
+                ((1000, 600), None)
             ),
             ResizeAction::Wait
         );
@@ -1053,10 +1152,10 @@ mod tests {
                 &mut pending,
                 None,
                 None,
-                (1280, 720),
-                (1001, 601)
+                ((1280, 720), None),
+                ((1001, 601), None)
             ),
-            ResizeAction::Settled(Some((1000, 600))),
+            ResizeAction::Settled(Some(((1000, 600), None))),
             "odd pixels floor to even"
         );
         assert!(pending.is_none(), "pending consumed");
@@ -1069,9 +1168,9 @@ mod tests {
                 t0 + ms(900),
                 &mut pending,
                 Some(t0),
-                Some((1000, 600)),
-                (1280, 720),
-                (800, 500)
+                Some(((1000, 600), None)),
+                ((1280, 720), None),
+                ((800, 500), None)
             ),
             ResizeAction::Wait
         );
@@ -1081,11 +1180,11 @@ mod tests {
                 t0 + ms(1000),
                 &mut pending,
                 Some(t0),
-                Some((1000, 600)),
-                (1280, 720),
-                (800, 500)
+                Some(((1000, 600), None)),
+                ((1280, 720), None),
+                ((800, 500), None)
             ),
-            ResizeAction::Settled(Some((800, 500)))
+            ResizeAction::Settled(Some(((800, 500), None)))
         );
 
         // Equal to the streamed mode → settle (persist) but no request.
@@ -1096,8 +1195,8 @@ mod tests {
                 &mut pending,
                 None,
                 None,
-                (1280, 720),
-                (1280, 720)
+                ((1280, 720), None),
+                ((1280, 720), None)
             ),
             ResizeAction::Settled(None)
         );
@@ -1110,9 +1209,9 @@ mod tests {
                 t0 + ms(400),
                 &mut pending,
                 None,
-                Some((1000, 600)),
-                (1280, 720),
-                (1000, 600)
+                Some(((1000, 600), None)),
+                ((1280, 720), None),
+                ((1000, 600), None)
             ),
             ResizeAction::Settled(None)
         );
@@ -1125,10 +1224,25 @@ mod tests {
                 &mut pending,
                 None,
                 None,
-                (1280, 720),
-                (100, 80)
+                ((1280, 720), None),
+                ((100, 80), None)
             ),
-            ResizeAction::Settled(Some((320, 200)))
+            ResizeAction::Settled(Some(((320, 200), None)))
+        );
+
+        // A clamped mode with a new view is an ask of its own.
+        let mut pending = Some(t0);
+        let viewed = ((1280, 720), Some((960, 540)));
+        assert_eq!(
+            resize_decision(
+                t0 + ms(400),
+                &mut pending,
+                None,
+                None,
+                at(1280, 720),
+                viewed
+            ),
+            ResizeAction::Settled(Some(viewed))
         );
     }
 
@@ -1140,7 +1254,7 @@ mod tests {
         let mut ind = ResizeIndicator::default();
         assert!(!ind.active());
 
-        ind.steering(1000, 600, t0);
+        ind.steering((1000, 600), None, t0);
         assert!(ind.active());
 
         // A stale old-mode frame still draining does not lift it.
@@ -1154,11 +1268,19 @@ mod tests {
 
         // A switch whose target frame never arrives (rejected / host-capped) times out.
         let mut ind = ResizeIndicator::default();
-        ind.steering(1000, 600, t0);
+        ind.steering((1000, 600), None, t0);
         ind.tick(t0 + ResizeIndicator::TIMEOUT - ms(1));
         assert!(ind.active(), "still within the timeout window");
         ind.tick(t0 + ResizeIndicator::TIMEOUT);
         assert!(!ind.active(), "timeout lifts a switch that never delivered");
+
+        // A refusal lifts it at once; an unchanged count does not.
+        let mut ind = ResizeIndicator::default();
+        ind.steering((1000, 600), None, t0);
+        ind.refusals(0);
+        assert!(ind.active(), "no refusal yet");
+        ind.refusals(1);
+        assert!(!ind.active(), "the host refused the switch");
     }
 
     #[test]
@@ -1168,9 +1290,9 @@ mod tests {
 
         // A drag through sizes re-arms the timeout, so a slow gesture never trips it.
         let mut ind = ResizeIndicator::default();
-        ind.steering(1000, 600, t0);
+        ind.steering((1000, 600), None, t0);
         let near = t0 + ResizeIndicator::TIMEOUT - ms(1);
-        ind.steering(1200, 700, near); // new target → timeout re-armed from `near`
+        ind.steering((1200, 700), None, near); // new target → timeout re-armed from `near`
         ind.tick(t0 + ResizeIndicator::TIMEOUT + ms(1)); // past A's window, within B's
         assert!(
             ind.active(),
@@ -1180,12 +1302,70 @@ mod tests {
         // Re-steering the same size does not re-arm (a repeated identical request cannot
         // hold the scrim open forever).
         let mut ind = ResizeIndicator::default();
-        ind.steering(1000, 600, t0);
-        ind.steering(1000, 600, t0 + ms(500)); // same target, later — `since` unchanged
+        ind.steering((1000, 600), None, t0);
+        ind.steering((1000, 600), None, t0 + ms(500)); // same target, later — `since` unchanged
         ind.tick(t0 + ResizeIndicator::TIMEOUT);
         assert!(
             !ind.active(),
             "an unchanged target keeps the original timeout"
+        );
+    }
+
+    /// Above 1x a window asks for its pixels × the scale and names its own pixels as the
+    /// view; at 1x and below it names none, which clears a view asked for before.
+    #[test]
+    fn a_match_window_ask_pairs_the_mode_with_its_view() {
+        assert_eq!(
+            window_mode(1600, 900, 2.0, 8192),
+            ((3200, 1800), Some((1600, 900)))
+        );
+        assert_eq!(
+            window_mode(1366, 768, 1.5, 8192),
+            ((2048, 1152), Some((1366, 768)))
+        );
+        assert_eq!(window_mode(1600, 900, 1.0, 8192), ((1600, 900), None));
+        assert_eq!(window_mode(1600, 900, 0.5, 8192), ((800, 450), None));
+        // The codec wall leaves the mode no larger than the window: nothing to shrink.
+        assert_eq!(window_mode(4096, 2304, 2.0, 4096), ((4096, 2304), None));
+    }
+
+    /// A host that reads the view sends a frame at it, any other host one at the mode:
+    /// either lifts the scrim, a stale frame at the old size does not.
+    #[test]
+    fn resize_indicator_lifts_on_the_view_or_the_mode() {
+        let t0 = Instant::now();
+        for frame in [(1600, 900), (3200, 1800)] {
+            let mut ind = ResizeIndicator::default();
+            ind.steering((3200, 1800), Some((1600, 900)), t0);
+            ind.decoded(1920, 1080);
+            assert!(ind.active(), "an old-size frame keeps the scrim up");
+            ind.decoded(frame.0, frame.1);
+            assert!(!ind.active(), "{frame:?} lifts the scrim");
+        }
+    }
+
+    /// A queued frame holds its decoder slot until it drops, and a producer that sends after
+    /// the close gets its frame back at once.
+    #[test]
+    fn drop_queued_releases_the_queue_and_refuses_more() {
+        let slot = std::sync::Arc::new(());
+        let (tx, rx) = async_channel::bounded(2);
+        tx.try_send(slot.clone()).unwrap();
+        tx.try_send(slot.clone()).unwrap();
+        assert_eq!(std::sync::Arc::strong_count(&slot), 3);
+        drop_queued(&rx);
+        assert_eq!(
+            std::sync::Arc::strong_count(&slot),
+            1,
+            "both frames dropped"
+        );
+        let late = tx.force_send(slot.clone());
+        assert!(matches!(late, Err(async_channel::SendError(_))));
+        drop(late);
+        assert_eq!(
+            std::sync::Arc::strong_count(&slot),
+            1,
+            "the late frame is back"
         );
     }
 }

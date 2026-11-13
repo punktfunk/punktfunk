@@ -391,7 +391,8 @@ final class SharedFoundationTests: XCTestCase {
     /// pinned card under "No Preset" — including the ones visibly wearing a preset chip.
     func testHostGroupingFilesPinnedCardsUnderTheirOwnPreset() {
         let groups = arranged(.name, .preset)
-        XCTAssertEqual(groups.map(\.title), ["Game", "Work", "No Preset"])
+        XCTAssertEqual(
+            groups.map(\.title), ["Game", "Work", String(localized: L10n.hostsGroupNoPreset)])
         // Desk is BOUND to Game; Couch merely pinned it. Both belong in the Game band.
         XCTAssertEqual(labels(groups[0]), ["Couch·Game", "Desk"])
         XCTAssertEqual(labels(groups[1]), ["attic", "Couch·Work"])
@@ -406,7 +407,7 @@ final class SharedFoundationTests: XCTestCase {
         let unused = PresetCatalog(presets: [StreamPreset(name: "Travel", id: "333333333333")])
         let groups = HostArrangement.groups(
             hosts: hosts, catalog: unused, online: [], sort: .name, grouping: .preset)
-        XCTAssertEqual(groups.map(\.title), ["No Preset"])
+        XCTAssertEqual(groups.map(\.title), [String(localized: L10n.hostsGroupNoPreset)])
         // The pins point at presets this catalog doesn't have, so they produce no cards either.
         XCTAssertEqual(labels(groups[0]), ["attic", "Basement", "Couch", "Desk"])
     }
@@ -418,7 +419,7 @@ final class SharedFoundationTests: XCTestCase {
         host.presetID = "deadbeefdead"
         let groups = HostArrangement.groups(
             hosts: [host], catalog: PresetCatalog(), online: [], sort: .name, grouping: .preset)
-        XCTAssertEqual(groups.map(\.title), ["No Preset"])
+        XCTAssertEqual(groups.map(\.title), [String(localized: L10n.hostsGroupNoPreset)])
     }
 
     func testHostGroupingByStatus() {
@@ -433,14 +434,19 @@ final class SharedFoundationTests: XCTestCase {
         // By name, not by index: the fixture's order is a fact about `.added`, not about this.
         let up = hosts.filter { ["Desk", "Couch"].contains($0.name) }.map(\.id)
         let some = groups(online: Set(up))
-        XCTAssertEqual(some.map(\.title), ["Online", "Offline"])
+        XCTAssertEqual(
+            some.map(\.title),
+            [String(localized: L10n.hostsGroupOnline), String(localized: L10n.hostsGroupOffline)])
         // A pinned card follows its host's status — same record, same reachability.
         XCTAssertEqual(labels(some[0]), ["Couch", "Couch·Game", "Couch·Work", "Desk"])
         XCTAssertEqual(labels(some[1]), ["attic", "Basement"])
 
         // All offline: no empty "Online" band.
-        XCTAssertEqual(groups(online: []).map(\.title), ["Offline"])
-        XCTAssertEqual(groups(online: Set(hosts.map(\.id))).map(\.title), ["Online"])
+        XCTAssertEqual(
+            groups(online: []).map(\.title), [String(localized: L10n.hostsGroupOffline)])
+        XCTAssertEqual(
+            groups(online: Set(hosts.map(\.id))).map(\.title),
+            [String(localized: L10n.hostsGroupOnline)])
     }
 
     // MARK: - Settings presets
@@ -486,6 +492,19 @@ final class SharedFoundationTests: XCTestCase {
         var moved = base
         moved.bitrateKbps = 50_000
         XCTAssertEqual(moved.applying(pin).bitrateKbps, 20_000)
+    }
+
+    /// A preset's host screen, as another client writes it, applies over a global that is always
+    /// empty: no defaults key holds it.
+    func testHostScreenIsAPresetFieldWithNoGlobal() throws {
+        let overlay = try JSONDecoder().decode(
+            SettingsOverlay.self, from: Data(#"{"host_screen":"monitor:HDMI-A-1"}"#.utf8))
+        XCTAssertTrue(overlay.extra.isEmpty)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "host-screen-tests"))
+        defaults.set("second", forKey: "host_screen")
+        XCTAssertEqual(EffectiveSettings(defaults: defaults).hostScreen, "")
+        XCTAssertEqual(EffectiveSettings().applying(overlay).hostScreen, "monitor:HDMI-A-1")
+        defaults.removePersistentDomain(forName: "host-screen-tests")
     }
 
     /// `clear` is the explicit way back to inheriting, including the resolution tri-state one row
@@ -775,6 +794,29 @@ final class SharedFoundationTests: XCTestCase {
         (s.width, s.height, s.refreshHz) = (1_920, 1_080, 120)
         let set = s.streamMode(native: (width: 3_840, height: 2_160, hz: 60))
         XCTAssertEqual([set.width, set.height, set.hz], [1_920, 1_080, 120])
+    }
+
+    /// Above 1x the connect names the chosen size as its view beside the scaled mode; 1x and
+    /// below name none. An override that brings the mode down to the view drops it. The desktop
+    /// twin is `the_connect_names_the_view_above_1x`.
+    func testStreamViewRidesAScaledMode() {
+        var s = EffectiveSettings()
+        (s.width, s.height, s.codec) = (1_366, 768, "hevc")
+        let native = (width: 1_920, height: 1_080, hz: 60)
+        func ask(_ scale: Double, lines: UInt32? = nil) -> [UInt32] {
+            s.renderScale = scale
+            let own = s.streamMode(native: native)
+            let mode = GameOverrides(lines: lines).fit(own, native: native, codecMax: 8_192)
+            let view = s.streamView(native: native, mode: mode)
+            return [mode.width, mode.height] + (view.map { [$0.width, $0.height] } ?? [])
+        }
+        XCTAssertEqual(ask(1.5), [2_048, 1_152, 1_366, 768])
+        XCTAssertEqual(ask(2.0), [2_732, 1_536, 1_366, 768])
+        XCTAssertEqual(ask(1.0), [1_366, 768])
+        XCTAssertEqual(ask(0.5), [682, 384])
+        XCTAssertEqual(ask(2.0, lines: 1_080), [1_920, 1_080, 1_366, 768])
+        XCTAssertEqual(ask(2.0, lines: 768), [1_366, 768])
+        XCTAssertEqual(ask(2.0, lines: 720), [1_280, 720])
     }
 
     // MARK: - The audio format a preset carries

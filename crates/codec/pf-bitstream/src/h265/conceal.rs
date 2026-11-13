@@ -20,8 +20,8 @@ pub enum Concealment {
     Intact,
     /// Decode these bytes instead: every current reference names a picture the decoder holds.
     Rewritten(Vec<u8>),
-    /// No present entry to stand in. Keep this and every following delta off the decoder and
-    /// ask for an IDR; the concealer resumes at the next IRAP.
+    /// No present entry to stand in: keep this AU off the decoder and ask for recovery. The
+    /// concealer forgets it, so the host's anchor on a picture the decoder holds plans intact.
     Unrecoverable,
 }
 
@@ -45,8 +45,15 @@ impl H265Concealer {
         }
     }
 
+    /// The decoder lost an AU this concealer folded: forget the decoding state. Every AU is
+    /// [`Concealment::Unrecoverable`] until an IRAP; parameter sets survive.
+    pub fn flush(&mut self) {
+        self.planner.flush();
+    }
+
     /// Fold one access unit; see [`Concealment`].
     pub fn conceal(&mut self, au: &[u8]) -> Concealment {
+        let before = self.planner.checkpoint();
         let plan = match self.planner.plan_au(au) {
             Ok(plan) => plan,
             Err(PlanError::AwaitingIdr) => return Concealment::Unrecoverable,
@@ -81,8 +88,9 @@ impl H265Concealer {
             ) {
                 Some(bytes) => patches.push((slice.data.clone(), bytes)),
                 None => {
-                    // The decoder never sees this picture, so the mirror must forget it too.
-                    self.planner.flush();
+                    // The decoder never sees this picture: the mirror forgets it and keeps
+                    // what the decoder still holds, the picture the host's anchor names.
+                    self.planner.restore(before);
                     return Concealment::Unrecoverable;
                 }
             }
@@ -230,17 +238,17 @@ fn locate_used_flags(rbsp: &[u8], nal_type: u8, sps: &Sps, pps: &Pps) -> Option<
     Some(UsedFlagBits { s0, s1 })
 }
 
-struct Bits<'a> {
-    data: &'a [u8],
-    pos: usize,
+pub(super) struct Bits<'a> {
+    pub(super) data: &'a [u8],
+    pub(super) pos: usize,
 }
 
 impl Bits<'_> {
-    fn flag(&mut self) -> Option<bool> {
+    pub(super) fn flag(&mut self) -> Option<bool> {
         Some(self.u(1)? == 1)
     }
 
-    fn u(&mut self, n: u32) -> Option<u32> {
+    pub(super) fn u(&mut self, n: u32) -> Option<u32> {
         let mut v = 0u32;
         for _ in 0..n {
             if self.pos / 8 >= self.data.len() {
@@ -252,7 +260,7 @@ impl Bits<'_> {
         Some(v)
     }
 
-    fn ue(&mut self) -> Option<u32> {
+    pub(super) fn ue(&mut self) -> Option<u32> {
         let mut zeros = 0;
         while self.u(1)? == 0 {
             zeros += 1;
@@ -264,11 +272,11 @@ impl Bits<'_> {
     }
 }
 
-fn read_bit(data: &[u8], bit: usize) -> bool {
+pub(super) fn read_bit(data: &[u8], bit: usize) -> bool {
     data[bit / 8] & (0x80 >> (bit % 8)) != 0
 }
 
-fn ceil_log2(n: u32) -> u32 {
+pub(super) fn ceil_log2(n: u32) -> u32 {
     if n <= 1 {
         0
     } else {
@@ -277,7 +285,7 @@ fn ceil_log2(n: u32) -> u32 {
 }
 
 /// Strip `emulation_prevention_three_byte`s (7.3.1.1).
-fn unescape(payload: &[u8]) -> Vec<u8> {
+pub(super) fn unescape(payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(payload.len());
     let mut zeros = 0usize;
     for &byte in payload {
@@ -293,7 +301,7 @@ fn unescape(payload: &[u8]) -> Vec<u8> {
 
 /// Re-insert them. Deterministic over the RBSP, so the untouched slice data re-escapes to
 /// its original bytes.
-fn escape(rbsp: &[u8]) -> Vec<u8> {
+pub(super) fn escape(rbsp: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rbsp.len() + 8);
     let mut zeros = 0usize;
     for &byte in rbsp {
@@ -370,18 +378,36 @@ mod tests {
     }
 
     #[test]
-    fn no_present_entry_in_the_rps_is_unrecoverable_until_an_idr() {
+    fn a_flush_holds_every_au_until_the_next_idr() {
         let mut c = H265Concealer::new();
         c.conceal(&idr());
-        // POC 2 names only the missing POC 1: nothing in its RPS can stand in.
+        c.flush();
         assert_eq!(
-            c.conceal(&trail_p(2, &[(0, true)], 1)),
+            c.conceal(&trail_p(1, &[(0, true)], 1)),
             Concealment::Unrecoverable
         );
+        assert_eq!(c.conceal(&idr()), Concealment::Intact);
+        assert_eq!(c.conceal(&trail_p(1, &[(0, true)], 1)), Concealment::Intact);
+    }
+
+    /// A one-reference chain, as NVENC codes it: each P names only the picture before it.
+    #[test]
+    fn no_present_entry_is_unrecoverable_until_the_anchor_on_a_held_picture() {
+        let mut c = H265Concealer::new();
+        c.conceal(&idr());
+        assert_eq!(c.conceal(&trail_p(1, &[(0, true)], 1)), Concealment::Intact);
+        // POC 2 never arrived; POC 3 and 4 name only pictures the decoder lacks.
         assert_eq!(
             c.conceal(&trail_p(3, &[(0, true)], 1)),
             Concealment::Unrecoverable
         );
+        assert_eq!(
+            c.conceal(&trail_p(4, &[(0, true)], 1)),
+            Concealment::Unrecoverable
+        );
+        // The host's anchor names POC 1, which the decoder still holds.
+        assert_eq!(c.conceal(&trail_p(5, &[(3, true)], 1)), Concealment::Intact);
+        assert_eq!(c.conceal(&trail_p(6, &[(0, true)], 1)), Concealment::Intact);
         assert_eq!(c.conceal(&idr()), Concealment::Intact);
         assert_eq!(c.conceal(&trail_p(1, &[(0, true)], 1)), Concealment::Intact);
     }

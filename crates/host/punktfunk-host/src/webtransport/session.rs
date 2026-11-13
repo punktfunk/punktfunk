@@ -82,10 +82,7 @@ pub(crate) async fn run(
         return Ok(Served::Session);
     };
     let permit = match knock {
-        None => sem
-            .acquire_owned()
-            .await
-            .expect("session semaphore is never closed"),
+        None => crate::native::slot_while_connected(&link, &sem).await?,
         Some(label) => {
             let fp = link
                 .peer_fingerprint()
@@ -117,6 +114,10 @@ pub(crate) async fn run(
     .await
 }
 
+/// Each step a browser takes before admission, the session request included: a peer still
+/// silent after this holds a slot, not a handshake.
+pub(super) const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// A browser past admission: its link, and the control stream with the first message read.
 struct Admitted {
     link: SessionLink,
@@ -139,7 +140,6 @@ async fn admit_session(
     serving: &Serving,
     via: &Arc<Via>,
 ) -> Result<Option<Admitted>> {
-    const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
     let (tx, mut rx) = tokio::time::timeout(HANDSHAKE_TIMEOUT, conn.accept_bi())
         .await
         .context("control stream: handshake timeout")?
@@ -444,6 +444,8 @@ mod tests {
             profile: None,
             access_only: false,
             screens: Vec::new(),
+            view: None,
+            screen_wish: None,
         }
     }
 
@@ -852,6 +854,7 @@ mod tests {
         let why = RejectReason::LaunchNotPermitted;
         assert_eq!(said.code, why.close_code());
         assert_eq!(said.reason, why.to_string());
+        assert_eq!(said.reason_id, "reject_launch_not_permitted");
     }
 
     /// A browser never opens a profile on a person's own Linux account, and the supervisor is
@@ -910,6 +913,7 @@ mod tests {
         assert!(ended.is_err(), "the session is refused");
         assert_eq!(said.code, RejectReason::SeatUnavailable.close_code());
         assert_eq!(said.reason, "Open this profile from the Punktfunk app.");
+        assert_eq!(said.reason_id, "close_unlock_from_browser");
         assert!(sup.asked().is_empty(), "nothing asked of the supervisor");
     }
 

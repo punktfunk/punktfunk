@@ -1,0 +1,777 @@
+// Game overrides in the console: the Stream controls of a game or a source, and the Shared
+// overrides dialog. Each control writes to the host when it changes and then shows what the host
+// stored, apart from the entry page's draft and Save. In a profile's view they write its own.
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
+import { toast } from "@unom/ui/toast";
+import { Pencil, Plus, Trash2 } from "lucide-react";
+import { type FC, type ReactNode, useState } from "react";
+import {
+	getGetLibraryOverridesQueryKey,
+	useCreateOverrideSet,
+	useDeleteOverrideSet,
+	useGetLibraryOverrides,
+	useSetGameOverrides,
+	useSetSourceOverrides,
+	useUpdateOverrideSet,
+} from "@/api/gen/library/library";
+import type { OverrideEntry } from "@/api/gen/model/overrideEntry";
+import { type ProfileView, useAs, useProfileView, whose } from "@/api/seat";
+import { useDialogs } from "@/components/dialogs";
+import { QueryState } from "@/components/query-state";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+	Dialog,
+	DialogContent,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
+import { apiErrorMessage } from "@/lib/errors";
+import { useLocale } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
+import { m } from "@/paraglide/messages";
+import { OwnBadge } from "./GameCard";
+import { refreshLibrary } from "./helpers";
+import {
+	applyPatch,
+	type Fields,
+	fieldsOf,
+	gameEntry,
+	HZ_RANGE,
+	LINES_RANGE,
+	linesLabel,
+	mergedSets,
+	type Patch,
+	padLabel,
+	padNames,
+	profileEntry,
+	profileStream,
+	REFRESH_RATES,
+	RESOLUTIONS,
+	setList,
+	storeOf,
+	usageOf,
+	wholeIn,
+} from "./overrides";
+
+/** `Select` values beside the set ids, which are 12 hex and never these. */
+const DEVICE = "device";
+const CUSTOM = "custom";
+const NEW = "new";
+const SAME = "same";
+
+/** The document and every library view ask again: a badge follows the entry it summarizes. */
+export const refreshOverrides = (qc: QueryClient) =>
+	Promise.all([
+		qc.invalidateQueries({ queryKey: getGetLibraryOverridesQueryKey() }),
+		refreshLibrary(qc),
+	]);
+
+/** One write at a time, then the stored state: a refused write toasts and the control reverts. */
+function useStreamWrite() {
+	const qc = useQueryClient();
+	const [busy, setBusy] = useState(false);
+	const run = async <T,>(write: () => Promise<T>): Promise<T | undefined> => {
+		setBusy(true);
+		try {
+			return await write();
+		} catch (e) {
+			toast.error(apiErrorMessage(e) ?? m.library_stream_failed());
+			return undefined;
+		} finally {
+			await refreshOverrides(qc);
+			setBusy(false);
+		}
+	};
+	return { busy, run };
+}
+
+/** Asks for a shared override's name; null when the operator backs out or leaves it blank. */
+function useAskName() {
+	const { promptText } = useDialogs();
+	return async (title: string, confirmLabel: string, defaultValue?: string) =>
+		(
+			await promptText({
+				title,
+				label: m.library_stream_name(),
+				confirmLabel,
+				...(defaultValue ? { defaultValue } : {}),
+			})
+		)?.trim() || null;
+}
+
+const Choice: FC<{
+	id: string;
+	label: string;
+	value: string;
+	options: [string, string][];
+	onPick: (value: string) => void;
+	disabled: boolean;
+	/** Where the value comes from, when not from here; the value reads muted. */
+	note?: string;
+	/** The value is not this entry's own: it reads muted. */
+	muted?: boolean;
+	children?: ReactNode;
+}> = ({
+	id,
+	label,
+	value,
+	options,
+	onPick,
+	disabled,
+	note,
+	muted,
+	children,
+}) => (
+	<div className="space-y-2">
+		<Label htmlFor={id}>{label}</Label>
+		<Select value={value} onValueChange={onPick} disabled={disabled}>
+			<SelectTrigger
+				id={id}
+				size="sm"
+				className={cn((note || muted) && "text-muted-foreground")}
+			>
+				<SelectValue />
+			</SelectTrigger>
+			<SelectContent>
+				{options.map(([v, text]) => (
+					<SelectItem key={v} value={v}>
+						{text}
+					</SelectItem>
+				))}
+			</SelectContent>
+		</Select>
+		{note && <p className="text-xs text-muted-foreground">{note}</p>}
+		{children}
+	</div>
+);
+
+/** "Device decides", then `list` and a stored value it lacks, labelled. */
+function choices<T extends string | number>(
+	list: readonly T[],
+	current: T | null | undefined,
+	label: (v: T) => string,
+): [string, string][] {
+	const all =
+		current == null || list.includes(current) ? list : [...list, current];
+	return [
+		[DEVICE, m.library_stream_device()],
+		...all.map((v): [string, string] => [String(v), label(v)]),
+	];
+}
+
+const picked = (v: string) => (v === DEVICE ? null : v);
+
+/** The `Select` value of a list with Custom: a stored value the list lacks reads Custom. */
+function listValue(
+	list: readonly number[],
+	stored: number | undefined,
+	custom: boolean,
+): string {
+	if (custom || (stored != null && !list.includes(stored))) return CUSTOM;
+	return stored != null ? String(stored) : DEVICE;
+}
+
+/**
+ * A custom value in `range`, written on blur or Enter rather than per keystroke as `InputNumber`
+ * does: each write goes to the host and locks the row until it answers.
+ */
+const CustomNumber: FC<{
+	id: string;
+	label: string;
+	unit: string;
+	value: number | undefined;
+	range: readonly [number, number];
+	onCommit: (n: number) => void;
+	disabled: boolean;
+}> = ({ id, label, unit, value, range, onCommit, disabled }) => {
+	// Null shows the stored value; typing holds a draft until it commits.
+	const [draft, setDraft] = useState<string | null>(null);
+	const commit = () => {
+		const n = draft == null ? null : wholeIn(draft, range);
+		setDraft(null);
+		if (n != null && n !== value) onCommit(n);
+	};
+	return (
+		<div className="flex items-center gap-2">
+			<Input
+				id={id}
+				type="number"
+				inputMode="numeric"
+				min={range[0]}
+				max={range[1]}
+				step={1}
+				placeholder={`${range[0]}–${range[1]}`}
+				aria-label={label}
+				className="w-24"
+				value={draft ?? value ?? ""}
+				onChange={(e) => setDraft(e.target.value)}
+				onBlur={commit}
+				onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+				disabled={disabled}
+			/>
+			<span className="text-sm text-muted-foreground">{unit}</span>
+		</div>
+	);
+};
+
+/** Resolution with its screen option, refresh rate (each a preset or Custom…), HDR, controller. */
+export const StreamFields: FC<{
+	id: string;
+	value: Fields;
+	onSet: (patch: Patch) => void;
+	disabled: boolean;
+	/** The source these values come from, for a game that has none of its own. */
+	from?: string | undefined;
+	/** The values are the owner's library's, in a profile's view: they read muted. */
+	muted?: boolean;
+}> = ({ id, value, onSet, disabled, from, muted }) => {
+	// Custom with nothing typed yet stores nothing; the pick holds until a value does.
+	const [customLines, setCustomLines] = useState(false);
+	const [customHz, setCustomHz] = useState(false);
+	const note = (set: boolean) =>
+		from && set ? m.library_stream_from({ source: from }) : undefined;
+	const hdr = value.hdr == null ? DEVICE : value.hdr ? "on" : "off";
+	const linesPick = listValue(RESOLUTIONS, value.lines, customLines);
+	const hzPick = listValue(REFRESH_RATES, value.hz, customHz);
+	const custom: [string, string] = [CUSTOM, m.library_stream_custom_value()];
+	return (
+		<div className="grid gap-4 @md:grid-cols-2">
+			<Choice
+				id={`${id}-lines`}
+				label={m.library_stream_resolution()}
+				value={linesPick}
+				options={[...choices(RESOLUTIONS, null, linesLabel), custom]}
+				onPick={(v) => {
+					setCustomLines(v === CUSTOM);
+					if (v === CUSTOM) return;
+					const lines = picked(v);
+					onSet(
+						lines == null
+							? { lines: null, beyond_screen: null }
+							: { lines: Number(lines) },
+					);
+				}}
+				disabled={disabled}
+				note={note(value.lines != null)}
+				muted={muted}
+			>
+				{linesPick === CUSTOM && (
+					<CustomNumber
+						id={`${id}-lines-custom`}
+						label={m.library_stream_resolution()}
+						unit="p"
+						value={value.lines}
+						range={LINES_RANGE}
+						onCommit={(n) => onSet({ lines: n })}
+						disabled={disabled}
+					/>
+				)}
+				{value.lines != null && (
+					<div className="flex items-center gap-2">
+						<Checkbox
+							id={`${id}-beyond`}
+							checked={value.beyond_screen === true}
+							disabled={disabled}
+							onCheckedChange={(next) =>
+								onSet({ beyond_screen: next === true ? true : null })
+							}
+						/>
+						<Label htmlFor={`${id}-beyond`}>{m.library_stream_beyond()}</Label>
+					</div>
+				)}
+			</Choice>
+			<Choice
+				id={`${id}-hz`}
+				label={m.library_stream_refresh()}
+				value={hzPick}
+				options={[
+					...choices(REFRESH_RATES, null, (hz) => m.library_stream_hz({ hz })),
+					custom,
+				]}
+				onPick={(v) => {
+					setCustomHz(v === CUSTOM);
+					if (v === CUSTOM) return;
+					const hz = picked(v);
+					onSet({ hz: hz == null ? null : Number(hz) });
+				}}
+				disabled={disabled}
+				note={note(value.hz != null)}
+				muted={muted}
+			>
+				{hzPick === CUSTOM && (
+					<CustomNumber
+						id={`${id}-hz-custom`}
+						label={m.library_stream_refresh()}
+						unit="Hz"
+						value={value.hz}
+						range={HZ_RANGE}
+						onCommit={(n) => onSet({ hz: n })}
+						disabled={disabled}
+					/>
+				)}
+			</Choice>
+			<Choice
+				id={`${id}-hdr`}
+				label={m.library_stream_hdr()}
+				value={hdr}
+				options={[
+					[DEVICE, m.library_stream_device()],
+					["on", m.common_on()],
+					["off", m.common_off()],
+				]}
+				onPick={(v) => onSet({ hdr: v === DEVICE ? null : v === "on" })}
+				disabled={disabled}
+				note={note(value.hdr != null)}
+				muted={muted}
+			/>
+			<Choice
+				id={`${id}-pad`}
+				label={m.library_stream_controller()}
+				value={value.gamepad ?? DEVICE}
+				options={choices(padNames(), value.gamepad, padLabel)}
+				onPick={(v) => onSet({ gamepad: picked(v) })}
+				disabled={disabled}
+				note={note(value.gamepad != null)}
+				muted={muted}
+			/>
+		</div>
+	);
+};
+
+type StreamControlsProps = {
+	kind: "game" | "source";
+	/** The library id, or the source id. */
+	id: string;
+	/** A game's source by name, for "from Lutris". */
+	from?: string;
+};
+
+/** A game's or a source's stream settings, the owner's library's or a profile's own. */
+export const StreamControls: FC<StreamControlsProps> = (props) => {
+	const view = useProfileView();
+	return view ? (
+		<ProfileStreamControls {...props} view={view} />
+	) : (
+		<OwnerStreamControls {...props} />
+	);
+};
+
+/**
+ * The owner's library: *Use* (none, its own values, or a shared override), then the values. A
+ * shared override's values read here and change in its dialog. A game under a source's entry
+ * also has *Same as <source>*: its source's values, muted. Editing one makes them the game's own,
+ * and *Device decides* opts out of them.
+ */
+const OwnerStreamControls: FC<StreamControlsProps> = ({ kind, id, from }) => {
+	const locale = useLocale();
+	const doc = useGetLibraryOverrides();
+	const setGame = useSetGameOverrides();
+	const setSource = useSetSourceOverrides();
+	const create = useCreateOverrideSet();
+	const { busy, run } = useStreamWrite();
+	const askName = useAskName();
+	// Custom with nothing set yet stores nothing; the pick holds until a value does.
+	const [custom, setCustom] = useState(false);
+	const [editing, setEditing] = useState<string | null>(null);
+
+	const d = doc.data;
+	const own = kind === "game" ? d?.games?.[id] : d?.sources?.[id];
+	const source = kind === "game" ? d?.sources?.[storeOf(id)] : undefined;
+	const inherited = own ? undefined : source;
+	const entry = own ?? inherited;
+	// A set id the document no longer holds resolves to nothing, as on the host.
+	const setId = entry?.set && d?.sets?.[entry.set] ? entry.set : undefined;
+	const values = Object.keys(fieldsOf(entry)).length > 0;
+	const shown = setId ? fieldsOf(d?.sets?.[setId]) : fieldsOf(entry);
+	const use =
+		inherited && !custom
+			? SAME
+			: (setId ?? (values || custom ? CUSTOM : DEVICE));
+	const via = inherited && (setId || values) ? from : undefined;
+
+	const put = (data: OverrideEntry | null) =>
+		kind === "game"
+			? setGame.mutateAsync({ id, data: gameEntry(d, id, data) })
+			: setSource.mutateAsync({ source: id, data: data ?? {} });
+
+	const onUse = async (v: string) => {
+		if (v === NEW) {
+			const name = await askName(
+				m.library_stream_new_title(),
+				m.common_create(),
+			);
+			if (!name) return;
+			await run(async () => {
+				const made = await create.mutateAsync({ data: { ...shown, name } });
+				await put({ set: made.id });
+			});
+			return;
+		}
+		setCustom(v === CUSTOM);
+		if (v === CUSTOM) {
+			// The shared override's or the source's values become this entry's own, to edit.
+			if ((setId || inherited) && Object.keys(shown).length > 0)
+				await run(() => put(shown));
+			return;
+		}
+		await run(() => put(v === SAME ? null : v === DEVICE ? {} : { set: v }));
+	};
+
+	const htmlId = `stream-${kind}-${id}`;
+	return (
+		<QueryState
+			isLoading={doc.isLoading}
+			error={doc.error}
+			refetch={doc.refetch}
+		>
+			<div className="space-y-4">
+				<div className="max-w-sm">
+					<Choice
+						id={`${htmlId}-use`}
+						label={m.library_stream_use()}
+						value={use}
+						options={[
+							[DEVICE, m.library_stream_device()],
+							...(source
+								? [
+										[
+											SAME,
+											m.library_stream_same_as_source({
+												source: from ?? storeOf(id),
+											}),
+										] as [string, string],
+									]
+								: []),
+							[CUSTOM, m.library_stream_custom()],
+							...setList(d, locale).map((s): [string, string] => [
+								s.id,
+								s.name ?? s.id,
+							]),
+							[NEW, m.library_stream_new()],
+						]}
+						onPick={(v) => void onUse(v)}
+						disabled={busy}
+					>
+						{setId && (
+							<Button
+								variant="link"
+								size="sm"
+								className="h-auto p-0"
+								onClick={() => setEditing(setId)}
+							>
+								{m.library_stream_edit_shared()}
+							</Button>
+						)}
+					</Choice>
+				</div>
+				<StreamFields
+					id={htmlId}
+					value={shown}
+					onSet={(patch) => void run(() => put(applyPatch(shown, patch)))}
+					disabled={busy || setId !== undefined}
+					from={via}
+				/>
+			</div>
+			{editing && (
+				<SharedOverridesDialog
+					only={editing}
+					onClose={() => setEditing(null)}
+				/>
+			)}
+		</QueryState>
+	);
+};
+
+/**
+ * The owner's library's overrides, and in a profile's view the profile's own file beside them.
+ * `sets` holds every shared override an entry may name there. A person's own console reads
+ * only their own file, which carries the owner's shared overrides as `box_sets`: the box lends
+ * a person no read of the owner's games and sources.
+ */
+export function useOverrideDocs(enabled = true) {
+	const as = useAs();
+	const person = useProfileView()?.person === true;
+	const owners = useGetLibraryOverrides(undefined, {
+		query: { enabled: enabled && !person },
+	});
+	const own = useGetLibraryOverrides(as, {
+		query: { enabled: enabled && as !== undefined },
+	});
+	// A person reads the owner's entries only for what their library lists, beside their own.
+	const lent = own.data;
+	const box = person
+		? lent?.box_sets
+			? {
+					sets: lent.box_sets,
+					games: lent.box_games ?? undefined,
+					sources: lent.box_sources ?? undefined,
+				}
+			: undefined
+		: owners.data;
+	return {
+		box,
+		own: as ? own.data : undefined,
+		sets: mergedSets(box, as ? own.data : undefined),
+		isLoading: owners.isLoading || (as !== undefined && own.isLoading),
+		error: owners.error ?? (as ? own.error : null),
+		refetch: () => {
+			if (!person) void owners.refetch();
+			if (as) void own.refetch();
+		},
+	};
+}
+
+/**
+ * A profile's own stream settings. *Use* starts with what applies without them, the owner's
+ * library's (*Same as Enrico*) or the profile's own source entry (*Same as Lutris*), whose
+ * values read muted. A value of the profile's own is marked, with one action back.
+ */
+const ProfileStreamControls: FC<
+	StreamControlsProps & { view: ProfileView }
+> = ({ kind, id, from, view }) => {
+	const locale = useLocale();
+	const as = useAs();
+	const docs = useOverrideDocs();
+	const setGame = useSetGameOverrides();
+	const setSource = useSetSourceOverrides();
+	const { busy, run } = useStreamWrite();
+	const [custom, setCustom] = useState(false);
+
+	const s = profileStream(kind, id, docs.box, docs.own);
+	const values = Object.keys(fieldsOf(s.mine)).length > 0;
+	const use = s.mine
+		? (s.setId ?? (values || custom ? CUSTOM : DEVICE))
+		: custom
+			? CUSTOM
+			: SAME;
+	const back = s.fallbackIsOwn
+		? m.library_stream_same_as_source({ source: from ?? storeOf(id) })
+		: m.profile_view_same_as_owner({ owner: view.ownerName });
+
+	const put = (data: OverrideEntry | null) => {
+		const entry = profileEntry(kind, data);
+		return kind === "game"
+			? setGame.mutateAsync({ id, data: entry, params: as })
+			: setSource.mutateAsync({ source: id, data: entry, params: as });
+	};
+	const onUse = async (v: string) => {
+		setCustom(v === CUSTOM);
+		if (v === CUSTOM) {
+			// What applied becomes the profile's own, to edit.
+			if (!s.mine && Object.keys(s.shown).length > 0)
+				await run(() => put(s.shown));
+			return;
+		}
+		await run(() => put(v === SAME ? null : v === DEVICE ? {} : { set: v }));
+	};
+
+	const htmlId = `stream-${kind}-${id}`;
+	return (
+		<QueryState
+			isLoading={docs.isLoading}
+			error={docs.error}
+			refetch={docs.refetch}
+		>
+			<div className="space-y-4">
+				{s.mine && (
+					<div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+						<OwnBadge label={whose(view.name, view.person).own} />
+						{!s.fallbackIsOwn && (
+							<Button
+								variant="link"
+								size="sm"
+								className="h-auto p-0"
+								disabled={busy}
+								onClick={() => void onUse(SAME)}
+							>
+								{m.profile_view_use_owner({ owner: view.ownerName })}
+							</Button>
+						)}
+					</div>
+				)}
+				<div className="max-w-sm">
+					<Choice
+						id={`${htmlId}-use`}
+						label={m.library_stream_use()}
+						value={use}
+						options={[
+							[SAME, back],
+							// A source's own entry cannot opt out; it hands back to the owner's.
+							...(kind === "game"
+								? [[DEVICE, m.library_stream_device()] as [string, string]]
+								: []),
+							[CUSTOM, m.library_stream_custom()],
+							...setList(docs.sets, locale).map((set): [string, string] => [
+								set.id,
+								set.name ?? set.id,
+							]),
+						]}
+						onPick={(v) => void onUse(v)}
+						disabled={busy}
+						muted={!s.mine && !custom}
+					/>
+				</div>
+				<StreamFields
+					id={htmlId}
+					value={s.shown}
+					onSet={(patch) => void run(() => put(applyPatch(s.shown, patch)))}
+					disabled={busy || s.setId !== undefined}
+					from={!s.mine && s.fallbackIsOwn ? from : undefined}
+					muted={!s.mine && !custom}
+				/>
+			</div>
+		</QueryState>
+	);
+};
+
+/** "12 games · 1 source", or that nothing uses it. */
+function usageLine({ games, sources }: { games: number; sources: number }) {
+	const parts = [
+		games > 0 && m.library_stream_used_games({ count: games }),
+		sources > 0 && m.library_stream_used_sources({ count: sources }),
+	].filter(Boolean);
+	return parts.length ? parts.join(" · ") : m.library_stream_unused();
+}
+
+/**
+ * The shared overrides: what uses each, its values, rename and delete, and a new one. `only`
+ * narrows it to one, opened from a game that uses it.
+ */
+export const SharedOverridesDialog: FC<{
+	only?: string;
+	onClose: () => void;
+}> = ({ only, onClose }) => {
+	const locale = useLocale();
+	const doc = useGetLibraryOverrides();
+	const create = useCreateOverrideSet();
+	const update = useUpdateOverrideSet();
+	const remove = useDeleteOverrideSet();
+	const { busy, run } = useStreamWrite();
+	const { confirm } = useDialogs();
+	const askName = useAskName();
+	const sets = setList(doc.data, locale).filter((s) => !only || s.id === only);
+
+	const onNew = async () => {
+		const name = await askName(m.library_stream_new_title(), m.common_create());
+		if (name) await run(() => create.mutateAsync({ data: { name } }));
+	};
+	const onRename = async (id: string, current: string) => {
+		const name = await askName(
+			m.library_stream_rename_title(),
+			m.common_rename(),
+			current,
+		);
+		if (name && name !== current)
+			await run(() => update.mutateAsync({ id, data: { name } }));
+	};
+	const onDelete = async (id: string, name: string) => {
+		const { games, sources } = usageOf(doc.data, id);
+		const body = [
+			games > 0 && m.library_stream_delete_body({ count: games }),
+			sources > 0 && m.library_stream_delete_sources_body({ count: sources }),
+		]
+			.filter(Boolean)
+			.join(" ");
+		const ok = await confirm({
+			title: m.library_stream_delete_title({ name }),
+			...(body ? { description: body } : {}),
+			confirmLabel: m.common_delete(),
+			destructive: true,
+		});
+		if (!ok) return;
+		const gone = await run(() => remove.mutateAsync({ id }));
+		if (gone && only) onClose();
+	};
+
+	return (
+		<Dialog open onOpenChange={(open) => !open && onClose()}>
+			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+				<DialogHeader>
+					<DialogTitle>{m.library_stream_shared()}</DialogTitle>
+				</DialogHeader>
+				<QueryState
+					isLoading={doc.isLoading}
+					error={doc.error}
+					refetch={doc.refetch}
+				>
+					{sets.length === 0 ? (
+						<p className="text-sm text-muted-foreground">
+							{m.library_stream_shared_empty()}
+						</p>
+					) : (
+						<ul className="@container divide-y">
+							{sets.map((s) => {
+								const name = s.name ?? s.id;
+								return (
+									<li key={s.id} className="space-y-3 py-4 first:pt-0">
+										<div className="flex items-center gap-2">
+											<div className="min-w-0 flex-1">
+												<p className="truncate font-medium">{name}</p>
+												<p className="text-xs text-muted-foreground">
+													{usageLine(usageOf(doc.data, s.id))}
+												</p>
+											</div>
+											<Button
+												variant="ghost"
+												size="icon"
+												className="size-8"
+												aria-label={m.common_rename()}
+												title={m.common_rename()}
+												disabled={busy}
+												onClick={() => void onRename(s.id, name)}
+											>
+												<Pencil className="size-4" />
+											</Button>
+											<Button
+												variant="ghost"
+												size="icon"
+												className="size-8"
+												aria-label={m.common_delete()}
+												title={m.common_delete()}
+												disabled={busy}
+												onClick={() => void onDelete(s.id, name)}
+											>
+												<Trash2 className="size-4 text-destructive" />
+											</Button>
+										</div>
+										<StreamFields
+											id={`stream-set-${s.id}`}
+											value={fieldsOf(s)}
+											disabled={busy}
+											onSet={(patch) =>
+												void run(() =>
+													update.mutateAsync({ id: s.id, data: patch }),
+												)
+											}
+										/>
+									</li>
+								);
+							})}
+						</ul>
+					)}
+					{!only && (
+						<Button
+							variant="outline"
+							className="mt-4"
+							disabled={busy}
+							onClick={() => void onNew()}
+						>
+							<Plus className="size-4" />
+							{m.library_stream_new()}
+						</Button>
+					)}
+				</QueryState>
+			</DialogContent>
+		</Dialog>
+	);
+};

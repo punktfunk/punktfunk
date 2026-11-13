@@ -8,9 +8,8 @@ Stream a GNOME desktop, or keep one up for an always-on host. Install the host f
 
 ## What works
 
-- Each client gets its own virtual display at its exact mode, created over Mutter's own D-Bus API,
-  so no portal dialog asks for permission.
-- Input goes in through Mutter's remote-desktop API, headless included.
+- Each client gets its own virtual display at its exact mode, with no permission dialog.
+- Input works on a headless box too.
 - A display scale you set for a client comes back on its next connect.
 
 It needs GNOME 48 or newer on a **Wayland** session.

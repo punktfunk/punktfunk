@@ -1,8 +1,12 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import type { ComponentProps, ReactNode } from "react";
+import type { SessionSettingsState } from "@/api/gen/model/sessionSettingsState";
+import { GameExitFixed, GameExitView } from "@/sections/Profiles/session";
 import {
 	AddProfileDialog,
 	DoctorDialog,
 	DoorDialog,
+	EditProfileDialog,
 	ProfilesView,
 	RemoveProfileDialog,
 	SeatsDialog,
@@ -263,6 +267,87 @@ export const AddOnLinuxDoor: Story = {
 			isPending={false}
 		/>
 	),
+};
+
+/** A profile's own **When the game exits**, as the host answers it. */
+const exit = (
+	configured: boolean,
+	end: boolean,
+	enforced = ["session_on_game_exit"],
+): SessionSettingsState => ({
+	configured,
+	enforced,
+	settings: { session_on_game_exit: end },
+});
+
+/** The pencil's dialog for `name` of the Windows box, with `exit` under the name. */
+const edit = (name: string, exit?: ReactNode) => {
+	const profile = profilesWindows.find((p) => p.display_name === name);
+	return (
+		<>
+			{profile && (
+				<EditProfileDialog
+					profile={profile}
+					exit={exit}
+					onRename={noop}
+					onClose={noop}
+				/>
+			)}
+		</>
+	);
+};
+
+/** **When the game exits** in the edit dialog, as the host answers it. */
+const exitView = (
+	state: SessionSettingsState | undefined,
+	more: Partial<ComponentProps<typeof GameExitView>> = {},
+) => (
+	<GameExitView
+		state={state}
+		loading={false}
+		error={null}
+		busy={false}
+		onPick={noop}
+		{...more}
+	/>
+);
+
+/** Kid's seat follows the host, which ends the session. */
+export const EditFollowsHost: Story = {
+	render: () => edit("Kid", exitView(exit(false, true))),
+};
+
+/** Leon set his own; **As the host does** drops it again. */
+export const EditOwnSetting: Story = {
+	render: () => edit("Leon", exitView(exit(true, false))),
+};
+
+/** Mia's setting is on its way; the name is already editable. */
+export const EditLoading: Story = {
+	render: () => edit("Mia", exitView(undefined, { loading: true })),
+};
+
+/** Oma's host didn't answer: the host's sentence and **Retry**, the name still editable. */
+export const EditFailed: Story = {
+	render: () =>
+		edit(
+			"Oma",
+			exitView(undefined, {
+				error: "That host didn't answer. Try again in a moment.",
+				onRetry: noop,
+			}),
+		),
+};
+
+/** A door: Oma plays on her own Linux account, where a game's exit always goes back to her
+ * desktop. */
+export const EditOwnLinuxAccount: Story = {
+	render: () => edit("Oma", <GameExitFixed name="Oma" />),
+};
+
+/** Anna shares the owner's desktop: the pencil only renames. */
+export const EditShared: Story = {
+	render: () => edit("Anna"),
 };
 
 /** **Remove** a Windows seat profile: no choice to keep its account, and the password. */

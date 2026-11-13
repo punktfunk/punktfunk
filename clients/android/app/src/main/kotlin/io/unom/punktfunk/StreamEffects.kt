@@ -21,6 +21,7 @@ import androidx.lifecycle.LifecycleOwner
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.GamepadRouter
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.SessionAccess
 import io.unom.punktfunk.kit.SessionEndReason
 import io.unom.punktfunk.kit.library.LibraryClient
@@ -28,6 +29,7 @@ import io.unom.punktfunk.kit.library.RunningGame
 import io.unom.punktfunk.kit.security.IdentityLoad
 import io.unom.punktfunk.kit.security.IdentityStore
 import io.unom.punktfunk.kit.security.KnownHost
+import io.unom.punktfunk.R as AppR
 import io.unom.punktfunk.models.ActiveSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -132,6 +134,11 @@ internal fun rememberStatsLines(
 ): State<List<HudLine>> {
     val handle = session.handle
     val context = LocalContext.current
+    // The preset closes the first line, and says so when the host set this game's stream.
+    val preset = listOfNotNull(
+        session.presetName,
+        session.redial?.overrides?.let { context.getString(R.string.overlay_host_override) },
+    ).joinToString(" · ").ifEmpty { null }
     val lines = remember { mutableStateOf<List<HudLine>>(emptyList()) }
     val pollTier by rememberUpdatedState(tier)
     LaunchedEffect(handle, statsOn) {
@@ -147,7 +154,7 @@ internal fun rememberStatsLines(
                     NativeBridge.nativeVideoStatsLines(
                         handle, pollTier.ordinal, session.settings.advancedStats,
                         display?.refreshRate ?: 0f, display?.mode?.refreshRate ?: 0f,
-                        session.presetName,
+                        preset,
                     ),
                 )
                 if (history != null) StatsSample.of(NativeBridge.nativeVideoStatsSample(handle))?.let(history::push)
@@ -161,8 +168,11 @@ internal fun rememberStatsLines(
 
 /**
  * The 1 Hz session watch: the access level and its countdown, the operator's mute, and the end
- * of the session. A host that sleeps, crashes or drops off the network stops answering the QUIC
- * keep-alive, and the connection idle-times out (~8 s). The moment the session is dead this drops
+ * of the session. At start it says once that the screen is another device's, else why the
+ * preset's [hostScreen] was not applied ([DisplayTargets.startLine]); a device decoder that stops
+ * answering is said once too. A host that
+ * sleeps, crashes or drops off the network stops answering the QUIC keep-alive, and the
+ * connection idle-times out (~8 s). The moment the session is dead this drops
  * back to the menu, so the user can wake the host instead of being stranded on a frozen picture.
  * The keep-alive holds a merely quiet connection open, so this fires only on a dead peer. Keyed on
  * [handle], so it stops the moment the screen goes (the handle is freed later, in onDispose).
@@ -170,6 +180,7 @@ internal fun rememberStatsLines(
 @Composable
 internal fun SessionWatchEffect(
     handle: Long,
+    hostScreen: String,
     initialAccess: IntArray?,
     ui: StreamUi,
     peripherals: StreamPeripherals,
@@ -179,6 +190,13 @@ internal fun SessionWatchEffect(
     val context = LocalContext.current
     LaunchedEffect(handle) {
         var lastAccessSeq = initialAccess?.getOrNull(2) ?: 0
+        var decoderStuckShown = false
+        DisplayTargets.startLine(
+            NativeBridge.nativeSharesScreen(handle),
+            hostScreen,
+            NativeBridge.nativeScreenRoleReason(handle),
+            context.resources,
+        )?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
         while (true) {
             delay(1000)
             // Access first, ended second: a session about to close on its expiry gets its final
@@ -201,9 +219,9 @@ internal fun SessionWatchEffect(
                         Toast.makeText(
                             context,
                             if (mins <= 1) {
-                                "Access expires in about a minute."
+                                context.getString(R.string.grant_ends_soon)
                             } else {
-                                "Access expires in about $mins minutes."
+                                context.getString(R.string.grant_ends_in, context.accessRemaining(ui.accessRemaining))
                             },
                             Toast.LENGTH_LONG,
                         ).show()
@@ -213,6 +231,10 @@ internal fun SessionWatchEffect(
             // The operator's per-session mute rides the control stream, so the badge learns it
             // on this tick. The local bit is in the same mask — the toggle writes it at once.
             ui.audioMute = NativeBridge.nativeAudioMute(handle)
+            if (!decoderStuckShown && NativeBridge.nativeVideoDecoderStuck(handle)) {
+                decoderStuckShown = true
+                Toast.makeText(context, context.getString(R.string.notice_decoder_stuck), Toast.LENGTH_LONG).show()
+            }
             if (NativeBridge.nativeSessionEnded(handle)) {
                 // WHY it ended decides what the user is told: only a connection that actually
                 // died says the host may be asleep. A quit game or a deliberate host end is not
@@ -226,16 +248,16 @@ internal fun SessionWatchEffect(
                     ui.accessRemaining in 1..75 ->
                         Toast.makeText(
                             context,
-                            "Your access to this host has expired.",
+                            context.getString(R.string.android_grant_expired),
                             Toast.LENGTH_LONG,
                         ).show()
                     // The redial says what happens next; this only says why the picture went.
                     reason == SessionEndReason.LOST ->
-                        Toast.makeText(context, "Lost the connection — reconnecting.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.ended_lost_reconnecting), Toast.LENGTH_SHORT).show()
                     reason == SessionEndReason.HOST_ERROR ->
                         Toast.makeText(
                             context,
-                            "The host ended the session with an error.",
+                            context.getString(R.string.ended_host_error),
                             Toast.LENGTH_LONG,
                         ).show()
                     // Deliberate endings — the player quit the game, the host was stopped, or we
@@ -300,13 +322,15 @@ internal fun rememberStreamedGame(handle: Long, host: KnownHost?, ringOpen: Bool
 /**
  * The background keep-alive (Settings › General): its ongoing notification, the leave-the-app
  * watch, and the away countdown. A null [keepAliveSpan] means leaving the app ends the session.
- * [endAway] ends it from a path that fires while the app is already away.
+ * [decoded] is [rememberDecodedSize]'s. [endAway] ends it from a path that fires while the app
+ * is already away.
  */
 @Composable
 internal fun KeepAliveEffects(
     session: ActiveSession,
     host: KnownHost?,
     keepAliveSpan: Long?,
+    decoded: IntArray?,
     endAway: (deliberate: Boolean) -> Unit,
     onSessionEnded: (SessionEndReason) -> Unit,
 ) {
@@ -315,14 +339,16 @@ internal fun KeepAliveEffects(
     val keepAlive = keepAliveSpan != null
     var away by remember(handle) { mutableStateOf(false) }
     val startedAt = remember(handle) { System.currentTimeMillis() }
-    // What the notification says. All of it is fixed at the handshake, so it is read once.
+    // What the notification says. Its size is the decoded picture's once one arrives: a host that
+    // scales sends less than its mode.
     val noteHost = host?.name?.takeIf { it.isNotEmpty() }
-        ?: context.getString(R.string.app_name)
+        ?: context.getString(AppR.string.app_name)
     val noteTitle = session.launchHold?.game?.title
-    val modeLine = remember(handle) {
+    val modeLine = remember(handle, decoded) {
         val mode = NativeBridge.nativeVideoSize(handle)
-        val w = mode?.getOrNull(0) ?: 0
-        val h = mode?.getOrNull(1) ?: 0
+        val size = decoded ?: mode
+        val w = size?.getOrNull(0) ?: 0
+        val h = size?.getOrNull(1) ?: 0
         val hz = mode?.getOrNull(2) ?: 0
         listOfNotNull(
             if (w > 0 && h > 0) "$w×$h" else null,
@@ -331,6 +357,10 @@ internal fun KeepAliveEffects(
         ).joinToString(" · ")
     }
     fun note(deadline: Long?) = StreamNote(noteHost, noteTitle, modeLine, startedAt, deadline)
+    // A size that lands after the post. Away, the notification counts down and names none.
+    LaunchedEffect(modeLine) {
+        if (!away) StreamKeepAliveService.update(context, note(null))
+    }
 
     // The notification goes up when the session starts: an app already in the background may
     // not start a foreground service, and without it the OS freezes the process, audio and QUIC

@@ -211,8 +211,8 @@ impl Entry {
         self.categories.retain(|c| crate::slug::category(c));
         self.categories.truncate(4);
         if let Some(d) = &mut self.detect {
-            d.linux.retain(|p| valid_probe(p));
-            d.windows.retain(|p| valid_probe(p));
+            d.linux.retain(|p| valid_probe(p, false));
+            d.windows.retain(|p| valid_probe(p, true));
             d.linux.truncate(MAX_PROBES);
             d.windows.truncate(MAX_PROBES);
             if d.linux.is_empty() && d.windows.is_empty() {
@@ -239,17 +239,33 @@ impl Entry {
     }
 
     pub(crate) fn incompatible_reason(&self) -> Option<String> {
+        self.incompatibility().map(|why| match why {
+            Incompatible::Platforms(list) => format!("requires {}", list.join(", ")),
+            Incompatible::Host(min) => format!("needs punktfunk {min} or newer"),
+        })
+    }
+
+    /// Why this host can't run the plugin, as data.
+    pub(crate) fn incompatibility(&self) -> Option<Incompatible> {
         if !self.platforms.is_empty() && !self.platforms.iter().any(|p| p == HOST_PLATFORM) {
-            return Some(format!("requires {}", self.platforms.join(" or ")));
+            return Some(Incompatible::Platforms(self.platforms.clone()));
         }
         if let Some(min) = &self.min_host {
             let min = semver::Version::parse(min).ok()?;
             if older_than(host_version(), &min) {
-                return Some(format!("needs punktfunk {min} or newer"));
+                return Some(Incompatible::Host(min.to_string()));
             }
         }
         None
     }
+}
+
+/// Why a plugin can't run on this host.
+pub(crate) enum Incompatible {
+    /// The platforms it runs on, none of them this one.
+    Platforms(Vec<String>),
+    /// The oldest host version it runs on.
+    Host(String),
 }
 
 /// Whether the build stamped `host` predates `min`, on `major.minor.patch` alone: a canary
@@ -346,7 +362,7 @@ fn valid_integrity(s: &str) -> bool {
     let Some((alg, b64)) = s.split_once('-') else {
         return false;
     };
-    matches!(alg, "sha512" | "sha384" | "sha256" | "sha1")
+    matches!(alg, "sha512" | "sha384" | "sha256")
         && !b64.is_empty()
         && b64
             .bytes()
@@ -360,21 +376,27 @@ fn is_https(url: &str) -> bool {
 /// Per-platform probe cap; bounds the stat cost of rendering the catalog.
 const MAX_PROBES: usize = 8;
 
-/// Absolute path with at most one `*` segment, or `HKLM\…`. Relative would follow cwd.
-/// One `*` bounds fan-out. `HKCU` is unreadable as LocalService; other hives are not for a remote index.
-fn valid_probe(p: &str) -> bool {
+/// A local absolute path with at most one `*` segment: `X:\…` or `HKLM\…` on `windows`, `/…`
+/// on Linux. Relative would follow cwd; `//host`, `\\host`, `\\?\` and `\\.\` reach a server or
+/// a device, so a Windows probe is never `/`-rooted. One `*` bounds fan-out. `HKCU` is
+/// unreadable as LocalService; other hives are not for a remote index.
+fn valid_probe(p: &str, windows: bool) -> bool {
     if p.is_empty() || p.len() > 260 {
         return false;
     }
-    if let Some(key) = p.strip_prefix("HKLM\\") {
-        return !key.is_empty()
-            && !key.contains("..")
-            && key.bytes().all(|b| {
-                b.is_ascii_alphanumeric() || matches!(b, b'\\' | b' ' | b'-' | b'_' | b'.')
-            });
-    }
     let b = p.as_bytes();
-    let absolute = p.starts_with('/') || (b.len() >= 3 && b[1] == b':' && b[2] == b'\\');
+    let absolute = if windows {
+        if let Some(key) = p.strip_prefix("HKLM\\") {
+            return !key.is_empty()
+                && !key.contains("..")
+                && key.bytes().all(|b| {
+                    b.is_ascii_alphanumeric() || matches!(b, b'\\' | b' ' | b'-' | b'_' | b'.')
+                });
+        }
+        b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\'
+    } else {
+        p.starts_with('/') && !p.starts_with("//")
+    };
     // `~` is not expanded: the service account's home is not the user's launcher install.
     absolute && !p.contains("..") && p.matches('*').count() <= 1
 }
@@ -383,17 +405,9 @@ fn valid_probe(p: &str) -> bool {
 fn probe_matches(p: &str) -> bool {
     #[cfg(windows)]
     if let Some(key) = p.strip_prefix("HKLM\\") {
-        use std::os::windows::process::CommandExt;
-        // `reg.exe query`, not a registry crate — no extra dep under LocalService.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        return std::process::Command::new(crate::install::sys32("reg.exe"))
-            .args(["query", &format!("HKLM\\{key}")])
-            .creation_flags(CREATE_NO_WINDOW)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
+        return winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+            .open_subkey(key)
+            .is_ok();
     }
     #[cfg(not(windows))]
     if p.starts_with("HKLM\\") {
@@ -485,19 +499,40 @@ mod tests {
 
     #[test]
     fn probe_shapes_are_bounded() {
-        assert!(valid_probe("/usr/bin/steam"));
-        assert!(
-            valid_probe("/home/*/.steam"),
-            "one wildcard segment is fine"
-        );
-        assert!(valid_probe(r"C:\Program Files (x86)\Steam\steam.exe"));
-        assert!(valid_probe(r"HKLM\SOFTWARE\WOW6432Node\Valve\Steam"));
-        assert!(!valid_probe("steam"));
-        assert!(!valid_probe("/usr/../etc/passwd"));
-        assert!(!valid_probe("/home/*/games/*/steam"));
-        assert!(!valid_probe(r"HKCU\SOFTWARE\Valve"));
-        assert!(!valid_probe(""));
-        assert!(!valid_probe(&"/x".repeat(200)));
+        let linux = |p: &str| valid_probe(p, false);
+        let windows = |p: &str| valid_probe(p, true);
+        assert!(linux("/usr/bin/steam"));
+        assert!(linux("/home/*/.steam"), "one wildcard segment is fine");
+        assert!(windows(r"C:\Program Files (x86)\Steam\steam.exe"));
+        assert!(windows(r"HKLM\SOFTWARE\WOW6432Node\Valve\Steam"));
+        assert!(!linux("steam"));
+        assert!(!linux("/usr/../etc/passwd"));
+        assert!(!linux("/home/*/games/*/steam"));
+        assert!(!windows(r"HKCU\SOFTWARE\Valve"));
+        assert!(!linux(""));
+        assert!(!linux(&"/x".repeat(200)));
+    }
+
+    /// A probe never names a server or a device: on Windows that stat would authenticate the
+    /// host's machine account to whoever answers.
+    #[test]
+    fn probes_refuse_unc_and_device_paths() {
+        for p in [
+            "//attacker/share/x",
+            "//attacker@80/x",
+            r"\\attacker\share",
+            r"\\?\UNC\attacker\share",
+            r"\\.\pipe\x",
+            r"/\attacker\share",
+            "/usr/bin/steam",
+            r"\Program Files",
+            r"1:\x",
+        ] {
+            assert!(!valid_probe(p, true), "{p}");
+        }
+        for p in ["//attacker/share/x", r"\\attacker\share", r"C:\Games"] {
+            assert!(!valid_probe(p, false), "{p}");
+        }
     }
 
     #[test]
@@ -604,6 +639,7 @@ mod tests {
     fn integrity_shape() {
         assert!(valid_integrity("sha512-abcABC123+/="));
         assert!(!valid_integrity("md5-abc"));
+        assert!(!valid_integrity("sha1-abcABC123+/="));
         assert!(!valid_integrity("sha512-"));
         assert!(!valid_integrity("sha512"));
     }

@@ -2,10 +2,15 @@
 //! page, whether it waits behind Show advanced, and which layer it edits. Rows take their text
 //! from here, and the catalog test holds this table to `clients/shared/settings-catalog.json`.
 
+use super::shortcuts::{chord, chords};
 use super::tables::{
-    resolution_caption, BITRATE_CAPTION, CODEC_CAPTION, MOUSE_MODE_CAPTIONS,
-    PRESENT_PRIORITY_CAPTIONS, SCREENS_CAPTIONS, TOUCH_MODE_CAPTIONS, VIDEO_FIT_CAPTIONS,
+    resolution_caption, MOUSE_MODE_CAPTIONS, PRESENT_PRIORITY_CAPTIONS, SCREENS_CAPTIONS,
+    TOUCH_MODE_CAPTIONS, VIDEO_FIT_CAPTIONS,
 };
+use pf_client_core::overlay_actions::SlotId;
+use pf_client_core::shortcuts::{Action, Device};
+use pf_l10n::{client, desktop};
+use std::borrow::Cow;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -17,13 +22,25 @@ pub enum Page {
 }
 
 impl Page {
+    /// The category the settings catalogue files the page under, and the page's name in the
+    /// dialog. Not for display: see [`Page::title`].
+    pub fn id(self) -> &'static str {
+        match self {
+            Page::General => "general",
+            Page::Display => "display",
+            Page::Input => "input",
+            Page::Audio => "audio",
+            Page::Controllers => "controllers",
+        }
+    }
+
     pub fn title(self) -> &'static str {
         match self {
-            Page::General => "General",
-            Page::Display => "Display",
-            Page::Input => "Input",
-            Page::Audio => "Audio",
-            Page::Controllers => "Controllers",
+            Page::General => client::prefs_category_general(),
+            Page::Display => client::prefs_category_display(),
+            Page::Input => client::prefs_category_input(),
+            Page::Audio => client::prefs_category_audio(),
+            Page::Controllers => client::prefs_category_controllers(),
         }
     }
 }
@@ -37,7 +54,8 @@ pub enum Layer {
     Device,
     /// This device's, shown in both scopes: it changes the dialog, not a stream.
     Dialog,
-    /// A stream setting whose defaults-scope row is a device variant (the fullscreen switch).
+    /// A stream setting with no defaults-scope row of its own: the fullscreen switch's is a
+    /// device variant, and Host screen's default is the host card.
     PresetOnly,
 }
 
@@ -61,19 +79,40 @@ impl Layer {
 pub struct Spec {
     /// The catalog key, and the name a preset pins it under.
     pub key: &'static str,
-    pub title: &'static str,
-    pub caption: &'static str,
+    title: fn() -> &'static str,
+    caption: fn() -> Cow<'static, str>,
     pub page: Page,
     pub advanced: bool,
     pub layer: Layer,
 }
 
+impl Spec {
+    pub fn title(&self) -> &'static str {
+        (self.title)()
+    }
+
+    pub fn caption(&self) -> Cow<'static, str> {
+        (self.caption)()
+    }
+}
+
+/// `base`, then `sentence` naming the key bound to `slot` in the dialog's scope, when one is.
+fn and_keys(base: &str, slot: SlotId, sentence: fn(&str) -> String) -> String {
+    match chord(Action::Slot(slot), Device::Keyboard) {
+        Some(keys) => format!("{base} {}", sentence(&keys)),
+        None => base.into(),
+    }
+}
+
+/// A row's title and caption are read each time the row is built, so a message such as
+/// `client::player_stats_scale_pct()` reads in the language `pf_l10n` settled on. A caption
+/// may be a message or a few joined, so it is a `Cow`.
 macro_rules! specs {
-    ($($name:ident: $key:literal, $title:literal, $caption:expr, $page:ident, $advanced:literal, $layer:ident;)*) => {
+    ($($name:ident: $key:literal, $title:expr, $caption:expr, $page:ident, $advanced:literal, $layer:ident;)*) => {
         $(pub const $name: Spec = Spec {
             key: $key,
-            title: $title,
-            caption: $caption,
+            title: || $title,
+            caption: || Cow::from($caption),
             page: Page::$page,
             advanced: $advanced,
             layer: Layer::$layer,
@@ -84,189 +123,242 @@ macro_rules! specs {
 }
 
 specs! {
-    FULLSCREEN: "fullscreen", "Fullscreen",
-        "Always keeps this window fullscreen too. F11 leads back out", General, false, Device;
-    FULLSCREEN_ON_STREAM: "fullscreen_on_stream", "Start streams fullscreen",
-        "F11, the mouse at the top edge, or L1+R1+Start+Select lead back out",
+    FULLSCREEN: "fullscreen", client::player_fullscreen(),
+        and_keys(desktop::desktop_fullscreen_hint(), SlotId::Fullscreen,
+            |k| desktop::desktop_fullscreen_exit_hint(k)), General, false, Device;
+    FULLSCREEN_ON_STREAM: "fullscreen_on_stream", client::player_fullscreen_on_stream(),
+        chords(Action::Slot(SlotId::Fullscreen), Action::Slot(SlotId::ReleaseInput))
+            .map(|(k, pad)| desktop::desktop_fullscreen_on_stream_exit_hint(k, pad))
+            .unwrap_or_default(),
         General, false, PresetOnly;
-    AUTO_WAKE: "auto_wake", "Auto-wake on connect",
-        "Sends Wake-on-LAN to an offline saved host and waits for it to boot \u{2014} turn off if \
-         hosts behind a VPN look offline when they aren't", General, false, Device;
-    START_IN: "start_in", "Start in", "", General, false, Device;
-    GAMEPAD_UI: "gamepad_ui_enabled", "Controller-optimized UI",
-        "Opens the console, the interface built for a controller", General, false, Device;
-    GAMEPAD_UI_MODE: "gamepad_ui_mode", "Show it",
-        "Always opens it at launch. Otherwise it opens when a controller connects, and this \
-         window returns when the last one disconnects", General, false, Device;
-    FOLLOW_OS_THEME: "follow_os_theme", "Follow system theme",
-        "Colours track omarchy-theme-set live \u{2014} off keeps Punktfunk's own look",
+    AUTO_WAKE: "auto_wake", client::player_auto_wake(), client::player_auto_wake_hint(),
         General, false, Device;
-    OMARCHY_MENU: "omarchy_menu", "Hosts in the Omarchy menu",
-        "Super+Space: connect, wake, the console \u{2014} this writes rows to omarchy-menu.jsonc",
-        General, false, Device;
-    STATS: "stats_verbosity", "Statistics overlay",
-        "Compact = fps \u{b7} latency \u{b7} bitrate in one line \u{2014} Ctrl+Alt+Shift+S cycles \
-         the tiers live", General, false, Stream;
-    SHOW_ADVANCED: "show_advanced", "Show advanced",
-        "Adds the settings most players never need to change", General, false, Dialog;
-    ADVANCED_STATS: "advanced_stats", "Advanced statistics",
-        "Off shows the figures Moonlight's overlay also shows. On shows capture to glass as \
-         p50/p95 and every stage between", General, true, Device;
-    STATS_POSITION: "hud_placement", "Statistics position",
-        "The corner the statistics overlay sits in", General, true, Device;
-    STATS_SIZE: "stats_scale_pct", "Statistics size",
-        "The overlay's size, on top of your display's scaling", General, true, Device;
-    EXIT_HINT: "exit_hint", "Exit hint",
-        "Shows how to leave for a few seconds when a stream starts", General, true, Device;
+    START_IN: "start_in", client::player_start_in(), "", General, false, Device;
+    GAMEPAD_UI: "gamepad_ui_enabled", client::player_gamepad_ui_enabled(),
+        client::player_gamepad_ui_enabled_hint(), General, false, Device;
+    GAMEPAD_UI_MODE: "gamepad_ui_mode", client::player_gamepad_ui_mode(),
+        client::player_gamepad_ui_mode_hint(), General, false, Device;
+    FOLLOW_OS_THEME: "follow_os_theme", client::player_follow_os_theme(),
+        client::player_follow_os_theme_hint(), General, false, Device;
+    OMARCHY_MENU: "omarchy_menu", desktop::desktop_omarchy_menu(),
+        desktop::desktop_omarchy_menu_hint("Super+Space"), General, false, Device;
+    STATS: "stats_verbosity", client::player_stats_verbosity(),
+        and_keys(client::player_stats_verbosity_hint(), SlotId::Stats,
+            |k| client::player_stats_verbosity_cycle_hint(k)),
+        General, false, Stream;
+    SHOW_ADVANCED: "show_advanced", client::player_show_advanced(),
+        client::player_show_advanced_hint(), General, false, Dialog;
+    ADVANCED_STATS: "advanced_stats", client::player_advanced_stats(),
+        client::player_advanced_stats_hint(), General, true, Device;
+    STATS_POSITION: "hud_placement", client::player_hud_placement(),
+        client::player_hud_placement_hint(), General, true, Device;
+    STATS_SIZE: "stats_scale_pct", client::player_stats_scale_pct(),
+        client::player_stats_scale_pct_hint(), General, true, Device;
+    EXIT_HINT: "exit_hint", client::player_exit_hint(), client::player_exit_hint_hint(),
+        General, true, Device;
 
-    RESOLUTION: "resolution", "Resolution", resolution_caption(0), Display, false, Stream;
-    REFRESH: "refresh_hz", "Refresh rate", "Native follows the monitor the window is on",
+    RESOLUTION: "resolution", client::player_resolution(), resolution_caption(0),
         Display, false, Stream;
-    BITRATE: "bitrate_kbps", "Bitrate", BITRATE_CAPTION, Display, false, Stream;
-    VIDEO_FIT: "video_fit", "Picture fit", VIDEO_FIT_CAPTIONS[0], Display, false, Stream;
-    SCREENS: "screens", "Screens", SCREENS_CAPTIONS[0], Display, false, Stream;
-    HDR: "hdr_enabled", "10-bit HDR",
-        "Advertise 10-bit HDR10 so the host upgrades HDR content \u{2014} shown in HDR where the \
-         display supports it, tone-mapped otherwise", Display, false, Stream;
-    PRESENT: "present_priority", "Prioritize", PRESENT_PRIORITY_CAPTIONS[0],
+    REFRESH: "refresh_hz", client::player_refresh_hz(), client::player_refresh_hz_hint(),
         Display, false, Stream;
-    SMOOTH_BUFFER: "smooth_buffer", "Smoothness buffer",
-        "Each frame held absorbs one refresh of hiccup and adds one of delay",
+    BITRATE: "bitrate_kbps", client::player_bitrate_kbps(),
+        desktop::desktop_bitrate_kbps_hint(), Display, false, Stream;
+    VIDEO_FIT: "video_fit", client::player_video_fit(), VIDEO_FIT_CAPTIONS[0](),
+        Display, false, Stream;
+    SCREENS: "screens", client::player_screens(), SCREENS_CAPTIONS[0](), Display, false, Stream;
+    HOST_SCREEN: "host_screen", client::preset_host_screen(), "", Display, false, PresetOnly;
+    HDR: "hdr_enabled", client::player_hdr_enabled(), client::player_hdr_enabled_hint(),
+        Display, false, Stream;
+    PRESENT: "present_priority", client::player_present_priority(),
+        PRESENT_PRIORITY_CAPTIONS[0](), Display, false, Stream;
+    SMOOTH_BUFFER: "smooth_buffer", client::player_smooth_buffer(),
+        client::player_smooth_buffer_hint(), Display, true, Stream;
+    RENDER_SCALE: "render_scale", client::player_render_scale(),
+        client::player_render_scale_hint(), Display, true, Stream;
+    CODEC: "codec", client::player_codec(), client::player_codec_hint(), Display, false, Stream;
+    PYROWAVE_QUALITY: "pyrowave_bpp", client::player_pyrowave_bpp(), "", Display, false, Stream;
+    CHROMA: "enable_444", client::player_enable_444(), client::player_enable_444_hint(),
         Display, true, Stream;
-    RENDER_SCALE: "render_scale", "Render scale",
-        "Above 1\u{d7} supersamples for sharpness; below is lighter on the host",
+    TEN_BIT_SDR: "ten_bit_sdr", client::player_ten_bit_sdr(), client::player_ten_bit_sdr_hint(),
         Display, true, Stream;
-    CODEC: "codec", "Video codec", CODEC_CAPTION, Display, false, Stream;
-    PYROWAVE_QUALITY: "pyrowave_bpp", "PyroWave quality", "", Display, false, Stream;
-    CHROMA: "enable_444", "Full chroma (4:4:4)",
-        "Full-colour video: crisp small text and thin lines, at more bandwidth. HEVC only, and \
-         only where the host can encode it.", Display, true, Stream;
-    TEN_BIT_SDR: "ten_bit_sdr", "10-bit SDR",
-        "Smoother gradients without HDR \u{2014} 10-bit encoding precision. Needs an NVIDIA \
-         host; HDR takes over when it engages.", Display, true, Stream;
-    VSYNC: "vsync", "V-Sync",
-        "Tear-free. Turning it off removes the wait for the screen's refresh \u{2014} the lowest \
-         possible delay, at the cost of visible tearing. Not every driver offers it; the stats \
-         overlay names the mode actually in use", Display, true, Stream;
-    VRR: "allow_vrr", "Follow variable refresh",
-        "On a VRR/FreeSync/G-Sync screen, let the panel refresh in step with the stream instead \
-         of on a fixed cadence. Applies to fullscreen sessions; harmless on a fixed-refresh \
-         screen", Display, true, Stream;
-    COMPOSITOR: "compositor", "Host compositor",
-        "Advisory \u{2014} the host falls back to auto-detect when unavailable",
+    VSYNC: "vsync", "V-Sync", client::player_vsync_hint(), Display, true, Stream;
+    VRR: "allow_vrr", client::player_allow_vrr(), client::player_allow_vrr_hint(),
         Display, true, Stream;
-    DECODER: "decoder", "Video decoder",
-        "Automatic picks the best hardware decode, then software", Display, true, Device;
-    ADAPTER: "adapter", "GPU", "Decodes and presents the stream", Display, true, Device;
-    KEEP_AWAKE: "keep_awake", "Keep screen awake",
-        "Off, a stream keeps the screen awake only while you play", Display, true, Device;
+    COMPOSITOR: "compositor", client::player_compositor(), client::player_compositor_hint(),
+        Display, true, Stream;
+    DECODER: "decoder", client::player_decoder(), client::player_decoder_hint(),
+        Display, true, Device;
+    ADAPTER: "adapter", desktop::desktop_adapter(), desktop::desktop_adapter_hint(),
+        Display, true, Device;
+    KEEP_AWAKE: "keep_awake", client::player_keep_awake(), client::player_keep_awake_hint(),
+        Display, true, Device;
 
-    TOUCH: "touch_mode", "Touch input", TOUCH_MODE_CAPTIONS[0], Input, false, Stream;
-    MOUSE: "mouse_mode", "Mouse input", MOUSE_MODE_CAPTIONS[0], Input, false, Stream;
-    SHORTCUTS: "inhibit_shortcuts", "Capture system shortcuts",
-        "Forward Alt+Tab, Super, \u{2026} to the host while input is captured",
+    TOUCH: "touch_mode", client::player_touch_mode(), TOUCH_MODE_CAPTIONS[0](),
         Input, false, Stream;
-    INVERT_SCROLL: "invert_scroll", "Invert scroll direction",
-        "Reverses the wheel and trackpad scroll direction sent to the host",
+    MOUSE: "mouse_mode", client::player_mouse_mode(), MOUSE_MODE_CAPTIONS[0](),
         Input, false, Stream;
-    QUICK_ACTIONS: "overlay_actions", "Quick actions", "", Input, false, Stream;
+    SHORTCUTS: "inhibit_shortcuts", client::player_inhibit_shortcuts(),
+        client::player_inhibit_shortcuts_hint("Alt+Tab, Super, \u{2026}"), Input, false, Stream;
+    INVERT_SCROLL: "invert_scroll", client::player_invert_scroll(),
+        client::player_invert_scroll_hint(), Input, false, Stream;
+    QUICK_ACTIONS: "overlay_actions", client::player_overlay_actions(), "", Input, false, Stream;
+    PLAYER_SHORTCUTS: "shortcuts", client::player_shortcuts(), client::player_shortcuts_hint(),
+        Input, false, Stream;
 
-    AUDIO_CHANNELS: "audio_channels", "Audio channels",
-        "Stereo or surround \u{2014} the host downmixes if its output has fewer",
-        Audio, false, Stream;
-    SPEAKER: "speaker_device", "Speaker",
-        "Host audio plays here \u{2014} System default follows the desktop", Audio, false, Device;
-    MIC: "mic_enabled", "Stream microphone",
-        "Sends your microphone to the host's virtual mic \u{2014} Ctrl+Alt+Shift+V mutes it \
-         mid-stream", Audio, false, Stream;
-    MIC_DEVICE: "mic_device", "Microphone", "The input that feeds the host's virtual mic",
+    AUDIO_CHANNELS: "audio_channels", client::player_audio_channels(),
+        client::player_audio_channels_hint(), Audio, false, Stream;
+    SPEAKER: "speaker_device", client::player_speaker_device(),
+        client::player_speaker_device_hint(), Audio, false, Device;
+    MIC: "mic_enabled", client::player_mic_enabled(),
+        and_keys(client::player_mic_enabled_hint(), SlotId::Mic,
+            |k| client::player_mic_enabled_keys_hint(k)), Audio, false, Stream;
+    MIC_DEVICE: "mic_device", client::player_mic_device(), client::player_mic_device_hint(),
         Audio, false, Device;
-    AUDIO_FORMAT: "audio_format", "Audio quality",
-        "Lossless is uncompressed PCM \u{2014} 2.3\u{2013}4.6 Mb/s off the top of the link, and \
-         the host has its own switch", Audio, true, Stream;
-    KEEP_HOST_AUDIO: "keep_host_audio", "Keep host audio playing",
-        "The host's speakers or headphones keep playing while you stream \u{2014} needs a host \
-         on 0.32+", Audio, true, Stream;
-    ECHO_CANCEL: "echo_cancel", "Echo cancellation",
-        "Keeps the host's audio, playing from this machine's speakers, out of the uplink",
+    AUDIO_FORMAT: "audio_format", client::player_audio_format(),
+        client::player_audio_format_hint(), Audio, true, Stream;
+    KEEP_HOST_AUDIO: "keep_host_audio", client::player_keep_host_audio(),
+        client::player_keep_host_audio_hint(), Audio, true, Stream;
+    ECHO_CANCEL: "echo_cancel", client::player_echo_cancel(), client::player_echo_cancel_hint(),
         Audio, true, Stream;
 
-    GAMEPAD: "gamepad", "Controller type",
-        "The virtual pad on the host \u{2014} Automatic matches your controller. An X-Box type \
-         has no gyroscope, so pick a DualSense-class one if you want motion.",
+    GAMEPAD: "gamepad", client::player_gamepad(), client::player_gamepad_hint(),
         Controllers, false, Stream;
-    PAD_RUMBLE: "pad_rumble", "Controller rumble",
-        "Off, controllers don't vibrate from the stream or in the menus, whatever the game sends",
+    PAD_RUMBLE: "pad_rumble", client::player_pad_rumble(), client::player_pad_rumble_hint(),
         Controllers, false, Device;
-    FORWARDING: "gamepad_forwarding", "Forward controllers",
-        "Send this device's controllers to the host \u{2014} off if it already has them another \
-         way", Controllers, true, Stream;
-    FORWARD_PAD: "forward_pad", "Use controller",
-        "Every pad is its own player \u{2014} pick one to force single-player",
+    FORWARDING: "gamepad_forwarding", client::player_gamepad_forwarding(),
+        client::player_gamepad_forwarding_hint(), Controllers, true, Stream;
+    FORWARD_PAD: "forward_pad", client::player_forward_pad(), client::player_forward_pad_hint(),
         Controllers, true, Device;
-    SYSTEM_BUTTONS: "system_buttons", "Guide button",
-        "Automatic sends it to the host, except where this device reacts to it too",
-        Controllers, true, Stream;
-    GUIDE_GESTURE: "guide_gesture", "Hold Select for guide",
-        "Hold Select alone for the host's guide button \u{2014} a tap still goes through",
-        Controllers, true, Stream;
-    PAD_HAPTICS: "pad_haptics", "Controller haptics",
-        "Play a DualSense's voice-coil haptics on the pad itself",
+    SYSTEM_BUTTONS: "system_buttons", client::player_system_buttons(),
+        client::player_system_buttons_hint(), Controllers, true, Stream;
+    PAD_HAPTICS: "pad_haptics", client::player_pad_haptics(), client::player_pad_haptics_hint(),
         Controllers, true, Device;
-    PAD_SPEAKER: "pad_speaker", "Controller speaker",
-        "Play the audio a game sends to the pad's own speaker on the pad, not here",
+    PAD_SPEAKER: "pad_speaker", client::player_pad_speaker(), client::player_pad_speaker_hint(),
         Controllers, true, Device;
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::tables::{
+        AUDIO_FORMATS, CODECS, COMPOSITORS, DECODERS, GAMEPADS, MOUSE_MODES, PRESENT_PRIORITIES,
+        REFRESH, RENDER_SCALES, SCREENS, SMOOTH_BUFFER_STEPS, SYSTEM_BUTTONS, TOUCH_MODES,
+        VIDEO_FITS,
+    };
     use super::*;
 
-    /// Catalog keys this client has no row for, and why.
-    const ABSENT: &[(&str, &str)] = &[
-        (
-            "background_keep_alive",
-            "a phone or TV app in the background",
-        ),
-        (
-            "background_timeout_minutes",
-            "a phone or TV app in the background",
-        ),
+    /// Catalog entries naming `desktop` that this dialog has no row for, and why: the console
+    /// the desktop session draws has them.
+    const CONSOLE_ONLY: &[(&str, &str)] = &[
         ("ui_palette", "the console's own look"),
         ("reduce_motion", "the console's own look"),
-        ("reduce_ui_resolution", "a weak GPU's console"),
         ("library_view", "the console's library"),
         ("library_sections", "Customize on the Library header"),
         ("host_sort", "Sort on the Hosts header"),
         ("host_grouping", "Group on the Hosts header"),
-        ("low_latency", "a MediaCodec decoder flag"),
-        ("second_screen", "an Android handheld's second screen"),
-        ("audio_route", "webOS's own audio plane"),
-        ("cursor_gestures", "a TV remote's missing second button"),
-        ("rumble_on_phone", "a phone's own hardware"),
-        ("gyro_on_phone", "a phone's own hardware"),
-        ("sc2_capture", "Apple only"),
-        ("ds_capture", "Android and webOS only"),
-        ("spatial_audio", "a Vision Pro's room"),
-        ("screen", "a Vision Pro's room"),
     ];
 
-    /// Rows with no catalog entry: this client's own variants and device pickers.
+    /// Pickers that list fewer options than the catalog, the ones they list in its order.
+    const SUBSET: &[(&str, &[&str])] = &[
+        (
+            "decoder",
+            &["auto", "native-vulkan", "native-vaapi", "software"],
+        ),
+        ("audio_format", &["opus", "lossless48", "lossless96"]),
+    ];
+
+    /// Pickers that list the catalog's options in another order: open rows in
+    /// docs/settings.md.
+    const OTHER_ORDER: &[(&str, &[&str])] = &[(
+        "gamepad",
+        &[
+            "auto",
+            "xbox360",
+            "dualsense",
+            "xboxone",
+            "dualshock4",
+            "steamdeck",
+            "steamcontroller2",
+        ],
+    )];
+
+    /// Lists the pages build inline, with no table to read: not pinned here.
+    const INLINE: &[&str] = &["audio_channels", "gamepad_ui_mode"];
+
+    /// The stored value of each entry of a row's list, in the order the dialog offers them.
+    fn options(key: &str) -> Option<Vec<String>> {
+        use pf_client_core::start::StartIn;
+        use pf_client_core::trust::{HudCorner, StatsVerbosity};
+        fn strs(table: &[&str]) -> Vec<String> {
+            table.iter().map(|s| s.to_string()).collect()
+        }
+        Some(match key {
+            "start_in" => StartIn::ALL.iter().map(|v| v.as_str().into()).collect(),
+            "stats_verbosity" => (StatsVerbosity::ALL.iter())
+                .map(|v| format!("{v:?}").to_lowercase())
+                .collect(),
+            "hud_placement" => HudCorner::ALL.iter().map(|c| c.as_name().into()).collect(),
+            "stats_scale_pct" => (punktfunk_core::hud::STATS_SCALE_PCTS.iter())
+                .map(|p| p.to_string())
+                .collect(),
+            "refresh_hz" => REFRESH.iter().map(|hz| hz.to_string()).collect(),
+            "render_scale" => RENDER_SCALES.iter().map(|x| x.to_string()).collect(),
+            "video_fit" => strs(VIDEO_FITS),
+            "screens" => strs(SCREENS),
+            "present_priority" => strs(PRESENT_PRIORITIES),
+            "smooth_buffer" => (0..SMOOTH_BUFFER_STEPS).map(|n| n.to_string()).collect(),
+            "codec" => strs(CODECS),
+            "compositor" => strs(COMPOSITORS),
+            "decoder" => strs(DECODERS),
+            "touch_mode" => strs(TOUCH_MODES),
+            "mouse_mode" => strs(MOUSE_MODES),
+            "audio_format" => AUDIO_FORMATS.iter().map(|(v, _)| v.to_string()).collect(),
+            "gamepad" => strs(GAMEPADS),
+            "system_buttons" => strs(SYSTEM_BUTTONS),
+            _ => return None,
+        })
+    }
+
+    /// What a fresh install stores for a setting, spelled as the catalog spells a default.
+    /// `None` for one this build keeps outside the typed settings.
+    fn stored(key: &str, s: &crate::trust::Settings) -> Option<String> {
+        use serde_json::Value;
+        match key {
+            "start_in" => Some(
+                pf_client_core::start::StartIn::parse(&s.start_in)
+                    .as_str()
+                    .into(),
+            ),
+            "stats_verbosity" => Some(format!("{:?}", s.stats_verbosity()).to_lowercase()),
+            _ => match serde_json::to_value(s).ok()?.get(key)? {
+                Value::Bool(b) => Some(b.to_string()),
+                Value::Number(n) => n.as_f64().map(|n| n.to_string()),
+                Value::String(t) => Some(t.clone()),
+                _ => None,
+            },
+        }
+    }
+
+    /// Rows with no catalog entry: this client's own variants and device pickers, and Host
+    /// screen, which only a preset holds.
     const LOCAL: &[&str] = &[
         "fullscreen",
+        "host_screen",
         "omarchy_menu",
         "adapter",
         "speaker_device",
         "mic_device",
     ];
 
-    /// Each row that edits a shared setting carries the catalog's label, category and tier,
-    /// and every catalog entry has a row here or a reason it does not.
+    /// Each row that edits a shared setting is the catalog's: the `player_<key>` message for
+    /// its label (V-Sync, a brand, has none), its category, tier and preset tier, its options
+    /// in the catalog's order, and its default. A catalog entry naming `desktop` has a row here
+    /// or a reason it does not, and an entry that leaves `desktop` out has no row.
     #[test]
     fn rows_match_the_settings_catalog() {
         let raw = include_str!("../../../shared/settings-catalog.json");
         let file: serde_json::Value = serde_json::from_str(raw).expect("the catalog parses");
         let entries = file["settings"].as_array().expect("settings");
+        let fresh = crate::trust::Settings::default();
         for spec in SPECS {
             let Some(e) = entries.iter().find(|e| e["key"] == spec.key) else {
                 assert!(
@@ -276,23 +368,68 @@ mod tests {
                 );
                 continue;
             };
-            assert_eq!(spec.title, e["label"].as_str().unwrap(), "{}", spec.key);
-            let page = spec.page.title().to_lowercase();
-            assert_eq!(page, e["category"].as_str().unwrap(), "{}", spec.key);
+            let key = spec.key;
+            match pf_l10n::get(&format!("player_{key}")) {
+                Some(m) => assert_eq!(spec.title(), m.text(), "{key}"),
+                None => assert_eq!((key, spec.title()), ("vsync", "V-Sync")),
+            }
+            assert_eq!(spec.page.id(), e["category"].as_str().unwrap(), "{key}");
+            assert_eq!(spec.advanced, e["advanced"].as_bool().unwrap(), "{key}");
             assert_eq!(
-                spec.advanced,
-                e["advanced"].as_bool().unwrap(),
-                "{}",
-                spec.key
+                spec.layer.presetable(),
+                e["preset"].as_bool().unwrap(),
+                "{key}: preset"
             );
+            assert!(
+                e["on"].as_array().unwrap().iter().any(|p| p == "desktop"),
+                "{key} has a row here, and the catalog leaves desktop out"
+            );
+
+            let want: Option<Vec<String>> = e.get("options").map(|o| {
+                let o = o.as_array().unwrap();
+                o.iter().map(|v| v.as_str().unwrap().to_string()).collect()
+            });
+            match (options(key), want) {
+                (None, None) => {}
+                (None, Some(_)) => assert!(INLINE.contains(&key), "{key}: no table to read"),
+                (Some(got), Some(want)) => {
+                    let subset = SUBSET.iter().find(|(k, _)| *k == key);
+                    let other = OTHER_ORDER.iter().find(|(k, _)| *k == key);
+                    if let Some((_, listed)) = subset {
+                        assert_eq!(got, *listed, "{key}");
+                        let mut rest = want.iter();
+                        assert!(
+                            listed.len() < want.len()
+                                && listed.iter().all(|s| rest.any(|w| w == s)),
+                            "{key}: the dialog's options are not the catalog's, in order"
+                        );
+                    } else if let Some((_, listed)) = other {
+                        assert_eq!(got, *listed, "{key}");
+                        let (mut a, mut b) = (got.clone(), want.clone());
+                        a.sort();
+                        b.sort();
+                        assert!(a == b && got != want, "{key}: not the catalog's, reordered");
+                    } else {
+                        assert_eq!(got, want, "{key}: options");
+                    }
+                }
+                (got, want) => panic!("{key}: options {got:?}, the catalog's {want:?}"),
+            }
+
+            if let (Some(d), Some(stored)) = (e.get("default"), stored(key, &fresh)) {
+                let want = d.as_str().map_or_else(|| d.to_string(), str::to_string);
+                assert_eq!(stored, want, "{key}: default");
+            }
         }
         for e in entries {
             let key = e["key"].as_str().unwrap();
+            let desktop = e["on"].as_array().unwrap().iter().any(|p| p == "desktop");
             let bound = SPECS.iter().any(|s| s.key == key);
-            let absent = ABSENT.iter().any(|(k, _)| *k == key);
-            assert!(
-                bound != absent,
-                "{key}: a row or a reason, not both or neither"
+            let console_only = CONSOLE_ONLY.iter().any(|(k, _)| *k == key);
+            assert_eq!(
+                bound,
+                desktop && !console_only,
+                "{key}: a row, or a reason, exactly when the catalog names desktop"
             );
         }
     }

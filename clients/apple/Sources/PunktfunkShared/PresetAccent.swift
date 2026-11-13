@@ -24,14 +24,14 @@ public struct PresetAccent: Identifiable, Sendable, Hashable {
     /// No violet: the brand purple IS the default, and a swatch a shade off it would be a
     /// choice you can't see you made.
     public static let palette: [PresetAccent] = [
-        PresetAccent(hex: "#3aa0ff", name: "Blue"),
-        PresetAccent(hex: "#2bb8a6", name: "Teal"),
-        PresetAccent(hex: "#35c759", name: "Green"),
-        PresetAccent(hex: "#e0a800", name: "Amber"),
-        PresetAccent(hex: "#ff8800", name: "Orange"),
-        PresetAccent(hex: "#ff4f6d", name: "Red"),
-        PresetAccent(hex: "#ff4f9a", name: "Pink"),
-        PresetAccent(hex: "#8e8e93", name: "Graphite"),
+        PresetAccent(hex: "#3aa0ff", name: String(localized: L10n.presetColorBlue)),
+        PresetAccent(hex: "#2bb8a6", name: String(localized: L10n.applePresetColorTeal)),
+        PresetAccent(hex: "#35c759", name: String(localized: L10n.presetColorGreen)),
+        PresetAccent(hex: "#e0a800", name: String(localized: L10n.applePresetColorAmber)),
+        PresetAccent(hex: "#ff8800", name: String(localized: L10n.presetColorOrange)),
+        PresetAccent(hex: "#ff4f6d", name: String(localized: L10n.presetColorRed)),
+        PresetAccent(hex: "#ff4f9a", name: String(localized: L10n.presetColorPink)),
+        PresetAccent(hex: "#8e8e93", name: String(localized: L10n.applePresetColorGraphite)),
     ]
 
     public static func named(_ hex: String?) -> PresetAccent? {

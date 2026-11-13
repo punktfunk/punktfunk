@@ -49,6 +49,29 @@ const RETIRE_HANDOVERS: u32 = 8;
 /// Floor while `present` is stalled on an occluded swapchain acquire and frames still flow.
 const RETIRE_MIN_AGE: Duration = Duration::from_millis(250);
 
+/// Superseded rings kept alive at once. A new size past this waits for one to ripen, so
+/// sizes that alternate cannot stack plane images.
+const MAX_RETIRED: usize = 4;
+/// Per-axis floor: the wavelet needs 4 · 2⁵ px, and the host's encoder refuses less.
+const MIN_DIM: u32 = 128;
+/// One refusal in the log per this long.
+const REFUSAL_LOG_EVERY: Duration = Duration::from_secs(5);
+
+/// Whether the decoder may rebuild at `width`×`height` with `retired` rings still alive. Each
+/// axis lies between [`MIN_DIM`] and the smaller of the codec wall (what the host encodes,
+/// shared by every client) and the device's `maxImageDimension2D`. A sequence header can
+/// announce 16384², and a rebuild allocates planes and a payload ring at the size it names.
+fn check_resize(width: u32, height: u32, device_max: u32, retired: usize) -> Result<()> {
+    let ceiling = device_max.min(punktfunk_core::render_scale::max_dimension("pyrowave"));
+    if !(MIN_DIM..=ceiling).contains(&width) || !(MIN_DIM..=ceiling).contains(&height) {
+        bail!("pyrowave size {width}x{height} is outside {MIN_DIM}..={ceiling} px per axis");
+    }
+    if retired >= MAX_RETIRED {
+        bail!("pyrowave resize to {width}x{height} waits for {retired} superseded rings");
+    }
+    Ok(())
+}
+
 fn pw_check(r: pw::pyrowave_result, what: &str) -> Result<()> {
     if r == pw::pyrowave_result_PYROWAVE_SUCCESS {
         Ok(())
@@ -507,8 +530,11 @@ pub struct PyroWaveDecoder {
     memory: Option<Arc<payload::RingMemory>>,
     /// Per slot: the AU its last decode reads, held until that decode is done.
     inflight: [Option<AuBuf>; RING],
-    /// `maxImageDimension2D`, which bounds the ring's linear images.
+    /// `maxImageDimension2D`, which bounds the ring's linear images and any size
+    /// [`check_resize`] admits.
     max_dim: u32,
+    /// When [`check_resize`] last refused a size in the log.
+    refusal_logged: Option<Instant>,
     /// AUs [`Self::decode_au`] found in the ring and AUs it copied in, since [`Self::take_ring_counts`].
     ring_counts: std::cell::Cell<(u32, u32)>,
 }
@@ -754,15 +780,29 @@ impl PyroWaveDecoder {
             memory: None,
             inflight: Default::default(),
             max_dim,
+            refusal_logged: None,
             ring_counts: Default::default(),
         })
     }
 
     /// Rebuild decoder + plane ring at new dimensions. Device, command buffers, timeline and
     /// pinned create-infos are dimension-independent and survive. Build-new-before-drop-old:
-    /// failure leaves the current decoder untouched. The old ring is retired, not
-    /// destroyed (see [`RETIRE_HANDOVERS`]).
+    /// failure, and a size [`check_resize`] refuses, leave the current decoder untouched. The
+    /// old ring is retired, not destroyed (see [`RETIRE_HANDOVERS`]).
     fn reconfigure(&mut self, width: u32, height: u32) -> Result<()> {
+        if self.retired.len() >= MAX_RETIRED {
+            self.reap_retired();
+        }
+        if let Err(e) = check_resize(width, height, self.max_dim, self.retired.len()) {
+            if self
+                .refusal_logged
+                .is_none_or(|t| t.elapsed() >= REFUSAL_LOG_EVERY)
+            {
+                self.refusal_logged = Some(Instant::now());
+                tracing::warn!(error = %format!("{e:#}"), "PyroWave size change refused");
+            }
+            return Err(e);
+        }
         if !self.chroma444 && (width % 2 != 0 || height % 2 != 0) {
             bail!("pyrowave 4:2:0 needs even dimensions (resize to {width}x{height})");
         }
@@ -1466,7 +1506,7 @@ impl Drop for PyroWaveDecoder {
 
 #[cfg(test)]
 mod tests {
-    use super::{au_dims, push_in_place, seq_header_dims};
+    use super::{au_dims, check_resize, push_in_place, seq_header_dims, MAX_RETIRED};
 
     /// LE encoding of `BitstreamSequenceHeader` (pyrowave_common.hpp): word 0 =
     /// width_minus_1:14 | height_minus_1:14 | sequence:3 | extended:1; word 1 =
@@ -1514,6 +1554,27 @@ mod tests {
             seq_header_dims(&seq_header(16384, 16384, 0)),
             Some((16384, 16384))
         );
+    }
+
+    /// A header's size is admitted between the wavelet floor and the codec wall or the
+    /// device, whichever is lower, and only while few superseded rings are alive.
+    #[test]
+    fn a_resize_is_bounded_in_size_and_in_live_rings() {
+        let ok = |w, h, device, retired| check_resize(w, h, device, retired).is_ok();
+        assert!(ok(1920, 1080, 16384, 0));
+        assert!(ok(128, 128, 16384, 0));
+        assert!(ok(8192, 4320, 16384, 0));
+        // Below the floor on either axis, or past the codec wall.
+        assert!(!ok(126, 1080, 16384, 0));
+        assert!(!ok(1920, 2, 16384, 0));
+        assert!(!ok(8194, 1080, 16384, 0));
+        assert!(!ok(16384, 16384, 16384, 0));
+        // A device that takes less than the wall wins.
+        assert!(ok(4096, 2160, 4096, 0));
+        assert!(!ok(4098, 2160, 4096, 0));
+        // Alternating sizes cannot stack rings.
+        assert!(ok(1920, 1080, 16384, MAX_RETIRED - 1));
+        assert!(!ok(1920, 1080, 16384, MAX_RETIRED));
     }
 
     #[test]

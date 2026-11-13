@@ -11,6 +11,8 @@
 
 use ash::vk;
 use pf_client_core::gamepad::{MenuEvent, MenuPulse};
+use pf_client_core::overlay_actions::SlotId;
+use pf_client_core::shortcuts::{Action, Client, Device, Shortcuts};
 use punktfunk_core::config::GamepadPref;
 
 /// Presenter's Vulkan handles. Overlay allocations use this device and queue.
@@ -75,6 +77,8 @@ pub struct FrameCtx<'a> {
     pub pads: &'a [pf_client_core::gamepad::PadInfo],
     /// Quick-action ring facts (`design/touch-client-overlay.md`). `None` outside a stream.
     pub ring: Option<&'a RingFacts>,
+    /// The shortcuts of this launch, for the hints that name them ([`leave_line`]).
+    pub shortcuts: &'a Shortcuts,
     /// The window's display as a stream request: what a Native connect asks for.
     pub native: punktfunk_core::Mode,
 }
@@ -97,6 +101,21 @@ pub struct OverlayFrame {
 pub use pf_client_core::console::{OverlayAction, PointerButton, PointerInput, SessionPhase};
 pub use pf_client_core::ring::{RingCommand, RingFacts, RingInput};
 pub use punktfunk_core::hud::{HudLine, Role};
+
+/// How to leave a stream from `device`, in one line: its first End stream trigger, "Hold L1 +
+/// R1 + Start + Select to leave". `None` when nothing on `device` ends the stream.
+pub fn leave_line(shortcuts: &Shortcuts, device: Device) -> Option<String> {
+    let end = Action::Slot(SlotId::EndStream);
+    let b = shortcuts
+        .bindings
+        .iter()
+        .find(|b| b.action == end && b.trigger.device() == device)?;
+    let keys = b.trigger.chord(Client::Desktop);
+    Some(match b.trigger.hold() {
+        true => pf_l10n::client::notice_exit_hold(keys),
+        false => pf_l10n::client::notice_exit_keys(keys),
+    })
+}
 
 /// Console-UI side. The session binary passes `Option<Box<dyn Overlay>>`;
 /// `None` is the Skia-free build.
@@ -144,6 +163,12 @@ pub trait Overlay {
     /// password, or none where SDL would hand it to a keyboard that can't hide it.
     fn text_input_secure(&self) -> bool {
         false
+    }
+
+    /// The field being edited in swapchain pixels, and its caret's offset from the field's
+    /// left. The run loop opens the input method's candidate window under it.
+    fn text_input_area(&self) -> Option<(sdl3::rect::Rect, i32)> {
+        None
     }
 
     /// Once per presenter iteration. Re-render (flush + `SHADER_READ_ONLY`) only

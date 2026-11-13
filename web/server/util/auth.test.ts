@@ -9,6 +9,7 @@ import {
 	csrfRequestOrigin,
 	isCrossSiteMutation,
 	sessionConfig,
+	sessionEpoch,
 	verifyUiPassword,
 } from "./auth";
 import { safeNextPath } from "./paths";
@@ -74,6 +75,9 @@ describe("verifyUiPassword", () => {
 			"PUNKTFUNK_UI_SECRET=keepme\nPUNKTFUNK_UI_PASSWORD=hunter2\n",
 		);
 		process.env.PUNKTFUNK_UI_PASSWORD = "hunter2";
+		// The epoch is one counter for the process, and a test file before this one may have
+		// moved it: what is checked is that this login moves it once.
+		const before = sessionEpoch();
 		expect(await verifyUiPassword("hunter2")).toBe(true);
 		const body = readFileSync(file, "utf8");
 		expect(body).toContain("PUNKTFUNK_UI_SECRET=keepme"); // other keys survive
@@ -82,7 +86,7 @@ describe("verifyUiPassword", () => {
 		const hash = body.match(/^PUNKTFUNK_UI_PASSWORD_HASH='(.+)'$/m)?.[1] ?? "";
 		expect(await Bun.password.verify("hunter2", hash)).toBe(true);
 		// A password just set revokes what came before it, so a reset ends old sessions too.
-		expect(readFileSync(epoch, "utf8")).toBe("2");
+		expect(readFileSync(epoch, "utf8")).toBe(String(before + 1));
 	});
 
 	test("a stored hash accepts only its own password", async () => {

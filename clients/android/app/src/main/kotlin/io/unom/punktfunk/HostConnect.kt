@@ -7,8 +7,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.ConnectRequest
+import io.unom.punktfunk.kit.DecodeNeed
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.VideoDecoders
+import io.unom.punktfunk.kit.library.GameOverrides
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.kit.security.KnownHostStore
 import io.unom.punktfunk.models.ActiveSession
@@ -148,24 +150,43 @@ class SessionOwner(private val close: (Long) -> Unit) {
     }
 }
 
+/** The host's HDR and pad for this game in place of the device's; the mode is [GameOverrides.fit]'s. */
+fun Settings.underHost(o: GameOverrides?): Settings =
+    if (o == null) this else copy(hdrEnabled = o.hdr ?: hdrEnabled, gamepad = o.gamepadPref ?: gamepad)
+
 /**
- * The one place [NativeBridge.nativeConnect] is assembled, for [JniHostNative]. Derives the mode,
- * HDR and gamepad settings the host needs from [spec]'s settings, waits for the last session's
- * close, and dials off the main thread. The dial cannot be interrupted, so it runs
- * `NonCancellable`. [unlock] crosses as byte arrays and is wiped when the native call returns.
- * Returns the session handle, or `0` on failure.
+ * The mode a connect asks for and the view beside it: [base] × render scale, then the host's game
+ * overrides [o] within [panel] and the codec. Above 1x the view is [base]'s size; an override that
+ * brings the mode down to it drops it.
+ */
+internal fun Settings.streamAsk(
+    base: Triple<Int, Int, Int>,
+    o: GameOverrides?,
+    panel: () -> Triple<Int, Int, Int>,
+): Pair<Triple<Int, Int, Int>, Pair<Int, Int>?> {
+    val max = RenderScale.maxDimension(codec)
+    val (w, h) = RenderScale.apply(base.first, base.second, renderScale, max)
+    val mode = o?.fit(Triple(w, h, base.third), panel(), max) ?: Triple(w, h, base.third)
+    val view = RenderScale.view(base.first, base.second, renderScale, max)
+    return mode to RenderScale.viewUnder(mode.first, mode.second, view)
+}
+
+/**
+ * The one place [NativeBridge.nativeConnect] is assembled, for [JniHostNative]. Derives the mode
+ * and view ([streamAsk]), HDR and gamepad settings the host needs from [spec]'s settings under its
+ * game overrides, keeps the codecs and 10-bit a hardware decoder takes at that mode
+ * ([VideoDecoders.probe]), waits for the last session's close, and dials off the main thread. The
+ * dial cannot be interrupted, so it runs `NonCancellable`. [unlock] crosses as byte arrays and is
+ * wiped when the native call returns. Returns the session handle, or `0` on failure.
  */
 suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = null): Long {
-    val settings = spec.settings
-    // Advertise HDR only when the user enabled it AND this device's display can present it (else the
-    // host sends a proper SDR stream rather than PQ the panel would mis-tone-map).
-    val (baseW, baseH, hz) = settings.effectiveMode(context)
-    // Render scale: ask the host for `chosen mode × scale` (even + codec-clamped) — > 1 supersamples
-    // (the compositor downscales the larger decoded frame to the SurfaceView), < 1 renders under
-    // native. 1.0 leaves the resolved mode untouched.
-    val (w, h) = RenderScale.apply(
-        baseW, baseH, settings.renderScale, RenderScale.maxDimension(settings.codec)
-    )
+    val settings = spec.settings.underHost(spec.overrides)
+    val (mode, view) = settings.streamAsk(settings.effectiveMode(context), spec.overrides) {
+        nativeDisplayMode(context, secondScreen = settings.secondScreen)
+    }
+    val (w, h, hz) = mode
+    // Advertise HDR only when it is on AND this device's display can present it (else the host
+    // sends a proper SDR stream rather than PQ the panel would mis-tone-map).
     val hdrEnabled = settings.hdrEnabled && displaySupportsHdr(context)
     // 10-bit on its own asks nothing of the PANEL: Main10 at BT.709 decodes and presents on an
     // ordinary display, and the compositor dithers what it cannot show. So this is the user's
@@ -196,14 +217,13 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
         // Slice-progressive delivery: decoder truth AND the low-latency toggle — parts are part of
         // the fast pipeline, and the toggle's "off" is the conservative configuration throughout.
         val frameParts = settings.lowLatencyMode && partialFrame
-        val codecBits = VideoDecoders.decodableCodecBits()
-        // Automatic codec (P5, measured NP3 ↔ RTX 4090): AV1 beat HEVC by ~1.2 ms end-to-end at
-        // identical conditions, so under "Automatic" this device prefers AV1 when it hardware-
-        // decodes it (the AV1 bit is only ever set for a real, non-blocked hardware decoder) AND
-        // it lacks FEATURE_PartialFrame — a partial-frame device keeps HEVC, whose slice overlap
-        // AV1 cannot ride (AV1 has no slices; the host's chunked poll never arms). The host
-        // honors the preference only inside the probed shared codec set, so an AV1-less encoder
-        // still resolves HEVC. An explicit user choice always wins unchanged.
+        // A codec, and 10-bit, only where a hardware decoder takes them at this mode.
+        val decode = VideoDecoders.probe(DecodeNeed(w, h, hz, hdrEnabled || tenBitSdr))
+        val codecBits = decode.codecBits
+        // Automatic codec: AV1 beat HEVC by ~1.2 ms end-to-end (NP3 ↔ RTX 4090), so "Automatic"
+        // prefers AV1 when its bit is set AND the device lacks FEATURE_PartialFrame — a
+        // partial-frame device keeps HEVC, whose slice overlap AV1 cannot ride. The host honors
+        // the preference only inside the shared codec set. An explicit user choice always wins.
         val preferredCodec = settings.preferredCodec().takeIf { it != 0 }
             ?: if (codecBits and 4 != 0 && !partialFrame) 4 else 0
         // The connect-time capability readout (`adb logcat -s pf.caps`): the P2 slice pipeline
@@ -212,17 +232,19 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
             "pf.caps",
             VideoDecoders.capsReport() +
                 " → multiSlice=$multiSlice parts=$frameParts studioRange=$studioRange" +
-                " prefer=$preferredCodec" +
+                " codecs=$codecBits tenBit=${decode.tenBit} prefer=$preferredCodec" +
                 " (lowLatency=${settings.lowLatencyMode})",
         )
         val request = ConnectRequest(
             host = spec.host, port = spec.port, width = w, height = h, refreshHz = hz,
+            viewWidth = view?.first ?: 0, viewHeight = view?.second ?: 0,
             certPem = spec.identity.certPem, keyPem = spec.identity.privateKeyPem, pinHex = spec.pinHex,
             // Zero is Automatic. Under PyroWave any other value is Fixed: the host ignores the
             // number and pins the player's quality.
             bitrateKbps = settings.bitrateKbps, compositorPref = settings.compositor,
             pyrowaveBppX100 = settings.pyrowaveBppX100(), gamepadPref = gamepadPref,
-            hdrEnabled = hdrEnabled, tenBitSdr = tenBitSdr, multiSliceOk = multiSlice,
+            hdrEnabled = hdrEnabled && decode.tenBit, tenBitSdr = tenBitSdr && decode.tenBit,
+            multiSliceOk = multiSlice,
             framePartsOk = frameParts, studioRange = studioRange,
             audioChannels = settings.audioChannels,
             // The audio format this session asks for. Only ever a request: the host's own gate
@@ -230,7 +252,7 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
             // this device will not open the rate — a rate the wire has committed to cannot be
             // rescued afterwards, so the fallback has to happen before the Hello.
             audioRateHz = audioRateHz, audioBits = audioBits,
-            // What this device can decode (H.264 always; HEVC and AV1 when a real decoder exists) +
+            // What this device decodes (H.264 always; HEVC and AV1 when a hardware decoder fits) +
             // the soft codec preference (user choice, or the Automatic AV1 rule above) — the
             // host resolves the emitted codec from both.
             videoCodecs = codecBits, preferredCodec = preferredCodec,
@@ -256,6 +278,7 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
             presetName = spec.preset?.name,
             deliveryFlags = spec.deliveryFlags,
             profile = spec.profile,
+            hostScreen = settings.hostScreen,
         )
         if (!spec.promptsUnlock && unlock == null) return@withContext NativeBridge.nativeConnect(request.toJson())
         try {

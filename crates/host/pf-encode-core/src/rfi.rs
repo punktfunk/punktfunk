@@ -141,6 +141,62 @@ pub fn mark_slot(trusted: &[bool], next: usize) -> usize {
     trusted.iter().position(|&t| !t).unwrap_or(next)
 }
 
+/// Frames back a kept picture may reach: inside every codec's reference distance (AV1's 8-bit
+/// order hints reach 127 back) and a round trip at 240 fps.
+pub const KEEP_REACH: i64 = 64;
+/// Frames a candidate waits before it becomes the pin when the client sends no
+/// confirmations: the two-slot LTR cadence AMF and QSV kept before [`Kept`].
+pub const KEEP_ROTATE: i64 = 8;
+
+/// The two pictures a backend keeps out of its ring so a loss finds an anchor however long
+/// the report took: `pin`, the newest the client confirmed, and `candidate`, the one awaiting
+/// confirmation. The client confirms only what it decoded clean, so the pin predates every
+/// loss it has not recovered from. A confirmed candidate becomes the pin and the next frame
+/// the candidate, so the pin trails the confirmations by a round trip at any frame rate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Kept {
+    pub pin: Option<i64>,
+    pub candidate: Option<i64>,
+}
+
+impl Kept {
+    /// Fold frame `cur` before it is coded. `held(w)`: the backend still holds `w` as a
+    /// trusted, clean picture. `keepable`: `cur` will be one. `true`: keep `cur` as the new
+    /// candidate. Without confirmations the candidate becomes the pin after [`KEEP_ROTATE`]
+    /// frames; with them, once confirmed or once no pin is left. Stalled confirmations, as
+    /// after a loss, so keep the confirmed pin for the whole reach.
+    pub fn step(
+        &mut self,
+        cur: i64,
+        keepable: bool,
+        acked: Option<&crate::codec::Acked>,
+        held: impl Fn(i64) -> bool,
+    ) -> bool {
+        let live = |w: i64| cur - w < KEEP_REACH && held(w);
+        self.pin = self.pin.filter(|&w| live(w));
+        self.candidate = self.candidate.filter(|&w| live(w));
+        if let Some(c) = self.candidate {
+            let rotate = match acked {
+                Some(a) => a.contains(c) || self.pin.is_none(),
+                None => cur - c >= KEEP_ROTATE,
+            };
+            if rotate {
+                (self.pin, self.candidate) = (Some(c), None);
+            }
+        }
+        if self.candidate.is_some() || !keepable {
+            return false;
+        }
+        self.candidate = Some(cur);
+        true
+    }
+
+    /// Whether `wire` is one of the two kept pictures.
+    pub fn holds(&self, wire: i64) -> bool {
+        self.pin == Some(wire) || self.candidate == Some(wire)
+    }
+}
+
 /// What a wave frame's AU tells the client. Both ends carry the recovery point; the close
 /// also carries the close bit, so a client that knows it lifts on a close after a start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -407,7 +463,8 @@ pub(crate) mod plan_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        ltr_acked_step, mark_slot, pick_acked, pick_anchor, plan_slot_recovery, wave_cycle, Wave,
+        ltr_acked_step, mark_slot, pick_acked, pick_anchor, plan_slot_recovery, wave_cycle, Kept,
+        Wave, KEEP_REACH, KEEP_ROTATE,
     };
 
     /// Two LTR slots marked at 840 and 870. A loss at 869 anchors on 840 and empties 870's
@@ -712,5 +769,88 @@ mod tests {
             Some(((10_212usize) % 8, 10_212)),
             "eight slots still hold the picture before the loss"
         );
+    }
+    /// A client that confirms a candidate a round trip later makes it the pin; the next frame
+    /// becomes the candidate, and nothing changes while one awaits its confirmation.
+    #[test]
+    fn a_confirmed_candidate_becomes_the_pin() {
+        let mut k = Kept {
+            pin: Some(2),
+            candidate: None,
+        };
+        let held = |_| true;
+        let acked = |last| Some(crate::codec::Acked { last, mask: 0xffff });
+        assert!(k.step(10, true, None, held));
+        assert!(!k.step(11, true, acked(9).as_ref(), held));
+        assert!(k.step(14, true, acked(10).as_ref(), held));
+        assert_eq!(
+            k,
+            Kept {
+                pin: Some(10),
+                candidate: Some(14)
+            }
+        );
+        // A pin that is the anchor for every unrecovered loss: older than 14's own loss.
+        assert_eq!(pick_anchor(&[(0, 10), (1, 14)], 14), Some((0, 10)));
+    }
+
+    /// With no confirmations the candidate rotates every [`KEEP_ROTATE`] frames. Stalled ones
+    /// keep the confirmed pin until it leaves the reach; only then does the candidate rotate.
+    #[test]
+    fn kept_pictures_rotate_without_confirmations_and_age_out() {
+        let held = |_| true;
+        let mut k = Kept::default();
+        k.step(0, true, None, held);
+        assert!(!k.step(KEEP_ROTATE - 1, true, None, held));
+        assert!(k.step(KEEP_ROTATE, true, None, held));
+        assert_eq!(k.pin, Some(0));
+
+        let stalled = Some(crate::codec::Acked { last: 1, mask: 0 });
+        let mut k = Kept {
+            pin: Some(1),
+            candidate: None,
+        };
+        assert!(k.step(2, true, stalled.as_ref(), held));
+        assert!(!k.step(KEEP_REACH, true, stalled.as_ref(), held));
+        assert_eq!(k.pin, Some(1), "a stall keeps the confirmed pin");
+        assert!(k.step(KEEP_REACH + 1, true, stalled.as_ref(), held));
+        assert_eq!(
+            k.pin,
+            Some(2),
+            "the candidate rotates in once the pin ages out"
+        );
+        let mut k = Kept {
+            pin: Some(1),
+            candidate: None,
+        };
+        k.step(KEEP_REACH + 1, false, None, held);
+        assert_eq!(k.pin, None, "a pin past the reach is dropped");
+    }
+
+    /// A picture the backend no longer holds (a taint, an IDR, an eviction) leaves the pair,
+    /// and a frame that will not be clean is never kept.
+    #[test]
+    fn kept_pictures_follow_what_the_backend_holds() {
+        let mut k = Kept {
+            pin: Some(3),
+            candidate: Some(5),
+        };
+        assert!(k.step(6, true, None, |w| w != 5));
+        assert_eq!(
+            k,
+            Kept {
+                pin: Some(3),
+                candidate: Some(6)
+            }
+        );
+        let mut k = Kept {
+            pin: Some(3),
+            candidate: None,
+        };
+        assert!(
+            !k.step(7, false, None, |_| true),
+            "a dirty wave frame is not kept"
+        );
+        assert!(k.holds(3) && !k.holds(7));
     }
 }

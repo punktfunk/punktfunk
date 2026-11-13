@@ -11,6 +11,7 @@
 //! installer log; a fresh intent ⇒ still in flight. Pure over its inputs.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Seconds after intent-write that an unchanged running version is still "in flight".
@@ -33,7 +34,7 @@ pub(crate) struct IntentRecord {
     pub source_build: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ResultRecord {
     pub ok: bool,
     pub from: String,
@@ -49,6 +50,33 @@ pub(crate) struct ResultRecord {
     /// Applied, but activates on the next reboot (rpm-ostree).
     #[serde(default)]
     pub staged: bool,
+    /// The failure a person reads, as the host message `hostupdate_<error_code>`; `error`
+    /// keeps the detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// That message's placeholder values beyond `from` and `to`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub error_params: BTreeMap<String, String>,
+}
+
+/// A failed apply leg: its stage, the detail, and the message a person reads, if any.
+pub(crate) struct ApplyFailed {
+    pub stage: &'static str,
+    pub error: String,
+    /// The host message `hostupdate_<code>`.
+    pub code: Option<String>,
+    pub params: BTreeMap<String, String>,
+}
+
+impl From<(&'static str, String)> for ApplyFailed {
+    fn from((stage, error): (&'static str, String)) -> Self {
+        ApplyFailed {
+            stage,
+            error,
+            code: None,
+            params: BTreeMap::new(),
+        }
+    }
 }
 
 /// Live job the console polls (`GET /update/status`).
@@ -118,6 +146,7 @@ pub(crate) fn reconcile(
             error: None,
             log_path: Some(intent.log_path),
             staged: false,
+            ..Default::default()
         });
     }
     if current_version == intent.to {
@@ -130,6 +159,7 @@ pub(crate) fn reconcile(
             error: None,
             log_path: Some(intent.log_path),
             staged: false,
+            ..Default::default()
         });
     }
     if now_unix.saturating_sub(intent.started_unix) < APPLY_GRACE_SECS {
@@ -142,12 +172,14 @@ pub(crate) fn reconcile(
         finished_unix: now_unix,
         stage: Some("restarting".into()),
         error: Some(format!(
-            "the host restarted still running {} (expected {}) — the installer aborted or \
+            "The host restarted still running {} (expected {}) — the installer aborted or \
              rolled back; see its log",
             intent.from, intent.to
         )),
         log_path: Some(intent.log_path),
         staged: false,
+        error_code: Some("rolled_back".into()),
+        ..Default::default()
     })
 }
 

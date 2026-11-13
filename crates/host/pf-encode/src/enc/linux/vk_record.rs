@@ -43,6 +43,8 @@ struct CscSource {
     rgb_view: vk::ImageView,
     /// The imported dmabuf the CSC samples, handed back to its producer after the dispatch.
     imported: Option<vk::Image>,
+    /// That dmabuf as words, where the device needs a LINEAR source read that way.
+    lin: Option<LinearSrc>,
     /// The cursor blend as `[origin_x, origin_y, size_w, size_h]`; size 0 skips it.
     cursor_pc: [i32; 4],
 }
@@ -130,10 +132,12 @@ impl VulkanVideoEncoder {
         // The record paths read this frame's wave; bookkeeping advances it.
         self.wave = plan.wave;
         let poc: i32 = if is_idr { 0 } else { self.poc };
-        let mut setup_idx = (self.enc_count % DPB_SLOTS as u64) as usize;
-        if !is_idr && setup_idx == ref_slot {
-            setup_idx = (setup_idx + 1) % DPB_SLOTS as usize;
-        }
+        // An IDR empties the DPB, kept pictures included.
+        let setup_idx = if is_idr {
+            (self.enc_count % DPB_SLOTS as u64) as usize
+        } else {
+            setup_slot(self.enc_count, ref_slot, &self.slot_wire, &self.kept)
+        };
         CodingPlan {
             frame: plan,
             is_idr,
@@ -354,9 +358,17 @@ impl VulkanVideoEncoder {
                 self.spec.is_hdr,
             )?;
 
-            let (rgb_view, imported) = match &frame.payload {
+            let (rgb_view, imported, lin) = match &frame.payload {
                 FramePayload::Dmabuf(d) => {
                     let (img, view, fresh) = self.import_cached(d, frame.width, frame.height)?;
+                    let lin = self.words.source(
+                        &dev,
+                        &self.ext_fd,
+                        &self.mem_props,
+                        self.import_key(d),
+                        d,
+                        (frame.width, frame.height),
+                    )?;
                     // EXCLUSIVE sharing: acquire the image from the foreign producer family for
                     // this compute read, fresh (UNDEFINED preserves modifier-tiled bytes) or
                     // cached (GENERAL, where `record_csc`'s release left it). `Frame::src_hold`
@@ -374,7 +386,7 @@ impl VulkanVideoEncoder {
                         compute_cmd,
                         &vk::DependencyInfo::default().image_memory_barriers(&[acq]),
                     );
-                    (view, Some(img))
+                    (view, Some(img), lin)
                 }
                 FramePayload::Cpu(_) => {
                     let view = self.stage_cpu(slot, frame)?;
@@ -396,13 +408,14 @@ impl VulkanVideoEncoder {
                         compute_cmd,
                         &vk::DependencyInfo::default().image_memory_barriers(&[to_read]),
                     );
-                    (view, None)
+                    (view, None, None)
                 }
                 _ => bail!("vulkan-encode: unsupported FramePayload (need Dmabuf or Cpu RGB)"),
             };
             Ok(CscSource {
                 rgb_view,
                 imported,
+                lin,
                 cursor_pc,
             })
         })();
@@ -653,8 +666,10 @@ impl VulkanVideoEncoder {
         let nv12_src = self.frames[slot].nv12.image;
         let nv12_view = self.frames[slot].nv12.view;
         let direct_planes = self.frames[slot].direct_planes;
-        // A reframed session converts the scaled crop; the cursor went in at source size.
-        let (cursor_pc, rgb_view) = match &self.reframe {
+        // A reframed session converts the scaled crop; the cursor went in at source size, and
+        // the reframe is what read a LINEAR source's words.
+        let idle = self.words.idle();
+        let (cursor_pc, rgb_view, lin) = match &self.reframe {
             Some(r) => (
                 [0; 4],
                 r.record(
@@ -665,11 +680,20 @@ impl VulkanVideoEncoder {
                     csc.rgb_view,
                     self.frames[slot].cursor.img.view,
                     csc.cursor_pc,
+                    csc.lin,
+                    idle,
                 ),
+                None,
             ),
-            None => (csc.cursor_pc, csc.rgb_view),
+            None => (csc.cursor_pc, csc.rgb_view, csc.lin),
         };
-        bind_rgb(dev, self.sampler, csc_set, rgb_view);
+        bind_rgb(
+            dev,
+            self.sampler,
+            csc_set,
+            rgb_view,
+            lin.map_or(idle, |l| l.buffer),
+        );
 
         // GENERAL for the CSC's targets, prior contents discarded: the picture itself when its
         // planes are written directly, else Y/UV scratch plus the picture as the copies' dst.
@@ -725,16 +749,12 @@ impl VulkanVideoEncoder {
             &[csc_set],
             &[],
         );
-        let mut pc_bytes = [0u8; 16];
-        for (i, v) in cursor_pc.iter().enumerate() {
-            pc_bytes[i * 4..i * 4 + 4].copy_from_slice(&v.to_ne_bytes());
-        }
         dev.cmd_push_constants(
             compute_cmd,
             self.csc_layout,
             vk::ShaderStageFlags::COMPUTE,
             0,
-            &pc_bytes,
+            &csc_push(cursor_pc, lin),
         );
         dev.cmd_dispatch(compute_cmd, (w / 2).div_ceil(8), (h_px / 2).div_ceil(8), 1);
 
@@ -959,6 +979,11 @@ impl VulkanVideoEncoder {
         }
         self.slot_wire[setup_idx] = if plan.dirty { -1 } else { wire };
         self.slot_poc[setup_idx] = poc;
+        let slot_wire = &self.slot_wire;
+        self.kept
+            .step(wire, !plan.dirty, self.confirmed.as_ref(), |w| {
+                slot_wire.contains(&w)
+            });
         if let Some(w) = plan.wave.filter(|w| w.closes()) {
             tracing::debug!(
                 cycle = w.cycle,

@@ -5,8 +5,9 @@
 //! and host run in the seat's session and join the cycle's job too, so they end with the
 //! service as well as when their [`ChildProcess`] drops and when the cycle logs the session
 //! off. The RDP bootstrap travels through one inherited anonymous stdin pipe, never argv or
-//! environment. Session children use a duplicated LocalSystem primary token
-//! retargeted with `TokenSessionId` and the `winsta0\default` desktop. Host
+//! environment. A child inherits only the handles its [`Inherit`] list names, whatever another
+//! seat's spawn has made inheritable meanwhile. Session children use a duplicated LocalSystem
+//! primary token retargeted with `TokenSessionId` and the `winsta0\default` desktop. Host
 //! environment construction uses an allow-listed system base plus exact seat
 //! variables, so control credentials cannot leak through inheritance.
 
@@ -38,9 +39,12 @@ use windows::Win32::System::JobObjects::{
 };
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
-    CreateProcessAsUserW, CreateProcessW, GetCurrentProcess, GetExitCodeProcess, OpenProcessToken,
-    ResumeThread, TerminateProcess, WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED,
-    CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
+    CreateProcessAsUserW, CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess,
+    GetExitCodeProcess, InitializeProcThreadAttributeList, OpenProcessToken, ResumeThread,
+    TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject, CREATE_NO_WINDOW,
+    CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT,
+    LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
 };
 
 pub(super) struct Job {
@@ -161,17 +165,27 @@ pub(super) fn spawn_keeper(
     let application = wide(keeper.as_os_str(), "keeper executable")?;
     let mut command_w = command_line(&[keeper.as_os_str().to_owned(), OsString::from("keep")])?;
     command_w.push(0);
-    let startup = STARTUPINFOW {
-        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
-        dwFlags: STARTF_USESTDHANDLES,
-        hStdInput: HANDLE(read_pipe.as_raw_handle()),
-        hStdOutput: HANDLE(nul.as_raw_handle()),
-        hStdError: HANDLE(log.as_raw_handle()),
-        ..Default::default()
+    let (stdin, stdout, stderr) = (
+        HANDLE(read_pipe.as_raw_handle()),
+        HANDLE(nul.as_raw_handle()),
+        HANDLE(log.as_raw_handle()),
+    );
+    let inherit = Inherit::new(&[stdin, stdout, stderr])?;
+    let startup = STARTUPINFOEXW {
+        StartupInfo: STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
+            dwFlags: STARTF_USESTDHANDLES,
+            hStdInput: stdin,
+            hStdOutput: stdout,
+            hStdError: stderr,
+            ..Default::default()
+        },
+        lpAttributeList: inherit.list(),
     };
     let mut info = PROCESS_INFORMATION::default();
-    // SAFETY: all pointers target live NUL-terminated buffers; only stdin, NUL and the log are
-    // inheritable.
+    // SAFETY: all pointers target live NUL-terminated buffers. `startup` is a STARTUPINFOEXW whose
+    // `cb` says so, and its list, alive in `inherit`, names stdin, NUL and the log: the child
+    // inherits those three and no other handle.
     unsafe {
         CreateProcessW(
             PCWSTR(application.as_ptr()),
@@ -179,14 +193,15 @@ pub(super) fn spawn_keeper(
             None,
             None,
             true,
-            CREATE_SUSPENDED | CREATE_NO_WINDOW,
+            CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
             None,
             PCWSTR::null(),
-            &startup,
+            std::ptr::from_ref(&startup).cast::<STARTUPINFOW>(),
             &mut info,
         )
     }
     .map_err(|error| io_error("keeper_spawn", "CreateProcessW(seat keeper)", error))?;
+    drop(inherit);
     finish_keeper_spawn(job, info, write_pipe, bootstrap)
 }
 
@@ -265,17 +280,23 @@ pub(super) fn spawn_in_session(
     let workdir_w = wide(workdir.as_os_str(), "child working directory")?;
     let mut desktop = wide("winsta0\\default", "child desktop")?;
     let log = open_log(log)?;
-    let startup = STARTUPINFOW {
-        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
-        lpDesktop: PWSTR(desktop.as_mut_ptr()),
-        dwFlags: STARTF_USESTDHANDLES,
-        hStdOutput: HANDLE(log.as_raw_handle()),
-        hStdError: HANDLE(log.as_raw_handle()),
-        ..Default::default()
+    let output = HANDLE(log.as_raw_handle());
+    let inherit = Inherit::new(&[output])?;
+    let startup = STARTUPINFOEXW {
+        StartupInfo: STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
+            lpDesktop: PWSTR(desktop.as_mut_ptr()),
+            dwFlags: STARTF_USESTDHANDLES,
+            hStdOutput: output,
+            hStdError: output,
+            ..Default::default()
+        },
+        lpAttributeList: inherit.list(),
     };
     let mut info = PROCESS_INFORMATION::default();
-    // SAFETY: token is a live primary token for the target session; all buffers remain live, and
-    // the log handle is the inheritable one the child's stdout and stderr name.
+    // SAFETY: token is a live primary token for the target session and all buffers remain live.
+    // `startup` is a STARTUPINFOEXW whose `cb` says so, and its list, alive in `inherit`, names
+    // the log alone: the child inherits it as stdout and stderr, and no other handle.
     unsafe {
         CreateProcessAsUserW(
             Some(HANDLE(token.as_raw_handle())),
@@ -284,14 +305,18 @@ pub(super) fn spawn_in_session(
             None,
             None,
             true,
-            CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+            CREATE_SUSPENDED
+                | CREATE_UNICODE_ENVIRONMENT
+                | CREATE_NO_WINDOW
+                | EXTENDED_STARTUPINFO_PRESENT,
             Some(environment.as_ptr().cast::<c_void>()),
             PCWSTR(workdir_w.as_ptr()),
-            &startup,
+            std::ptr::from_ref(&startup).cast::<STARTUPINFOW>(),
             &mut info,
         )
     }
     .map_err(|error| io_error("process_spawn", "CreateProcessAsUserW failed", error))?;
+    drop(inherit);
     finish_suspended_spawn(info, job)
 }
 
@@ -328,6 +353,68 @@ fn open_log(path: &Path) -> WinResult<OwnedHandle> {
     .map_err(|error| io_error("seat_log", "open the seat log", error))?;
     // SAFETY: `raw` is a fresh handle with no other owner.
     Ok(unsafe { OwnedHandle::from_raw_handle(raw.0) })
+}
+
+/// A `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`: the one set of handles a child inherits. Seats spawn
+/// on threads of their own, so a handle another seat's spawn holds inheritable at that moment
+/// would otherwise reach this child too. The list is deleted when this drops.
+struct Inherit {
+    /// The opaque list, which Windows lays out in place; `usize` keeps it pointer-aligned.
+    list: Vec<usize>,
+    /// What the list points at. Boxed, so its address holds while `Inherit` moves.
+    handles: Box<[HANDLE]>,
+}
+
+impl Inherit {
+    /// `handles` must be inheritable and distinct.
+    fn new(handles: &[HANDLE]) -> WinResult<Self> {
+        let mut bytes = 0_usize;
+        // SAFETY: with no list, the call only writes the size one attribute needs to `bytes`, and
+        // fails by design with ERROR_INSUFFICIENT_BUFFER.
+        let _ = unsafe { InitializeProcThreadAttributeList(None, 1, None, &mut bytes) };
+        let mut list = vec![0_usize; bytes.div_ceil(std::mem::size_of::<usize>())];
+        let raw = LPPROC_THREAD_ATTRIBUTE_LIST(list.as_mut_ptr().cast());
+        // SAFETY: `list` holds at least `bytes` writable, pointer-aligned bytes and outlives the
+        // list, which `Drop` deletes before the vector is freed.
+        unsafe { InitializeProcThreadAttributeList(Some(raw), 1, None, &mut bytes) }
+            .map_err(|error| io_error("process_spawn", "initialize the inherit list", error))?;
+        let size = std::mem::size_of_val(handles);
+        let inherit = Self {
+            list,
+            handles: handles.into(),
+        };
+        // SAFETY: the list was initialized above with room for one attribute. It keeps a pointer
+        // to `handles`, a heap slice of `size` bytes that `inherit` owns as long as the list.
+        unsafe {
+            UpdateProcThreadAttribute(
+                raw,
+                0,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                Some(inherit.handles.as_ptr().cast()),
+                size,
+                None,
+                None,
+            )
+        }
+        .map_err(|error| io_error("process_spawn", "name the inherited handles", error))?;
+        Ok(inherit)
+    }
+
+    fn list(&self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
+        LPPROC_THREAD_ATTRIBUTE_LIST(self.list.as_ptr().cast_mut().cast())
+    }
+}
+
+impl Drop for Inherit {
+    fn drop(&mut self) {
+        // SAFETY: `new` initialized the list before any `Inherit` existed, and it is deleted once,
+        // here, while its storage and the handles it names are still alive.
+        unsafe {
+            DeleteProcThreadAttributeList(LPPROC_THREAD_ATTRIBUTE_LIST(
+                self.list.as_mut_ptr().cast(),
+            ));
+        }
+    }
 }
 
 fn finish_suspended_spawn(info: PROCESS_INFORMATION, job: Option<&Job>) -> WinResult<ChildProcess> {
@@ -458,7 +545,7 @@ pub(super) fn seat_environment(
             "PUNKTFUNK_TRUST_DIR",
             pf_paths::config_dir().into_os_string(),
         ),
-        // The box's catalog, read only: a Windows seat runs no plugins of its own.
+        // The box's catalog, read only: the seat's own plugins live in its config dir.
         (
             "PUNKTFUNK_LIBRARY_DIR",
             pf_paths::config_dir().into_os_string(),
@@ -598,6 +685,93 @@ mod tests {
         };
         assert!(marked(&adopted));
         assert!(!marked(&made));
+    }
+
+    /// A child holds the inheritable handle its list names, and not one the list leaves out.
+    #[test]
+    fn a_child_inherits_only_the_handles_its_list_names() {
+        use windows::Win32::Foundation::{
+            CompareObjectHandles, DuplicateHandle, DUPLICATE_SAME_ACCESS,
+        };
+        use windows::Win32::System::Threading::CreateEventW;
+        let inheritable = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            bInheritHandle: true.into(),
+            ..Default::default()
+        };
+        let event = || {
+            // SAFETY: an unnamed event whose handle the returned owner closes.
+            let raw = unsafe { CreateEventW(Some(&inheritable), true, false, None) }.unwrap();
+            // SAFETY: `raw` is fresh and has no other owner.
+            unsafe { OwnedHandle::from_raw_handle(raw.0) }
+        };
+        let (listed, stray) = (event(), event());
+        let inherit = Inherit::new(&[HANDLE(listed.as_raw_handle())]).unwrap();
+        let startup = STARTUPINFOEXW {
+            StartupInfo: STARTUPINFOW {
+                cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
+                ..Default::default()
+            },
+            lpAttributeList: inherit.list(),
+        };
+        let cmd = wide(pf_paths::system32("cmd.exe"), "cmd").unwrap();
+        let mut info = PROCESS_INFORMATION::default();
+        // SAFETY: as in `spawn_keeper`; the child stays suspended and is ended below.
+        unsafe {
+            CreateProcessW(
+                PCWSTR(cmd.as_ptr()),
+                None,
+                None,
+                None,
+                true,
+                CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
+                None,
+                PCWSTR::null(),
+                std::ptr::from_ref(&startup).cast::<STARTUPINFOW>(),
+                &mut info,
+            )
+        }
+        .unwrap();
+        // SAFETY: the creation returned two handles this test owns from here.
+        let (child, _thread) = unsafe {
+            (
+                OwnedHandle::from_raw_handle(info.hProcess.0),
+                OwnedHandle::from_raw_handle(info.hThread.0),
+            )
+        };
+        // An inherited handle keeps its value in the child, and names the same object there.
+        let held = |handle: &OwnedHandle| {
+            let mut copy = HANDLE::default();
+            // SAFETY: both process handles are live; `copy` receives a handle owned below.
+            let copied = unsafe {
+                DuplicateHandle(
+                    HANDLE(child.as_raw_handle()),
+                    HANDLE(handle.as_raw_handle()),
+                    GetCurrentProcess(),
+                    &mut copy,
+                    0,
+                    false,
+                    DUPLICATE_SAME_ACCESS,
+                )
+            };
+            copied.is_ok_and(|()| {
+                // SAFETY: the duplicate is fresh and closed when this owner drops.
+                let copy = unsafe { OwnedHandle::from_raw_handle(copy.0) };
+                // SAFETY: both handles are live for the call.
+                unsafe {
+                    CompareObjectHandles(
+                        HANDLE(copy.as_raw_handle()),
+                        HANDLE(handle.as_raw_handle()),
+                    )
+                }
+                .as_bool()
+            })
+        };
+        let (got_listed, got_stray) = (held(&listed), held(&stray));
+        // SAFETY: the child is still suspended and its handle live.
+        let _ = unsafe { TerminateProcess(HANDLE(child.as_raw_handle()), 1) };
+        assert!(got_listed, "the listed handle is inherited");
+        assert!(!got_stray, "a handle left out of the list is not");
     }
 
     /// A child in another session ends when its job closes, as it must when the service dies.

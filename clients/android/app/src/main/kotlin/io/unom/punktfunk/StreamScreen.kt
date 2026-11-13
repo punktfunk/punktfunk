@@ -46,6 +46,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +64,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
@@ -74,6 +76,9 @@ import androidx.core.content.ContextCompat
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.GamepadRouter
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Shortcuts
+import io.unom.punktfunk.kit.SlotId
 import io.unom.punktfunk.kit.security.IdentityLoad
 import io.unom.punktfunk.kit.security.IdentityStore
 import io.unom.punktfunk.kit.security.KnownHostStore
@@ -81,6 +86,7 @@ import io.unom.punktfunk.kit.SessionAccess
 import io.unom.punktfunk.kit.SessionEndReason
 import io.unom.punktfunk.kit.VideoFit
 import io.unom.punktfunk.models.ActiveSession
+import io.unom.punktfunk.kit.say
 import io.unom.punktfunk.kit.library.GameEnd
 import io.unom.punktfunk.kit.library.LibraryClient
 import kotlinx.coroutines.Dispatchers
@@ -134,6 +140,12 @@ fun StreamScreen(
         if (ui.micHint != null) {
             delay(1600)
             ui.micHint = null
+        }
+    }
+    LaunchedEffect(ui.shortcutHint) {
+        if (ui.shortcutHint != null) {
+            delay(2000)
+            ui.shortcutHint = null
         }
     }
     LaunchedEffect(ui.motionHint) {
@@ -309,7 +321,7 @@ fun StreamScreen(
     var statsView by remember { mutableStateOf(CompanionMemory.statsView(context)) }
 
     // Host-gone watchdog and the live access level.
-    SessionWatchEffect(handle, initialAccess, ui, peripherals, wakeRedial, onSessionEnded)
+    SessionWatchEffect(handle, initialSettings.hostScreen, initialAccess, ui, peripherals, wakeRedial, onSessionEnded)
 
     // Everything this stream does to the window — wake/Wi-Fi locks, the refresh pin, ALLM, the
     // cutout and soft-keyboard modes — and the prior values it puts back.
@@ -336,8 +348,14 @@ fun StreamScreen(
     // The twist and the three-finger tap live in the pointer touch models only — passthrough gives
     // every finger to the host verbatim — and need a screen plus the POINTER grant.
     val gestures = hasTouch && touchMode != TouchMode.TOUCH && pointerOk
+    // The shortcuts the start banner and Back's fallback read: this session's, live bindings.
+    val shortcuts = remember(handle) { initialSettings.shortcutBindings() }
+    val ringOpener = listOfNotNull(
+        shortcuts.hint(Shortcuts.Action.Ring, Shortcuts.Device.PAD).takeIf { ui.padPresent },
+        shortcuts.hint(Shortcuts.Action.Ring, Shortcuts.Device.KEYBOARD).takeIf { keyboard },
+    ).firstOrNull()?.words(context.resources)
     // Settings can turn Back off, but only while another opener exists: the ring holds End stream.
-    val backOpensRing = initialSettings.backOpensRing || !(ui.padPresent || keyboard || gestures)
+    val backOpensRing = initialSettings.backOpensRing || !(ringOpener != null || gestures)
     val openRingCentred = { ring.openAt(Offset(containerSize.width / 2f, containerSize.height / 2f)) }
     // The quick-action ring (design/touch-client-overlay.md §2). Back opens it at the screen
     // centre instead of ending the session; "End stream" is a slot inside, behind a two-press arm.
@@ -374,7 +392,7 @@ fun StreamScreen(
         onSessionEnded(reason)
     }
 
-    KeepAliveEffects(session, hostRecord, keepAliveSpan, { endAway(it) }, onSessionEnded)
+    KeepAliveEffects(session, hostRecord, keepAliveSpan, decodedSize, { endAway(it) }, onSessionEnded)
 
     // "Keep screen awake": asked every few seconds, since with the setting off the answer
     // follows the player's input. With it on the answer never changes.
@@ -399,9 +417,12 @@ fun StreamScreen(
     // measure against it, so none of them knows a fold happened.
     var padSize by remember { mutableStateOf(IntSize.Zero) }
     val split = fold?.takeIf { hingeCompanion || (padShown && !companionUp) }
-    // A live mode switch: the asked-for mode shows at once, the host's answer half a second later.
-    fun switchMode(w: Int, h: Int, hz: Int) {
-        if (NativeBridge.nativeRequestMode(handle, w, h, hz)) {
+    // A live mode switch, shown at [view] when the mode is larger, none clearing it; [keepView]
+    // keeps the host's own instead. The asked-for mode shows at once, the host's answer half a
+    // second later.
+    fun switchMode(w: Int, h: Int, hz: Int, view: Pair<Int, Int>?, keepView: Boolean = false) {
+        val (vw, vh) = if (keepView) -1 to -1 else (view?.first ?: 0) to (view?.second ?: 0)
+        if (NativeBridge.nativeRequestMode(handle, w, h, hz, vw, vh)) {
             requestedMode = intArrayOf(w, h, hz)
             scope.launch {
                 delay(500)
@@ -413,20 +434,20 @@ fun StreamScreen(
     var modePicked by remember(handle) { mutableStateOf(false) }
 
     /**
-     * What Automatic resolves for layout [l] on this pair, asked when it differs from the live
-     * mode: live where the host takes the switch, else from the next connect, which resolves
-     * against the same screen ([pictureDisplay]) and the kept layout ([pictureSpanned]).
+     * What Automatic resolves for layout [l] on this pair, and its view, asked when the mode
+     * differs from the live one: live where the host takes the switch, else from the next connect,
+     * which resolves against the same screen ([pictureDisplay]) and the kept layout
+     * ([pictureSpanned]).
      */
     fun askModeFor(l: ScreenLayout) {
         val automatic = initialSettings.width <= 0 || initialSettings.height <= 0 || initialSettings.hz <= 0
         if (companionDisplay == null || modePicked || !automatic) return
         // ponytail: the picture screen follows the KEPT layout, so a launch that spans over a
         // kept swap asks at the second screen's width; the next cycle sets it right.
-        val (baseW, baseH, hz) = initialSettings.effectiveMode(context, spanned = l == ScreenLayout.SPANNED)
-        val (w, h) = RenderScale.apply(
-            baseW, baseH, initialSettings.renderScale, RenderScale.maxDimension(initialSettings.codec),
-        )
-        if (!intArrayOf(w, h, hz).contentEquals(requestedMode)) switchMode(w, h, hz)
+        val base = initialSettings.effectiveMode(context, spanned = l == ScreenLayout.SPANNED)
+        val (mode, view) = initialSettings.streamAsk(base, null) { base }
+        val (w, h, hz) = mode
+        if (!intArrayOf(w, h, hz).contentEquals(requestedMode)) switchMode(w, h, hz, view)
     }
 
     /** The pair's next layout, remembered, and the mode that goes with it. */
@@ -477,7 +498,7 @@ fun StreamScreen(
             hostRecord?.let { kh ->
                 scope.launch(Dispatchers.IO) {
                     (IdentityStore(context).load() as? IdentityLoad.Ok)?.identity?.let { id ->
-                        HostActions.invoke(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.name, act.id, act.label, kh.port)
+                        HostActions.invoke(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.name, act.id, act.text(context.resources), kh.port)
                     }
                 }
             }
@@ -510,22 +531,24 @@ fun StreamScreen(
                     val outcome = withContext(Dispatchers.IO) {
                         (IdentityStore(context).load() as? IdentityLoad.Ok)?.identity?.let { id ->
                             LibraryClient.endGame(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, appId, kh.port)
-                        } ?: GameEnd.Failed("this device has no identity yet")
+                        } ?: GameEnd.Failed(say(R.string.android_lib_error_no_identity))
                     }
                     // Gone either way: leave as End stream does. A refusal keeps the stream.
                     if (outcome.gameGone) {
                         NativeBridge.nativeDisconnectQuit(handle)
                         onSessionEnded(SessionEndReason.LOCAL)
                     } else {
-                        Toast.makeText(context, outcome.notice(game.title), Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, outcome.notice(game.title).words(context.resources), Toast.LENGTH_LONG).show()
                     }
                 }
             }
         },
         currentMode = { requestedMode },
+        // The ring picks the host's mode itself: a new size is shown at it, a rate pick keeps
+        // the view.
         requestMode = { w, h, hz ->
             modePicked = true
-            switchMode(w, h, hz)
+            switchMode(w, h, hz, null, keepView = true)
         },
         screenLayouts = { layoutsOffered },
         screenLayout = { layout },
@@ -536,7 +559,18 @@ fun StreamScreen(
         },
         // This stream only: the next one starts from the Controller type setting.
         cyclePadType = { activity?.gamepadRouter?.let { it.setPadType(nextPadType(it.padType)) } },
+        pointerCapture = { hasPhysicalMouse() },
+        toggleCapture = { activity?.mouseForwarder?.toggleCapture() },
     )
+    // A shortcut fires through this composition's ring actions, whichever is current.
+    val shortcutArm = remember(handle) { ShortcutArm() }
+    SideEffect {
+        peripherals.onShortcut = { action, phase ->
+            fireShortcut(action, phase, handle, ring, overlayCfg, ringActions, context, shortcutArm, openRingCentred) {
+                ui.shortcutHint = it
+            }
+        }
+    }
     // The summon rides a pointer gesture but TYPES, so it also needs the KEYBOARD grant
     // (dismissing is always allowed).
     val showKeyboard: (Boolean) -> Unit = { show ->
@@ -550,8 +584,9 @@ fun StreamScreen(
             header = PanelHeader(
                 title = listOfNotNull(hostRecord?.name, streamedGame?.title ?: session.launchHold?.game?.title)
                     .joinToString(" · ").ifEmpty { "Punktfunk" },
+                // The size that arrives: a host that scales sends less than its mode.
                 detail = requestedMode.takeIf { it.size >= 3 && it[0] > 0 }
-                    ?.let { "${it[0]}×${it[1]} · ${it[2]} Hz" }.orEmpty(),
+                    ?.let { m -> (decodedSize ?: m).let { "${it[0]}×${it[1]} · ${m[2]} Hz" } }.orEmpty(),
             ),
             history = statsHistory,
             stats = statsLines,
@@ -684,13 +719,18 @@ fun StreamScreen(
                     // explanation, not as new chrome on everyone's stream. TopEnd, in the shared pill
                     // family (TopStart is the HUD's, TopCentre the transient cues', BottomCentre the
                     // banner's).
+                    val accessLevel = stringResource(SessionAccess.label(ui.accessGrants))
                     val accessChip = when {
                         ui.statsVerbosity == StatsVerbosity.OFF -> null
-                        ui.accessGrants and SessionAccess.ALL == SessionAccess.ALL && ui.accessRemaining == 0 -> null
+                        SessionAccess.normalizeLegacyFull(ui.accessGrants) and SessionAccess.ALL == SessionAccess.ALL &&
+                            ui.accessRemaining == 0 -> null
                         ui.accessRemaining > 0 ->
-                            "${SessionAccess.label(ui.accessGrants)} · " +
-                                "${SessionAccess.remainingLabel(ui.accessRemaining)} left"
-                        else -> SessionAccess.label(ui.accessGrants)
+                            "$accessLevel · " + if (ui.accessRemaining < 60) {
+                                stringResource(R.string.grant_chip_ends_soon)
+                            } else {
+                                stringResource(R.string.grant_chip_ends, context.accessRemaining(ui.accessRemaining))
+                            }
+                        else -> accessLevel
                     }
                     // Same corner, stacked: the mute sentence stands whatever the stats tier, because
                     // a player who cannot hear is owed the reason even with chrome off. Top left while
@@ -703,7 +743,7 @@ fun StreamScreen(
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                                 horizontalAlignment = if (left) Alignment.Start else Alignment.End,
                             ) {
-                                ui.audioMuteLabel?.let { AccessChip(it) }
+                                ui.audioMuteLabel?.let { AccessChip(stringResource(it)) }
                                 accessChip?.let { AccessChip(it) }
                             }
                         }
@@ -728,12 +768,17 @@ fun StreamScreen(
                     // Bottom-centre, which MotionUnreachableHint also owns at t≈0. The hint YIELDS: the
                     // notice reports something broken about THIS session, the hint repeats every stream.
                     if (initialSettings.exitHint && banner.up && !ui.motionHint && !touchHint) OsdScaled {
+                        // The pad's End stream hold, as the player bound it.
+                        val exitHold = shortcuts.bindings.firstOrNull {
+                            it.action == Shortcuts.Action.Slot(SlotId.EndStream) &&
+                                it.trigger.device == Shortcuts.Device.PAD && it.trigger.hold
+                        }?.trigger?.chord()
                         StreamStartBanner(
                             text = when {
-                                ui.padPresent -> "Hold L1 + R1 + Start + Select to leave"
-                                backOpensRing -> "Back opens quick actions"
-                                gestures -> "A two-finger twist opens quick actions"
-                                else -> "Ctrl+Alt+Shift+O opens quick actions"
+                                ui.padPresent && exitHold != null -> stringResource(R.string.notice_exit_hold, exitHold)
+                                backOpensRing -> stringResource(R.string.notice_ring_opens_keys, "Back")
+                                gestures -> stringResource(R.string.notice_ring_twist)
+                                else -> stringResource(R.string.notice_ring_opens_keys, ringOpener.orEmpty())
                             },
                             alpha = banner.alpha,
                             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
@@ -811,6 +856,10 @@ fun StreamScreen(
                         )
                     }
                     ui.micHint?.let {
+                        OsdScaled { MicChordHint(stringResource(it), Modifier.align(Alignment.TopCenter).padding(top = 16.dp)) }
+                    }
+                    // A shortcut's dimmed action says why; a danger one asks for its second press.
+                    ui.shortcutHint?.let {
                         OsdScaled { MicChordHint(it, Modifier.align(Alignment.TopCenter).padding(top = 16.dp)) }
                     }
                     // Bottom, not top: this can coincide with a mic-chord confirmation or the exit cue,
@@ -893,6 +942,7 @@ fun StreamScreen(
             launchHold?.let {
                 LaunchHoldOverlay(
                     it,
+                    handle,
                     // Retry is the shelf the launch came off: ending as `GAME_EXITED` puts a library
                     // launch back on it, one press from the same tile.
                     onRetry = { endAway(true, SessionEndReason.GAME_EXITED) },
@@ -924,7 +974,7 @@ private fun PadHalf(pad: GamepadRouter.ExternalPad?, cfg: PadConfig, size: IntSi
 @Composable
 private fun TouchFallbackHint(modifier: Modifier = Modifier) {
     Text(
-        "This host doesn't accept touch — using the trackpad model",
+        stringResource(R.string.notice_touch_unsupported),
         modifier = modifier
             .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
             .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -1032,7 +1082,7 @@ private fun AccessChip(text: String, modifier: Modifier = Modifier) {
 @Composable
 private fun MotionUnreachableHint(modifier: Modifier = Modifier) {
     Text(
-        "Motion won't reach this session — set Controller type to DualSense",
+        stringResource(R.string.notice_motion_unreachable),
         modifier = modifier
             .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
             .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -1050,7 +1100,7 @@ private fun MotionUnreachableHint(modifier: Modifier = Modifier) {
 @Composable
 private fun ExitChordHint(modifier: Modifier = Modifier) {
     Text(
-        "Hold to quit…",
+        stringResource(R.string.notice_exit_arming),
         modifier = modifier
             .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
             .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -1066,7 +1116,7 @@ private fun ExitChordHint(modifier: Modifier = Modifier) {
 @Composable
 private fun RemotePointerHint(modifier: Modifier = Modifier) {
     Text(
-        "Remote pointer — SELECT click · play/pause right-click · hold SELECT to exit",
+        stringResource(R.string.android_remote_pointer_hint, "SELECT", "play/pause"),
         modifier = modifier
             .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
             .padding(horizontal = 14.dp, vertical = 8.dp),

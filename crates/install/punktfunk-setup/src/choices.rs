@@ -74,6 +74,52 @@ pub struct Pins {
     pub no_start: bool,
 }
 
+/// The couch-box image a default names. `Other` is any Game Mode / HTPC box without a name of its
+/// own here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Couch {
+    Bazzite,
+    Nobara,
+    Other,
+}
+
+/// Why the box chose a default: stored as the cause and worded where it is shown, so a
+/// transcript prints English and a screen prints the person's language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Why {
+    /// SteamOS' script always enables linger.
+    SteamosLinger,
+    /// SteamOS' script always joins the group.
+    SteamosGroup,
+    CouchHeadless(Couch),
+    CouchPad(Couch),
+    NoGraphicalSession,
+}
+
+impl Why {
+    pub fn text(self) -> String {
+        use pf_l10n::tools as t;
+        let name = |couch| match couch {
+            Couch::Bazzite => Some("Bazzite"),
+            Couch::Nobara => Some("Nobara"),
+            Couch::Other => None,
+        };
+        match self {
+            Why::SteamosLinger => t::setup_why_linger_steamos().to_string(),
+            Why::SteamosGroup => t::setup_why_group_steamos().to_string(),
+            Why::NoGraphicalSession => t::setup_why_no_graphical_session().to_string(),
+            Why::CouchHeadless(couch) => match name(couch) {
+                Some(distro) => t::setup_why_couch_headless(distro),
+                None => t::setup_why_couch_box_headless().to_string(),
+            },
+            Why::CouchPad(couch) => match name(couch) {
+                Some(distro) => t::setup_why_group_couch(distro),
+                None => t::setup_why_group_couch_box().to_string(),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Choices {
     pub action: Action,
@@ -105,8 +151,8 @@ pub struct Choices {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_password: Option<String>,
     /// Why the box chose these — shown next to the row when it is on.
-    pub group_why: Option<String>,
-    pub linger_why: Option<String>,
+    pub group_why: Option<Why>,
+    pub linger_why: Option<Why>,
 }
 
 impl Choices {
@@ -118,26 +164,24 @@ impl Choices {
         // happen rather than let a toggle promise something nothing reads.
         let steamos = facts.family == Family::Steamos;
 
-        let couch_why = match facts.os.id.as_str() {
-            "bazzite" => "Bazzite",
-            "nobara" => "Nobara",
-            _ => "Game Mode / HTPC box",
+        let couch = match facts.os.id.as_str() {
+            "bazzite" => Couch::Bazzite,
+            "nobara" => Couch::Nobara,
+            _ => Couch::Other,
         };
         let linger_why = if steamos {
-            Some("the SteamOS installer always enables it".to_string())
+            Some(Why::SteamosLinger)
         } else if facts.couch_box {
-            Some(format!("{couch_why} hosts are usually headless"))
+            Some(Why::CouchHeadless(couch))
         } else if !facts.graphical_seat {
-            Some("no graphical session".to_string())
+            Some(Why::NoGraphicalSession)
         } else {
             None
         };
         let group_why = if steamos {
-            Some("the SteamOS installer always joins it".to_string())
+            Some(Why::SteamosGroup)
         } else {
-            facts
-                .couch_box
-                .then(|| format!("{couch_why} — virtual Steam Deck pad"))
+            facts.couch_box.then_some(Why::CouchPad(couch))
         };
 
         let omarchy_setup = pins.omarchy_setup.unwrap_or(true);
@@ -256,16 +300,21 @@ mod tests {
         let couch = Choices::derive(&fresh("bazzite", Family::Sysext), &Pins::default());
         assert!(couch.punktfunk_group);
         assert!(couch.linger, "a couch box starts at boot");
+        assert_eq!(couch.group_why, Some(Why::CouchPad(Couch::Bazzite)));
         assert_eq!(
-            couch.group_why.as_deref(),
-            Some("Bazzite — virtual Steam Deck pad")
+            couch.group_why.map(Why::text).as_deref(),
+            Some("Bazzite — virtual Steam Deck controller")
         );
 
         let mut seatless = fresh("debian", Family::Apt);
         seatless.graphical_seat = false;
         let seatless = Choices::derive(&seatless, &Pins::default());
         assert!(seatless.linger);
-        assert_eq!(seatless.linger_why.as_deref(), Some("no graphical session"));
+        assert_eq!(seatless.linger_why, Some(Why::NoGraphicalSession));
+        assert_eq!(
+            seatless.linger_why.map(Why::text).as_deref(),
+            Some("no graphical session")
+        );
 
         let mut sunshine = fresh("fedora", Family::Dnf);
         sunshine.sunshine_active = true;
@@ -283,6 +332,32 @@ mod tests {
             !Choices::derive(&placed, &Pins::default()).move_mgmt_port,
             "a re-run must not widen the operator's own bind"
         );
+    }
+
+    // A reason is stored as its cause; the English a transcript prints is the message's.
+    #[test]
+    fn a_reason_is_worded_where_it_is_shown() {
+        for (why, text) in [
+            (
+                Why::CouchHeadless(Couch::Nobara),
+                "Nobara hosts are usually headless",
+            ),
+            (
+                Why::CouchHeadless(Couch::Other),
+                "Game Mode / HTPC box hosts are usually headless",
+            ),
+            (
+                Why::CouchPad(Couch::Other),
+                "Game Mode / HTPC box — virtual Steam Deck controller",
+            ),
+            (
+                Why::SteamosLinger,
+                "the SteamOS installer always enables it",
+            ),
+            (Why::SteamosGroup, "the SteamOS installer always joins it"),
+        ] {
+            assert_eq!(why.text(), text);
+        }
     }
 
     #[test]

@@ -129,11 +129,21 @@ let
 
   clientOnly = evalWith { services.punktfunk.client.enable = true; };
 
+  # The Steam Frame adapter hook rides on NetworkManager, which `desktop` leaves off.
+  networkManager = evalWith {
+    services.punktfunk.host = {
+      enable = true;
+      gamescopeHdr = false;
+    };
+    networking.networkmanager.enable = true;
+  };
+
   # The seat supervisor, on a host. The other two are the refusals: no host to run in each seat,
   # and users the supervisor could not create with useradd.
   seats = evalWith {
     services.punktfunk.host = {
       enable = true;
+      users = [ "alice" ];
       openFirewall = true;
       gamescopeHdr = false;
       settings.RUST_LOG = "info";
@@ -182,6 +192,18 @@ let
     {
       name = "client-only scenario has no failing assertions";
       ok = failedAssertions clientOnly == [ ];
+    }
+    {
+      # `drvPath` instantiates the wrapper, so every package it names must exist.
+      name = "the Steam Frame adapter hook reaches NetworkManager, and only with it";
+      ok =
+        let
+          hooks = networkManager.networking.networkmanager.dispatcherScripts;
+        in
+        failedAssertions networkManager == [ ]
+        && lib.length hooks == 1
+        && lib.hasInfix "90-punktfunk-frame-adapter" (lib.head hooks).source.drvPath
+        && desktop.networking.networkmanager.dispatcherScripts == [ ];
     }
 
     # --- user scoping: the second-copy-steals-the-ports trap -----------------------------------
@@ -393,6 +415,13 @@ let
       ok =
         hasSys seats "punktfunk-seat@.service"
           "PUNKTFUNK_HOST_BIN=/pf-stub/system-punktfunk-host/bin/punktfunk-host";
+    }
+    {
+      # The console turns the door on through the helper templates, which only this group starts.
+      name = "seats put the host's users in punktfunk-update, and only with seats on";
+      ok =
+        lib.elem "punktfunk-update" seats.users.users.alice.extraGroups
+        && !lib.elem "punktfunk-update" desktop.users.users.alice.extraGroups;
     }
     {
       name = "a switch leaves running seats up";

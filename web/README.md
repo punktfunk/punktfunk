@@ -126,5 +126,9 @@ src/
     gen/             GENERATED react-query hooks + models (orval)
   lib/i18n.ts        reactive Paraglide locale hook
   paraglide/         GENERATED i18n runtime (paraglide)
-messages/{en,de,es}.json   translation sources
+project.inlang/      reads ../l10n/messages/{web,common,host}/{locale}.json
 ```
+
+The console's text is `l10n/messages/web/`; the button verbs it shares with every client are in
+`common`, the host's ids in `host`. A key lives in one part only. `cargo run -p pf-l10n -- check`
+holds them to the copy budget in `l10n/rules.json` (`l10n/README.md`).

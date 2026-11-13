@@ -3,8 +3,18 @@
 
 use crate::trust::Settings;
 pub use pf_client_core::session::AUDIO_FORMATS;
+use pf_client_core::settings::{MouseMode, TouchMode};
 use pf_client_core::trust::{HudCorner, StatsVerbosity};
+use pf_l10n::client;
 use punktfunk_core::hud::{stats_scale, STATS_SCALE_PCTS};
+
+/// A message, read when a row is built, so a table holds what to say and not the words.
+pub type Text = fn() -> &'static str;
+
+/// The words of a table of messages.
+pub fn texts(table: &[Text]) -> Vec<&'static str> {
+    table.iter().map(|t| t()).collect()
+}
 
 /// Sizes by family; the Resolution row lists one family at a time behind the Aspect row.
 /// `(0, 0)` = the native size of the monitor the window is on, resolved at connect.
@@ -121,13 +131,6 @@ pub mod index {
             .unwrap_or(0) as u32
     }
 
-    pub fn guide_gesture(s: &Settings) -> u32 {
-        GUIDE_GESTURES
-            .iter()
-            .position(|&v| v == s.guide_gesture)
-            .unwrap_or(0) as u32
-    }
-
     pub fn video_fit(s: &Settings) -> u32 {
         // Unknown values (a newer client's mode) read as Fit, as the presenter does.
         VIDEO_FITS
@@ -151,7 +154,7 @@ pub mod index {
 
     pub fn smooth_buffer(s: &Settings) -> u32 {
         // The index IS the stored value: 0 = Automatic, 1..3 = frames.
-        u32::from(s.smooth_buffer).min(SMOOTH_BUFFER_LABELS.len() as u32 - 1)
+        u32::from(s.smooth_buffer).min(SMOOTH_BUFFER_STEPS - 1)
     }
 
     /// The stats corner: the stored one, else the desktop overlay's top left.
@@ -180,7 +183,7 @@ pub fn at<T>(table: &[T], i: u32) -> &T {
 /// A compact label for a render-scale multiplier: "Native" / "1.5×" / "2× (supersample)".
 pub fn render_scale_label(scale: f64) -> String {
     if scale == 1.0 {
-        "Native".to_string()
+        client::player_render_scale_native().to_string()
     } else {
         // Just the multiplier: the row's caption already says what above and below 1× mean,
         // and "2× (supersample)" is long enough that the value ellipsizes to "2× (su…" the
@@ -201,11 +204,11 @@ pub const GAMEPADS: &[&str] = &[
 /// where the guide (Xbox/PS/Steam) and quick-access presses land while streaming. Auto =
 /// the host, except under Gaming Mode where the local Steam UI reacts to the same press.
 pub const SYSTEM_BUTTONS: &[&str] = &["auto", "forward", "local"];
-pub const SYSTEM_BUTTON_LABELS: &[&str] = &["Automatic", "Send to host", "This device"];
-/// Hold-Select guide gesture values (the cross-client `guide_gesture` key). Auto arms it
-/// only where the raw guide press can't reach the host (Gaming Mode here).
-pub const GUIDE_GESTURES: &[&str] = &["auto", "on", "off"];
-pub const GUIDE_GESTURE_LABELS: &[&str] = &["Automatic", "On", "Off"];
+pub const SYSTEM_BUTTON_LABELS: &[Text] = &[
+    client::player_system_buttons_auto,
+    client::player_system_buttons_forward,
+    client::player_system_buttons_local,
+];
 pub const COMPOSITORS: &[&str] = &[
     "auto",
     "kwin",
@@ -220,12 +223,12 @@ pub const COMPOSITORS: &[&str] = &[
 /// preference-only by design (`Settings::preferred_codec`) — the ladder falls back to
 /// HEVC when either side can't do it.
 pub const CODECS: &[&str] = &["auto", "hevc", "h264", "av1", "pyrowave"];
-pub const CODEC_LABELS: &[&str] = &[
-    "Automatic",
-    "HEVC (H.265)",
-    "H.264 (AVC)",
-    "AV1",
-    "PyroWave (wired LAN)",
+pub const CODEC_LABELS: &[Text] = &[
+    client::player_codec_auto,
+    || "HEVC",
+    || "H.264",
+    || "AV1",
+    client::player_codec_pyrowave,
 ];
 // Stored decoder-preference values. `native-*` since M10 — the bare "vulkan"/"vaapi"
 // named libavcodec's rungs, which are deleted; a store still holding them is migrated on
@@ -235,94 +238,118 @@ pub const DECODERS: &[&str] = &["auto", "native-vulkan", "native-vaapi", "softwa
 /// Touch-input model values (persisted) paired with their display labels below — the
 /// cross-client set (Android/Apple). Only meaningful on a touchscreen (Deck/tablet).
 pub const TOUCH_MODES: &[&str] = &["trackpad", "pointer", "touch", "off"];
-pub const TOUCH_MODE_LABELS: &[&str] = &["Trackpad", "Direct pointer", "Touch passthrough", "Off"];
+pub fn touch_mode_labels() -> Vec<&'static str> {
+    TOUCH_MODES
+        .iter()
+        .map(|name| TouchMode::from_name(name).label())
+        .collect()
+}
 /// The SELECTED touch mode explained — the caption swaps with the choice (the Apple
 /// revamp's dynamic-caption idiom) instead of narrating every mode at once.
 /// Combo-row captions must stay ONE line (~66 chars at the default dialog width): a
 /// wrapped subtitle's natural width crushes the selected-value label into an ellipsis.
-pub const TOUCH_MODE_CAPTIONS: &[&str] = &[
-    "Drives the cursor like a laptop trackpad — tap to click",
-    "The cursor jumps to your finger — a tap clicks there",
-    "Real multi-touch reaches the host — for touch-native apps",
-    "Touches on the stream don't reach the host",
+pub const TOUCH_MODE_CAPTIONS: &[Text] = &[
+    client::player_touch_mode_trackpad_hint,
+    client::player_touch_mode_pointer_hint,
+    client::player_touch_mode_touch_hint,
+    client::player_touch_mode_off_hint,
 ];
 /// `video_fit` values + labels + one-line captions, index-aligned.
 pub const VIDEO_FITS: &[&str] = &["fit", "crop", "stretch"];
-pub const VIDEO_FIT_LABELS: &[&str] = &["Fit", "Crop to fill", "Stretch to fill"];
-pub const VIDEO_FIT_CAPTIONS: &[&str] = &[
-    "The whole picture, with black bars when shapes differ",
-    "No bars — the picture's edges are cut off",
-    "No bars — the picture is stretched to the window",
+pub const VIDEO_FIT_LABELS: &[Text] = &[
+    client::player_video_fit_fit,
+    client::player_video_fit_crop,
+    client::player_video_fit_stretch,
+];
+pub const VIDEO_FIT_CAPTIONS: &[Text] = &[
+    client::player_video_fit_fit_hint,
+    client::player_video_fit_crop_hint,
+    client::player_video_fit_stretch_hint,
 ];
 /// `screens` values + labels + one-line captions, index-aligned.
 pub const SCREENS: &[&str] = &["this", "all"];
-pub const SCREENS_LABELS: &[&str] = &["This monitor", "All monitors"];
-pub const SCREENS_CAPTIONS: &[&str] = &[
-    "The stream shows on the monitor the window is on",
-    "A host screen on each monitor, laid out as they sit. Close one to give it back",
+pub const SCREENS_LABELS: &[Text] = &[client::player_screens_this, client::player_screens_all];
+pub const SCREENS_CAPTIONS: &[Text] = &[
+    client::player_screens_this_hint,
+    client::player_screens_all_hint,
 ];
 /// Presentation-intent values (persisted under the `present_priority` key the Apple and
 /// Android clients share) + labels + dynamic captions. Captions stay ONE line, like the
 /// touch/mouse rows.
 pub const PRESENT_PRIORITIES: &[&str] = &["latency", "smooth"];
-pub const PRESENT_PRIORITY_LABELS: &[&str] = &["Lowest latency", "Smoothness"];
-pub const PRESENT_PRIORITY_CAPTIONS: &[&str] = &[
-    "Each frame shows the moment the display can take it",
-    "Buffers a little to even out network hiccups",
+pub const PRESENT_PRIORITY_LABELS: &[Text] = &[
+    client::player_present_priority_latency,
+    client::player_present_priority_smooth,
+];
+pub const PRESENT_PRIORITY_CAPTIONS: &[Text] = &[
+    client::player_present_priority_latency_hint,
+    client::player_present_priority_smooth_hint,
 ];
 /// Smoothness buffer depth, in frames — the index IS the stored `smooth_buffer` value
 /// (0 = Automatic, which resolves to 2). No millisecond hints: the cost is one refresh
 /// per frame, and the session's refresh isn't known here when the mode is Native.
-pub const SMOOTH_BUFFER_LABELS: &[&str] = &["Automatic", "1 frame", "2 frames", "3 frames"];
+pub const SMOOTH_BUFFER_STEPS: u32 = 4;
+
+/// The Smoothness buffer row's entries: Automatic, then 1 to 3 frames.
+pub fn smooth_buffer_labels() -> Vec<String> {
+    (0..SMOOTH_BUFFER_STEPS)
+        .map(|frames| match frames {
+            0 => client::player_smooth_buffer_automatic().to_string(),
+            n => client::player_smooth_buffer_frames(u64::from(n)),
+        })
+        .collect()
+}
 
 /// Physical-mouse model values (persisted) + labels + dynamic captions — same idiom as
 /// the touch rows. Ctrl+Alt+Shift+M flips the model live in-stream.
 pub const MOUSE_MODES: &[&str] = &["capture", "desktop"];
-pub const MOUSE_MODE_LABELS: &[&str] = &["Capture (games)", "Desktop (absolute)"];
-pub const MOUSE_MODE_CAPTIONS: &[&str] = &[
-    "Pointer locks to the stream — relative motion, best for games",
-    "Pointer moves freely in and out — best for remote desktop work",
+pub fn mouse_mode_labels() -> Vec<&'static str> {
+    MOUSE_MODES
+        .iter()
+        .map(|name| MouseMode::from_name(name).label())
+        .collect()
+}
+pub const MOUSE_MODE_CAPTIONS: &[Text] = &[
+    client::player_mouse_mode_capture_hint,
+    client::player_mouse_mode_desktop_hint,
 ];
 
 /// The SELECTED resolution choice explained (row index: 0 = Native, 1 = Match window,
 /// 2.. = explicit sizes) — one line each, see the caption-width note on
 /// [`TOUCH_MODE_CAPTIONS`].
-pub const fn resolution_caption(i: u32) -> &'static str {
+pub fn resolution_caption(i: u32) -> &'static str {
     match i {
-        0 => "The native mode of this monitor, resolved at connect",
-        1 => "Follows the stream window — resizes renegotiate the host output",
-        _ => "The host drives a virtual output at exactly this size",
+        0 => client::player_resolution_native_hint(),
+        1 => client::player_resolution_match_window_hint(),
+        _ => client::player_resolution_hint(),
     }
 }
 
 /// The Resolution row's entries for one family: the D1 tri-state's Native and Match window,
 /// that family's sizes, then Custom, which shows the Width and Height rows.
 pub fn resolution_names(family: usize) -> Vec<String> {
-    ["Native display".to_string(), "Match window".to_string()]
-        .into_iter()
-        .chain(
-            ASPECTS[family]
-                .sizes
-                .iter()
-                .map(|&(w, h)| format!("{w} × {h}")),
-        )
-        .chain(["Custom\u{2026}".to_string()])
-        .collect()
+    [
+        client::player_resolution_native().to_string(),
+        client::player_resolution_match_window().to_string(),
+    ]
+    .into_iter()
+    .chain(
+        ASPECTS[family]
+            .sizes
+            .iter()
+            .map(|&(w, h)| format!("{w} × {h}")),
+    )
+    .chain([client::player_resolution_custom().to_string()])
+    .collect()
 }
-
-pub const BITRATE_CAPTION: &str =
-    "Mbit/s · 0 = host default · a host card's menu has a network speed test";
-
-/// Every codec but PyroWave shares this soft-preference line.
-pub const CODEC_CAPTION: &str = "A preference — the host falls back if it can't encode it";
 
 /// The SELECTED codec explained: the PyroWave entry is the one that needs its trade-off
 /// spelled out.
 pub fn codec_caption(i: u32) -> &'static str {
     if CODECS.get(i as usize) == Some(&"pyrowave") {
-        "Wavelet codec for wired LAN — minimal latency, lots of bandwidth"
+        client::player_codec_pyrowave_hint()
     } else {
-        CODEC_CAPTION
+        client::player_codec_hint()
     }
 }
 

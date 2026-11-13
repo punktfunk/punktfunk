@@ -308,6 +308,11 @@ jobs:
       - name: Test (unit + loopback + proptest + C ABI harness)
         run: cargo test --workspace --locked
 
+      # The message files in l10n/: one line per problem (a key in two parts, a lost
+      # placeholder, a missing plural category, over budget, a retired term).
+      - name: Message check
+        run: cargo run -p pf-l10n --locked -- check
+
       # Discovery without the desktop bundle. The workspace test above enables `desktop`,
       # which includes this feature, so it never compiles the feature on its own.
       # Clippy with warnings denied: `cargo check` would stay green on a warning.
@@ -701,8 +706,9 @@ jobs:
           corepack prepare pnpm@9 --activate
           pnpm install --frozen-lockfile
           pnpm run test
-      # main.py's pure helpers against a stubbed `decky` module: argv shapes, exit codes, the
-      # Steam VDF editor. Stdlib only, Python 3.10 or newer; this image carries 3.11.
+      # The backend (main.py + py_modules/pf_decky) against a stubbed `decky` module: argv shapes,
+      # exit codes, the Steam VDF editor, the loader's import shape. Stdlib only, Python 3.10 or
+      # newer; this image carries 3.11.
       - name: Backend helpers
         run: python3 scripts/test-backend.py
 
@@ -760,6 +766,12 @@ jobs:
       # the repo's markdown. External URLs are deliberately not checked.
       - name: Docs link check
         run: sh scripts/ci/check-docs-links.sh
+      # Text a person reads that is not in l10n/messages yet, per surface: a count may fall,
+      # never rise. Pure text and unfiltered, so a Swift-, Kotlin- or Decky-only PR runs it.
+      - name: Text census ratchet
+        run: |
+          python3 scripts/l10n-census-test.py
+          python3 scripts/l10n-census.py . --check
       # Touched Rust comments fail at 6 (`//`) / 24 (`//!`/`///`). Self-test plants
       # those failures before the live tree is checked.
       - name: Writing-style gates

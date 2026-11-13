@@ -185,7 +185,8 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
             let _ = hosts.send(HostsMsg::ShowAddHost);
         }
         "shortcuts" | "07-shortcuts" => {
-            adw::prelude::AdwDialogExt::present(&crate::app::shortcuts_dialog(), Some(&ctx.window));
+            let dialog = crate::app::shortcuts_dialog(&ctx.store.settings());
+            adw::prelude::AdwDialogExt::present(&dialog, Some(&ctx.window));
         }
         // The Library on the first shelf with injected titles: mixed stores for the badge
         // set, a launcher, placeholders, and one solid-colour texture standing in for a poster.
@@ -264,6 +265,7 @@ fn mock_library() -> (
     let game =
         |id: &str, store: &str, title: &str, played: u64| pf_client_core::library::GameEntry {
             install: None,
+            overrides: None,
             id: id.to_string(),
             store: store.to_string(),
             title: title.to_string(),
@@ -284,6 +286,7 @@ fn mock_library() -> (
     let games = vec![
         pf_client_core::library::GameEntry {
             install: None,
+            overrides: None,
             role: Some("launcher".into()),
             icon: Some("steam".into()),
             ..game("steam:bigpicture", "steam", "Steam", 0)
@@ -314,6 +317,7 @@ fn bench_library(n: usize) -> Vec<pf_client_core::library::GameEntry> {
     (0..n)
         .map(|i| pf_client_core::library::GameEntry {
             install: None,
+            overrides: None,
             id: format!("bench:{i}"),
             store: STORES[i % STORES.len()].to_string(),
             title: format!(

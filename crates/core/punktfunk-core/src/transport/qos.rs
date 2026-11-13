@@ -9,7 +9,9 @@
 //! paths bleach or reject DSCP. `PUNKTFUNK_DSCP=1` forces on, `=0` kills it;
 //! [`set_dscp_default`] still forces on (Android low-latency). Windows strips
 //! a plain `IP_TOS`, so the mark goes through qWAVE ([`super::qos_windows`]);
-//! hold the returned [`QosFlow`] while the socket sends media.
+//! hold the returned [`QosFlow`] while the socket sends media. On Linux and
+//! Android the shared socket's packets carry the mark themselves
+//! (`transport::shared`): quinn-udp gives each its own TOS.
 
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -81,9 +83,13 @@ fn dscp_decision(env: Option<&str>, embedder_on: bool, peer_private: bool) -> bo
     }
 }
 
+/// [`dscp_decision`] for `peer`. `PUNKTFUNK_DSCP` is read once: the shared socket asks on
+/// every packet.
 pub(crate) fn dscp_enabled_for(peer: Option<std::net::SocketAddr>) -> bool {
+    static ENV: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     dscp_decision(
-        std::env::var("PUNKTFUNK_DSCP").ok().as_deref(),
+        ENV.get_or_init(|| std::env::var("PUNKTFUNK_DSCP").ok())
+            .as_deref(),
         DSCP_DEFAULT.load(Ordering::Relaxed),
         peer.is_some_and(|p| is_private_peer(&p)),
     )
@@ -139,9 +145,10 @@ pub fn set_media_qos(socket: &UdpSocket, class: MediaClass) -> Option<QosFlow> {
 }
 
 /// [`set_media_qos`] for an unconnected socket that sends media to `peer`: the host's
-/// shared QUIC socket. Windows marks only traffic to `peer`. Elsewhere the mark is
-/// socket-wide, so it follows the latest peer and a routable one clears it: concurrent
-/// LAN and WAN sessions on one endpoint share the newest one's mark.
+/// shared QUIC socket. Windows marks only traffic to `peer`; Linux and Android mark each
+/// packet by its own destination (`transport::shared`). Elsewhere the mark is socket-wide,
+/// so it follows the latest peer and a routable one clears it: concurrent LAN and WAN
+/// sessions on one endpoint share the newest one's mark.
 pub fn set_media_qos_to(
     socket: &UdpSocket,
     peer: std::net::SocketAddr,

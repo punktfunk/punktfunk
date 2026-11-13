@@ -31,6 +31,7 @@ pub(crate) enum Call {
     SetGamescopeRoute(Option<crate::GamescopeRoute>),
     SetSessionIsolation(Option<crate::SessionIsolation>),
     SetClientIdentity(Option<[u8; 32]>),
+    SetTopology(Option<crate::policy::Topology>),
     SetJoinLive(bool),
     SetQuitFlag,
     SetClientHdr(Option<pf_frame::HdrMeta>),
@@ -88,6 +89,10 @@ pub(crate) struct Script {
     /// The device this display serves, as `set_client_identity` names it to a pooled backend.
     /// `accepts_kept` answers by it, as those backends do.
     pub(crate) client_fp: Option<[u8; 32]>,
+    /// `join_live`; `join_cast` then casts the node it names.
+    pub(crate) join_live: bool,
+    /// `topology`: what the next create applies.
+    pub(crate) topology: Option<crate::policy::Topology>,
 }
 
 struct Shared {
@@ -147,6 +152,8 @@ impl FakeDisplay {
                     cast_fails: false,
                     identity_slot: None,
                     client_fp: None,
+                    join_live: false,
+                    topology: None,
                 },
                 calls: Vec::new(),
                 nodes: 0,
@@ -255,7 +262,11 @@ impl VirtualDisplay for FakeDisplay {
     #[cfg(target_os = "linux")]
     fn join_cast(&mut self, name: &str, node_id: u32) -> Result<Option<crate::SessionCastParts>> {
         self.log(Call::JoinCast(name.to_string(), node_id));
-        Ok(None)
+        let joins = self.answer(|s| s.join_live);
+        Ok(joins.then(|| {
+            let closed: Box<dyn Send> = Box::new(OnDrop(self.clone(), Call::CastClosed(node_id)));
+            (node_id, None, closed)
+        }))
     }
 
     fn set_launch_command(&mut self, cmd: Option<String>) {
@@ -278,8 +289,20 @@ impl VirtualDisplay for FakeDisplay {
         self.log(Call::SetClientIdentity(fingerprint));
     }
 
+    fn set_topology(&mut self, topology: Option<crate::policy::Topology>) {
+        self.log(Call::SetTopology(topology));
+    }
+
+    fn topology(&self) -> Option<crate::policy::Topology> {
+        self.answer(|s| s.topology)
+    }
+
     fn set_join_live(&mut self, on: bool) {
         self.log(Call::SetJoinLive(on));
+    }
+
+    fn join_live(&self) -> bool {
+        self.answer(|s| s.join_live)
     }
 
     fn set_quit_flag(&mut self, _quit: Arc<std::sync::atomic::AtomicBool>) {
@@ -523,6 +546,8 @@ mod tests {
             mic_source: None,
         };
         let params = crate::SessionParams {
+            screen: None,
+            topology: Some(crate::policy::Topology::Extend),
             client_fp: Some([7; 32]),
             client_hdr: Some(pf_frame::HdrMeta::default()),
             hdr: true,
@@ -538,6 +563,7 @@ mod tests {
         let calls = fake.take_calls();
         let want = [
             Call::SetClientIdentity(Some([7; 32])),
+            Call::SetTopology(Some(crate::policy::Topology::Extend)),
             Call::SetJoinLive(true),
             Call::SetClientHdr(Some(pf_frame::HdrMeta::default())),
             Call::SetHdr(true),

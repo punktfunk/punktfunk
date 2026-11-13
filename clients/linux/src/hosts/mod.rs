@@ -20,8 +20,10 @@ pub(crate) use card::os_icon_name;
 use gtk::{gio, glib};
 pub use model::Phase;
 use model::{Band, CardModel, Live, Preset, Status};
+use pf_client_core::display_targets::{self, Pick};
 use pf_client_core::host_order;
 use pf_client_core::orchestrate::HostTarget;
+use pf_l10n::{client, desktop};
 use relm4::prelude::*;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -98,6 +100,12 @@ pub enum Act {
         action_id: String,
         label: String,
         danger: bool,
+    },
+    /// Write a Screen row's pick on the host; `label` is the row's name, for a refusal's toast.
+    Screen {
+        req: ConnectRequest,
+        pick: Pick,
+        label: String,
     },
     Wake {
         mac: Vec<String>,
@@ -182,6 +190,8 @@ pub enum HostsMsg {
     ShowAddHost,
     /// A host page was popped off the navigation.
     DetailClosed,
+    /// A screen pick came back: redraw the host page's Screen rows from the cache.
+    ScreenWritten,
     Act(Act),
 }
 
@@ -238,7 +248,7 @@ impl SimpleComponent for HostsPage {
             l.set_halign(gtk::Align::Start);
             l
         };
-        let disc_heading = heading("On this network");
+        let disc_heading = heading(client::hosts_section_discovered());
         // Bands of saved cards, redrawn as a whole when the models change.
         let saved = gtk::Box::new(gtk::Orientation::Vertical, 12);
         let discovered = card_grid();
@@ -246,7 +256,7 @@ impl SimpleComponent for HostsPage {
         // Shown under the discovered heading while no (unsaved) advert is live yet.
         let searching = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         searching.append(&adw::Spinner::new());
-        let searching_label = gtk::Label::new(Some("Searching the network\u{2026}"));
+        let searching_label = gtk::Label::new(Some(client::hosts_searching()));
         searching_label.add_css_class("dim-label");
         searching.append(&searching_label);
         searching.set_margin_top(6);
@@ -274,12 +284,10 @@ impl SimpleComponent for HostsPage {
         // No saved hosts AND nothing on the network → the whole page is the empty state.
         let empty = adw::StatusPage::builder()
             .icon_name("network-workgroup-symbolic")
-            .title("No hosts yet")
-            .description(
-                "Hosts on your network appear here automatically.\nAdd one by address with +.",
-            )
+            .title(client::hosts_empty_title())
+            .description(client::hosts_empty_body())
             .build();
-        let add_btn = gtk::Button::with_label("Add Host");
+        let add_btn = gtk::Button::with_label(client::hosts_add());
         add_btn.add_css_class("pill");
         add_btn.add_css_class("suggested-action");
         add_btn.set_halign(gtk::Align::Center);
@@ -292,7 +300,7 @@ impl SimpleComponent for HostsPage {
 
         // Connect failures land here, not in toasts.
         let banner = adw::Banner::new("");
-        banner.set_button_label(Some("Dismiss"));
+        banner.set_button_label(Some(desktop::desktop_banner_dismiss()));
         banner.connect_button_clicked(|b| b.set_revealed(false));
 
         let (arrange, sort, group) = arrange_menu(&store);
@@ -308,11 +316,11 @@ impl SimpleComponent for HostsPage {
 
         let (header, bar) = crate::widgets::chrome::destination_header(&views, &narrow);
         let add_host_btn = crate::widgets::lucide::button("plus");
-        add_host_btn.set_tooltip_text(Some("Add host"));
+        add_host_btn.set_tooltip_text(Some(client::hosts_add()));
         add_host_btn.set_action_name(Some("win.add-host"));
         header.pack_start(&add_host_btn);
         let rescan_btn = crate::widgets::lucide::button("refresh-cw");
-        rescan_btn.set_tooltip_text(Some("Scan the network for hosts again"));
+        rescan_btn.set_tooltip_text(Some(client::hosts_rescan_hint()));
         {
             let sender = sender.clone();
             rescan_btn.connect_clicked(move |_| sender.input(HostsMsg::Rescan));
@@ -324,8 +332,7 @@ impl SimpleComponent for HostsPage {
         if cfg!(feature = "console") {
             // The couch UI's front door, beside the page's other actions.
             let console_btn = crate::widgets::lucide::button("gamepad-2");
-            console_btn
-                .set_tooltip_text(Some("Console UI — the controller-driven couch interface"));
+            console_btn.set_tooltip_text(Some(desktop::desktop_console_ui_hint()));
             console_btn.set_action_name(Some("win.console"));
             header.pack_end(&console_btn);
         }
@@ -467,6 +474,12 @@ impl SimpleComponent for HostsPage {
             HostsMsg::ClearError => self.widgets.banner.set_revealed(false),
             HostsMsg::ShowAddHost => self.add_host_dialog(&sender),
             HostsMsg::DetailClosed => self.detail = None,
+            HostsMsg::ScreenWritten => {
+                if let Some(page) = &self.detail {
+                    page.forget_screens();
+                }
+                self.rebuild();
+            }
             HostsMsg::Act(act) => self.act(act, &sender),
         }
     }
@@ -525,12 +538,16 @@ fn arrange_menu(store: &Rc<Store>) -> (gtk::MenuButton, gio::SimpleAction, gio::
     );
     let menu = gio::Menu::new();
     for (title, action, values) in [
-        ("Sort", "hosts.sort", &host_order::HOST_SORTS),
-        ("Group", "hosts.group", &host_order::HOST_GROUPINGS),
+        (client::hosts_sort(), "hosts.sort", &host_order::HOST_SORTS),
+        (
+            client::hosts_group(),
+            "hosts.group",
+            &host_order::HOST_GROUPINGS,
+        ),
     ] {
         let section = gio::Menu::new();
         for (id, label) in values {
-            let item = gio::MenuItem::new(Some(label), None);
+            let item = gio::MenuItem::new(Some(label()), None);
             item.set_action_and_target_value(Some(action), Some(&id.to_variant()));
             section.append_item(&item);
         }
@@ -539,7 +556,7 @@ fn arrange_menu(store: &Rc<Store>) -> (gtk::MenuButton, gio::SimpleAction, gio::
     let button = gtk::MenuButton::builder()
         .child(&crate::widgets::lucide::row_icon("arrow-up-down"))
         .menu_model(&menu)
-        .tooltip_text("Sort and group")
+        .tooltip_text(client::hosts_arrange())
         .build();
     (button, sort, group)
 }
@@ -563,8 +580,9 @@ impl HostsPage {
         self.store.reload(Changed::Hosts);
     }
 
-    /// Keep each paired, reachable host's own actions and what it has up warm, so a menu or a
-    /// status is built from a settled answer. Both caches are TTL-gated and fetch on a worker.
+    /// Keep each paired, reachable host's own actions, screens and what it has up warm, so a
+    /// menu, a page or a status is built from a settled answer. Every cache is TTL-gated and
+    /// fetches on a worker.
     fn refresh_reachable(&self) {
         for k in self.store.hosts().hosts.iter() {
             if !k.paired || !self.probed.get(&k.card_key()).copied().unwrap_or(false) {
@@ -572,6 +590,7 @@ impl HostsPage {
             }
             let mgmt = self.mgmt_port(&k.fp_hex, &k.addr, k.port);
             pf_client_core::host_actions::refresh(&k.addr, mgmt, k.port, &k.fp_hex);
+            display_targets::refresh(&k.addr, mgmt, k.port, &k.fp_hex);
             pf_client_core::library::refresh_running(&k.addr, mgmt, k.port, &k.fp_hex);
         }
     }
@@ -585,6 +604,7 @@ impl HostsPage {
                 id: p.id.clone(),
                 name: p.name.clone(),
                 accent: p.accent.clone(),
+                host_screen: p.overrides.host_screen.clone(),
             })
             .collect()
     }
@@ -595,10 +615,12 @@ impl HostsPage {
         let settings = self.store.settings().clone();
         let presets = self.presets();
         let playing = |fp: &str| pf_client_core::library::now_playing(fp);
+        let screen = |fp: &str| display_targets::cached(fp);
         let live = Live {
             probed: &self.probed,
             sessions: &self.sessions,
             playing: &playing,
+            screen: &screen,
         };
         let bands = model::saved_bands(&hosts, &presets, &settings, &live);
         let discovered = model::discovered_cards(self.adverts.values(), &hosts, &self.sessions);
@@ -617,7 +639,11 @@ impl HostsPage {
             w.saved.remove(&child);
         }
         for band in bands {
-            let heading = gtk::Label::new(Some(band.title.as_deref().unwrap_or("Saved hosts")));
+            let heading = gtk::Label::new(Some(
+                band.title
+                    .as_deref()
+                    .unwrap_or(client::hosts_section_saved()),
+            ));
             heading.add_css_class("heading");
             heading.set_halign(gtk::Align::Start);
             w.saved.append(&heading);
@@ -685,6 +711,11 @@ impl HostsPage {
             } else {
                 pf_client_core::host_actions::cached(&k.fp_hex)
             },
+            screens: if k.paired && !k.fp_hex.is_empty() {
+                display_targets::cached(&k.fp_hex)
+            } else {
+                None
+            },
             is_default: k.id.is_some() && settings.default_host == k.id,
             start_in: pf_client_core::start::StartIn::parse(&settings.start_in),
         }
@@ -721,13 +752,14 @@ impl HostsPage {
                     danger,
                 });
             }
+            Act::Screen { req, pick, label } => self.set_screen(req, pick, label),
             Act::Wake { mac, addr } => crate::wol::wake(&mac, addr.parse().ok()),
             Act::CopyLink { host, preset } => {
                 if let Some((url, _)) = self.link(&host, preset.as_deref()) {
                     if let Some(display) = gtk::gdk::Display::default() {
                         display.clipboard().set_text(&url);
                     }
-                    out(HostsOutput::Toast("Link copied".into()));
+                    out(HostsOutput::Toast(client::hostcard_link_copied().into()));
                 }
             }
             Act::CreateShortcut { host, preset } => {
@@ -743,11 +775,35 @@ impl HostsPage {
                     }
                 });
                 if let Err(e) = saved {
-                    out(HostsOutput::Toast(format!("Couldn't save \u{2014} {e:#}")));
+                    out(HostsOutput::Toast(desktop::desktop_save_failed(format!(
+                        "{e:#}"
+                    ))));
                 }
             }
             Act::Toast(msg) => out(HostsOutput::Toast(msg)),
         }
+    }
+
+    /// Write a Screen row's pick on a worker, then redraw from the rows `set_pick` read back:
+    /// the radio stays where the host says. Only a refusal says anything.
+    fn set_screen(&self, req: ConnectRequest, pick: Pick, label: String) {
+        let mgmt = self
+            .mgmt_port_for(&req)
+            .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
+        let (identity, sender) = (self.identity.clone(), self.sender.clone());
+        std::thread::Builder::new()
+            .name("punktfunk-screen".into())
+            .spawn(move || {
+                let (addr, port) = (&req.host.addr, req.host.port);
+                let fp = req.host.fp_hex.as_deref().unwrap_or_default();
+                if let Err(e) = display_targets::set_pick(addr, mgmt, port, &identity, fp, &pick) {
+                    tracing::warn!(?pick, error = %e, "screen pick refused");
+                    let said = client::hostcard_action_failed(&label, e);
+                    sender.emit(HostsMsg::Act(Act::Toast(said)));
+                }
+                sender.emit(HostsMsg::ScreenWritten);
+            })
+            .ok();
     }
 
     /// The host's self-emitted `punktfunk://` link and a launcher label for it. It carries the

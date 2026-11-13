@@ -4,6 +4,7 @@
 // `unsafe_op_in_unsafe_fn` off, as in `vk_util.rs`: every body here is raw ash calls.
 #![allow(unsafe_op_in_unsafe_fn)]
 
+use crate::vk_csc::LinearSrc;
 use crate::vk_util::{color_range, make_plain_image};
 use anyhow::Result;
 use ash::vk;
@@ -11,8 +12,10 @@ use pf_zerocopy::vkdev::VkImageAlloc;
 
 // Source `reframe.comp`; regenerate with `glslangValidator -V reframe.comp -o reframe.spv`.
 const REFRAME_SPV: &[u8] = include_bytes!("reframe.spv");
-/// `{ivec2 origin, ivec2 extent, float step, int axis, ivec2 cur_origin, ivec2 cur_size}`.
-const PUSH_BYTES: usize = 40;
+/// `{ivec2 origin, ivec2 extent, float step, int axis, ivec2 cur_origin, ivec2 cur_size}`, then
+/// `uvec3 lin` at its 16-byte alignment.
+const PUSH_BYTES: usize = 60;
+const PUSH_LIN: usize = 48;
 const FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
 #[derive(Default)]
@@ -26,7 +29,7 @@ struct Slot {
 }
 
 #[derive(Default)]
-pub(super) struct Reframe {
+pub(crate) struct Reframe {
     crop: [u32; 4],
     out: (u32, u32),
     pipe: vk::Pipeline,
@@ -38,7 +41,7 @@ pub(super) struct Reframe {
 
 impl Reframe {
     /// Build the stage for `slots` ring slots. On error everything built so far is released.
-    pub(super) unsafe fn new(
+    pub(crate) unsafe fn new(
         device: &ash::Device,
         mem_props: &vk::PhysicalDeviceMemoryProperties,
         crop: [u32; 4],
@@ -76,6 +79,7 @@ impl Reframe {
             binding(0, vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
             binding(1, vk::DescriptorType::STORAGE_IMAGE),
             binding(2, vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
+            binding(3, vk::DescriptorType::STORAGE_BUFFER),
         ];
         self.dsl = device.create_descriptor_set_layout(
             &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
@@ -117,6 +121,9 @@ impl Reframe {
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(2 * n),
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(2 * n),
         ];
         self.pool = device.create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
@@ -143,17 +150,18 @@ impl Reframe {
     }
 
     /// Whether a `width × height` capture holds the crop.
-    pub(super) fn covers(&self, width: u32, height: u32) -> bool {
+    pub(crate) fn covers(&self, width: u32, height: u32) -> bool {
         let [x, y, w, h] = self.crop;
         x + w <= width && y + h <= height
     }
 
     /// Record both passes for `slot` into `cmd`, reading `src` and `cursor` (both
     /// `SHADER_READ_ONLY_OPTIMAL`, sampled through `sampler`) with the cursor at
-    /// `[x, y, w, h]` in source pixels. Returns the slot's picture, left
-    /// `SHADER_READ_ONLY_OPTIMAL` for the CSC.
+    /// `[x, y, w, h]` in source pixels. A LINEAR source is read as `lin`'s words instead of
+    /// `src`; `idle` fills that binding where no pass reads it. Returns the slot's picture,
+    /// left `SHADER_READ_ONLY_OPTIMAL` for the CSC.
     #[allow(clippy::too_many_arguments)]
-    pub(super) unsafe fn record(
+    pub(crate) unsafe fn record(
         &self,
         device: &ash::Device,
         cmd: vk::CommandBuffer,
@@ -162,6 +170,8 @@ impl Reframe {
         src: vk::ImageView,
         cursor: vk::ImageView,
         cursor_rect: [i32; 4],
+        lin: Option<LinearSrc>,
+        idle: vk::Buffer,
     ) -> vk::ImageView {
         let s = &self.slots[slot];
         let [cx, cy, cw, ch] = self.crop.map(|v| v as i32);
@@ -193,14 +203,29 @@ impl Reframe {
         }
         let sampler_ty = vk::DescriptorType::COMBINED_IMAGE_SAMPLER;
         let storage_ty = vk::DescriptorType::STORAGE_IMAGE;
+        let words = |buffer| {
+            [vk::DescriptorBufferInfo::default()
+                .buffer(buffer)
+                .range(vk::WHOLE_SIZE)]
+        };
+        let (words_x, words_y) = (words(lin.map_or(idle, |l| l.buffer)), words(idle));
+        let write_words = |set, info| {
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(3)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(info)
+        };
         device.update_descriptor_sets(
             &[
                 write(s.set_x, 0, sampler_ty, &src_x),
                 write(s.set_x, 1, storage_ty, &out_x),
                 write(s.set_x, 2, sampler_ty, &cur),
+                write_words(s.set_x, &words_x),
                 write(s.set_y, 0, sampler_ty, &src_y),
                 write(s.set_y, 1, storage_ty, &out_y),
                 write(s.set_y, 2, sampler_ty, &cur),
+                write_words(s.set_y, &words_y),
             ],
             &[],
         );
@@ -241,6 +266,7 @@ impl Reframe {
                     step: f32,
                     axis: i32,
                     cursor: [i32; 4],
+                    lin: [u32; 3],
                     groups: (u32, u32)| {
             device.cmd_bind_descriptor_sets(
                 cmd,
@@ -266,6 +292,9 @@ impl Reframe {
             for (i, w) in words.iter().enumerate() {
                 bytes[i * 4..i * 4 + 4].copy_from_slice(&w.to_ne_bytes());
             }
+            for (i, w) in lin.iter().enumerate() {
+                bytes[PUSH_LIN + i * 4..PUSH_LIN + 4 + i * 4].copy_from_slice(&w.to_ne_bytes());
+            }
             device.cmd_push_constants(cmd, self.layout, vk::ShaderStageFlags::COMPUTE, 0, &bytes);
             device.cmd_dispatch(cmd, groups.0.div_ceil(16), groups.1.div_ceil(16), 1);
         };
@@ -276,6 +305,7 @@ impl Reframe {
             cw as f32 / ow as f32,
             0,
             cursor_rect,
+            lin.map_or([0; 3], |l| [l.fmt, l.off_w, l.pitch_w]),
             (ow, ch as u32),
         );
         device.cmd_pipeline_barrier2(
@@ -295,6 +325,7 @@ impl Reframe {
             ch as f32 / oh as f32,
             1,
             [0; 4],
+            [0; 3],
             (ow, oh),
         );
         device.cmd_pipeline_barrier2(
@@ -311,7 +342,7 @@ impl Reframe {
     }
 
     /// Release everything. The device must be idle for this stage; null handles are skipped.
-    pub(super) unsafe fn destroy(&mut self, device: &ash::Device) {
+    pub(crate) unsafe fn destroy(&mut self, device: &ash::Device) {
         for s in self.slots.drain(..) {
             s.tmp.destroy(device);
             s.dst.destroy(device);

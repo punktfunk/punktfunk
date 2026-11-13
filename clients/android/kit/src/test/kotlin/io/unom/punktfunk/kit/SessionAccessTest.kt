@@ -33,21 +33,22 @@ class SessionAccessTest {
             "LAUNCH" to SessionAccess.LAUNCH,
             "POWER" to SessionAccess.POWER,
             "MANAGE_GAMES" to SessionAccess.MANAGE_GAMES,
+            "DISPLAY" to SessionAccess.DISPLAY,
         )
         assertEquals(bits.keys().asSequence().toSet(), mine.keys)
         mine.forEach { (name, bit) -> assertEquals(name, bits.getInt(name), bit) }
         assertEquals(vectors.getInt("all"), SessionAccess.ALL)
     }
 
-    /** The legacy-full read and the derived preset, per mask, as core computes them. */
+    /** The wire reader's legacy-full read and the derived preset, per mask, as core computes them. */
     @Test
     fun `labels match the core vectors`() {
         val masks = vectors.getJSONArray("masks")
         val labels = mapOf(
-            "full" to "Full control",
-            "controller" to "Controller only",
-            "view" to "View only",
-            "custom" to "Custom",
+            "full" to R.string.grant_level_full,
+            "controller" to R.string.grant_level_controller,
+            "view" to R.string.grant_level_view,
+            "custom" to R.string.grant_level_custom,
         )
         for (i in 0 until masks.length()) {
             val case = masks.getJSONObject(i)
@@ -58,11 +59,15 @@ class SessionAccessTest {
     }
 
     @Test
-    fun `remaining label is compact and never empty`() {
-        assertEquals("1 h 58 m", SessionAccess.remainingLabel(7130))
-        assertEquals("2 h", SessionAccess.remainingLabel(7200))
-        assertEquals("12 m", SessionAccess.remainingLabel(725))
-        assertEquals("45 s", SessionAccess.remainingLabel(45))
-        assertEquals("0 s", SessionAccess.remainingLabel(0))
+    fun `remaining names its message and numbers and is never empty`() {
+        fun check(secs: Int, message: Int, vararg args: Int) = SessionAccess.remaining(secs).let {
+            assertEquals("message $secs", message, it.message)
+            assertEquals("args $secs", args.toList(), it.args)
+        }
+        check(7130, R.string.grant_remaining_hours_minutes, 1, 58)
+        check(7200, R.string.grant_remaining_hours, 2)
+        check(725, R.string.grant_remaining_minutes, 12)
+        check(45, R.string.grant_remaining_seconds, 45)
+        check(0, R.string.grant_remaining_seconds, 0)
     }
 }

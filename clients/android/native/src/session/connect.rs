@@ -7,7 +7,8 @@ use jni::sys::{jboolean, jint, jlong};
 use jni::EnvUnowned;
 use punktfunk_core::client::{ConnectParams, NativeClient};
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode};
-use punktfunk_core::quic::v2::msg::{ProfileUnlock, Zeroizing};
+use punktfunk_core::quic::v2::hello::ScreenWish;
+use punktfunk_core::quic::v2::msg::{self, ProfileUnlock, Zeroizing};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,18 +26,24 @@ static LAST_SAID: Mutex<String> = Mutex::new(String::new());
 /// The dial `nativeConnect` is blocked on was parked by the host for its operator.
 static DIAL_PENDING: AtomicBool = AtomicBool::new(false);
 
-/// Stable token for a failed pair/connect cause, matched by Kotlin (`ConnectErrors.kt`):
-/// a typed host rejection yields its `RejectReason::as_str()` token ("not-armed", "denied",
-/// "approval-timeout", …); transport-level causes map to "crypto" / "timeout" / "io" / "error".
-fn note_error(e: &punktfunk_core::error::PunktfunkError) {
+/// The stable token and the host's sentence for a failed pair or connect, matched by Kotlin
+/// (`ConnectErrors.kt`). A typed host rejection gives its `RejectReason::as_str()` token
+/// ("not-armed", "denied", "approval-timeout", …) and what the host said; transport causes give
+/// "crypto", "timeout" or "io", anything else "error", each with no sentence.
+fn error_token(e: &punktfunk_core::error::PunktfunkError) -> (&str, &str) {
     use punktfunk_core::error::PunktfunkError as E;
-    let (token, said) = match e {
+    match e {
         E::Rejected(r, said) => (r.as_str(), said.as_str()),
         E::Crypto => ("crypto", ""),
         E::Timeout => ("timeout", ""),
         E::Io(_) => ("io", ""),
         _ => ("error", ""),
-    };
+    }
+}
+
+/// Keep `e`'s token and sentence for `nativeTakeLastError` and `nativeTakeLastSaid`.
+fn note_error(e: &punktfunk_core::error::PunktfunkError) {
+    let (token, said) = error_token(e);
     *lock_recover(&LAST_ERROR) = token.to_string();
     *lock_recover(&LAST_SAID) = said.to_string();
 }
@@ -278,6 +285,66 @@ fn video_caps(hdr: bool, ten_bit_sdr: bool, multi_slice: bool) -> u8 {
     caps
 }
 
+/// The `Hello`'s `CLIENT_CAP_*` bits for the session-level asks.
+///
+/// `pad_audio_ok` is the session negotiation, separate from the per-pad arrival bits: without it
+/// the host never emits the pad-audio plane. It follows the setting, so a user with pad audio
+/// off does not make the host provision endpoints.
+///
+/// `keep_host_audio` has the host tap its default playback device rather than park the desktop
+/// mix on a silent endpoint. It is a request with no host echo; an older host ignores it.
+///
+/// `client_cursor` is Desktop mouse mode with a mouse: Kotlin's `HostCursor` wears the host's
+/// pointer and says when the host composites it instead.
+fn client_caps(pad_audio_ok: bool, keep_host_audio: bool, client_cursor: bool) -> u8 {
+    use punktfunk_core::quic::{
+        CLIENT_CAP_CURSOR, CLIENT_CAP_KEEP_HOST_AUDIO, CLIENT_CAP_PAD_AUDIO,
+    };
+    let mut caps = 0;
+    if pad_audio_ok {
+        caps |= CLIENT_CAP_PAD_AUDIO;
+    }
+    if keep_host_audio {
+        caps |= CLIENT_CAP_KEEP_HOST_AUDIO;
+    }
+    if client_cursor {
+        caps |= CLIENT_CAP_CURSOR;
+    }
+    caps
+}
+
+/// The `CODEC_*` bits the `Hello` advertises: Kotlin's mask cut to the known codecs, and
+/// H.264|HEVC when none is left, so a bogus mask cannot advertise nothing and kill the
+/// handshake. PyroWave is the one bit naming no MediaCodec; it decodes as Vulkan compute.
+fn advertised_codecs(bits: u8) -> u8 {
+    use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC, CODEC_PYROWAVE};
+    let known = bits & (CODEC_H264 | CODEC_HEVC | CODEC_AV1 | CODEC_PYROWAVE);
+    if known == 0 {
+        CODEC_H264 | CODEC_HEVC
+    } else {
+        known
+    }
+}
+
+/// `s` unless it is empty: an empty launch id or profile asks for nothing, as `null` does.
+fn non_empty(s: Option<String>) -> Option<String> {
+    s.filter(|s| !s.is_empty())
+}
+
+/// The label the host files this device under: trimmed, and none when blank.
+fn device_label(name: Option<String>) -> Option<String> {
+    non_empty(name.map(|s| s.trim().to_string()))
+}
+
+/// The persistent identity as `(cert, key)` PEMs; anonymous unless both are present.
+fn identity_of(cert: String, key: String) -> Option<(String, String)> {
+    if cert.is_empty() || key.is_empty() {
+        None
+    } else {
+        Some((cert, key))
+    }
+}
+
 #[cfg(test)]
 mod caps_tests {
     use super::video_caps;
@@ -427,6 +494,21 @@ struct ConnectRequest {
     /// `FEATURE_STUDIO_RANGE` ask.
     #[serde(default)]
     studio_range: bool,
+    /// The size the picture is shown at when the mode is larger ([`ConnectParams::view`]);
+    /// `0`×`0` names none.
+    #[serde(default)]
+    view_width: u32,
+    #[serde(default)]
+    view_height: u32,
+    /// A preset's screen wish ([`ScreenWish::parse`]'s spelling); empty or unreadable asks for
+    /// none.
+    #[serde(default)]
+    host_screen: String,
+}
+
+/// A `w`×`h` view, or `None` when either side is not positive.
+fn view_of(w: i64, h: i64) -> Option<(u32, u32)> {
+    Some((u32::try_from(w).ok()?, u32::try_from(h).ok()?)).filter(|&(w, h)| w > 0 && h > 0)
 }
 
 /// The request Kotlin's JSON names; `None` (logged) when it doesn't parse.
@@ -533,15 +615,46 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConnectWith
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeProfileUnlockMessage<
     'local,
 >(
-    mut env: EnvUnowned<'local>,
+    env: EnvUnowned<'local>,
     _this: JObject<'local>,
     challenge: JByteArray<'local>,
     seat_id: JString<'local>,
     device_fp: JByteArray<'local>,
     box_fp: JByteArray<'local>,
 ) -> JByteArray<'local> {
+    unlock_message(env, challenge, seat_id, device_fp, box_fp, false)
+}
+
+/// `NativeBridge.nativeLockedProfileUnlockMessage(challenge, profileId, deviceFp, boxFp):
+/// ByteArray?` — the 187 bytes a locked profile's unlock key signs, with SHA-256 as the digest
+/// ([`msg::profile_unlock_signed_message`]). `profileId` is 1 to 64 of `[A-Za-z0-9_-]`; the three
+/// arrays are 32 bytes each. Null for anything else.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeLockedProfileUnlockMessage<
+    'local,
+>(
+    env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    challenge: JByteArray<'local>,
+    profile_id: JString<'local>,
+    device_fp: JByteArray<'local>,
+    box_fp: JByteArray<'local>,
+) -> JByteArray<'local> {
+    unlock_message(env, challenge, profile_id, device_fp, box_fp, true)
+}
+
+/// The message a key signs for seat `id`, or for locked profile `id` when `profile`, as a Java
+/// array. Null for an array that is not 32 bytes, or an id the message refuses.
+fn unlock_message<'local>(
+    mut env: EnvUnowned<'local>,
+    challenge: JByteArray<'local>,
+    id: JString<'local>,
+    device_fp: JByteArray<'local>,
+    box_fp: JByteArray<'local>,
+    profile: bool,
+) -> JByteArray<'local> {
     env.with_env(|env| -> jni::errors::Result<JByteArray<'local>> {
-        let seat = seat_id.try_to_string(env)?;
+        let id = id.try_to_string(env)?;
         let fp = |a: &JByteArray| -> jni::errors::Result<Option<[u8; 32]>> {
             Ok(env.convert_byte_array(a)?.try_into().ok())
         };
@@ -549,7 +662,11 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeProfileUnlo
         let (Some(c), Some(d), Some(b)) = (c, d, b) else {
             return Ok(JByteArray::default());
         };
-        match punktfunk_core::quic::v2::msg::unlock_signed_message(&c, &seat, &d, &b) {
+        let built = match profile {
+            false => msg::unlock_signed_message(&c, &id, &d, &b).map(|m| m.to_vec()),
+            true => msg::profile_unlock_signed_message(&c, &id, &d, &b).map(|m| m.to_vec()),
+        };
+        match built {
             Ok(m) => env.byte_array_from_slice(&m),
             Err(_) => Ok(JByteArray::default()),
         }
@@ -595,6 +712,9 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         preset_name,
         profile,
         studio_range,
+        view_width,
+        view_height,
+        host_screen,
     } = req;
     // Which shell asked, for the host's `handshake complete` line. Set before the dial: core reads
     // it once the host says it parses the block.
@@ -602,16 +722,10 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
     let preset = preset_id.as_deref().and_then(|id| {
         punktfunk_core::quic::SessionPreset::new(id, preset_name.as_deref().unwrap_or(""))
     });
-    let launch = launch.filter(|s| !s.is_empty());
-    let profile = profile.filter(|s| !s.is_empty());
-    let device_name = device_name
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let identity: Option<(String, String)> = if cert.is_empty() || key.is_empty() {
-        None
-    } else {
-        Some((cert, key))
-    };
+    let launch = non_empty(launch);
+    let profile = non_empty(profile);
+    let device_name = device_label(device_name);
+    let identity = identity_of(cert, key);
     // Slice-progressive parts, by decoder truth (Kotlin's FEATURE_PartialFrame probe) — with a
     // sysprop escape hatch for the on-glass science question the probe can't answer: does the
     // decoder ACTUALLY choke on BUFFER_FLAG_PARTIAL_FRAME input, or does it merely not declare
@@ -679,53 +793,14 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         // Legacy coupling: libopus here decodes either, and nothing on Android needs the other.
         audio_layout: punktfunk_core::audio::AudioLayout::Legacy,
         video_fit: punktfunk_core::video_fit::VideoFit::from_name(&video_fit),
-        // Codecs this device decodes (`VideoDecoders.decodableCodecBits`): H.264 + HEVC always,
-        // AV1 on a real `video/av01` decoder, PyroWave on a GPU that passes the probe — the one
-        // bit here naming no MediaCodec, since it decodes as Vulkan compute in `crate::pyro`.
-        // Masked to the known bits, falling back to H.264|HEVC on 0 so a bogus value cannot
-        // advertise nothing and kill the handshake. The host echoes its pick in `connector.codec`.
-        video_codecs: {
-            let bits = video_codecs
-                & (punktfunk_core::quic::CODEC_H264
-                    | punktfunk_core::quic::CODEC_HEVC
-                    | punktfunk_core::quic::CODEC_AV1
-                    | punktfunk_core::quic::CODEC_PYROWAVE);
-            if bits == 0 {
-                punktfunk_core::quic::CODEC_H264 | punktfunk_core::quic::CODEC_HEVC
-            } else {
-                bits
-            }
-        },
+        // Codecs this device decodes (`VideoDecoders.decodableCodecBits`). The host echoes its
+        // pick in `connector.codec`.
+        video_codecs: advertised_codecs(video_codecs),
         preferred_codec,
         // No display-volume forwarding from Android yet (the panel tone-maps PQ itself via the
         // Surface dataspace + static metadata) — the host keeps its virtual-display EDID defaults.
         display_hdr: None,
-        // CLIENT_CAP_PAD_AUDIO is the SESSION-level negotiation, separate from the per-pad
-        // arrival bits: without it the host never sets HOST_CAP_PAD_AUDIO and never emits 0xD1,
-        // so declaring a pad's render caps later would have nothing to gate. Gated on the
-        // settings so a user with pad audio off does not make the host provision endpoints.
-        client_caps: if pad_audio_ok {
-                punktfunk_core::quic::CLIENT_CAP_PAD_AUDIO
-            } else {
-                0
-            }
-            // The user's "Keep host audio playing" setting: the host taps whatever its default
-            // playback device already is instead of parking the desktop mix on a silent
-            // endpoint, so the speakers on the host PC stay live. REQUEST-only — there is no
-            // host-cap echo — so an older host ignores the bit and re-routes exactly as it
-            // always did ("the host went quiet"), never a broken session.
-            | if keep_host_audio {
-                punktfunk_core::quic::CLIENT_CAP_KEEP_HOST_AUDIO
-            } else {
-                0
-            }
-            // Desktop mouse mode with a mouse: Kotlin's HostCursor wears the host's pointer and
-            // tells the host when to composite it instead.
-            | if client_cursor {
-                punktfunk_core::quic::CLIENT_CAP_CURSOR
-            } else {
-                0
-            },
+        client_caps: client_caps(pad_audio_ok, keep_host_audio, client_cursor),
         // Slice-progressive delivery, by decoder truth (Kotlin probes FEATURE_PartialFrame on
         // every decoder this device would use; `debug.punktfunk.force_parts` overrides for the
         // on-glass experiment): AU prefixes then arrive as `Frame::part` pieces and the decode
@@ -742,6 +817,8 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         // An older Qualcomm display shows full-range BT.709 as studio, so ask for studio SDR. The
         // decode path takes the range from the Welcome either way.
         studio_range,
+        view: view_of(view_width.into(), view_height.into()),
+        screen_wish: ScreenWish::parse(&host_screen),
         // Handshake budget from Kotlin: ~10 s for a normal connect, ~185 s for "request access"
         // (the host parks the connection until the operator approves the device — see ConnectScreen).
         // No `cancel`: Kotlin drops the result (`Dial.cancelled`) rather than abort the dial — its
@@ -765,15 +842,15 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
             let handle = SessionHandle {
                 stats: Arc::new(crate::stats::VideoStats::new(client.hud_shared())),
                 client,
-                video: Mutex::new(None),
+                video: Default::default(),
                 video_started: std::sync::atomic::AtomicBool::new(false),
-                drain: Mutex::new(None),
+                drain: Default::default(),
                 #[cfg(target_os = "android")]
-                audio: Mutex::new(None),
+                audio: Default::default(),
                 #[cfg(target_os = "android")]
-                mic: Mutex::new(None),
+                mic: Default::default(),
                 #[cfg(target_os = "android")]
-                pad_audio: Mutex::new(None),
+                pad_audio: Default::default(),
                 // A fresh session is never muted (mute is per-session UI state, not a setting).
                 mic_muted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 access_seq: std::sync::atomic::AtomicU32::new(0),
@@ -806,12 +883,13 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeClose(
     handle: jlong,
 ) {
     jni_guard((), || {
-        let Some(session) = SESSIONS.remove(handle) else {
-            return;
-        };
+        // Joined while the key still resolves: a `nativeStopPadAudio` racing this close then
+        // waits on the same join instead of finding no session and returning at once.
         #[cfg(target_os = "android")]
-        session.stop_pad_audio();
-        drop(session);
+        if let Some(session) = SESSIONS.get(handle) {
+            session.stop_pad_audio();
+        }
+        drop(SESSIONS.remove(handle));
     })
 }
 
@@ -832,11 +910,14 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeDisconnectQ
     })
 }
 
-/// Request an in-stream resolution switch without reconnecting.
+/// Request an in-stream resolution switch without reconnecting, shown at the `view_width` ×
+/// `view_height` view (`request_mode_view`). A side of `0` names none, which clears a view the
+/// host keeps; a negative side keeps it (`request_mode`), for a rate pick that does not know it.
 ///
 /// Returns `false` for a missing session, nonpositive geometry, or a closed request channel.
 /// A concurrent close cannot invalidate the table-retained session during this enqueue.
 #[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestMode(
     _env: EnvUnowned,
     _this: JObject,
@@ -844,6 +925,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestMode
     width: jint,
     height: jint,
     refresh_hz: jint,
+    view_width: jint,
+    view_height: jint,
 ) -> jboolean {
     jni_guard(false, || {
         if width <= 0 || height <= 0 || refresh_hz <= 0 {
@@ -852,14 +935,16 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestMode
         let Some(session) = SESSIONS.get(handle) else {
             return false;
         };
-        session
-            .client
-            .request_mode(Mode {
-                width: width as u32,
-                height: height as u32,
-                refresh_hz: refresh_hz as u32,
-            })
-            .is_ok()
+        let mode = Mode {
+            width: width as u32,
+            height: height as u32,
+            refresh_hz: refresh_hz as u32,
+        };
+        if view_width < 0 || view_height < 0 {
+            return session.client.request_mode(mode).is_ok();
+        }
+        let view = view_of(view_width.into(), view_height.into());
+        session.client.request_mode_view(mode, view).is_ok()
     })
 }
 
@@ -877,6 +962,37 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeHostFingerp
         .unwrap_or_default();
     env.with_env(|env| env.new_string(out))
         .resolve::<LogErrorAndDefault>()
+}
+
+/// Report whether the keyed session started on a screen another device opened and sized.
+/// Missing or concurrently closed keys, and a host that does not say, return `false`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSharesScreen(
+    _env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+) -> jboolean {
+    use punktfunk_core::quic::v2::hello::ScreenEcho;
+    jni_guard(false, || {
+        SESSIONS
+            .get(handle)
+            .is_some_and(|session| session.client.screen() == Some(&ScreenEcho::Shared))
+    })
+}
+
+/// Return the reason byte of the host's role echo: `0` as asked, `1` not allowed, `2` monitors
+/// held, `3` unavailable, `4` no monitors. A missing key and a host that sends no echo read `0`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeScreenRoleReason(
+    _env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+) -> jint {
+    jni_guard(0, || {
+        (SESSIONS.get(handle))
+            .and_then(|session| session.client.role())
+            .map_or(0, |echo| echo.reason.to_u8().into())
+    })
 }
 
 /// Report whether the keyed QUIC session has ended.
@@ -1068,7 +1184,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestAcce
         let out = if host.is_empty() || cert.is_empty() || key.is_empty() {
             log::error!("nativeRequestAccess: missing host/identity");
             String::new()
-        } else {
+        } else if let Some(pin) = pin {
             match NativeClient::request_access(
                 &host,
                 port as u16,
@@ -1085,6 +1201,10 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestAcce
                     String::new()
                 }
             }
+        } else {
+            // A host that advertised no fingerprint pairs by PIN; the app routes it there.
+            log::error!("nativeRequestAccess: no fingerprint to hold {host}:{port} to");
+            String::new()
         };
         env.new_string(out)
     })
@@ -1332,6 +1452,284 @@ mod request_vectors {
             if let Err(e) = serde_json::from_str::<ConnectRequest>(&text) {
                 panic!("{}: {e}", case["name"]);
             }
+        }
+    }
+}
+
+/// The decoders `connect` and `note_error` run over Kotlin's request: what reaches the `Hello`
+/// and what Kotlin reads back as the failure token.
+#[cfg(test)]
+mod decoder_tests {
+    use super::*;
+    use punktfunk_core::error::PunktfunkError;
+    use punktfunk_core::quic::{
+        CLIENT_CAP_CURSOR, CLIENT_CAP_KEEP_HOST_AUDIO, CLIENT_CAP_PAD_AUDIO, CODEC_AV1, CODEC_H264,
+        CODEC_HEVC, CODEC_PYROWAVE,
+    };
+    use punktfunk_core::reject::RejectReason;
+
+    /// Tokens Kotlin reads for a transport failure; no typed rejection may take one.
+    const TRANSPORT_TOKENS: [&str; 4] = ["crypto", "timeout", "io", "error"];
+
+    fn rejected(reason: RejectReason, said: &str) -> PunktfunkError {
+        PunktfunkError::Rejected(reason, said.to_string())
+    }
+
+    #[test]
+    fn a_failure_maps_to_the_token_kotlin_matches_and_the_hosts_sentence() {
+        // (name, error, token, said)
+        let rows: Vec<(&str, PunktfunkError, &str, &str)> = vec![
+            (
+                "a rejection with no sentence",
+                rejected(RejectReason::PairingNotArmed, ""),
+                "not-armed",
+                "",
+            ),
+            (
+                "a rejection carries what the host said",
+                rejected(RejectReason::Busy, "someone is streaming right now"),
+                "busy",
+                "someone is streaming right now",
+            ),
+            (
+                "a locked profile",
+                rejected(RejectReason::ProfileLocked, ""),
+                "profile-locked",
+                "",
+            ),
+            (
+                "a wrong PIN or a changed host",
+                PunktfunkError::Crypto,
+                "crypto",
+                "",
+            ),
+            (
+                "a handshake timeout",
+                PunktfunkError::Timeout,
+                "timeout",
+                "",
+            ),
+            (
+                "a socket failure",
+                PunktfunkError::Io(std::io::Error::other("unreachable")),
+                "io",
+                "",
+            ),
+            (
+                "an invalid argument",
+                PunktfunkError::InvalidArg("x"),
+                "error",
+                "",
+            ),
+            ("a malformed packet", PunktfunkError::BadPacket, "error", ""),
+            ("no frame", PunktfunkError::NoFrame, "error", ""),
+            (
+                "an unsupported request",
+                PunktfunkError::Unsupported("x"),
+                "error",
+                "",
+            ),
+            ("a closed session", PunktfunkError::Closed, "error", ""),
+        ];
+        for (name, err, token, said) in rows {
+            assert_eq!(error_token(&err), (token, said), "{name}");
+        }
+    }
+
+    #[test]
+    fn every_typed_rejection_keeps_its_own_token_and_never_a_transport_one() {
+        for &reason in RejectReason::ALL {
+            let err = rejected(reason, "said");
+            let (token, said) = error_token(&err);
+            assert_eq!(token, reason.as_str(), "{reason:?}");
+            assert_eq!(said, "said", "{reason:?}");
+            assert!(
+                !TRANSPORT_TOKENS.contains(&token),
+                "{reason:?} reads as a transport failure"
+            );
+        }
+    }
+
+    /// The one test that writes `LAST_ERROR` and `LAST_SAID`, so it cannot race another.
+    #[test]
+    fn a_later_failure_without_a_sentence_clears_the_earlier_sentence() {
+        let kept = || {
+            (
+                lock_recover(&LAST_ERROR).clone(),
+                lock_recover(&LAST_SAID).clone(),
+            )
+        };
+        note_error(&rejected(RejectReason::Busy, "one session at a time"));
+        assert_eq!(kept(), ("busy".into(), "one session at a time".into()));
+        note_error(&PunktfunkError::Timeout);
+        assert_eq!(kept(), ("timeout".into(), String::new()));
+    }
+
+    #[test]
+    fn the_caps_mask_is_the_union_of_the_asks_made() {
+        // (name, pad audio, keep host audio, host cursor, bits)
+        const CASES: &[(&str, bool, bool, bool, u8)] = &[
+            ("no asks", false, false, false, 0),
+            ("pad audio", true, false, false, CLIENT_CAP_PAD_AUDIO),
+            (
+                "keep host audio",
+                false,
+                true,
+                false,
+                CLIENT_CAP_KEEP_HOST_AUDIO,
+            ),
+            ("host cursor", false, false, true, CLIENT_CAP_CURSOR),
+            (
+                "pad audio and keep host audio",
+                true,
+                true,
+                false,
+                CLIENT_CAP_PAD_AUDIO | CLIENT_CAP_KEEP_HOST_AUDIO,
+            ),
+            (
+                "pad audio and host cursor",
+                true,
+                false,
+                true,
+                CLIENT_CAP_PAD_AUDIO | CLIENT_CAP_CURSOR,
+            ),
+            (
+                "keep host audio and host cursor",
+                false,
+                true,
+                true,
+                CLIENT_CAP_KEEP_HOST_AUDIO | CLIENT_CAP_CURSOR,
+            ),
+            (
+                "all three",
+                true,
+                true,
+                true,
+                CLIENT_CAP_PAD_AUDIO | CLIENT_CAP_KEEP_HOST_AUDIO | CLIENT_CAP_CURSOR,
+            ),
+        ];
+        for &(name, pad, keep, cursor, want) in CASES {
+            assert_eq!(client_caps(pad, keep, cursor), want, "{name}");
+        }
+        let bits = [
+            CLIENT_CAP_PAD_AUDIO,
+            CLIENT_CAP_KEEP_HOST_AUDIO,
+            CLIENT_CAP_CURSOR,
+        ];
+        assert_eq!(
+            bits.iter().fold(0u8, |all, &b| all | b).count_ones(),
+            3,
+            "each ask has a bit of its own"
+        );
+    }
+
+    #[test]
+    fn a_codec_mask_is_cut_to_the_known_codecs_and_falls_back_to_h264_and_hevc() {
+        const FALLBACK: u8 = CODEC_H264 | CODEC_HEVC;
+        // (name, Kotlin's mask, advertised)
+        const CASES: &[(&str, u8, u8)] = &[
+            ("an empty mask", 0, FALLBACK),
+            ("unknown bits only", 0xF0, FALLBACK),
+            ("the top bit only", 0x80, FALLBACK),
+            ("H.264 alone is not widened", CODEC_H264, CODEC_H264),
+            ("HEVC alone is not widened", CODEC_HEVC, CODEC_HEVC),
+            ("AV1 alone", CODEC_AV1, CODEC_AV1),
+            ("PyroWave alone", CODEC_PYROWAVE, CODEC_PYROWAVE),
+            (
+                "every known codec",
+                CODEC_H264 | CODEC_HEVC | CODEC_AV1 | CODEC_PYROWAVE,
+                CODEC_H264 | CODEC_HEVC | CODEC_AV1 | CODEC_PYROWAVE,
+            ),
+            (
+                "every bit set",
+                0xFF,
+                CODEC_H264 | CODEC_HEVC | CODEC_AV1 | CODEC_PYROWAVE,
+            ),
+            (
+                "unknown bits beside known ones",
+                0xF0 | CODEC_AV1 | CODEC_PYROWAVE,
+                CODEC_AV1 | CODEC_PYROWAVE,
+            ),
+            ("an unknown bit beside H.264", 0x10 | CODEC_H264, CODEC_H264),
+        ];
+        for &(name, bits, want) in CASES {
+            assert_eq!(advertised_codecs(bits), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_empty_launch_or_profile_is_none_and_is_not_trimmed() {
+        let some = |s: &str| Some(s.to_string());
+        let rows = [
+            ("absent", None, None),
+            ("empty", some(""), None),
+            (
+                "a store-qualified id",
+                some("steam:1245620"),
+                some("steam:1245620"),
+            ),
+            ("blank is kept", some(" "), some(" ")),
+            ("padding is kept", some(" steam:1 "), some(" steam:1 ")),
+        ];
+        for (name, input, want) in rows {
+            assert_eq!(non_empty(input), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_device_name_is_trimmed_and_blank_is_none() {
+        let some = |s: &str| Some(s.to_string());
+        let rows = [
+            ("absent", None, None),
+            ("empty", some(""), None),
+            ("spaces only", some("   "), None),
+            ("tab and newline only", some("\t\n"), None),
+            ("a no-break space only", some("\u{a0}"), None),
+            ("a model name", some("Pixel 9"), some("Pixel 9")),
+            ("padding is trimmed", some("  Pixel 9\n"), some("Pixel 9")),
+            ("inner spaces are kept", some("Pixel  9"), some("Pixel  9")),
+        ];
+        for (name, input, want) in rows {
+            assert_eq!(device_label(input), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_identity_needs_both_halves() {
+        let pair = |c: &str, k: &str| identity_of(c.to_string(), k.to_string());
+        assert_eq!(pair("", ""), None, "both empty");
+        assert_eq!(pair("cert", ""), None, "no key");
+        assert_eq!(pair("", "key"), None, "no cert");
+        assert_eq!(
+            pair("cert", "key"),
+            Some(("cert".to_string(), "key".to_string())),
+            "both present"
+        );
+        assert!(
+            pair(" ", " ").is_some(),
+            "blank is not empty, and is not trimmed"
+        );
+    }
+
+    #[test]
+    fn a_negative_since_first_is_no_refusal_yet() {
+        const CASES: &[(&str, jlong, Option<Duration>)] = &[
+            ("i64::MIN", jlong::MIN, None),
+            ("the first refusal", -1, None),
+            ("no time since", 0, Some(Duration::ZERO)),
+            (
+                "a second and a half",
+                1_500,
+                Some(Duration::from_millis(1_500)),
+            ),
+            (
+                "i64::MAX",
+                jlong::MAX,
+                Some(Duration::from_millis(jlong::MAX as u64)),
+            ),
+        ];
+        for &(name, ms, want) in CASES {
+            assert_eq!(since_first(ms), want, "{name}");
         }
     }
 }

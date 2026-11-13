@@ -24,6 +24,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { digitsOnly } from "@/lib/ime";
 import type { Loadable } from "@/lib/query";
 import { m } from "@/paraglide/messages";
 
@@ -226,7 +227,7 @@ export const MoonlightPairing: FC<{
 							autoComplete="off"
 							maxLength={16}
 							value={pin}
-							onChange={(e) => onPinChange(e.target.value.replace(/\D/g, ""))}
+							onChange={(e) => onPinChange(digitsOnly(e.target.value))}
 							placeholder="0000"
 							className="font-mono text-lg"
 						/>

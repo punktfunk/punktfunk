@@ -22,6 +22,7 @@ use crate::widgets::{
 };
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use pf_client_core::presets::SettingsOverlay;
+use pf_l10n::{client, common, console};
 use skia_safe::{Canvas, Rect};
 
 pub(crate) mod rows;
@@ -152,7 +153,8 @@ impl SettingsScreen {
     }
 
     /// Filtered by [`row_on`] / [`row_applies`], and [`advanced`] rows by Show advanced: a tab
-    /// hiding changed ones ends on [`RowId::AdvancedChanged`]. Presets comes from the catalog.
+    /// hiding changed ones ends on [`RowId::AdvancedChanged`], above General's reset. Presets
+    /// comes from the catalog.
     fn row_ids(&self, ctx: &Ctx) -> Vec<RowId> {
         if self.tab != PRESETS_TAB {
             let offered = TABS[self.tab]
@@ -167,7 +169,8 @@ impl SettingsScreen {
             }
             let mut rows: Vec<RowId> = offered.filter(|id| !advanced(*id)).collect();
             if !changed_advanced(self.tab, ctx).is_empty() {
-                rows.push(RowId::AdvancedChanged);
+                let at = rows.len() - usize::from(rows.last() == Some(&RowId::ResetSettings));
+                rows.insert(at, RowId::AdvancedChanged);
             }
             return rows;
         }
@@ -186,12 +189,10 @@ impl SettingsScreen {
     fn spec(&self, id: RowId, ids: &[RowId], ctx: &Ctx) -> RowSpec {
         let mut spec = row_spec(id, ctx, &self.presets, &self.overrides);
         if id == RowId::AdvancedChanged {
-            spec.label = match changed_advanced(self.tab, ctx).len() {
-                1 => "1 advanced setting changed".into(),
-                n => format!("{n} advanced settings changed"),
-            };
+            let n = changed_advanced(self.tab, ctx).len();
+            spec.label = client::prefs_advanced_changed(n as u64);
         } else if advanced(id) && ids.iter().find(|r| advanced(**r)) == Some(&id) {
-            spec.header = Some("Advanced");
+            spec.header = Some(client::prefs_advanced());
         }
         spec
     }
@@ -213,17 +214,28 @@ impl SettingsScreen {
     /// trays run in this far so the rows bleed under both on one ramp. The keyboard
     /// lifts the bottom reach away, or the tray would slab the keys.
     pub(crate) fn pinned(&self, k: f64) -> (f32, f32) {
-        let bottom = DETAIL_H * k * (1.0 - self.keyboard.seated().min(1.0));
+        let bottom = DETAIL_H * k * (1.0 - self.keyboard.seated().min(1.0)) + self.lead(k);
         ((TAB_STRIP_H * k) as f32, bottom as f32)
     }
 
-    /// The rows' band: under the section strip, above the explainer and the keyboard.
+    /// The tray's run-up over the explainer while rows bleed under it: the blur is under
+    /// way where the line starts. None once the keyboard is up or nothing blurs.
+    fn lead(&self, k: f64) -> f64 {
+        if crate::blur::active() {
+            crate::widgets::FOOT_LEAD * k * (1.0 - self.keyboard.seated().min(1.0))
+        } else {
+            0.0
+        }
+    }
+
+    /// The rows' band: under the section strip, above the explainer's run-up and the
+    /// keyboard. The focused row rests in it, clear of the blur.
     fn list_rect(&self, rect: Rect, k: f64) -> Rect {
         Rect::from_ltrb(
             rect.left,
             rect.top + (TAB_STRIP_H * k) as f32,
             rect.right,
-            rect.bottom - (DETAIL_H * k + self.keyboard.reserve(k)) as f32,
+            rect.bottom - (DETAIL_H * k + self.keyboard.reserve(k) + self.lead(k)) as f32,
         )
     }
 
@@ -316,7 +328,7 @@ impl SettingsScreen {
             RowId::NewPreset => {
                 return match msg {
                     ListMsg::Activate => {
-                        fx.push(Screen::PresetName(super::preset::PresetName::new()));
+                        fx.push(Screen::PresetStarter(super::preset::PresetStarter::new()));
                         pulse
                     }
                     ListMsg::Adjust(_) => Some(MenuPulse::Boundary),
@@ -356,7 +368,20 @@ impl SettingsScreen {
                 return match msg {
                     ListMsg::Activate => {
                         fx.push(Screen::RingEditor(Box::new(
-                            super::ring_editor::RingEditorScreen::new(ctx),
+                            super::ring_editor::RingEditorScreen::new(ctx, Default::default()),
+                        )));
+                        pulse
+                    }
+                    ListMsg::Adjust(_) => Some(MenuPulse::Boundary),
+                    ListMsg::None => pulse,
+                };
+            }
+            RowId::ShortcutsPage => {
+                return match msg {
+                    ListMsg::Activate => {
+                        fx.push(Screen::Shortcuts(super::shortcuts::ShortcutsScreen::new(
+                            ctx,
+                            Default::default(),
                         )));
                         pulse
                     }
@@ -393,10 +418,10 @@ impl SettingsScreen {
                     ListMsg::None => pulse,
                 };
             }
-            RowId::StreamControls => {
+            RowId::ResetSettings => {
                 return match msg {
                     ListMsg::Activate => {
-                        fx.push(Screen::Controls(super::controls::ControlsScreen::new(ctx)));
+                        fx.push(Screen::Prompt(super::prompt::PromptScreen::reset_settings()));
                         pulse
                     }
                     ListMsg::Adjust(_) => Some(MenuPulse::Boundary),
@@ -455,7 +480,7 @@ impl SettingsScreen {
         let list_rect = self.list_rect(rect, k);
         let col = column(ui, list_rect, k);
         let inner = f64::from(col.left) + 16.0 * k;
-        let labels: Vec<&str> = TABS.iter().map(|(name, _)| *name).collect();
+        let labels: Vec<&str> = TABS.iter().map(|(section, _)| section.name()).collect();
         self.strip.render(
             canvas,
             ui,
@@ -469,10 +494,10 @@ impl SettingsScreen {
         );
         let ids = self.row_ids(ctx);
         let focused = ids.get(self.list.cursor).copied();
-        let detail = focused.map_or("", |id| detail(id, ctx));
+        let detail = focused.map(|id| detail(id, ctx));
         // The explainer under the list, led by the row's mark; above the keyboard when up.
         crate::widgets::Foot {
-            detail: Some(detail),
+            detail: Some(detail.as_deref().unwrap_or("")),
             mark: focused.map(row_icon),
             ..Default::default()
         }
@@ -480,7 +505,12 @@ impl SettingsScreen {
             canvas,
             ui,
             fonts,
-            Rect::from_ltrb(rect.left, list_rect.bottom, rect.right, rect.bottom),
+            Rect::from_ltrb(
+                rect.left,
+                list_rect.bottom + self.lead(k) as f32,
+                rect.right,
+                rect.bottom,
+            ),
             (inner, f64::from(col.right)),
             k,
         );
@@ -496,10 +526,10 @@ impl ScreenView for SettingsScreen {
     fn edit_field(&self) -> Option<crate::screens::EditField> {
         let (typing, text) = self.typing.as_ref()?;
         let label = match typing {
-            Typing::Bitrate => "Bitrate in Mbps",
-            Typing::Scale => "Render scale in percent",
-            Typing::Width => "Width in pixels",
-            Typing::Height(_) => "Height in pixels",
+            Typing::Bitrate => client::player_bitrate_kbps_entry(),
+            Typing::Scale => client::player_render_scale_entry(),
+            Typing::Width => console::console_resolution_width_entry(),
+            Typing::Height(_) => console::console_resolution_height_entry(),
         };
         crate::screens::EditField::new(label, text, true)
     }
@@ -606,7 +636,7 @@ impl ScreenView for SettingsScreen {
     /// focused row's label and the value drawn beside it.
     fn announcement(&self, ctx: &Ctx) -> Option<String> {
         if self.strip_focus {
-            return Some(format!("{} section", TABS[self.tab].0));
+            return Some(TABS[self.tab].0.spoken().into());
         }
         let ids = self.row_ids(ctx);
         let row = self.spec(*ids.get(self.list.cursor)?, &ids, ctx);
@@ -619,64 +649,80 @@ impl ScreenView for SettingsScreen {
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if let Some((typing, _)) = &self.typing {
             let done = if *typing == Typing::Width {
-                "Next"
+                common::common_next()
             } else {
-                "Done"
+                common::common_done()
             };
             return self.keyboard.hints(ctx.device, done);
         }
+        let done = || Hint::new(HintKey::Back, common::common_done());
+        let adjust = || Hint::new(HintKey::Adjust, common::common_adjust());
         // Strip-focused: hints describe the D-pad, not the rows.
         if self.strip_focus {
             return vec![
-                Hint::new(HintKey::Adjust, "Section"),
-                Hint::new(HintKey::Confirm, "Rows"),
-                Hint::new(HintKey::Back, "Done"),
+                Hint::new(HintKey::Adjust, console::console_hint_section()),
+                Hint::new(HintKey::Confirm, console::console_hint_rows()),
+                done(),
             ];
         }
         let ids = self.row_ids(ctx);
-        let mut hints = vec![Hint::new(HintKey::Shoulders, "Section")];
+        let mut hints = vec![Hint::new(
+            HintKey::Shoulders,
+            console::console_hint_section(),
+        )];
         hints.extend(match ids.get(self.list.cursor) {
             Some(RowId::Preset(_)) => vec![
-                Hint::new(HintKey::Confirm, "Options\u{2026}"),
-                Hint::new(HintKey::Back, "Done"),
+                Hint::new(HintKey::Confirm, console::console_hint_preset_options()),
+                done(),
             ],
             Some(RowId::NewPreset) => vec![
-                Hint::new(HintKey::Confirm, "Create\u{2026}"),
-                Hint::new(HintKey::Back, "Done"),
+                Hint::new(HintKey::Confirm, console::console_hint_create()),
+                done(),
             ],
-            Some(RowId::Version) | None => {
-                vec![Hint::new(HintKey::Back, "Done")]
+            Some(RowId::ResetSettings) => {
+                vec![
+                    Hint::new(HintKey::Confirm, console::console_hint_reset()),
+                    done(),
+                ]
             }
+            Some(RowId::Version) | None => vec![done()],
             Some(
                 RowId::Controllers
-                | RowId::StreamControls
+                | RowId::QuickActions
+                | RowId::ShortcutsPage
                 | RowId::Licenses
                 | RowId::LibrarySections
                 | RowId::Palette
                 | RowId::AdvancedChanged,
-            ) => vec![
-                Hint::new(HintKey::Confirm, "Open"),
-                Hint::new(HintKey::Back, "Done"),
-            ],
+            ) => vec![Hint::new(HintKey::Confirm, common::common_open()), done()],
             Some(RowId::Bitrate) if !pyrowave_rate(ctx) => vec![
-                Hint::new(HintKey::Adjust, "Adjust"),
-                Hint::new(HintKey::Confirm, "Custom rate"),
-                Hint::new(HintKey::Back, "Done"),
+                adjust(),
+                Hint::new(
+                    HintKey::Confirm,
+                    console::console_bitrate_kbps_type_action(),
+                ),
+                done(),
             ],
             Some(RowId::Resolution) => vec![
-                Hint::new(HintKey::Adjust, "Adjust"),
-                Hint::new(HintKey::Secondary, "Type a size"),
-                Hint::new(HintKey::Back, "Done"),
+                adjust(),
+                Hint::new(
+                    HintKey::Secondary,
+                    console::console_resolution_type_action(),
+                ),
+                done(),
             ],
             Some(RowId::RenderScale) => vec![
-                Hint::new(HintKey::Adjust, "Adjust"),
-                Hint::new(HintKey::Secondary, "Type a percent"),
-                Hint::new(HintKey::Back, "Done"),
+                adjust(),
+                Hint::new(
+                    HintKey::Secondary,
+                    console::console_render_scale_type_action(),
+                ),
+                done(),
             ],
             Some(_) => vec![
-                Hint::new(HintKey::Adjust, "Adjust"),
-                Hint::new(HintKey::Confirm, "Change"),
-                Hint::new(HintKey::Back, "Done"),
+                adjust(),
+                Hint::new(HintKey::Confirm, common::common_change()),
+                done(),
             ],
         });
         hints
@@ -701,15 +747,20 @@ impl ScreenView for SettingsScreen {
         // Field-open: the row being typed shows the digits so far and the caret.
         if let Some((typing, text)) = self.typing.as_ref() {
             let (row, value) = match typing {
-                Typing::Bitrate if text.is_empty() => (RowId::Bitrate, "Mbps".into()),
-                Typing::Bitrate => (RowId::Bitrate, format!("{text} Mbps")),
-                Typing::Scale if text.is_empty() => (RowId::RenderScale, "%".into()),
-                Typing::Scale => (RowId::RenderScale, format!("{text} %")),
-                Typing::Width if text.is_empty() => (RowId::Resolution, "Width".into()),
-                Typing::Width => (RowId::Resolution, format!("{text} × \u{2026}")),
-                Typing::Height(w) if text.is_empty() => {
-                    (RowId::Resolution, format!("{w} × height"))
+                Typing::Bitrate if text.is_empty() => {
+                    (RowId::Bitrate, common::common_unit_mbits().into())
                 }
+                Typing::Bitrate => (RowId::Bitrate, common::common_mbits(text)),
+                Typing::Scale if text.is_empty() => (RowId::RenderScale, "%".into()),
+                Typing::Scale => (RowId::RenderScale, common::common_percent(text)),
+                Typing::Width if text.is_empty() => {
+                    (RowId::Resolution, client::player_resolution_width().into())
+                }
+                Typing::Width => (RowId::Resolution, format!("{text} × \u{2026}")),
+                Typing::Height(w) if text.is_empty() => (
+                    RowId::Resolution,
+                    console::console_resolution_typing_height(w),
+                ),
                 Typing::Height(w) => (RowId::Resolution, format!("{w} × {text}")),
             };
             if let Some(i) = ids.iter().position(|id| *id == row) {
@@ -737,7 +788,7 @@ impl ScreenView for SettingsScreen {
     }
 
     fn title(&self) -> String {
-        "Settings".into()
+        client::prefs_title().into()
     }
 
     fn pan(&mut self, p: Pointer) -> bool {

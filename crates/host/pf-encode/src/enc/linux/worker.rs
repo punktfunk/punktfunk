@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 /// Bumped on any wire change. Host and worker are different files, so a lockstep
 /// miss must fall back to the in-process encoder, never a dead session.
-pub(crate) const PROTO_VERSION: u32 = 2;
+pub(crate) const PROTO_VERSION: u32 = 3;
 
 /// Compile-time `CARGO_PKG_VERSION` of this crate. Handshake compares it too: a
 /// protocol can stay still while the encoder moves, and a stale worker binary
@@ -190,6 +190,11 @@ pub(crate) enum ToWorker {
     },
     Reconfigure {
         bitrate_bps: u64,
+    },
+    /// `Encoder::set_input_crop`, before the first frame. [`FromWorker::Ack`], or
+    /// [`FromWorker::EncodeErr`] with the encoder's reason for declining.
+    SetInputCrop {
+        rect: [u32; 4],
     },
     /// `Encoder::reset` inside the worker so the priority-elevated device survives.
     /// Why a message, not a respawn: [`super::pyrowave_remote::RemotePyroWave::reset`].
@@ -448,6 +453,13 @@ fn serve(sock: &OwnedFd, mut enc: super::pyrowave::PyroWaveEncoder, au_buf: &Fil
                 ok: enc.reconfigure_bitrate(bitrate_bps),
             },
             ToWorker::Reset => FromWorker::Ack { ok: enc.reset() },
+            ToWorker::SetInputCrop { rect } => match enc.set_input_crop(rect) {
+                Ok(()) => FromWorker::Ack { ok: true },
+                Err(e) => FromWorker::EncodeErr {
+                    message: format!("{e:#}"),
+                    capture_rebuild: false,
+                },
+            },
             ToWorker::Frame {
                 key,
                 has_fd,

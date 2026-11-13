@@ -13,13 +13,18 @@ use crate::config::Mode;
 /// data plane is unchanged. The first new-mode frame is an IDR with in-band
 /// parameter sets — that is all a decoder needs.
 ///
-/// `exclude_codecs` non-zero is a codec ask instead, and `mode` is ignored: drop these
-/// `CODEC_*` bits and stream on in another codec, from a new epoch. Only under
+/// `exclude_codecs` non-zero is a codec ask instead, and `mode` and `view` are ignored: drop
+/// these `CODEC_*` bits and stream on in another codec, from a new epoch. Only under
 /// [`FEATURE_FORMAT_EPOCH`](super::v2::registry::FEATURE_FORMAT_EPOCH).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Reconfigure {
     pub mode: Mode,
     pub exclude_codecs: u8,
+    /// The size the client shows the picture at, when smaller than `mode`: the host builds the
+    /// display at `mode` and scales the picture to `view` before encoding. `None` keeps the
+    /// view in force while the size stays, else encodes `mode`; a view the size of `mode`
+    /// clears it.
+    pub view: Option<(u32, u32)>,
 }
 
 /// `host → client` answer to [`Reconfigure`]. `accepted = false`: request
@@ -518,6 +523,13 @@ pub fn unpack_identity_replies(b: &[u8]) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
 /// a host cannot make the client hold more than this.
 pub const LAUNCH_MESSAGE_MAX: usize = 200;
 
+/// Longest [`LaunchOutcome::message_id`], and each placeholder name, in bytes.
+pub const LAUNCH_ID_MAX: usize = 64;
+
+/// Most [`LaunchOutcome::message_params`]. With every field at its cap the frame stays
+/// under the 1 KiB a client reads.
+pub const LAUNCH_PARAMS_MAX: usize = 3;
+
 /// How a session's library launch turned out.
 ///
 /// Wire values are append-only: an unknown byte decodes to [`Self::Spawned`], the
@@ -588,17 +600,38 @@ pub struct LaunchOutcome {
     pub kind: LaunchOutcomeKind,
     /// Plain sentence for the player, already stripped and capped by [`Self::new`].
     pub message: String,
+    /// The host message `message` is the English of (`launch_*`), empty when it has none.
+    pub message_id: String,
+    /// That message's placeholder values, by name.
+    pub message_params: Vec<(String, String)>,
 }
 
 impl LaunchOutcome {
     /// Trims, drops control characters, and truncates to [`LAUNCH_MESSAGE_MAX`] on a
     /// char boundary. Empty in means empty out, which is "say nothing".
     pub fn new(kind: LaunchOutcomeKind, message: &str) -> Self {
-        let mut message: String = message.trim().chars().filter(|c| !c.is_control()).collect();
-        while message.len() > LAUNCH_MESSAGE_MAX {
-            message.pop();
+        LaunchOutcome {
+            kind,
+            message: plain_capped(message, LAUNCH_MESSAGE_MAX),
+            message_id: String::new(),
+            message_params: Vec::new(),
         }
-        LaunchOutcome { kind, message }
+    }
+
+    /// Names the host message `message` words, with its placeholder values, each kept plain
+    /// and capped like `message`.
+    pub fn worded(mut self, id: &str, params: &[(&str, &str)]) -> Self {
+        self.message_id = plain_capped(id, LAUNCH_ID_MAX);
+        self.message_params = capped_params(params, LAUNCH_PARAMS_MAX, LAUNCH_MESSAGE_MAX);
+        self
+    }
+
+    /// Every field within its cap: what a decoder accepts.
+    pub(crate) fn bounded(&self) -> bool {
+        self.message.len() <= LAUNCH_MESSAGE_MAX
+            && self.message_id.len() <= LAUNCH_ID_MAX
+            && self.message_params.len() <= LAUNCH_PARAMS_MAX
+            && params_within(&self.message_params, LAUNCH_MESSAGE_MAX)
     }
 
     /// The line a client shows: the host's sentence, when the player did not get the game
@@ -608,9 +641,44 @@ impl LaunchOutcome {
     }
 }
 
+/// `s` trimmed, without control characters, truncated to `max` bytes on a char boundary.
+pub(crate) fn plain_capped(s: &str, max: usize) -> String {
+    let mut out: String = s.trim().chars().filter(|c| !c.is_control()).collect();
+    while out.len() > max {
+        out.pop();
+    }
+    out
+}
+
+/// The first `most` of `params`, names capped at [`LAUNCH_ID_MAX`] and values at `value_max`.
+pub(crate) fn capped_params(
+    params: &[(&str, &str)],
+    most: usize,
+    value_max: usize,
+) -> Vec<(String, String)> {
+    params
+        .iter()
+        .take(most)
+        .map(|(name, value)| {
+            (
+                plain_capped(name, LAUNCH_ID_MAX),
+                plain_capped(value, value_max),
+            )
+        })
+        .collect()
+}
+
+/// Every name within [`LAUNCH_ID_MAX`] and every value within `value_max`.
+pub(crate) fn params_within(params: &[(String, String)], value_max: usize) -> bool {
+    params
+        .iter()
+        .all(|(name, value)| name.len() <= LAUNCH_ID_MAX && value.len() <= value_max)
+}
+
 /// `client → host` ([`MSG_INPUT_EDGE`]): one input event whose loss would stick — a key or
-/// mouse-button press or release — on the control stream instead of the datagram plane, so
-/// QUIC resends it and keeps its order. Sent only toward [`HOST_CAP2_INPUT_EDGES`](super::HOST_CAP2_INPUT_EDGES).
+/// mouse-button press or release, or a character of text — on the control stream instead of
+/// the datagram plane, so QUIC resends it and keeps its order. Sent only toward
+/// [`HOST_CAP2_INPUT_EDGES`](super::HOST_CAP2_INPUT_EDGES).
 /// The payload is the datagram encoding unchanged, so the host feeds both paths into one
 /// queue; any kind decodes, and the grants gate it exactly as they gate the datagram.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -654,6 +722,23 @@ mod tests {
         assert_eq!(
             LaunchOutcome::new(LaunchOutcomeKind::Refused, "  a\u{7}b\n  ").message,
             "ab"
+        );
+        let worded = LaunchOutcome::new(LaunchOutcomeKind::Failed, "Quail didn't download.")
+            .worded(
+                "launch_download_failed",
+                &[
+                    ("title", &"\u{e9}".repeat(400)),
+                    ("a", "b"),
+                    ("c", "d"),
+                    ("e", "f"),
+                ],
+            );
+        assert_eq!(worded.message_params.len(), LAUNCH_PARAMS_MAX);
+        let frame = worded.encode_v2();
+        assert!(frame.len() <= 1024, "{} bytes", frame.len());
+        assert_eq!(
+            LaunchOutcome::from_body(&worded.fields().into_body()).unwrap(),
+            worded
         );
     }
 }

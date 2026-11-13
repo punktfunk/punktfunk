@@ -1,12 +1,14 @@
 {
   "title": "Streaming",
   "pages": [
+    "shortcuts",
     "input",
     "controller-audio",
     "clipboard",
     "hdr",
     "pyrowave",
     "game-library",
+    "when-a-game-ends",
     "stats"
   ]
 }

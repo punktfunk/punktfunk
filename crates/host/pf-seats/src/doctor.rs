@@ -5,6 +5,7 @@
 //! them into [`Diagnostic`]s: no I/O and no OS types, so the tables run on every target.
 //! Every row is one plain sentence; a problem names the next move.
 
+use crate::backend::BackendError;
 use crate::ipc::{Diagnostic, DiagnosticLevel};
 use crate::model::{RuntimeState, RuntimeStatus, Seat, DEFAULT_MGMT_PORTS, DEFAULT_NATIVE_PORTS};
 use std::path::{Path, PathBuf};
@@ -50,12 +51,16 @@ pub(crate) struct BoxFacts {
     /// The licensing row. Read only on Windows Server.
     pub licensing: Option<Diagnostic>,
     pub termservice: bool,
+    /// The operator keeps Remote Desktop to this PC.
+    pub rdp_local_only: bool,
+    /// An enabled firewall rule lets an address other than this PC's reach Remote Desktop.
+    pub rdp_reachable: bool,
     /// The first of the host and keeper executables that isn't on disk.
     pub missing_file: Option<PathBuf>,
     pub driver: DriverState,
     pub inbox_driver_newer: Option<bool>,
     /// `None` while no certificate pin is recorded; otherwise whether it matches the live one.
-    pub pin: Option<Result<(), String>>,
+    pub pin: Option<Result<(), BackendError>>,
     pub steam_box: Option<PathBuf>,
     /// Where Steam registers itself. Read only when `steam_box` is `None`.
     pub steam_registered: Option<PathBuf>,
@@ -82,25 +87,36 @@ pub(crate) fn report_rows(facts: BoxFacts) -> Vec<Diagnostic> {
     let mut rows = vec![build_row(&facts.build)];
     match &facts.x64 {
         Ok(true) => {}
-        Ok(false) => rows.push(Diagnostic::error("architecture", "Seats need an x64 PC.")),
-        Err(cause) => rows.push(Diagnostic::warning(
-            "architecture",
-            format!("Couldn't tell whether this PC is x64 — {cause}. Seats need an x64 PC."),
-        )),
+        Ok(false) => rows.push(
+            Diagnostic::error("architecture", "Seats need an x64 PC.")
+                .worded("seatcheck_architecture_not_x64"),
+        ),
+        Err(cause) => rows.push(
+            Diagnostic::warning(
+                "architecture",
+                format!("Couldn't tell whether this PC is x64 — {cause}. Seats need an x64 PC."),
+            )
+            .worded("seatcheck_architecture_unknown")
+            .param("error", cause),
+        ),
     }
     if !facts.local_system {
-        rows.push(Diagnostic::error(
-            "identity",
-            "punktfunk's service isn't running as Local System. Reinstall punktfunk.",
-        ));
+        rows.push(
+            Diagnostic::error(
+                "identity",
+                "Punktfunk's service isn't running as Local System. Reinstall Punktfunk.",
+            )
+            .worded("seatcheck_identity"),
+        );
     }
     rows.push(if facts.seats_on {
-        Diagnostic::info("reservation", "Seats are on.")
+        Diagnostic::info("reservation", "Seats are on.").worded("seatcheck_reservation_on")
     } else {
         Diagnostic::error(
             "reservation",
             "Seats are off. Turn them on under Profiles → Seats.",
         )
+        .worded("seatcheck_reservation_off")
     });
     rows.push(session_row(facts.server, facts.session_wrapper));
     rows.extend(
@@ -112,28 +128,46 @@ pub(crate) fn report_rows(facts: BoxFacts) -> Vec<Diagnostic> {
     rows.extend(facts.licensing);
     rows.push(if facts.termservice {
         Diagnostic::info("termservice", "Remote Desktop Services is running.")
+            .worded("seatcheck_termservice_on")
     } else {
         Diagnostic::error(
             "termservice",
             "Remote Desktop Services isn't running. Start it under Services, or restart the PC.",
         )
+        .worded("seatcheck_termservice_off")
     });
+    if facts.rdp_local_only && facts.rdp_reachable {
+        rows.push(Diagnostic::warning(
+            "rdp_network",
+            "A firewall rule lets other computers reach Remote Desktop, which seats keep to this \
+             PC. Turn the rule off in Windows Defender Firewall, or turn on Allow Remote Desktop \
+             from the network under Profiles → Seats.",
+        )
+        .worded("seatcheck_rdp_network"));
+    }
     if let Some(missing) = &facts.missing_file {
-        rows.push(Diagnostic::error(
-            "host_executable",
-            format!(
-                "A punktfunk file is missing ({}). Reinstall punktfunk.",
-                missing.display()
-            ),
-        ));
+        rows.push(
+            Diagnostic::error(
+                "host_executable",
+                format!(
+                    "A Punktfunk file is missing ({}). Reinstall Punktfunk.",
+                    missing.display()
+                ),
+            )
+            .worded("seatcheck_host_executable")
+            .param("path", missing.display()),
+        );
     }
     rows.push(driver_row(&facts.driver));
     if facts.inbox_driver_newer == Some(true) {
-        rows.push(Diagnostic::error(
-            "seat_display_rank",
-            "Windows' own Remote Desktop display driver is newer than punktfunk's, so seats \
-             start without a picture. Update punktfunk.",
-        ));
+        rows.push(
+            Diagnostic::error(
+                "seat_display_rank",
+                "Windows' own Remote Desktop display driver is newer than Punktfunk's, so seats \
+                 start without a picture. Update Punktfunk.",
+            )
+            .worded("seatcheck_seat_display_rank"),
+        );
     }
     rows.push(pin_row(facts.pin));
     rows.push(steam_row(
@@ -141,11 +175,14 @@ pub(crate) fn report_rows(facts: BoxFacts) -> Vec<Diagnostic> {
         facts.steam_registered.as_deref(),
     ));
     if facts.has_seats && !facts.seat_sound {
-        rows.push(Diagnostic::warning(
-            "seat_audio",
-            "Seats stream without sound: Steam's streaming audio driver isn't on this PC. \
-             Install Steam, then restart the seats.",
-        ));
+        rows.push(
+            Diagnostic::warning(
+                "seat_audio",
+                "Seats stream without sound: Steam's streaming audio driver isn't on this PC. \
+                 Install Steam, then restart the seats.",
+            )
+            .worded("seatcheck_seat_audio"),
+        );
     }
     rows
 }
@@ -155,17 +192,23 @@ fn build_row(build: &Result<u32, String>) -> Diagnostic {
         Ok(build) if *build >= 22621 => Diagnostic::info(
             "windows_build",
             format!("This Windows is new enough for seats (build {build})."),
-        ),
+        )
+        .worded("seatcheck_windows_build_ok")
+        .param("build", build),
         Ok(build) => Diagnostic::error(
             "windows_build",
             format!(
                 "This Windows is too old for seats (build {build}). Seats need Windows Server 2025 or newer."
             ),
-        ),
+        )
+        .worded("seatcheck_windows_build_old")
+        .param("build", build),
         Err(message) => Diagnostic::error(
             "windows_build",
             format!("Couldn't read the Windows version — {message}."),
-        ),
+        )
+        .worded("seatcheck_windows_build_unknown")
+        .param("error", message),
     }
 }
 
@@ -174,21 +217,25 @@ fn session_row(server: Option<bool>, wrapper: bool) -> Diagnostic {
         Some(true) => Diagnostic::info(
             "session_provider",
             "Windows Server gives each seat a desktop of its own.",
-        ),
+        )
+        .worded("seatcheck_session_provider_server"),
         Some(false) if wrapper => Diagnostic::warning(
             "session_provider",
             "A Remote Desktop wrapper gives each seat a desktop on this edition of Windows. \
              Only Windows Server is supported.",
-        ),
+        )
+        .worded("seatcheck_session_provider_wrapper"),
         Some(false) => Diagnostic::error(
             "session_provider",
             "This edition of Windows runs one desktop at a time, so seats can't start. \
              Seats need Windows Server.",
-        ),
+        )
+        .worded("seatcheck_session_provider_desktop"),
         None => Diagnostic::error(
             "session_provider",
             "Couldn't tell which edition of Windows this is.",
-        ),
+        )
+        .worded("seatcheck_edition_unknown"),
     }
 }
 
@@ -196,32 +243,42 @@ fn driver_row(driver: &DriverState) -> Diagnostic {
     match driver {
         DriverState::Current => {
             Diagnostic::info("seat_display_driver", "The seat display driver is installed.")
+                .worded("seatcheck_seat_display_driver_ok")
         }
         DriverState::Outdated => Diagnostic::warning(
             "seat_display_driver",
-            "The seat display driver is older than this punktfunk. Seats update it when they next start.",
-        ),
+            "The seat display driver is older than this Punktfunk. Seats update it when they next start.",
+        )
+        .worded("seatcheck_seat_display_driver_outdated"),
         DriverState::Missing => Diagnostic::error(
             "seat_display_driver",
             "The seat display driver isn't installed. Seats put it back when they next start; \
              if this stays, turn seats off and on under Profiles → Seats.",
-        ),
+        )
+        .worded("seatcheck_seat_display_driver_missing"),
         DriverState::Unstaged => Diagnostic::error(
             "seat_display_driver",
-            "The seat display driver isn't on this PC. Reinstall punktfunk.",
-        ),
+            "The seat display driver isn't on this PC. Reinstall Punktfunk.",
+        )
+        .worded("seatcheck_seat_display_driver_unstaged"),
     }
 }
 
-fn pin_row(pin: Option<Result<(), String>>) -> Diagnostic {
+fn pin_row(pin: Option<Result<(), BackendError>>) -> Diagnostic {
     match pin {
-        Some(Ok(())) => Diagnostic::info("rdp_pin", "Remote Desktop's certificate is recorded."),
-        Some(Err(message)) => Diagnostic::error("rdp_pin", message),
+        Some(Ok(())) => Diagnostic::info("rdp_pin", "Remote Desktop's certificate is recorded.")
+            .worded("seatcheck_rdp_pin_ok"),
+        // A changed certificate is a sentence for the person; the others are the log's.
+        Some(Err(e)) if e.code == "rdp_pin_changed" => {
+            Diagnostic::error("rdp_pin", e.message).worded("apierr_rdp_pin_changed")
+        }
+        Some(Err(e)) => Diagnostic::error("rdp_pin", e.message),
         None => Diagnostic::error(
             "rdp_pin",
             "Remote Desktop's certificate isn't recorded, so seats can't sign in. \
              Turn seats off and on under Profiles → Seats.",
-        ),
+        )
+        .worded("seatcheck_rdp_pin_missing"),
     }
 }
 
@@ -234,7 +291,9 @@ fn steam_row(installed: Option<&Path>, registered: Option<&Path>) -> Diagnostic 
                 "Steam is installed in {}. Each seat gets a copy of its own.",
                 dir.display()
             ),
-        );
+        )
+        .worded("seatcheck_steam_installed")
+        .param("path", dir.display());
     }
     match registered {
         Some(dir) => Diagnostic::warning(
@@ -244,8 +303,11 @@ fn steam_row(installed: Option<&Path>, registered: Option<&Path>) -> Diagnostic 
                  C:\\Program Files (x86)\\Steam; reinstall it there.",
                 dir.display()
             ),
-        ),
-        None => Diagnostic::info("steam", "Steam isn't installed, so seats have no Steam."),
+        )
+        .worded("seatcheck_steam_elsewhere")
+        .param("path", dir.display()),
+        None => Diagnostic::info("steam", "Steam isn't installed, so seats have no Steam.")
+            .worded("seatcheck_steam_none"),
     }
 }
 
@@ -263,7 +325,10 @@ pub(crate) fn seat_rows(seat: &Seat, facts: &SeatFacts) -> Vec<Diagnostic> {
                 seat.account, message
             ),
             seat,
-        ),
+        )
+        .worded("seatcheck_account_unreadable")
+        .param("account", &seat.account)
+        .param("error", message),
     });
     rows.push(steam_client_row(seat, facts.box_steam, facts.seat_steam));
     rows.extend(state_row(seat, &facts.status, facts.session_id));
@@ -291,6 +356,10 @@ fn resources_row(seat: &Seat) -> Option<Diagnostic> {
             ),
             seat,
         )
+        .worded("seatcheck_seat_resources")
+        .param("slot", seat.display_slot)
+        .param("native_port", seat.native_port)
+        .param("mgmt_port", seat.mgmt_port)
     })
 }
 
@@ -302,39 +371,50 @@ fn account_row(seat: &Seat, inspection: &AccountInspection, group: &str) -> Diag
     let adopted = seat.adopted_sid.is_some();
     let problem = if !inspection.identity_matches {
         Some(if adopted {
-            format!(
+            ("seatcheck_account_gone", format!(
                 "Its Windows account {account} is gone, or was made again. Remove the profile and add it again."
-            )
+            ))
         } else {
-            format!(
-                "Its Windows account {account} is missing or isn't punktfunk's. Remove the profile and add it again."
-            )
+            ("seatcheck_account_not_ours", format!(
+                "Its Windows account {account} is missing or isn't Punktfunk's. Remove the profile and add it again."
+            ))
         })
     } else if !inspection.credential_blob {
         Some(if adopted {
-            format!(
-                "punktfunk has lost {account}'s password. Enter it again on the profile's card."
+            (
+                "seatcheck_account_password_lost_adopted",
+                format!(
+                "Punktfunk has lost {account}'s password. Enter it again on the profile's card."
+            ),
             )
         } else {
-            format!(
-                "punktfunk has lost the password of its Windows account {account}. Remove the profile and add it again."
-            )
+            ("seatcheck_account_password_lost", format!(
+                "Punktfunk has lost the password of its Windows account {account}. Remove the profile and add it again."
+            ))
         })
     } else if inspection.administrator {
-        Some(format!(
-            "Its Windows account {account} is an administrator, which a seat must not be. \
+        Some((
+            "seatcheck_account_administrator",
+            format!(
+                "Its Windows account {account} is an administrator, which a seat must not be. \
              Remove it from Administrators."
+            ),
         ))
     } else if !inspection.rdp_member || !inspection.deny_console || inspection.deny_remote {
-        Some(format!(
-            "Its Windows account {account} lost a right it needs to sign in to its seat. \
+        Some((
+            "seatcheck_account_rights",
+            format!(
+                "Its Windows account {account} lost a right it needs to sign in to its seat. \
              Remove the profile and add it again."
+            ),
         ))
     } else {
         None
     };
-    match problem {
-        Some(problem) => seat_diagnostic(DiagnosticLevel::Error, "account", problem, seat),
+    let row = match problem {
+        Some((id, problem)) => {
+            seat_diagnostic(DiagnosticLevel::Error, "account", problem, seat).worded(id)
+        }
         None if !inspection.seats_member => seat_diagnostic(
             DiagnosticLevel::Warning,
             "account",
@@ -342,7 +422,9 @@ fn account_row(seat: &Seat, inspection: &AccountInspection, group: &str) -> Diag
                 "Its Windows account {account} left the {group} group. It's put back when the seat next starts."
             ),
             seat,
-        ),
+        )
+        .worded("seatcheck_account_group")
+        .param("group", group),
         None if adopted => seat_diagnostic(
             DiagnosticLevel::Info,
             "account",
@@ -350,52 +432,69 @@ fn account_row(seat: &Seat, inspection: &AccountInspection, group: &str) -> Diag
                 "Its Windows account {account} is set up. While it's a seat, nobody signs in to it at this PC."
             ),
             seat,
-        ),
+        )
+        .worded("seatcheck_account_set_up_adopted"),
         None => seat_diagnostic(
             DiagnosticLevel::Info,
             "account",
             format!("Its Windows account {account} is set up."),
             seat,
-        ),
-    }
+        )
+        .worded("seatcheck_account_set_up"),
+    };
+    row.param("account", account)
 }
 
 fn steam_client_row(seat: &Seat, box_steam: bool, seat_steam: bool) -> Diagnostic {
-    let (level, message) = match (box_steam, seat_steam) {
-        (false, _) => (DiagnosticLevel::Info, "No Steam: the PC has none to copy."),
+    let (level, id, message) = match (box_steam, seat_steam) {
+        (false, _) => (
+            DiagnosticLevel::Info,
+            "seatcheck_steam_client_none",
+            "No Steam: the PC has none to copy.",
+        ),
         (true, true) => (
             DiagnosticLevel::Info,
+            "seatcheck_steam_client_ok",
             "Has its own Steam. Steam opened on this seat starts that copy.",
         ),
         (true, false) => (
             DiagnosticLevel::Warning,
+            "seatcheck_steam_client_pending",
             "Its own Steam isn't set up yet. It's copied the first time the seat starts; \
              Steam games start on the seat once that's done.",
         ),
     };
-    seat_diagnostic(level, "steam_client", message.into(), seat)
+    seat_diagnostic(level, "steam_client", message.into(), seat).worded(id)
 }
 
 fn state_row(seat: &Seat, status: &RuntimeStatus, session_id: Option<u32>) -> Option<Diagnostic> {
-    let message = match status.state {
+    let row =
+        |message: String| seat_diagnostic(DiagnosticLevel::Info, "child_state", message, seat);
+    Some(match status.state {
         RuntimeState::Running => match session_id {
-            Some(id) => format!("Running, in Windows session {id}."),
-            None => "Running.".into(),
+            Some(id) => row(format!("Running, in Windows session {id}."))
+                .worded("seatcheck_child_state_running_session")
+                .param("session", id),
+            None => row("Running.".into()).worded("seatcheck_child_state_running"),
         },
-        RuntimeState::Starting => status.detail.clone().unwrap_or_else(|| "Starting…".into()),
+        // A starting seat shows its step's own line.
+        RuntimeState::Starting => match &status.detail {
+            Some(detail) => {
+                let mut said = row(detail.clone());
+                said.id.clone_from(&status.detail_id);
+                said.params.clone_from(&status.detail_params);
+                said
+            }
+            None => row("Starting…".into()).worded("seatcheck_child_state_starting"),
+        },
         RuntimeState::Stopped | RuntimeState::Unknown => {
-            "Stopped. It starts when its player connects.".into()
+            row("Stopped. It starts when its player connects.".into())
+                .worded("seatcheck_child_state_stopped")
         }
-        RuntimeState::Stopping => "Stopping…".into(),
+        RuntimeState::Stopping => row("Stopping…".into()).worded("seatcheck_child_state_stopping"),
         // The service's own `runtime_failed` row says why.
         RuntimeState::Failed => return None,
-    };
-    Some(seat_diagnostic(
-        DiagnosticLevel::Info,
-        "child_state",
-        message,
-        seat,
-    ))
+    })
 }
 
 /// A running seat with a port closed, or a port held while the seat is idle. A seat that is
@@ -411,10 +510,17 @@ fn port_row(
         state,
         RuntimeState::Stopped | RuntimeState::Unknown | RuntimeState::Failed
     );
-    let message = if running && !(native_open && mgmt_open) {
-        format!(
-            "It's running, but its ports {} and {} aren't both open. Stop and start the seat.",
-            seat.native_port, seat.mgmt_port
+    let row =
+        |message: String| seat_diagnostic(DiagnosticLevel::Warning, "seat_port", message, seat);
+    if running && !(native_open && mgmt_open) {
+        Some(
+            row(format!(
+                "It's running, but its ports {} and {} aren't both open. Stop and start the seat.",
+                seat.native_port, seat.mgmt_port
+            ))
+            .worded("seatcheck_seat_port_closed")
+            .param("native_port", seat.native_port)
+            .param("mgmt_port", seat.mgmt_port),
         )
     } else if idle && (native_open || mgmt_open) {
         let port = if native_open {
@@ -422,24 +528,23 @@ fn port_row(
         } else {
             seat.mgmt_port
         };
-        format!("Another program holds its port {port}, so the seat can't start. Restart the PC.")
+        Some(
+            row(format!(
+                "Another program holds its port {port}, so the seat can't start. Restart the PC."
+            ))
+            .worded("seatcheck_seat_port_taken")
+            .param("port", port),
+        )
     } else {
-        return None;
-    };
-    Some(seat_diagnostic(
-        DiagnosticLevel::Warning,
-        "seat_port",
-        message,
-        seat,
-    ))
+        None
+    }
 }
 
 fn seat_diagnostic(level: DiagnosticLevel, code: &str, message: String, seat: &Seat) -> Diagnostic {
     Diagnostic {
         level,
-        code: code.into(),
-        message,
         seat_id: Some(seat.id.clone()),
+        ..Diagnostic::info(code, message)
     }
 }
 
@@ -460,6 +565,8 @@ mod tests {
             checks: Vec::new(),
             licensing: None,
             termservice: true,
+            rdp_local_only: true,
+            rdp_reachable: false,
             missing_file: None,
             driver: DriverState::Current,
             inbox_driver_newer: Some(false),
@@ -589,7 +696,7 @@ mod tests {
             pick(&rows, "identity"),
             (
                 Error,
-                "punktfunk's service isn't running as Local System. Reinstall punktfunk.".into()
+                "Punktfunk's service isn't running as Local System. Reinstall Punktfunk.".into()
             )
         );
         let rows = report_rows(healthy());
@@ -702,6 +809,31 @@ mod tests {
         );
     }
 
+    /// Only "this PC only" with a rule open to the network warns; the network choice never does.
+    #[test]
+    fn remote_desktop_open_against_the_choice_warns() {
+        let rows = |rdp_local_only, rdp_reachable| {
+            report_rows(BoxFacts {
+                rdp_local_only,
+                rdp_reachable,
+                ..healthy()
+            })
+        };
+        assert_eq!(
+            pick(&rows(true, true), "rdp_network"),
+            (
+                Warning,
+                "A firewall rule lets other computers reach Remote Desktop, which seats keep to \
+                 this PC. Turn the rule off in Windows Defender Firewall, or turn on Allow Remote \
+                 Desktop from the network under Profiles → Seats."
+                    .into()
+            )
+        );
+        for (local, reachable) in [(true, false), (false, true), (false, false)] {
+            assert!(!codes(&rows(local, reachable)).contains(&"rdp_network"));
+        }
+    }
+
     #[test]
     fn a_missing_file_is_named() {
         let rows = report_rows(BoxFacts {
@@ -712,7 +844,7 @@ mod tests {
             pick(&rows, "host_executable"),
             (
                 Error,
-                "A punktfunk file is missing (pf-keeper.exe). Reinstall punktfunk.".into()
+                "A Punktfunk file is missing (pf-keeper.exe). Reinstall Punktfunk.".into()
             )
         );
     }
@@ -736,7 +868,7 @@ mod tests {
             row(DriverState::Outdated),
             (
                 Warning,
-                "The seat display driver is older than this punktfunk. Seats update it when they next start."
+                "The seat display driver is older than this Punktfunk. Seats update it when they next start."
                     .into()
             )
         );
@@ -753,7 +885,7 @@ mod tests {
             row(DriverState::Unstaged),
             (
                 Error,
-                "The seat display driver isn't on this PC. Reinstall punktfunk.".into()
+                "The seat display driver isn't on this PC. Reinstall Punktfunk.".into()
             )
         );
     }
@@ -780,8 +912,8 @@ mod tests {
             pick(&rows, "seat_display_rank"),
             (
                 Error,
-                "Windows' own Remote Desktop display driver is newer than punktfunk's, so seats \
-                 start without a picture. Update punktfunk."
+                "Windows' own Remote Desktop display driver is newer than Punktfunk's, so seats \
+                 start without a picture. Update Punktfunk."
                     .into()
             )
         );
@@ -795,7 +927,10 @@ mod tests {
             (Info, "Remote Desktop's certificate is recorded.".into())
         );
         assert_eq!(
-            row(Some(Err("the certificate changed".into()))),
+            row(Some(Err(BackendError::new(
+                "rdp_pin_invalid",
+                "the certificate changed"
+            )))),
             (Error, "the certificate changed".into())
         );
         assert_eq!(
@@ -859,11 +994,14 @@ mod tests {
         assert_eq!(row(false, false), None);
         assert_eq!(
             row(true, false),
-            Some(Diagnostic::warning(
-                "seat_audio",
-                "Seats stream without sound: Steam's streaming audio driver isn't on this PC. \
+            Some(
+                Diagnostic::warning(
+                    "seat_audio",
+                    "Seats stream without sound: Steam's streaming audio driver isn't on this PC. \
                  Install Steam, then restart the seats."
-            ))
+                )
+                .worded("seatcheck_seat_audio")
+            )
         );
     }
 
@@ -879,10 +1017,12 @@ mod tests {
             autostart: false,
             runtime: RuntimeStatus::stopped(),
             owner: false,
+            owner_uid: None,
             fingerprint: None,
             adopted_sid: None,
             adopted_uid: None,
             rdp_granted: false,
+            console_deny_kept: false,
         }
     }
 
@@ -902,6 +1042,7 @@ mod tests {
         RuntimeStatus {
             state,
             detail: detail.map(Into::into),
+            ..RuntimeStatus::default()
         }
     }
 
@@ -987,7 +1128,7 @@ mod tests {
         };
         let missing = (
             Error,
-            "Its Windows account pfs-one is missing or isn't punktfunk's. Remove the profile and add it again."
+            "Its Windows account pfs-one is missing or isn't Punktfunk's. Remove the profile and add it again."
                 .to_string(),
         );
         let lost = (
@@ -1014,7 +1155,7 @@ mod tests {
             }),
             (
                 Error,
-                "punktfunk has lost the password of its Windows account pfs-one. Remove the profile and add it again."
+                "Punktfunk has lost the password of its Windows account pfs-one. Remove the profile and add it again."
                     .into()
             )
         );
@@ -1114,7 +1255,7 @@ mod tests {
             }),
             (
                 Error,
-                "punktfunk has lost Bärbel Ott's password. Enter it again on the profile's card."
+                "Punktfunk has lost Bärbel Ott's password. Enter it again on the profile's card."
                     .into()
             )
         );

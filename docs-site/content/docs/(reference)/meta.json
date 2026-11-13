@@ -5,7 +5,9 @@
   "pages": [
     "support-matrix",
     "configuration",
+    "client-settings",
     "host-cli",
+    "host-events",
     "ports",
     "security",
     "how-it-works",

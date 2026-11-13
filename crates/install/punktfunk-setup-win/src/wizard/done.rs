@@ -73,7 +73,7 @@ pub(super) fn done_page(w: &Wizard, cx: &ViewContext<'_, Wizard>) -> View {
         WizStep::Done,
         content,
         vec![Button::new()
-            .content("Finish")
+            .content(tools::wizard_finish())
             .style(ButtonStyle::Accent)
             .min_width(124.0)
             .on_click(cx.message(Msg::Exit(0)))
@@ -84,15 +84,11 @@ pub(super) fn done_page(w: &Wizard, cx: &ViewContext<'_, Wizard>) -> View {
 fn done_uninstalled(w: &Wizard) -> Vec<View> {
     vec![
         TextBlock::new()
-            .text("punktfunk was removed from this PC.")
+            .text(tools::wizard_done_removed())
             .font_size(18.0)
             .font_weight(FontWeight::SEMI_BOLD)
             .into(),
-        note(
-            w,
-            r"Kept on purpose: %ProgramData%\punktfunk (identity, passwords, update cache) — a reinstall picks it up.",
-        )
-        .into(),
+        note(w, tools::wizard_done_kept()).into(),
     ]
 }
 
@@ -103,10 +99,10 @@ fn done_installed(w: &Wizard, cx: &ViewContext<'_, Wizard>) -> Vec<View> {
     let fresh = w.screen.fresh();
     let mut children: Vec<View> = vec![TextBlock::new()
         .text(match (w.preset.artifact, fresh) {
-            (Artifact::Host, true) => "The punktfunk host is installed and streaming.",
-            (Artifact::Host, false) => "The punktfunk host is up to date.",
-            (Artifact::Client, true) => "The punktfunk client is installed.",
-            (Artifact::Client, false) => "The punktfunk client is up to date.",
+            (Artifact::Host, true) => tools::wizard_done_host_installed(),
+            (Artifact::Host, false) => tools::wizard_done_host_updated(),
+            (Artifact::Client, true) => tools::wizard_done_client_installed(),
+            (Artifact::Client, false) => tools::wizard_done_client_updated(),
         })
         .font_size(18.0)
         .font_weight(FontWeight::SEMI_BOLD)
@@ -120,7 +116,7 @@ fn done_installed(w: &Wizard, cx: &ViewContext<'_, Wizard>) -> Vec<View> {
         children.push(password_card(w, cx, pw));
     }
     children.push(
-        note(w, "Next")
+        note(w, tools::wizard_done_next())
             .font_size(12.0)
             .font_weight(FontWeight::SEMI_BOLD)
             .margin(Thickness::new(2.0, 6.0, 0.0, -4.0))
@@ -146,9 +142,12 @@ fn done_installed(w: &Wizard, cx: &ViewContext<'_, Wizard>) -> Vec<View> {
         );
     }
     children.push(
-        link("Stuck? Troubleshooting", &format!("{DOCS}/troubleshooting"))
-            .margin(Thickness::new(-10.0, 0.0, 0.0, 0.0))
-            .into(),
+        link(
+            tools::wizard_done_stuck(),
+            &format!("{DOCS}/troubleshooting"),
+        )
+        .margin(Thickness::new(-10.0, 0.0, 0.0, 0.0))
+        .into(),
     );
     children
 }
@@ -161,7 +160,7 @@ fn password_card(w: &Wizard, cx: &ViewContext<'_, Wizard>, pw: &str) -> View {
     card(
         StackPanel::new().spacing(6.0).children((
             TextBlock::new()
-                .text("Your web console password")
+                .text(tools::wizard_password_title())
                 .font_weight(FontWeight::SEMI_BOLD),
             StackPanel::new()
                 .orientation(Orientation::Horizontal)
@@ -178,21 +177,25 @@ fn password_card(w: &Wizard, cx: &ViewContext<'_, Wizard>, pw: &str) -> View {
                     icon_button(
                         cx,
                         if reveal { GLYPH_HIDE } else { GLYPH_VIEW },
-                        if reveal { "Hide" } else { "Show" },
+                        if reveal {
+                            tools::wizard_password_hide()
+                        } else {
+                            tools::wizard_password_show()
+                        },
                         Msg::RevealDone(!reveal),
                     ),
                     icon_button(
                         cx,
                         if w.copied { GLYPH_ACCEPT } else { GLYPH_COPY },
-                        if w.copied { "Copied" } else { "Copy" },
+                        if w.copied {
+                            tools::wizard_password_copied()
+                        } else {
+                            tools::wizard_password_copy()
+                        },
                         Msg::Copy,
                     ),
                 )),
-            note(
-                w,
-                r"Stored in %ProgramData%\punktfunk\web-password. To change it later, edit that file and run `punktfunk-host service restart` from an elevated PowerShell.",
-            )
-            .font_size(12.0),
+            note(w, tools::wizard_password_stored()).font_size(12.0),
         )),
     )
     .into()
@@ -205,32 +208,32 @@ fn next_steps(w: &Wizard, artifact: Artifact) -> (Border, Border) {
         Artifact::Host => (
             next_step(
                 w,
-                "Open the web console",
-                "Approve devices, pick what to stream, change settings. The certificate is the host's own — continue past the browser's warning.",
+                tools::wizard_next_console(),
+                tools::wizard_next_console_body(),
                 "https://127.0.0.1:47992",
                 "https://127.0.0.1:47992/",
             ),
             next_step(
                 w,
-                "Install a client",
-                "On the device you play on — Windows, macOS, iOS, Android, Linux, Steam Deck — then connect and press Approve in the console.",
-                "Client downloads",
+                tools::wizard_next_client(),
+                tools::wizard_next_client_body(),
+                tools::wizard_next_client_link(),
                 &format!("{DOCS}/install-client"),
             ),
         ),
         Artifact::Client => (
             next_step(
                 w,
-                "Open Punktfunk",
-                "It is in the Start menu. Pick your host from the list, or add one by address.",
-                "Pairing help",
+                tools::wizard_next_open(),
+                tools::wizard_next_open_body(),
+                tools::wizard_next_pairing_link(),
                 &format!("{DOCS}/pairing"),
             ),
             next_step(
                 w,
-                "No host yet?",
-                "Install the punktfunk host on the PC you stream from.",
-                "Host install guide",
+                tools::wizard_next_no_host(),
+                tools::wizard_next_no_host_body(),
+                tools::wizard_next_host_link(),
                 &format!("{DOCS}/windows-host"),
             ),
         ),

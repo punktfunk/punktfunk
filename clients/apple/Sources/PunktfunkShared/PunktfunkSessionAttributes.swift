@@ -17,21 +17,16 @@ public struct PunktfunkSessionAttributes: ActivityAttributes {
     // Static for the Activity's whole life (set at request time).
     public let hostID: UUID
     public let hostName: String
-    /// The title of the launched game, if the session started from the library; nil for a plain
-    /// host connect (nothing tracks the live foreground app mid-session).
-    public let launchTitle: String?
 
-    public init(hostID: UUID, hostName: String, launchTitle: String?) {
+    public init(hostID: UUID, hostName: String) {
         self.hostID = hostID
         self.hostName = hostName
-        self.launchTitle = launchTitle
     }
 
     public struct ContentState: Codable, Hashable {
         public enum Stage: String, Codable, Hashable {
             case streaming     // foreground, live
             case background    // backgrounded keep-alive (countdown running)
-            case reconnecting  // post-loss re-anchor hold
             case ending        // torn down — final state before dismissal
         }
 
@@ -41,28 +36,18 @@ public struct PunktfunkSessionAttributes: ActivityAttributes {
         public var startedAt: Date
         /// e.g. "2560×1440 @120 · HEVC · HDR". Updated only when it actually changes.
         public var modeLine: String
-        /// Coarse, updated sparsely (every ~30 s) — never the 1 Hz stats firehose.
-        public var latencyMs: Int?
-        public var mbps: Double?
         /// While backgrounded: when the keep-alive auto-disconnect fires — drives the countdown.
         public var backgroundDeadline: Date?
 
         public init(
-            stage: Stage, startedAt: Date, modeLine: String,
-            latencyMs: Int? = nil, mbps: Double? = nil, backgroundDeadline: Date? = nil
+            stage: Stage, startedAt: Date, modeLine: String, backgroundDeadline: Date? = nil
         ) {
             self.stage = stage
             self.startedAt = startedAt
             self.modeLine = modeLine
-            self.latencyMs = latencyMs
-            self.mbps = mbps
             self.backgroundDeadline = backgroundDeadline
         }
     }
 }
 
-/// Kind string for the Live Activity — kept next to the attributes so app + extension agree.
-public enum PunktfunkActivity {
-    public static let kind = "PunktfunkSession"
-}
 #endif

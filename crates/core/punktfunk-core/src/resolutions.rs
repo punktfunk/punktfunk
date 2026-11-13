@@ -83,19 +83,28 @@ pub fn aspect_of(w: u32, h: u32) -> Option<usize> {
     })
 }
 
+/// Which entry of the aspect switch a [`Family`] is. A client words the device's two; an
+/// aspect shows its [`Aspect::label`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FamilyId {
+    /// This device's screen.
+    Screen,
+    /// This device's safe area.
+    SafeArea,
+    /// `ASPECTS[i]`.
+    Aspect(usize),
+}
+
 /// One entry of a device's aspect switch: a standard family, or this screen's
 /// own shape ([`families`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Family {
-    pub label: &'static str,
+    pub id: FamilyId,
     /// Width over height.
     pub shape: f64,
     /// Ascending, all sides even.
     pub sizes: Vec<(u32, u32)>,
 }
-
-pub const SCREEN_LABEL: &str = "Screen";
-pub const SAFE_AREA_LABEL: &str = "Safe area";
 
 /// Heights a device family offers below the screen's own.
 const DEVICE_HEIGHTS: [u32; 4] = [720, 1080, 1440, 2160];
@@ -105,30 +114,30 @@ const DEVICE_HEIGHTS: [u32; 4] = [720, 1080, 1440, 2160];
 const DEVICE_TOLERANCE: f64 = 0.01;
 
 /// The aspect switch on a device with `screen` and a `safe` area (landscape
-/// `(w, h)`): "Screen", then "Safe area", then [`ASPECTS`]. Each device entry
+/// `(w, h)`): the screen, then the safe area, then [`ASPECTS`]. Each device entry
 /// appears only when no standard family already has its shape, and the safe
 /// area only when it differs from the screen.
 pub fn families(screen: Option<(u32, u32)>, safe: Option<(u32, u32)>) -> Vec<Family> {
     let mut out = Vec::new();
     let screen = screen.filter(|&(w, h)| w > 0 && h > 0);
-    for (label, dims) in [(SCREEN_LABEL, screen), (SAFE_AREA_LABEL, safe)] {
+    for (id, dims) in [(FamilyId::Screen, screen), (FamilyId::SafeArea, safe)] {
         let Some((w, h)) = dims.filter(|&(w, h)| w > 0 && h > 0) else {
             continue;
         };
-        if label == SAFE_AREA_LABEL && Some((w, h)) == screen {
+        if id == FamilyId::SafeArea && Some((w, h)) == screen {
             continue;
         }
         if aspect_of(w, h).is_some() {
             continue;
         }
         out.push(Family {
-            label,
+            id,
             shape: f64::from(w) / f64::from(h),
             sizes: device_sizes(w, h),
         });
     }
-    out.extend(ASPECTS.iter().map(|a| Family {
-        label: a.label,
+    out.extend(ASPECTS.iter().enumerate().map(|(i, a)| Family {
+        id: FamilyId::Aspect(i),
         shape: f64::from(a.ratio.0) / f64::from(a.ratio.1),
         sizes: a.sizes.to_vec(),
     }));
@@ -160,7 +169,7 @@ pub fn family_of(families: &[Family], w: u32, h: u32) -> Option<usize> {
     }
     let shape = f64::from(w) / f64::from(h);
     let within = |f: &Family, tol: f64| (shape / f.shape - 1.0).abs() < tol;
-    let device = |f: &Family| f.label == SCREEN_LABEL || f.label == SAFE_AREA_LABEL;
+    let device = |f: &Family| !matches!(f.id, FamilyId::Aspect(_));
     families
         .iter()
         .position(|f| device(f) && within(f, DEVICE_TOLERANCE))
@@ -246,8 +255,8 @@ mod tests {
         let f = families(Some((3216, 1440)), Some((3088, 1440)));
         assert_eq!(f.len(), ASPECTS.len() + 2);
         assert_eq!(
-            (f[0].label, f[1].label, f[2].label),
-            ("Screen", "Safe area", "16:9")
+            (f[0].id, f[1].id, f[2].id),
+            (FamilyId::Screen, FamilyId::SafeArea, FamilyId::Aspect(0))
         );
         assert_eq!(f[0].sizes, [(1608, 720), (2412, 1080), (3216, 1440)]);
         assert_eq!(f[1].sizes, [(1544, 720), (2316, 1080), (3088, 1440)]);

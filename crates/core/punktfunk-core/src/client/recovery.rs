@@ -5,11 +5,13 @@
 //! (`FeedbackOut`).
 
 use crate::quic::v2::dgram::Feedback;
-use crate::reanchor::{AnchorEvidence, GateVerdict, LocalRecovery, ReanchorGate};
+use crate::reanchor::{
+    AnchorEvidence, GateVerdict, LocalRecovery, ReanchorGate, REANCHOR_FREEZE_MAX,
+};
 use std::time::{Duration, Instant};
 
-/// One RFI ask per window so a burst of gaps cannot storm the control stream.
-/// The host coalesces further.
+/// One ask per window so a burst of gaps cannot storm the control stream. A lift ends the
+/// window early: the repair took, so the next loss is a new one. The host coalesces further.
 const RFI_THROTTLE: Duration = Duration::from_millis(100);
 
 /// Short tails remembered so the decoder's later gap over them asks nothing. The gap
@@ -153,10 +155,15 @@ impl RfiRecovery {
         self.pending = None;
     }
 
-    /// No ask of either kind went out in the last [`RFI_THROTTLE`].
+    /// No ask of either kind went out in the last [`RFI_THROTTLE`], or a lift came after it.
     fn window_open(&self, now: Instant) -> bool {
         self.last_req
             .is_none_or(|t| now.duration_since(t) >= RFI_THROTTLE)
+    }
+
+    /// The freeze lifted: the ask behind it was answered, so the window opens.
+    fn reopen(&mut self) {
+        self.last_req = None;
     }
 
     /// An IDR went out through the one window: it repairs the pending range and shuts the
@@ -455,7 +462,7 @@ impl RecoveryDriver {
 
     /// One decoded picture: `(forgive_chain, want_keyframe)`. A recovery SEI on a picture
     /// decoded before the arm cannot lift; a damaged chain that reaches an open gate holds
-    /// and asks now, not at the backstop.
+    /// and asks now, not at the backstop. A lift opens the ask window.
     fn decoded(&mut self, d: Decoded, now: Instant) -> (bool, bool) {
         let Some(g) = &mut self.gate else {
             return (false, false);
@@ -474,12 +481,19 @@ impl RecoveryDriver {
         if want_keyframe {
             tracing::debug!("damaged reference chain reached an open gate — holding");
         }
+        if forgive || (was && present) {
+            self.rfi.reopen();
+        }
         (forgive, want_keyframe)
     }
 
-    /// A keyframe through the one window. Shut: dropped, and the backstop re-asks.
+    /// A keyframe through the one window. Shut: held back, and the gate re-asks
+    /// [`REANCHOR_FREEZE_MAX`] after the ask that shut it, should the freeze still hold.
     fn keyframe(&mut self, now: Instant) -> RecoveryAsk {
         if !self.rfi.window_open(now) {
+            if let (Some(g), Some(last)) = (&mut self.gate, self.rfi.last_req) {
+                g.hasten(last + REANCHOR_FREEZE_MAX);
+            }
             return RecoveryAsk::None;
         }
         self.rfi.keyframe_sent(now);
@@ -497,13 +511,15 @@ impl RecoveryDriver {
     }
 }
 
-/// The frames the decoder took clean, in its order: an IDR, an anchor, or the frame right
-/// after a clean one. The newest and the sixteen before it ride
-/// [`Feedback::acked`]; while its link loses packets the host references only these.
+/// The frames the decoder took clean, in its order: an IDR, an anchor, a wave's close after an
+/// unbroken sweep, or the frame right after a clean one. The newest and the sixteen before it
+/// ride [`Feedback::acked`]; the host keeps one of these resident as the next loss's anchor.
 #[derive(Default)]
 pub(crate) struct AckChain {
     prev: Option<u32>,
     clean: bool,
+    /// Every frame since a wave's start followed the one before it.
+    sweep: bool,
     last: Option<u32>,
     mask: u16,
 }
@@ -516,10 +532,17 @@ impl AckChain {
         }
         let follows = self.prev.is_some_and(|p| p.wrapping_add(1) == index);
         self.prev = Some(index);
+        use crate::packet::{USER_FLAG_RECOVERY_CLOSE as CLOSE, USER_FLAG_RECOVERY_POINT as POINT};
+        let healed = flags & CLOSE != 0 && follows && self.sweep;
+        self.sweep = if flags & POINT != 0 {
+            flags & CLOSE == 0
+        } else {
+            follows && self.sweep
+        };
         let fresh = flags
             & (u32::from(crate::packet::FLAG_SOF) | crate::packet::USER_FLAG_RECOVERY_ANCHOR)
             != 0;
-        self.clean = fresh || (follows && self.clean);
+        self.clean = fresh || healed || (follows && self.clean);
         if !self.clean {
             return None;
         }
@@ -1176,6 +1199,24 @@ mod feedback_out_tests {
         assert_eq!(acked(40, USER_FLAG_RECOVERY_ANCHOR), Some((40, 0)));
     }
 
+    /// A wave's close restarts the chain once the client saw its start and every frame after
+    /// it; a gap inside the sweep leaves the close unconfirmed.
+    #[test]
+    fn a_whole_wave_restarts_the_chain() {
+        use crate::packet::{USER_FLAG_RECOVERY_CLOSE as CLOSE, USER_FLAG_RECOVERY_POINT as POINT};
+        let mut out = FeedbackOut::default();
+        let mut acked = |i, f| out.decoded(i, f).and_then(|fb| fb.acked);
+        assert_eq!(acked(5, 0), None, "a broken chain");
+        assert_eq!(acked(6, POINT), None, "the start leans on the damage");
+        assert_eq!(acked(7, 0), None);
+        assert_eq!(acked(8, POINT | CLOSE), Some((8, 0)));
+        assert_eq!(acked(9, 0), Some((9, 0b1)));
+        assert_eq!(acked(20, 0), None, "a gap");
+        assert_eq!(acked(21, POINT), None);
+        assert_eq!(acked(23, 0), None, "22 never came");
+        assert_eq!(acked(24, POINT | CLOSE), None, "the sweep had a gap");
+    }
+
     #[test]
     fn a_nack_repeats_until_its_frame_arrives() {
         let t0 = Instant::now();
@@ -1363,6 +1404,115 @@ mod driver_tests {
                 ),
                 other => panic!("ask {other:?}"),
             },
+        }
+    }
+
+    const fn au(index: u32) -> E {
+        E::Arrived {
+            index,
+            complete: true,
+            decode_order: 0,
+        }
+    }
+
+    const fn took(flags: u32) -> E {
+        E::Decoded(Decoded {
+            flags,
+            keyframe: false,
+            evidence: AnchorEvidence::Unavailable,
+            local: LocalRecovery::NONE,
+            decode_order: None,
+        })
+    }
+
+    /// Plays `script` through `d` with the pump's 1 ms tick to `until` ms; every ask with the
+    /// millisecond it left.
+    fn replay(d: &mut RecoveryDriver, script: &[(u64, E)], until: u64) -> Vec<(u64, RecoveryAsk)> {
+        let t0 = Instant::now();
+        let mut script = script.iter().peekable();
+        let mut asks = Vec::new();
+        for ms in 0..=until {
+            let now = t0 + Duration::from_millis(ms);
+            while let Some(&(_, ev)) = script.next_if(|(at, _)| *at <= ms) {
+                asks.push((ms, d.step(ev, now).ask));
+            }
+            asks.push((ms, d.step(E::Tick { frames_dropped: 0 }, now).ask));
+        }
+        asks.retain(|&(_, ask)| ask != RecoveryAsk::None);
+        asks
+    }
+
+    fn engaged() -> RecoveryDriver {
+        let mut d = RecoveryDriver::default();
+        d.engage(0);
+        d
+    }
+
+    /// A loss after the anchor lifted the last one asks at once, not when the window that
+    /// ask opened ends: one ask per answered ask.
+    #[test]
+    fn a_loss_after_the_lift_asks_at_once() {
+        let script = [
+            (0, au(100)),
+            (1, E::TailShort { index: 101 }),
+            (9, au(102)),
+            (16, au(103)),
+            (17, took(USER_FLAG_RECOVERY_ANCHOR)),
+            (41, E::TailShort { index: 108 }),
+        ];
+        assert_eq!(
+            replay(&mut engaged(), &script, 1_000),
+            [
+                (1, RecoveryAsk::Rfi(101, 101)),
+                (41, RecoveryAsk::Rfi(108, 108))
+            ]
+        );
+    }
+
+    /// No lift, no early window: a lost anchor's gap asks when the window ends, and a loss its
+    /// anchor repairs asks once.
+    #[test]
+    fn without_a_lift_the_window_runs_out() {
+        let lost_anchor = [(0, au(100)), (0, au(102)), (20, au(104))];
+        assert_eq!(
+            replay(&mut engaged(), &lost_anchor, 200),
+            [
+                (0, RecoveryAsk::Rfi(101, 101)),
+                (100, RecoveryAsk::Rfi(103, 103))
+            ]
+        );
+        let repaired = [
+            (0, au(100)),
+            (0, au(102)),
+            (20, took(USER_FLAG_RECOVERY_ANCHOR)),
+        ];
+        assert_eq!(
+            replay(&mut engaged(), &repaired, 2_000),
+            [(0, RecoveryAsk::Rfi(101, 101))]
+        );
+    }
+
+    /// The decoder asks for an IDR 5 ms after an RFI the anchor does not lift: the ask goes
+    /// 500 ms after the RFI, not after itself. A no-output streak is the same ask; its re-arm
+    /// does not push the wait.
+    #[test]
+    fn a_held_keyframe_ask_goes_500_ms_after_the_rfi() {
+        let need = [(0, au(104)), (0, au(106)), (5, E::NeedKeyframe)];
+        let silent = [
+            (0, au(104)),
+            (0, au(106)),
+            (10, E::NoOutput),
+            (18, E::NoOutput),
+            (26, E::NoOutput),
+        ];
+        for script in [&need[..], &silent[..]] {
+            assert_eq!(
+                replay(&mut engaged(), script, 999),
+                [
+                    (0, RecoveryAsk::Rfi(105, 105)),
+                    (500, RecoveryAsk::Keyframe)
+                ]
+            );
         }
     }
 

@@ -15,6 +15,7 @@
 use super::choices::{NetworkAnswer, WinChoices};
 use super::plan::{self, Artifact, WinPlan};
 use super::WinFacts;
+use pf_l10n::tools;
 
 /// The D9 step frame. `Network` is the one conditional step (D12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,11 +30,34 @@ pub enum WizStep {
 impl WizStep {
     pub fn title(self) -> &'static str {
         match self {
-            WizStep::Welcome => "Welcome",
-            WizStep::Configure => "Configure",
-            WizStep::Network => "Network",
-            WizStep::Install => "Install",
-            WizStep::Done => "Done",
+            WizStep::Welcome => tools::wizard_step_welcome(),
+            WizStep::Configure => tools::wizard_step_configure(),
+            WizStep::Network => tools::wizard_step_network(),
+            WizStep::Install => tools::wizard_step_install(),
+            WizStep::Done => tools::wizard_step_done(),
+        }
+    }
+}
+
+/// A titled group of Configure rows. The page finds the Network section by this id, never by
+/// its title.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    Drivers,
+    Network,
+    AfterInstall,
+    WebConsole,
+    Shortcuts,
+}
+
+impl Section {
+    pub fn title(self) -> &'static str {
+        match self {
+            Section::Drivers => tools::wizard_section_drivers(),
+            Section::Network => tools::wizard_section_network(),
+            Section::AfterInstall => tools::wizard_section_after_install(),
+            Section::WebConsole => tools::wizard_section_web_console(),
+            Section::Shortcuts => tools::wizard_section_shortcuts(),
         }
     }
 }
@@ -130,22 +154,25 @@ impl WinScreen {
 
     /// The rows grouped for the wizard's Configure page; the transcript keeps the flat
     /// `[Tasks]` order. Every row lands in exactly one section (tested).
-    pub fn sections(&self) -> Vec<(&'static str, Vec<Field>)> {
+    pub fn sections(&self) -> Vec<(Section, Vec<Field>)> {
         let rows = self.rows();
-        let group = |title: &'static str, fields: &[Field]| {
+        let group = |section: Section, fields: &[Field]| {
             let fields: Vec<Field> = fields
                 .iter()
                 .copied()
                 .filter(|f| rows.contains(f))
                 .collect();
-            (title, fields)
+            (section, fields)
         };
         [
-            group("Drivers", &[Field::Driver, Field::Gamepad, Field::HdrLayer]),
-            group("Network", &[Field::Gamestream, Field::PublicFw]),
-            group("After install", &[Field::StartService, Field::Tray]),
-            group("Web console", &[Field::WebBind, Field::Password]),
-            group("Shortcuts", &[Field::DesktopIcon]),
+            group(
+                Section::Drivers,
+                &[Field::Driver, Field::Gamepad, Field::HdrLayer],
+            ),
+            group(Section::Network, &[Field::Gamestream, Field::PublicFw]),
+            group(Section::AfterInstall, &[Field::StartService, Field::Tray]),
+            group(Section::WebConsole, &[Field::WebBind, Field::Password]),
+            group(Section::Shortcuts, &[Field::DesktopIcon]),
         ]
         .into_iter()
         .filter(|(_, fields)| !fields.is_empty())
@@ -174,16 +201,16 @@ impl WinScreen {
 
     pub fn label(field: Field) -> &'static str {
         match field {
-            Field::Driver => "Virtual display driver",
-            Field::Gamepad => "Gamepad drivers",
-            Field::HdrLayer => "HDR Vulkan layer",
-            Field::Gamestream => "Moonlight compat",
-            Field::PublicFw => "Public-network firewall rules",
-            Field::StartService => "Start the service",
-            Field::Tray => "Tray autostart",
-            Field::WebBind => "Web console reachable from",
-            Field::Password => "Web console password",
-            Field::DesktopIcon => "Desktop shortcut",
+            Field::Driver => tools::wizard_row_driver(),
+            Field::Gamepad => tools::wizard_row_gamepad(),
+            Field::HdrLayer => tools::wizard_row_hdr(),
+            Field::Gamestream => tools::wizard_row_gamestream(),
+            Field::PublicFw => tools::wizard_row_public_fw(),
+            Field::StartService => tools::wizard_row_start_service(),
+            Field::Tray => tools::wizard_row_tray(),
+            Field::WebBind => tools::setup_row_web_bind(),
+            Field::Password => tools::wizard_row_password(),
+            Field::DesktopIcon => tools::wizard_row_desktop_icon(),
         }
     }
 
@@ -191,29 +218,22 @@ impl WinScreen {
     /// live") is state, not renderer copy.
     pub fn why(&self, field: Field) -> String {
         match field {
-            Field::Driver => "The virtual display the host streams from.".into(),
-            Field::Gamepad => "Controllers arrive on the host as real gamepads.".into(),
-            Field::HdrLayer => "HDR for Vulkan and DXVK titles.".into(),
+            Field::Driver => tools::wizard_row_driver_hint().into(),
+            Field::Gamepad => tools::wizard_row_gamepad_hint().into(),
+            Field::HdrLayer => tools::wizard_row_hdr_hint().into(),
+            Field::Gamestream if !self.facts.needs_coexistence() => {
+                tools::setup_gamestream_hint().into()
+            }
             Field::Gamestream => match self.competitor() {
-                Some(who) => format!(
-                    "Serve Moonlight, Artemis, or another third-party client. {who} owns the Moonlight ports while it runs — this plane can't bind until it stops."
-                ),
-                None => {
-                    "Serve Moonlight, Artemis, or another third-party client. Punktfunk's own apps don't need this.".into()
-                }
+                Some(who) => tools::wizard_row_gamestream_hint_busy(who),
+                None => tools::wizard_row_gamestream_hint_busy_unnamed().into(),
             },
-            Field::PublicFw => {
-                "Open the firewall on networks marked Public. Off, the host is reachable on private networks only.".into()
-            }
-            Field::StartService => "Start streaming as soon as the install finishes.".into(),
-            Field::Tray => "The status icon next to the clock, for every user.".into(),
-            Field::WebBind => {
-                "Where the console answers: your local network (never the internet), this PC only, or one address such as a VPN interface. It is how you pair devices and change every setting.".into()
-            }
-            Field::Password => {
-                "Generated for you — keep it or type your own. It signs you into the web console and is shown again on the finish page.".into()
-            }
-            Field::DesktopIcon => "A Punktfunk shortcut on the desktop.".into(),
+            Field::PublicFw => tools::wizard_row_public_fw_hint().into(),
+            Field::StartService => tools::wizard_row_start_service_hint().into(),
+            Field::Tray => tools::wizard_row_tray_hint().into(),
+            Field::WebBind => tools::wizard_row_web_bind_hint().into(),
+            Field::Password => tools::wizard_row_password_hint().into(),
+            Field::DesktopIcon => tools::wizard_row_desktop_icon_hint().into(),
         }
     }
 
@@ -222,26 +242,23 @@ impl WinScreen {
         if !self.facts.needs_coexistence() {
             return None;
         }
-        let who = self.competitor().unwrap_or("another streaming host");
-        Some(format!(
-            "{who} detected — punktfunk's management API moves to :{}. {who} keeps :{}.",
-            crate::choices::DEFAULT_MGMT_PORT,
-            super::MGMT_PORT,
-        ))
+        let (port, old_port) = (crate::choices::DEFAULT_MGMT_PORT, super::MGMT_PORT);
+        Some(match self.competitor() {
+            Some(who) => tools::wizard_coexist_note(who, port, old_port),
+            None => tools::wizard_coexist_note_unnamed(port, old_port),
+        })
     }
 
-    /// The competitor's human name — the service name minus the `Service` suffix.
+    /// The live competitor's name, the service name minus the `Service` suffix. `None` when
+    /// none is live or none is named; each sentence has a whole message for the unnamed case.
     fn competitor(&self) -> Option<&str> {
         if !self.facts.needs_coexistence() {
             return None;
         }
-        Some(
-            self.facts
-                .competing_hosts
-                .first()
-                .map(|s| s.strip_suffix("Service").unwrap_or(s))
-                .unwrap_or("another streaming host"),
-        )
+        self.facts
+            .competing_hosts
+            .first()
+            .map(|s| s.strip_suffix("Service").unwrap_or(s))
     }
 
     /// The Public networks the D12 step names, joined for copy.
@@ -376,18 +393,23 @@ mod tests {
             let flat: Vec<Field> = s.sections().into_iter().flat_map(|(_, f)| f).collect();
             assert_eq!(flat, s.rows());
         }
-        let titles: Vec<&str> = screen_of(fresh_facts(), Artifact::Host)
+        let sections: Vec<Section> = screen_of(fresh_facts(), Artifact::Host)
             .sections()
             .into_iter()
-            .map(|(t, _)| t)
+            .map(|(section, _)| section)
             .collect();
         assert_eq!(
-            titles,
-            ["Drivers", "Network", "After install", "Web console"]
+            sections,
+            [
+                Section::Drivers,
+                Section::Network,
+                Section::AfterInstall,
+                Section::WebConsole
+            ]
         );
         assert_eq!(
             screen_of(fresh_facts(), Artifact::Client).sections()[0].0,
-            "Shortcuts"
+            Section::Shortcuts
         );
     }
 
@@ -534,9 +556,26 @@ mod tests {
         let note = s.coexistence_note().unwrap();
         assert!(note.contains("Sunshine detected"));
         assert!(note.contains(":47991"));
-        assert!(s.why(Field::Gamestream).contains("Sunshine owns"));
+        assert!(s
+            .why(Field::Gamestream)
+            .contains("Sunshine holds the Moonlight ports"));
         assert!(screen_of(fresh_facts(), Artifact::Host)
             .coexistence_note()
             .is_none());
+    }
+
+    // A bound management port with no service entry names no one; the sentences say so whole.
+    #[test]
+    fn an_unnamed_competitor_gets_the_whole_unnamed_sentences() {
+        let facts = WinFacts {
+            mgmt_port_in_use: true,
+            ..fresh_facts()
+        };
+        let s = screen_of(facts, Artifact::Host);
+        let note = s.coexistence_note().unwrap();
+        assert!(note.starts_with("Another streaming host detected"));
+        assert!(s
+            .why(Field::Gamestream)
+            .contains("Another streaming host holds the Moonlight ports"));
     }
 }

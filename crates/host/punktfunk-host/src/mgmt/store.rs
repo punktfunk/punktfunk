@@ -9,8 +9,10 @@
 //! Handlers hop to `spawn_blocking`: catalog scans, fetches, and package-manager spawns
 //! would stall the runtime.
 
+use super::auth::AuthLane;
 use super::shared::*;
 use crate::store::{self, index, jobs, manifest, sources};
+use axum::Extension;
 
 // ---------------------------------------------------------------- wire shapes
 
@@ -177,8 +179,9 @@ pub(crate) struct RuntimeRequest {
 
 // ---------------------------------------------------------------- assembly
 
-fn runtime_view() -> RuntimeView {
-    let st = crate::plugins::runtime_status();
+/// The runner as `lane` reads it ([`crate::plugins::runtime_status_as`]).
+fn runtime_view(lane: AuthLane) -> RuntimeView {
+    let st = crate::plugins::runtime_status_as(lane == AuthLane::Person);
     RuntimeView {
         installed: st.installed,
         enabled: st.enabled,
@@ -346,6 +349,55 @@ fn an_update_is_only_ever_newer() {
 
 // ---------------------------------------------------------------- handlers
 
+/// What a seat host on a person's own account answers a plugin from outside the built-in source,
+/// and a catalog source: the code of its host message `apierr_<code>`, and its English.
+pub(super) const REVIEWED_ONLY: (&str, &str) = (
+    "plugin_own_account_unreviewed",
+    "Only plugins reviewed for the Punktfunk store install on a profile that uses an existing \
+     account, because they run as that person.",
+);
+
+/// What a Windows seat host answers its person for a plugin from outside the built-in source.
+const SEAT_REVIEWED_ONLY: (&str, &str) = (
+    "plugin_seat_unreviewed",
+    "Only plugins reviewed for the Punktfunk store install from your own Punktfunk.",
+);
+
+/// Why a plan of `tier` doesn't install, if it doesn't: a person's own account takes reviewed
+/// plugins alone on any lane, and so does a Windows seat's `person` lane. That store runs as
+/// SYSTEM, and a raw spec names what it fetches.
+fn unreviewed(
+    tier: manifest::Tier,
+    own_account: bool,
+    windows_seat: bool,
+    person: bool,
+) -> Option<(&'static str, &'static str)> {
+    match (tier, own_account, windows_seat && person) {
+        (manifest::Tier::Verified, ..) => None,
+        (_, true, _) => Some(REVIEWED_ONLY),
+        (_, false, true) => Some(SEAT_REVIEWED_ONLY),
+        (_, false, false) => None,
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn a_windows_seat_s_person_installs_reviewed_plugins_alone() {
+    use manifest::Tier;
+    let seat = Some(SEAT_REVIEWED_ONLY);
+    let rows = [
+        (Tier::Verified, true, true, true, None),
+        (Tier::Unverified, true, false, false, Some(REVIEWED_ONLY)),
+        (Tier::Unverified, false, true, true, seat),
+        (Tier::External, false, true, true, seat),
+        (Tier::Unverified, false, true, false, None),
+        (Tier::Unverified, false, false, true, None),
+    ];
+    for (tier, own, windows, person, want) in rows {
+        assert_eq!(unreviewed(tier, own, windows, person), want);
+    }
+}
+
 /// Browse the plugin catalog
 ///
 /// Merged view across sources, annotated with what this host has and can run. A source past its
@@ -363,7 +415,7 @@ fn an_update_is_only_ever_newer() {
     )
 )]
 pub(crate) async fn get_catalog() -> Response {
-    match blocking("plugin store", || build_catalog(false)).await {
+    match blocking("plugin_store", || build_catalog(false)).await {
         Ok(c) => Json(c).into_response(),
         Err(e) => e,
     }
@@ -384,7 +436,7 @@ pub(crate) async fn get_catalog() -> Response {
     )
 )]
 pub(crate) async fn refresh_catalog() -> Response {
-    match blocking("plugin store", || build_catalog(true)).await {
+    match blocking("plugin_store", || build_catalog(true)).await {
         Ok(c) => {
             crate::events::emit(crate::events::EventKind::StoreChanged);
             Json(c).into_response()
@@ -411,7 +463,7 @@ pub(crate) async fn refresh_catalog() -> Response {
 pub(crate) async fn list_installed() -> Response {
     // Lease registry is in-memory; read it here, not inside `spawn_blocking`.
     let live: Vec<String> = crate::plugin_host::registry::live_plugin_ids();
-    match blocking("plugin store", move || build_installed(&live)).await {
+    match blocking("plugin_store", move || build_installed(&live)).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => e,
     }
@@ -421,8 +473,10 @@ pub(crate) async fn list_installed() -> Response {
 ///
 /// `{source, id}` installs the catalog pin after re-checking integrity, or `{spec,
 /// accept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at
-/// `GET /store/jobs/{id}`. A seat host on a person's own account installs from the built-in
-/// source alone: anything else would run code the box chose as that person.
+/// `GET /store/jobs/{id}`. A seat host installs into the seat's own plugins, which its own runner
+/// runs as the seat's account. On a person's own account it installs for that person's own
+/// session, from the built-in source alone: what it installs runs as them. A Windows seat's
+/// person installs from the built-in source alone too.
 ///
 /// One package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.
 #[utoipa::path(
@@ -436,11 +490,12 @@ pub(crate) async fn list_installed() -> Response {
         (status = BAD_REQUEST, description = "Unknown entry, bad spec, or missing acknowledgement", body = ApiError),
         (status = CONFLICT, description = "Another package operation is in flight", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = FORBIDDEN, description = "Not authorized for the plugin token, or a plugin from outside the built-in source on a seat host on a person's own account", body = ApiError),
+        (status = FORBIDDEN, description = "Not authorized for the plugin token, or a plugin from outside the built-in source on a seat host on a person's own account or for a Windows seat's person", body = ApiError),
     )
 )]
 pub(crate) async fn install_plugin(
     State(st): State<Arc<MgmtState>>,
+    Extension(lane): Extension<AuthLane>,
     ApiJson(req): ApiJson<InstallRequest>,
 ) -> Response {
     let plan =
@@ -450,7 +505,7 @@ pub(crate) async fn install_plugin(
             req.spec.as_deref(),
         ) {
             (Some(source), Some(id), None) => {
-                let found = match blocking("plugin store", {
+                let found = match blocking("plugin_store", {
                     let (source, id) = (source.to_string(), id.to_string());
                     move || store::find_entry(&source, &id)
                 })
@@ -465,11 +520,25 @@ pub(crate) async fn install_plugin(
                         "no such plugin in that source's catalog",
                     );
                 };
-                if let Some(reason) = entry.incompatible_reason() {
-                    return api_error(
-                        StatusCode::BAD_REQUEST,
-                        &format!("This plugin can't run on this host — {reason}"),
-                    );
+                if let Some(why) = entry.incompatibility() {
+                    let refusal = match why {
+                        index::Incompatible::Platforms(list) => ApiError::coded(
+                            "plugin_needs_platform",
+                            format!(
+                                "This plugin can't run on this host — requires {}",
+                                list.join(", ")
+                            ),
+                        )
+                        .param("platforms", list.join(", ")),
+                        index::Incompatible::Host(min) => ApiError::coded(
+                            "plugin_needs_newer_host",
+                            format!(
+                            "This plugin can't run on this host — needs Punktfunk {min} or newer"
+                        ),
+                        )
+                        .param("version", min),
+                    };
+                    return refusal.respond(StatusCode::BAD_REQUEST);
                 }
                 match jobs::Plan::from_entry(&entry, source, verified) {
                     Ok(p) => p,
@@ -495,16 +564,14 @@ pub(crate) async fn install_plugin(
             ),
         };
 
-    if pf_paths::seat::own_account() && plan.tier != manifest::Tier::Verified {
-        return api_error(
-            StatusCode::FORBIDDEN,
-            "Only plugins reviewed for the Punktfunk store install on a profile that uses an \
-             existing account, because they run as that person.",
-        );
+    let windows_seat = cfg!(windows) && pf_paths::seat::role().is_seat_host();
+    let own = pf_paths::seat::own_account();
+    if let Some((code, why)) = unreviewed(plan.tier, own, windows_seat, lane == AuthLane::Person) {
+        return api_error_coded(StatusCode::FORBIDDEN, code, why);
     }
     match jobs::spawn_install(plan, st.plugin_tokens.clone()) {
         Ok(job) => (StatusCode::ACCEPTED, Json(JobRef { job })).into_response(),
-        Err(e) => api_error(StatusCode::CONFLICT, &format!("{e:#}")),
+        Err(e) => job_running(&e),
     }
 }
 
@@ -536,7 +603,7 @@ pub(crate) async fn uninstall_plugin(
     // `@scope/plugin-*` also matches `@punktfunk/plugin-kit`, a library plugins depend on.
     // Only a top-level install (`installed_packages`) may be removed.
     let pkg = req.pkg.clone();
-    let known = match blocking("plugin store", move || {
+    let known = match blocking("plugin_store", move || {
         store::installed_packages(&store::plugins_dir())
             .iter()
             .any(|p| p.pkg == pkg)
@@ -559,8 +626,18 @@ pub(crate) async fn uninstall_plugin(
         crate::library::delete_provider,
     ) {
         Ok(job) => (StatusCode::ACCEPTED, Json(JobRef { job })).into_response(),
-        Err(e) => api_error(StatusCode::CONFLICT, &format!("{e:#}")),
+        Err(e) => job_running(&e),
     }
+}
+
+/// The `409` for a plugin job refused because another one runs; which one goes to the log.
+fn job_running(e: &anyhow::Error) -> Response {
+    api_error_logged(
+        StatusCode::CONFLICT,
+        "plugin_job_running",
+        "Another plugin operation is already running",
+        &format!("{e:#}"),
+    )
 }
 
 /// List recent package jobs
@@ -615,7 +692,7 @@ pub(crate) async fn get_job(Path(id): Path<String>) -> Response {
     )
 )]
 pub(crate) async fn list_sources() -> Response {
-    match blocking("plugin store", || {
+    match blocking("plugin_store", || {
         store::cached_catalogs()
             .into_iter()
             .map(|st| SourceView {
@@ -665,7 +742,7 @@ pub(crate) async fn put_source(
         url: input.url,
         public_key: input.public_key.filter(|k| !k.trim().is_empty()),
     };
-    let saved = blocking("plugin store", move || {
+    let saved = blocking("plugin_store", move || {
         let r = sources::put(source);
         if r.is_ok() {
             // A redefined source must not keep serving the old cache.
@@ -704,7 +781,7 @@ pub(crate) async fn delete_source(Path(name): Path<String>) -> Response {
             "the built-in source cannot be removed",
         );
     }
-    let removed = blocking("plugin store", move || {
+    let removed = blocking("plugin_store", move || {
         let r = sources::remove(&name);
         if matches!(r, Ok(true)) {
             store::drop_source_cache(&name);
@@ -725,7 +802,8 @@ pub(crate) async fn delete_source(Path(name): Path<String>) -> Response {
 /// Plugin runner state
 ///
 /// Plugins run only while the runner is on. The runner discovers units at startup, so a freshly
-/// installed plugin may not have appeared yet.
+/// installed plugin may not have appeared yet. On a seat host on a person's own account the
+/// runner is theirs: any lane but their own session reads it as not installed.
 #[utoipa::path(
     get,
     path = "/store/runtime",
@@ -737,14 +815,16 @@ pub(crate) async fn delete_source(Path(name): Path<String>) -> Response {
         (status = FORBIDDEN, description = "Not authorized for the plugin token", body = ApiError),
     )
 )]
-pub(crate) async fn get_runtime() -> Response {
-    match blocking("plugin store", runtime_view).await {
+pub(crate) async fn get_runtime(Extension(lane): Extension<AuthLane>) -> Response {
+    match blocking("plugin_store", move || runtime_view(lane)).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => e,
     }
 }
 
 /// Turn the plugin runner on or off
+///
+/// On a seat host on a person's own account only their own session switches it.
 #[utoipa::path(
     post,
     path = "/store/runtime",
@@ -758,14 +838,22 @@ pub(crate) async fn get_runtime() -> Response {
         (status = FORBIDDEN, description = "Not authorized for the plugin token", body = ApiError),
     )
 )]
-pub(crate) async fn set_runtime(ApiJson(req): ApiJson<RuntimeRequest>) -> Response {
-    let switched = blocking("plugin store", move || {
-        crate::plugins::set_runtime_enabled(req.enabled).map(|()| runtime_view())
+pub(crate) async fn set_runtime(
+    Extension(lane): Extension<AuthLane>,
+    ApiJson(req): ApiJson<RuntimeRequest>,
+) -> Response {
+    let switched = blocking("plugin_store", move || {
+        crate::plugins::set_runtime_enabled(req.enabled).map(|()| runtime_view(lane))
     })
     .await;
     match switched {
         Err(e) => e,
-        Ok(Err(e)) => api_error(StatusCode::BAD_REQUEST, &format!("{e:#}")),
+        Ok(Err(e)) => api_error_logged(
+            StatusCode::BAD_REQUEST,
+            "host_error",
+            "The host hit an error",
+            &format!("{e:#}"),
+        ),
         Ok(Ok(v)) => {
             crate::events::emit(crate::events::EventKind::StoreChanged);
             Json(v).into_response()

@@ -2,9 +2,8 @@
 ==> Uninstalling the host (https://docs.punktfunk.unom.io/docs/uninstall)
   + systemctl --user disable --now punktfunk-host punktfunk-web punktfunk-scripting 2>/dev/null || true
   + systemctl --user disable --now punktfunk-rebuild-check 2>/dev/null || true
-  !! the on-device build has no uninstall script — the build container, the files under your home and the root-owned tuning come off by hand: https://docs.punktfunk.unom.io/docs/uninstall#steamos--steam-deck-host-on-device-build
+  !! The on-device build has no uninstall script — the build container, the files under your home and the root-owned tuning come off by hand: https://docs.punktfunk.unom.io/docs/uninstall#steamos--steam-deck-host-on-device-build
 
-  Removed. Left on purpose: ~/.config/punktfunk (identity, pairings, host.env, plugins — a reinstall
-  picks them up), the punktfunk, punktfunk-door and punktfunk-update groups, and any firewall
-  rules you opened.
+  Removed. Kept for a reinstall: ~/.config/punktfunk, the punktfunk, punktfunk-door and
+  punktfunk-update groups, and your firewall rules.
   The one-command cleanups for each are on https://docs.punktfunk.unom.io/docs/uninstall#linux-hosts

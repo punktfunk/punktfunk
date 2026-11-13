@@ -1,6 +1,6 @@
 # Punktfunk writing standards
 
-House style for **commits**, **changelogs**, and **comments**.
+House style for **commits**, **changelogs**, **comments**, and the **text a person reads**.
 `scripts/ci/check-writing.sh` fails a PR that breaks the caps below.
 
 ## 0. Where facts go
@@ -140,6 +140,15 @@ and stop.
 A constant’s comment is why the number, not the incident that produced it.
 A version comment is the live handshake, not a biography of every bump.
 
+A default or a platform's path has one home: the line that decides it. Elsewhere, name
+that line instead of repeating its answer; the copy goes stale the day the line changes.
+An OS limit names the OS version it was checked on.
+
+Bad (a copy, on the enum): `decoded … is tvOS's latency default`
+Good: `Which pacing a platform takes is decided in PresenterChoice.platformDefault.`
+Bad: `tvOS has no EDR API`
+Good: `tvOS lacks edrMetadata; it has CALayer.toneMapMode from tvOS 18.`
+
 Bad (archaeology): `A v2 host never stamps the field, so a v3 driver would refuse
 every attach — lockstep by the handshake, as ever. On-glass 2026-07-23…`
 Good (the live rule): `A host that leaves this field zero fails the bind.`
@@ -255,16 +264,17 @@ window it renders in.
 
 ## 4b. UI copy
 
-Every string an operator reads *while working a control* — the web console
-first, and any surface that grows the same shape. Error messages stay §4.
+Every string a person reads *while working a control*, on every surface that
+shows text: the web console, each client, the console kit, setup, the tray.
+Error messages stay §4. Writing for translation is §4d.
 
 A control is made clear by its options, not by a paragraph under it.
-`web/tools/check-i18n.mjs` fails the build on a string over budget.
+`cargo run -p pf-l10n -- check` fails on a string over budget (`l10n/rules.json`).
 
 | Kind | Budget | Rule |
 |---|---|---|
 | Label | ≤ 3 words | Names the thing, not the mechanism. `Your monitors while streaming`, not `Topology`. |
-| Option | — | The outcome, as the operator would say it: `Turn off`, `Stay on`, `Hand over`. |
+| Option | — | The outcome, as the reader would say it: `Turn off`, `Stay on`, `Hand over`. |
 | Hint | 1 sentence, ≤ 110 chars | Only when the options cannot carry it. States the consequence or the next move. |
 | Warning | 2 sentences | What happens, then what to do. |
 | Anything longer | — | A `Docs ↗` link into `docs-site/` beside the hint. The console does not host manuals. |
@@ -276,8 +286,10 @@ A control is made clear by its options, not by a paragraph under it.
 - Status words are outcomes: `Streaming`, `Kept`, `Kept until released`, `Off`.
   Not `Lingering`, `Pinned`, `Active`.
 - Translations get 20% more room; the base locale is where the budget bites.
-- The lint's allowlist is for legal and security texts, where the exact wording
-  is the point. Each entry is a debt line in `design/web-console-overhaul.md` §2.2.
+- The allowlist (`debt` in `l10n/rules.json`) is for legal and security texts, where
+  the exact wording is the point, and for wording that waits for review. Each entry
+  carries its reason; the web console's are debt lines in
+  `design/web-console-overhaul.md` §2.2.
 
 Bad: `Windows only, takes effect with Exclusive topology. Before disabling your
 physical monitors, the host also tells them to power their panel off over the
@@ -320,6 +332,76 @@ Good: `Add the repo and install the host, the console and the plugin runner:`
 
 ---
 
+## 4d. Writing for translation
+
+A message is written once in `l10n/messages` and every surface reads it
+(`docs/l10n.md`). These rules decide whether it survives German, French or
+Polish. `pf-l10n check` catches some; review catches the rest.
+
+**One message, one whole sentence.** Never glue a sentence from parts or reuse a
+fragment in two frames. A placeholder holds a name, a number or a key chord,
+never another translated word: dropped into a sentence, it lands in the wrong
+case or gender.
+
+Bad: `format!("{} — press again", act.label)`
+Good: `Remove host — press again`, one message per action
+
+**A count is a plural message.** Never `if n == 1`, never `(s)`. The shape is
+in `l10n/SPEC.md`.
+
+Bad: `{} host(s) have it`
+Good: `{count} host has it` / `{count} hosts have it`, one plural message
+
+**Share a message, never a word.** Share it when it stands in the same place for
+the same thing, not when the English matches. Key an option by its setting; a
+state belongs to what it describes. `common` holds only text with no context: a
+button's verb, a unit, a product term.
+
+Bad: one `automatic` key under Video codec and Bitrate (Polish writes
+`Automatyczny` for the codec, `Automatyczna` for the bitrate)
+Good: `player_codec_auto`, `player_bitrate_kbps_automatic`
+
+**Nothing a platform says differently.** A platform part never redefines a
+shared key.
+
+| In the text | Write |
+| --- | --- |
+| The device in hand | `this device`. Not `this phone`, `this Mac`, `here` |
+| A controller button | Nothing: the hint bar draws it. If the sentence dies without it, `{button}`, filled by the client, said in the note |
+| A key chord | A message of its own with `{keys}`, filled from the client's shortcut table |
+| Click or tap | Words that need neither; else one key per platform part |
+| What one OS alone has | A key in that platform's part |
+
+Bad: `Gyro from this phone`
+Good: `Gyro from this device`
+Bad: `Every button and stick on the controller shows here. Hold B to finish.`
+Good: `Hold {button} to finish.`, its own message
+Bad: `base + " ⌃⌥⇧S cycles it."`
+Good: `{keys} cycles it during a stream.`
+Bad: `Click the card to pair it`
+Good: `Select the card to pair it.`
+
+**House style.**
+
+- Sentence case everywhere. Mac menu-bar items and App Intents titles keep Apple's title case.
+  Bad: `Copy Link` Good: `Copy link`
+- US spelling. Bad: `No colour` Good: `No color`
+- Units: `Mbit/s`, `Gbit/s`, `ms`, `Hz`, `GB`. Bad: `Bitrate in Mbps`
+  Good: `Bitrate in Mbit/s`
+- A hint or a body ends each sentence with a period; a label or an option does not. An error
+  message follows §4: no trailing period on a lone sentence.
+  Bad: `Add its MAC address under Connection to wake it`
+  Good: `Add its MAC address under Connection to wake it.`
+- No `Please`, no `!`, no `failed to` / `could not` / `cannot` /
+  `unable to` (§4).
+- No upper-casing in code: Turkish and German change letters.
+  Bad: `g.title.uppercase()` Good: the heading as it should read.
+
+Chinese, Japanese and Korean add rules of their own: `docs/l10n.md` "Chinese, Japanese and
+Korean".
+
+---
+
 ## 5. Checklist (every PR)
 
 - [ ] Subject is `type(scope): summary`, ≤ 72 characters, imperative, no period
@@ -338,6 +420,10 @@ Good: `Add the repo and install the host, the console and the plugin runner:`
 - [ ] New error messages pick a register: operator lines are lowercase phrases,
       user lines are one plain sentence with the next move
 - [ ] No `failed to` / `could not` / `unable to` framing, and no doubled cause
+- [ ] Text a person reads is a message in `l10n/messages`, not a new literal
+- [ ] Messages follow §4d: whole sentences, counts as plurals, no button, chord
+      or device in prose, no translated word in a placeholder
+- [ ] `pf-l10n check` and the text census (`scripts/l10n-census.py`) are green
 - [ ] `scripts/ci/check-writing.sh` is green
 
 ---

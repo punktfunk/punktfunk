@@ -1,22 +1,26 @@
 import { Link } from "@tanstack/react-router";
-import { Eye, EyeOff, Trash2 } from "lucide-react";
-import { type FC, useState } from "react";
+import { Eye, EyeOff, Trash2, UserRound } from "lucide-react";
+import { type FC, useId, useState } from "react";
 import type { Download } from "@/api/gen/model/download";
 import type { OperatorGameEntry } from "@/api/gen/model/operatorGameEntry";
+import { useWhose, type Whose } from "@/api/seat";
 import { LauncherIcon } from "@/components/launcher-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { isOperatorOwned } from "./helpers";
 import { InstallBadge } from "./Install";
+import { streamSummary } from "./overrides";
 
 export interface GameCardProps {
 	game: OperatorGameEntry;
-	onDelete: () => void;
+	/** Absent in a profile's view, but on a game only that profile has. */
+	onDelete?: () => void;
 	deleting: boolean;
-	/** Hide this title from every play surface, or bring it back. */
+	/** Hide this title from every play surface, or bring it back; in a profile's view, for it. */
 	onToggleHidden: () => void;
 	/** This card's hide/un-hide is in flight — only this one disables. */
 	hiding: boolean;
@@ -24,13 +28,83 @@ export interface GameCardProps {
 	nameOf?: (id: string) => string | undefined;
 	/** The title's download, while it has one. */
 	download?: Download;
+	/** Selection mode: a click checks or unchecks the title instead of opening its page. */
+	selecting?: boolean;
+	selected?: boolean;
+	onSelect?: () => void;
+	/** The profile whose view this is, by name: its hide and its own stream settings are marked. */
+	who?: string;
 }
+
+/**
+ * **Hide for Anna** (to Anna herself, **Hide for me**), or the owner's library's **Hide from your
+ * devices**, and the way back.
+ */
+export const hideLabel = (hidden: boolean, who: Whose | null): string =>
+	who
+		? hidden
+			? who.show
+			: who.hide
+		: hidden
+			? m.library_unhide_action()
+			: m.library_hide_action();
+
+/**
+ * A value that is a profile's own: the brand colour and a person. `mark` says whose, to a pointer
+ * and a screen reader: before a value (**Only for Anna**), or instead of a `short` label that
+ * says the same (**Hidden** for **Hidden for Anna**). A long label ends in an ellipsis.
+ */
+export const OwnBadge: FC<{
+	label: string;
+	mark?: string;
+	short?: boolean;
+	className?: string;
+}> = ({ label, mark, short, className }) => (
+	<Badge className={cn("max-w-full min-w-0 gap-1", className)} title={mark}>
+		<UserRound className="size-3 shrink-0" aria-hidden />
+		{mark && <span className="sr-only">{mark}</span>}
+		<span className="truncate" aria-hidden={(short && !!mark) || undefined}>
+			{label}
+		</span>
+	</Badge>
+);
+
+/** The checkbox over a card or row in selection mode; the whole surface takes the click. */
+export const SelectCover: FC<{
+	title: string;
+	selected: boolean;
+	onSelect: () => void;
+	className?: string;
+}> = ({ title, selected, onSelect, className }) => {
+	const id = useId();
+	return (
+		<label
+			htmlFor={id}
+			className={cn(
+				"absolute inset-0 z-20 flex cursor-pointer rounded-[inherit]",
+				selected && "ring-2 ring-primary ring-inset",
+				className,
+			)}
+		>
+			<Checkbox
+				id={id}
+				checked={selected}
+				onCheckedChange={onSelect}
+				aria-label={title}
+				className="bg-background"
+			/>
+		</label>
+	);
+};
 
 /**
  * A poster that opens the entry's page. The cover prefers the 2:3 portrait; on a load error it
  * falls back to the wide header, then to the title. Only what a cover cannot say sits on it: a
- * console's platform, Hidden, and the install mark; the source is the entry page's. Hide and
- * delete appear on hover, on a pointer that can hover; a phone manages a title on its page.
+ * console's platform, Hidden, the host's stream settings, and the install mark; the source is
+ * the entry page's. Hide and delete appear on hover, on a pointer that can hover; a phone
+ * manages a title on its page. In selection mode the card is one checkbox. In a profile's view
+ * its hide and its own stream settings carry its mark, and a game only it has is marked so and
+ * deletes rather than hides.
  */
 export const GameCard: FC<GameCardProps> = ({
 	game,
@@ -39,7 +113,12 @@ export const GameCard: FC<GameCardProps> = ({
 	onToggleHidden,
 	hiding,
 	download,
+	selecting,
+	selected = false,
+	onSelect,
+	who,
 }) => {
+	const whose = useWhose(who);
 	// Every store can be hidden: the titles most worth hiding are the ones the operator cannot
 	// edit. The host keys the setting by entry id and never needs to own the entry.
 	const hidden = game.hidden === true;
@@ -50,6 +129,10 @@ export const GameCard: FC<GameCardProps> = ({
 		(u): u is string => !!u && !failed[u],
 	);
 	const emulated = game.platform && game.platform.toUpperCase() !== "PC";
+	const stream = streamSummary(game.overrides);
+	const ownStream = who !== undefined && game.profile?.overrides === true;
+	const own = who !== undefined && game.own === true;
+	const small = "px-1.5 text-[10px] [&>svg]:size-2.5";
 	return (
 		<Card className="group relative overflow-hidden">
 			<Link
@@ -89,7 +172,9 @@ export const GameCard: FC<GameCardProps> = ({
 							{game.title}
 						</div>
 					)}
-					<div className="absolute top-1.5 left-1.5 flex flex-wrap gap-1">
+					{/* Inset on both sides, so a long badge ends in its ellipsis inside the card. */}
+					<div className="absolute top-1.5 right-1.5 left-1.5 flex flex-wrap gap-1">
+						{own && <OwnBadge label={whose?.own ?? ""} className={small} />}
 						{emulated && (
 							<Badge
 								variant="outline"
@@ -98,14 +183,39 @@ export const GameCard: FC<GameCardProps> = ({
 								{game.platform}
 							</Badge>
 						)}
-						{hidden && (
-							<Badge
-								variant="secondary"
-								className="bg-background/90 px-1.5 text-[10px] backdrop-blur"
-							>
-								{m.library_hidden_badge()}
-							</Badge>
-						)}
+						{hidden &&
+							(whose ? (
+								<OwnBadge
+									label={m.library_hidden_badge()}
+									mark={whose.hidden}
+									short
+									className={small}
+								/>
+							) : (
+								<Badge
+									variant="secondary"
+									className="bg-background/90 px-1.5 text-[10px] backdrop-blur"
+								>
+									{m.library_hidden_badge()}
+								</Badge>
+							))}
+						{stream &&
+							(ownStream ? (
+								<OwnBadge
+									label={stream}
+									mark={whose?.own ?? ""}
+									className={small}
+								/>
+							) : (
+								<Badge
+									variant="secondary"
+									className="max-w-full min-w-0 bg-background/90 px-1.5 text-[10px] backdrop-blur"
+									title={stream}
+								>
+									{/* A flex box draws no ellipsis; its text's own box does. */}
+									<span className="truncate">{stream}</span>
+								</Badge>
+							))}
 					</div>
 					<div className="absolute bottom-1.5 left-1.5">
 						<InstallBadge
@@ -134,27 +244,28 @@ export const GameCard: FC<GameCardProps> = ({
 					hidden
 						? "opacity-100"
 						: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100",
+					selecting && "sm:hidden",
 				)}
 			>
-				<Button
-					variant="secondary"
-					size="icon"
-					className="size-7 bg-background/80 backdrop-blur"
-					aria-label={
-						hidden ? m.library_unhide_action() : m.library_hide_action()
-					}
-					title={hidden ? m.library_unhide_action() : m.library_hide_action()}
-					aria-pressed={hidden}
-					disabled={hiding}
-					onClick={onToggleHidden}
-				>
-					{hidden ? (
-						<Eye className="size-3.5" />
-					) : (
-						<EyeOff className="size-3.5" />
-					)}
-				</Button>
-				{isCustom && (
+				{!own && (
+					<Button
+						variant="secondary"
+						size="icon"
+						className="size-7 bg-background/80 backdrop-blur"
+						aria-label={hideLabel(hidden, whose)}
+						title={hideLabel(hidden, whose)}
+						aria-pressed={hidden}
+						disabled={hiding}
+						onClick={onToggleHidden}
+					>
+						{hidden ? (
+							<Eye className="size-3.5" />
+						) : (
+							<EyeOff className="size-3.5" />
+						)}
+					</Button>
+				)}
+				{isCustom && onDelete && (
 					<Button
 						variant="secondary"
 						size="icon"
@@ -168,6 +279,14 @@ export const GameCard: FC<GameCardProps> = ({
 					</Button>
 				)}
 			</div>
+			{selecting && onSelect && (
+				<SelectCover
+					title={game.title}
+					selected={selected}
+					onSelect={onSelect}
+					className="items-start justify-end p-2"
+				/>
+			)}
 		</Card>
 	);
 };

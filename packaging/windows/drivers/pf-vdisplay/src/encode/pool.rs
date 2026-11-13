@@ -2,10 +2,10 @@
 //! worker's fused pass ([`Pool::offer`]) inside the acquire window and drained by the encode
 //! thread. The monitor owns it, not the session: between sessions the newest frame keeps
 //! landing in it, so a new `SET_ENCODE` on an idle desktop encodes the retained slot as its
-//! first IDR and needs no compose. A pool built for another device epoch, size or format is
-//! replaced by the next session; nothing rebuilds in place. A surface no pool can take is kept
-//! as the monitor's [`Seed`], which the next pool opens on — the compose at swap-chain assign
-//! is a monitor's first picture, and it arrives before any `SET_ENCODE`.
+//! first IDR and needs no compose. A pool built for another device epoch, size, framing or
+//! format is replaced by the next session; nothing rebuilds in place. A surface no pool can
+//! take is kept as the monitor's [`Seed`], which the next pool opens on — the compose at
+//! swap-chain assign is a monitor's first picture, and it arrives before any `SET_ENCODE`.
 //!
 //! Which slot, which frame and whether a hold ended is [`Slots`], tested in `pf-driver-proto`;
 //! each verb here asks it, then does the GPU pass or the event its answer names. A bypass pool
@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pf_driver_proto::encode as wire;
+use pf_driver_proto::encode::Framing;
 use pf_driver_proto::encode::au::{AuHeader, ENCODER_WEDGED};
 use pf_encode_session::drive::{FrameSource, Slot};
 use pf_frame::CapturedFrame;
@@ -171,8 +172,8 @@ impl Drop for Seed {
 /// One monitor's pool. See the module docs.
 pub struct Pool {
     device_epoch: u32,
-    width: u32,
-    height: u32,
+    /// The surfaces it takes (`source`) and what its targets encode of them.
+    framing: Framing,
     kind: InputKind,
     /// The range the targets' video-engine converter writes.
     full_range: bool,
@@ -190,12 +191,13 @@ pub struct Pool {
 }
 
 impl Pool {
-    /// Build the targets for `kind` at `size` on `device`, converting at `full_range`; `bypass`
-    /// is [`wire::zero_copy`].
+    /// Build the targets for `kind` on `device`: `framing`'s source surfaces in, its encode size
+    /// out, converting at `full_range`. `bypass` is [`wire::zero_copy`], which a framing that
+    /// scales never is.
     pub fn build(
         device: &Direct3DDevice,
         kind: InputKind,
-        size: (u32, u32),
+        framing: Framing,
         full_range: bool,
         source_seq: Arc<AtomicU64>,
         cursor: Arc<CursorCell>,
@@ -203,15 +205,15 @@ impl Pool {
     ) -> Result<Arc<Self>, Fail> {
         let dev62: d3d::ID3D11Device = bridge(&device.device)?;
         let ctx62: d3d::ID3D11DeviceContext = bridge(&device.device_context)?;
-        let targets = Targets::new(kind, &dev62, &ctx62, size, SLOTS, full_range)?;
+        let targets = Targets::new(kind, &dev62, &ctx62, framing.encode, SLOTS, full_range)?
+            .framed(&framing)?;
         let event = OwnedHandle::event(false).ok_or((-2, "event"))?;
         // Without a release event there is nothing to wait on, so the pool copies every frame.
         let release_event = bypass.then(|| OwnedHandle::event(false)).flatten();
         let bypass = release_event.is_some();
         let pool = Arc::new(Self {
             device_epoch: device.epoch(),
-            width: size.0,
-            height: size.1,
+            framing,
             kind,
             full_range,
             source_format: DXGI_FORMAT(source_format(kind).0),
@@ -237,19 +239,19 @@ impl Pool {
         self.bypass
     }
 
-    /// Whether a session opening `kind` at `size` and `full_range` on `device`, with or without
-    /// `bypass`, can reuse this pool — and with it the retained slot.
+    /// Whether a session opening `kind` for `framing` and `full_range` on `device`, with or
+    /// without `bypass`, can reuse this pool — and with it the retained slot.
     pub fn matches(
         &self,
         device: &Direct3DDevice,
         kind: InputKind,
-        size: (u32, u32),
+        framing: Framing,
         full_range: bool,
         bypass: bool,
     ) -> bool {
         self.device_epoch == device.epoch()
             && self.kind == kind
-            && (self.width, self.height) == size
+            && self.framing == framing
             && self.full_range == full_range
             && self.bypass == bypass
     }
@@ -258,17 +260,18 @@ impl Pool {
     /// the one test every pass runs first, since a pass over another epoch, size or format is
     /// not valid D3D11 use.
     fn refusal(&self, device: &Direct3DDevice, tex: &ID3D11Texture2D) -> Option<Offer> {
+        let (width, height) = self.framing.source;
         if device.epoch() != self.device_epoch {
             return Some(Offer::Refused {
                 got: (0, 0, device.epoch()),
-                want: (self.width, self.height, self.device_epoch),
+                want: (width, height, self.device_epoch),
             });
         }
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         // SAFETY: `tex` is the live acquired surface; `desc` is a valid local out-param.
         unsafe { tex.GetDesc(&mut desc) };
         let got = (desc.Width, desc.Height, desc.Format.0 as u32);
-        let want = (self.width, self.height, self.source_format.0 as u32);
+        let want = (width, height, self.source_format.0 as u32);
         (got != want).then_some(Offer::Refused { got, want })
     }
 
@@ -352,8 +355,7 @@ impl Pool {
         if let Some(seq) = st.slots.newest_seq() {
             return Some(seq);
         }
-        let size = (self.width, self.height);
-        let tex = seed.take(self.device_epoch, size, self.source_format)?;
+        let tex = seed.take(self.device_epoch, self.framing.source, self.source_format)?;
         let slot = st.slots.still_slot()?;
         let plate = self.cursor.blends() || self.cursor.armed();
         st.pass(&tex, slot, plate).ok()?;

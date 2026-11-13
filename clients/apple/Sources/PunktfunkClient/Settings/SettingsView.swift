@@ -15,10 +15,14 @@ struct SettingsView: View {
     // preset's overrides. A TV picks it in its Editing pane.
     @ObservedObject var presets = PresetStore.shared
     @State var scope: SettingsScope = .defaults
+    /// The resolved layer, emptied by each body pass and each write (SettingsView+Scope).
+    @State var pass = SettingsPass()
     /// The preset editor (create / duplicate / edit), when it is open, and the preset a delete
     /// is being confirmed for.
     @State var presetDraft: PresetDraft?
     @State var presetPendingDelete: StreamPreset?
+    /// Reset All Settings is asking.
+    @State var confirmingReset = false
     /// The menu's icons are rasterised per appearance (see `MenuIcon`), so the surface has to know
     /// which one it is drawing in.
     @Environment(\.colorScheme) var colorScheme
@@ -32,9 +36,9 @@ struct SettingsView: View {
     // windowed session instead streams at the window's native pixels (1:1, no scaling) so it stays
     // pixel-exact rather than the presenter resampling a fixed-mode frame into the window.
     @AppStorage(DefaultsKey.matchWindow) var matchWindow = SettingDefault.matchWindow
-    // Render-resolution multiplier: the host renders/encodes at chosen-resolution × this, and the
-    // presenter downscales (> 1 = supersampling for sharpness) or upscales (< 1 = a lighter host /
-    // link). 1.0 = Native (the prior behaviour).
+    // Render-resolution multiplier: the host renders at chosen-resolution × this. Above 1x the host
+    // or the presenter scales the picture down (supersampling for sharpness); below 1x the
+    // presenter upscales (a lighter host / link). 1.0 = Native.
     @AppStorage(DefaultsKey.renderScale) var renderScale = SettingDefault.renderScale
     @AppStorage(DefaultsKey.videoFit) var videoFit = SettingDefault.videoFit
     @AppStorage(DefaultsKey.screens) var screens = SettingDefault.screens
@@ -61,9 +65,11 @@ struct SettingsView: View {
     @AppStorage(DefaultsKey.tenBitSdr) var tenBitSdr = SettingDefault.tenBitSdr
     /// The gamepad library's arrangement — a device preference, stored as the cross-client
     /// `library_view` value.
-    @AppStorage(DefaultsKey.libraryView) var libraryViewRaw = LibraryArrangement.shelf.stored
+    @AppStorage(DefaultsKey.libraryView) var libraryViewRaw = LibraryArrangement.grid.stored
     @AppStorage(DefaultsKey.startIn) var startInRaw = SettingDefault.startIn
     @AppStorage(DefaultsKey.defaultHost) var defaultHostID = ""
+    /// The default host's name for Start in's caption, nil with none (`readStartInHost`).
+    @State var startInHost: String?
     @AppStorage(DefaultsKey.fullscreenWhileStreaming) var fullscreenWhileStreaming =
         SettingDefault.fullscreenWhileStreaming
     @AppStorage(DefaultsKey.fullscreenAlways) var fullscreenAlways = SettingDefault.fullscreenAlways
@@ -106,8 +112,10 @@ struct SettingsView: View {
     #endif
     // The quick-action ring's blob — every platform, tvOS included (the pad opens the ring there).
     @AppStorage(DefaultsKey.overlayActions) var overlayActions = SettingDefault.overlayActions
+    @AppStorage(DefaultsKey.shortcuts) var shortcuts = SettingDefault.shortcuts
     /// The quick-actions editor, as a sheet (the detail column is not a NavigationStack).
     @State var showQuickActions = false
+    @State var showShortcuts = false
     #if DEBUG && !os(tvOS)
     @State var showControllerTest = false
     #endif
@@ -203,14 +211,16 @@ struct SettingsView: View {
     #endif
 
     var body: some View {
+        // Every input of `effective` re-runs `body`, so each pass resolves the layers afresh.
+        pass.settings = nil
         #if os(tvOS)
         // No inline text entry on a TV: values are picked from pushed lists, as in the system
         // Settings app.
-        tvBody
+        return tvBody
         #elseif os(macOS)
-        macBody
+        return macBody.onChange(of: scope) { clearCustomFlags() }
         #else
-        iosBody
+        return iosBody.onChange(of: scope) { clearCustomFlags() }
         #endif
     }
 
@@ -250,9 +260,10 @@ struct SettingsView: View {
                 librarySection
                 showAdvancedSection
                 generalAdvancedSection
+                resetSection
             }
             .formStyle(.grouped)
-            .tabItem { Label("General", systemImage: "gearshape") }
+            .tabItem { Label(L10n.prefsCategoryGeneral, systemImage: "gearshape") }
             .tag(MacTab.general)
 
             Form {
@@ -261,14 +272,14 @@ struct SettingsView: View {
                 displayAdvancedSection
             }
             .formStyle(.grouped)
-            .tabItem { Label("Display", systemImage: "display") }
+            .tabItem { Label(L10n.prefsCategoryDisplay, systemImage: "display") }
             .tag(MacTab.display)
 
             Form {
                 inputSection
             }
             .formStyle(.grouped)
-            .tabItem { Label("Input", systemImage: "keyboard") }
+            .tabItem { Label(L10n.prefsCategoryInput, systemImage: "keyboard") }
             .tag(MacTab.input)
 
             Form {
@@ -285,7 +296,7 @@ struct SettingsView: View {
                 micChannelCount = AudioDevices.inputChannelCount(forUID: newUID)
                 if micChannel > micChannelCount { micChannel = 0 }
             }
-            .tabItem { Label("Audio", systemImage: "speaker.wave.2") }
+            .tabItem { Label(L10n.prefsCategoryAudio, systemImage: "speaker.wave.2") }
             .tag(MacTab.audio)
 
             Form {
@@ -297,11 +308,11 @@ struct SettingsView: View {
                 gamepads.startDiscovery()
             }
             .onDisappear { gamepads.stopDiscovery() }
-            .tabItem { Label("Controllers", systemImage: "gamecontroller") }
+            .tabItem { Label(L10n.prefsCategoryControllers, systemImage: "gamecontroller") }
             .tag(MacTab.controllers)
 
             AboutView()
-                .tabItem { Label("About", systemImage: "info.circle") }
+                .tabItem { Label(L10n.prefsCategoryAbout, systemImage: "info.circle") }
                 .tag(MacTab.about)
         }
     }
@@ -347,10 +358,10 @@ struct SettingsView: View {
                     .tag(category)
                 }
             }
-            .navigationTitle("Settings")
+            .navigationTitle(L10n.prefsTitle)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button(L10n.commonDone) { dismiss() }
                 }
             }
         } detail: {
@@ -365,7 +376,7 @@ struct SettingsView: View {
                 .toolbar {
                     if horizontalSizeClass == .compact || columnVisibility == .detailOnly {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { dismiss() }
+                            Button(L10n.commonDone) { dismiss() }
                         }
                     }
                 }
@@ -397,9 +408,10 @@ struct SettingsView: View {
                 librarySection
                 showAdvancedSection
                 generalAdvancedSection
+                resetSection
             }
             .formStyle(.grouped)
-            .navigationTitle("General")
+            .navigationTitle(category.title)
             .navigationBarTitleDisplayMode(.inline)
         case .display:
             Form {
@@ -408,7 +420,7 @@ struct SettingsView: View {
                 displayAdvancedSection
             }
             .formStyle(.grouped)
-            .navigationTitle("Display")
+            .navigationTitle(category.title)
             .navigationBarTitleDisplayMode(.inline)
         case .input:
             Form {
@@ -416,24 +428,24 @@ struct SettingsView: View {
                 inputSection
             }
             .formStyle(.grouped)
-            .navigationTitle("Input")
+            .navigationTitle(category.title)
             .navigationBarTitleDisplayMode(.inline)
         case .audio:
             Form { audioSection }
                 .formStyle(.grouped)
-                .navigationTitle("Audio")
+                .navigationTitle(category.title)
                 .navigationBarTitleDisplayMode(.inline)
         case .controllers:
             Form { controllersSection }
                 .formStyle(.grouped)
-                .navigationTitle("Controllers")
+                .navigationTitle(category.title)
                 .navigationBarTitleDisplayMode(.inline)
         case .about:
             // The identity card; the license wall is one push further in. Inline title to match
             // the five sibling detail pages (it would otherwise inherit the large title from the
             // "Settings" sidebar root).
             AboutView()
-                .navigationTitle("About")
+                .navigationTitle(category.title)
                 .navigationBarTitleDisplayMode(.inline)
         }
     }
@@ -485,7 +497,7 @@ struct SettingsView: View {
                     HStack(spacing: 14) {
                         scopeDot
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Editing")
+                            Text(L10n.prefsScopeEditing)
                                 .font(.geist(20, relativeTo: .caption))
                                 .foregroundStyle(.secondary)
                             Text(scopeName)
@@ -534,6 +546,7 @@ struct SettingsView: View {
                 librarySection
                 showAdvancedSection
                 generalAdvancedSection
+                resetSection
             }
         case .category(.display):
             Form {
@@ -555,7 +568,10 @@ struct SettingsView: View {
     private var tvQuickActions: TVQuickActionsEditor {
         var editor = TVQuickActionsEditor(
             blob: scoped(SettingsFields.overlayActions),
-            overridden: isOverridden("overlay_actions")
+            overridden: isOverridden("overlay_actions"),
+            shortcuts: shortcutsEditor,
+            padOpener: editedShortcuts.hint(.ring, device: .pad),
+            ownsBindings: !inPresetScope || isOverridden("shortcuts")
         ) {
             if inPresetScope {
                 resetOverride("overlay_actions")
@@ -574,7 +590,9 @@ struct SettingsView: View {
     private var tvPresetManager: some View {
         Form {
             Section {
-                tvLayerRow(.defaults, name: "Default settings", color: nil, detail: nil)
+                tvLayerRow(
+                    .defaults, name: String(localized: L10n.prefsScopeDefaults), color: nil,
+                    detail: nil)
                 ForEach(presets.presets) { preset in
                     tvLayerRow(
                         .preset(preset.id), name: preset.name, color: preset.accentColor,
@@ -583,10 +601,10 @@ struct SettingsView: View {
                 Button {
                     presetDraft = .create()
                 } label: {
-                    Label("New Preset…", systemImage: "plus")
+                    Label(L10n.presetNew, systemImage: "plus")
                 }
             } header: {
-                Text("Editing")
+                Text(L10n.prefsScopeEditing)
             } footer: {
                 Text(scopeCaption)
             }
@@ -595,19 +613,19 @@ struct SettingsView: View {
                     Button {
                         presetDraft = .edit(active)
                     } label: {
-                        Label("Name and Color…", systemImage: "pencil")
+                        Label(L10n.applePresetMenuNameColor, systemImage: "pencil")
                     }
                     Button {
                         presetDraft = .duplicate(
                             active, name: Self.copyName(of: active.name, in: presets))
                     } label: {
-                        Label("Duplicate…", systemImage: "plus.square.on.square")
+                        Label(L10n.applePresetMenuDuplicate, systemImage: "plus.square.on.square")
                     }
                     Button(role: .destructive) {
                         presetPendingDelete = active
                     } label: {
                         // Text and symbol in one colour: the role reddens only the text.
-                        Label("Delete…", systemImage: "trash")
+                        Label(L10n.presetMenuDelete, systemImage: "trash")
                             .foregroundStyle(.red)
                     }
                 }
@@ -632,7 +650,7 @@ struct SettingsView: View {
                 if let detail {
                     Text(detail).foregroundStyle(.secondary)
                 }
-                if scope == layer {
+                if shownScope == layer {
                     Image(systemName: "checkmark")
                 }
             }
@@ -643,9 +661,10 @@ struct SettingsView: View {
     private func tvUsage(of preset: StreamPreset) -> String {
         let (bound, pinned) = presets.usage(of: preset.id)
         var parts: [String] = []
-        if bound > 0 { parts.append(bound == 1 ? "1 host" : "\(bound) hosts") }
-        if pinned > 0 { parts.append(pinned == 1 ? "1 card" : "\(pinned) cards") }
-        return parts.isEmpty ? "Not used" : parts.joined(separator: " · ")
+        if bound > 0 { parts.append(L10n.applePresetUsageHosts(count: bound)) }
+        if pinned > 0 { parts.append(L10n.applePresetUsageCards(count: pinned)) }
+        return parts.isEmpty
+            ? String(localized: L10n.applePresetUsageNone) : parts.joined(separator: " · ")
     }
     #endif
 }

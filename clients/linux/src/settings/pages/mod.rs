@@ -20,7 +20,9 @@ use super::DeviceProbes;
 use crate::store::Store;
 use crate::trust::Settings;
 use adw::prelude::*;
+use gtk::glib;
 use pf_client_core::presets::SettingsOverlay;
+use pf_l10n::client;
 use std::rc::Rc;
 
 /// What the pages are built from, and what they leave behind for the dialog to bind.
@@ -47,7 +49,13 @@ pub struct Build<'a> {
 
 impl Build<'_> {
     pub fn choice(&self, spec: &Spec, options: &[&str]) -> ChoiceRow {
-        ChoiceRow::new(&self.dialog, self.inline, spec.title, spec.caption, options)
+        ChoiceRow::new(
+            &self.dialog,
+            self.inline,
+            spec.title(),
+            &spec.caption(),
+            options,
+        )
     }
 
     pub fn page(&self, kind: Page, icon: &str) -> PageB {
@@ -55,7 +63,7 @@ impl Build<'_> {
             kind,
             page: adw::PreferencesPage::builder()
                 // The name addresses the page (`set_visible_page_name`, the screenshot knob).
-                .name(kind.title().to_lowercase())
+                .name(kind.id())
                 .title(kind.title())
                 .icon_name(icon)
                 .build(),
@@ -111,11 +119,14 @@ pub struct PageB {
 }
 
 impl PageB {
-    /// A group, hidden until a row lands in it.
+    /// A group, hidden until a row lands in it. A group's title and description are Pango
+    /// markup, so a message goes in escaped.
     pub fn group(&self, title: &str, note: &str) -> adw::PreferencesGroup {
-        let g = adw::PreferencesGroup::builder().title(title).build();
+        let g = adw::PreferencesGroup::builder()
+            .title(glib::markup_escape_text(title))
+            .build();
         if !note.is_empty() {
-            g.set_description(Some(note));
+            g.set_description(Some(&glib::markup_escape_text(note)));
         }
         g.set_visible(false);
         self.page.add(&g);
@@ -148,7 +159,9 @@ pub struct Tier {
 
 impl Tier {
     fn new(p: &PageB) -> Tier {
-        let group = adw::PreferencesGroup::builder().title("Advanced").build();
+        let group = adw::PreferencesGroup::builder()
+            .title(glib::markup_escape_text(client::prefs_advanced()))
+            .build();
         for w in &p.advanced {
             group.add(w);
         }
@@ -179,9 +192,7 @@ impl Tier {
             self.counted.iter().filter(|f| f.changed()).count()
         };
         self.note.set_visible(n > 0);
-        self.note_row.set_title(&match n {
-            1 => "1 advanced setting changed".to_string(),
-            n => format!("{n} advanced settings changed"),
-        });
+        self.note_row
+            .set_title(&client::prefs_advanced_changed(n as u64));
     }
 }

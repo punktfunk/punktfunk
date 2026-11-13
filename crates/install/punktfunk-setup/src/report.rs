@@ -7,12 +7,19 @@
 //!
 //! Under `--yes` the choices summary is the only place the punktfunk-group
 //! grant is stated, so the row names it (`design/installer-v2.md`).
+//!
+//! `banner`, `detected` and `choices_summary` print only on the plain transcript: the screens
+//! replace them, so they stay English literals, but for the bind label. The rest reaches the
+//! screens too and reads `pf_l10n`.
 
-use crate::choices::{Action, Choices, LAN_BIND, LOOPBACK_BIND};
+use console::measure_text_width;
+use pf_l10n::tools as t;
+
+use crate::choices::{Action, Choices, Why, LAN_BIND, LOOPBACK_BIND};
 use crate::exec::{Opts, Outcome};
 use crate::facts::{Facts, Family, Nvidia, DOCS};
 use crate::seam::CommandRunner;
-use crate::ui::Reporter;
+use crate::ui::{columns, Reporter};
 
 /// Printing the password is one command, and it is the same one in the step that offers to
 /// generate it, in the outro, and in the docs. It prints until the first sign-in only: the
@@ -60,7 +67,7 @@ pub fn choices_summary(ui: &dyn Reporter, choices: &Choices) {
         ui.line(&format!("  Channel: {}", choices.channel.as_str()));
         return;
     }
-    let rows: [(&str, bool, &Option<String>); 4] = [
+    let rows: [(&str, bool, &Option<Why>); 4] = [
         (
             "Full controller (joins the punktfunk group — grants usbip attach)",
             choices.punktfunk_group,
@@ -81,7 +88,7 @@ pub fn choices_summary(ui: &dyn Reporter, choices: &Choices) {
     for (label, on, why) in rows {
         let value = if on { "yes" } else { "no" };
         match why {
-            Some(why) if on => ui.line(&format!("  {label}: {value}  ({why})")),
+            Some(why) if on => ui.line(&format!("  {label}: {value}  ({})", why.text())),
             _ => ui.line(&format!("  {label}: {value}")),
         }
     }
@@ -96,8 +103,8 @@ pub fn choices_summary(ui: &dyn Reporter, choices: &Choices) {
 /// The console's bind in the words the question asked it in.
 fn bind_label(choices: &Choices) -> String {
     match choices.web_bind.as_str() {
-        LOOPBACK_BIND => "this machine only".to_string(),
-        LAN_BIND => "this local network".to_string(),
+        LOOPBACK_BIND => t::setup_bind_value_loopback().to_string(),
+        LAN_BIND => t::setup_bind_value_lan().to_string(),
         addr => addr.to_string(),
     }
 }
@@ -105,13 +112,23 @@ fn bind_label(choices: &Choices) -> String {
 /// What `--uninstall` deliberately left behind, so a reinstall picks it up.
 pub fn uninstall_outro(ui: &dyn Reporter) {
     ui.blank();
-    ui.line("  Removed. Left on purpose: ~/.config/punktfunk (identity, pairings, host.env, plugins — a reinstall");
-    ui.line("  picks them up), the punktfunk, punktfunk-door and punktfunk-update groups, and any firewall");
-    ui.line("  rules you opened.");
+    for line in columns::wrap(
+        t::setup_uninstall_outro(),
+        OUTRO_COLUMNS - measure_text_width(INDENT),
+    ) {
+        ui.line(&format!("{INDENT}{line}"));
+    }
     ui.line(&format!(
-        "  The one-command cleanups for each are on {DOCS}/uninstall#linux-hosts"
+        "{INDENT}{}",
+        t::setup_uninstall_cleanups(format!("{DOCS}/uninstall#linux-hosts"))
     ));
 }
+
+/// Every outro line starts under the gutter's text.
+const INDENT: &str = "  ";
+
+/// Where a long outro sentence breaks, indent included.
+const OUTRO_COLUMNS: usize = 100;
 
 pub fn verify(
     ui: &dyn Reporter,
@@ -121,7 +138,7 @@ pub fn verify(
     outcome: &Outcome,
     opts: Opts,
 ) {
-    ui.say("Checking");
+    ui.say(t::setup_phase_checking());
     if outcome.started && !opts.dry {
         std::thread::sleep(std::time::Duration::from_secs(2));
         if run
@@ -131,21 +148,19 @@ pub fn verify(
             )
             .is_some_and(|o| o.ok())
         {
-            ui.ok("punktfunk-host is running");
+            ui.ok(t::setup_verify_running());
         } else {
-            ui.warn(&format!(
-                "punktfunk-host is not active — journalctl --user -u punktfunk-host -e ({DOCS}/troubleshooting#the-linux-host-service-wont-start)"
-            ));
+            ui.warn(&t::setup_verify_not_active(format!(
+                "{DOCS}/troubleshooting#the-linux-host-service-wont-start"
+            )));
         }
         let listening = run
             .probe("ss", &["-lun"])
             .is_some_and(|o| o.ok() && o.stdout.contains(":9777 "));
         if listening {
-            ui.ok("listening on UDP 9777 (punktfunk/2)");
+            ui.ok(t::setup_verify_listening());
         } else {
-            ui.warn(
-                "nothing on UDP 9777 yet — give it a second, then: journalctl --user -u punktfunk-host -e",
-            );
+            ui.warn(t::setup_verify_not_listening());
         }
     }
     nvidia_warnings(ui, facts);
@@ -156,13 +171,10 @@ pub fn verify(
 fn nvidia_warnings(ui: &dyn Reporter, facts: &Facts) {
     match facts.nvidia {
         Nvidia::Absent => {}
-        Nvidia::NoDriver => ui.warn(&format!(
-            "NVIDIA GPU without the NVIDIA driver — nothing can encode until it's installed: step 1 of {}",
-            facts.docs_page
-        )),
-        Nvidia::ModuleNotLoaded => ui.warn(&format!(
-            "NVIDIA GPU, but nvidia-smi can't talk to the driver — the kernel module didn't load (Secure Boot? run: mokutil --sb-state): {DOCS}/troubleshooting#nvidia-smi-says-it-cant-communicate-with-the-driver"
-        )),
+        Nvidia::NoDriver => ui.warn(&t::setup_nvidia_no_driver(&facts.docs_page)),
+        Nvidia::ModuleNotLoaded => ui.warn(&t::setup_nvidia_no_module(format!(
+            "{DOCS}/troubleshooting#nvidia-smi-says-it-cant-communicate-with-the-driver"
+        ))),
         Nvidia::Ok => {}
     }
 }
@@ -175,15 +187,13 @@ fn next_steps(
     outcome: &Outcome,
     opts: Opts,
 ) {
-    let ip = facts.ip.clone().unwrap_or_else(|| "<host-ip>".to_string());
+    let lan = facts.ip.as_deref().unwrap_or(facts.console_host());
     ui.blank();
     // The download page's third step, in its words, so the terminal ends where the page does.
-    ui.line("  Done. Next: let a device in.");
+    ui.line(&format!("{INDENT}{}", t::setup_outro_done()));
     // This box serves nothing. Console URL and pairing belong on the host, not localhost.
     if !choices.components.host {
-        ui.line(
-            "  Open punktfunk here and pick the PC you stream from — then approve this device in that host's console.",
-        );
+        ui.line(&format!("{INDENT}{}", t::setup_outro_client()));
         ui.line(&format!("  {DOCS}/install-client · {DOCS}/pairing"));
         ui.blank();
         return;
@@ -191,38 +201,34 @@ fn next_steps(
     // Probe again, not Facts: the install that just ran is usually what put the
     // console on the box. `--dry-run` shows the same text (it installs nothing).
     if run.which("punktfunk-web-server") || opts.dry {
-        ui.line("  On the device you play on, open punktfunk and pick this host. Approve it in the notification here, or in the console.");
+        ui.line(&format!("{INDENT}{}", t::setup_outro_host()));
         // The URL has to be the one that answers. A loopback console is not at the box's LAN
         // address, and printing it there is how an operator concludes the install failed.
         let console = match choices.web_bind.as_str() {
-            LOOPBACK_BIND => "https://127.0.0.1:47992  (this machine only — PUNKTFUNK_UI_BIND in host.env opens it up)".to_string(),
-            LAN_BIND => format!("https://{ip}:47992  (its certificate is this host's own)"),
-            addr => format!("https://{addr}:47992  (its certificate is this host's own)"),
+            LOOPBACK_BIND => t::setup_outro_console_loopback("https://127.0.0.1:47992"),
+            LAN_BIND => t::setup_outro_console(format!("https://{lan}:47992")),
+            addr => t::setup_outro_console(format!("https://{addr}:47992")),
         };
-        ui.line(&format!("  Console: {console}"));
+        ui.line(&format!("{INDENT}{console}"));
         let password = match choices.web_password {
-            Some(_) => "  Password: the one you typed".to_string(),
-            None => {
-                format!(
-                    "  Password — this prints it, until you first sign in: {}",
-                    password_read(facts.family)
-                )
-            }
+            Some(_) => t::setup_outro_password_typed().to_string(),
+            None => t::setup_outro_password_read(password_read(facts.family)),
         };
-        ui.line(&password);
+        ui.line(&format!("{INDENT}{password}"));
     } else {
-        ui.line("  The web console is NOT on this box, and pairing and every setting live there.");
+        ui.line(&format!("{INDENT}{}", t::setup_outro_no_console()));
         ui.line(&format!(
-            "  Install line for your distro: {}",
-            facts.docs_page
+            "{INDENT}{}",
+            t::setup_outro_install_line(&facts.docs_page)
         ));
     }
     if outcome.relogin {
-        ui.line("  Group changes apply after a restart of this computer (controllers won't work until then).");
+        ui.line(&format!("{INDENT}{}", t::setup_outro_relogin()));
     }
     if choices.move_mgmt_port || facts.sunshine_active {
         ui.line(&format!(
-            "  Running next to Sunshine/Apollo: {DOCS}/switching-from-sunshine"
+            "{INDENT}{}",
+            t::setup_outro_sunshine(format!("{DOCS}/switching-from-sunshine"))
         ));
     }
     ui.line(&format!("  {DOCS}/troubleshooting · {}", facts.docs_page));

@@ -258,6 +258,146 @@ async fn a_device_s_own_play_reaches_its_seat_as_that_device() {
     assert_eq!(calls[0].1.target, "game/end");
 }
 
+/// Its screen picker reads the screens of the seat it plays on, as that device, and wakes no
+/// seat: the door has no screens of its own.
+#[tokio::test]
+async fn a_device_s_screen_picker_reads_its_seat() {
+    let fp = "aa11bb22cc33dd44ee55ff6600112233445566778899aabbccddeeff00112233";
+    let np = paired(&[fp]);
+    let seats = FakeSeats::new(box_snapshot(Some(fp))).answering(
+        "display/targets",
+        200,
+        serde_json::json!({"targets": []}),
+    );
+    let app = test_app_door(test_state(), Some(np), seats.clone());
+    let mut req = get_req("/api/v1/display/targets");
+    req.extensions_mut()
+        .insert(PeerCertFingerprint(Some(fp.to_string())));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let calls = seats.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, Target::Seat(KID_SEAT.into()));
+    assert_eq!(calls[0].1.device.as_deref(), Some(fp));
+    assert!(!calls[0].1.start, "a device's read wakes no seat");
+}
+
+/// A device's install, pause and removal reach the owner's host as that device, wherever it
+/// plays: the owner's plugins download into the box's shared game files.
+#[tokio::test]
+async fn a_device_s_install_reaches_the_owner_s_host_as_that_device() {
+    let fp = "aa11bb22cc33dd44ee55ff6600112233445566778899aabbccddeeff00112233";
+    let np = paired(&[fp]);
+    for plays in [Some(fp), None] {
+        let seats = FakeSeats::new(box_snapshot(plays)).answering(
+            "library/install/steam:570",
+            202,
+            serde_json::json!({"id": "steam:570"}),
+        );
+        let app = test_app_door(test_state(), Some(np.clone()), seats.clone());
+        let calls = [
+            (Method::POST, "/api/v1/library/install/steam:570"),
+            (Method::DELETE, "/api/v1/library/install/steam:570"),
+            (Method::POST, "/api/v1/library/install/steam:570/pause"),
+        ];
+        for (method, path) in calls {
+            let mut req = axum::http::Request::builder()
+                .method(method)
+                .uri(path)
+                .body(Body::empty())
+                .unwrap();
+            req.extensions_mut()
+                .insert(PeerCertFingerprint(Some(fp.to_string())));
+            let resp = app.clone().oneshot(req).await.unwrap();
+            assert_ne!(resp.status(), StatusCode::CONFLICT, "{path}");
+        }
+        let calls = seats.calls();
+        assert_eq!(calls.len(), 3);
+        for (target, call) in &calls {
+            assert_eq!(*target, Target::Owner, "{}", call.target);
+            assert_eq!(call.device.as_deref(), Some(fp), "never as the operator");
+        }
+        assert_eq!(calls[0].1.method, "POST");
+        assert_eq!(calls[2].1.target, "library/install/steam:570/pause");
+    }
+}
+
+/// The owner's host answers a vouched install as the device: its grant decides, and a device
+/// it holds no pairing for gets nothing. The admin token alone is the operator.
+#[tokio::test]
+async fn a_vouched_install_is_the_device_s_never_the_operator_s() {
+    use punktfunk_core::quic::{GRANT_GAMEPAD, GRANT_LAUNCH};
+    let (pad, deck) = (
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "2222222222222222222222222222222222222222222222222222222222222222",
+    );
+    let unpaired = "3333333333333333333333333333333333333333333333333333333333333333";
+    let np = crate::native_pairing::NativePairing::load_with(
+        Some(crate::test_support::scratch().join("pf-vouched.json")),
+        None,
+        false,
+    )
+    .unwrap();
+    let access = |grants| {
+        Some(crate::native_pairing::Access {
+            grants,
+            expires_unix: None,
+            until_disconnect: false,
+        })
+    };
+    np.add_with_access("pad", pad, access(GRANT_GAMEPAD))
+        .unwrap();
+    np.add_with_access("deck", deck, access(GRANT_GAMEPAD | GRANT_LAUNCH))
+        .unwrap();
+    let app = test_app_native(test_state(), Arc::new(np));
+    let install = |device: Option<&str>| {
+        let mut req = axum::http::Request::post("/api/v1/library/install/custom:no-such")
+            .body(Body::empty())
+            .unwrap();
+        if let Some(fp) = device {
+            let value = axum::http::HeaderValue::from_str(fp).unwrap();
+            req.headers_mut()
+                .insert(crate::mgmt::auth::VOUCH_HEADER, value);
+        }
+        req
+    };
+    let (status, body) = send(&app, install(Some(pad))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "device_not_allowed_to_start_games");
+    let (status, _) = send(&app, install(Some(deck))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "past the grant");
+    let (status, _) = send(&app, install(Some(unpaired))).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = send(&app, install(None)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "the operator");
+}
+
+/// The door answers a profile's view of the library from its own copy, for the console and
+/// for a device alike.
+#[tokio::test]
+async fn the_door_answers_a_profile_s_library_itself() {
+    let fp = "aa11bb22cc33dd44ee55ff6600112233445566778899aabbccddeeff00112233";
+    let seats = FakeSeats::new(box_snapshot(None));
+    let tmp = tempfile::tempdir().unwrap();
+    let row = |id: &str| serde_json::json!({"id": id, "display_name": id, "os_account": {"kind": "operator"}});
+    let profiles = serde_json::json!({"profiles": [row("000000000001"), row("a1a1a1a1a1a1")]});
+    let state = super::profile_view::profiles_state(tmp.path(), profiles);
+    let app = test_app_door(state, Some(paired(&[fp])), seats.clone());
+    for path in [
+        "/api/v1/library?as=a1a1a1a1a1a1",
+        "/api/v1/library/page?as=a1a1a1a1a1a1",
+    ] {
+        let (status, _) = send(&app, get_req(path)).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        let mut req = get_req(path);
+        req.extensions_mut()
+            .insert(PeerCertFingerprint(Some(fp.to_string())));
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{path}, a device");
+    }
+    assert!(seats.calls().is_empty(), "nothing left the door");
+}
+
 /// The seats' sessions, games and downloads are on the door's `/status`; a device sees the
 /// others' rows without their identity.
 #[tokio::test]
@@ -366,6 +506,25 @@ async fn host_settings_show_the_owner_s_rows_beside_the_door_s() {
     assert_eq!(body["env_file"], "/home/me/.config/punktfunk/host.env");
 }
 
+/// A door row the door won't take refuses the whole patch before the owner's host stores any.
+#[tokio::test]
+async fn a_bad_door_row_stores_none_of_the_owner_s() {
+    let seats = FakeSeats::new(box_snapshot(None)).answering(
+        "host/settings",
+        200,
+        serde_json::json!({"settings": [], "restart_pending": []}),
+    );
+    let app = admin_door(seats.clone());
+    let patch = json_req(
+        Method::PATCH,
+        "/api/v1/host/settings",
+        serde_json::json!({"encoder": "nvenc", "mdns": "bogus"}),
+    );
+    let (status, _) = send(&app, patch).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(seats.calls().is_empty(), "the owner's host was not asked");
+}
+
 /// A tail from the owner's host reaches the console as it arrives, not as one buffered answer.
 #[tokio::test]
 async fn a_tail_streams_through_the_door() {
@@ -430,4 +589,140 @@ async fn a_relayed_event_joins_the_bus() {
     );
     let (status, _) = send(&app, req).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// On a door a Moonlight device is paired with the owner's host, so adding one to a profile's
+/// lock asks that host's list, once, and takes its label; a fingerprint neither lists is refused.
+#[tokio::test]
+async fn a_door_adds_a_moonlight_device_the_owner_s_host_paired() {
+    let moonlight = "ef".repeat(32);
+    let seats = FakeSeats::new(box_snapshot(None)).answering(
+        "clients",
+        200,
+        serde_json::json!([{"fingerprint": moonlight.to_uppercase(), "label": "Living room"}]),
+    );
+    let state = test_state();
+    let path = crate::test_support::scratch().join("profiles.json");
+    let profiles = crate::profiles::Profiles::load_with(Some(path), None);
+    profiles.ensure_owner("box").unwrap();
+    let owner = profiles.owner_id().unwrap();
+    let _ = state.profiles.set(Arc::new(profiles));
+    let app = test_app_door(state, None, seats.clone());
+    let devices = format!("/api/v1/profiles/{owner}/devices");
+    let add = |fp: &str| {
+        json_req(
+            Method::POST,
+            &devices,
+            serde_json::json!({"fingerprint": fp}),
+        )
+    };
+    let (status, body) = send(&app, add(&moonlight)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body[0]["fingerprint"], moonlight.as_str());
+    assert_eq!(body[0]["name"], "Living room");
+    assert_eq!(
+        body[0]["moonlight"], true,
+        "the list tags it from the owner's"
+    );
+    let (status, body) = send(&app, add(&"cd".repeat(32))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "profile_device_not_paired");
+    let asked: Vec<_> = seats
+        .calls()
+        .into_iter()
+        .map(|(t, c)| (t, c.target))
+        .collect();
+    // The add, the list it answers, the refused add.
+    let clients = (Target::Owner, "clients".to_string());
+    assert_eq!(asked, [clients.clone(), clients.clone(), clients]);
+}
+
+/// The door decides who a locked profile's person is, from its own lock file, and passes the
+/// person's call to the owner's host as that device, naming the profile, never as the operator.
+/// A device that isn't the person, the owner's id, an unknown one, no `as`, and a profile on a
+/// person's own account are answered on the door, and nothing leaves it.
+#[tokio::test]
+async fn a_person_s_call_reaches_the_owner_s_host_as_that_device() {
+    const OWNER_P: &str = "0f0f0f0f0f0f";
+    const KID: &str = "a1b2c3d4e5f6";
+    let (listed, other) = ("a7".repeat(32), "b8".repeat(32));
+    for adopted in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let row =
+            |id, account| serde_json::json!({"id": id, "display_name": id, "os_account": account});
+        let profiles = serde_json::json!({"profiles": [
+            row(OWNER_P, serde_json::json!({"kind": "operator"})),
+            row(KID, serde_json::json!({"kind": "seat", "seat": KID_SEAT})),
+        ]});
+        let state = super::profile_view::profiles_state(tmp.path(), profiles);
+        let device = pf_seats::ipc::Device {
+            fingerprint: listed.clone(),
+            name: "Kid's tablet".into(),
+        };
+        let store = state.profiles.get().unwrap().clone();
+        let locked = store.locks().edit(KID, |lock, now| {
+            lock.locked = true;
+            lock.add(&device, now)
+        });
+        assert!(locked.unwrap());
+        let mut snapshot = box_snapshot(None);
+        if adopted {
+            snapshot.seats[1].adopted_uid = Some(1000);
+        }
+        let target = format!("library/hidden/steam:400?as={KID}");
+        let seats = FakeSeats::new(snapshot).answering(
+            &target,
+            200,
+            serde_json::json!({"id": "steam:400", "hidden": true}),
+        );
+        let np = paired(&[listed.as_str(), other.as_str()]);
+        let app = test_app_door(state, Some(np), seats.clone());
+        let hide = |fp: &str, query: &str| {
+            let path = format!("/api/v1/library/hidden/steam:400{query}");
+            let mut req = json_req(Method::PUT, &path, serde_json::json!({"hidden": true}));
+            req.extensions_mut()
+                .insert(PeerCertFingerprint(Some(fp.to_string())));
+            req
+        };
+        for (fp, query, status) in [
+            (other.as_str(), format!("?as={KID}"), StatusCode::FORBIDDEN),
+            (
+                listed.as_str(),
+                format!("?as={OWNER_P}"),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                listed.as_str(),
+                "?as=0123456789ab".into(),
+                StatusCode::NOT_FOUND,
+            ),
+            (listed.as_str(), String::new(), StatusCode::UNAUTHORIZED),
+        ] {
+            let resp = app.clone().oneshot(hide(fp, &query)).await.unwrap();
+            assert_eq!(resp.status(), status, "{query}");
+        }
+        assert!(seats.calls().is_empty(), "nothing left the door");
+        let resp = app
+            .clone()
+            .oneshot(hide(&listed, &format!("?as={KID}")))
+            .await;
+        let status = resp.unwrap().status();
+        if adopted {
+            assert_eq!(status, StatusCode::FORBIDDEN, "a person's own account");
+            assert!(seats.calls().is_empty());
+            continue;
+        }
+        assert_eq!(status, StatusCode::OK);
+        let calls = seats.calls();
+        assert_eq!(calls.len(), 1);
+        let (to, call) = &calls[0];
+        assert_eq!(*to, Target::Owner);
+        assert_eq!(call.target, target);
+        assert_eq!(
+            call.device.as_deref(),
+            Some(listed.as_str()),
+            "as the device"
+        );
+        assert_eq!(call.person.as_deref(), Some(KID));
+    }
 }

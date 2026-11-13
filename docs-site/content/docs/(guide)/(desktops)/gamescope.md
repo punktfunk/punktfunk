@@ -10,14 +10,23 @@ runs one. Install the host first: [Bazzite](/docs/bazzite) or [SteamOS (Host)](/
 
 - Each client gets Gaming Mode at its own resolution and refresh rate (managed and bare spawn,
   [below](#how-the-host-gets-a-gamescope)).
-- On Bazzite and SteamOS it follows **Switch to Desktop** and back mid-stream, with no reconnect.
-  Elsewhere, turn on **Follow mode switches** in the console (`PUNKTFUNK_SESSION_WATCH=1`). The
-  desktop streams at 60 Hz until its KWin reaches 6.6 ([KDE](/docs/kde#known-limits)); SteamOS
-  3.8 ships 6.4. Gaming Mode keeps your client's refresh rate.
+- On a box with Steam Gaming Mode (Bazzite, SteamOS, Nobara) it follows **Switch to Desktop**
+  and back mid-stream, with no reconnect. Elsewhere, turn on **Follow mode switches** in the
+  console (`PUNKTFUNK_SESSION_WATCH=1`). The desktop streams at 60 Hz until its KWin reaches 6.6
+  ([KDE](/docs/kde#known-limits)); SteamOS 3.8 ships 6.4. Gaming Mode keeps your client's refresh
+  rate.
 - Controllers, including a virtual Steam Deck pad when you are in the
   [`punktfunk` group](#the-punktfunk-group).
 - With [`punktfunk-gamescope`](#hdr-on-gamescope): HDR, the real resolution and refresh rate in
   Steam, the performance overlay, and your keyboard layout.
+
+## The Game Mode tile
+
+On a host that runs a gamescope session, such as SteamOS, Bazzite, Nobara or CachyOS with
+gamescope-session, the library shows a **Game Mode** tile beside **Desktop**. It streams Steam's
+gamepad interface on a screen of its own, at your device's resolution and refresh rate, the way a
+[managed or bare-spawn session](#how-the-host-gets-a-gamescope) does. A desktop that only has
+gamescope installed shows no tile.
 
 ## host.env
 
@@ -55,19 +64,17 @@ The host picks one of three modes per session and logs it:
 ### Nobara and other autologin display managers
 
 When a display manager autologs into Gaming Mode, the managed takeover idles that session for the
-stream instead of stopping it: a drop-in under `$XDG_RUNTIME_DIR` swaps its `ExecStart` for a
-sleep. Steam is free, the display manager keeps running, and **Switch to Desktop** still works
-while you stream. It needs no privilege, and a reboot clears it.
+stream instead of stopping it. The display manager keeps running, and **Switch to Desktop** still
+works while you stream. A reboot undoes it.
 
-If nothing lights the box's screen 25 seconds after the host hands it back, the host stops that
-session so the display manager logs in again, then restarts the display manager through its
-packaged helper (`pf-dm-helper`, polkit action `io.unom.punktfunk.dm-helper`). The helper serves
-members of the [`punktfunk` group](#the-punktfunk-group) only. If both fail, the host runs
+If nothing lights the box's screen 25 seconds after the host hands it back, the host restarts the
+session, then the display manager. The display manager restart needs the
+[`punktfunk` group](#the-punktfunk-group). If both fail, the host runs
 `PUNKTFUNK_RECOVER_SESSION_CMD` when you set one.
 
 ### The `punktfunk` group
 
-Join the `punktfunk` group on any box you stream Gaming Mode from, then log out and back in:
+Join the `punktfunk` group on any box you stream Gaming Mode from, then restart the computer:
 
 ```sh
 sudo usermod -aG punktfunk "$USER"
@@ -84,7 +91,7 @@ To stream Gaming Mode exactly as the TV shows it, pick that screen under **Displ
 **Stream this monitor** in the console, or set `PUNKTFUNK_CAPTURE_MONITOR=HDMI-A-1` (names from
 `punktfunk-host list-monitors`). Nothing is stopped or relaunched and no mode is imposed. A headless
 gamescope has no screen to list. See
-[Stream a real monitor instead](/docs/virtual-displays#stream-a-real-monitor-instead).
+[Stream a real monitor instead](/docs/stream-a-monitor).
 
 With **Your monitors while streaming** → **Turn off**, managed and bare-spawn sessions switch the
 box's screen off for the stream and back on after. GNOME can't be asked to, and the log says so.
@@ -100,8 +107,8 @@ gamescope.
 | System | How to get it |
 |---|---|
 | Bazzite, Fedora Atomic | In the Punktfunk sysext: `punktfunk-sysext update`. |
-| Fedora, Nobara, other RPM systems | Installed with the host. On an older install: `sudo dnf install punktfunk-gamescope`. |
-| Debian 13, Ubuntu 26.04 | Installed with the host. On an older install: `sudo apt install punktfunk-gamescope`. |
+| Fedora, Nobara, other RPM systems | Installed with the host. If it's missing: `sudo dnf install punktfunk-gamescope`. |
+| Debian 13, Ubuntu 26.04 | Installed with the host. If it's missing: `sudo apt install punktfunk-gamescope`. |
 | Ubuntu 24.04 | Not available: its wayland is too old. Build from source or upgrade. |
 | Arch | Installed with the host. |
 | SteamOS | Built by the Steam Deck installer (`scripts/steamdeck/install.sh`, `update.sh`). |
@@ -159,7 +166,6 @@ The session streamed the box's own screen at its own mode. Check
 `journalctl --user -u punktfunk-host | grep 'gamescope sub-mode'`.
 
 1. Under **Displays**, click **Stream this monitor** on the streamed screen again to clear it.
-2. If `~/.config/punktfunk/host.env` sets `PUNKTFUNK_GAMESCOPE_ATTACH`, a copied template put it
-   there: delete that line, and any `PUNKTFUNK_GAMESCOPE_NODE` line, then
-   `systemctl --user restart punktfunk-host`.
+2. If `~/.config/punktfunk/host.env` sets `PUNKTFUNK_GAMESCOPE_ATTACH`, delete that line, and any
+   `PUNKTFUNK_GAMESCOPE_NODE` line, then `systemctl --user restart punktfunk-host`.
 3. If the log says `managed takeover unavailable`, the reason is on the same line.

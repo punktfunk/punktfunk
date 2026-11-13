@@ -81,7 +81,9 @@ on:
       - 'clients/session/**'
       - 'clients/shared/**'
       - 'clients/cli/**'
+      - 'l10n/**'
       - 'web/**'
+      - 'l10n/messages/**'
       - 'sdk/**'
       - 'api/openapi.json'
       - 'packaging/debian/**'
@@ -89,6 +91,7 @@ on:
       - 'packaging/linux/*.conf'
       - 'packaging/linux/*.desktop'
       - 'packaging/linux/*.generator'
+      - 'packaging/linux/*.pam'
       - 'packaging/linux/apparmor/**'
       - 'packaging/linux/*.rules'
       - 'packaging/linux/*.service'
@@ -96,6 +99,7 @@ on:
       - 'packaging/linux/*.tmpfiles'
       - 'packaging/linux/*.sysusers'
       - 'packaging/linux/payload.txt'
+      - 'packaging/linux/90-punktfunk-frame-adapter'
       - 'packaging/linux/seat-*'
       - 'packaging/linux/door-*'
       - 'packaging/linux/*.ufw'
@@ -124,6 +128,7 @@ on:
       - 'scripts/punktfunk-kde-session.service'
       - 'scripts/punktfunk-modules.conf'
       - 'scripts/punktfunk-scripting.service'
+      - 'scripts/punktfunk-scripting-seat@.service'
       - 'scripts/punktfunk-web-init.service'
       - 'scripts/punktfunk-web.service'
       - 'scripts/web-init.sh'
@@ -267,8 +272,8 @@ jobs:
 
       # ── The web console, built ONCE per (web+sdk content, bun) rather than once per job ────────
       # This bundle was being rebuilt six times on every push — ci.yml, here, both RPM legs, arch,
-      # and the docker app image — at ~2.5 min each, for output that is a pure function of web/ and
-      # sdk/. windows-host.yml has cached it this way for a while; this is the same arrangement for
+      # and the docker app image — at ~2.5 min each, for output that is a pure function of web/,
+      # sdk/ and l10n/messages/. windows-host.yml has cached it this way for a while; this is the same arrangement for
       # the Linux packaging legs, sharing one key family so a hit in one warms the others.
       #
       # The bun version is IN THE KEY. Each builder image installs its own bun (rust-ci, fedora-rpm
@@ -283,7 +288,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: web/.output
-          key: web-console-linux-bun${{ env.bunver }}-${{ hashFiles('web/**', 'sdk/**') }}
+          key: web-console-linux-bun${{ env.bunver }}-${{ hashFiles('web/**', 'sdk/**', 'l10n/messages/**') }}
 
       - name: Build + smoke-boot web console (bun preset)
         # Skipped when the cache already holds this exact (web+sdk, bun) bundle — the assertion step

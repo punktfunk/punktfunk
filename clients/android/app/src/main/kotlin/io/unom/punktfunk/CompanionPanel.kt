@@ -1,6 +1,7 @@
 package io.unom.punktfunk
 
 import android.content.Context
+import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,6 +51,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
@@ -60,6 +62,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.unom.punktfunk.components.SectionLabel
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.SlotId
 
 /*
  * The companion panel (design/android-dual-screen.md §6): what the lower screen of a dual-screen
@@ -69,12 +73,12 @@ import io.unom.punktfunk.components.SectionLabel
  * second display's Presentation.
  */
 
-internal enum class CompanionPage(val label: String, val icon: ImageVector) {
-    STATS("Stats", Icons.Filled.Insights),
-    ACTIONS("Actions", Icons.Filled.Apps),
-    KEYBOARD("Keyboard", Icons.Filled.Keyboard),
-    TRACKPAD("Trackpad", Icons.Filled.TouchApp),
-    PAD("Controller", Icons.Filled.SportsEsports),
+internal enum class CompanionPage(@StringRes val label: Int, val icon: ImageVector) {
+    STATS(R.string.android_companion_stats, Icons.Filled.Insights),
+    ACTIONS(R.string.android_companion_actions, Icons.Filled.Apps),
+    KEYBOARD(R.string.android_companion_keyboard, Icons.Filled.Keyboard),
+    TRACKPAD(R.string.android_companion_trackpad, Icons.Filled.TouchApp),
+    PAD(R.string.android_companion_controller, Icons.Filled.SportsEsports),
 }
 
 /**
@@ -92,15 +96,15 @@ internal fun companionPages(pointer: Boolean, pad: Boolean, keyboard: Boolean): 
     }
 
 /** Which screen of a pair holds the picture — or both (design/android-dual-screen.md §3). */
-enum class ScreenLayout(val label: String) {
+enum class ScreenLayout(@StringRes val label: Int) {
     /** The picture above, the panel below: the default. */
-    PANEL("Panel below"),
+    PANEL(R.string.android_companion_layout_panel),
 
     /** The panel above, the picture below. */
-    SWAPPED("Picture below"),
+    SWAPPED(R.string.android_companion_layout_swapped),
 
     /** One picture across both: its top half above, its bottom half below. */
-    SPANNED("Across both");
+    SPANNED(R.string.android_companion_layout_spanned);
 
     /** The layout after this one in [offered], wrapping; the first offered when this one is not. */
     fun next(offered: List<ScreenLayout>): ScreenLayout =
@@ -116,9 +120,9 @@ private val TWO_SCREEN_TAGS = setOf(
 )
 
 /** How the stats page shows the window: the graphs (the default), or the HUD's lines. */
-internal enum class StatsView(val label: String) {
-    GRAPHS("Graphs"),
-    TEXT("Text"),
+internal enum class StatsView(@StringRes val label: Int) {
+    GRAPHS(R.string.android_companion_view_graphs),
+    TEXT(R.string.android_companion_view_text),
 }
 
 /**
@@ -165,7 +169,7 @@ internal object CompanionMemory {
     }
 }
 
-/** The panel's header: the host and the title on one line, the mode on the next. */
+/** The panel's header: the host and the title on one line, the picture's size and rate on the next. */
 internal data class PanelHeader(val title: String, val detail: String = "")
 
 /**
@@ -225,7 +229,7 @@ internal fun CompanionPanel(
                         onPage(p)
                     },
                     icon = { Icon(p.icon, contentDescription = null) },
-                    label = { Text(p.label) },
+                    label = { Text(stringResource(p.label)) },
                 )
             }
         }
@@ -284,7 +288,7 @@ private fun StatsPage(
                             selected = v == view,
                             onClick = { onView(v) },
                             shape = SegmentedButtonDefaults.itemShape(index = i, count = StatsView.entries.size),
-                        ) { Text(v.label, maxLines = 1) }
+                        ) { Text(stringResource(v.label), maxLines = 1) }
                     }
                 }
             }
@@ -296,7 +300,7 @@ private fun StatsPage(
                             selected = t == tier,
                             onClick = { onTier(t) },
                             shape = SegmentedButtonDefaults.itemShape(index = i, count = all.size),
-                        ) { Text(t.label, maxLines = 1) }
+                        ) { Text(stringResource(statsVerbosityLabel(t)), maxLines = 1) }
                     }
                 }
             }
@@ -317,7 +321,7 @@ private fun StatsPage(
                 StatsGraphs(history, wide, Modifier.padding(bottom = 12.dp))
             } else if (lines.isEmpty()) {
                 Text(
-                    "The numbers arrive within a second.",
+                    stringResource(R.string.android_companion_stats_waiting),
                     style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
@@ -346,12 +350,16 @@ private fun StatsPage(
 @Composable
 private fun ActionsPage(cfg: OverlayConfig, actions: RingActions, haptics: ConsoleHaptics) {
     val state = remember { RingState() }
+    val ctx = textContext()
     ExpireRingHint(state)
     // End game only while this device's launch is on the stream: a dimmed tile says nothing.
     val endGame = listOfNotNull(SlotId.EndGame.takeIf { actions.streamedGame() != null })
     val host = actions.hostActions().map { SlotId.Host(it.id) } + cfg.shortcuts.map { SlotId.Shortcut(it.id) }
-    val groups = listOf("Session" to SESSION_SLOTS, "Host" to host, "Leave" to endGame + EXIT_SLOTS)
-        .filter { it.second.isNotEmpty() }
+    val groups = listOf(
+        ActionGroup("session", R.string.android_companion_group_session, SESSION_SLOTS),
+        ActionGroup("host", R.string.android_companion_group_host, host),
+        ActionGroup("leave", R.string.android_companion_group_leave, endGame + EXIT_SLOTS),
+    ).filter { it.slots.isNotEmpty() }
     Box(Modifier.fillMaxSize()) {
         LazyVerticalGrid(
             GridCells.Adaptive(104.dp),
@@ -359,13 +367,13 @@ private fun ActionsPage(cfg: OverlayConfig, actions: RingActions, haptics: Conso
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            for ((name, slots) in groups) {
-                item(key = "group:$name", span = { GridItemSpan(maxLineSpan) }) {
-                    Box(Modifier.padding(top = 8.dp)) { SectionLabel(name) }
+            for (group in groups) {
+                item(key = "group:${group.id}", span = { GridItemSpan(maxLineSpan) }) {
+                    Box(Modifier.padding(top = 8.dp)) { SectionLabel(stringResource(group.title)) }
                 }
-                items(slots, key = { it.id }) { slot ->
-                    val s = spec(slot, cfg, actions)
-                    ActionTile(s, armed = state.armed == s.id) { fireSlot(s, slot, state, cfg, actions, haptics) {} }
+                items(group.slots, key = { it.id }) { slot ->
+                    val s = spec(slot, cfg, actions, ctx)
+                    ActionTile(s, armed = state.armed == s.id) { fireSlot(s, slot, state, cfg, actions, haptics, ctx) {} }
                 }
             }
         }
@@ -384,9 +392,13 @@ private fun ActionsPage(cfg: OverlayConfig, actions: RingActions, haptics: Conso
     }
 }
 
+/** One header and its tiles; [id] keys the header in the grid, never the title. */
+private class ActionGroup(val id: String, @StringRes val title: Int, val slots: List<SlotId>)
+
 @Composable
 private fun ActionTile(spec: SlotSpec, armed: Boolean, onTap: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
+    val armedState = stringResource(R.string.android_companion_armed_a11y)
     val (fill, tint) = when {
         armed -> scheme.errorContainer to scheme.onErrorContainer
         !spec.enabled -> scheme.surfaceVariant.copy(alpha = 0.45f) to scheme.onSurface.copy(alpha = 0.38f)
@@ -403,7 +415,7 @@ private fun ActionTile(spec: SlotSpec, armed: Boolean, onTap: () -> Unit) {
             .height(108.dp)
             .semantics {
                 stateDescription = when {
-                    armed -> "armed — press again"
+                    armed -> armedState
                     !spec.enabled -> spec.reason
                     else -> spec.state
                 }
@@ -444,7 +456,7 @@ private fun TrackpadPage(input: suspend PointerInputScope.() -> Unit) {
     ) {
         Box(contentAlignment = Alignment.Center) {
             Text(
-                "Tap to click · two fingers scroll · two-finger tap right-clicks",
+                stringResource(R.string.android_companion_trackpad_hint),
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center, modifier = Modifier.padding(24.dp),
             )
@@ -463,7 +475,7 @@ private fun PadPage(actions: RingActions, pad: @Composable (IntSize) -> Unit) {
             FilledTonalButton(onClick = { actions.togglePad() }) {
                 Icon(Icons.Filled.SportsEsports, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("Show the controller")
+                Text(stringResource(R.string.android_companion_show_controller))
             }
         }
     }

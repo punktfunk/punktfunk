@@ -57,8 +57,9 @@ pub(crate) struct ClientShared {
     pub(crate) feedback: Mutex<super::recovery::FeedbackOut>,
     /// Where feedback datagrams leave: the session's connection, from when the pump has one.
     pub(crate) feedback_tx: std::sync::OnceLock<FeedbackTx>,
-    /// Re-picks the shared socket's source address after the device's path changed.
-    pub(crate) reconnect: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>>,
+    /// Re-picks the source address of the socket the session runs on after the device's path
+    /// changed. Every dial replaces it: a redirect dials twice and keeps the second.
+    pub(crate) reconnect: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     /// The host answered `Pending`: its operator is deciding about this device.
     pub(crate) pending: AtomicBool,
     /// Keyframe asks sent; the pump drains them per report window as the ABR recovery signal.
@@ -94,6 +95,8 @@ pub(crate) struct ClientShared {
     pub(crate) video_format: Mutex<crate::quic::VideoFormat>,
     /// `CODEC_*` bits of the last codec ask the host refused; `0` while none was.
     pub(crate) codec_refused: AtomicU8,
+    /// Mode switches the host refused; the control task counts them.
+    pub(crate) mode_refusals: AtomicU32,
     /// The desktop audio stream's live format and the `AudioConfig` that moves it next.
     pub(crate) audio_anchor: Mutex<super::pump::anchor::AudioAnchor>,
     /// The audio format of the newest packet handed to the embedder; `None` = the Welcome's.
@@ -166,7 +169,7 @@ impl ClientShared {
             host_link: Mutex::default(),
             feedback: Mutex::default(),
             feedback_tx: std::sync::OnceLock::new(),
-            reconnect: std::sync::OnceLock::new(),
+            reconnect: Mutex::new(None),
             pending: AtomicBool::new(false),
             recovery_kf: AtomicU32::new(0),
             starved_kf: AtomicU32::new(0),
@@ -182,6 +185,7 @@ impl ClientShared {
             anchor: Mutex::default(),
             video_format: Mutex::default(),
             codec_refused: AtomicU8::new(0),
+            mode_refusals: AtomicU32::new(0),
             audio_anchor: Mutex::default(),
             audio_out: Mutex::default(),
             live_bitrate_kbps: AtomicU32::new(0),
@@ -309,8 +313,19 @@ pub(crate) fn reject_from_close(
         quinn::ConnectionError::ApplicationClosed(ac) => u32::try_from(u64::from(ac.error_code))
             .ok()
             .and_then(crate::reject::RejectReason::from_close_code)
-            .map(|r| (r, sanitize_reason(&ac.reason))),
+            .map(|r| (r, said_beyond(r, sanitize_reason(&ac.reason)))),
         _ => None,
+    }
+}
+
+/// `said` without the stock sentence of `reason`'s code, which the host sends for a plain
+/// refusal. A client words the code itself (`RejectReason::message_id`), so only a sentence
+/// the code does not carry is the host's own.
+fn said_beyond(reason: crate::reject::RejectReason, said: String) -> String {
+    if said == reason.to_string() {
+        String::new()
+    } else {
+        said
     }
 }
 
@@ -332,7 +347,20 @@ pub(crate) fn sanitize_reason(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod reason_tests {
-    use super::sanitize_reason;
+    use super::{said_beyond, sanitize_reason};
+    use crate::reject::RejectReason;
+
+    #[test]
+    fn a_stock_sentence_is_the_codes_not_the_hosts() {
+        for &r in RejectReason::ALL {
+            assert_eq!(said_beyond(r, r.to_string()), "", "{r:?}");
+        }
+        let own = "The host is set to capture a monitor that isn't connected.";
+        assert_eq!(said_beyond(RejectReason::SetupFailed, own.into()), own);
+        // Another code's stock sentence is not this code's.
+        let other = RejectReason::Busy.to_string();
+        assert_eq!(said_beyond(RejectReason::Denied, other.clone()), other);
+    }
 
     #[test]
     fn a_hostile_reason_cannot_fill_the_screen_or_move_the_cursor() {

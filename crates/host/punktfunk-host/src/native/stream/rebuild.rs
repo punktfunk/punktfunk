@@ -1,6 +1,7 @@
 //! Everything that swaps the pipeline under a running stream: a Gaming↔Desktop session switch,
-//! a client mode switch, a codec ask, the Windows topology re-assert, capture loss, a source
-//! that changed size with no client Reconfigure, and a rate the encoder cannot take in place.
+//! a client mode switch, a codec ask, content that turned HDR or SDR, the Windows topology
+//! re-assert, capture loss, a source that changed size with no client Reconfigure, and a rate
+//! the encoder cannot take in place.
 //! Each site drains its ask into [`StreamState::rebuild`], the one performer: it plans the
 //! rebuild ([`rebuild_plan::plan`]), prepares, builds, then commits through
 //! [`StreamState::swap_pipeline`] and the plan's epilogue, or rolls back.
@@ -10,8 +11,8 @@ use super::cursor::settle_portal_cursor;
 #[cfg(target_os = "linux")]
 use super::pipeline::reattach_pipeline;
 use super::pipeline::{
-    build_pipeline, build_pipeline_with_retry, is_permanent_build_error, open_session_encoder,
-    BuildRequest, Pipeline,
+    build_pipeline, build_pipeline_with_retry, is_permanent_build_error, open_session_encoder_with,
+    rate_at_encoded, BuildRequest, Pipeline,
 };
 use super::rebuild_plan::{
     self, Build, DisplayChange, Rate, RebuildAsk, RebuildFacts, RebuildPlan, Screens, Tell,
@@ -23,6 +24,7 @@ use crate::bringup::Trace;
 use crate::encode_recovery::{
     EncoderWatchdog, RebuildBudget, MAX_CAPTURE_REBUILDS, MAX_ENCODER_RESETS,
 };
+use crate::native::wiring::{joined_display, joined_held};
 use crate::session_status::pack_mode;
 
 /// How long a capture-loss rebuild waits after a failed attempt.
@@ -279,6 +281,7 @@ pub(super) enum Rebuilt {
 struct Before {
     plan: crate::session_plan::SessionPlan,
     bit_depth: u8,
+    format_facts: super::super::handshake::FormatFacts,
     composite: (bool, bool),
     params: crate::vdisplay::SessionParams,
     compositor: crate::vdisplay::Compositor,
@@ -299,8 +302,9 @@ struct Prepared {
 
 /// The one rebuild performer: [`StreamState::rebuild`] and the steps it runs.
 impl StreamState {
-    /// What [`rebuild_plan::plan`] reads.
+    /// What [`rebuild_plan::plan`] reads, the display's holders as they are now.
     fn rebuild_facts(&self) -> RebuildFacts {
+        let (joined, generation) = (self.display.vd_params.join_live, self.live.cur_display_gen);
         RebuildFacts {
             mode: self.live.cur_mode,
             rate_kbps: self.live.bitrate_kbps,
@@ -311,6 +315,13 @@ impl StreamState {
             seen_reassert_gen: self.seen_reassert_gen,
             follows_session: pf_host_config::config().compositor.is_none(),
             windows: cfg!(target_os = "windows"),
+            // A display it joined counts as held wherever it may not change it.
+            shared: if joined {
+                joined_held(joined_display(true, generation))
+            } else {
+                generation.is_some_and(crate::vdisplay::registry::shared)
+            },
+            joined,
         }
     }
 
@@ -319,7 +330,7 @@ impl StreamState {
     /// build. The live mode asked again still tells the control task what is delivered (S5-6).
     pub(super) fn rebuild(&mut self, ask: RebuildAsk) -> Result<Rebuilt> {
         let Some(plan) = rebuild_plan::plan(&ask, &self.rebuild_facts()) else {
-            if let RebuildAsk::Mode(asked) = ask {
+            if let RebuildAsk::Mode(asked, _) = ask {
                 self.publish_delivered_mode(asked);
             }
             return Ok(Rebuilt::Unchanged);
@@ -355,14 +366,17 @@ impl StreamState {
         }
     }
 
-    /// Snapshot what the plan changes, take the ask's payload, and apply its display change: a
-    /// switch's env, route and cursor plan, or a codec's.
+    /// Snapshot what the plan changes, take the ask's payload — a mode ask's view, or the size it
+    /// asked on a display that stays, goes into the session plan — and apply its display change:
+    /// a joiner that stops joining, a switch's env, route, format and cursor plan, a codec's,
+    /// or the format of content that turned HDR or SDR.
     fn prepare(&mut self, plan: &RebuildPlan, ask: RebuildAsk) -> Prepared {
         let d = &self.display;
         let mut prep = Prepared {
             before: Before {
                 plan: self.plan,
                 bit_depth: self.bit_depth,
+                format_facts: self.facts.format_facts.clone(),
                 composite: (d.gamescope_composite, d.metadata_composite),
                 params: d.vd_params.clone(),
                 compositor: d.compositor,
@@ -386,17 +400,31 @@ impl StreamState {
                 }
                 prep.launch = sw.launch;
             }
-            RebuildAsk::Mode(new_mode) => {
-                tracing::info!(?new_mode, "rebuilding pipeline for mode switch")
+            RebuildAsk::Mode(new_mode, view) => {
+                let view = rebuild_plan::view_for(new_mode, view, plan.mode);
+                tracing::info!(?new_mode, ?view, "rebuilding pipeline for mode switch");
+                self.plan.reframe_to = view.map(|v| (punktfunk_core::video_fit::VideoFit::Fit, v));
             }
             RebuildAsk::TopologyReassert(_) => tracing::info!(
                 "exclusive-topology eviction bounced the virtual display's modes — rebuilding \
                  the capture attachment in place at the current mode"
             ),
             RebuildAsk::CaptureLost(keepalive) => prep.keepalive = keepalive,
+            // Taking the keepalive stops the running capture: the next one attaches alone.
+            RebuildAsk::Content(_) => {
+                let feed = self.live.capturer.feed();
+                prep.keepalive = feed.and_then(|f| f.take_keepalive());
+            }
             RebuildAsk::Format(_) | RebuildAsk::SourceMode(_) | RebuildAsk::Bitrate(_) => {}
         }
 
+        if plan.stops_joining {
+            tracing::info!(
+                "the display this session joined has no other holder — building its own"
+            );
+            self.display.vd_params.join_live = false;
+            self.display.vd.set_join_live(false);
+        }
         match plan.display {
             Some(DisplayChange::Switch(to)) => {
                 let route = crate::vdisplay::resolve_gamescope_route(to, false);
@@ -406,48 +434,84 @@ impl StreamState {
                 ) {
                     crate::vdisplay::settle_desktop_portal(to);
                 }
+                let hdr = self.follow_to(to, route.as_ref(), plan.mode);
                 let hw_cursor = self.retarget_cursor_plan(to, route.as_ref());
                 prep.params = Some(crate::vdisplay::SessionParams {
+                    hdr,
                     hw_cursor,
                     route,
                     ..self.display.vd_params.clone()
                 });
             }
-            Some(DisplayChange::Format(codec)) => self.reformat(codec, plan.mode, &mut prep),
+            Some(DisplayChange::Format(codec)) => {
+                let v = self.resolve_live(codec, plan.mode);
+                self.show(v.display_hdr, &mut prep);
+                tracing::info!(from = ?prep.before.plan.codec, to = ?codec,
+                    bit_depth = v.bit_depth, hdr = v.hdr, chroma = ?v.chroma,
+                    "rebuilding the pipeline for a codec change");
+            }
+            Some(DisplayChange::Content(hdr)) => {
+                self.facts.format_facts.content_hdr = Some(hdr);
+                let v = self.resolve_live(self.plan.codec, plan.mode);
+                self.show(self.display.vd_params.hdr, &mut prep);
+                tracing::info!(
+                    content_hdr = hdr,
+                    bit_depth = v.bit_depth,
+                    hdr = v.hdr,
+                    "the content's HDR state moved — rebuilding the capture in its range"
+                );
+            }
             None => {}
         }
         prep
     }
 
-    /// Re-run the handshake's depth, HDR and chroma rule for `codec` at `mode` (S2-5), resolve
-    /// the plan for it, and hand the live display its HDR verdict and cursor plan (S5-4).
-    fn reformat(
+    /// Run the handshake's depth, HDR and chroma rule on the session's facts for `codec` at
+    /// `mode` (S2-5), and resolve the plan for it on `compositor` and `route`.
+    fn resolve_format(
         &mut self,
         codec: crate::encode::Codec,
         mode: punktfunk_core::Mode,
-        prep: &mut Prepared,
-    ) {
-        let (bit_depth, hdr, chroma) =
-            self.facts
-                .format_facts
-                .resolve(codec, &self.facts.encoder, mode);
+        compositor: crate::vdisplay::Compositor,
+        route: Option<&crate::vdisplay::GamescopeRoute>,
+    ) -> super::super::handshake::Verdict {
+        let v = self
+            .facts
+            .format_facts
+            .resolve(codec, &self.facts.encoder, mode);
         self.plan = super::pipeline::resolve_plan(
             &self.facts.encoder,
-            bit_depth,
-            hdr,
-            chroma,
+            v.bit_depth,
+            v.hdr,
+            v.chroma,
             codec,
             self.plan.studio_asked,
             self.plan.cursor_forward,
             self.plan.slices,
-            self.display.compositor,
-            self.display.vd_params.route.as_ref(),
+            compositor,
+            route,
             self.plan.pyrowave_bpp,
             usize::from(self.facts.shard_payload),
             self.plan.reframe_to,
             self.display.vd_params.join_live,
+            self.plan.mirrored,
         );
-        self.bit_depth = bit_depth;
+        self.bit_depth = v.bit_depth;
+        v
+    }
+
+    /// [`Self::resolve_format`] on the display the session runs.
+    fn resolve_live(
+        &mut self,
+        codec: crate::encode::Codec,
+        mode: punktfunk_core::Mode,
+    ) -> super::super::handshake::Verdict {
+        let route = self.display.vd_params.route.clone();
+        self.resolve_format(codec, mode, self.display.compositor, route.as_ref())
+    }
+
+    /// Hand the live display `hdr` and the plan's cursor (S5-4), and make them its request.
+    fn show(&mut self, hdr: bool, prep: &mut Prepared) {
         let route = self.display.vd_params.route.clone();
         let hw_cursor = self.retarget_cursor_plan(self.display.compositor, route.as_ref());
         self.display.vd.set_hdr(hdr);
@@ -458,8 +522,23 @@ impl StreamState {
             hw_cursor,
             ..self.display.vd_params.clone()
         });
-        tracing::info!(from = ?prep.before.plan.codec, to = ?codec, bit_depth, hdr, ?chroma,
-            "rebuilding the pipeline for a codec change");
+    }
+
+    /// Whether the display of a session on its way to `to` is lit in HDR. A session that
+    /// follows its source runs the format rule for the new one; a session on a display
+    /// another holds keeps the format they share.
+    fn follow_to(
+        &mut self,
+        to: crate::vdisplay::Compositor,
+        route: Option<&crate::vdisplay::GamescopeRoute>,
+        mode: punktfunk_core::Mode,
+    ) -> bool {
+        if !self.facts.format_facts.follows || self.rebuild_facts().shared {
+            return self.display.vd_params.hdr;
+        }
+        self.facts.format_facts = self.facts.format_facts.moved_to(to, route);
+        self.resolve_format(self.plan.codec, mode, to, route)
+            .display_hdr
     }
 
     /// The plan's build: in place first where it says, else its pipeline or encoder.
@@ -470,22 +549,24 @@ impl StreamState {
         trace: Option<&Trace>,
     ) -> Result<Built> {
         if let (true, Some(t)) = (plan.in_place, trace) {
-            if let Some(next) = self.in_place(plan, t) {
+            if let Some((next, rate_kbps)) = self.in_place(plan, t) {
                 return Ok(Built {
                     next,
-                    rate_kbps: plan.rate_kbps,
+                    rate_kbps,
                     vd: None,
                 });
             }
         }
         match (&plan.build, plan.display) {
-            (Build::Encoder, _) => self.build_encoder(plan),
+            (Build::Encoder, _) => self.build_encoder(plan, crate::encode::open_video),
             (Build::CaptureLoss, _) => {
                 let pipe = self.build_after_loss(prep.keepalive.take())?;
                 Ok(Built::pipeline(pipe, None))
             }
             (build, Some(DisplayChange::Switch(to))) => {
-                let mut vd = crate::vdisplay::open(to)?;
+                let client = prep.params.as_ref().unwrap_or(&self.display.vd_params);
+                let mut vd =
+                    crate::vdisplay::open_for(to, client.client_fp, client.screen.clone())?;
                 let params = crate::vdisplay::SessionParams {
                     launch: prep.launch.take(),
                     ..prep
@@ -508,22 +589,39 @@ impl StreamState {
         }
     }
 
-    /// The encoder alone, on the live capture at the delivered refresh, at the plan's rate.
-    fn build_encoder(&mut self, plan: &RebuildPlan) -> Result<Built> {
+    /// The encoder alone, on the live capture at the delivered refresh, through `open_video`, at
+    /// the plan's rate. A rate the plan priced follows the size the encoder opened at
+    /// ([`rate_at_encoded`]), as a full build's does; an asked one stands.
+    fn build_encoder(
+        &mut self,
+        plan: &RebuildPlan,
+        open_video: impl FnMut(
+            &crate::encode::Resolved,
+            crate::encode::OpenParams,
+        ) -> Result<Box<dyn crate::encode::Encoder>>,
+    ) -> Result<Built> {
         let ed = self.enc_now();
         let wire_seq_base = self.clock.next_au();
-        let (enc, reframe) = open_session_encoder(
+        let priced = self.plan.picture(plan.mode);
+        let (auto, cap) = (self.facts.bitrate_auto, self.facts.knobs.pyrowave_max_kbps);
+        let kbps_for = |w, h| match plan.epilogue.rate {
+            Rate::Built => rate_at_encoded(plan.rate_kbps, auto, priced, (w, h), &self.plan, cap),
+            Rate::Applied => plan.rate_kbps,
+        };
+        let (enc, reframe) = open_session_encoder_with(
             &self.facts.encoder,
             &self.plan,
             &*self.live.capturer,
             &self.live.frame,
             (self.facts.negotiated.width, self.facts.negotiated.height),
             self.delivered_mode().refresh_hz,
-            |_, _| ed.enc_kbps(plan.rate_kbps) as u64 * 1000,
+            |w, h| ed.enc_kbps(kbps_for(w, h)) as u64 * 1000,
             self.bit_depth,
             self.facts.client_hdr,
             wire_seq_base,
+            open_video,
         )?;
+        let rate_kbps = kbps_for(reframe.out.0, reframe.out.1);
         let next = Next::Encoder {
             enc,
             reframe,
@@ -531,7 +629,7 @@ impl StreamState {
         };
         Ok(Built {
             next,
-            rate_kbps: plan.rate_kbps,
+            rate_kbps,
             vd: None,
         })
     }
@@ -556,21 +654,35 @@ impl StreamState {
         rebuild_after_capture_loss(self, keepalive, &budget)
     }
 
-    /// The Windows in-place mode set ([`Self::resize`]) for `plan`. `None` = the full build runs.
+    /// The Windows in-place mode set ([`Self::resize`]) for `plan`, and the rate its encoder
+    /// opened at, priced at the picture it encodes as [`Self::build_encoder`] prices it. `None` =
+    /// the full build runs.
     #[cfg(target_os = "windows")]
-    fn in_place(&mut self, plan: &RebuildPlan, trace: &Trace) -> Option<Next> {
+    fn in_place(&mut self, plan: &RebuildPlan, trace: &Trace) -> Option<(Next, u32)> {
         let recover_ring = plan.reason == super::swap::SwapReason::TopologyReassert;
-        self.resize(plan.mode, plan.rate_kbps, trace, recover_ring)
+        let (session, priced) = (self.plan, self.plan.picture(plan.mode));
+        let (auto, cap) = (self.facts.bitrate_auto, self.facts.knobs.pyrowave_max_kbps);
+        let kbps_for = move |w, h| match plan.epilogue.rate {
+            Rate::Built => rate_at_encoded(plan.rate_kbps, auto, priced, (w, h), &session, cap),
+            Rate::Applied => plan.rate_kbps,
+        };
+        let next = self.resize(plan.mode, kbps_for, trace, recover_ring)?;
+        let rate_kbps = match &next {
+            Next::Encoder { reframe, .. } => kbps_for(reframe.out.0, reframe.out.1),
+            _ => plan.rate_kbps,
+        };
+        Some((next, rate_kbps))
     }
 
     /// Only a Windows IDD-push display is mode-set in place.
     #[cfg(not(target_os = "windows"))]
-    fn in_place(&mut self, _plan: &RebuildPlan, _trace: &Trace) -> Option<Next> {
+    fn in_place(&mut self, _plan: &RebuildPlan, _trace: &Trace) -> Option<(Next, u32)> {
         None
     }
 
-    /// Swap the build in, then the plan's epilogue: the display request it commits to, the
-    /// input route, the rate, the further screens, the mode and who hears it, the gap.
+    /// Swap the build in, then the plan's epilogue: the display request it commits to and the
+    /// colour and format later joiners read off it, the input route, the rate, the further screens, the
+    /// mode, which a switch also gives later joiners, and who hears it, the gap.
     fn commit(
         &mut self,
         plan: &RebuildPlan,
@@ -592,6 +704,14 @@ impl StreamState {
         }
         // The request every later display of this session starts from.
         if let Some(params) = prep.params {
+            let stop = self.facts.life.stop_flag();
+            crate::vdisplay::admission::publish_hdr(stop, params.hdr);
+            let format = crate::vdisplay::admission::SampleFormat {
+                bit_depth: self.bit_depth,
+                chroma_444: self.plan.chroma.is_444(),
+                full_range: self.plan.full_range(self.plan.hdr, self.bit_depth),
+            };
+            crate::vdisplay::admission::publish_format(stop, format);
             self.display.vd_params = params;
         }
         if e.input {
@@ -611,6 +731,11 @@ impl StreamState {
                 self.display.no_overlay_means_off_output =
                     settle_portal_cursor(&*self.display.vd, &mut self.display.metadata_composite);
             }
+        }
+        if plan.reason == super::swap::SwapReason::ModeSwitch && plan.mode != self.live.cur_mode {
+            let m = plan.mode;
+            let mode = (m.width, m.height, m.refresh_hz);
+            crate::vdisplay::admission::publish_mode(self.facts.life.stop_flag(), mode);
         }
         self.live.cur_mode = plan.mode;
         if e.keyframe {
@@ -667,16 +792,21 @@ impl StreamState {
         let Before {
             plan: old_plan,
             bit_depth,
+            format_facts,
             composite,
             params,
             ..
         } = prep.before;
         (self.plan, self.bit_depth) = (old_plan, bit_depth);
+        self.facts.format_facts = format_facts;
         let d = &mut self.display;
         (d.gamescope_composite, d.metadata_composite) = composite;
         if prep.shown {
             d.vd.set_hdr(params.hdr);
             d.vd.set_hw_cursor(params.hw_cursor);
+        }
+        if plan.stops_joining {
+            d.vd.set_join_live(params.join_live);
         }
         d.vd_params = params;
         if plan.rollback.gap {
@@ -693,7 +823,7 @@ impl StreamState {
     }
 }
 
-/// The seven rebuild sites: each drains its ask and hands it to [`StreamState::rebuild`].
+/// The eight rebuild sites: each drains its ask and hands it to [`StreamState::rebuild`].
 impl StreamState {
     /// Follow the latest session switch, the watcher's or the seat's: rebuild the backend in
     /// place, with the session's display request, the switch's launch and the cursor plan of the
@@ -729,14 +859,15 @@ impl StreamState {
         }
     }
 
-    /// The client's latest accepted mode: in place on Windows IDD-push, else a full rebuild; the
-    /// mode the session already runs rebuilds nothing. A failed rebuild stays on the current
-    /// mode and tells the client so. PyroWave re-resolves its pin for the new mode.
+    /// The client's latest accepted mode and view: in place on Windows IDD-push, else a full
+    /// rebuild; a new view alone reopens the encoder; the mode and view the session already runs
+    /// rebuild nothing. A failed rebuild stays on what runs and tells the client so. PyroWave
+    /// re-resolves its pin for the new picture.
     pub(super) fn on_mode_switch(&mut self) {
-        let Some(new_mode) = self.ends.reconfig.try_iter().last() else {
+        let Some((new_mode, view)) = self.ends.reconfig.try_iter().last() else {
             return;
         };
-        if let Ok(Rebuilt::Kept(e)) | Err(e) = self.rebuild(RebuildAsk::Mode(new_mode)) {
+        if let Ok(Rebuilt::Kept(e)) | Err(e) = self.rebuild(RebuildAsk::Mode(new_mode, view)) {
             tracing::warn!(error = %format!("{e:#}"), ?new_mode,
                 "mode-switch rebuild failed — staying on the current mode");
         }
@@ -753,6 +884,31 @@ impl StreamState {
             tracing::warn!(error = %format!("{e:#}"), ?codec,
                 "codec-change rebuild failed — staying on the current codec");
         }
+    }
+
+    /// The content on the session's gamescope turned HDR or SDR: stop the capture and attach
+    /// it again in that range, the display lit as it is. `Err` when no capture comes back up.
+    /// A display that is not lit in HDR streams SDR whatever it shows, and is left alone.
+    #[cfg(target_os = "linux")]
+    pub(super) fn on_content(&mut self) -> Result<()> {
+        let streamed = (self.facts.format_facts.content_hdr).filter(|_| self.display.vd_params.hdr);
+        let generation = self.live.cur_display_gen;
+        let Some(follow) = self.content.as_mut() else {
+            return Ok(());
+        };
+        follow.point(streamed.is_some(), generation);
+        let Some(hdr) = streamed.and_then(|s| follow.wants(s)) else {
+            return Ok(());
+        };
+        self.rebuild(RebuildAsk::Content(hdr))
+            .context("re-attach capture in the content's range")?;
+        Ok(())
+    }
+
+    /// Only gamescope names the HDR state of its content.
+    #[cfg(not(target_os = "linux"))]
+    pub(super) fn on_content(&mut self) -> Result<()> {
+        Ok(())
     }
 
     /// An exclusive-topology eviction bounced the Windows IDD-push display's modes: re-attach
@@ -879,8 +1035,9 @@ impl StreamState {
     }
 
     /// One capture-loss attempt's re-detection: follow the live session's compositor, opening a
-    /// new backend with the session's request when it changed, and re-derive the cursor plan.
-    /// Input follows on commit, onto the compositor the build landed on.
+    /// new backend with the session's request when it changed, at the format the rule gives
+    /// that source, and re-derive the cursor plan. Input follows on commit, onto the compositor
+    /// the build landed on.
     fn retarget_to_live_session(&mut self) {
         let active = crate::vdisplay::detect_active_session();
         crate::vdisplay::observe_session_instance(&active);
@@ -897,7 +1054,8 @@ impl StreamState {
             ) {
                 crate::vdisplay::settle_desktop_portal(c);
             }
-            match crate::vdisplay::open(c) {
+            let params = &self.display.vd_params;
+            match crate::vdisplay::open_for(c, params.client_fp, params.screen.clone()) {
                 Ok(v) => {
                     tracing::info!(
                         from = self.display.compositor.id(),
@@ -911,6 +1069,10 @@ impl StreamState {
                 Err(e2) => tracing::warn!(error = %format!("{e2:#}"),
                     "capture loss: opening the newly-detected compositor failed — retrying"),
             }
+        }
+        if reopened {
+            self.display.vd_params.hdr =
+                self.follow_to(c, rebuilt_route.as_ref(), self.live.cur_mode);
         }
         // Also when only the gamescope route changed: Attach and Spawn differ in who draws.
         let hw_cursor = self.retarget_cursor_plan(self.display.compositor, rebuilt_route.as_ref());
@@ -963,7 +1125,8 @@ mod tests {
             run: |f| {
                 let (tx, rx) = std::sync::mpsc::channel();
                 f.st.ends.reconfig = rx;
-                tx.send(f.st.live.cur_mode).expect("the loop's end is open");
+                tx.send((f.st.live.cur_mode, None))
+                    .expect("the loop's end is open");
                 f.st.on_mode_switch();
             },
             gap: Some(false),
@@ -977,7 +1140,7 @@ mod tests {
             run: |f| {
                 let (tx, rx) = std::sync::mpsc::channel();
                 f.st.ends.reconfig = rx;
-                tx.send(wide()).expect("the loop's end is open");
+                tx.send((wide(), None)).expect("the loop's end is open");
                 f.st.on_mode_switch();
             },
             gap: Some(true),
@@ -1206,7 +1369,7 @@ mod tests {
         },
         PerformRow {
             name: "mode switch: the mode adopted, the delivered one told",
-            ask: || RebuildAsk::Mode(mode(WIDE, 60)),
+            ask: || RebuildAsk::Mode(mode(WIDE, 60), None),
             setup: |_| {},
             script: Script::Pipeline(WIDE, 20_000),
             built: Some(true),
@@ -1290,6 +1453,40 @@ mod tests {
             frame_open: false,
         },
         PerformRow {
+            name: "a view alone: the encoder reopens, the client hears the mode it holds",
+            ask: || RebuildAsk::Mode(ASKED, Some((8, 8))),
+            setup: |_| {},
+            script: Script::Encoder,
+            built: Some(true),
+            compositor: Compositor::Kwin,
+            mode: ASKED,
+            rate_kbps: 20_000,
+            told: &[(DELIVERED, false), (DELIVERED, true)],
+            codec: None,
+            rate_told: None,
+            keyframes: 0,
+            gap: true,
+            seen_reassert_gen: Some(9),
+            frame_open: false,
+        },
+        PerformRow {
+            name: "failed view change: the view kept, the mode told as a correction",
+            ask: || RebuildAsk::Mode(ASKED, Some((8, 8))),
+            setup: |_| {},
+            script: Script::Fails,
+            built: Some(false),
+            compositor: Compositor::Kwin,
+            mode: ASKED,
+            rate_kbps: 20_000,
+            told: &[(DELIVERED, true)],
+            codec: None,
+            rate_told: None,
+            keyframes: 0,
+            gap: true,
+            seen_reassert_gen: Some(9),
+            frame_open: true,
+        },
+        PerformRow {
             name: "bitrate: the rate runs, the epoch stays, the frame closes on commit",
             ask: || RebuildAsk::Bitrate(10_000),
             setup: |_| {},
@@ -1325,7 +1522,7 @@ mod tests {
         },
         PerformRow {
             name: "failed mode switch: the mode kept is told as a correction (44692a0dc)",
-            ask: || RebuildAsk::Mode(mode(WIDE, 60)),
+            ask: || RebuildAsk::Mode(mode(WIDE, 60), None),
             setup: |_| {},
             script: Script::Fails,
             built: Some(false),
@@ -1489,6 +1686,146 @@ mod tests {
                 "{name}: the new display's launch"
             );
         }
+    }
+
+    /// A mode ask's view is in the plan its build opens on; a codec ask keeps it; a later ask
+    /// without one clears it.
+    #[test]
+    fn the_view_rides_the_mode_ask_into_the_plan() {
+        use punktfunk_core::video_fit::VideoFit;
+        let mut f = super::super::swap::tests::fake();
+        let keyframes = Arc::new(AtomicU32::new(0));
+        let mut opened_for = Vec::new();
+        for ask in [
+            RebuildAsk::Mode(ASKED, Some((8, 8))),
+            RebuildAsk::Format(crate::encode::Codec::H264),
+            RebuildAsk::Mode(ASKED, None),
+        ] {
+            let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
+            let built = f.st.perform(plan, ask, |st, plan, _, _| {
+                opened_for.push(st.plan.reframe_to);
+                script(Script::Encoder, plan.rate_kbps, &keyframes)
+            });
+            assert!(matches!(built, Ok(Rebuilt::Built)));
+        }
+        let view = Some((VideoFit::Fit, (8, 8)));
+        assert_eq!(opened_for, [view, view, None]);
+        assert_eq!(f.st.plan.codec, crate::encode::Codec::H264);
+    }
+
+    /// Content that turned HDR leaves the display lit as it is. The fact stays once its
+    /// capture is built; a build that never comes up puts the old one back and ends the session.
+    #[test]
+    fn a_content_rebuild_keeps_the_display_lit_and_the_fact_it_built() {
+        let mut f = super::super::swap::tests::fake();
+        let keyframes = Arc::new(AtomicU32::new(0));
+        f.st.facts.format_facts.content_hdr = Some(false);
+        f.st.display.vd_params.hdr = true;
+        for (build, fact) in [
+            (Script::Fails, Some(false)),
+            (Script::Pipeline(WIDE, 20_000), Some(true)),
+        ] {
+            let ask = RebuildAsk::Content(true);
+            let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
+            let out = f.st.perform(plan, ask, |_, plan, _, _| {
+                script(build, plan.rate_kbps, &keyframes)
+            });
+            assert_eq!(matches!(out, Ok(Rebuilt::Built)), fact == Some(true));
+            assert_eq!(f.st.facts.format_facts.content_hdr, fact);
+            assert!(f.st.display.vd_params.hdr, "the display stays lit");
+        }
+    }
+
+    /// Another session holds the display: a smaller size asked reopens the encoder framed for
+    /// it at the live mode, and the client, acked with the size it asked for, hears that mode.
+    #[test]
+    fn a_shared_display_keeps_its_mode_and_frames_the_asked_size() {
+        use punktfunk_core::video_fit::VideoFit;
+        let mut f = super::super::swap::tests::fake();
+        let keyframes = Arc::new(AtomicU32::new(0));
+        let ask = RebuildAsk::Mode(mode((8, 8), 60), None);
+        let facts = RebuildFacts {
+            shared: true,
+            ..f.st.rebuild_facts()
+        };
+        let plan = rebuild_plan::plan(&ask, &facts).expect("an encoder rebuild");
+        assert_eq!((plan.build.clone(), plan.mode), (Build::Encoder, ASKED));
+        let mut opened_for = None;
+        let built = f.st.perform(plan, ask, |st, plan, _, _| {
+            opened_for = st.plan.reframe_to;
+            script(Script::Encoder, plan.rate_kbps, &keyframes)
+        });
+        assert!(matches!(built, Ok(Rebuilt::Built)));
+        assert_eq!(opened_for, Some((VideoFit::Fit, (8, 8))));
+        assert_eq!(f.st.live.cur_mode, ASKED, "the display's mode stays");
+        let told: Vec<_> = std::iter::from_fn(|| f.told.try_recv().ok())
+            .map(|d| (d.mode, d.corrects))
+            .collect();
+        assert_eq!(told, [(DELIVERED, false), (DELIVERED, true)]);
+    }
+
+    /// A joiner alone on its display builds as an owner: it stops joining once the build
+    /// commits, and joins again, display and control task both, when it fails.
+    #[test]
+    fn a_lone_joiner_builds_a_display_of_its_own() {
+        let keyframes = Arc::new(AtomicU32::new(0));
+        for (built, joins_after) in [
+            (Script::Pipeline(WIDE, 20_000), false),
+            (Script::Fails, true),
+        ] {
+            let mut f = super::super::swap::tests::fake();
+            f.st.display.vd_params.join_live = true;
+            f.st.shared.joined_display.store(1, Ordering::Relaxed);
+            let ask = RebuildAsk::Mode(mode(WIDE, 60), None);
+            let facts = RebuildFacts {
+                shared: false,
+                ..f.st.rebuild_facts()
+            };
+            let plan = rebuild_plan::plan(&ask, &facts).expect("a rebuild");
+            assert!(plan.stops_joining);
+            let mut joined_in_build = None;
+            let _ = f.st.perform(plan, ask, |st, plan, _, _| {
+                joined_in_build = Some(st.display.vd_params.join_live);
+                script(built, plan.rate_kbps, &keyframes)
+            });
+            assert_eq!(
+                joined_in_build,
+                Some(false),
+                "the build acquires as an owner"
+            );
+            assert_eq!(f.st.display.vd_params.join_live, joins_after);
+            assert_eq!(f.display.lock().unwrap().join_live, Some(joins_after));
+            let joined = f.st.shared.joined_display.load(Ordering::Relaxed);
+            assert_eq!(joined != 0, joins_after, "what the control task reads");
+        }
+    }
+
+    /// A new view whose encoder cannot frame it runs PyroWave at the size it opened at, and
+    /// opens at that rate.
+    #[test]
+    fn an_encoder_that_cannot_frame_the_view_reprices_pyrowave() {
+        use crate::native::bitrate::pyrowave_mode_kbps;
+        let mut f = super::super::swap::tests::fake();
+        let full = mode((1920, 1080), 60);
+        f.st.live.frame = frame((1920, 1080));
+        f.st.live.cur_mode = full;
+        f.st.plan.codec = crate::encode::Codec::PyroWave;
+        f.st.plan.pyrowave_bpp = 4.0;
+        let ask = RebuildAsk::Mode(full, Some((1280, 720)));
+        let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("an encoder rebuild");
+        let at_mode = pyrowave_mode_kbps(None, &full, &f.st.plan, None);
+        assert!(plan.rate_kbps < at_mode, "the plan priced the view");
+        let enc_bps = u64::from(f.st.enc_now().enc_kbps(at_mode)) * 1000;
+        let mut opened = Vec::new();
+        let built = f.st.perform(plan, ask, |st, plan, _, _| {
+            st.build_encoder(plan, |_, p| {
+                opened.push(((p.width, p.height), p.bitrate_bps));
+                Ok(Box::new(super::super::swap::tests::NullEnc))
+            })
+        });
+        assert!(matches!(built, Ok(Rebuilt::Built)));
+        assert_eq!(f.st.live.bitrate_kbps, at_mode);
+        assert_eq!(opened.last(), Some(&((1920, 1080), enc_bps)));
     }
 
     use crate::vdisplay::Compositor;

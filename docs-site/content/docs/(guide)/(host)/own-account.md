@@ -47,8 +47,8 @@ the account, so a device can't lock its person out at the desk.
 
 - **Opens it:** the account's password, typed in the app on a paired device, and the devices on
   its [signed-in list](#signed-in-devices). At the machine itself, the person logs in as always.
-- **Can't:** the console password, the card's **Start**, **Wake**, a browser, a paired device
-  without the password, and any other profile.
+- **Can't:** the console password, the card's **Start**, a browser, a paired device without the
+  password, and any other profile.
 
 ## Signed-in devices
 
@@ -66,15 +66,19 @@ The profile's card under **Profiles** lists each device signed in to it, as **Si
 - **The desktop keeps running.** It doesn't stop when idle, and **Seats kept warm** never starts
   it: only its person's unlock does. **Stop** on its card logs it off, and unsaved work there is
   lost.
-- **The wallet stays locked.** KWallet or GNOME Keyring stays locked until they type its password
-  in the stream.
+- **The password opens the wallet.** When the typed password starts the desktop, KWallet opens
+  with it on a machine whose own login opens KWallet. A desktop that a face or finger match
+  started keeps the wallet locked until they type its password in the stream.
 - **Nothing is set up in the account.** Punktfunk makes no user or group and doesn't prepare their
   home; the apps the profile runs write there what they always write. **Remove** ends only the
   profile's own session. The account and its files stay.
-- **The console manages nothing inside.** No plugin runs there, and the console adds no plugin,
-  folder access or emulator: **Plugins** and **Library** → **Sources** say so for that profile. It
-  runs no [hooks](/docs/automation#hooks). A game from the box's library starts what the library
-  says.
+- **The console manages nothing inside.** The console adds no plugin, folder access or emulator
+  there: **Plugins** says so for that profile. On Linux the person installs plugins from the
+  Plugins page of their own console, and only those run, as them. It sets no
+  [hooks](/docs/automation#hooks) there. The profile's [own library](/docs/profiles#each-profiles-own-library)
+  is kept on the host, not in the account. A game from the box's library starts without the
+  commands the owner set to run before it, and a tile that is itself a command isn't offered:
+  both would run the owner's command as that person.
 - **No password to update.** Nothing stores it, so the card has no **Update password…**. If the
   account's password expires, sign in as that person once.
 

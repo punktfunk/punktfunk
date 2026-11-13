@@ -143,7 +143,7 @@ fn the_row_editor_frame_names_the_grant() {
         .expect("no radio list was ever drawn");
     golden("tui-editor-group", editor);
     assert!(
-        editor.contains("usbip attach"),
+        editor.contains("can attach USB devices"),
         "the editor hid what the row grants"
     );
 }
@@ -207,20 +207,7 @@ fn the_mark_mutes_the_half_that_is_not_being_installed() {
 }
 
 fn columns(line: &str) -> usize {
-    let mut cols = 0;
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            for c in chars.by_ref() {
-                if c.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            cols += 1;
-        }
-    }
-    cols
+    console::measure_text_width(line)
 }
 
 /// A wrapped line makes `clear_last_lines` rewind fewer rows than the frame
@@ -344,12 +331,27 @@ fn verbose_keeps_the_command_transcript() {
 /// The step a fresh host install ends on. Enter takes the generated password, and the frame
 /// it was taken from names the command that prints it.
 fn ask_password(keys: &[Key]) -> (Option<String>, Vec<String>) {
+    ask_password_at(Some("192.168.1.10"), keys)
+}
+
+fn ask_password_at(ip: Option<&str>, keys: &[Key]) -> (Option<String>, Vec<String>) {
     let mut term = ScriptedTerm::new(keys);
     let answer = {
         let tui = Tui::new(&mut term as &mut dyn Terminal, caps(), 0);
-        tui.web_password("https://192.168.1.10:47992", report::PASSWORD_READ)
+        tui.web_password(ip, "pf-box", report::PASSWORD_READ)
     };
     (answer, term.frames.clone())
+}
+
+/// With no address found, the prompt names the host instead.
+#[test]
+fn the_password_step_names_the_host_when_no_address_is_known() {
+    let (_, frames) = ask_password_at(None, &[Key::Enter]);
+    assert!(
+        frames[0].contains("The web console (https://pf-box:47992) asks for a password."),
+        "{}",
+        frames[0]
+    );
 }
 
 #[test]
@@ -361,6 +363,20 @@ fn the_password_step_offers_the_generated_one_and_says_how_to_print_it() {
     );
     golden("tui-web-password", &frames[0]);
     assert!(frames[0].contains(report::PASSWORD_READ));
+}
+
+#[test]
+fn the_bind_step_names_the_host_when_no_address_is_known() {
+    let mut term = ScriptedTerm::new(&[Key::Enter]);
+    {
+        let tui = Tui::new(&mut term as &mut dyn Terminal, caps(), 0);
+        tui.web_bind(None, "pf-box", "127.0.0.1");
+    }
+    let all = term.frames.join("");
+    assert!(
+        all.contains("This local network (https://pf-box:47992)"),
+        "{all}"
+    );
 }
 
 #[test]
@@ -394,4 +410,42 @@ fn a_short_or_unquotable_password_is_refused_at_the_prompt() {
 fn escaping_the_prompt_falls_back_to_the_generated_password() {
     assert_eq!(ask_password(&[Key::Cancel]).0, None);
     assert_eq!(ask_password(&[Key::Down, Key::Enter, Key::Cancel]).0, None);
+}
+
+/// Every word on the screens comes from the messages: in `en-XA`, which accents and brackets
+/// each one, no English phrase survives on the list, a row editor or either prompt.
+#[test]
+fn the_screens_read_their_words_from_the_messages() {
+    let english = [
+        "Install now with these settings",
+        "Full controller support",
+        "Shared clipboard",
+        "Third-party clients",
+        "nothing runs until you confirm",
+        "Joins the punktfunk group",
+        "Use the generated password",
+        "asks for a password",
+        "Where should the web console be reachable?",
+        "A specific address",
+        "Type the address",
+        "Esc leaves it unchanged",
+    ];
+    let all = pf_l10n::with_language("en-XA", || {
+        let (_, _, _, list) =
+            drive_all("arch-fresh", &[Key::Down, Key::Down, Key::Down, Key::Enter]);
+        let (_, password) = ask_password(&[Key::Enter]);
+        let mut term = ScriptedTerm::new(&[Key::Down, Key::Down, Key::Enter]);
+        {
+            let tui = Tui::new(&mut term as &mut dyn Terminal, caps(), 0);
+            tui.web_bind(Some("192.168.1.10"), "pf-box", "0.0.0.0");
+        }
+        [list.join(""), password.join(""), term.frames.join("")].join("\n")
+    });
+    assert!(all.contains("~]"), "not read in en-XA:\n{all}");
+    for phrase in english {
+        assert!(
+            !all.contains(phrase),
+            "{phrase:?} is still a literal:\n{all}"
+        );
+    }
 }

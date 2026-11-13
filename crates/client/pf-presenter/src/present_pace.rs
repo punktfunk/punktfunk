@@ -145,6 +145,12 @@ impl<T> FrameStore<T> {
         }
     }
 
+    /// Drop every held frame without counting it: the stream is over, and each frame's
+    /// release guard hands its decoder slot back as it drops.
+    pub(crate) fn clear(&mut self) {
+        self.frames.clear();
+    }
+
     pub(crate) fn take_counters(&mut self) -> (u32, u32) {
         let c = (self.replaced, self.overflow_drops);
         self.replaced = 0;
@@ -304,6 +310,10 @@ impl Cadence {
 /// spacing that is itself a period multiple — the panel's own rate, or a whole
 /// fraction of it — lands on the grid under either regime, so those deltas are no
 /// evidence and the verdict stands until the cadence leaves the grid again.
+///
+/// Paced onto the grid, a variable panel's stamps land on it too: a present inside its
+/// shortest refresh interval waits for it. A frame aimed two latches out does not wait,
+/// and shows before its aim ([`CadenceProbe::note_aimed`]).
 pub(crate) struct CadenceProbe {
     /// Off-grid distances as a fraction of the period, in thousandths.
     off_grid_milli: Vec<u32>,
@@ -323,6 +333,12 @@ pub(crate) struct CadenceProbe {
     /// The stream's own spacing, smoothed, from every shown frame's source stamp.
     src_spacing_ns: u64,
     src_last_pts_ns: u64,
+    /// Off-grid distances, in thousandths, of frames aimed two latches past the last exact
+    /// stamp; that stamp; agreeing variable rounds in a row; and their verdict.
+    aimed_milli: Vec<u32>,
+    last_exact_ns: u64,
+    aim_rounds: u8,
+    aim_variable: bool,
 }
 
 /// Enough deltas to distinguish jitter from a real off-grid cadence.
@@ -365,6 +381,44 @@ impl CadenceProbe {
             engine_variable: false,
             src_spacing_ns: 0,
             src_last_pts_ns: 0,
+            aimed_milli: Vec::new(),
+            last_exact_ns: 0,
+            aim_rounds: 0,
+            aim_variable: false,
+        }
+    }
+
+    /// A shown frame's stamp, `exact` where the engine or compositor gave it, and the latch
+    /// it was aimed at (0: none). A fixed panel shows a frame aimed two or more latches past
+    /// the last exact stamp on its grid; variable refresh shows it when it was presented,
+    /// before its aim. That evidence only ever reads variable: a lead close to the
+    /// compositor's need lands on the grid under either regime.
+    pub(crate) fn note_aimed(
+        &mut self,
+        displayed_ns: u64,
+        aim_ns: u64,
+        exact: bool,
+        period_ns: u64,
+    ) {
+        let prev = std::mem::replace(
+            &mut self.last_exact_ns,
+            if exact { displayed_ns } else { 0 },
+        );
+        if prev == 0 || displayed_ns <= prev || aim_ns < prev + period_ns * 3 / 2 {
+            return;
+        }
+        self.aimed_milli
+            .push(off_grid_milli(displayed_ns - prev, period_ns));
+        if self.aimed_milli.len() >= CADENCE_MIN_SAMPLES {
+            self.aimed_milli.sort_unstable();
+            let variable = self.aimed_milli[self.aimed_milli.len() / 2] > CADENCE_FIXED_MILLI;
+            self.aim_rounds = if variable {
+                self.aim_rounds.saturating_add(1)
+            } else {
+                0
+            };
+            self.aim_variable |= self.aim_rounds >= CADENCE_STABLE_ROUNDS;
+            self.aimed_milli.clear();
         }
     }
 
@@ -463,6 +517,8 @@ impl CadenceProbe {
         }
     }
 
+    /// The engine's word, else the measured refresh, else aimed frames reading variable,
+    /// else the stamps' quantization.
     pub(crate) fn verdict(&self) -> Cadence {
         if self.engine_variable {
             return Cadence::Variable;
@@ -470,20 +526,15 @@ impl CadenceProbe {
         match self.refresh_variable {
             Some(true) => Cadence::Variable,
             Some(false) => Cadence::Fixed,
+            None if self.aim_variable => Cadence::Variable,
             None => self.verdict,
         }
     }
 
-    /// A mode switch or display change invalidates the evidence.
+    /// A mode switch, display change or focus change invalidates the evidence, the
+    /// stream's own spacing included: the next measured refresh reads as at session start.
     pub(crate) fn reset(&mut self) {
-        self.off_grid_milli.clear();
-        self.last_ns = 0;
-        self.last_pts_ns = 0;
-        self.candidate = Cadence::Unknown;
-        self.agree_rounds = 0;
-        self.verdict = Cadence::Unknown;
-        self.refresh_variable = None;
-        self.engine_variable = false;
+        *self = CadenceProbe::new();
     }
 }
 
@@ -702,6 +753,23 @@ mod tests {
         assert_eq!(s.take(|_| true), Some(6));
         assert_eq!(s.take(|_| true), Some(7));
         assert_eq!(s.take_counters(), (0, 2), "6 evicted 4, 7 evicted 5");
+    }
+
+    #[test]
+    fn clear_drops_every_held_frame() {
+        use std::rc::Rc;
+        let alive = Rc::new(());
+        for capacity in [0, 2] {
+            let mut s: FrameStore<Rc<()>> = FrameStore::new(capacity);
+            s.set_paced(true);
+            s.submit(alive.clone());
+            s.submit(alive.clone());
+            assert!(Rc::strong_count(&alive) > 1);
+            s.clear();
+            assert_eq!(Rc::strong_count(&alive), 1, "capacity {capacity}");
+            assert!(s.front().is_none());
+            assert_eq!(s.take_counters(), (0, 0), "a clear is not a displacement");
+        }
     }
 
     #[test]
@@ -1183,6 +1251,56 @@ mod tests {
             Cadence::Fixed,
             "a slower stream on a panel at its mode rate"
         );
+    }
+
+    /// Snapped onto the grid, a frame aimed two latches past the last stamp shows at its aim
+    /// on a fixed panel and on arrival under variable refresh. Wake times are no evidence.
+    #[test]
+    fn frames_aimed_two_latches_out_read_variable_refresh() {
+        const P: u64 = 8_333_333; // 120 Hz
+        const LEAD: u64 = 3_000_000;
+        let run = |variable: bool, exact: bool| {
+            let mut p = CadenceProbe::new();
+            let mut shown = 0;
+            // 100 fps, each frame aimed at the first latch a lead past its arrival.
+            for i in 0..400u64 {
+                let arrival = 1_000_000_000 + i * 10_000_000;
+                let aim = (arrival + LEAD).div_ceil(P) * P;
+                shown = if variable {
+                    arrival.max(shown + P)
+                } else {
+                    aim
+                };
+                p.note_aimed(shown, aim, exact, P);
+            }
+            p
+        };
+        assert_eq!(
+            run(false, true).verdict(),
+            Cadence::Unknown,
+            "a fixed panel shows each frame at its aim"
+        );
+        assert_eq!(run(true, true).verdict(), Cadence::Variable);
+        assert_eq!(run(true, false).verdict(), Cadence::Unknown, "wake times");
+        let mut p = run(true, true);
+        p.reset();
+        assert_eq!(p.verdict(), Cadence::Unknown);
+    }
+
+    /// A focus or display event forgets the stream's spacing too: a panel-rate stream's
+    /// panel at its mode period reads fixed again, as at session start.
+    #[test]
+    fn a_reset_reads_the_mode_period_as_at_session_start() {
+        const P: u64 = 16_666_666;
+        let mut p = CadenceProbe::new();
+        p.note_refresh(P, P);
+        assert_eq!(p.verdict(), Cadence::Fixed, "session start");
+        for i in 1..=20u64 {
+            p.note_source(1_000_000_000 + i * P);
+        }
+        p.reset();
+        p.note_refresh(P, P);
+        assert_eq!(p.verdict(), Cadence::Fixed, "after the reset");
     }
 
     /// Batching must not change the verdict: live drain is one frame, tests hand over

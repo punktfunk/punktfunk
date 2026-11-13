@@ -16,9 +16,10 @@ struct Committed {
     client_fp: Option<[u8; 32]>,
 }
 
-/// The committed slots, in slot order.
+/// The committed slots, in slot order, and whether their group keeps the host's monitors off
+/// (an exclusive isolate is live).
 #[derive(Default)]
-pub(super) struct View(Vec<Committed>);
+pub(super) struct View(Vec<Committed>, bool);
 
 impl View {
     pub(super) fn of(inner: &MgrInner) -> View {
@@ -34,7 +35,7 @@ impl View {
                 joined: *joined,
                 client_fp: mon.client_fp,
             });
-        View(slots.collect())
+        View(slots.collect(), inner.group.ccd_exclusive)
     }
 
     /// `/display/state`'s rows in acquire (generation) order, linger countdowns read at `now`.
@@ -71,11 +72,22 @@ impl View {
             .collect()
     }
 
+    /// The device on each slot, while their group keeps the host's monitors off.
+    pub(super) fn dark(&self) -> Vec<Option<[u8; 32]>> {
+        let slots = self.0.iter().filter(|_| self.1);
+        slots.map(|c| c.client_fp).collect()
+    }
+
     /// Some slot lingered past its deadline at `now`.
     pub(super) fn expired(&self, now: Instant) -> bool {
         self.0
             .iter()
             .any(|c| matches!(c.life, lifecycle::State::Lingering { until } if now >= until))
+    }
+
+    /// The monitor of `generation` has more than one hold.
+    pub(super) fn shared(&self, generation: u64) -> bool {
+        (self.0.iter()).any(|c| c.generation == generation && c.life.refs() > 1)
     }
 
     /// `slot`'s committed life and its joined holds; `Idle` when it is not in the map.

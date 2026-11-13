@@ -81,10 +81,7 @@ struct StreamHUDView: View {
             // fact with the other session facts. Absent for full-and-permanent sessions
             // (every old host): today's overlay must not change there.
             if model.notices.accessLimited {
-                Text(model.notices.accessRemainingSecs == 0
-                    ? "access \(model.notices.accessLevel.label.lowercased())"
-                    : "access \(model.notices.accessLevel.label.lowercased()) · ends in "
-                        + SessionModel.accessCountdown(model.notices.accessRemainingSecs))
+                Text(accessLine)
                     .font(hudFont(.caption2))
                     .foregroundStyle(.secondary)
             }
@@ -104,14 +101,14 @@ struct StreamHUDView: View {
             // access churn.
             #if os(macOS)
             if !model.mouseCaptured, connection.canSendPointer || connection.canSendKeyboard {
-                Text("Click the stream to capture input")
+                Text(L10n.noticeCaptureClick)
                     .font(.geist(11, relativeTo: .caption2))
                     .foregroundStyle(.secondary)
             }
             #elseif os(iOS) || os(visionOS)
             // Touch always plays directly; ⌘⎋ (hardware keyboard) captures kb/mouse.
             if !model.mouseCaptured, connection.canSendPointer || connection.canSendKeyboard {
-                Text("⌘⎋ captures keyboard & mouse")
+                Text(L10n.appleCaptureKeys(keys: "⌘⎋"))
                     .font(.geist(11, relativeTo: .caption2))
                     .foregroundStyle(.secondary)
             }
@@ -135,14 +132,32 @@ struct StreamHUDView: View {
             // line: the exits are the hold gestures the start-of-stream banner teaches (hold
             // the remote's Back; hold L1+R1+Start+Select on a pad).
             #if os(macOS)
-            Button("Disconnect (⌃⌥⇧D)") { model.disconnect() }
+            Button(L10n.appleHudDisconnectKeys(keys: "⌃⌥⇧D")) { model.disconnect() }
                 .font(.geist(12, relativeTo: .caption))
             #elseif os(iOS) || os(visionOS)
-            Button("Disconnect") { model.disconnect() }
+            Button(L10n.commonDisconnect) { model.disconnect() }
                 .font(.geist(12, relativeTo: .caption))
             #endif
         }
     }
+
+    #if os(tvOS)
+    /// "access full control", then " · ends in 1 h 58 m" while the access is timed.
+    private var accessLine: String {
+        let level: LocalizedStringResource
+        switch model.notices.accessLevel {
+        case .fullControl: level = L10n.appleOverlayAccessFull
+        case .controllerOnly: level = L10n.appleOverlayAccessController
+        case .viewOnly: level = L10n.appleOverlayAccessView
+        case .custom: level = L10n.appleOverlayAccessCustom
+        }
+        let remaining = model.notices.accessRemainingSecs
+        guard remaining != 0 else { return String(localized: level) }
+        return [String(localized: level),
+                SessionModel.accessChipEnd(remaining)]
+            .joined(separator: " \u{b7} ")
+    }
+    #endif
 
     /// A monospaced HUD text style at the player's Statistics size. At 1 it is the stock style;
     /// otherwise the style's current point size, so Dynamic Type still applies underneath.
@@ -172,9 +187,10 @@ struct StreamHUDView: View {
     /// hardware keyboard could fire one — the Stream menu is that keyboard's surface).
     private var micButtonTitle: String {
         #if os(macOS)
-        return model.micMuted ? "Unmute Mic (⌃⌥⇧A)" : "Mute Mic (⌃⌥⇧A)"
+        return model.micMuted
+            ? L10n.appleHudUnmuteMicKeys(keys: "⌃⌥⇧A") : L10n.appleHudMuteMicKeys(keys: "⌃⌥⇧A")
         #else
-        return model.micMuted ? "Unmute Microphone" : "Mute Microphone"
+        return String(localized: model.micMuted ? L10n.appleUnmuteMicrophone : L10n.appleMuteMicrophone)
         #endif
     }
     #endif
@@ -281,8 +297,7 @@ struct StreamBadgeStack: View {
             // macOS refused the SC2's open; without this the double input has no explanation.
             if captureEnabled, model.notices.sc2Refused.isShown {
                 AccessWarningBadge(
-                    text: "Couldn't stream the Steam Controller as itself — macOS refused access. "
-                        + "Turn Punktfunk on, or off and on, in Privacy & Security → Input Monitoring.",
+                    text: String(localized: L10n.appleSc2Refused),
                     icon: "exclamationmark.triangle"
                 ).transition(Self.pop)
             }
@@ -299,6 +314,11 @@ struct StreamBadgeStack: View {
             // The host's word on a launch that did not give the player their game.
             if captureEnabled, let notice = model.notices.launch.value {
                 AccessWarningBadge(text: notice, icon: "exclamationmark.triangle")
+                    .transition(Self.pop)
+            }
+            // A shortcut armed a danger action: the dial's question, until the second press.
+            if captureEnabled, let arm = model.notices.shortcutArm.value {
+                AccessWarningBadge(text: arm.text, icon: "exclamationmark.triangle")
                     .transition(Self.pop)
             }
             #if !os(tvOS)
@@ -321,6 +341,7 @@ struct StreamBadgeStack: View {
         .animation(.easeOut(duration: 0.2), value: model.notices.micMute.value)
         .animation(.easeOut(duration: 0.2), value: model.notices.accessWarning.value)
         .animation(.easeOut(duration: 0.2), value: model.notices.launch.value)
+        .animation(.easeOut(duration: 0.2), value: model.notices.shortcutArm.isShown)
         .animation(.easeOut(duration: 0.2), value: model.notices.accessLimited)
         .animation(.easeOut(duration: 0.2), value: statsVerbosity)
         .animation(.easeOut(duration: 0.2), value: model.notices.motionUnreachable.value)
@@ -343,14 +364,12 @@ struct VrrWarningBadge: View {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.yellow)
-            Text(
-                "macOS 26 stutters with variable refresh rate (ProMotion) on. Turn it off in "
-                    + "System Settings → Displays, or update macOS.")
+            Text(L10n.appleVrrWarning)
                 .font(.geist(12, .medium, relativeTo: .caption))
                 .foregroundStyle(.white.opacity(0.9))
-            Button("Dismiss", action: dismiss)
+            Button(L10n.commonDismiss, action: dismiss)
                 .font(.geist(12, relativeTo: .caption))
-            Button("Don't warn again", action: mute)
+            Button(L10n.appleVrrDontWarn, action: mute)
                 .font(.geist(12, relativeTo: .caption))
         }
         .padding(.horizontal, 14)
@@ -394,7 +413,7 @@ struct MotionUnreachableBadge: View {
             Image(systemName: "gyroscope")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.yellow)
-            Text("Motion won't reach this session — set Controller type to DualSense")
+            Text(L10n.noticeMotionUnreachable)
                 .font(.geist(12, .medium, relativeTo: .caption))
                 .foregroundStyle(.white.opacity(0.9))
         }
@@ -403,9 +422,7 @@ struct MotionUnreachableBadge: View {
         .glassBackground(Capsule())
         .environment(\.colorScheme, .dark) // reads over any frame, like the resize overlay
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "This controller's motion will not reach the game. "
-                + "Set Controller type to DualSense to enable it.")
+        .accessibilityLabel(L10n.appleMotionUnreachableA11y)
     }
 }
 
@@ -420,7 +437,7 @@ struct Sc2CapturedBadge: View {
             Image(systemName: "gamecontroller.fill")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.green)
-            Text("Steam Controller passing through")
+            Text(L10n.appleSc2PassingThrough)
                 .font(.geist(12, .medium, relativeTo: .caption))
                 .foregroundStyle(.white.opacity(0.9))
         }
@@ -429,8 +446,7 @@ struct Sc2CapturedBadge: View {
         .glassBackground(Capsule())
         .environment(\.colorScheme, .dark) // reads over any frame, like the resize overlay
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "Steam Controller connected — passing through to the host as itself.")
+        .accessibilityLabel(L10n.appleSc2PassingThroughA11y)
     }
 }
 
@@ -452,9 +468,7 @@ struct AccessChipBadge: View {
             Image(systemName: "lock.fill")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.75))
-            Text(remainingSecs == 0
-                ? label
-                : "\(label) · ends in \(SessionModel.accessCountdown(remainingSecs))")
+            Text(levelAndEnd(separator: " \u{b7} "))
                 .font(.geist(12, .medium, relativeTo: .caption))
                 .foregroundStyle(.white.opacity(0.9))
         }
@@ -463,10 +477,15 @@ struct AccessChipBadge: View {
         .glassBackground(Capsule())
         .environment(\.colorScheme, .dark) // reads over any frame, like the resize overlay
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            remainingSecs == 0
-                ? "Access level: \(label)"
-                : "Access level: \(label), ends in \(SessionModel.accessCountdown(remainingSecs))")
+        .accessibilityLabel(L10n.appleAccessLevelA11y)
+        .accessibilityValue(levelAndEnd(separator: ", "))
+    }
+
+    /// The level, then how long it lasts; the level alone while the access is permanent.
+    private func levelAndEnd(separator: String) -> String {
+        guard remainingSecs != 0 else { return label }
+        return [label, SessionModel.accessChipEnd(remainingSecs)]
+            .joined(separator: separator)
     }
 }
 #endif
@@ -508,7 +527,7 @@ struct AccessWarningBadge: View {
 struct MicNoticeBadge: View {
     let muted: Bool
 
-    private var text: String { muted ? "Microphone muted" : "Microphone live" }
+    private var text: LocalizedStringResource { muted ? L10n.noticeMicMuted : L10n.noticeMicLive }
 
     var body: some View {
         HStack(spacing: 7) {
@@ -532,11 +551,11 @@ struct MicNoticeBadge: View {
 #if os(iOS) || os(visionOS)
 /// Device display geometry the overlay needs but UIKit doesn't expose publicly.
 enum DeviceMetrics {
-    /// The physical display's corner radius. There's no public API for it, so read the private
-    /// `_displayCornerRadius` via KVC on the active window scene's screen, guarded by a fallback that
-    /// approximates a modern rounded device — a future OS that hides the key just yields a slightly
-    /// less-perfect inset, never a crash. The key is assembled from parts so it isn't a plain literal
-    /// in the binary; note the App Store private-API consideration regardless.
+    /// The physical display's corner radius, read from the screen's private
+    /// `_displayCornerRadius` by KVC: there is no public API. KVC raises on a key the object
+    /// lacks, so the read is behind `responds(to:)`, and a screen without it gets 44, close to
+    /// a modern rounded device. The key is assembled from parts so it is no plain literal in
+    /// the binary; it is private API all the same.
     static var displayCornerRadius: CGFloat {
         #if os(visionOS)
         return 46 // every visionOS window's corner radius
@@ -546,6 +565,7 @@ enum DeviceMetrics {
             let screen = UIApplication.shared.connectedScenes
                 .compactMap({ $0 as? UIWindowScene })
                 .first?.screen,
+            screen.responds(to: NSSelectorFromString(key)),
             let radius = screen.value(forKey: key) as? NSNumber,
             radius.doubleValue > 0
         else { return 44 }
@@ -565,7 +585,7 @@ struct TouchFallbackBadge: View {
             Image(systemName: "hand.tap")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.yellow)
-            Text("This host doesn't accept touch — using the trackpad model")
+            Text(L10n.noticeTouchUnsupported)
                 .font(.geist(12, .medium, relativeTo: .caption))
                 .foregroundStyle(.white.opacity(0.9))
         }
@@ -574,7 +594,6 @@ struct TouchFallbackBadge: View {
         .glassBackground(Capsule())
         .environment(\.colorScheme, .dark)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "This host does not accept touch input. Fingers drive the cursor as a trackpad instead.")
+        .accessibilityLabel(L10n.appleTouchUnsupportedA11y)
     }
 }

@@ -15,7 +15,7 @@ final class HevcConcealer {
         case intact
         /// Decode these bytes instead.
         case rewritten(Data)
-        /// Nothing can stand in: keep this AU off the decoder and ask for an IDR.
+        /// Nothing can stand in: keep this AU off the decoder until the host re-anchors.
         case unrecoverable
     }
 

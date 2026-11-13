@@ -24,14 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::sys::now_monotonic_ns;
-
-/// One upcoming frame timeline (API 33+ payload): when SurfaceFlinger expects to present the
-/// frame, and the last instant it can be submitted to make that present. Monotonic ns.
-#[derive(Clone, Copy)]
-pub(super) struct FrameTimeline {
-    pub expected_present_ns: i64,
-    pub deadline_ns: i64,
-}
+use crate::vsync_grid::{onto_panel_grid, pick_timeline, smoothed_period, FrameTimeline};
 
 /// State the choreographer thread publishes and the decode loop reads. All monotonic ns.
 pub(super) struct VsyncShared {
@@ -68,70 +61,30 @@ impl VsyncShared {
         self.panel_period_ns.load(Ordering::Relaxed)
     }
 
-    /// The release target for a frame that must not be presented before `not_before_ns`: the
-    /// earliest stored timeline whose EXPECTED PRESENT is past that instant, extrapolated forward
-    /// by whole periods once the stored set has aged out (timelines refresh once per vsync
-    /// callback; a frame can decode anywhere inside that window). `None` on the 31/32 fallback —
-    /// the caller releases ASAP.
-    ///
-    /// The floor is the CALLER's to compose because two constraints meet in it and only the
-    /// caller knows the second: SurfaceFlinger's latch lead (`now + margin`, always) and, under
-    /// cadence targeting, the frame's own due time on the source's timeline. Adding the submit
-    /// lead here to a due time that is already an absolute present instant would push a frame due
-    /// just under a grid point onto the next one for some phases and not others — judder rather
-    /// than latency, which is the defect the due time exists to remove.
-    ///
-    /// Gated on `expected_present`, NOT the timeline's `deadline`, on purpose: the deadline
-    /// budgets for GPU rendering the app has yet to submit (`presDeadline` — 11.3 ms on the
-    /// A024, more than a full 120 Hz period), but a video buffer is already fully rendered —
-    /// the only real constraint is SurfaceFlinger's own latch lead, which is what the caller
-    /// folds into the floor. Targeting by deadline cost every frame an extra refresh of waiting
-    /// (measured: latch p50 ~21 ms vs the ~2-interval floor); a mis-gamble here just means the
-    /// frame presents one vsync later — exactly what the conservative gate always paid.
-    ///
-    /// The picked target is then SUBDIVIDED onto the panel grid: the platform reports timelines
-    /// at the app's assigned render rate, but the panel latches at its own — when the app is
-    /// down-rated (60 Hz callbacks on a 120 Hz panel) the reported timelines are a whole panel
-    /// period apart or more, and pacing to them would cap the video. Pulling the target earlier
-    /// by whole panel periods (while its present still clears the floor) restores the true grid;
-    /// when callbacks run at the panel rate the pull condition is never true and this is a no-op.
+    /// SurfaceFlinger's own lead: the latest timeline's expected present minus its deadline,
+    /// which is when the compositor wakes to latch for that present. 0 before a timeline and on
+    /// the 31/32 fallback.
+    pub(super) fn sf_lead_ns(&self) -> i64 {
+        self.timelines
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .first()
+            .map_or(0, |t| t.expected_present_ns - t.deadline_ns)
+    }
+
+    /// The release target for a frame that must not be presented before `not_before_ns`:
+    /// [`pick_timeline`] over the stored set, then [`onto_panel_grid`]. `None` on the 31/32
+    /// fallback; the caller releases ASAP.
     pub(super) fn next_target(&self, not_before_ns: i64) -> Option<FrameTimeline> {
-        let mut t = {
+        let picked = {
             let g = self
                 .timelines
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let found = g
-                .iter()
-                .find(|t| t.expected_present_ns > not_before_ns)
-                .copied();
-            match found {
-                Some(t) => t,
-                None => {
-                    let last = g.last().copied()?;
-                    let period = self.period_ns();
-                    if period <= 0 {
-                        return None;
-                    }
-                    // All stored timelines have passed — step the last one forward whole
-                    // periods until its present clears the floor again.
-                    let behind = not_before_ns.saturating_sub(last.expected_present_ns);
-                    let k = behind / period + 1;
-                    FrameTimeline {
-                        expected_present_ns: last.expected_present_ns + k * period,
-                        deadline_ns: last.deadline_ns + k * period,
-                    }
-                }
-            }
+            pick_timeline(&g, self.period_ns(), not_before_ns)?
         };
         let panel = self.panel_period_ns.load(Ordering::Relaxed);
-        if panel > 0 {
-            while t.expected_present_ns - panel > not_before_ns {
-                t.deadline_ns -= panel;
-                t.expected_present_ns -= panel;
-            }
-        }
-        Some(t)
+        Some(onto_panel_grid(picked, panel, not_before_ns))
     }
 }
 
@@ -263,22 +216,9 @@ impl CallbackCtx {
                 self.shared.panel_period_ns.load(Ordering::Relaxed) as f64 / 1e6,
             );
         }
-        // Period: prefer timeline spacing (exact, straight from the platform), else the delta of
-        // successive callbacks (jittery — EMA'd), clamped to sane panel rates (24..500 Hz).
-        let mut period = 0i64;
-        if timelines.len() >= 2 {
-            period = timelines[1].expected_present_ns - timelines[0].expected_present_ns;
-        } else if prev > 0 {
-            period = frame_time_ns - prev;
-        }
-        if (2_000_000..=42_000_000).contains(&period) {
-            let old = self.shared.period_ns.load(Ordering::Relaxed);
-            let smoothed = if old > 0 {
-                (old * 7 + period) / 8
-            } else {
-                period
-            };
-            self.shared.period_ns.store(smoothed, Ordering::Relaxed);
+        let old = self.shared.period_ns.load(Ordering::Relaxed);
+        if let Some(period) = smoothed_period(old, &timelines, frame_time_ns, prev) {
+            self.shared.period_ns.store(period, Ordering::Relaxed);
         }
         if !timelines.is_empty() {
             let mut g = self

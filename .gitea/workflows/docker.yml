@@ -74,6 +74,7 @@ on:
     paths:
       - 'ci/**'
       - 'web/**'
+      - 'l10n/messages/**'
       - 'docs-site/**'
       - 'api/openapi.json'
       - 'rust-toolchain.toml'

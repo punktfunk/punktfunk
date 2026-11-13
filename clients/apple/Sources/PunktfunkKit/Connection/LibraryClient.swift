@@ -102,10 +102,12 @@ public struct GameEntry: Codable, Hashable, Identifiable, Sendable {
     public var stats: GameStats?
     /// A title a plugin installs; `nil` is installed, as every other title is.
     public var install: TitleInstall?
+    /// What the host sets for this game on every device; `nil` when it sets nothing.
+    public var overrides: GameOverrides?
 
     private enum CodingKeys: String, CodingKey {
         case id, store, title, art, launch, role, icon, platform
-        case developer, publisher, genres, description, tags, players, stats, install
+        case developer, publisher, genres, description, tags, players, stats, install, overrides
         case releaseYear = "release_year"
     }
 
@@ -130,16 +132,21 @@ public struct GameEntry: Codable, Hashable, Identifiable, Sendable {
     /// Display name for the store badge — the same table the Rust clients use
     /// (`pf-console-ui::library::store_label`). Before this existed the badge said "Steam" for
     /// every non-custom entry, which a Lutris or GOG title made a lie.
-    public var storeLabel: String {
+    public var storeLabel: String { storeName ?? String(localized: L10n.libStoreOther) }
+
+    /// Whether `store` is an id this build has a name for; an unknown one reads as "Game".
+    var hasStoreName: Bool { storeName != nil }
+
+    private var storeName: String? {
         switch store {
         case "steam": return "Steam"
-        case "custom": return "Custom"
+        case "custom": return String(localized: L10n.libStoreCustom)
         case "heroic": return "Heroic"
         case "lutris": return "Lutris"
         case "epic": return "Epic"
         case "gog": return "GOG"
         case "xbox": return "Xbox"
-        default: return "Game"
+        default: return nil
         }
     }
 }
@@ -198,17 +205,27 @@ public enum InstallAction: String, Sendable {
         switch self {
         case .install:
             switch (size, install?.freeBytes.map(HostDownload.bytes)) {
-            case let (size?, free?): return "Install \u{b7} \(size) (\(free) free)"
-            case let (size?, nil): return "Install \u{b7} \(size)"
-            default: return "Install"
+            case let (size?, free?): return L10n.libInstallSizeFree(size: size, free: free)
+            case let (size?, nil): return L10n.libInstallSize(size: size)
+            default: return String(localized: L10n.libInstall)
             }
-        case .pause: return "Pause download"
-        case .resume: return "Resume download"
-        case .remove: return size.map { "Remove download \u{b7} \($0)" } ?? "Remove download"
+        case .pause: return String(localized: L10n.libDownloadPause)
+        case .resume: return String(localized: L10n.libDownloadResume)
+        case .remove:
+            return size.map { L10n.libDownloadRemoveSize(size: $0) }
+                ?? String(localized: L10n.libDownloadRemove)
         }
     }
 
-    var verb: String { rawValue.lowercased() }
+    /// "Couldn't install Quail — why": one whole sentence per action.
+    func failed(title: String, why: String) -> String {
+        switch self {
+        case .install: return L10n.libInstallFailed(title: title, why: why)
+        case .resume: return L10n.libResumeFailed(title: title, why: why)
+        case .pause: return L10n.libPauseFailed(title: title, why: why)
+        case .remove: return L10n.libRemoveFailed(title: title, why: why)
+        }
+    }
 }
 
 /// A tile's mark for a title's files; an installed title has none. Same words as the Rust tiles.
@@ -220,14 +237,15 @@ public struct TileBadge: Equatable, Sendable {
 
     public static func forTitle(_ install: TitleInstall?, download: HostDownload?) -> TileBadge? {
         let pct = { (d: HostDownload) in
-            d.fraction.map { "\(Int(($0 * 100).rounded(.down))) %" } ?? "Queued"
+            d.fraction.map { L10n.libBadgePercent(percent: String(Int(($0 * 100).rounded(.down)))) }
+                ?? String(localized: L10n.libBadgeQueued)
         }
         if let d = download, d.live { return TileBadge(icon: "download", text: pct(d)) }
         if let d = download, d.state == "paused" { return TileBadge(icon: "pause", text: pct(d)) }
-        if download?.state == "failed" { return TileBadge(icon: "alert", text: "Not installed") }
+        if download?.state == "failed" { return TileBadge(icon: "alert", text: String(localized: L10n.libBadgeNotInstalled)) }
         guard let install, install.missing else { return nil }
         return TileBadge(
-            icon: "download", text: install.sizeBytes.map(HostDownload.bytes) ?? "Not installed")
+            icon: "download", text: install.sizeBytes.map(HostDownload.bytes) ?? String(localized: L10n.libBadgeNotInstalled))
     }
 }
 
@@ -245,7 +263,7 @@ public enum InstallOutcome: Equatable, Sendable {
         if (200..<300).contains(status) { return .done }
         if let message, !message.isEmpty { return .refused(message) }
         if [401, 404, 405].contains(status) { return .unsupported }
-        return .failed("the host refused it (\(status))")
+        return .failed(L10n.errorMgmtRefused(code: String(status)))
     }
 
     /// The player-facing line.
@@ -253,15 +271,39 @@ public enum InstallOutcome: Equatable, Sendable {
         switch self {
         case .done:
             switch action {
-            case .install, .resume: return "Downloading \(title)."
-            case .pause: return "Paused \(title)'s download."
-            case .remove: return "Removed \(title). Saves stay on the host."
+            case .install, .resume: return L10n.libInstallStarted(title: title)
+            case .pause: return L10n.libDownloadPausedDone(title: title)
+            case .remove: return L10n.libRemoved(title: title)
             }
         case .refused(let why): return why
-        case .unsupported: return "This host needs an update to manage games from here."
-        case .failed(let why): return "Couldn't \(action.verb) \(title) \u{2014} \(why)"
+        case .unsupported: return String(localized: L10n.libInstallUnsupported)
+        case .failed(let why): return action.failed(title: title, why: why)
         }
     }
+}
+
+public extension GameOverrides {
+    /// What the host sets, for the "Host: …" line: the shared override's name, else its values
+    /// (`1080p60, DualSense, HDR off`). nil when it sets nothing worth a line.
+    var summary: String? {
+        guard !isEmpty else { return nil }
+        if let name, !name.isEmpty { return name }
+        let mode: String? = switch (lines, hz) {
+        case let (l?, z?): "\(l)p\(z)"
+        case let (l?, nil): "\(l)p"
+        case let (nil, z?): L10n.commonHz(value: String(z))
+        case (nil, nil): nil
+        }
+        let pad = gamepad.flatMap(PunktfunkConnection.GamepadType.init(name:))?.padName
+        let hdr = hdr.map {
+            String(localized: $0 ? L10n.libHostOverrideHdrOn : L10n.libHostOverrideHdrOff)
+        }
+        let parts = [mode, pad, hdr].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
+
+    /// `Host: 1080p60, DualSense`, or nil when it sets nothing.
+    var hostLine: String? { summary.map { L10n.libHostOverride(rule: $0) } }
 }
 
 public extension Array where Element == GameEntry {
@@ -292,15 +334,15 @@ public enum LibraryError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .unauthorized:
-            return "the host doesn't recognize this device — pair with it first"
+            return String(localized: L10n.errorMgmtNotPaired)
         case .pinMismatch:
-            return "the host's certificate isn't the one you paired with — pair again"
+            return String(localized: L10n.errorMgmtPinMismatch)
         case .http(let code):
-            return "the host refused it (\(code))"
+            return L10n.errorMgmtRefused(code: String(code))
         case .badArtURL:
-            return "that title's artwork isn't a web address or an inline image"
+            return String(localized: L10n.appleLibBadArt)
         case .unreachable(let why):
-            return "couldn't reach the host — \(why)"
+            return L10n.errorMgmtUnreachable(why: why)
         }
     }
 }
@@ -360,22 +402,24 @@ public struct HostDownload: Codable, Hashable, Sendable {
     /// `12.3 GB of 26 GB · 48 MB/s · about 4 min left`, `Installing…`.
     public var line: String {
         switch state {
-        case "queued": return "Waiting for its turn to download\u{2026}"
-        case "installing": return phase ?? "Installing\u{2026}"
+        case "queued": return String(localized: L10n.libDownloadQueued)
+        case "installing": return phase ?? String(localized: L10n.libDownloadInstalling)
         default: break
         }
         var parts = [
             totalBytes.flatMap { $0 > 0 ? $0 : nil }.map {
-                "\(HostDownload.bytes(doneBytes)) of \(HostDownload.bytes($0))"
-            } ?? "\(HostDownload.bytes(doneBytes)) so far",
+                L10n.libDownloadProgress(
+                    done: HostDownload.bytes(doneBytes), total: HostDownload.bytes($0))
+            } ?? L10n.libDownloadSoFar(done: HostDownload.bytes(doneBytes)),
         ]
         if state == "downloading" {
-            if let rate = rateBps { parts.append("\(HostDownload.bytes(rate))/s") }
+            if let rate = rateBps { parts.append(L10n.libDownloadRate(rate: HostDownload.bytes(rate))) }
             if let eta = etaS {
                 parts.append(
-                    eta < 60 ? "less than a minute left"
-                        : eta < 3600 ? "about \((eta + 30) / 60) min left"
-                        : "about \(eta / 3600) h \((eta % 3600) / 60) min left")
+                    eta < 60 ? String(localized: L10n.libDownloadEtaSoon)
+                        : eta < 3600 ? L10n.libDownloadEtaMinutes(minutes: String((eta + 30) / 60))
+                        : L10n.libDownloadEtaHours(
+                            hours: String(eta / 3600), minutes: String((eta % 3600) / 60)))
             }
         }
         return parts.joined(separator: " \u{b7} ")
@@ -384,9 +428,11 @@ public struct HostDownload: Codable, Hashable, Sendable {
     /// Why a launch that waited on it didn't start the title; nil while it may still.
     public func stopped(title: String) -> String? {
         switch state {
-        case "failed": return error.map { "\(title) didn't download \u{2014} \($0)" } ?? "\(title) didn't download."
-        case "cancelled": return "\(title)'s download was cancelled."
-        case "paused": return "\(title)'s download was paused. Start it again to resume."
+        case "failed":
+            return error.map { L10n.libDownloadFailedWhy(title: title, why: $0) }
+                ?? L10n.libDownloadFailed(title: title)
+        case "cancelled": return L10n.libDownloadCancelled(title: title)
+        case "paused": return L10n.libDownloadPaused(title: title)
         default: return nil
         }
     }
@@ -394,12 +440,15 @@ public struct HostDownload: Codable, Hashable, Sendable {
     /// Decimal units, as stores count: `12.3 GB`, `48 MB`, `512 kB`.
     public static func bytes(_ n: UInt64) -> String {
         let v = Double(n)
-        let (value, unit) = v >= 1e9 ? (v / 1e9, "GB") : v >= 1e6 ? (v / 1e6, "MB") : (v / 1e3, "kB")
+        let (value, sized): (Double, (String) -> String) =
+            v >= 1e9 ? (v / 1e9, { L10n.commonSizeGb(size: $0) })
+            : v >= 1e6 ? (v / 1e6, { L10n.commonSizeMb(size: $0) })
+            : (v / 1e3, { L10n.commonSizeKb(size: $0) })
         let rounded = (value * 10).rounded() / 10
         if value >= 100 || rounded.truncatingRemainder(dividingBy: 1) == 0 {
-            return "\(Int(value.rounded())) \(unit)"
+            return sized(String(Int(value.rounded())))
         }
-        return String(format: "%.1f %@", rounded, unit)
+        return sized(rounded.formatted(.number.precision(.fractionLength(1)).grouping(.never)))
     }
 }
 
@@ -461,7 +510,7 @@ public enum GameEndOutcome: Equatable, Sendable {
         case 409: return .notRunning
         case 401, 404: return .unsupported
         case 403: return .expired
-        default: return .failed("the host refused it (\(status))")
+        default: return .failed(L10n.errorMgmtRefused(code: String(status)))
         }
     }
 
@@ -471,11 +520,11 @@ public enum GameEndOutcome: Equatable, Sendable {
     /// The player-facing line. The Rust, Kotlin and web clients use the same words.
     public func notice(title: String) -> String {
         switch self {
-        case .ended: return "Ended \(title)."
-        case .notRunning: return "\(title) isn't running any more."
-        case .unsupported: return "This host needs an update to end games from here."
-        case .expired: return "This device's access to the host has expired."
-        case .failed(let why): return "Couldn't end \(title) \u{2014} \(why)"
+        case .ended: return L10n.libEndGameDone(title: title)
+        case .notRunning: return L10n.libEndGameNotRunning(title: title)
+        case .unsupported: return String(localized: L10n.libEndGameUnsupported)
+        case .expired: return String(localized: L10n.libEndGameExpired)
+        case .failed(let why): return L10n.libEndGameFailed(title: title, why: why)
         }
     }
 }
@@ -497,7 +546,11 @@ public struct HostAction: Codable, Hashable, Sendable, Identifiable {
     /// Whether the host can run it right now (a machine that cannot suspend, a foreign inhibitor).
     public var available: Bool
     /// Why not, when it can't — shown rather than hidden, so "greyed out" always has a reason.
+    /// When the host names the message (`unavailableCode`) this is the app's wording of it.
     public var unavailableReason: String?
+    /// The host message of `unavailableReason`, `apierr_<code>`. Absent when the reason is the
+    /// system's own words, and from a host that predates it.
+    public var unavailableCode: String?
     /// Whether THIS device's access covers it (the host's Host-power grant). The client only ever
     /// keeps the permitted ones.
     public var permitted: Bool
@@ -512,23 +565,35 @@ public struct HostAction: Codable, Hashable, Sendable, Identifiable {
         self.danger = danger
         self.available = available
         self.unavailableReason = unavailableReason
+        self.unavailableCode = nil
         self.permitted = permitted
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, title, group, danger, available, permitted
         case unavailableReason = "unavailable_reason"
+        case unavailableCode = "unavailable_code"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        group = try c.decode(String.self, forKey: .group)
+        danger = try c.decode(Bool.self, forKey: .danger)
+        available = try c.decode(Bool.self, forKey: .available)
+        permitted = try c.decode(Bool.self, forKey: .permitted)
+        unavailableCode = try c.decodeIfPresent(String.self, forKey: .unavailableCode)
+        let english = try c.decodeIfPresent(String.self, forKey: .unavailableReason)
+        // The host's English stands for a code this build does not know.
+        let said = unavailableCode.map { HostText.word(code: $0, english: english ?? "") }
+        unavailableReason = said.flatMap { $0.isEmpty ? nil : $0 } ?? english
     }
 
     /// This client's wording for a known id, else the host's own title — so a familiar action is
     /// worded the way the rest of this app words it, without hiding an unfamiliar one.
     public var label: String {
-        switch id {
-        case "power.sleep": return "Sleep Host"
-        case "power.reboot": return "Restart Host"
-        case "power.shutdown": return "Shut Down Host"
-        default: return title
-        }
+        SlotId.hostWord(id).map { String(localized: $0) } ?? title
     }
 }
 
@@ -536,8 +601,8 @@ public struct HostAction: Codable, Hashable, Sendable, Identifiable {
 public enum LibraryClient {
     /// One answer of `GET /api/v1/library/page`. `total` and `platforms` stay undecoded: the
     /// library screens collate the whole catalog themselves.
-    struct LibraryPage: Decodable {
-        var items: [GameEntry]
+    struct LibraryPage<Item: Decodable>: Decodable {
+        var items: [Item]
         var nextCursor: String?
 
         private enum CodingKeys: String, CodingKey {
@@ -554,19 +619,31 @@ public enum LibraryClient {
 
     /// The request path of one page. The cursor is the host's own text, so it is encoded.
     static func pagePath(cursor: String?) -> String {
-        let plain = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
-        let next = cursor?.addingPercentEncoding(withAllowedCharacters: plain)
+        let next = cursor.flatMap(queryValue)
         return "/api/v1/library/page?limit=\(pageLimit)" + (next.map { "&cursor=\($0)" } ?? "")
+    }
+
+    /// `s` percent-encoded for a query value.
+    static func queryValue(_ s: String) -> String? {
+        s.addingPercentEncoding(
+            withAllowedCharacters: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~")))
     }
 
     /// The whole catalog, a page at a time, so no answer grows with the library. `get` takes
     /// the cursor of the page before and answers one page's body. Any page failing fails the
     /// walk: half a catalog is not one.
     static func walkPages(_ get: (String?) async throws -> Data) async throws -> [GameEntry] {
-        var games: [GameEntry] = []
+        try await walkPages(of: GameEntry.self, get)
+    }
+
+    /// ``walkPages(_:)`` over pages of `Item`.
+    static func walkPages<Item: Decodable>(
+        of _: Item.Type, _ get: (String?) async throws -> Data
+    ) async throws -> [Item] {
+        var games: [Item] = []
         var cursor: String?
         for _ in 0..<maxPages {
-            let page = try JSONDecoder().decode(LibraryPage.self, from: try await get(cursor))
+            let page = try JSONDecoder().decode(LibraryPage<Item>.self, from: try await get(cursor))
             games += page.items
             // A cursor that does not move would ask for the same page forever.
             guard let next = page.nextCursor, !next.isEmpty, next != cursor else { break }
@@ -575,31 +652,66 @@ public enum LibraryClient {
         return games
     }
 
-    /// The host's catalog, walked by `GET /api/v1/library/page` over ``send(_:to:method:body:)``'s
-    /// lanes. A host older than the paged route refuses it, so `GET /api/v1/library` answers
-    /// whole instead.
-    public static func fetch(_ target: MgmtTarget) async throws -> [GameEntry] {
+    /// A 404 `profile_unknown`: the host no longer holds the profile a call named.
+    private struct ProfileGone: Error {}
+
+    /// The titles of a catalog, and the profile they were fetched as (nil: the box's).
+    public typealias Catalog = (games: [GameEntry], profile: String?)
+
+    /// The catalog as `profile` plays it (`as=`), else the box's. `get` answers one path. A host
+    /// older than the paged route refuses it, so `GET /api/v1/library` answers whole instead. A
+    /// profile the host no longer holds is asked once more as the box, and that answer stands,
+    /// as the box's. `clients/shared/library-profile-vectors.json` pins this here, in Rust and
+    /// in Kotlin.
+    static func catalog(
+        as profile: String?, _ get: (String) async throws -> HTTPResponse
+    ) async throws -> Catalog {
+        func walk(_ profile: String?) async throws -> [GameEntry] {
+            func body(_ path: String) async throws -> Data {
+                var path = path
+                if let profile, let id = queryValue(profile) {
+                    path += (path.contains("?") ? "&" : "?") + "as=" + id
+                }
+                let response = try await get(path)
+                if profile != nil, response.status == 404,
+                   (try? JSONDecoder().decode(Coded.self, from: response.body))?.code
+                       == "profile_unknown"
+                {
+                    throw ProfileGone()
+                }
+                try expectOK(response)
+                return response.body
+            }
+            do {
+                return try await walkPages { cursor in try await body(pagePath(cursor: cursor)) }
+            } catch LibraryError.unauthorized, LibraryError.http(404) {
+                return try JSONDecoder().decode(
+                    [GameEntry].self, from: try await body("/api/v1/library"))
+            }
+        }
+        do {
+            return (try await walk(profile), profile)
+        } catch is ProfileGone {
+            return (try await walk(nil), nil)
+        }
+    }
+
+    /// An `ApiError` body's `code`.
+    private struct Coded: Decodable { let code: String? }
+
+    /// The host's catalog as `profile` plays it, walked over ``send(_:to:method:body:)``'s lanes
+    /// (``catalog(as:_:)``).
+    public static func fetch(_ target: MgmtTarget, as profile: String?) async throws -> Catalog {
         guard let base = URL(
             string: "\(baseURL(address: target.address, port: target.port))/api/v1/library")
         else { throw LibraryError.unreachable("invalid host address") }
-        let body: (String) async throws -> Data = { path in
-            let response = try await send(path, to: target)
-            try expectOK(response)
-            return response.body
-        }
-        var games: [GameEntry]
-        do {
-            games = try await walkPages { cursor in try await body(pagePath(cursor: cursor)) }
-        } catch LibraryError.unauthorized, LibraryError.http(404) {
-            games = try JSONDecoder().decode(
-                [GameEntry].self, from: try await body("/api/v1/library"))
-        }
+        var fetched = try await catalog(as: profile) { path in try await send(path, to: target) }
         // Art the host serves arrives as host-relative proxy paths (`/api/v1/library/art/...`).
         // Resolve them against THIS host, so every consumer sees absolute URLs.
-        for i in games.indices {
-            games[i].art = games[i].art.resolved(against: base)
+        for i in fetched.games.indices {
+            fetched.games[i].art = fetched.games[i].art.resolved(against: base)
         }
-        return games
+        return fetched
     }
 
     /// The profiles on this host, from `GET /api/v1/profiles/enumerate`, in host order. nil: the
@@ -665,9 +777,9 @@ public enum LibraryClient {
     /// its own words, any other failure under the desk it was for.
     public static func wakeFailedLine(_ displayName: String, _ error: Error) -> String {
         if let error = error as? LibraryError, case .http(403) = error {
-            return "This device isn't allowed to start another profile's seat."
+            return String(localized: L10n.profileWakeRefused)
         }
-        return "Couldn't wake \(displayName)'s desk. Try again in a moment."
+        return L10n.appleProfileWakeFailed(name: displayName)
     }
 
     /// What the host currently has running, from `GET /api/v1/status`. Best-effort, as
@@ -684,10 +796,24 @@ public enum LibraryClient {
     public static func status(
         _ target: MgmtTarget
     ) async -> (games: [RunningGame], downloads: [HostDownload], grants: UInt32?) {
-        guard let response = try? await send("/api/v1/status", to: target),
-              response.status == 200,
+        await statusIfAnswered(target) ?? ([], [], nil)
+    }
+
+    /// ``status(_:)``, or nil when the host didn't answer it: a transport error, a status other
+    /// than 200, or a body that isn't a status. A screen that keeps state applies only an answer.
+    public static func statusIfAnswered(
+        _ target: MgmtTarget
+    ) async -> (games: [RunningGame], downloads: [HostDownload], grants: UInt32?)? {
+        statusAnswer(try? await send("/api/v1/status", to: target))
+    }
+
+    /// The status `response` carries, or nil for no response, a non-200 or an undecodable body.
+    static func statusAnswer(
+        _ response: HTTPResponse?
+    ) -> (games: [RunningGame], downloads: [HostDownload], grants: UInt32?)? {
+        guard let response, response.status == 200,
               let status = try? JSONDecoder().decode(HostStatus.self, from: response.body)
-        else { return ([], [], nil) }
+        else { return nil }
         return (status.games ?? [], status.downloads ?? [], status.grants)
     }
 
@@ -820,10 +946,10 @@ public enum LibraryClient {
         throw LibraryError.http(response.status)
     }
 
-    /// The host's own sentence from its `ApiError` envelope (`{"error": "..."}`), if it sent one.
+    /// The host's sentence from its `ApiError` envelope, if it sent one: its message in the
+    /// app's language when the envelope names one this build has, else the host's English.
     static func hostReason(_ body: Data) -> String? {
-        let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
-        return (json?["error"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        HostText.apiError(body)
     }
 
     /// One request against `target`: over the stream port when it is known, which needs no TCP

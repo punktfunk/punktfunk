@@ -1,23 +1,43 @@
-import { Link, useRouterState } from "@tanstack/react-router";
-import { MoreHorizontal } from "lucide-react";
+import {
+	Link,
+	Navigate,
+	useNavigate,
+	useRouterState,
+} from "@tanstack/react-router";
+import { toast } from "@unom/ui/toast";
+import { LogOut, MoreHorizontal } from "lucide-react";
 import { AnimatePresence, motion, stagger, type Variants } from "motion/react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { useHostEvents } from "@/api/events";
+import { endPersonSession, usePersonMe, usePersonPlugins } from "@/api/person";
 import { pluginIcon, uiPlugins, usePlugins } from "@/api/plugins";
 import { BrandMark } from "@/components/brand-mark";
+import { ProfileAvatar } from "@/components/profile-avatar";
+import { QueryState } from "@/components/query-state";
 import { ROW, Stagger, staggerProps } from "@/components/stagger";
+import { Button } from "@/components/ui/button";
 import { Wordmark } from "@/components/wordmark";
+import { apiErrorCode } from "@/lib/errors";
 import { useLocale } from "@/lib/i18n";
 import {
+	isPersonPage,
 	MANAGE,
 	type NavEntry,
 	PHONE_BAR,
 	PHONE_SHEET,
 	PRIMARY,
+	personNav,
 	pluginPin,
 	resolvePins,
 	usePins,
 } from "@/lib/nav";
+import {
+	CLOSED_EVENT,
+	type Closed,
+	closedBy,
+	PersonContext,
+	type PersonMe,
+} from "@/lib/person";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { useNewPluginToast } from "./plugin-toast";
@@ -163,7 +183,7 @@ function GroupLabel({ children }: { children: ReactNode }) {
 	return (
 		<motion.p
 			variants={{ from: { opacity: 0 }, enter: { opacity: 1 } }}
-			className="mt-6 border-t pt-4 px-3 pb-1 text-xs font-medium uppercase text-muted-foreground/70 lg:border-0 lg:pt-0"
+			className="mt-6 border-t pt-4 px-3 pb-1 text-xs font-medium text-muted-foreground/70 lg:border-0 lg:pt-0"
 		>
 			<span className="hidden lg:inline">{children}</span>
 		</motion.p>
@@ -404,7 +424,7 @@ function MoreGroup({
 	return (
 		<div className="border-b last:border-0">
 			{label && (
-				<p className="px-4 pt-3 pb-1 text-xs font-medium uppercase text-muted-foreground/70">
+				<p className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground/70">
 					{label}
 				</p>
 			)}
@@ -468,5 +488,231 @@ function MorePluginRow({
 				</span>
 			</Link>
 		</motion.li>
+	);
+}
+
+/**
+ * A person's own console: their picture and name above their pages, and a quiet way out. Pages
+ * wait for whose console it is, and a plugin's page for whether their host runs plugins of
+ * theirs. A session that ends, or a seat host that stops, turns into the closed page; a page that
+ * is not theirs goes home.
+ */
+export function PersonShell({ children }: { children: ReactNode }) {
+	useLocale();
+	const navigate = useNavigate();
+	const pathname = useRouterState({ select: (s) => s.location.pathname });
+	const me = usePersonMe();
+	const plugins = usePersonPlugins(me.data ?? null);
+	const [leaving, setLeaving] = useState(false);
+	const close = useCallback(
+		(why: Closed) => {
+			void navigate({ to: "/closed", search: { why }, replace: true });
+		},
+		[navigate],
+	);
+	useEffect(() => {
+		const on = (e: Event) => close((e as CustomEvent<Closed>).detail);
+		window.addEventListener(CLOSED_EVENT, on);
+		return () => window.removeEventListener(CLOSED_EVENT, on);
+	}, [close]);
+	const ended = closedBy(apiErrorCode(me.error));
+	useEffect(() => {
+		if (ended) close(ended);
+	}, [ended, close]);
+	useEffect(() => {
+		document.title = m.person_title();
+	}, []);
+
+	const signOut = async () => {
+		setLeaving(true);
+		try {
+			await endPersonSession();
+			close("signed-out");
+		} catch {
+			setLeaving(false);
+			toast.error(m.settings_logout_failed());
+		}
+	};
+
+	return (
+		<PersonFrame
+			me={me.data ?? null}
+			pathname={pathname}
+			plugins={plugins.offered}
+			leaving={leaving}
+			onSignOut={signOut}
+		>
+			{me.data && !(plugins.pending && pathname.startsWith("/plugins")) ? (
+				<PersonContext.Provider value={me.data}>
+					{isPersonPage(pathname, plugins.offered) ? (
+						children
+					) : (
+						<Navigate to="/" replace />
+					)}
+				</PersonContext.Provider>
+			) : (
+				<QueryState
+					isLoading={me.isPending || ended !== null || plugins.pending}
+					error={me.error}
+					refetch={() => void me.refetch()}
+				>
+					{null}
+				</QueryState>
+			)}
+		</PersonFrame>
+	);
+}
+
+/** The person's frame without its queries: sidebar or top bar, the page, the phone tabs. */
+export function PersonFrame({
+	me,
+	pathname,
+	plugins = false,
+	leaving,
+	onSignOut,
+	children,
+}: {
+	me: PersonMe | null;
+	pathname: string;
+	/** Their seat host runs plugins of theirs: Plugins is one of their pages. */
+	plugins?: boolean;
+	leaving: boolean;
+	onSignOut: () => void;
+	children: ReactNode;
+}) {
+	return (
+		<div className="flex min-h-screen">
+			<aside className="sticky top-0 hidden h-dvh w-16 shrink-0 flex-col overflow-y-auto border-r bg-card/40 p-2 sm:flex lg:w-60 lg:p-4">
+				<Link
+					to="/"
+					aria-label="Punktfunk"
+					className="mb-6 flex items-center justify-center gap-2 px-2 pt-1 lg:justify-start"
+				>
+					<BrandMark className="size-7 shrink-0 drop-shadow-[0_2px_12px_rgba(108,91,243,0.45)]" />
+					<Wordmark className="hidden h-4 lg:block" />
+				</Link>
+				{me && <Identity me={me} />}
+				<motion.nav
+					animate="enter"
+					initial="from"
+					{...staggerProps()}
+					aria-label={m.person_nav_a11y()}
+					className="mt-5 flex flex-col gap-1"
+				>
+					{personNav(plugins).map((n) => (
+						<SidebarLink key={n.to} entry={n} />
+					))}
+				</motion.nav>
+				<div className="mt-auto pt-6">
+					<Button
+						variant="ghost"
+						size="sm"
+						disabled={leaving}
+						onClick={onSignOut}
+						title={m.action_logout()}
+						className="w-full justify-center gap-3 px-3 text-muted-foreground hover:text-foreground lg:justify-start"
+					>
+						<LogOut className="size-4 shrink-0" aria-hidden />
+						<span className="sr-only lg:not-sr-only">{m.action_logout()}</span>
+					</Button>
+				</div>
+			</aside>
+
+			<div className="flex flex-1 flex-col overflow-x-hidden">
+				{/* Phone: whose console it is, and the way out, always in view. */}
+				<header className="flex items-center gap-3 border-b bg-card/40 px-4 py-2.5 sm:hidden">
+					<BrandMark className="size-6 shrink-0" />
+					{me && (
+						<>
+							<ProfileAvatar
+								profile={avatarOf(me)}
+								className="size-7 text-xs"
+							/>
+							<span className="min-w-0 flex-1 truncate text-sm font-medium">
+								{me.name}
+							</span>
+						</>
+					)}
+					<Button
+						variant="ghost"
+						size="icon"
+						disabled={leaving}
+						onClick={onSignOut}
+						aria-label={m.action_logout()}
+						title={m.action_logout()}
+						className="ml-auto shrink-0 text-muted-foreground"
+					>
+						<LogOut className="size-4" aria-hidden />
+					</Button>
+				</header>
+
+				<main className="flex-1">
+					<div className="mx-auto max-w-[1700px] px-4 py-6 pb-24 sm:p-10 sm:pb-10">
+						{children}
+					</div>
+				</main>
+			</div>
+
+			<motion.nav
+				initial="from"
+				animate="enter"
+				variants={BAR}
+				aria-label={m.person_nav_a11y()}
+				className="fixed inset-x-0 bottom-0 z-50 sm:hidden"
+				style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+			>
+				<div className="flex border-t bg-card/95 backdrop-blur">
+					{personNav(plugins).map(({ to, icon: Icon, label, exact }) => {
+						const on =
+							pathname === to || (!exact && pathname.startsWith(`${to}/`));
+						return (
+							<MLink
+								key={to}
+								to={to}
+								variants={TAB}
+								whileTap={PRESS}
+								activeOptions={{ exact: exact === true }}
+								className={cn(
+									"flex flex-1 flex-col items-center justify-center gap-1 px-0.5 py-2 text-muted-foreground transition-colors",
+									on && "font-medium text-foreground",
+								)}
+							>
+								<TabIcon active={on}>
+									<Icon className="size-5 shrink-0" />
+								</TabIcon>
+								<span className="w-full truncate text-center text-xs leading-tight">
+									{label()}
+								</span>
+							</MLink>
+						);
+					})}
+				</div>
+			</motion.nav>
+		</div>
+	);
+}
+
+const avatarOf = (me: PersonMe) => ({
+	id: me.profile,
+	display_name: me.name,
+	accent: me.accent,
+	avatar: me.avatar,
+});
+
+/** Whose console: their picture, their name, and the computer's. At icon width the picture alone. */
+function Identity({ me }: { me: PersonMe }) {
+	return (
+		<div
+			title={me.name}
+			className="flex items-center justify-center gap-3 rounded-lg lg:justify-start lg:bg-muted/60 lg:p-2.5"
+		>
+			<ProfileAvatar profile={avatarOf(me)} className="size-9" />
+			<div className="hidden min-w-0 lg:block">
+				<p className="truncate text-sm font-medium">{me.name}</p>
+				{me.host && (
+					<p className="truncate text-xs text-muted-foreground">{me.host}</p>
+				)}
+			</div>
+		</div>
 	);
 }

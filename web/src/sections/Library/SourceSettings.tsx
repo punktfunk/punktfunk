@@ -22,8 +22,11 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
-import { newlyHanded } from "@/lib/handed-paths";
+import { type GrantRefusal, newlyHanded } from "@/lib/handed-paths";
+import { apiText } from "@/lib/host-messages";
+import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
+import { StreamControls } from "./Stream";
 
 /**
  * A library source's settings, rendered as a **generic form** from the plugin's own JSON Schema.
@@ -38,15 +41,24 @@ import { m } from "@/paraglide/messages";
  *
  * `config` is optional on the kit's `serveUi`, so a source that ships its own page may serve no
  * `__config` at all. That 404 points at the plugin's page instead of reporting a failure.
+ *
+ * A game source also shows the stream settings its titles take when they have none of their
+ * own; those save as each control changes, apart from the form. A profile's view shows only
+ * those: the form is the owner's library's.
  */
 export const SourceSettingsDialog: FC<{
 	/** A game source, or an Art & Metadata source by its plugin id. */
 	source: Pick<ScannerInfo, "id" | "label" | "provider">;
+	/** A game source: its titles' stream settings show below the form. */
+	stream?: boolean;
+	/** The plugin's own form; off, the stream settings alone. */
+	form?: boolean;
 	onClose: () => void;
-}> = ({ source, onClose }) => {
+}> = ({ source, stream, form = true, onClose }) => {
 	const pluginId = source.provider ?? source.id;
 	const configUrl = `/api/plugin-config/${pluginId}`;
 	const config = useQuery({
+		enabled: form,
 		queryKey: ["plugin-config", pluginId],
 		queryFn: async () => {
 			const r = await pluginSurface<{
@@ -76,11 +88,14 @@ export const SourceSettingsDialog: FC<{
 
 	const put = async (value: JsonObject, password?: string) => {
 		const saved = await pluginSurfaceOrThrow<{
-			access?: { refused?: { path: string; error: string }[] };
+			access?: { refused?: GrantRefusal[] };
 		} | null>(configUrl, { method: "PUT", body: value, password });
 		for (const r of saved?.access?.refused ?? []) {
 			toast.error(
-				m.plugin_form_grant_refused({ path: r.path, issue: r.error }),
+				m.plugin_form_grant_refused({
+					path: r.path,
+					issue: apiText(r.code, r.params, r.error),
+				}),
 			);
 		}
 		toast.success(m.library_source_settings_saved());
@@ -108,13 +123,13 @@ export const SourceSettingsDialog: FC<{
 
 	return (
 		<Dialog open onOpenChange={(open) => !open && onClose()}>
-			<DialogContent>
+			<DialogContent className="max-h-[85vh] overflow-y-auto">
 				<DialogHeader>
 					<DialogTitle>
 						{m.library_source_settings_title({ source: source.label })}
 					</DialogTitle>
 				</DialogHeader>
-				{config.isPending && <Spinner />}
+				{form && config.isPending && <Spinner />}
 				{config.isError && !config.data && (
 					<p className="text-sm text-destructive">
 						{m.library_source_settings_unreachable({
@@ -142,6 +157,21 @@ export const SourceSettingsDialog: FC<{
 						saving={saving}
 						onSave={save}
 					/>
+				)}
+				{stream && (
+					<section
+						className={cn("@container space-y-4", form && "border-t pt-4")}
+					>
+						<div className="space-y-1">
+							<h3 className="font-semibold">
+								{m.library_stream_source_title({ source: source.label })}
+							</h3>
+							<p className="text-sm text-muted-foreground">
+								{m.library_stream_hint()}
+							</p>
+						</div>
+						<StreamControls kind="source" id={source.id} />
+					</section>
 				)}
 			</DialogContent>
 			<PasswordConfirmDialog

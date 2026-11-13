@@ -3,6 +3,7 @@
 // Each shell draws the events its own way.
 
 import Foundation
+import PunktfunkShared
 
 /// One step of a library load, in the order `LibraryLoad` yields them.
 public enum LibraryLoadEvent: Sendable {
@@ -14,8 +15,9 @@ public enum LibraryLoadEvent: Sendable {
     case fetched([GameEntry])
     /// The catalog fetch gave up. `hadCache`: a cached catalog is up and stays.
     case failed(LibraryError, hadCache: Bool)
-    /// What the host runs and downloads, and this device's grants there. Always the last event.
-    case status(games: [RunningGame], downloads: [HostDownload], grants: UInt32?)
+    /// What the host runs and downloads, and this device's grants there; nil when the host
+    /// didn't answer, which changes nothing on screen. Always the last event.
+    case status((games: [RunningGame], downloads: [HostDownload], grants: UInt32?)?)
 }
 
 /// The load's sequence over its host. `run` builds one for a real host; a test fakes the calls.
@@ -24,23 +26,26 @@ public struct LibraryLoad {
     static let wakeAttempts = 12
 
     var hostID: String
+    /// The profile the shelf is for: only its own cached catalog goes up.
+    var profile: String? = nil
     var cache: LibraryCache?
     /// Sends the wake; nil asks the host once.
     var wake: (() -> Void)?
-    var fetch: () async throws -> [GameEntry]
-    var status: () async -> (games: [RunningGame], downloads: [HostDownload], grants: UInt32?)
+    var fetch: () async throws -> LibraryClient.Catalog
+    var status: () async -> (games: [RunningGame], downloads: [HostDownload], grants: UInt32?)?
     var retryEvery: UInt64 = 5 * NSEC_PER_SEC
 
     /// The line a screen with no headline of its own shows for a failed load.
     public static func failure(_ error: LibraryError) -> String {
-        "Couldn't load the library — \(error.errorDescription ?? "")"
+        L10n.libLoadFailedWhy(why: error.errorDescription ?? "")
     }
 
-    /// Load `target`'s library, cached under `hostID`. When `WakePolicy.autoWakes` the host
-    /// (`autoWake` is the player's setting), it wakes the host first and retries an unreachable
-    /// fetch while it boots; otherwise it asks once. Cancelling the consumer cancels the load.
+    /// Load `target`'s library as `profile` plays it, cached under `hostID`. When
+    /// `WakePolicy.autoWakes` the host (`autoWake` is the player's setting), it wakes the host
+    /// first and retries an unreachable fetch while it boots; otherwise it asks once. Cancelling
+    /// the consumer cancels the load.
     public static func run(
-        target: MgmtTarget, hostID: String, wakeMacs: [String], autoWake: Bool
+        target: MgmtTarget, hostID: String, wakeMacs: [String], autoWake: Bool, profile: String?
     ) -> AsyncStream<LibraryLoadEvent> {
         // Sent on every open, not only when the host looks offline: an awake machine ignores a
         // magic packet, and finding out first costs more than sending it.
@@ -53,9 +58,9 @@ public struct LibraryLoad {
             }
             : nil
         let load = LibraryLoad(
-            hostID: hostID, cache: LibraryCache.shared, wake: wake,
-            fetch: { try await LibraryClient.fetch(target) },
-            status: { await LibraryClient.status(target) })
+            hostID: hostID, profile: profile, cache: LibraryCache.shared, wake: wake,
+            fetch: { try await LibraryClient.fetch(target, as: profile) },
+            status: { await LibraryClient.statusIfAnswered(target) })
         return AsyncStream { continuation in
             let task = Task {
                 await load.events { continuation.yield($0) }
@@ -65,9 +70,10 @@ public struct LibraryLoad {
         }
     }
 
-    /// The whole load, each step handed to `emit`. Stops quietly once cancelled.
+    /// The whole load, each step handed to `emit`. Stops quietly once cancelled. A catalog is
+    /// cached as the profile it came back as: a gone profile's fallback is the box's.
     func events(_ emit: (LibraryLoadEvent) -> Void) async {
-        var cached = await cache?.load(hostID: hostID)
+        var cached = await cache?.load(hostID: hostID, profile: profile)
         if var shelf = cached {
             shelf.games = shelf.games.launchersFirst
             cached = shelf
@@ -81,9 +87,10 @@ public struct LibraryLoad {
         for attempt in 0..<attempts {
             if Task.isCancelled { return }
             do {
-                let games = try await fetch().launchersFirst
+                let fetched = try await fetch()
+                let games = fetched.games.launchersFirst
                 emit(.fetched(games))
-                await cache?.store(games, hostID: hostID)
+                await cache?.store(games, hostID: hostID, profile: fetched.profile)
                 break
             } catch {
                 if Task.isCancelled { return }
@@ -97,7 +104,6 @@ public struct LibraryLoad {
             }
         }
         if Task.isCancelled { return }
-        let answer = await status()
-        emit(.status(games: answer.games, downloads: answer.downloads, grants: answer.grants))
+        emit(.status(await status()))
     }
 }

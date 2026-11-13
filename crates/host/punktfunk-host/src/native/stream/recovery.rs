@@ -94,25 +94,32 @@ impl StreamState {
         }
     }
 
-    /// Say what a proposal came to. A hold the control task re-proposes every
-    /// window is logged at warn once, then at debug.
+    /// Say what a proposal came to, its percent and whether it spans the whole frame. A hold
+    /// the control task re-proposes every window is logged at warn once, then at debug.
     fn note_fec_move(&mut self, requested: u8, encoder_kbps: u32, moved: bool) {
+        use crate::native::bitrate::{fec_pct, FEC_WHOLE_FRAME};
+        let whole_frame = requested & FEC_WHOLE_FRAME != 0;
         if moved {
             self.fec.hold_logged = 0;
             tracing::debug!(
-                fec_pct = requested,
+                fec_pct = fec_pct(requested),
+                whole_frame,
                 encoder_kbps,
                 budget_kbps = self.live.bitrate_kbps,
                 "adaptive FEC moved — encoder rate re-derived within the wire budget"
             );
         } else if std::mem::replace(&mut self.fec.hold_logged, requested) != requested {
             tracing::warn!(
-                requested_fec_pct = requested,
-                applied_fec_pct = self.fec.last,
+                requested_fec_pct = fec_pct(requested),
+                whole_frame,
+                applied_fec_pct = fec_pct(self.fec.last),
                 "adaptive FEC held — encoder did not take the matching bitrate"
             );
         } else {
-            tracing::debug!(requested_fec_pct = requested, "adaptive FEC still held");
+            tracing::debug!(
+                requested_fec_pct = fec_pct(requested),
+                "adaptive FEC still held"
+            );
         }
     }
 
@@ -425,8 +432,9 @@ impl StreamState {
 
     /// One forced IDR per cooldown. A stream whose recovery marks the client can lift on heals
     /// over ~0.5 s (2 s window); every other stream's only repair is the IDR, so the window is
-    /// short — swallow the round-trip echo, re-issue a lost IDR promptly. An IDR the client
-    /// re-asks after is one it lost or could not use; each such IDR doubles the cooldown
+    /// short — swallow the round-trip echo, re-issue a lost IDR promptly. The gate times both
+    /// from the link's round trip and when the last keyframe left. An IDR the client re-asks
+    /// after is one it lost or could not use; each such IDR doubles the cooldown
     /// ([`idr_cooldown`]), and a run of them is the gate's storm ([`IDR_STORM`]).
     fn force_keyframe(&mut self, rfi_declined: bool) {
         let base = if self.live.enc.caps().intra_refresh_recovery {
@@ -435,6 +443,13 @@ impl StreamState {
             IDR_COOLDOWN_FULL
         };
         let now = std::time::Instant::now();
+        let keyframe_left = *self
+            .shared
+            .keyframe_left
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        self.kf_gate
+            .measure(self.facts.conn.rtt(), self.live.interval, keyframe_left);
         match self.kf_gate.decide(
             now,
             base,
@@ -656,9 +671,20 @@ fn hold_fec(fec_requested: &AtomicU8, applied: u8, requested: u8) {
     let _ = fec_requested.compare_exchange(requested, applied, Ordering::AcqRel, Ordering::Acquire);
 }
 
-/// A recovery frame's flight: encode, wire, decode. A request inside it echoes the loss the
-/// frame repairs; one past it says the frame landed and did not.
+/// A recovery frame's flight on a link with no round-trip sample: encode, wire, decode. A
+/// request inside it echoes the loss the frame repairs; one past it says the frame landed and
+/// did not.
 const RECOVERY_FLIGHT: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Frame periods an anchor spends off the wire: up to two waiting for the encoder (the Windows
+/// driver acts on the frame after next), one to encode and send, one to decode. An anchor is a
+/// P-frame, which the pacer spreads over at most two periods and mostly far less.
+const ANCHOR_FRAMES: u32 = 4;
+
+/// Frame periods after an IDR's last packet left before a request can answer it: the client's
+/// decode and one of slack. The IDR's own send is timed, never estimated: on a slow link a
+/// large one takes many periods.
+const IDR_LEFT_FRAMES: u32 = 2;
 
 /// Longest wait between forced IDRs, whatever the backoff. 3 s of a broken picture is the
 /// ceiling a user tolerates over a storm of repairs that never take.
@@ -678,7 +704,8 @@ const IDR_STORM: u32 = 3;
 /// the swallowed RFI echoes and the previous request all belong to the old one.
 const KF_EPISODE_RESET: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Requests the [`RECOVERY_FLIGHT`] echo hedge swallows before the next one forces an IDR.
+/// Requests the RFI echo hedge swallows inside the anchor's flight before the next one forces
+/// an IDR.
 const RFI_ECHO_MAX_SWALLOWED: u32 = 2;
 
 /// `base` doubled per unhealed IDR, capped at [`IDR_COOLDOWN_MAX`].
@@ -765,30 +792,36 @@ impl LossMode {
                 (self.frames, self.distance) = (0, 0);
             }
         }
-        if !on || acked == crate::native::wiring::NONE_ACKED {
-            return None;
-        }
-        let last = (acked >> 16) as u32;
+        let floor = confirmed(acked).filter(|_| on)?;
         self.frames += 1;
-        self.distance += u64::from(wire.wrapping_sub(last));
-        Some(crate::encode::Acked {
-            last: i64::from(last),
-            mask: acked as u16,
-        })
+        self.distance += u64::from(wire.wrapping_sub(floor.last as u32));
+        Some(floor)
     }
 }
 
+/// The client's confirmations as an encoder takes them: `last << 16 | mask`, `None` until the
+/// first ([`crate::native::wiring::NONE_ACKED`]).
+pub(super) fn confirmed(acked: u64) -> Option<crate::encode::Acked> {
+    (acked != crate::native::wiring::NONE_ACKED).then(|| crate::encode::Acked {
+        last: i64::from((acked >> 16) as u32),
+        mask: acked as u16,
+    })
+}
+
 /// Frames whose plaintext a NACK can still reach.
-const RESEND_FRAMES: usize = 3;
+pub(super) const RESEND_FRAMES: usize = 3;
 /// Bytes the ring holds at most; the oldest frames go first, never the one in progress.
 const RESEND_BYTES: usize = 4 << 20;
 
 /// The plaintext of the last few frames' packets, as the session staged them
 /// ([`punktfunk_core::session::Session::tap_plaintext`]), for a client that names the shards
-/// one of them lacks. Buffers are reused frame to frame.
+/// one of them lacks. The ring keeps the tap's own buffers and hands the tap those of the frame
+/// it overwrites, so a packet is never copied twice. At most three frames' buffers exist.
 #[derive(Default)]
 pub(super) struct ResendRing {
     frames: std::collections::VecDeque<RingFrame>,
+    /// Frames shed over [`RESEND_BYTES`], empty, their buffers kept for [`Self::begin`].
+    shed: Vec<RingFrame>,
     bytes: usize,
 }
 
@@ -830,23 +863,28 @@ fn place(p: &[u8], index: u32) -> Option<Place> {
 }
 
 impl ResendRing {
-    /// Frame `index` starts; its packets follow through [`Self::note`].
+    /// Frame `index` starts in the oldest frame's buffers, or a shed frame's; its packets
+    /// follow through [`Self::note`].
     pub(super) fn begin(&mut self, index: u32) {
         let mut f = if self.frames.len() >= RESEND_FRAMES {
-            self.frames.pop_front().unwrap_or_default()
+            self.frames.pop_front()
         } else {
-            RingFrame::default()
-        };
+            self.shed.pop()
+        }
+        .unwrap_or_default();
         self.bytes -= f.bytes();
         (f.index, f.sent, f.used) = (index, Some(std::time::Instant::now()), 0);
         self.frames.push_back(f);
     }
 
-    /// A copy of one packet the current frame staged.
-    pub(super) fn note(&mut self, plaintext: &[u8]) {
+    /// One packet the current frame staged: the ring keeps `plaintext`'s buffer and leaves
+    /// one it no longer needs in its place.
+    pub(super) fn note(&mut self, plaintext: &mut Vec<u8>) {
         while self.bytes > RESEND_BYTES && self.frames.len() > 1 {
-            let old = self.frames.pop_front().expect("more than one");
+            let mut old = self.frames.pop_front().expect("more than one");
             self.bytes -= old.bytes();
+            old.used = 0;
+            self.shed.push(old);
         }
         let Some(f) = self.frames.back_mut() else {
             return;
@@ -855,10 +893,9 @@ impl ResendRing {
             f.wires.push(Vec::new());
         }
         let slot = &mut f.wires[f.used];
-        slot.clear();
-        slot.extend_from_slice(plaintext);
+        std::mem::swap(slot, plaintext);
         f.used += 1;
-        self.bytes += plaintext.len();
+        self.bytes += slot.len();
     }
 
     /// Frame `index`'s packets the client named, and how long ago the frame went out;
@@ -901,15 +938,20 @@ impl ResendRing {
 }
 
 /// Episode state behind [`StreamState::force_keyframe`]: which requests coalesce, and how far
-/// the IDR cooldown has backed off. A request past the last IDR's [`RECOVERY_FLIGHT`] means
-/// that IDR landed and did not heal; each such IDR doubles the cooldown ([`idr_cooldown`]);
-/// a cooldown no such request lands in resets the run, as does a [`KF_EPISODE_RESET`] gap.
+/// the IDR cooldown has backed off. A request past the last IDR's flight means that IDR landed
+/// and did not heal; each such IDR doubles the cooldown ([`idr_cooldown`]); a cooldown no such
+/// request lands in resets the run, as does a [`KF_EPISODE_RESET`] gap.
 #[derive(Default)]
 pub(super) struct KeyframeGate {
     last_request: Option<std::time::Instant>,
     rfi_echo_swallowed: u32,
     unhealed: u32,
     refuted: Arc<crate::send_pacing::Refutation>,
+    /// The link's smoothed round trip and the stream's frame period ([`Self::measure`]);
+    /// `None` until a round-trip sample.
+    link: Option<(std::time::Duration, std::time::Duration)>,
+    /// When the latest keyframe's last packet left the host.
+    keyframe_left: Option<std::time::Instant>,
 }
 
 impl KeyframeGate {
@@ -921,8 +963,44 @@ impl KeyframeGate {
         }
     }
 
-    /// What one keyframe request at `now` gets. The [`IDR_STORM`]th unhealed IDR in a row is
-    /// logged and refutes an unmeasured link.
+    /// The link's smoothed round trip, the stream's frame period and when the latest keyframe's
+    /// last packet left. A zero round trip is no sample.
+    pub(super) fn measure(
+        &mut self,
+        rtt: std::time::Duration,
+        frame: std::time::Duration,
+        keyframe_left: Option<std::time::Instant>,
+    ) {
+        self.link = (!rtt.is_zero()).then_some((rtt, frame));
+        self.keyframe_left = keyframe_left;
+    }
+
+    /// A request at `at` comes after the IDR forced at `idr` could reach the client: one round
+    /// trip and [`IDR_LEFT_FRAMES`] past its last packet, or [`RECOVERY_FLIGHT`] past the
+    /// force with no round-trip sample. An IDR not yet sent is still in flight.
+    fn past_idr_flight(&self, idr: std::time::Instant, at: std::time::Instant) -> bool {
+        match self.link {
+            Some((rtt, frame)) => self
+                .keyframe_left
+                .filter(|&left| left >= idr)
+                .is_some_and(|left| at >= left + rtt + frame * IDR_LEFT_FRAMES),
+            None => at.saturating_duration_since(idr) >= RECOVERY_FLIGHT,
+        }
+    }
+
+    /// An anchor's flight: one round trip and [`ANCHOR_FRAMES`], or [`RECOVERY_FLIGHT`] with no
+    /// round-trip sample.
+    fn anchor_flight(&self) -> std::time::Duration {
+        self.link
+            .map_or(RECOVERY_FLIGHT, |(rtt, frame)| rtt + frame * ANCHOR_FRAMES)
+    }
+
+    /// What one keyframe request at `now` gets. Inside the IDR cooldown it coalesces, except
+    /// the episode's first client request past that IDR's flight: the IDR landed and did not
+    /// heal, so it forces now and the cooldown doubles. A declined RFI past the flight may
+    /// name frames before the IDR, so it coalesces. Inside an anchored RFI's flight a request
+    /// is its echo, swallowed twice. The [`IDR_STORM`]th unhealed IDR in a row is logged and
+    /// refutes an unmeasured link.
     pub(super) fn decide(
         &mut self,
         now: std::time::Instant,
@@ -941,14 +1019,19 @@ impl KeyframeGate {
         let prev_request = self.last_request.replace(now).filter(|_| !new_episode);
         let cooldown = idr_cooldown(base, self.unhealed);
         let since_idr = |t: Option<std::time::Instant>| t.map(|t| now.saturating_duration_since(t));
-        if since_idr(last_idr).is_some_and(|d| d < cooldown) {
+        let in_cooldown = since_idr(last_idr).is_some_and(|d| d < cooldown);
+        let missed_now = in_cooldown
+            && !rfi_declined
+            && self.unhealed == 0
+            && last_idr.is_some_and(|idr| self.past_idr_flight(idr, now));
+        if in_cooldown && !missed_now {
             return KeyframeVerdict::Coalesced {
                 cooldown,
                 unhealed: self.unhealed,
             };
         }
         if !rfi_declined
-            && since_idr(last_rfi).is_some_and(|d| d < RECOVERY_FLIGHT)
+            && since_idr(last_rfi).is_some_and(|d| d < self.anchor_flight())
             && self.rfi_echo_swallowed < RFI_ECHO_MAX_SWALLOWED
         {
             self.rfi_echo_swallowed += 1;
@@ -956,9 +1039,10 @@ impl KeyframeGate {
                 swallowed: self.rfi_echo_swallowed,
             };
         }
-        let missed = last_idr
-            .zip(prev_request)
-            .is_some_and(|(idr, req)| req.saturating_duration_since(idr) >= RECOVERY_FLIGHT);
+        let missed = missed_now
+            || last_idr
+                .zip(prev_request)
+                .is_some_and(|(idr, req)| self.past_idr_flight(idr, req));
         self.unhealed = if missed { self.unhealed + 1 } else { 0 };
         let rfi_unhealed = std::mem::take(&mut self.rfi_echo_swallowed) > 0;
         let cooldown = idr_cooldown(base, self.unhealed);
@@ -1181,11 +1265,11 @@ mod tests {
             KeyframeVerdict::Force { unhealed: 0, cooldown, .. } if cooldown == base
         ));
         last_idr = Some(quiet);
-        // One late re-ask inside the cooldown, then a long healthy silence: the old episode's
-        // request must not turn the next unrelated loss into an unhealed IDR.
+        // One late re-ask inside the cooldown forces, then a long healthy silence: the old
+        // episode's request must not turn the next unrelated loss into an unhealed IDR.
         assert!(matches!(
             gate.decide(quiet + ms(500), base, last_idr, None, false),
-            KeyframeVerdict::Coalesced { unhealed: 0, .. }
+            KeyframeVerdict::Force { unhealed: 1, .. }
         ));
         assert!(matches!(
             gate.decide(quiet + Duration::from_secs(600), base, last_idr, None, false),
@@ -1262,6 +1346,135 @@ mod tests {
         assert!(matches!(
             gate.decide(t0 + ms(800), base, idr, None, false),
             KeyframeVerdict::Force { unhealed: 0, .. }
+        ));
+    }
+
+    /// A lost IDR: the client's re-ask past its flight forces at once, not when the cooldown
+    /// ends, and doubles the cooldown, so a client that still asks gets no third IDR early.
+    /// A declined RFI inside the cooldown still coalesces.
+    #[test]
+    fn a_reask_past_the_idrs_flight_forces_once() {
+        let ms = Duration::from_millis;
+        let t0 = Instant::now();
+        let base = IDR_COOLDOWN_FULL;
+        let mut gate = KeyframeGate::default();
+        assert!(matches!(
+            gate.decide(t0, base, None, None, false),
+            KeyframeVerdict::Force { unhealed: 0, .. }
+        ));
+        let idr = Some(t0);
+        assert!(matches!(
+            gate.decide(t0 + ms(100), base, idr, None, true),
+            KeyframeVerdict::Coalesced { .. }
+        ));
+        assert!(matches!(
+            gate.decide(t0 + ms(520), base, idr, None, false),
+            KeyframeVerdict::Force { unhealed: 1, cooldown, .. } if cooldown == ms(1_500)
+        ));
+        let idr = Some(t0 + ms(520));
+        assert!(matches!(
+            gate.decide(t0 + ms(1_020), base, idr, None, false),
+            KeyframeVerdict::Coalesced { unhealed: 1, .. }
+        ));
+        // A measured link, 2 ms round trip at 60 Hz: the IDR left 10 ms after the force, so
+        // its flight ends at 45 ms.
+        let mut gate = KeyframeGate::default();
+        let frame = Duration::from_micros(16_667);
+        gate.measure(ms(2), frame, None);
+        gate.decide(t0, base, None, None, false);
+        let idr = Some(t0);
+        gate.measure(ms(2), frame, Some(t0 + ms(10)));
+        assert!(matches!(
+            gate.decide(t0 + ms(40), base, idr, None, false),
+            KeyframeVerdict::Coalesced { unhealed: 0, .. }
+        ));
+        assert!(matches!(
+            gate.decide(t0 + ms(120), base, idr, None, false),
+            KeyframeVerdict::Force { unhealed: 1, .. }
+        ));
+    }
+
+    /// An IDR that landed: echoes inside its flight, a declined RFI past it and an RFI's own
+    /// echo send nothing; the next loss after the cooldown forces on the base cooldown.
+    #[test]
+    fn a_landed_idr_takes_no_second_one_inside_the_cooldown() {
+        let ms = Duration::from_millis;
+        let t0 = Instant::now();
+        let base = IDR_COOLDOWN_FULL;
+        let mut gate = KeyframeGate::default();
+        gate.decide(t0, base, None, None, false);
+        let idr = Some(t0);
+        gate.measure(ms(2), Duration::from_micros(16_667), Some(t0 + ms(10)));
+        let verdicts = [
+            gate.decide(t0 + ms(40), base, idr, None, false),
+            gate.decide(t0 + ms(200), base, idr, None, true),
+            gate.decide(t0 + ms(400), base, idr, Some(t0 + ms(380)), false),
+        ];
+        assert!(
+            matches!(
+                verdicts,
+                [
+                    KeyframeVerdict::Coalesced { .. },
+                    KeyframeVerdict::Coalesced { .. },
+                    KeyframeVerdict::RfiEcho { swallowed: 1 },
+                ]
+            ),
+            "{verdicts:?}"
+        );
+        assert!(matches!(
+            gate.decide(t0 + Duration::from_secs(5), base, idr, None, false),
+            KeyframeVerdict::Force { unhealed: 0, cooldown, .. } if cooldown == base
+        ));
+    }
+
+    /// A large IDR on a slow link: a re-ask while it is still leaving, or within a round trip
+    /// and two periods of its last packet, is an echo; one past that forces.
+    #[test]
+    fn a_large_idr_is_in_flight_until_it_has_left() {
+        let ms = Duration::from_millis;
+        let t0 = Instant::now();
+        let base = IDR_COOLDOWN_FULL;
+        let frame = Duration::from_micros(16_667);
+        let mut gate = KeyframeGate::default();
+        let before = Some(t0 - Duration::from_secs(5));
+        gate.measure(ms(6), frame, before);
+        gate.decide(t0, base, None, None, false);
+        let idr = Some(t0);
+        assert!(matches!(
+            gate.decide(t0 + ms(100), base, idr, None, false),
+            KeyframeVerdict::Coalesced { unhealed: 0, .. }
+        ));
+        gate.measure(ms(6), frame, Some(t0 + ms(120)));
+        assert!(matches!(
+            gate.decide(t0 + ms(150), base, idr, None, false),
+            KeyframeVerdict::Coalesced { unhealed: 0, .. }
+        ));
+        assert!(matches!(
+            gate.decide(t0 + ms(170), base, idr, None, false),
+            KeyframeVerdict::Force { unhealed: 1, .. }
+        ));
+    }
+
+    /// On a measured link an RFI's echo is what lands inside its flight: a keyframe ask past
+    /// it says the anchor did not take, and forces with the anchor distrusted.
+    #[test]
+    fn an_ask_past_the_anchors_measured_flight_forces() {
+        let ms = Duration::from_millis;
+        let t0 = Instant::now();
+        let mut gate = KeyframeGate::default();
+        gate.measure(ms(2), Duration::from_micros(16_667), None);
+        let rfi = Some(t0);
+        assert_eq!(
+            gate.decide(t0 + ms(50), IDR_COOLDOWN_FULL, None, rfi, false),
+            KeyframeVerdict::RfiEcho { swallowed: 1 }
+        );
+        assert!(matches!(
+            gate.decide(t0 + ms(100), IDR_COOLDOWN_FULL, None, rfi, false),
+            KeyframeVerdict::Force {
+                rfi_unhealed: true,
+                unhealed: 0,
+                ..
+            }
         ));
     }
 
@@ -1529,7 +1742,7 @@ mod resend_ring_tests {
     fn frame(r: &mut ResendRing, index: u32, packets: usize, len: usize) {
         r.begin(index);
         for s in 0..packets as u16 {
-            r.note(&packet(index, 0, s, packets as u16, 0, len));
+            r.note(&mut packet(index, 0, s, packets as u16, 0, len));
         }
     }
 
@@ -1544,7 +1757,7 @@ mod resend_ring_tests {
         assert!(r.pick(1, &[0]).is_none());
         assert_eq!(r.pick(4, &[0, 1]).unwrap().0.len(), 2);
         frame(&mut r, 9, 80, 64 * 1024);
-        r.note(&packet(9, 0, 80, 81, 0, 10));
+        r.note(&mut packet(9, 0, 80, 81, 0, 10));
         assert!(
             r.pick(3, &[0]).is_none() && r.pick(4, &[0]).is_none(),
             "over the cap"
@@ -1564,15 +1777,138 @@ mod resend_ring_tests {
         r.begin(7);
         // Block 0: 4 data + 2 parity; block 1 at base 4: 3 data + 2 parity. 7 data in all.
         for s in 0..6 {
-            r.note(&packet(7, 0, s, 4, 2, 40));
+            r.note(&mut packet(7, 0, s, 4, 2, 40));
         }
         for s in 0..5 {
-            r.note(&packet(7, 4, s, 3, 2, 40));
+            r.note(&mut packet(7, 4, s, 3, 2, 40));
         }
-        r.note(&packet(8, 0, 2, 4, 2, 40));
+        r.note(&mut packet(8, 0, 2, 4, 2, 40));
         let (picked, _) = r.pick(7, &[2, 8, 9]).unwrap();
         let at = |p: &[u8]| (p[18], p[22]);
         let got: Vec<(u8, u8)> = picked.iter().map(|p| at(p)).collect();
         assert_eq!(got, [(0, 2), (0, 5), (4, 3)]);
+    }
+
+    /// A sealed host session that taps its plaintext, as the send loop runs it.
+    fn tapped_session() -> punktfunk_core::session::Session {
+        use punktfunk_core::config::{Config, FecConfig, FecScheme, Role};
+        use punktfunk_core::crypto::{MediaKeys, MediaSuite};
+        let cfg = Config {
+            role: Role::Host,
+            fec: FecConfig {
+                scheme: FecScheme::Gf16,
+                fec_percent: 10,
+                max_data_per_block: 64,
+            },
+            shard_payload: 1408,
+            max_frame_bytes: 8 << 20,
+            loopback_drop_period: 0,
+        };
+        let media = punktfunk_core::session::MediaV2 {
+            clock_origin_ns: 0,
+            keys: Some(MediaKeys::derive(&[7; 32], MediaSuite::Aes128Gcm)),
+            clock: None,
+            clear_placement: false,
+        };
+        let (tp, _) = punktfunk_core::transport::loopback_pair(0, 0);
+        let mut s = punktfunk_core::session::Session::new(cfg, media, Box::new(tp)).unwrap();
+        s.tap_plaintext(true);
+        s
+    }
+
+    /// A NACK resend from the ring, which keeps the tap's own buffers, matches one resealed
+    /// from copies taken as the frame was drained: a one-chunk frame, a pipelined one, and
+    /// after the ring wrapped and shed many times.
+    #[test]
+    fn a_resend_from_moved_buffers_matches_one_from_copies() {
+        let (mut host, mut twin) = (tapped_session(), tapped_session());
+        let mut pacer = crate::send_pacing::Pacer::new(Default::default(), None);
+        let (mut ring, mut copies) = (ResendRing::default(), ResendRing::default());
+        // 400 KB crosses the pipelined seal's 256 data shards; 4.6 MB sheds older frames.
+        let sizes = [8 << 10, 400 << 10, 30 << 10, 4600 << 10, 600 << 10];
+        let names: Vec<u16> = (0..400).step_by(37).collect();
+        let mut resent = 0;
+        for i in 0..30u32 {
+            let len = sizes[i as usize % sizes.len()];
+            let au: Vec<u8> = (0..len).map(|b| (b as u32 ^ (i * 97)) as u8).collect();
+            let r = Some(&mut ring);
+            super::super::paced_submit(&mut host, &au, i.into(), 0, i, &mut pacer, r).unwrap();
+            copies.begin(i);
+            twin.seal_frame_chunks_at(&au, i.into(), 0, i, &mut |_, _| Ok(()))
+                .unwrap();
+            twin.drain_plaintext(|p| copies.note(&mut p.clone()));
+            for f in i.saturating_sub(2)..=i {
+                let resend = |s: &mut punktfunk_core::session::Session, r: &ResendRing| {
+                    let (plain, _) = r.pick(f, &names)?;
+                    Some(
+                        plain
+                            .iter()
+                            .map(|p| s.reseal(p).unwrap())
+                            .collect::<Vec<_>>(),
+                    )
+                };
+                let ours = resend(&mut host, &ring);
+                assert_eq!(ours, resend(&mut twin, &copies), "frame {f} after {i}");
+                resent += ours.map_or(0, |p| p.len());
+            }
+        }
+        assert!(resent > 100, "{resent} packets resent");
+    }
+
+    /// Buffers circulate between the tap and the ring and are not allocated again: across
+    /// frames of mixed sizes, ones the byte cap sheds included, every buffer the ring holds
+    /// after the warm-up is one it held before, at the same capacity.
+    #[test]
+    fn the_tap_and_the_ring_reuse_their_buffers() {
+        let mut session = tapped_session();
+        let mut r = ResendRing::default();
+        // Four sizes against three frame slots, so each slot holds each size in turn.
+        let sizes = [100 << 10, 4600 << 10, 1 << 20, 20 << 10];
+        let mut warm = std::collections::HashSet::new();
+        for i in 0..40u32 {
+            let au = vec![0x5a; sizes[i as usize % sizes.len()]];
+            r.begin(i);
+            session
+                .seal_frame_chunks_at(&au, 0, 0, i, &mut |_, _| Ok(()))
+                .unwrap();
+            session.drain_plaintext(|p| r.note(p));
+            let held = r.frames.iter().chain(&r.shed).flat_map(|f| &f.wires);
+            let held = held.map(|w| (w.as_ptr(), w.capacity()));
+            if i < 24 {
+                warm.extend(held);
+            } else {
+                for b in held {
+                    assert!(
+                        warm.contains(&b),
+                        "frame {i}: a buffer new since the warm-up"
+                    );
+                }
+            }
+        }
+        assert!(r.frames.len() + r.shed.len() <= 3);
+    }
+
+    /// p50 µs to hand a frame's tapped plaintext to the ring, at 100 KB, 1 MB and 4 MB:
+    /// `cargo test -p punktfunk-host --release ring_note_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "prints a timing"]
+    fn ring_note_cost() {
+        let mut session = tapped_session();
+        let mut r = ResendRing::default();
+        for kb in [100, 1024, 4096] {
+            let frame = vec![0x5a; kb * 1024];
+            let mut ns = Vec::new();
+            for i in 0..200u32 {
+                r.begin(i);
+                session
+                    .seal_frame_chunks_at(&frame, 0, 0, i, &mut |_, _| Ok(()))
+                    .unwrap();
+                let t0 = std::time::Instant::now();
+                session.drain_plaintext(|p| r.note(p));
+                ns.push(t0.elapsed().as_nanos());
+            }
+            ns.sort_unstable();
+            println!("{kb} KB: note p50 {:.1} us", ns[ns.len() / 2] as f64 / 1e3);
+        }
     }
 }

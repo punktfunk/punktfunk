@@ -1,20 +1,34 @@
 //! The desktop's own accessibility switches, where it states them. The console follows an
 //! answer and keeps its own row for a desktop that gives none.
 
-/// The OS asked for less motion: `Some(true)` reduce, `Some(false)` animate, `None` when this
-/// desktop does not say.
-pub fn reduce_motion() -> Option<bool> {
-    imp::reduce_motion()
+/// A reader of the OS's reduce-motion switch: `Some(true)` reduce, `Some(false)` animate,
+/// `None` when this desktop does not say. A poller calls it repeatedly; on Linux it keeps one
+/// D-Bus session connection between calls and reconnects after an answer of `None`.
+pub fn reduce_motion_reader() -> impl FnMut() -> Option<bool> + Send {
+    imp::reader()
 }
 
 #[cfg(target_os = "linux")]
 mod imp {
     use zbus::zvariant::OwnedValue;
 
+    pub(super) fn reader() -> impl FnMut() -> Option<bool> + Send {
+        let mut conn: Option<zbus::blocking::Connection> = None;
+        move || {
+            if conn.is_none() {
+                conn = zbus::blocking::Connection::session().ok();
+            }
+            let answer = reduce_motion(conn.as_ref()?);
+            if answer.is_none() {
+                conn = None;
+            }
+            answer
+        }
+    }
+
     /// The XDG Settings portal: the standard `reduced-motion` (1 = reduce), else the GNOME and
     /// KDE keys their portal backends relay.
-    pub(super) fn reduce_motion() -> Option<bool> {
-        let conn = zbus::blocking::Connection::session().ok()?;
+    fn reduce_motion(conn: &zbus::blocking::Connection) -> Option<bool> {
         let read = |namespace: &str, key: &str| -> Option<OwnedValue> {
             let reply = conn
                 .call_method(
@@ -50,8 +64,12 @@ mod imp {
 mod imp {
     use windows::Win32::winuser::{SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION};
 
+    pub(super) fn reader() -> impl FnMut() -> Option<bool> + Send {
+        reduce_motion
+    }
+
     /// Settings → Accessibility → Visual effects → Animation effects.
-    pub(super) fn reduce_motion() -> Option<bool> {
+    fn reduce_motion() -> Option<bool> {
         let mut on: i32 = 1;
         // SAFETY: SPI_GETCLIENTAREAANIMATION writes one BOOL (4 bytes) through `pvparam`, and
         // `on` is a live i32 local; no update flag, so nothing is written back to the profile.

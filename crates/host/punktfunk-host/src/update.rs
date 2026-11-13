@@ -63,7 +63,8 @@ struct Caps {
     /// Pacman's root-owned full-sysupgrade opt-in; the helper refuses pacman without it.
     pacman_optin: bool,
     /// This host is the door, a system service as the `punktfunk` user: no group of the
-    /// operator's lets it start the helper, and the Deck's checkout is not its own.
+    /// operator's lets it start the helper, and the Deck's checkout is not its own. Its console
+    /// asks the owner's host for a helper kind's update ([`crate::mgmt::update`]).
     door: bool,
 }
 
@@ -103,7 +104,7 @@ enum Leg {
 }
 
 /// Kinds the root helper applies.
-fn helper_kind(kind: detect::InstallKind) -> bool {
+pub(crate) fn helper_kind(kind: detect::InstallKind) -> bool {
     use detect::InstallKind as K;
     matches!(kind, K::Apt | K::Dnf | K::Sysext | K::RpmOstree | K::Pacman)
 }
@@ -464,7 +465,7 @@ pub(crate) fn start_apply(force: bool, session_active: bool) -> Result<(), Apply
                 job.stage = s;
             }
         };
-        let outcome: Result<PostApply, (&'static str, String)> = {
+        let outcome: Result<PostApply, jobs::ApplyFailed> = {
             #[cfg(target_os = "windows")]
             {
                 let progress = |received: u64, total: Option<u64>| {
@@ -477,12 +478,14 @@ pub(crate) fn start_apply(force: bool, session_active: bool) -> Result<(), Apply
                 let asset = asset.expect("windows leg reserved with an asset");
                 windows::run_apply(&asset, &target_version, serial, &progress, &stage)
                     .map(|()| PostApply::AwaitRestart)
+                    .map_err(jobs::ApplyFailed::from)
             }
             #[cfg(target_os = "linux")]
             {
                 let _ = &asset; // unused: Linux legs use the package manager
                 let run = if leg == Leg::SteamosSource {
                     linux::run_apply_steamos(&target_version, serial, &stage)
+                        .map_err(jobs::ApplyFailed::from)
                 } else {
                     linux::run_apply(&target_version, serial, &stage)
                 };
@@ -496,7 +499,7 @@ pub(crate) fn start_apply(force: bool, session_active: bool) -> Result<(), Apply
             #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             {
                 let _ = (&asset, &target_version, serial, &stage);
-                Err(("applying", "no apply leg for this platform".to_string()))
+                Err(("applying", "no apply leg for this platform".to_string()).into())
             }
         };
         match outcome {
@@ -507,16 +510,18 @@ pub(crate) fn start_apply(force: bool, session_active: bool) -> Result<(), Apply
             Ok(PostApply::Done) => {
                 runtime().lock().unwrap().job = None;
             }
-            Err((stage_name, error)) => {
+            Err(failed) => {
                 let record = jobs::ResultRecord {
                     ok: false,
                     from: crate::version::get().into(),
                     to: target_version.clone(),
                     finished_unix: crate::clock::unix_secs_u64(),
-                    stage: Some(stage_name.into()),
-                    error: Some(error),
+                    stage: Some(failed.stage.into()),
+                    error: Some(failed.error),
                     log_path: None,
                     staged: false,
+                    error_code: failed.code,
+                    error_params: failed.params,
                 };
                 let _ = jobs::write_json_atomic(&jobs::result_path(), &record);
                 runtime().lock().unwrap().job = None;
@@ -685,6 +690,16 @@ mod tests {
                 ));
             }
         }
+    }
+
+    /// A door's console asks the owner's host for exactly the helper legs. A Deck build stays.
+    #[test]
+    fn a_door_hands_the_helper_legs_to_the_owner_s_host() {
+        for kind in KINDS {
+            let helper = apply_leg(kind, ready()) == Some(Leg::Helper);
+            assert_eq!(helper_kind(kind), helper, "{}", kind.as_str());
+        }
+        assert!(!helper_kind(detect::InstallKind::SteamosSource));
     }
 
     #[test]

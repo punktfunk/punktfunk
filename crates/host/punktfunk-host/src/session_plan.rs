@@ -28,11 +28,12 @@ pub enum CaptureBackend {
 }
 
 impl CaptureBackend {
-    /// Shared by [`SessionPlan::resolve`] and the standalone callers (GameStream / spike).
-    pub fn resolve() -> Self {
+    /// The capture of a session that streams a monitor (`mirrored`) or a display of its own.
+    /// Shared by [`SessionPlan::mirroring`] and the standalone callers (GameStream / spike).
+    pub fn resolve(mirrored: bool) -> Self {
         if !cfg!(target_os = "windows") {
             CaptureBackend::Portal
-        } else if mirrored() {
+        } else if mirrored {
             CaptureBackend::Wgc
         } else {
             CaptureBackend::IddPush
@@ -127,12 +128,16 @@ pub struct SessionPlan {
     /// wedge on multi-slice frames). Applied to every encoder this plan opens so slicing cannot
     /// change shape across a rebuild.
     pub slices: u32,
-    /// A joiner's own view and fit: the encoder frames the owner's picture for it. `None`
-    /// streams the source as captured, or a mirrored head fitted to the negotiated size.
+    /// The view and fit the encoder frames the picture for: a joiner's own, or the view a client
+    /// shows its larger mode at. `None` streams the source as captured, or a mirrored head
+    /// fitted to the negotiated size. Says nothing about whose display it is.
     pub reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
-    /// The encoder's own RGB conversion writes the range it is asked for
+    /// The session streams a host monitor, not a display of its own: the device's screen as the
+    /// handshake resolved it. Set only through [`Self::mirroring`], which picks the capture.
+    pub mirrored: bool,
+    /// The colours the encoder's own RGB conversion writes at full range
     /// ([`crate::encode::Resolved::rgb_full_range`]). Read through [`Self::full_range`].
-    pub rgb_full_range: bool,
+    pub rgb_full_range: crate::encode::RgbFullRange,
     /// The colours the client asked to get at studio range. Read through [`Self::full_range`].
     pub studio_asked: StudioAsk,
 }
@@ -160,12 +165,13 @@ impl StudioAsk {
 }
 
 /// The range a `codec` session at `hdr` and `bit_depth` encodes and advertises. Studio where the
-/// client asked for it for that colour, or where AMF converts the desktop's 8-bit RGB itself on
-/// a GPU that writes nothing else. PyroWave stays full: its client converts with its own
-/// shaders. The Welcome, a mid-stream format and every encoder's open all ask here.
+/// client asked for it for that colour, or where the GPU's own conversion writes nothing else
+/// for it: AMF from the desktop's 8-bit RGB, a VCN on firmware that converts BT.709 narrow
+/// only. PyroWave stays full: its client converts with its own shaders. The Welcome, a
+/// mid-stream format and every encoder's open all ask here.
 pub(crate) fn full_range(
     encoder: EncoderBackend,
-    rgb_full_range: bool,
+    rgb_full_range: crate::encode::RgbFullRange,
     studio_asked: StudioAsk,
     codec: crate::encode::Codec,
     hdr: bool,
@@ -176,8 +182,10 @@ pub(crate) fn full_range(
     } else {
         studio_asked.sdr
     };
-    let amf_studio = encoder == EncoderBackend::Amf && !rgb_full_range && bit_depth == 8;
-    codec == crate::encode::Codec::PyroWave || !(asked || amf_studio)
+    // AMF converts the 8-bit desktop only; a 10-bit surface reaches it converted.
+    let chip_converts = encoder != EncoderBackend::Amf || bit_depth == 8;
+    let chip_studio = chip_converts && !rgb_full_range.at(hdr);
+    codec == crate::encode::Codec::PyroWave || !(asked || chip_studio)
 }
 
 /// [`full_range`] for a session not planned yet: the Welcome's, from the handshake's resolution.
@@ -190,7 +198,7 @@ pub(crate) fn full_range_for(
 ) -> bool {
     full_range(
         resolve_encoder(encoder),
-        encoder.rgb_full_range(),
+        encoder.rgb_full_range(codec),
         studio_asked,
         codec,
         hdr,
@@ -217,7 +225,8 @@ pub fn client_slices(video_caps: u8, asked: u8) -> u32 {
 impl SessionPlan {
     /// `encoder` is the session's resolution. `hdr` is the handshake verdict, not derived from
     /// depth: 10-bit SDR exists. PyroWave's bits per pixel start at the host's; a caller that
-    /// knows the client's sets them. `slices` is the client's count, [`Self::slices`].
+    /// knows the client's sets them. `slices` is the client's count, [`Self::slices`]. The plan
+    /// is a display of the session's own until [`Self::mirroring`] says otherwise.
     #[allow(clippy::too_many_arguments)]
     pub fn resolve(
         encoder: &crate::encode::Resolved,
@@ -229,12 +238,12 @@ impl SessionPlan {
         cursor_forward: bool,
         slices: u32,
     ) -> Self {
-        let capture = CaptureBackend::resolve();
+        let capture = CaptureBackend::resolve(false);
         SessionPlan {
             capture,
             topology: resolve_topology(capture),
             encoder: resolve_encoder(encoder),
-            rgb_full_range: encoder.rgb_full_range(),
+            rgb_full_range: encoder.rgb_full_range(codec),
             // A caller that knows the client's ask sets it.
             studio_asked: StudioAsk::default(),
             bit_depth,
@@ -250,7 +259,22 @@ impl SessionPlan {
             sdr10_native: false,
             slices,
             reframe_to: None,
+            mirrored: false,
         }
+    }
+
+    /// This plan for a session that streams a host monitor (`mirrored`) or a display of its own,
+    /// with the capture that takes it.
+    pub fn mirroring(mut self, mirrored: bool) -> Self {
+        self.mirrored = mirrored;
+        self.capture = CaptureBackend::resolve(mirrored);
+        self.topology = resolve_topology(self.capture);
+        self
+    }
+
+    /// `mode` at the size this plan encodes it ([`picture`]).
+    pub fn picture(&self, mode: punktfunk_core::Mode) -> punktfunk_core::Mode {
+        picture(mode, self.reframe_to.map(|(_, view)| view))
     }
 
     /// The range this plan encodes and advertises at the live `hdr` and `bit_depth` ([`full_range`]).
@@ -337,6 +361,25 @@ impl SessionPlan {
             full_range: self.full_range(self.hdr, self.bit_depth),
         }
     }
+}
+
+/// `mode` at the size the encoder means to take it to: `view`, else the mode's own. Every
+/// bitrate that depends on pixels is priced here.
+pub(crate) fn picture(
+    mode: punktfunk_core::Mode,
+    view: Option<(u32, u32)>,
+) -> punktfunk_core::Mode {
+    let (width, height) = view.unwrap_or((mode.width, mode.height));
+    punktfunk_core::Mode {
+        width,
+        height,
+        ..mode
+    }
+}
+
+/// The `picture` field a client prices its bitrate on: `None` at `mode`'s own size.
+pub(crate) fn picture_field(mode: punktfunk_core::Mode, picture: (u32, u32)) -> Option<(u32, u32)> {
+    (picture != (mode.width, mode.height)).then_some(picture)
 }
 
 pub(crate) fn resolve_topology(capture: CaptureBackend) -> SessionTopology {
@@ -517,14 +560,11 @@ pub(crate) fn live_depth(plan_hdr: bool, source_hdr: bool, bit_depth: u8) -> (bo
     (hdr, if plan_hdr && !hdr { 8 } else { bit_depth })
 }
 
-/// Whether a session opened now streams a pinned physical head instead of a virtual display.
-pub(crate) fn mirrored() -> bool {
-    pf_vdisplay::mirrors_pinned()
-}
-
 impl SessionPlan {
-    /// The plan of a session `mode_conflict: join` admitted. On Windows the owner's display is
-    /// captured by a worker; a Linux joiner gets a second cast through the same portal path.
+    /// The plan of a session `mode_conflict: join` admitted, until its capture opens. On Windows
+    /// the owner's display is captured by a worker; a Linux joiner gets a second cast through
+    /// the same portal path. With nothing left to join, the display open makes one of the
+    /// joiner's own, and [`Self::captured_by`] settles the plan on it.
     pub(crate) fn sharing_live_display(mut self) -> Self {
         if cfg!(target_os = "windows") {
             self.capture = CaptureBackend::Wgc;
@@ -532,34 +572,59 @@ impl SessionPlan {
         }
         self
     }
+
+    /// This plan on the capture that opened: the driver's encoder is IDD-push, a worker's is
+    /// WGC. A capture with no remote encoder leaves the plan as it is.
+    pub(crate) fn captured_by(mut self, capturer: &dyn crate::capture::Capturer) -> Self {
+        self.capture = match capturer.remote_encoder().map(|r| r.site()) {
+            Some(pf_capture::EncoderSite::Driver) => CaptureBackend::IddPush,
+            Some(pf_capture::EncoderSite::Worker) => CaptureBackend::Wgc,
+            None => return self,
+        };
+        self.topology = resolve_topology(self.capture);
+        self
+    }
 }
 
-/// Open the encoder for `frame` through `open(width, height)` and return it with the framing
-/// it encodes. A joiner's `reframe_to` frames the owner's picture for its view; a mirrored head
-/// larger than the client's `negotiated` picture fits inside it. Either crops and scales on
-/// ingest; a backend that cannot is reopened at the source's own size.
+/// Open the encoder for a `captured` picture through `open(framing)`, which opens at
+/// `framing.out`, and return it with the framing it encodes. `reframe_to` frames the picture
+/// for its view; a `mirrored` head larger than the client's `negotiated` picture fits inside
+/// it. Either crops and scales on ingest; a backend whose caps cannot, or whose framed open
+/// fails, is reopened unframed.
 pub(crate) fn open_encoder_fitted(
-    frame: &crate::capture::CapturedFrame,
+    captured: (u32, u32),
     negotiated: (u32, u32),
     reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
-    mut open: impl FnMut(u32, u32) -> anyhow::Result<Box<dyn crate::encode::Encoder>>,
+    mirrored: bool,
+    mut open: impl FnMut(
+        punktfunk_core::video_fit::Reframe,
+    ) -> anyhow::Result<Box<dyn crate::encode::Encoder>>,
 ) -> anyhow::Result<(
     Box<dyn crate::encode::Encoder>,
     punktfunk_core::video_fit::Reframe,
 )> {
     use punktfunk_core::video_fit::{Reframe, VideoFit};
-    let captured = (frame.width, frame.height);
     let full = Reframe::full(captured);
-    let Some((fit, view)) =
-        reframe_to.or_else(|| mirrored().then_some((VideoFit::Fit, negotiated)))
+    let Some((fit, view)) = reframe_to.or_else(|| mirrored.then_some((VideoFit::Fit, negotiated)))
     else {
-        return Ok((open(captured.0, captured.1)?, full));
+        return Ok((open(full)?, full));
     };
     let framed = Reframe::plan(fit, captured, view);
     if framed.is_full() {
-        return Ok((open(captured.0, captured.1)?, full));
+        return Ok((open(full)?, full));
     }
-    let mut enc = open(framed.out.0, framed.out.1)?;
+    let mut enc = match open(framed) {
+        Ok(enc) => enc,
+        Err(e) => {
+            tracing::warn!(
+                ?captured,
+                wanted = ?framed.out,
+                error = %format!("{e:#}"),
+                "framed encoder did not open — encoding the captured size for the client to scale"
+            );
+            return Ok((open(full)?, full));
+        }
+    };
     let caps = enc.caps();
     let scaled = framed.out != (framed.crop[2], framed.crop[3]);
     let armed = if (scaled && !caps.downscales_input) || (framed.is_cropped() && !caps.crops_input)
@@ -577,8 +642,9 @@ pub(crate) fn open_encoder_fitted(
             ?captured,
             crop = ?framed.crop,
             wanted = ?framed.out,
+            ?view,
             error = %format!("{e:#}"),
-            "this encode backend cannot frame the picture for this client — encoding the source at its own size"
+            "picture not framed on ingest — encoding the captured size for the client to scale"
         );
     } else {
         tracing::info!(
@@ -592,7 +658,7 @@ pub(crate) fn open_encoder_fitted(
         return Ok((enc, framed));
     }
     drop(enc);
-    Ok((open(captured.0, captured.1)?, full))
+    Ok((open(full)?, full))
 }
 
 #[cfg(test)]
@@ -623,6 +689,104 @@ mod tests {
         assert_eq!(live_depth(false, true, 8), (false, 8));
     }
 
+    /// An encoder that frames on ingest when `0` says so, and records the crop it was armed with.
+    struct Frames(bool, std::sync::Arc<std::sync::Mutex<Option<[u32; 4]>>>);
+
+    impl crate::encode::Encoder for Frames {
+        fn submit(&mut self, _frame: &crate::capture::CapturedFrame) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn poll(&mut self) -> anyhow::Result<Option<crate::encode::EncodedFrame>> {
+            Ok(None)
+        }
+        fn flush(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn caps(&self) -> crate::encode::EncoderCaps {
+            crate::encode::EncoderCaps {
+                crops_input: self.0,
+                downscales_input: self.0,
+                ..Default::default()
+            }
+        }
+        fn set_input_crop(&mut self, rect: [u32; 4]) -> anyhow::Result<()> {
+            *self.1.lock().unwrap() = Some(rect);
+            Ok(())
+        }
+    }
+
+    /// A view smaller than the capture opens the encoder at the view and arms the whole source
+    /// as the crop; a backend without the caps, or one that fails to open framed, is reopened at
+    /// the captured size.
+    #[test]
+    fn a_view_frames_on_ingest_or_falls_back_to_the_capture() {
+        use punktfunk_core::video_fit::VideoFit;
+        let view = Some((VideoFit::Fit, (1366, 768)));
+        for capable in [true, false] {
+            let (mut opens, crop) = (Vec::new(), std::sync::Arc::default());
+            let (_, framed) = open_encoder_fitted((2048, 1152), (2048, 1152), view, false, |r| {
+                assert_eq!(r.source, (2048, 1152), "the opener sees the whole framing");
+                opens.push(r.out);
+                Ok(Box::new(Frames(capable, std::sync::Arc::clone(&crop))))
+            })
+            .expect("an encoder");
+            if capable {
+                assert_eq!(opens, [(1366, 768)]);
+                assert_eq!(framed.out, (1366, 768));
+                assert_eq!(*crop.lock().unwrap(), Some([0, 0, 2048, 1152]));
+            } else {
+                assert_eq!(opens, [(1366, 768), (2048, 1152)]);
+                assert!(framed.is_full() && framed.out == (2048, 1152));
+            }
+        }
+        // A framed open that fails is tried once more unframed.
+        let mut opens = Vec::new();
+        let (_, framed) = open_encoder_fitted((2048, 1152), (2048, 1152), view, false, |r| {
+            opens.push(r.out);
+            if r.is_full() {
+                Ok(Box::new(Frames(true, Default::default())))
+            } else {
+                Err(anyhow::anyhow!("no scale pass"))
+            }
+        })
+        .expect("an encoder");
+        assert_eq!(opens, [(1366, 768), (2048, 1152)]);
+        assert!(framed.is_full());
+        // No view and no mirror: the capture as it is, opened once.
+        let mut opens = Vec::new();
+        let (_, framed) = open_encoder_fitted((2048, 1152), (1366, 768), None, false, |r| {
+            opens.push(r.out);
+            Ok(Box::new(Frames(true, Default::default())))
+        })
+        .expect("an encoder");
+        assert_eq!((opens, framed.out), (vec![(2048, 1152)], (2048, 1152)));
+    }
+
+    /// A plan prices pixels at its view; without one, at the mode.
+    #[test]
+    fn a_plan_prices_the_picture_it_encodes() {
+        use punktfunk_core::video_fit::VideoFit;
+        let mode = punktfunk_core::Mode {
+            width: 2048,
+            height: 1152,
+            refresh_hz: 120,
+        };
+        let mut plan = SessionPlan::resolve(
+            &crate::encode::resolve(),
+            8,
+            false,
+            ChromaFormat::Yuv420,
+            Codec::H264,
+            false,
+            false,
+            1,
+        );
+        assert_eq!(plan.picture(mode), mode);
+        plan.reframe_to = Some((VideoFit::Fit, (1366, 768)));
+        let p = plan.picture(mode);
+        assert_eq!((p.width, p.height, p.refresh_hz), (1366, 768, 120));
+    }
+
     /// The plan keeps the client's count: a GameStream ask above the native default survives.
     #[test]
     fn resolve_keeps_the_client_slice_count() {
@@ -640,6 +804,40 @@ mod tests {
             );
             assert_eq!(plan.slices, slices);
         }
+    }
+
+    /// A session set to a monitor captures it with WGC in a worker on Windows, whatever the
+    /// host-wide screen is; its own screen is the driver's IDD push. Linux takes the portal.
+    #[test]
+    fn a_mirrored_session_plans_its_own_capture() {
+        let plan = |mirrored| {
+            SessionPlan::resolve(
+                &crate::encode::resolve(),
+                8,
+                false,
+                ChromaFormat::Yuv420,
+                Codec::H264,
+                false,
+                false,
+                1,
+            )
+            .mirroring(mirrored)
+        };
+        let (own, mirror) = (plan(false), plan(true));
+        assert!(mirror.mirrored && !own.mirrored);
+        if cfg!(target_os = "windows") {
+            assert_eq!(
+                (own.capture, mirror.capture),
+                (CaptureBackend::IddPush, CaptureBackend::Wgc)
+            );
+            assert_eq!(mirror.topology, SessionTopology::CaptureWorker);
+        } else {
+            assert_eq!(
+                (own.capture, mirror.capture),
+                (CaptureBackend::Portal, CaptureBackend::Portal)
+            );
+        }
+        assert_eq!(own.topology, SessionTopology::SingleProcess);
     }
 
     #[cfg(target_os = "linux")]
@@ -752,33 +950,53 @@ mod tests {
         assert!(!gamescope_cursor_for(false, None));
     }
 
-    /// Studio only where AMF converts 8-bit SDR itself on a GPU that writes nothing else.
+    /// Studio unasked only where the GPU's own conversion writes nothing else for that colour:
+    /// AMF from 8-bit SDR, a two-pair VCN (`PlatformAuto`) from SDR at either depth.
     #[test]
-    fn only_amf_8bit_sdr_on_a_studio_gpu_goes_studio() {
+    fn a_gpu_that_converts_sdr_narrow_only_goes_studio_for_sdr() {
         use crate::encode::Codec::{Av1, PyroWave, H264, H265};
+        use crate::encode::RgbFullRange;
         use EncoderBackend::{Amf, Nvenc, PlatformAuto, Qsv};
         let none = StudioAsk::default();
+        let (full, narrow_sdr) = (
+            RgbFullRange::BOTH,
+            RgbFullRange {
+                sdr: false,
+                hdr: true,
+            },
+        );
         for codec in [H264, H265, Av1] {
-            assert!(!full_range(Amf, false, none, codec, false, 8), "{codec:?}");
             assert!(
-                full_range(Amf, true, none, codec, false, 8),
+                !full_range(Amf, narrow_sdr, none, codec, false, 8),
+                "{codec:?}"
+            );
+            assert!(
+                full_range(Amf, full, none, codec, false, 8),
                 "a GPU that writes full"
             );
         }
         assert!(
-            full_range(Amf, false, none, PyroWave, false, 8),
+            full_range(Amf, narrow_sdr, none, PyroWave, false, 8),
             "PyroWave: our shaders"
         );
         assert!(
-            full_range(Amf, false, none, H265, false, 10),
-            "10-bit SDR: our converter"
+            full_range(Amf, narrow_sdr, none, H265, false, 10),
+            "AMF 10-bit SDR: our converter"
         );
-        assert!(
-            full_range(Amf, false, none, H265, true, 10),
-            "HDR: our converter"
-        );
+        for depth in [8, 10] {
+            assert!(
+                !full_range(PlatformAuto, narrow_sdr, none, H265, false, depth),
+                "a two-pair VCN converts SDR narrow at {depth} bits"
+            );
+        }
+        for backend in [Amf, PlatformAuto] {
+            assert!(
+                full_range(backend, narrow_sdr, none, H265, true, 10),
+                "HDR stays full: {backend:?}"
+            );
+        }
         for other in [Nvenc, Qsv, PlatformAuto] {
-            assert!(full_range(other, false, none, H264, false, 8), "{other:?}");
+            assert!(full_range(other, full, none, H264, false, 8), "{other:?}");
         }
     }
 
@@ -787,6 +1005,7 @@ mod tests {
     #[test]
     fn a_studio_ask_takes_only_its_own_colour() {
         use crate::encode::Codec::{Av1, PyroWave, H264, H265};
+        use crate::encode::RgbFullRange;
         use EncoderBackend::{Amf, MediaFoundation, Nvenc, PlatformAuto, Qsv, Software};
         let sdr = StudioAsk {
             sdr: true,
@@ -805,26 +1024,26 @@ mod tests {
                 for depth in [8, 10] {
                     let what = format!("{backend:?} {codec:?} {depth}");
                     assert!(
-                        !full_range(backend, true, sdr, codec, false, depth),
+                        !full_range(backend, RgbFullRange::BOTH, sdr, codec, false, depth),
                         "SDR: {what}"
                     );
                     assert!(
-                        full_range(backend, true, hdr, codec, false, depth),
+                        full_range(backend, RgbFullRange::BOTH, hdr, codec, false, depth),
                         "SDR unasked: {what}"
                     );
                 }
                 let what = format!("{backend:?} {codec:?}");
                 assert!(
-                    !full_range(backend, true, hdr, codec, true, 10),
+                    !full_range(backend, RgbFullRange::BOTH, hdr, codec, true, 10),
                     "HDR: {what}"
                 );
                 assert!(
-                    full_range(backend, true, sdr, codec, true, 10),
+                    full_range(backend, RgbFullRange::BOTH, sdr, codec, true, 10),
                     "HDR unasked: {what}"
                 );
             }
             assert!(
-                full_range(backend, true, both, PyroWave, false, 8),
+                full_range(backend, RgbFullRange::BOTH, both, PyroWave, false, 8),
                 "PyroWave: {backend:?}"
             );
         }

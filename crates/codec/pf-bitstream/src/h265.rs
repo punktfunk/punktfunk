@@ -57,6 +57,7 @@ use crate::sei;
 pub use crate::sei::RecoveryPointHevc;
 
 pub mod conceal;
+pub mod poc_widen;
 mod refs;
 
 pub use refs::CurrentRefs;
@@ -428,6 +429,23 @@ pub struct H265Planner {
     report: crate::report::AuReporter,
 }
 
+/// [`H265Planner::checkpoint`]: the planner's state, pictures by value.
+pub struct Checkpoint {
+    parser: Parser,
+    negotiation_info: NegotiationInfo,
+    pictures: Vec<(PictureData, PicId)>,
+    max_num_pics: usize,
+    prev_tid0_pic: Option<PictureData>,
+    max_pic_order_cnt_lsb: i32,
+    irap_no_rasl_output_flag: bool,
+    first_picture_in_bitstream: bool,
+    first_picture_after_eos: bool,
+    last_independent_header: Option<SliceHeader>,
+    next_pic_id: PicId,
+    awaiting_idr: bool,
+    report: crate::report::AuReporter,
+}
+
 impl Default for H265Planner {
     fn default() -> Self {
         Self {
@@ -708,6 +726,75 @@ impl H265Planner {
         self.first_picture_after_eos = true;
         self.awaiting_idr = true;
         self.report.flush(live)
+    }
+
+    /// The decoding state as it stands, for [`Self::restore`]. DPB pictures are
+    /// copied, not shared: planning marks them in place.
+    pub fn checkpoint(&self) -> Checkpoint {
+        // Destructured so a new field cannot slip past the checkpoint.
+        let Self {
+            parser,
+            negotiation_info,
+            dpb,
+            rps: _,
+            prev_tid0_pic,
+            max_pic_order_cnt_lsb,
+            irap_no_rasl_output_flag,
+            first_picture_in_bitstream,
+            first_picture_after_eos,
+            last_independent_header,
+            next_pic_id,
+            awaiting_idr,
+            report,
+        } = self;
+        Checkpoint {
+            parser: parser.clone(),
+            negotiation_info: negotiation_info.clone(),
+            pictures: dpb
+                .entries()
+                .iter()
+                .map(|e| (e.0.borrow().clone(), e.1))
+                .collect(),
+            max_num_pics: dpb.max_num_pics(),
+            prev_tid0_pic: prev_tid0_pic.clone(),
+            max_pic_order_cnt_lsb: *max_pic_order_cnt_lsb,
+            irap_no_rasl_output_flag: *irap_no_rasl_output_flag,
+            first_picture_in_bitstream: *first_picture_in_bitstream,
+            first_picture_after_eos: *first_picture_after_eos,
+            last_independent_header: last_independent_header.clone(),
+            next_pic_id: *next_pic_id,
+            awaiting_idr: *awaiting_idr,
+            report: report.clone(),
+        }
+    }
+
+    /// Return to `c` as if the AUs planned since never arrived. A concealer that
+    /// keeps an AU off its decoder restores, so its mirror stays that decoder's DPB.
+    pub fn restore(&mut self, c: Checkpoint) {
+        let mut dpb = Dpb::default();
+        // Uncapped while refilling, so no store fails; the limit returns below.
+        dpb.set_max_num_pics(usize::MAX);
+        for (pic, id) in &c.pictures {
+            let _ = dpb.store_picture(Rc::new(RefCell::new(pic.clone())), *id);
+        }
+        dpb.set_max_num_pics(c.max_num_pics);
+        // `store_picture` re-marks what it stores: put each picture back as copied.
+        for (mut live, (pic, _)) in dpb.pictures_mut().zip(c.pictures) {
+            *live = pic;
+        }
+        self.dpb = dpb;
+        self.rps = RefPicSet::default();
+        self.parser = c.parser;
+        self.negotiation_info = c.negotiation_info;
+        self.prev_tid0_pic = c.prev_tid0_pic;
+        self.max_pic_order_cnt_lsb = c.max_pic_order_cnt_lsb;
+        self.irap_no_rasl_output_flag = c.irap_no_rasl_output_flag;
+        self.first_picture_in_bitstream = c.first_picture_in_bitstream;
+        self.first_picture_after_eos = c.first_picture_after_eos;
+        self.last_independent_header = c.last_independent_header;
+        self.next_pic_id = c.next_pic_id;
+        self.awaiting_idr = c.awaiting_idr;
+        self.report = c.report;
     }
 
     /// Envelope: no interlaced video, separate-colour-plane, SCC self-reference,
@@ -1701,6 +1788,9 @@ mod tests {
             colour: Option<(u8, u8, u8)>,
         },
         FieldSeq,
+        /// Fixed-rate `hrd_parameters()` in the VUI timing info, then a bitstream
+        /// restriction whose fields are all distinct.
+        FixedRateHrd,
     }
 
     #[derive(Clone)]
@@ -1717,8 +1807,12 @@ mod tests {
         conf_win: Option<(u32, u32, u32, u32)>,
         max_dec_pic_buffering_minus1: u32,
         max_num_reorder_pics: u32,
-        long_term: bool,
+        pub(super) long_term: bool,
         vui: VuiOpt,
+        /// `(negatives, inter_sets)`: `st_ref_pic_set(0)` is explicit with that many
+        /// negative pictures, then each of `inter_sets` sets predicts from the one
+        /// before it and keeps every entry, so each holds one picture more.
+        chained_inter_rps: Option<(u32, u32)>,
     }
 
     impl Default for SpsOpts {
@@ -1735,6 +1829,7 @@ mod tests {
                 max_num_reorder_pics: 0,
                 long_term: false,
                 vui: VuiOpt::Absent,
+                chained_inter_rps: None,
             }
         }
     }
@@ -1797,7 +1892,26 @@ mod tests {
         s.bit(0); // amp_enabled_flag
         s.bit(0); // sample_adaptive_offset_enabled_flag
         s.bit(0); // pcm_enabled_flag
-        s.ue(0); // num_short_term_ref_pic_sets
+        match o.chained_inter_rps {
+            None => s.ue(0), // num_short_term_ref_pic_sets
+            Some((negatives, inter_sets)) => {
+                s.ue(1 + inter_sets);
+                s.ue(negatives); // num_negative_pics
+                s.ue(0); // num_positive_pics
+                for _ in 0..negatives {
+                    s.ue(0); // delta_poc_s0_minus1
+                    s.bit(1); // used_by_curr_pic_s0_flag
+                }
+                for num_delta_pocs in negatives..negatives + inter_sets {
+                    s.bit(1); // inter_ref_pic_set_prediction_flag
+                    s.bit(1); // delta_rps_sign
+                    s.ue(0); // abs_delta_rps_minus1
+                    for _ in 0..=num_delta_pocs {
+                        s.bit(1); // used_by_curr_pic_flag
+                    }
+                }
+            }
+        }
         if o.long_term {
             s.bit(1); // long_term_ref_pics_present_flag
             s.ue(0); // num_long_term_ref_pics_sps
@@ -1834,8 +1948,29 @@ mod tests {
                 s.bit(u32::from(matches!(vui, VuiOpt::FieldSeq))); // field_seq_flag
                 s.bit(0); // frame_field_info_present_flag
                 s.bit(0); // default_display_window_flag
-                s.bit(0); // vui_timing_info_present_flag
-                s.bit(0); // bitstream_restriction_flag
+                if matches!(vui, VuiOpt::FixedRateHrd) {
+                    s.bit(1); // vui_timing_info_present_flag
+                    s.bits(32, 1001); // vui_num_units_in_tick
+                    s.bits(32, 60000); // vui_time_scale
+                    s.bit(0); // vui_poc_proportional_to_timing_flag
+                    s.bit(1); // vui_hrd_parameters_present_flag
+                    s.bits(2, 0); // nal / vcl_hrd_parameters_present_flag
+                    s.bit(1); // fixed_pic_rate_general_flag: within_cvs is inferred
+                    s.ue(0); // elemental_duration_in_tc_minus1
+                    s.ue(0); // cpb_cnt_minus1
+                    s.bit(1); // bitstream_restriction_flag
+                    s.bit(1); // tiles_fixed_structure_flag
+                    s.bit(0); // motion_vectors_over_pic_boundaries_flag
+                    s.bit(1); // restricted_ref_pic_lists_flag
+                    s.ue(5); // min_spatial_segmentation_idc
+                    s.ue(2); // max_bytes_per_pic_denom
+                    s.ue(1); // max_bits_per_min_cu_denom
+                    s.ue(3); // log2_max_mv_length_horizontal
+                    s.ue(4); // log2_max_mv_length_vertical
+                } else {
+                    s.bit(0); // vui_timing_info_present_flag
+                    s.bit(0); // bitstream_restriction_flag
+                }
             }
         }
         s.bit(0); // sps_extension_present_flag
@@ -1881,25 +2016,25 @@ mod tests {
     const RASL_N: u8 = 8;
 
     #[derive(Clone)]
-    struct SliceOpts {
-        nalu_type: u8,
-        layer_id: u8,
+    pub(super) struct SliceOpts {
+        pub(super) nalu_type: u8,
+        pub(super) layer_id: u8,
         /// Continuation: `Some((address, address_bits, dependent))`.
-        segment: Option<(u32, usize, bool)>,
+        pub(super) segment: Option<(u32, usize, bool)>,
         /// Flag bit is written only when the PPS enables dependent segments.
-        pps_dependent_enabled: bool,
-        slice_type: u32, // 2 = I, 1 = P, 0 = B
-        poc_lsb: u32,
+        pub(super) pps_dependent_enabled: bool,
+        pub(super) slice_type: u32, // 2 = I, 1 = P, 0 = B
+        pub(super) poc_lsb: u32,
         /// Short-term RPS: (delta_poc_sX_minus1, used_by_curr_pic) pairs.
-        neg: Vec<(u32, bool)>,
-        pos: Vec<(u32, bool)>,
+        pub(super) neg: Vec<(u32, bool)>,
+        pub(super) pos: Vec<(u32, bool)>,
         /// When the SPS set long_term_ref_pics_present_flag:
         /// (poc_lsb_lt, used_by_curr_pic_lt, delta_poc_msb_cycle_lt).
-        lt: Vec<(u32, bool, Option<u32>)>,
-        sps_long_term: bool,
-        num_ref_idx_l0: u32,
-        num_ref_idx_l1: u32,
-        no_output_of_prior_pics: bool,
+        pub(super) lt: Vec<(u32, bool, Option<u32>)>,
+        pub(super) sps_long_term: bool,
+        pub(super) num_ref_idx_l0: u32,
+        pub(super) num_ref_idx_l1: u32,
+        pub(super) no_output_of_prior_pics: bool,
     }
 
     impl Default for SliceOpts {
@@ -1922,7 +2057,7 @@ mod tests {
         }
     }
 
-    fn synth_slice(o: &SliceOpts) -> Vec<u8> {
+    pub(super) fn synth_slice(o: &SliceOpts) -> Vec<u8> {
         let is_irap = (16..=23).contains(&o.nalu_type);
         let is_idr = o.nalu_type == IDR_W_RADL || o.nalu_type == 20;
         let mut s = BitSink::new();
@@ -1984,7 +2119,7 @@ mod tests {
         h265_nalu_with_layer(o.nalu_type, o.layer_id, &s.finish())
     }
 
-    fn idr_slice() -> Vec<u8> {
+    pub(super) fn idr_slice() -> Vec<u8> {
         synth_slice(&SliceOpts {
             nalu_type: IDR_W_RADL,
             slice_type: 2,
@@ -2001,7 +2136,7 @@ mod tests {
         })
     }
 
-    fn param_sets(sps: &SpsOpts) -> Vec<u8> {
+    pub(super) fn param_sets(sps: &SpsOpts) -> Vec<u8> {
         let mut au = synth_sps(sps);
         au.extend(synth_pps(false));
         au
@@ -2660,6 +2795,28 @@ mod tests {
         let plan = planner.plan_au(&trail_p(1, &[(0, true)], 1)).unwrap();
         assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
         assert_eq!(plan.slices[0].ref_list0.len(), 1);
+    }
+
+    #[test]
+    fn a_restore_plans_as_if_the_au_never_arrived() {
+        let mut planner = H265Planner::new();
+        let mut fresh = H265Planner::new();
+        for au in [
+            opening_idr_au(&SpsOpts::default()),
+            trail_p(1, &[(0, true)], 1),
+        ] {
+            planner.plan_au(&au).unwrap();
+            fresh.plan_au(&au).unwrap();
+        }
+        let before = planner.checkpoint();
+        // POC 3 names the lost POC 2 and marks POC 0 and 1 unused.
+        planner.plan_au(&trail_p(3, &[(0, true)], 1)).unwrap();
+        planner.restore(before);
+        let anchor = trail_p(5, &[(3, true)], 1);
+        let restored = planner.plan_au(&anchor).unwrap();
+        let reference = fresh.plan_au(&anchor).unwrap();
+        assert!(restored.warnings.is_empty(), "{:?}", restored.warnings);
+        assert_eq!(format!("{restored:?}"), format!("{reference:?}"));
     }
 
     #[test]
@@ -3523,5 +3680,112 @@ mod tests {
             0xea, 0xf3, 0xc7, 0xfe, 0x00, 0x00, 0x01, 0x40, 0x01,
         ];
         assert!(H265Planner::new().plan_au(&unit).is_err());
+    }
+
+    /// A VPS with timing info that claims `claimed` hrd_parameters() structures and
+    /// writes `written` of them, each a fixed-rate one in the fewest bits.
+    fn vps_with_hrd(claimed: u32, written: u32) -> Vec<u8> {
+        let mut s = BitSink::new();
+        s.bits(4, 0); // vps_video_parameter_set_id
+        s.bits(2, 3); // vps_base_layer_internal_flag / vps_base_layer_available_flag
+        s.bits(6, 0); // vps_max_layers_minus1
+        s.bits(3, 0); // vps_max_sub_layers_minus1
+        s.bit(1); // vps_temporal_id_nesting_flag
+        s.bits(16, 0xffff); // vps_reserved_0xffff_16bits
+        ptl_general(&mut s, 1, 120);
+        s.bit(1); // vps_sub_layer_ordering_info_present_flag
+        s.ue(4); // vps_max_dec_pic_buffering_minus1
+        s.ue(0); // vps_max_num_reorder_pics
+        s.ue(0); // vps_max_latency_increase_plus1
+        s.bits(6, 0); // vps_max_layer_id
+        s.ue(0); // vps_num_layer_sets_minus1
+        s.bit(1); // vps_timing_info_present_flag
+        s.bits(32, 1001); // vps_num_units_in_tick
+        s.bits(32, 60000); // vps_time_scale
+        s.bit(0); // vps_poc_proportional_to_timing_flag
+        s.ue(claimed); // vps_num_hrd_parameters
+        for i in 0..written {
+            s.ue(0); // hrd_layer_set_idx
+            if i > 0 {
+                s.bit(0); // cprms_present_flag
+            } else {
+                s.bits(2, 0); // nal / vcl_hrd_parameters_present_flag
+            }
+            s.bit(1); // fixed_pic_rate_general_flag: within_cvs is inferred
+            s.ue(0); // elemental_duration_in_tc_minus1
+            s.ue(0); // cpb_cnt_minus1
+        }
+        s.bit(0); // vps_extension_flag
+        h265_nalu(VPS_NUT, &s.finish())
+    }
+
+    /// 7.4.3.1 stops `vps_num_hrd_parameters` at `vps_num_layer_sets_minus1 + 1`. Each
+    /// structure is ~7.7 KB of heap built from five input bits.
+    #[test]
+    fn a_vps_claiming_more_hrd_parameters_than_layer_sets_is_a_parse_error() {
+        let parse = |claimed, written| {
+            let vps = vps_with_hrd(claimed, written);
+            let nalu = Nalu::next(&mut Cursor::new(vps.as_slice())).unwrap();
+            let mut parser = Parser::default();
+            parser.parse_vps(&nalu).map(|vps| vps.num_hrd_parameters)
+        };
+
+        assert_eq!(parse(0, 0), Ok(0));
+        assert_eq!(parse(1, 1), Ok(1));
+        // One layer set takes one structure.
+        assert!(parse(2, 2).is_err());
+        assert!(parse(5000, 5000).is_err());
+    }
+
+    /// E.3.2 infers `fixed_pic_rate_within_cvs_flag` = 1 from `fixed_pic_rate_general_flag`,
+    /// so `elemental_duration_in_tc_minus1` follows and not `low_delay_hrd_flag`. Read the
+    /// other way the VUI after the HRD is a bit out of step.
+    #[test]
+    fn an_hrd_with_a_fixed_picture_rate_leaves_the_rest_of_the_vui_aligned() {
+        let sps = synth_sps(&SpsOpts {
+            vui: VuiOpt::FixedRateHrd,
+            ..Default::default()
+        });
+        let nalu = Nalu::next(&mut Cursor::new(sps.as_slice())).unwrap();
+        let mut parser = Parser::default();
+        let vui = &parser.parse_sps(&nalu).unwrap().vui_parameters;
+
+        assert!(vui.hrd.fixed_pic_rate_within_cvs_flag[0]);
+        assert_eq!(
+            (
+                vui.min_spatial_segmentation_idc,
+                vui.max_bytes_per_pic_denom,
+                vui.max_bits_per_min_cu_denom,
+                vui.log2_max_mv_length_horizontal,
+                vui.log2_max_mv_length_vertical,
+            ),
+            (5, 2, 1, 3, 4)
+        );
+    }
+
+    /// 7.4.8: a short-term RPS holds at most `sps_max_dec_pic_buffering_minus1` pictures.
+    /// Each chained inter-predicted set adds one, so unbounded the 50th ran off the 64
+    /// `used_by_curr_pic_flag` entries.
+    #[test]
+    fn chained_inter_rps_sets_stop_at_the_dpb_size_not_at_the_arrays() {
+        let parse = |max_dec_minus1, negatives, inter_sets| {
+            let sps = synth_sps(&SpsOpts {
+                max_dec_pic_buffering_minus1: max_dec_minus1,
+                chained_inter_rps: Some((negatives, inter_sets)),
+                ..Default::default()
+            });
+            let nalu = Nalu::next(&mut Cursor::new(sps.as_slice())).unwrap();
+            let mut parser = Parser::default();
+            parser
+                .parse_sps(&nalu)
+                .map(|sps| sps.short_term_ref_pic_set.len())
+        };
+
+        // The sets hold 2, 3 and 4 pictures; 4 is the DPB size.
+        assert_eq!(parse(4, 2, 2), Ok(3));
+        // A fifth picture does not fit.
+        assert!(parse(4, 2, 3).is_err());
+        // 15 pictures, then 50 chained sets in about 270 bytes.
+        assert!(parse(15, 15, 50).is_err());
     }
 }

@@ -34,14 +34,11 @@ extension SettingsView {
     /// which never sees the pad on iOS.
     static var sc2CaptureCaption: String {
         #if os(macOS)
-        return "Stream a Steam Controller 2, its Puck or a 2015 Steam Controller as-is; "
-            + "needs Input Monitoring (or Bluetooth) access."
+        return String(localized: L10n.applePlayerSc2CaptureMacHint)
         #elseif os(tvOS)
-        return "Stream a Steam Controller 2 or a 2015 Steam Controller as-is; "
-            + "needs Bluetooth access."
+        return String(localized: L10n.playerSc2CaptureHint)
         #else
-        return "Browse and stream with a Steam Controller 2 or a 2015 Steam Controller as-is; "
-            + "needs Bluetooth access."
+        return String(localized: L10n.applePlayerSc2CaptureIosHint)
         #endif
     }
 
@@ -52,22 +49,22 @@ extension SettingsView {
     // type-checker budget ("unable to type-check this expression in reasonable time"), which
     // failed exactly one slice: the iOS archive (macOS/tvOS never compile that branch).
     @ViewBuilder var resolutionSection: some View {
-        Section("Resolution") {
+        Section(L10n.prefsGroupResolution) {
             #if os(iOS) || os(visionOS) || os(macOS)
             // Match window follows the window, renegotiating the host mode on a resize; off, the
             // mode below. Its marker sits under the size control: the toggle, width and height
             // are one override.
             described(effective.matchWindow
-                ? "The host follows this window's size — pixel-exact through every resize."
-                : "Streams the fixed mode below, scaled to the window.") {
-                Toggle("Match window", isOn: scoped(SettingsFields.matchWindow))
+                ? L10n.appleMatchWindowOnHint
+                : L10n.appleMatchWindowOffHint) {
+                Toggle(L10n.appleMatchWindow, isOn: scoped(SettingsFields.matchWindow))
             }
             #endif
             #if os(iOS) || os(visionOS)
             iosResolutionWheel
-            overrideMarker(OverlayField.resolution)
+            overrideMarker([OverlayField.resolution])
             iosRefreshRows
-            Button("Use this display's mode") { fillFromMainScreen() }
+            Button(L10n.appleUseDisplayMode) { fillFromMainScreen() }
             #elseif os(macOS)
             macResolutionRows
             #elseif os(tvOS)
@@ -87,7 +84,7 @@ extension SettingsView {
     /// `iosRefreshRows`).
     @ViewBuilder private var iosResolutionWheel: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Aspect ratio")
+            Text(L10n.playerResolutionAspect)
                 .font(.geist(15, relativeTo: .subheadline))
                 .foregroundStyle(.secondary)
             WrapLayout(spacing: 8) {
@@ -96,11 +93,11 @@ extension SettingsView {
                 }
             }
             .padding(.vertical, 2)
-            Text("Resolution")
+            Text(L10n.playerResolution)
                 .font(.geist(15, relativeTo: .subheadline))
                 .foregroundStyle(.secondary)
                 .padding(.top, 8)
-            Picker("Resolution", selection: resolutionSelection) {
+            Picker(L10n.playerResolution, selection: resolutionSelection) {
                 ForEach(resolutionChoices, id: \.tag) { choice in
                     Text(choice.label).tag(choice.tag)
                 }
@@ -142,11 +139,11 @@ extension SettingsView {
         if isCustomResolution {
             // Arbitrary entry: type the exact width × height (and refresh) the host should drive.
             HStack {
-                TextField("Width", value: customSide(width: true),
+                TextField(L10n.playerResolutionWidth, value: customSide(width: true),
                           format: .number.grouping(.never))
                     .keyboardType(.numberPad)
                 Text("×")
-                TextField("Height", value: customSide(width: false),
+                TextField(L10n.playerResolutionHeight, value: customSide(width: false),
                           format: .number.grouping(.never))
                     .labelsHidden()
                     .keyboardType(.numberPad)
@@ -154,7 +151,7 @@ extension SettingsView {
             // A row built from an HStack of TextFields otherwise insets its bottom separator to
             // the inner content, clipping the hairline under "Width"; pin it to the cell edge.
             .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
-            LabeledContent("Refresh rate") {
+            LabeledContent(String(localized: L10n.playerRefreshHz)) {
                 TextField("Hz", value: scoped(SettingsFields.refreshHz),
                           format: .number.grouping(.never))
                     .keyboardType(.numberPad)
@@ -162,21 +159,21 @@ extension SettingsView {
             }
         } else if refreshChoices.count > 1 {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Refresh rate")
+                Text(L10n.playerRefreshHz)
                     .font(.geist(15, relativeTo: .subheadline))
                     .foregroundStyle(.secondary)
-                Picker("Refresh rate", selection: scoped(SettingsFields.refreshHz)) {
+                Picker(L10n.playerRefreshHz, selection: scoped(SettingsFields.refreshHz)) {
                     ForEach(refreshChoices, id: \.self) { rate in
                         Text(SettingsOptions.refreshLabel(rate)).tag(rate)
                     }
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
-                overrideMarker("refresh_hz")
+                overrideMarker(["refresh_hz"])
             }
         } else {
             // A device with a single supported rate (e.g. 60 Hz) has nothing to pick.
-            LabeledContent("Refresh rate") {
+            LabeledContent(String(localized: L10n.playerRefreshHz)) {
                 Text(SettingsOptions.refreshLabel(effective.refreshHz))
                     .foregroundStyle(.secondary)
             }
@@ -188,14 +185,13 @@ extension SettingsView {
     /// The desktop layout, as on Linux and Windows: the aspect switch over Native, this display's
     /// notch-safe mode, the family's sizes and Custom…, which shows the typed width and height.
     @ViewBuilder private var macResolutionRows: some View {
-        Picker("Aspect ratio", selection: aspectSelection) {
+        Picker(L10n.playerResolutionAspect, selection: aspectSelection) {
             ForEach(Array(SettingsOptions.families().enumerated()), id: \.offset) { i, family in
                 Text(family.label).tag(i)
             }
         }
-        described("The host drives a real output at exactly this size — no scaling.",
-            field: OverlayField.resolution) {
-            Picker("Resolution", selection: resolutionSelection) {
+        described(L10n.playerResolutionHint, field: OverlayField.resolution) {
+            Picker(L10n.playerResolution, selection: resolutionSelection) {
                 ForEach(resolutionChoices, id: \.tag) { choice in
                     Text(choice.label).tag(choice.tag)
                 }
@@ -203,16 +199,16 @@ extension SettingsView {
         }
         if isCustomResolution {
             HStack {
-                TextField("Width", value: customSide(width: true),
+                TextField(L10n.playerResolutionWidth, value: customSide(width: true),
                           format: .number.grouping(.never))
                 Text("×")
-                TextField("Height", value: customSide(width: false),
+                TextField(L10n.playerResolutionHeight, value: customSide(width: false),
                           format: .number.grouping(.never))
                     .labelsHidden()
             }
         }
-        described("Native follows the display this window is on.", field: "refresh_hz") {
-            Picker("Refresh rate", selection: scoped(SettingsFields.refreshHz)) {
+        described(L10n.playerRefreshHzHint, field: "refresh_hz") {
+            Picker(L10n.playerRefreshHz, selection: scoped(SettingsFields.refreshHz)) {
                 ForEach(refreshChoices, id: \.self) { rate in
                     Text(SettingsOptions.refreshLabel(rate)).tag(rate)
                 }
@@ -237,10 +233,6 @@ extension SettingsView {
                 setResolution(width: size.w, height: size.h)
             })
     }
-
-    /// Sentinel wheel tag for the "Custom…" row. Real tags are "WxH" (digits + "x"), so this can't
-    /// collide with a resolution.
-    private static let customResolutionTag = "custom"
 
     /// The family the wheel lists — see `SettingsOptions.family`.
     private var family: Int {
@@ -268,11 +260,10 @@ extension SettingsView {
            SafeDisplay.coversHousing(
                content: (effective.width, effective.height),
                panel: screen.panelPixelSize, safe: screen.notchSafePixelSize) {
-            return "Over the notch, macOS blends every frame instead of scanning it out: "
-                + "about 10 ms more display latency."
+            return String(localized: L10n.appleResolutionNotchHint)
         }
         #endif
-        return "The host drives a real output at exactly this mode — no scaling."
+        return String(localized: L10n.playerResolutionHint)
     }
 
     /// The list: Native (`0x0`, which follows the display), this device's other native mode, the
@@ -281,45 +272,37 @@ extension SettingsView {
     private var resolutionChoices: [(label: String, tag: String)] {
         SettingsOptions.resolutionModes(family: family)
             .map {
-                let size = "\($0.w) × \($0.h)"
-                let label = $0.w == 0 ? $0.name : $0.name.isEmpty ? size : "\($0.name)  ·  \(size)"
-                return (label: label, tag: "\($0.w)x\($0.h)")
+                (label: SettingsOptions.modeLabel($0.kind, w: $0.w, h: $0.h),
+                 tag: ResolutionPick.tag(width: $0.w, height: $0.h))
             }
-            + [(label: "Custom…", tag: Self.customResolutionTag)]
+            + [(label: String(localized: L10n.playerResolutionCustom), tag: ResolutionPick.customTag)]
     }
 
     private var presetResolutionTags: Set<String> {
-        Set(SettingsOptions.resolutionModes(family: family).map { "\($0.w)x\($0.h)" })
+        Set(SettingsOptions.resolutionModes(family: family).map {
+            ResolutionPick.tag(width: $0.w, height: $0.h)
+        })
     }
 
-    /// True when the editable custom fields should show: the wheel is parked on "Custom…" (sticky),
-    /// or the effective size simply isn't one of the presets (e.g. a value synced from a Mac, or a
-    /// preset's own override) — so a non-preset mode stays editable without a persisted flag.
+    /// The typed fields show (`ResolutionPick.isCustom`).
     private var isCustomResolution: Bool {
-        customMode || !presetResolutionTags.contains("\(effective.width)x\(effective.height)")
+        ResolutionPick.isCustom(
+            customMode: customMode, width: effective.width, height: effective.height,
+            tags: presetResolutionTags)
     }
 
-    /// The list works in "WxH" tags so one selection drives both width and height; the custom
-    /// sentinel toggles `customMode`, starting the fields from 1080p when the size was Native.
+    /// One selection drives width and height (`ResolutionPick.apply`).
     private var resolutionSelection: Binding<String> {
         Binding(
             get: {
                 isCustomResolution
-                    ? Self.customResolutionTag
-                    : "\(effective.width)x\(effective.height)"
+                    ? ResolutionPick.customTag
+                    : ResolutionPick.tag(width: effective.width, height: effective.height)
             },
             set: { tag in
-                if tag == Self.customResolutionTag {
-                    customMode = true
-                    if effective.width == 0 {
-                        setResolution(width: 1920, height: 1080)
-                    }
-                    return
-                }
-                customMode = false
-                let parts = tag.split(separator: "x").compactMap { Int($0) }
-                guard parts.count == 2 else { return }
-                setResolution(width: parts[0], height: parts[1])
+                let pick = ResolutionPick.apply(tag: tag, currentWidth: effective.width)
+                customMode = pick.customMode
+                if let size = pick.size { setResolution(width: size.w, height: size.h) }
             })
     }
 
@@ -335,24 +318,25 @@ extension SettingsView {
     /// A TV picks size and rate together, as its own settings do: Native, the common modes, and
     /// whatever is stored today.
     private var tvStreamModeRow: some View {
-        described("The host drives a real output at exactly this mode — no scaling.",
-                  field: OverlayField.resolution) {
-            TVSelectionRow(title: "Stream mode", options: tvModeOptions, selection: tvModeTag)
+        described(String(localized: L10n.playerResolutionHint), fields: ResolutionPick.modeFields) {
+            TVSelectionRow(
+                title: String(localized: L10n.appleStreamMode), options: tvModeOptions,
+                selection: tvModeTag)
         }
     }
 
     /// Any size, typed on the system keyboard as "width × height", at the stored rate.
     private var tvCustomSizeRow: some View {
-        described("Any size, typed as width × height.", field: OverlayField.resolution) {
+        described(L10n.appleCustomSizeHint, field: OverlayField.resolution) {
             TVFieldRow(
-                label: "Custom size",
+                label: String(localized: L10n.playerResolutionCustomRow),
                 value: Self.tvModes.contains { $0.tag == tvModeTag.wrappedValue }
                     ? "" : "\(effective.width) × \(effective.height)",
-                placeholder: "Type a size"
+                placeholder: String(localized: L10n.appleCustomSizePlaceholder)
             ) { typingSize = true }
             .fullScreenCover(isPresented: $typingSize) {
                 TVTextEntry(
-                    title: "Size, as width × height", text: "",
+                    title: String(localized: L10n.appleCustomSizeEntry), text: "",
                     keyboardType: .numbersAndPunctuation
                 ) {
                     if let size = SettingsOptions.typedSize($0, codec: effective.codec) {
@@ -366,7 +350,7 @@ extension SettingsView {
 
     /// `0x0x0` is Native: this TV's own mode, resolved at connect.
     private static let tvModes: [(label: String, tag: String)] = [
-        ("Native", "0x0x0"),
+        (String(localized: L10n.appleStreamModeNative), "0x0x0"),
         ("720p @ 60", "1280x720x60"),
         ("1080p @ 60", "1920x1080x60"),
         ("4K @ 60", "3840x2160x60"),
@@ -374,25 +358,42 @@ extension SettingsView {
 
     private var tvModeOptions: [(label: String, tag: String)] {
         let s = effective
-        let current = "\(s.width)x\(s.height)x\(s.refreshHz)"
+        let current = ResolutionPick.modeTag(width: s.width, height: s.height, hz: s.refreshHz)
         var options = Self.tvModes
         if !options.contains(where: { $0.tag == current }) {
-            let size = s.width == 0 ? "Native" : "\(s.width)×\(s.height)"
-            let rate = SettingsOptions.refreshLabel(s.refreshHz)
-            options.insert(("Custom (\(size) @ \(rate))", current), at: 0)
+            options.insert((Self.customModeLabel(s), current), at: 0)
         }
         return options
+    }
+
+    /// A stored mode none of `tvModes` holds. Native size and Native rate each have their own
+    /// sentence, so no word is spliced into another message.
+    private static func customModeLabel(_ s: EffectiveSettings) -> String {
+        switch (s.width == 0, s.refreshHz == 0) {
+        case (true, true):
+            return String(localized: L10n.appleStreamModeNative)
+        case (true, false):
+            return L10n.appleStreamModeCustomNativeSize(hz: String(s.refreshHz))
+        case (false, true):
+            return L10n.appleStreamModeCustomNativeRate(
+                width: String(s.width), height: String(s.height))
+        case (false, false):
+            return L10n.appleStreamModeCustom(
+                width: String(s.width), height: String(s.height), hz: String(s.refreshHz))
+        }
     }
 
     /// Size and rate in one write, through the scoped setters, so a preset records both.
     private var tvModeTag: Binding<String> {
         Binding(
-            get: { "\(effective.width)x\(effective.height)x\(effective.refreshHz)" },
+            get: {
+                ResolutionPick.modeTag(
+                    width: effective.width, height: effective.height, hz: effective.refreshHz)
+            },
             set: { tag in
-                let parts = tag.split(separator: "x").compactMap { Int($0) }
-                guard parts.count == 3 else { return }
-                setResolution(width: parts[0], height: parts[1])
-                scoped(SettingsFields.refreshHz).wrappedValue = parts[2]
+                guard let mode = ResolutionPick.mode(tag: tag) else { return }
+                setResolution(width: mode.w, height: mode.h)
+                scoped(SettingsFields.refreshHz).wrappedValue = mode.hz
             })
     }
     #endif
@@ -401,30 +402,32 @@ extension SettingsView {
 
     @ViewBuilder var pictureSection: some View {
         Section {
-            described("When the stream's shape differs from this screen. Fit shows the whole "
-                + "picture with black bars, Crop to fill cuts the edges off, Stretch to fill "
-                + "distorts it.", field: "video_fit") {
+            described(L10n.playerVideoFitHint, field: "video_fit") {
                 settingPicker(
-                    "Picture fit",
+                    L10n.playerVideoFit,
                     options: VideoFit.allCases.map { (label: $0.label, tag: $0.rawValue) },
                     selection: scoped(SettingsFields.videoFit))
             }
             #if os(macOS)
-            described("All monitors opens a window on each of this Mac's monitors, one host "
-                + "screen each, laid out as your monitors sit.", field: "screens") {
+            described(L10n.playerScreensHint, field: "screens") {
                 settingPicker(
-                    "Screens",
-                    options: [(label: "This monitor", tag: "this"), (label: "All monitors", tag: "all")],
+                    L10n.playerScreens,
+                    options: [
+                        (label: String(localized: L10n.playerScreensThis), tag: "this"),
+                        (label: String(localized: L10n.playerScreensAll), tag: "all"),
+                    ],
                     selection: scoped(SettingsFields.screens))
             }
             #endif
+            if let preset = activePreset {
+                hostScreenRow(preset)
+            }
             #if os(visionOS)
             // How this headset bends the picture (tier G). An older stored name shows as its stop.
             if !inPresetScope {
-                described("Flat, or bent like a curved monitor: the radius in millimetres, 800R "
-                    + "the tightest.") {
+                described(L10n.playerScreenHint) {
                     settingPicker(
-                        "Screen",
+                        L10n.playerScreen,
                         options: ScreenCurve.allCases.map { (label: $0.label, tag: $0.rawValue) },
                         selection: Binding(
                             get: { ScreenCurve(name: screen).rawValue }, set: { screen = $0 }))
@@ -436,24 +439,22 @@ extension SettingsView {
             #else
             bitrateRows
             #endif
-            described("HDR10 when the host sends it and this display supports it. Not with H.264.",
-                field: "hdr_enabled") {
-                Toggle("10-bit HDR", isOn: scoped(SettingsFields.hdrEnabled))
+            described(L10n.playerHdrEnabledHint, field: "hdr_enabled") {
+                Toggle(L10n.playerHdrEnabled, isOn: scoped(SettingsFields.hdrEnabled))
             }
             prioritizeRow
-            described("A preference — the host falls back if it can't encode it.",
-                      field: "codec") {
+            described(L10n.playerCodecHint, field: "codec") {
                 settingPicker(
-                    "Video codec",
+                    L10n.playerCodec,
                     options: SettingsOptions.codecs(current: scoped(SettingsFields.codec).wrappedValue),
                     selection: scoped(SettingsFields.codec))
             }
             pyrowaveQualityRows
         } header: {
-            Text("Picture")
+            Text(L10n.prefsGroupPicture)
         } footer: {
             // The one form-level note (deliberately not repeated on every row above).
-            Text("Display changes apply from the next session.")
+            Text(L10n.prefsAppliesNextSession)
                 .settingsFooter()
         }
     }
@@ -463,30 +464,26 @@ extension SettingsView {
     @ViewBuilder var displayAdvancedSection: some View {
         advancedSection(changed: displayChanged, fields: Self.displayAdvancedFields) {
             if effective.presentPriority == "smooth" {
-                described("Each frame costs one refresh of latency and absorbs one of jitter.",
-                    field: "smooth_buffer") {
+                described(L10n.playerSmoothBufferHint, field: "smooth_buffer") {
                     settingPicker(
-                        "Smoothness buffer",
+                        L10n.playerSmoothBuffer,
                         options: SettingsOptions.smoothBuffers(
-                            refreshHz: Int(effective.streamMode(native: NativeDisplay.mode).hz)),
+                            refreshHz: Int(effective.streamMode(native: connectNative).hz)),
                         selection: scoped(SettingsFields.smoothBuffer))
                 }
             }
             renderScaleRow
             pictureDepthRows
             presentationRows
-            described("The backend the host drives its virtual output with — honored only if "
-                + "available.",
-                field: "compositor") {
+            described(L10n.playerCompositorHint, field: "compositor") {
                 settingPicker(
-                    "Host compositor", options: SettingsOptions.compositors,
+                    L10n.playerCompositor, options: SettingsOptions.compositors,
                     selection: scoped(SettingsFields.compositor))
             }
             // This device's screen, so never a preset's.
             if !inPresetScope {
-                described("Off, a stream keeps the screen awake only while you play. Left alone "
-                    + "for five minutes, it lets this device's own sleep timer take over.") {
-                    Toggle("Keep screen awake", isOn: $keepAwake)
+                described(L10n.playerKeepAwakeHint) {
+                    Toggle(L10n.playerKeepAwake, isOn: $keepAwake)
                 }
             }
         }
@@ -515,38 +512,39 @@ extension SettingsView {
     }
 
     @ViewBuilder private var pictureDepthRows: some View {
-        described("Sharper text and UI, at more bandwidth. For desktop work; HEVC only.",
-            field: "enable_444") {
-            Toggle("Full chroma (4:4:4)", isOn: scoped(SettingsFields.enable444))
+        described(L10n.playerEnable444Hint, field: "enable_444") {
+            Toggle(L10n.playerEnable444, isOn: scoped(SettingsFields.enable444))
         }
-        described("Main10 for an SDR desktop, which costs a little bandwidth and takes the "
-            + "banding out of gradients. 10-bit HDR already asks for the depth.",
-            field: "ten_bit_sdr") {
-            Toggle("10-bit SDR", isOn: scoped(SettingsFields.tenBitSdr))
+        described(L10n.playerTenBitSdrHint, field: "ten_bit_sdr") {
+            Toggle(L10n.playerTenBitSdr, isOn: scoped(SettingsFields.tenBitSdr))
         }
     }
 
-    /// Render-scale picker + the resulting host resolution. > 1 supersamples (sharper, at more
-    /// bandwidth AND client decode); < 1 renders under native (lighter). The presenter resamples the
-    /// decoded frame to this display, so the multiplier is where the sharpness/cost trade-off lives.
+    /// Render-scale picker + the resulting host resolution. > 1 supersamples (sharper, at more host
+    /// work; a host that cannot scale the picture down also costs bandwidth and client decode);
+    /// < 1 renders under native (lighter), and the presenter upscales.
     /// Any percent from 50 to 400 can be typed: "Custom…" shows the field, a TV has its own row.
     @ViewBuilder var renderScaleRow: some View {
         #if os(tvOS)
         described(renderScaleDescription, field: "render_scale") {
             TVSelectionRow(
-                title: "Render scale", options: tvScaleOptions,
+                title: String(localized: L10n.playerRenderScale), options: tvScaleOptions,
                 selection: scoped(SettingsFields.renderScale))
         }
-        described("Any scale, typed as a percent from 50 to 400.", field: "render_scale") {
+        described(L10n.appleCustomScaleHint, field: "render_scale") {
             TVFieldRow(
-                label: "Custom scale",
+                label: String(localized: L10n.appleCustomScale),
                 value: RenderScale.presetIndex(effective.renderScale) == nil
-                    ? "\(RenderScale.percent(effective.renderScale)) %" : "",
-                placeholder: "Type a percent"
+                    ? L10n.commonPercent(value: String(RenderScale.percent(effective.renderScale)))
+                    : "",
+                placeholder: String(localized: L10n.appleCustomScalePlaceholder)
             ) { typingScale = true }
             .fullScreenCover(isPresented: $typingScale) {
-                TVTextEntry(title: "Render scale (percent)", text: "", keyboardType: .numberPad) {
-                    if let percent = Int($0), percent > 0 {
+                TVTextEntry(
+                    title: String(localized: L10n.playerRenderScaleEntry), text: "",
+                    keyboardType: .numberPad
+                ) {
+                    if let percent = Int($0.withASCIIDigits), percent > 0 {
                         scoped(SettingsFields.renderScale).wrappedValue =
                             RenderScale.fromPercent(percent)
                     }
@@ -557,13 +555,16 @@ extension SettingsView {
         #else
         described(renderScaleDescription, field: "render_scale") {
             settingPicker(
-                "Render scale",
+                L10n.playerRenderScale,
                 options: RenderScale.presets.map { (label: RenderScale.label($0), tag: $0) }
-                    + [(label: "Custom…", tag: Self.customScaleTag)],
+                    + [(label: String(localized: L10n.playerRenderScaleCustom),
+                        tag: Self.customScaleTag)],
                 selection: renderScaleSelection)
         }
         if isCustomScale {
-            TextField("Percent", value: customScalePercent, format: .number.grouping(.never))
+            TextField(
+                L10n.playerRenderScalePercent, value: customScalePercent,
+                format: .number.grouping(.never))
         }
         #endif
     }
@@ -574,7 +575,9 @@ extension SettingsView {
         var options = RenderScale.presets.map { (label: RenderScale.label($0), tag: $0) }
         let stored = effective.renderScale
         if RenderScale.presetIndex(stored) == nil {
-            options.append((label: RenderScale.label(stored) + " (custom)", tag: stored))
+            options.append((
+                label: L10n.playerRenderScaleCustomValue(value: RenderScale.label(stored)),
+                tag: stored))
         }
         return options
     }
@@ -618,12 +621,12 @@ extension SettingsView {
     /// legible. Only the explicit mode can show it (match-window derives the base from the live
     /// window, not these fields).
     private var renderScaleDescription: String {
-        var text = "Above native is sharper, below is lighter on the host and link."
+        var text = String(localized: L10n.playerRenderScaleHint)
         let settings = effective
         if settings.renderScale != 1.0, !settings.matchWindow {
-            // Native resolves against this display, as the connect does.
-            let mode = settings.streamMode(native: NativeDisplay.mode)
-            text += " Host renders \(Int(mode.width))×\(Int(mode.height))."
+            let mode = settings.streamMode(native: connectNative)
+            text += " " + L10n.appleRenderScaleHostSize(
+                width: String(Int(mode.width)), height: String(Int(mode.height)))
         }
         return text
     }
@@ -636,15 +639,14 @@ extension SettingsView {
         if pyroWaveRate {
             pyrowaveAutomaticRow
         } else {
-            described("Uses the host's default, 20 Mbps. Off to set it yourself.",
-                field: "bitrate_kbps") {
-                Toggle("Automatic bitrate", isOn: automaticBitrate)
+            described(L10n.playerBitrateKbpsAutoSwitchHint, field: "bitrate_kbps") {
+                Toggle(L10n.playerBitrateKbpsAutoSwitch, isOn: automaticBitrate)
             }
         }
         if !pyroWaveRate, effective.bitrateKbps != 0 {
             HStack(spacing: 12) {
                 Slider(value: bitrateSlider, in: 0...1) {
-                    Text("Bitrate")
+                    Text(L10n.playerBitrateKbps)
                 }
                 Text(SpeedTestView.mbpsLabel(kbps: effective.bitrateKbps))
                     .monospacedDigit()
@@ -666,22 +668,25 @@ extension SettingsView {
             pyrowaveAutomaticRow
         } else {
             described(effective.bitrateKbps > 1_000_000
-                ? Self.gigabitWarning : "Automatic uses the host's default, 20 Mbps.",
+                ? Self.gigabitWarning : String(localized: L10n.playerBitrateKbpsHint),
                 field: "bitrate_kbps") {
                 TVSelectionRow(
-                    title: "Bitrate",
+                    title: String(localized: L10n.playerBitrateKbps),
                     options: SettingsOptions.bitrateOptions(current: effective.bitrateKbps),
                     selection: scoped(SettingsFields.bitrateKbps))
             }
-            described("Any fixed rate, in Mbps.", field: "bitrate_kbps") {
+            described(L10n.appleCustomBitrateHint, field: "bitrate_kbps") {
                 TVFieldRow(
-                    label: "Custom bitrate",
+                    label: String(localized: L10n.appleCustomBitrate),
                     value: SettingsOptions.isCustomBitrate(effective.bitrateKbps)
                         ? SpeedTestView.mbpsLabel(kbps: effective.bitrateKbps) : "",
-                    placeholder: "Type a rate"
+                    placeholder: String(localized: L10n.appleCustomBitratePlaceholder)
                 ) { typingBitrate = true }
                 .fullScreenCover(isPresented: $typingBitrate) {
-                    TVTextEntry(title: "Bitrate (Mbps)", text: "", keyboardType: .numberPad) {
+                    TVTextEntry(
+                        title: String(localized: L10n.playerBitrateKbpsEntry), text: "",
+                        keyboardType: .numberPad
+                    ) {
                         if let kbps = SettingsOptions.customBitrateKbps($0) {
                             scoped(SettingsFields.bitrateKbps).wrappedValue = kbps
                         }
@@ -696,9 +701,8 @@ extension SettingsView {
     /// Automatic under PyroWave: on, the session steps its quality down while the link falls
     /// short; off, any fixed rate pins it at the quality row's.
     private var pyrowaveAutomaticRow: some View {
-        described("Lowers PyroWave quality while the network falls short; off always streams at "
-            + "your quality.", field: "bitrate_kbps") {
-            Toggle("Automatic bitrate", isOn: automaticBitrate)
+        described(L10n.playerBitrateKbpsPyrowaveSwitchHint, field: "bitrate_kbps") {
+            Toggle(L10n.playerBitrateKbpsAutoSwitch, isOn: automaticBitrate)
         }
     }
 
@@ -707,36 +711,41 @@ extension SettingsView {
         effective.codec == "pyrowave" && MetalWaveletDecoder.supported
     }
 
-    /// The mode a connect would ask for. Native is an attached monitor's on iPhone and iPad, else
-    /// this display's.
-    private func connectMode(_ s: EffectiveSettings) -> (width: UInt32, height: UInt32, hz: UInt32) {
+    /// Native as a connect resolves it: an attached monitor's on iPhone and iPad, else this
+    /// display's. Every caption that names a mode reads it.
+    private var connectNative: (width: Int, height: Int, hz: Int) {
         #if os(iOS)
-        if let mode = ExternalDisplay.streamMode(s) { return mode }
+        if let native = ExternalDisplay.nativeMode { return native }
         #endif
-        return s.streamMode(native: NativeDisplay.mode)
+        return NativeDisplay.mode
+    }
+
+    /// The picture a connect would have the host encode (`streamPicture`).
+    private func connectPicture(_ s: EffectiveSettings) -> (width: UInt32, height: UInt32, hz: UInt32) {
+        s.streamPicture(native: connectNative)
     }
 
     /// PyroWave quality in Bitrate's place: 0.5 to 2 by tenths, read as the rate it needs at the
-    /// mode a connect would ask, warned when this device's link is short of it. The TV lists
-    /// those rates.
+    /// picture a connect would have the host encode, warned when this device's link is short of
+    /// it. The TV lists those rates.
     @ViewBuilder private var pyrowaveQualityRows: some View {
         if pyroWaveRate {
             let s = effective
-            let mode = connectMode(s)
-            let lines = PyroWaveQuality.lines(s, mode: mode, link: PyroWaveQuality.localLink())
+            let picture = connectPicture(s)
+            let lines = PyroWaveQuality.lines(s, mode: picture, link: PyroWaveQuality.localLink())
             let field = scoped(SettingsFields.pyrowaveBpp)
             let quality = Binding(
                 get: { PyroWaveQuality.snapped(field.wrappedValue) },
                 set: { field.wrappedValue = PyroWaveQuality.snapped($0) })
             #if os(tvOS)
-            described(lines.warning.map { "\(lines.caption). \($0)" } ?? lines.caption,
+            described(lines.warning.map { "\(lines.caption)\n\($0)" } ?? lines.caption,
                 field: "pyrowave_bpp") {
                 settingPicker(
-                    "PyroWave quality",
+                    L10n.playerPyrowaveBpp,
                     options: PyroWaveQuality.rungs.map { bpp in
                         var at = s
                         at.pyrowaveBpp = bpp
-                        let kbps = PyroWaveQuality.kbps(at, mode: mode)
+                        let kbps = PyroWaveQuality.kbps(at, mode: picture)
                         return (label: PyroWaveQuality.rateLabel(kbps: kbps), tag: bpp)
                     },
                     selection: quality)
@@ -744,9 +753,9 @@ extension SettingsView {
             #else
             described(lines.caption, field: "pyrowave_bpp") {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("PyroWave quality")
+                    Text(L10n.playerPyrowaveBpp)
                     Slider(value: quality, in: PyroWaveQuality.range, step: 0.1) {
-                        Text("PyroWave quality")
+                        Text(L10n.playerPyrowaveBpp)
                     }
                     .labelsHidden()
                 }
@@ -767,62 +776,59 @@ extension SettingsView {
     // only as the hidden PUNKTFUNK_PRESENTER debug env lever.
     private var prioritizeRow: some View {
         described(effective.presentPriority == "smooth"
-            ? "A small buffer evens out network hiccups, at its worth of added latency."
-            : "Frames show as soon as they arrive; a hiccup repeats or skips one.",
+            ? L10n.playerPresentPrioritySmoothHint
+            : L10n.playerPresentPriorityLatencyHint,
             field: "present_priority") {
             settingPicker(
-                "Prioritize",
-                options: SettingsOptions.presentPriorities.map { option in
-                    (label: option.tag == SettingDefault.presentPriority
-                        ? "\(option.label) (default)" : option.label, tag: option.tag)
-                },
+                L10n.playerPresentPriority,
+                options: SettingsOptions.presentPriorities,
                 selection: scoped(SettingsFields.presentPriority))
         }
     }
 
     @ViewBuilder private var presentationRows: some View {
-        // macOS-only: iOS/tvOS layers always present on the display's vsync, so the choice
-        // only exists on the Mac (the layer's own sync stays off — see MetalVideoPresenter).
+        // macOS-only, both: elsewhere the layer presents on the display's vsync and the display
+        // link is pinned at the panel's top rate (`FrameRateHint`), so neither choice exists.
         #if os(macOS)
-        described("Even pacing, at up to one refresh of added latency.", field: "vsync") {
+        described(L10n.playerVsyncHint, field: "vsync") {
             Toggle("V-Sync", isOn: scoped(SettingsFields.vsync))
         }
-        #endif
-        // Non-tvOS: the Apple TV drives a fixed HDMI mode, so there's no adaptive refresh.
-        #if !os(tvOS)
-        described("A ProMotion or adaptive-sync display follows the stream's rate — "
-            + "smoother motion.", field: "allow_vrr") {
-            Toggle("Follow variable refresh", isOn: scoped(SettingsFields.allowVRR))
+        described(L10n.playerAllowVrrHint, field: "allow_vrr") {
+            Toggle(L10n.playerAllowVrr, isOn: scoped(SettingsFields.allowVRR))
         }
         #endif
     }
 
     // MARK: - Advanced
 
-    /// A category's advanced rows: their own section while Show advanced is on or the edited
-    /// preset overrides one of `fields`, otherwise one button naming how many hold a changed
-    /// value, which shows them. Nothing when none changed.
+    /// A category's advanced rows, as `AdvancedDisclosure` decides. `fields` are the rows'
+    /// overlay names.
     @ViewBuilder
     func advancedSection<Content: View>(
         changed: Int, fields: [String] = [], @ViewBuilder content: () -> Content
     ) -> some View {
-        if showAdvanced || fields.contains(where: isOverridden) {
-            Section("Advanced") { content() }
-        } else if changed > 0, !inPresetScope {
+        switch AdvancedDisclosure.state(
+            showAdvanced: showAdvanced, overridden: fields.contains(where: isOverridden),
+            changed: changed, inPreset: inPresetScope)
+        {
+        case .rows:
+            Section(L10n.prefsAdvanced) { content() }
+        case .countButton(let count):
             Section {
-                Button(changed == 1
-                    ? "1 advanced setting changed" : "\(changed) advanced settings changed") {
+                Button(L10n.prefsAdvancedChanged(count: count)) {
                     showAdvanced = true
                 }
             }
+        case .hidden:
+            EmptyView()
         }
     }
 
     /// Device-wide, and in both scopes: it changes what this surface lists, not a stream.
     var showAdvancedSection: some View {
         Section {
-            described("Adds the settings most players never need to change.") {
-                Toggle("Show advanced", isOn: $showAdvanced)
+            described(L10n.playerShowAdvancedHint) {
+                Toggle(L10n.playerShowAdvanced, isOn: $showAdvanced)
             }
         }
     }
@@ -842,42 +848,42 @@ extension SettingsView {
 
     @ViewBuilder var sessionSection: some View {
         if showsSessionSection {
-            Section("Session") {
+            Section(L10n.prefsGroupSession) {
                 #if os(macOS)
                 if inPresetScope {
                     described(fullscreenAlways
-                        ? "Every stream is fullscreen while Fullscreen is set to Always."
-                        : "Go fullscreen when a session starts; return to a window on the host "
-                            + "list.", field: "fullscreen_on_stream") {
+                        ? L10n.appleFullscreenOnStreamAlwaysHint
+                        : L10n.playerFullscreenOnStreamHint, field: "fullscreen_on_stream") {
                         Toggle(
-                            "Fullscreen while streaming",
+                            L10n.playerFullscreenOnStream,
                             isOn: scoped(SettingsFields.fullscreenWhileStreaming))
                     }
                 } else {
                     described(fullscreenCaption) {
                         settingPicker(
-                            "Fullscreen", options: SettingsOptions.fullscreenModes,
+                            L10n.playerFullscreen, options: SettingsOptions.fullscreenModes,
                             selection: fullscreenMode)
                     }
                 }
                 #endif
                 if !inPresetScope {
-                    described("Sends Wake-on-LAN to a sleeping saved host and waits for it.") {
-                        Toggle("Auto-wake on connect", isOn: $autoWakeEnabled)
+                    described(L10n.playerAutoWakeHint) {
+                        Toggle(L10n.playerAutoWake, isOn: $autoWakeEnabled)
                     }
                 }
                 #if os(iOS) || os(visionOS) || os(tvOS)
                 if !inPresetScope {
-                    described("Audio and the connection stay live when you switch away; video "
-                        + "pauses.") {
-                        Toggle("Keep streaming in background", isOn: $backgroundKeepAlive)
+                    described(L10n.playerBackgroundKeepAliveHint) {
+                        Toggle(L10n.playerBackgroundKeepAlive, isOn: $backgroundKeepAlive)
                     }
                     if backgroundKeepAlive {
                         described(Self.backgroundTimeoutCaption) {
                             settingPicker(
-                                "Disconnect after",
-                                options: [("1 minute", 1), ("5 minutes", 5), ("10 minutes", 10),
-                                          ("30 minutes", 30)],
+                                L10n.playerBackgroundTimeoutMinutes,
+                                options: [1, 5, 10, 30].map {
+                                    (label: L10n.playerBackgroundTimeoutMinutesCount(count: $0),
+                                     tag: $0)
+                                },
                                 selection: $backgroundTimeoutMinutes)
                         }
                     }
@@ -890,9 +896,9 @@ extension SettingsView {
     /// A phone's reason is its battery; a TV's is only not holding a host it has left.
     private static var backgroundTimeoutCaption: String {
         #if os(tvOS)
-        "Ends a session left in the background after this long."
+        String(localized: L10n.playerBackgroundTimeoutMinutesTvHint)
         #else
-        "Ends a backgrounded session so it can't run down the battery."
+        String(localized: L10n.playerBackgroundTimeoutMinutesHint)
         #endif
     }
 
@@ -910,33 +916,29 @@ extension SettingsView {
 
     private var fullscreenCaption: String {
         switch fullscreenMode.wrappedValue {
-        case "always": "Punktfunk opens fullscreen and stays fullscreen between streams."
-        case "stream": "Streams go fullscreen. The host list returns to a window."
-        default: "Streams stay in a window."
+        case "always": String(localized: L10n.playerFullscreenAlwaysHint)
+        case "stream": String(localized: L10n.playerFullscreenStreamHint)
+        default: String(localized: L10n.playerFullscreenOffHint)
         }
     }
     #endif
 
     private static var gamepadUIModeCaption: String {
-        #if os(tvOS)
-        "Always keeps it up — otherwise this screen returns when the last controller disconnects."
-        #else
-        "Always keeps it up — otherwise touch returns when the last controller disconnects."
-        #endif
+        String(localized: L10n.playerGamepadUiModeHint)
     }
 
     // MARK: - General: Statistics overlay
 
     @ViewBuilder var overlaySection: some View {
-        Section("Statistics") {
+        Section(L10n.prefsGroupStatistics) {
             described(Self.statisticsDescription, field: "stats_verbosity") {
                 settingPicker(
-                    "Statistics overlay", options: SettingsOptions.statsVerbosities,
+                    L10n.playerStatsVerbosity, options: SettingsOptions.statsVerbosities,
                     selection: scoped(SettingsFields.statsVerbosity))
             }
             #if !os(tvOS)
             if !inPresetScope {
-                Link("What each number means", destination: Self.statsDocsURL)
+                Link(L10n.playerStatsDocsLink, destination: Self.statsDocsURL)
                     .foregroundStyle(Color.brand) // a Link takes the system accent, not the tint
             }
             #endif
@@ -949,24 +951,51 @@ extension SettingsView {
         if !inPresetScope {
             advancedSection(changed: generalChanged) {
                 described(Self.advancedStatisticsDescription) {
-                    Toggle("Advanced statistics", isOn: $advancedStats)
+                    Toggle(L10n.playerAdvancedStats, isOn: $advancedStats)
                 }
-                described("The corner the statistics overlay sits in.") {
+                described(L10n.playerHudPlacementHint) {
                     settingPicker(
-                        "Statistics position", options: SettingsOptions.hudPlacements,
+                        L10n.playerHudPlacement, options: SettingsOptions.hudPlacements,
                         selection: $hudPlacement)
                 }
                 .disabled(effective.statsVerbosity == StatsVerbosity.off.rawValue)
-                described("The overlay's size, on top of the system text size.") {
+                described(L10n.appleStatsScalePctHint) {
                     settingPicker(
-                        "Statistics size", options: SettingsOptions.statsScales,
+                        L10n.playerStatsScalePct, options: SettingsOptions.statsScales,
                         selection: $statsScalePct)
                 }
-                described("Shows how to leave for a few seconds when a stream starts.") {
-                    Toggle("Exit hint", isOn: $exitHint)
+                described(L10n.playerExitHintHint) {
+                    Toggle(L10n.playerExitHint, isOn: $exitHint)
                 }
             }
         }
+    }
+
+    /// General's last section: every setting back to a fresh install's value, asked first. A
+    /// preset resets row by row, so only Default settings has it.
+    @ViewBuilder var resetSection: some View {
+        if !inPresetScope {
+            Section {
+                Button(L10n.prefsResetAll, role: .destructive) { confirmingReset = true }
+                    .alert(L10n.prefsResetAllTitle, isPresented: $confirmingReset) {
+                        Button(L10n.commonCancel, role: .cancel) {}
+                        Button(L10n.commonReset, role: .destructive) { resetAllSettings() }
+                    } message: {
+                        Text(L10n.prefsResetAllBody)
+                    }
+            }
+        }
+    }
+
+    private func resetAllSettings() {
+        SettingDefault.resetAll()
+        // This tier's @AppStorage default was read at launch, from the value just removed.
+        statsVerbosityRaw = SettingDefault.statsVerbosity
+        // The pad manager keeps its own copy of the pinned controller, read at launch.
+        gamepads.preferredID = ""
+        #if os(iOS) || os(visionOS) || os(macOS)
+        clearCustomFlags()
+        #endif
     }
 
     private var generalChanged: Int {
@@ -980,20 +1009,21 @@ extension SettingsView {
         // An app-level feature switch for this device (tier G) — the whole section collapses in
         // preset scope rather than rendering an empty group.
         if !inPresetScope {
-            Section("Library") {
-                described("How the controller-optimized library arranges titles: Shelf is one "
-                    + "row of covers, Grid shows more at once.") {
+            Section(L10n.prefsGroupLibrary) {
+                described(L10n.playerLibraryViewHint) {
                     settingPicker(
-                        "Library view",
+                        L10n.playerLibraryView,
                         options: LibraryArrangement.all.map { (label: $0.label, tag: $0.stored) },
                         selection: $libraryViewRaw)
                 }
                 described(startInFooter) {
                     settingPicker(
-                        "Start in",
+                        L10n.playerStartIn,
                         options: StartIn.allCases.map { (label: $0.label, tag: $0.stored) },
                         selection: $startInRaw)
                 }
+                .onAppear { readStartInHost() }
+                .onChange(of: defaultHostID) { readStartInHost() }
             }
         }
     }
@@ -1001,13 +1031,17 @@ extension SettingsView {
     /// Names the host the setting resolves to, so the row explains itself — and says when it
     /// resolves to nothing, which is what every value does with no default host.
     private var startInFooter: String {
-        let hosts = StartScreen.savedHosts()
-        guard let host = StartScreen.defaultHost(id: defaultHostID, hosts: hosts).host else {
-            return "Opens on the host list: there is no default host. Pair one, or pick one "
-                + "from a host's menu when several are paired."
+        guard let name = startInHost else {
+            return String(localized: L10n.playerStartInNoHostHint)
         }
-        return "Library opens \(host.displayName)'s games; Stream also connects to its desktop. "
-            + "Back leaves either one on the host list."
+        return L10n.playerStartInHostHint(host: name)
+    }
+
+    /// Decodes the host store when the row appears and when the pick moves, not on every pass.
+    /// An appear runs before the first frame, so the caption never shows the empty case first.
+    private func readStartInHost() {
+        startInHost = StartScreen.defaultHost(id: defaultHostID, hosts: StartScreen.savedHosts())
+            .host?.displayName
     }
 
     // MARK: - Input
@@ -1016,22 +1050,22 @@ extension SettingsView {
     /// Touch-input model (iPhone + iPad) plus the iPad-only pointer-capture toggle: lock the
     /// mouse/trackpad for relative movement (games) vs forward an absolute cursor position.
     @ViewBuilder var pointerSection: some View {
-        Section("Touch & pointer") {
+        Section(L10n.prefsGroupTouchPointer) {
             described(touchModeDescription, field: "touch_mode") {
-                Picker("Touch input", selection: scoped(SettingsFields.touchMode)) {
-                    Text("Trackpad").tag(TouchInputMode.trackpad.rawValue)
-                    Text("Direct pointer").tag(TouchInputMode.pointer.rawValue)
-                    Text("Touch passthrough").tag(TouchInputMode.touch.rawValue)
-                    Text("Off").tag(TouchInputMode.off.rawValue)
+                Picker(L10n.playerTouchMode, selection: scoped(SettingsFields.touchMode)) {
+                    Text(L10n.playerTouchModeTrackpad).tag(TouchInputMode.trackpad.rawValue)
+                    Text(L10n.playerTouchModePointer).tag(TouchInputMode.pointer.rawValue)
+                    Text(L10n.playerTouchModeTouch).tag(TouchInputMode.touch.rawValue)
+                    Text(L10n.playerTouchModeOff).tag(TouchInputMode.off.rawValue)
                 }
             }
             quickActionsRow
+            shortcutsRow
             // Whether a hardware mouse attached to THIS iPad gets locked is a fact about this
             // device's input hardware (tier G), not about how a host is streamed.
             if !inPresetScope, UIDevice.current.userInterfaceIdiom == .pad {
-                described("Locks a hardware mouse for mouse-look. Needs the stream "
-                    + "fullscreen.") {
-                    Toggle("Capture pointer for games", isOn: $pointerCapture)
+                described(L10n.applePlayerPointerCaptureHint) {
+                    Toggle(L10n.applePlayerPointerCapture, isOn: $pointerCapture)
                 }
             }
         }
@@ -1044,36 +1078,57 @@ extension SettingsView {
         case .trackpad:
             // The one caption where length is earned: this is a gesture reference, not an
             // explanation. Only the two gestures a trackpad user would not guess are listed.
-            return "Drives the host cursor like a trackpad — two-finger tap right-clicks, "
-                + "two-finger drag scrolls."
+            return String(localized: L10n.playerTouchModeTrackpadHint)
         case .pointer:
-            return "The host cursor jumps to wherever you touch."
+            return String(localized: L10n.playerTouchModePointerHint)
         case .touch:
-            return "Real multi-touch reaches the host."
+            return String(localized: L10n.playerTouchModeTouchHint)
         case .off:
-            return "Touches on the picture don't reach the host. On-screen controls still work."
+            return String(localized: L10n.playerTouchModeOffHint)
         }
     }
     #endif
 
+    /// The shortcuts of the layer being edited, as the next stream resolves them.
+    var editedShortcuts: Shortcuts {
+        Shortcuts.resolve(effective.shortcuts, client: shortcutClient,
+                          legacyGuideGesture: effective.guideGesture)
+    }
+
+    /// The Shortcuts page of the layer being edited.
+    var shortcutsEditor: ShortcutsEditor {
+        ShortcutsEditor(
+            blob: scoped(SettingsFields.shortcuts), legacyGuideGesture: effective.guideGesture,
+            overlayActions: effective.overlayActions, overridden: isOverridden("shortcuts")
+        ) {
+            if inPresetScope {
+                resetOverride("shortcuts")
+            } else {
+                scoped(SettingsFields.shortcuts).wrappedValue = ""
+            }
+        }
+    }
+
     #if os(iOS) || os(visionOS) || os(macOS)
-    /// The in-stream quick-action ring's editor, opened as a sheet. Every platform with a ring
-    /// the user can change: iOS from Touch & pointer, macOS from Keyboard & mouse (the Mac opens
-    /// the ring with ⌃⌥⇧O or the Stream menu, so that is where a reader looks for it).
-    /// How to reach the dial on THIS platform. The editor must name its opener: six buttons
-    /// nobody can summon are six buttons nobody sees.
+    /// How to reach the dial on THIS platform, from the live shortcuts. The editor must name its
+    /// opener: six buttons nobody can summon are six buttons nobody sees.
     private var dialOpener: String {
+        let s = editedShortcuts
+        guard let keys = s.hint(.ring, device: .keyboard), let pad = s.hint(.ring, device: .pad) else {
+            return ""
+        }
         #if os(macOS)
-        "⌃⌥⇧O, the Stream menu or Select + A on a controller opens it mid-stream. "
+        return L10n.applePlayerOverlayActionsOpenerMac(keys: keys, padKeys: pad) + " "
         #else
-        "A two-finger twist, ⌃⌥⇧O on a keyboard or Select + A on a controller opens it mid-stream. "
+        return L10n.applePlayerOverlayActionsOpener(keys: keys, padKeys: pad) + " "
         #endif
     }
 
+    /// The in-stream quick-action ring's editor, opened as a sheet. Every platform with a ring
+    /// the user can change: iOS from Touch & pointer, macOS from Keyboard & mouse.
     @ViewBuilder var quickActionsRow: some View {
-        described(dialOpener
-                  + "Which actions the in-stream dial offers and the shortcuts it can send; "
-                  + "a preset that changes it owns the whole dial.", field: "overlay_actions") {
+        described(dialOpener + String(localized: L10n.playerOverlayActionsHint),
+                  field: "overlay_actions") {
             // A SHEET, not a push: the detail column is not a NavigationStack, and a
             // NavigationLink pushed from it popped the collapsed iPhone stack to the category
             // list on the way back and left the selection dead (AboutView's rows say the same).
@@ -1081,7 +1136,7 @@ extension SettingsView {
                 showQuickActions = true
             } label: {
                 HStack {
-                    Text("Quick actions")
+                    Text(L10n.playerOverlayActions)
                     Spacer(minLength: 8)
                     Image(systemName: "chevron.right")
                         .font(.footnote.weight(.semibold))
@@ -1093,8 +1148,13 @@ extension SettingsView {
             .buttonStyle(.plain)
             .sheet(isPresented: $showQuickActions) {
                 NavigationStack {
-                    QuickActionsEditor(blob: scoped(SettingsFields.overlayActions),
-                                       overridden: isOverridden("overlay_actions")) {
+                    QuickActionsEditor(
+                        blob: scoped(SettingsFields.overlayActions),
+                        overridden: isOverridden("overlay_actions"),
+                        bindings: scoped(SettingsFields.shortcuts),
+                        // Default settings hold their bindings; a preset only once it overrides.
+                        ownsBindings: !inPresetScope || isOverridden("shortcuts")
+                    ) {
                         if inPresetScope {
                             resetOverride("overlay_actions")
                         } else {
@@ -1103,7 +1163,7 @@ extension SettingsView {
                     }
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showQuickActions = false }
+                            Button(L10n.commonDone) { showQuickActions = false }
                         }
                     }
                 }
@@ -1116,42 +1176,77 @@ extension SettingsView {
             }
         }
     }
+
+    /// The Shortcuts page (design/client-shortcuts.md §5), a sheet like Quick actions.
+    @ViewBuilder var shortcutsRow: some View {
+        described(L10n.playerShortcutsHint, field: "shortcuts") {
+            Button {
+                showShortcuts = true
+            } label: {
+                HStack {
+                    Text(L10n.playerShortcuts)
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showShortcuts) {
+                NavigationStack {
+                    shortcutsEditor.toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(L10n.commonDone) { showShortcuts = false }
+                        }
+                    }
+                }
+                #if os(macOS)
+                .frame(width: 460, height: 560)
+                #endif
+            }
+        }
+    }
     #endif
 
     #if !os(tvOS)
     /// Keyboard & mouse forwarding — applies wherever a hardware keyboard/mouse drives the stream
     /// (always on macOS; an attached keyboard/mouse on iPad). Absent on tvOS (no such input path).
     @ViewBuilder var inputSection: some View {
-        Section("Keyboard & mouse") {
+        Section(L10n.prefsGroupKeyboardMouse) {
             #if os(macOS)
             described(mouseModeDescription, field: "mouse_mode") {
-                Picker("Mouse input", selection: scoped(SettingsFields.mouseMode)) {
-                    Text("Capture (games)").tag(MouseInputMode.capture.rawValue)
-                    Text("Desktop (absolute)").tag(MouseInputMode.desktop.rawValue)
+                Picker(L10n.playerMouseMode, selection: scoped(SettingsFields.mouseMode)) {
+                    Text(L10n.playerMouseModeCapture).tag(MouseInputMode.capture.rawValue)
+                    Text(L10n.playerMouseModeDesktop).tag(MouseInputMode.desktop.rawValue)
                 }
             }
             described(
-                "Sends ⌘ shortcuts — ⌘Space, ⌘Tab and Mission Control included — to the host while "
-                    + "captured. ⌘⎋ always stays local — it releases capture.",
+                L10n.playerInhibitShortcutsHint(keys: "⌘Space, ⌘Tab, Mission Control, …")
+                    + " " + L10n.applePlayerInhibitShortcutsReleaseHint(keys: "⌘⎋"),
                 field: "inhibit_shortcuts"
             ) {
-                Toggle("Capture system shortcuts", isOn: scoped(SettingsFields.inhibitShortcuts))
+                Toggle(L10n.playerInhibitShortcuts, isOn: scoped(SettingsFields.inhibitShortcuts))
             }
             quickActionsRow
+            shortcutsRow
             #endif
             described(
                 (ModifierLayout(rawValue: effective.modifierLayout) ?? .mac).detail,
                 field: "modifier_layout"
             ) {
-                Picker("Modifier keys", selection: scoped(SettingsFields.modifierLayout)) {
+                Picker(
+                    L10n.applePlayerModifierLayout,
+                    selection: scoped(SettingsFields.modifierLayout)
+                ) {
                     ForEach(ModifierLayout.allCases, id: \.self) { layout in
                         Text(layout.label).tag(layout.rawValue)
                     }
                 }
             }
-            described("Reverses the wheel and trackpad scroll direction sent to the host.",
-                      field: "invert_scroll") {
-                Toggle("Invert scroll direction", isOn: scoped(SettingsFields.invertScroll))
+            described(L10n.playerInvertScrollHint, field: "invert_scroll") {
+                Toggle(L10n.playerInvertScroll, isOn: scoped(SettingsFields.invertScroll))
             }
         }
     }
@@ -1161,11 +1256,11 @@ extension SettingsView {
     private var mouseModeDescription: String {
         switch MouseInputMode(rawValue: effective.mouseMode) ?? .capture {
         case .capture:
-            return "Locks the pointer and sends relative motion — best for games. ⌃⌥⇧M "
-                + "switches live."
+            let keys = editedShortcuts.hint(.slot(.mouseMode), device: .keyboard)
+            return String(localized: L10n.playerMouseModeCaptureHint)
+                + (keys.map { " " + L10n.playerMouseModeKeysHint(keys: $0) } ?? "")
         case .desktop:
-            return "The pointer moves freely and sends absolute positions — best for desktop "
-                + "work."
+            return String(localized: L10n.playerMouseModeDesktopHint)
         }
     }
     #endif
@@ -1175,23 +1270,23 @@ extension SettingsView {
 
     @ViewBuilder var audioSection: some View {
         Section {
-            described("The speaker layout requested from the host.", field: "audio_channels") {
+            described(L10n.playerAudioChannelsHint, field: "audio_channels") {
                 settingPicker(
-                    "Audio channels", options: SettingsOptions.audioChannels,
+                    L10n.playerAudioChannels, options: SettingsOptions.audioChannels,
                     selection: scoped(SettingsFields.audioChannels))
             }
             #if os(macOS)
             // Which speaker THIS Mac plays through is this device's audio routing (tier G).
             if !inPresetScope {
-                described("Where host audio plays on this Mac.") {
-                    Picker("Speaker", selection: $speakerUID) {
-                        Text("System default").tag("")
+                described(L10n.playerSpeakerDeviceHint) {
+                    Picker(L10n.playerSpeakerDevice, selection: $speakerUID) {
+                        Text(L10n.playerSpeakerDeviceSystem).tag("")
                         ForEach(outputDevices) { device in
                             Text(device.name).tag(device.uid)
                         }
                         if !speakerUID.isEmpty,
                            !outputDevices.contains(where: { $0.uid == speakerUID }) {
-                            Text("Unavailable device").tag(speakerUID)
+                            Text(L10n.appleAudioDeviceUnavailable).tag(speakerUID)
                         }
                     }
                 }
@@ -1199,30 +1294,28 @@ extension SettingsView {
             #endif
             // An Apple TV has no microphone an app can open.
             #if !os(tvOS)
-            described("This device's microphone feeds the host's virtual mic.",
-                      field: "mic_enabled") {
-                Toggle("Stream microphone", isOn: scoped(SettingsFields.micEnabled))
+            described(L10n.playerMicEnabledHint, field: "mic_enabled") {
+                Toggle(L10n.playerMicEnabled, isOn: scoped(SettingsFields.micEnabled))
             }
             #endif
             #if os(visionOS)
             // Where this headset plays the sound (tier G).
             if !inPresetScope {
-                described("On, the sound comes from the window. Off plays the game's own mix "
-                          + "straight to your ears.") {
-                    Toggle("Spatial audio", isOn: $spatialAudio)
+                described(L10n.playerSpatialAudioHint) {
+                    Toggle(L10n.playerSpatialAudio, isOn: $spatialAudio)
                 }
             }
             #endif
             #if os(macOS)
             if !inPresetScope {
-                Picker("Microphone", selection: $micUID) {
-                    Text("System default").tag("")
+                Picker(L10n.playerMicDevice, selection: $micUID) {
+                    Text(L10n.playerMicDeviceSystem).tag("")
                     ForEach(inputDevices) { device in
                         Text(device.name).tag(device.uid)
                     }
                     if !micUID.isEmpty,
                        !inputDevices.contains(where: { $0.uid == micUID }) {
-                        Text("Unavailable device").tag(micUID)
+                        Text(L10n.appleAudioDeviceUnavailable).tag(micUID)
                     }
                 }
                 .disabled(!effective.micEnabled)
@@ -1230,11 +1323,11 @@ extension SettingsView {
                 // user pick it. Auto sums every channel (a lone hot mic still passes at full
                 // level).
                 if micChannelCount > 1 {
-                    described("Pick the input your mic is on; Auto sums every channel.") {
-                        Picker("Microphone channel", selection: $micChannel) {
-                            Text("Auto (all channels)").tag(0)
+                    described(L10n.applePlayerMicChannelHint) {
+                        Picker(L10n.applePlayerMicChannel, selection: $micChannel) {
+                            Text(L10n.applePlayerMicChannelAuto).tag(0)
                             ForEach(1...micChannelCount, id: \.self) { ch in
-                                Text("Channel \(ch)").tag(ch)
+                                Text(L10n.applePlayerMicChannelN(n: String(ch))).tag(ch)
                             }
                         }
                         .disabled(!effective.micEnabled)
@@ -1243,9 +1336,9 @@ extension SettingsView {
             }
             #endif
         } header: {
-            Text("Audio")
+            Text(L10n.prefsCategoryAudio)
         } footer: {
-            Text("Applies from the next session.")
+            Text(L10n.prefsAppliesNextSession)
                 .settingsFooter()
         }
         advancedSection(
@@ -1255,17 +1348,15 @@ extension SettingsView {
             // caption states the cases that genuinely do not fit.
             described(audioFormatCaption, field: "audio_format") {
                 settingPicker(
-                    "Audio quality", options: SettingsOptions.audioFormats,
+                    L10n.playerAudioFormat, options: SettingsOptions.audioFormats,
                     selection: scoped(SettingsFields.audioFormat))
             }
-            described("The host's speakers or headphones keep playing while you stream — "
-                      + "needs a host on 0.32+",
-                      field: "keep_host_audio") {
-                Toggle("Keep host audio playing", isOn: scoped(SettingsFields.keepHostAudio))
+            described(L10n.playerKeepHostAudioHint, field: "keep_host_audio") {
+                Toggle(L10n.playerKeepHostAudio, isOn: scoped(SettingsFields.keepHostAudio))
             }
             #if !os(tvOS)
             described(echoCancelCaption, field: "echo_cancel") {
-                Toggle("Echo cancellation", isOn: scoped(SettingsFields.echoCancel))
+                Toggle(L10n.playerEchoCancel, isOn: scoped(SettingsFields.echoCancel))
                     .disabled(!effective.micEnabled)
             }
             #endif
@@ -1292,7 +1383,7 @@ extension SettingsView {
     private var audioFormatCaption: String {
         let choice = AudioFormatChoice(setting: effective.audioFormat)
         guard choice != .opus else {
-            return "Compressed 256 kbps Opus — effectively transparent."
+            return String(localized: L10n.applePlayerAudioFormatOpusHint)
         }
         // Stereo cost at 24-bit, from `pcm::bitrate_kbps`. 5.1 is three times it and 7.1 four, so
         // the surround rider below states the multiplier rather than repeating the table.
@@ -1305,32 +1396,26 @@ extension SettingsView {
         case .lossless96: mbps = "4.6"
         case .lossless1764: mbps = "8.5"
         }
-        let head = "Bit-exact PCM — about \(mbps) Mbps on top of the video, or Standard where "
-            + "the host or this device declines it."
+        let head = L10n.applePlayerAudioFormatLosslessHint(rate: mbps)
         guard effective.audioChannels > 2 else { return head }
-        // Surround is offered at every rate, so what it costs has to be said out loud. The plane
-        // sends one frame per datagram and never fragments, so more channels buy a SHORTER frame
-        // rather than a bigger packet — a packet rate, not an impossibility, right up until no rung
-        // on the ladder fits at all. Where that line falls, at 24-bit and the default datagram size
-        // (`pcm::frame_us_for` against ~1 387 B of payload): 44.1 kHz 5.1/7.1 and 48 kHz 7.1 land
-        // on the 1 ms rung, 48 kHz 5.1 on 1.5 ms, and 88.2 kHz upward fit NOTHING. Two different
-        // sentences, because "it will cost you" and "it will not happen" are two different things
-        // to tell someone.
+        // One frame per datagram: more channels buy a shorter frame. At 24-bit and the default
+        // datagram (`pcm::frame_us_for`), 44.1 and 48 kHz surround fit a 1–1.5 ms rung, which
+        // costs packets; 88.2 kHz upward fits none, so it gets the other sentence.
         guard choice == .lossless441 || choice == .lossless48 else {
-            return head + " Surround needs 48 kHz or lower."
+            return head + " " + String(localized: L10n.applePlayerAudioFormatSurroundLimitHint)
         }
-        return head + (effective.audioChannels == 6
-            ? " Three times that on 5.1."
-            : " Four times that on 7.1.")
+        return head + " " + String(localized: effective.audioChannels == 6
+            ? L10n.applePlayerAudioFormatSurround6Hint
+            : L10n.applePlayerAudioFormatSurround8Hint)
     }
 
     /// Honest about the macOS escape hatch: the voice processor only follows the system
     /// default devices, so hand-picked endpoints silently keep the raw path (see
     /// SessionAudio's topology note) — better said here than discovered mid-call.
     private var echoCancelCaption: String {
-        let base = "Filters the stream's own audio out of the mic pickup."
+        let base = String(localized: L10n.playerEchoCancelHint)
         #if os(macOS)
-        return base + " Only on the system default devices."
+        return base + " " + String(localized: L10n.applePlayerEchoCancelMacHint)
         #else
         return base
         #endif
@@ -1344,7 +1429,7 @@ extension SettingsView {
             // about THIS device (tier G) — only the virtual pad the host creates is presetable.
             if !inPresetScope {
                 if gamepads.controllers.isEmpty {
-                    Text("No controllers detected")
+                    Text(L10n.padNoneDetected)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(gamepads.controllers) { controller in
@@ -1352,26 +1437,24 @@ extension SettingsView {
                     }
                 }
             }
-            described("The virtual pad the host creates — Automatic matches your controller.",
-                field: "gamepad") {
+            described(L10n.playerGamepadHint, field: "gamepad") {
                 settingPicker(
-                    "Controller type", options: SettingsOptions.padTypes,
+                    L10n.playerGamepad,
+                    options: SettingsOptions.padTypes(current: effective.gamepadType),
                     selection: scoped(SettingsFields.gamepadType))
                     .disabled(!effective.gamepadForwarding)
             }
             if !inPresetScope {
-                described("Off, controllers don't vibrate from the stream or in the menus, "
-                    + "whatever the game sends.") {
-                    Toggle("Controller rumble", isOn: $padRumble)
+                described(L10n.playerPadRumbleHint) {
+                    Toggle(L10n.playerPadRumble, isOn: $padRumble)
                         .disabled(!effective.gamepadForwarding)
                 }
             }
             #if !os(tvOS)
             if homeButtonKept, !inPresetScope, effective.gamepadForwarding,
                effective.systemButtonsForward, #available(macOS 27.0, iOS 27.0, visionOS 27.0, *) {
-                described("The system keeps the Home button, so the host never sees it. Add "
-                    + "Punktfunk to Home Button Overrides.") {
-                    Button("Home Button Settings…") {
+                described(L10n.applePadHomeButtonHint) {
+                    Button(L10n.applePadHomeButtonSettings) {
                         try? GCControllerHomeButtonSettingsManager()
                             .openControllerHomeButtonSettings(for: .customizeInAppAction)
                     }
@@ -1381,24 +1464,22 @@ extension SettingsView {
             #if os(iOS)
             // iPhone only in practice: hidden where the device itself can't play haptics (iPad).
             if !inPresetScope, CHHapticEngine.capabilitiesForHardware().supportsHaptics {
-                described("Plays player 1's rumble on the phone itself — for pads without "
-                    + "motors.") {
-                    Toggle("Rumble on this iPhone", isOn: $rumbleOnDevice)
+                described(L10n.playerRumbleOnPhoneHint) {
+                    Toggle(L10n.playerRumbleOnPhone, isOn: $rumbleOnDevice)
                 }
             }
             // The rumble mirror's sibling, data flowing the other way: hidden where the
             // device has no motion hardware, engages only while the player-1 controller
             // reports no rotation rate of its own.
             if !inPresetScope, DeviceGyro.isAvailable {
-                described("Sends this device's motion as player 1's when the controller has no "
-                    + "gyro.") {
-                    Toggle("Gyro from this device", isOn: $gyroFromDevice)
+                described(L10n.playerGyroOnPhoneHint) {
+                    Toggle(L10n.playerGyroOnPhone, isOn: $gyroFromDevice)
                 }
             }
             #endif
             if !inPresetScope {
-                described("A controller-friendly layout for the host list and library.") {
-                    Toggle("Controller-optimized UI", isOn: $gamepadUIEnabled)
+                described(L10n.playerGamepadUiEnabledHint) {
+                    Toggle(L10n.playerGamepadUiEnabled, isOn: $gamepadUIEnabled)
                 }
                 // Only meaningful while the switch above is on, so it is HIDDEN rather than
                 // disabled when it isn't: a picker whose every option decides nothing is worse
@@ -1406,15 +1487,15 @@ extension SettingsView {
                 if gamepadUIEnabled {
                     described(Self.gamepadUIModeCaption) {
                         settingPicker(
-                            "Show it", options: SettingsOptions.gamepadUIModes,
+                            L10n.playerGamepadUiMode, options: SettingsOptions.gamepadUIModes,
                             selection: $gamepadUIMode)
                     }
                     #if os(tvOS)
                     // A TV's only route to `ui_palette`: the gamepad settings that carry it
                     // elsewhere need a controller to open.
-                    described("The background of the controller-optimized screens.") {
+                    described(L10n.playerUiPaletteHint) {
                         settingPicker(
-                            "Background",
+                            L10n.playerUiPalette,
                             options: ConsoleBridge.palettes.map { (label: $0.name, tag: $0.id) },
                             selection: $uiPalette)
                     }
@@ -1429,9 +1510,9 @@ extension SettingsView {
             }
             #endif
         } header: {
-            Text("Controllers")
+            Text(L10n.prefsCategoryControllers)
         } footer: {
-            Text("Applies from the next session.")
+            Text(L10n.prefsAppliesNextSession)
                 .settingsFooter()
         }
         #if !os(tvOS)
@@ -1445,42 +1526,31 @@ extension SettingsView {
         }
     }
 
-    /// Forwarding and the guide button. The master switch is presetable, so it renders in both
+    /// Forwarding and the system buttons. The master switch is presetable, so it renders in both
     /// scopes: a "Work" preset can decline to forward what "Game" forwards.
     @ViewBuilder private var controllerAdvancedRows: some View {
-        described("Sends this device's controllers to the host. Off if they already reach it "
-            + "another way.",
-            field: "gamepad_forwarding") {
-            Toggle("Forward controllers", isOn: scoped(SettingsFields.gamepadForwarding))
+        described(L10n.playerGamepadForwardingHint, field: "gamepad_forwarding") {
+            Toggle(L10n.playerGamepadForwarding, isOn: scoped(SettingsFields.gamepadForwarding))
         }
         if !inPresetScope {
-            described("Which pad is player 1. Automatic picks the newest connection.") {
+            described(L10n.playerForwardPadHint) {
                 settingPicker(
-                    "Use controller", options: controllerOptions,
+                    L10n.playerForwardPad, options: controllerOptions,
                     selection: $gamepads.preferredID)
                     .disabled(!effective.gamepadForwarding)
             }
         }
-        described("Where guide and share presses go while streaming.",
-            field: "system_buttons") {
+        described(L10n.playerSystemButtonsHint, field: "system_buttons") {
             settingPicker(
-                "Guide button", options: SettingsOptions.systemButtons,
+                L10n.playerSystemButtons, options: SettingsOptions.systemButtons,
                 selection: scoped(SettingsFields.systemButtons))
-                .disabled(!effective.gamepadForwarding)
-        }
-        described("Hold Select for the host's guide button; keep holding for its "
-            + "quick-access menu.",
-            field: "guide_gesture") {
-            settingPicker(
-                "Hold Select for guide", options: SettingsOptions.guideGestures,
-                selection: scoped(SettingsFields.guideGesture))
                 .disabled(!effective.gamepadForwarding)
         }
         // Steam Controller 2 as-is passthrough: device tier (EffectiveSettings.sc2Capture is not
         // presetable). It engages at the next stream; the in-stream badge announces it.
         if !inPresetScope {
             described(Self.sc2CaptureCaption) {
-                Toggle("Steam Controller 2 passthrough", isOn: $sc2Capture)
+                Toggle(L10n.playerSc2Capture, isOn: $sc2Capture)
                     .disabled(!effective.gamepadForwarding)
             }
         }
@@ -1490,7 +1560,7 @@ extension SettingsView {
         let e = effective, d = EffectiveSettings()
         return [
             e.gamepadForwarding != d.gamepadForwarding, !gamepads.preferredID.isEmpty,
-            e.systemButtons != d.systemButtons, e.guideGesture != d.guideGesture, sc2Capture,
+            e.systemButtons != d.systemButtons, sc2Capture,
         ].filter { $0 }.count
     }
 

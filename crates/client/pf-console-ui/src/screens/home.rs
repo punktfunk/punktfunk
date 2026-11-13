@@ -112,15 +112,15 @@ enum Verb {
 impl Verb {
     fn label(self, h: &HostRow) -> String {
         match self {
-            Verb::Pair => "Pair\u{2026}".into(),
-            Verb::Games => "Games".into(),
-            Verb::ConnectWith => "Connect with\u{2026}".into(),
+            Verb::Pair => pf_l10n::console::console_card_pair().into(),
+            Verb::Games => pf_l10n::console::console_verb_games().into(),
+            Verb::ConnectWith => pf_l10n::console::console_card_connect_with().into(),
             Verb::Profile => match h.remembered() {
-                Some(p) => format!("Playing as {}", p.display_name),
-                None => "Who\u{2019}s playing?".into(),
+                Some(p) => pf_l10n::client::hostcard_playing_as(&p.display_name),
+                None => pf_l10n::console::console_verb_whos_playing().into(),
             },
-            Verb::Wake => "Wake".into(),
-            Verb::Details => "Details\u{2026}".into(),
+            Verb::Wake => pf_l10n::console::console_verb_wake().into(),
+            Verb::Details => pf_l10n::console::console_verb_details().into(),
         }
     }
 }
@@ -167,7 +167,7 @@ fn run_verb(verb: Verb, h: &HostRow, ctx: &mut Ctx, fx: &mut Outbox) {
         }
         Verb::Wake => {
             fx.cmds.push(ConsoleCmd::wake(&h.key, false));
-            fx.toast = Some(format!("Waking {}\u{2026}", h.name));
+            fx.toast = Some(pf_l10n::client::dial_waking(&h.name));
         }
         Verb::Details => fx.push(Screen::CardMenu(CardMenu::host_details(h))),
     }
@@ -460,7 +460,7 @@ impl ScreenView for HomeScreen {
                     }
                     Slot::Rescan => {
                         fx.cmds.push(ConsoleCmd::Probe);
-                        fx.toast = Some("Scanning for hosts…".into());
+                        fx.toast = Some(pf_l10n::client::hosts_scanning().into());
                     }
                     Slot::Host(h) if !h.paired => fx.push(Screen::Pair(
                         super::pair::PairScreen::new(h, &ctx.device.name),
@@ -614,7 +614,12 @@ impl ScreenView for HomeScreen {
         let say = |(title, sub): (&str, &str)| format!("{title}, {sub}");
         Some(match self.slot(hosts) {
             Slot::Host(h) => match h.remembered() {
-                Some(p) => format!("{}, {}, as {}", h.name, status(ctx.ui, h).0, p.display_name),
+                Some(p) => format!(
+                    "{}, {}, {}",
+                    h.name,
+                    status(ctx.ui, h).0,
+                    pf_l10n::client::hostcard_playing_as(&p.display_name)
+                ),
                 None => format!("{}, {}", h.name, status(ctx.ui, h).0),
             },
             Slot::AddHost => say(action_text(ActionTile::AddHost)),
@@ -628,25 +633,44 @@ impl ScreenView for HomeScreen {
         }
         let mut hints = Vec::new();
         match self.slot(ctx.hosts) {
-            Slot::AddHost => hints.push(Hint::new(HintKey::Confirm, "Add Host")),
-            Slot::Rescan => hints.push(Hint::new(HintKey::Confirm, "Scan Again")),
-            Slot::Host(h) if !h.paired => hints.push(Hint::new(HintKey::Confirm, "Pair…")),
-            Slot::Host(h) if !h.online && h.can_wake => {
-                hints.push(Hint::new(HintKey::Confirm, "Wake & Connect"))
+            Slot::AddHost => hints.push(Hint::new(HintKey::Confirm, pf_l10n::client::hosts_add())),
+            Slot::Rescan => {
+                hints.push(Hint::new(HintKey::Confirm, pf_l10n::client::hosts_rescan()))
             }
+            Slot::Host(h) if !h.paired => hints.push(Hint::new(
+                HintKey::Confirm,
+                pf_l10n::console::console_card_pair(),
+            )),
+            Slot::Host(h) if !h.online && h.can_wake => hints.push(Hint::new(
+                HintKey::Confirm,
+                pf_l10n::console::console_hint_wake_connect(),
+            )),
             // Same press, honest word: a host with a game up is one you get back INTO,
             // and the tile is already naming the title above it.
-            Slot::Host(h) if !h.running.is_empty() => {
-                hints.push(Hint::new(HintKey::Confirm, "Resume"))
-            }
-            Slot::Host(_) => hints.push(Hint::new(HintKey::Confirm, "Connect")),
+            Slot::Host(h) if !h.running.is_empty() => hints.push(Hint::new(
+                HintKey::Confirm,
+                pf_l10n::client::hostcard_resume(),
+            )),
+            Slot::Host(_) => hints.push(Hint::new(
+                HintKey::Confirm,
+                pf_l10n::common::common_connect(),
+            )),
         }
         if self.focused(ctx.hosts).is_some() {
-            hints.push(Hint::new(HintKey::Secondary, "Options"));
+            hints.push(Hint::new(
+                HintKey::Secondary,
+                pf_l10n::console::console_hint_options(),
+            ));
         }
-        hints.push(Hint::new(HintKey::Tertiary, "Settings"));
-        if ctx.device.platform.can_quit() {
-            hints.push(Hint::new(HintKey::Back, "Quit"));
+        hints.push(Hint::new(
+            HintKey::Tertiary,
+            pf_l10n::client::hosts_open_settings(),
+        ));
+        if ctx.device.can_quit() {
+            hints.push(Hint::new(
+                HintKey::Back,
+                pf_l10n::console::console_hint_quit(),
+            ));
         }
         hints
     }
@@ -798,8 +822,7 @@ impl ScreenView for HomeScreen {
                     if let Some(text) = &caption {
                         let (x, y) = (f64::from(tile.left), f64::from(tile.top) - 10.0 * k);
                         let size = GROUP_CAPTION * k;
-                        let upper = text.to_uppercase();
-                        fonts.draw(canvas, &upper, x, y, W::SemiBold, size, ui.fg(0.55));
+                        fonts.draw(canvas, text, x, y, W::SemiBold, size, ui.fg(0.55));
                     }
                     look.paint(canvas, ui, fonts, &slot)
                 })
@@ -883,7 +906,7 @@ impl ScreenView for HomeScreen {
             }
         } else {
             let line = if ctx.hosts.is_empty() {
-                Some("Hosts on this network appear automatically. Add one by address for everything else.".to_string())
+                Some(pf_l10n::client::hosts_empty_body().to_string())
             } else {
                 no_games(&slot)
             };
@@ -903,7 +926,7 @@ impl ScreenView for HomeScreen {
     }
 
     fn title(&self) -> String {
-        "Select a Host".into()
+        pf_l10n::console::console_home_title().into()
     }
 }
 
@@ -1019,44 +1042,45 @@ fn draw_host_tile(canvas: &Canvas, ui: &Frame, fonts: &Fonts, h: &HostRow, rect:
 /// What stands where the games would when the focused card has none to show.
 fn no_games(slot: &Slot<'_>) -> Option<String> {
     Some(match slot {
-        Slot::Host(h) if !h.paired => format!("Pair with {} to see its games here.", h.name),
+        Slot::Host(h) if !h.paired => pf_l10n::console::console_home_pair_for_games_body(&h.name),
         Slot::Host(h) if !h.online && h.can_wake => {
-            format!("{} is asleep. Wake it to see its games.", h.name)
+            pf_l10n::console::console_home_asleep_body(&h.name)
         }
-        Slot::Host(h) if !h.online => format!(
-            "{} is offline. Its games show here once it is back.",
-            h.name
-        ),
+        Slot::Host(h) if !h.online => pf_l10n::console::console_home_offline_body(&h.name),
         _ => return None,
     })
 }
 
 /// A card's one status line and its ink: what the host is doing, whether OK will reach
-/// it, and the preset a pinned or bound card connects with.
+/// it, the preset a pinned or bound card connects with, and the screen it streams unless that
+/// is the default, the bound preset's when it decides
+/// ([`pf_client_core::display_targets::Targets::card_line_under`]).
 fn status(ui: &Frame, h: &HostRow) -> (String, Color4f) {
     if let Some(p) = &h.pin {
         return (p.name.clone(), accent_color(ui, p.accent.as_deref()));
     }
     let (base, ink) = if !h.running.is_empty() {
-        return (format!("Playing {}", h.running), ui.live());
+        return (
+            pf_l10n::client::hostcard_status_playing(&h.running),
+            ui.live(),
+        );
     } else if !h.saved {
-        ("Found on this network".to_string(), ui.fg(0.7))
+        (pf_l10n::client::hostcard_status_found(), ui.fg(0.7))
     } else if !h.paired {
-        ("Not paired yet".to_string(), ui.fg(0.7))
+        (pf_l10n::client::hostcard_status_not_paired(), ui.fg(0.7))
     } else if h.online {
-        ("Online".to_string(), ui.live())
+        (pf_l10n::client::hostcard_status_online(), ui.live())
     } else if h.can_wake {
-        (
-            "Offline \u{b7} wakes when you connect".to_string(),
-            ui.fg(0.7),
-        )
+        (pf_l10n::client::hostcard_status_offline_wakes(), ui.fg(0.7))
     } else {
-        ("Offline".to_string(), ui.fg(0.7))
+        (pf_l10n::client::hostcard_status_offline(), ui.fg(0.7))
     };
-    match &h.bound_preset {
-        Some(b) => (format!("{base} \u{b7} {}", b.name), ink),
-        None => (base, ink),
-    }
+    let screen = (h.screens.as_ref()).and_then(|s| s.card_line_under(h.screen_preset()));
+    let parts: Vec<String> = std::iter::once(base.to_string())
+        .chain(h.bound_preset.as_ref().map(|b| b.name.clone()))
+        .chain(screen)
+        .collect();
+    (parts.join(" \u{b7} "), ink)
 }
 
 /// `#RRGGBB` accent, or the card's ink. A malformed value falls back.
@@ -1087,8 +1111,14 @@ enum ActionTile {
 /// The tile's title and the line over it. Drawn and spoken from the same pair.
 fn action_text(kind: ActionTile) -> (&'static str, &'static str) {
     match kind {
-        ActionTile::AddHost => ("Add Host", "Register a host by address"),
-        ActionTile::Rescan => ("Rescan", "Look for hosts on this network again"),
+        ActionTile::AddHost => (
+            pf_l10n::client::hosts_add(),
+            pf_l10n::client::hosts_add_tile_hint(),
+        ),
+        ActionTile::Rescan => (
+            pf_l10n::client::hosts_rescan(),
+            pf_l10n::client::hosts_rescan_hint(),
+        ),
     }
 }
 
@@ -1299,6 +1329,41 @@ mod tests {
         pf_client_core::trust::Settings::default()
     }
 
+    /// The card names a monitor this device streams, or its role when that is not the only
+    /// screen; the default adds nothing, as a host without the route adds nothing.
+    #[test]
+    fn a_card_says_which_screen_it_streams() {
+        use pf_client_core::display_targets::{DisplayTarget, Role, RoleInfo, Target, Targets};
+        let ui = Frame::default();
+        let plain = host("a", true, true, false);
+        assert_eq!(status(&ui, &plain).0, "Online");
+        let tv = Target {
+            id: "HDMI-A-1".into(),
+            label: "LG TV".into(),
+            ..Target::default()
+        };
+        let mut screened = HostRow {
+            screens: Some(Targets {
+                yours: Some(DisplayTarget::Monitor("HDMI-A-1".into())),
+                targets: vec![tv],
+                ..Targets::default()
+            }),
+            ..plain
+        };
+        assert_eq!(status(&ui, &screened).0, "Online \u{b7} Streams LG TV");
+        screened.screens.as_mut().unwrap().yours = None;
+        assert_eq!(status(&ui, &screened).0, "Online");
+        let role = |yours| RoleInfo {
+            yours,
+            host_default: Role::Only,
+            offered: Role::ALL.to_vec(),
+        };
+        screened.screens.as_mut().unwrap().role = Some(role(Some(Role::Second)));
+        assert_eq!(status(&ui, &screened).0, "Online \u{b7} Second screen");
+        screened.screens.as_mut().unwrap().role = Some(role(None));
+        assert_eq!(status(&ui, &screened).0, "Online");
+    }
+
     #[test]
     fn cursor_follows_the_key_through_churn() {
         let mut s = HomeScreen::new();
@@ -1448,6 +1513,7 @@ mod tests {
             name: "Work".into(),
             accent: None,
             bitrate_kbps: None,
+            host_screen: None,
         });
         let hosts = [pinned];
         let library = crate::library::LibraryShared::default();
@@ -1533,12 +1599,14 @@ mod tests {
     fn quit_is_hinted_only_where_the_app_can_quit() {
         let mut settings = ctx_settings();
         let library = crate::library::LibraryShared::default();
-        for (platform, quits) in [
-            (crate::platform::Platform::Android, true),
-            (crate::platform::Platform::Apple, false),
+        for (platform, tv, quits) in [
+            (crate::platform::Platform::Android, false, true),
+            (crate::platform::Platform::Apple, false, true),
+            (crate::platform::Platform::Apple, true, false),
         ] {
             let device = crate::screens::Device {
                 platform,
+                tv,
                 ..crate::screens::Device::test()
             };
             let ctx = Ctx {
@@ -1549,7 +1617,7 @@ mod tests {
             assert_eq!(
                 hints.iter().any(|h| h.key == HintKey::Back),
                 quits,
-                "{platform:?}"
+                "{platform:?} tv={tv}"
             );
         }
     }
@@ -1648,6 +1716,7 @@ mod tests {
             name: name.into(),
             accent: None,
             bitrate_kbps: None,
+            host_screen: None,
         };
         let row = || {
             let mut c = host("charlie", true, false, false);

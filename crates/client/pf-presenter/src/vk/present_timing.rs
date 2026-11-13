@@ -343,7 +343,9 @@ impl PresentTimer {
     }
 
     /// Wait until no wait still names a swapchain. Required before
-    /// `vkDestroySwapchainKHR` / `oldSwapchain` create. Capped at 250 ms.
+    /// `vkDestroySwapchainKHR` / `oldSwapchain` create. Each queued job ends within its two
+    /// 250 ms waits. There is no deadline: giving up mid-wait would destroy the swapchain
+    /// under `vkWaitForPresentKHR`.
     pub(crate) fn drain(&self) {
         while self.pending.load(Ordering::Acquire) > 0 {
             std::thread::sleep(std::time::Duration::from_millis(1));

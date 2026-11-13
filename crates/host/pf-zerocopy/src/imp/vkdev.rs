@@ -522,6 +522,90 @@ pub unsafe fn modifier_importable(
             .contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
 }
 
+/// Import `size` bytes of `fd` as a buffer bound to its own dedicated memory: a LINEAR dmabuf's
+/// bytes, for a consumer that reads rows at the producer's stride and not through an image
+/// whose pitch the driver picks.
+///
+/// The import takes a dup of `fd`; Vulkan owns the dup once memory allocation succeeds. On
+/// failure every handle this call created is destroyed. The caller destroys the returned alloc.
+///
+/// # Safety
+/// `device` and `ext_fd` belong to the live device `mem_props` describes, with
+/// `VK_EXT_external_memory_dma_buf` enabled.
+pub unsafe fn import_dmabuf_buffer(
+    device: &ash::Device,
+    ext_fd: &ash::khr::external_memory_fd::Device,
+    mem_props: &vk::PhysicalDeviceMemoryProperties,
+    fd: std::os::fd::BorrowedFd<'_>,
+    size: u64,
+    usage: vk::BufferUsageFlags,
+) -> Result<VkBufferAlloc> {
+    use std::os::fd::{AsRawFd, IntoRawFd};
+    let dup = fd.try_clone_to_owned().context("dup dmabuf fd")?;
+    let mut ext = vk::ExternalMemoryBufferCreateInfo::default()
+        .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+    // SAFETY: caller contract for `device`/`ext_fd`; every create info is a local that outlives
+    // the synchronous call reading it, and each failure destroys what this call created.
+    unsafe {
+        let buffer = device
+            .create_buffer(
+                &vk::BufferCreateInfo::default()
+                    .size(size)
+                    .usage(usage)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                    .push_next(&mut ext),
+                None,
+            )
+            .context("create dmabuf buffer")?;
+        let mut fd_props = vk::MemoryFdPropertiesKHR::default();
+        // Borrow-only; a failure leaves no fd types, and the buffer requirements decide.
+        let _ = ext_fd.get_memory_fd_properties(
+            vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+            dup.as_raw_fd(),
+            &mut fd_props,
+        );
+        let reqs = device.get_buffer_memory_requirements(buffer);
+        let bits = match reqs.memory_type_bits & fd_props.memory_type_bits {
+            0 => reqs.memory_type_bits,
+            bits => bits,
+        };
+        let mem_type = match memory_type(mem_props, bits, vk::MemoryPropertyFlags::empty()) {
+            Ok(t) => t,
+            Err(e) => {
+                device.destroy_buffer(buffer, None);
+                return Err(e); // `dup` drops: nothing imported it
+            }
+        };
+        let mut import = vk::ImportMemoryFdInfoKHR::default()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+            .fd(dup.as_raw_fd());
+        let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().buffer(buffer);
+        let memory = match device.allocate_memory(
+            &vk::MemoryAllocateInfo::default()
+                .allocation_size(reqs.size.max(size))
+                .memory_type_index(mem_type)
+                .push_next(&mut import)
+                .push_next(&mut dedicated),
+            None,
+        ) {
+            Ok(m) => {
+                let _ = dup.into_raw_fd(); // Vulkan owns the dup now
+                m
+            }
+            Err(e) => {
+                device.destroy_buffer(buffer, None);
+                return Err(e).context("import dmabuf memory (buffer)"); // `dup` closes once
+            }
+        };
+        let alloc = VkBufferAlloc { buffer, memory };
+        if let Err(e) = device.bind_buffer_memory(buffer, memory, 0) {
+            alloc.destroy(device); // the memory owns the imported fd
+            return Err(e).context("bind dmabuf buffer memory");
+        }
+        Ok(alloc)
+    }
+}
+
 /// Import `src` as an image bound to its own dedicated memory. The memory type comes from the
 /// fd's properties intersected with the image's requirements, or the requirements alone when
 /// the driver reports no fd types. `profile_list` chains a video profile into the image.

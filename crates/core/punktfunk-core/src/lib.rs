@@ -12,9 +12,9 @@
 //! the optional control plane.
 
 // `unsafe` is crate-denied. Parsers of network bytes stay safe Rust. Carve-outs are
-// only `client` (thread ids, QoS pins, hostname), `crash_windows`, and the transport
-// syscall shims (`udp`, `qos_windows`, `ifinfo`, `sockstat`). A wire parser may not add
-// a carve-out; SAFETY proofs sit next to each `unsafe`.
+// only `client` (thread ids, QoS pins, hostname), `crash_windows`, the transport syscall
+// shims (`udp`, `qos_windows`, `ifinfo`, `sockstat`) and the parity lane's frame borrow
+// (`session::seal`). A wire parser may not add one; SAFETY proofs sit next to each `unsafe`.
 #![deny(unsafe_code)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -44,6 +44,8 @@ pub mod error;
 pub mod fec;
 /// cbindgen:ignore
 pub mod fp;
+/// cbindgen:ignore
+pub mod game_overrides;
 // The stats overlay every client draws: window, snapshot, formatter. `punktfunk-ffi` exports it.
 /// cbindgen:ignore
 pub mod hud;
@@ -66,6 +68,8 @@ pub mod resolutions;
 /// The rumble policy every client runs. Outside `client` because the browser, which has no
 /// quinn, runs it too.
 pub mod rumble;
+/// cbindgen:ignore
+pub mod search;
 pub mod session;
 pub mod stats;
 /// cbindgen:ignore
@@ -110,11 +114,11 @@ fn env_value_on(value: &str) -> bool {
 ///
 /// The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 /// (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-pub const ABI_VERSION: u32 = 64;
+pub const ABI_VERSION: u32 = 72;
 /// FNV-1a of the generated `include/punktfunk_core.h` without comments or the version define.
 /// `gen-headers`'s `abi_header_hash` test fails on a change; update this beside `ABI_VERSION`.
 /// cbindgen:ignore
-pub const ABI_HEADER_HASH: u64 = 0x8981_4be8_d3c1_b825;
+pub const ABI_HEADER_HASH: u64 = 0x81ea_de6a_932d_4728;
 
 #[cfg(test)]
 mod env_tests {

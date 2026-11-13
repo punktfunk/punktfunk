@@ -1,8 +1,10 @@
 //! On-disk cache of a host's library catalog (titles, not cover art).
 //!
-//! One JSON file per host under the platform cache dir. Every byte is re-derivable
-//! from the host, so the OS may evict it. No size budget: a catalog is a few hundred KB.
-//! Shared by every client that fetches through [`crate::library`].
+//! One JSON file per host and per profile it was fetched as, under the platform cache dir:
+//! `<pin>.json` the box's, `<pin>/<profile>.json` a profile's. Every byte is re-derivable
+//! from the host, so the OS may evict it. No size budget: a catalog is a few hundred KB, and
+//! a host has one per profile this device played as there. Shared by every client that
+//! fetches through [`crate::library`].
 //!
 //! The key is the pinned certificate fingerprint, not `addr:port`. A host that
 //! moves DHCP lease is the same library; keying on address would miss exactly
@@ -17,7 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::library::GameEntry;
+use crate::library::{GameEntry, GameOverrides};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CachedLibrary {
@@ -33,6 +35,19 @@ impl CachedLibrary {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
         now.checked_sub(self.fetched_at).map(Duration::from_secs)
     }
+
+    /// What the host set for `game`, `None` when it set nothing.
+    pub fn overrides(&self, game: &str) -> Option<GameOverrides> {
+        let g = self.games.iter().find(|g| g.id == game)?;
+        g.overrides.clone().filter(|o| !o.is_empty())
+    }
+}
+
+/// The launched game's overrides from this host's last-seen library as `profile` plays it. A
+/// cold deep link on a library never fetched gets none; the host still clamps the mode down at
+/// the handshake.
+pub fn overrides(fp_hex: &str, profile: Option<&str>, game: &str) -> Option<GameOverrides> {
+    load(fp_hex, profile)?.overrides(game)
 }
 
 /// One resolution for every client-side cache: `$XDG_CACHE_HOME/punktfunk/<name>`,
@@ -62,32 +77,42 @@ fn cache_dir() -> Option<PathBuf> {
     cache_subdir("library")
 }
 
-/// Re-validated because `fp_hex` becomes a path component (64 lowercase hex).
-/// An unpinned host has no key and runs uncached — we do not remember a game
-/// list against TOFU.
-fn path_for(fp_hex: &str) -> Option<PathBuf> {
+/// The pin's folder of profile catalogs. Re-validated because `fp_hex` becomes a path
+/// component (64 lowercase hex). An unpinned host has no key and runs uncached — we do not
+/// remember a game list against TOFU.
+fn host_dir(fp_hex: &str) -> Option<PathBuf> {
     let ok = fp_hex.len() == 64
         && fp_hex
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-    ok.then(|| cache_dir().map(|d| d.join(format!("{fp_hex}.json"))))
-        .flatten()
+    ok.then(|| cache_dir().map(|d| d.join(fp_hex))).flatten()
 }
 
-/// Decode failure (older `GameEntry` shape) is a miss, never an error:
-/// one extra fetch, same as no cache.
-pub fn load(fp_hex: &str) -> Option<CachedLibrary> {
-    let raw = std::fs::read_to_string(path_for(fp_hex)?).ok()?;
+/// `<pin>.json` for the box, the name a catalog had before profiles, else
+/// `<pin>/<profile>.json`. A profile id that is not a minted one runs uncached.
+fn path_for(fp_hex: &str, profile: Option<&str>) -> Option<PathBuf> {
+    let host = host_dir(fp_hex)?;
+    match profile {
+        None => Some(host.with_extension("json")),
+        Some(p) if crate::unlock::is_profile_id(p) => Some(host.join(format!("{p}.json"))),
+        Some(_) => None,
+    }
+}
+
+/// The catalog fetched as `profile` (`None`: the box's). Decode failure (older `GameEntry`
+/// shape) is a miss, never an error: one extra fetch, same as no cache.
+pub fn load(fp_hex: &str, profile: Option<&str>) -> Option<CachedLibrary> {
+    let raw = std::fs::read_to_string(path_for(fp_hex, profile)?).ok()?;
     serde_json::from_str(&raw).ok()
 }
 
-/// Best-effort write. A cache that cannot write is a slower client, not a broken one.
-pub fn store(fp_hex: &str, games: &[GameEntry]) {
+/// Best-effort write of the catalog fetched as `profile`. A cache that cannot write is a
+/// slower client, not a broken one.
+pub fn store(fp_hex: &str, profile: Option<&str>, games: &[GameEntry]) {
     // Empty is indistinguishable from a miss; caching it would pin a blank list over titles.
     if games.is_empty() {
         return;
     }
-    let Some(path) = path_for(fp_hex) else { return };
     let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
         return;
     };
@@ -95,7 +120,28 @@ pub fn store(fp_hex: &str, games: &[GameEntry]) {
         games: games.to_vec(),
         fetched_at: now.as_secs(),
     };
-    let Ok(json) = serde_json::to_vec(&snapshot) else {
+    write(fp_hex, profile, &snapshot);
+}
+
+/// The catalog cached for `profile` once title `id` left it (`back: None`) or came back as
+/// `back`, keeping its age. No cache, nothing written; the last title gone, no cache.
+pub fn note_hidden(fp_hex: &str, profile: Option<&str>, id: &str, back: Option<&GameEntry>) {
+    let Some(mut cached) = load(fp_hex, profile) else {
+        return;
+    };
+    cached.games.retain(|g| g.id != id);
+    cached.games.extend(back.cloned());
+    match (cached.games.is_empty(), path_for(fp_hex, profile)) {
+        (true, Some(path)) => drop(std::fs::remove_file(path)),
+        _ => write(fp_hex, profile, &cached),
+    }
+}
+
+fn write(fp_hex: &str, profile: Option<&str>, snapshot: &CachedLibrary) {
+    let Some(path) = path_for(fp_hex, profile) else {
+        return;
+    };
+    let Ok(json) = serde_json::to_vec(snapshot) else {
         return;
     };
     let Some(dir) = path.parent() else { return };
@@ -111,10 +157,13 @@ pub fn store(fp_hex: &str, games: &[GameEntry]) {
     }
 }
 
-/// Part of forgetting the host: the title list must leave disk with it.
+/// Part of forgetting the host: its title lists, every profile's, must leave disk with it.
 pub fn forget(fp_hex: &str) {
-    if let Some(path) = path_for(fp_hex) {
+    if let Some(path) = path_for(fp_hex, None) {
         let _ = std::fs::remove_file(path);
+    }
+    if let Some(dir) = host_dir(fp_hex) {
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
 
@@ -124,18 +173,34 @@ mod tests {
 
     #[test]
     fn only_a_real_fingerprint_becomes_a_path() {
-        assert!(path_for("../../etc/passwd").is_none());
-        assert!(path_for("").is_none());
-        assert!(path_for(&"a".repeat(63)).is_none(), "too short");
+        assert!(path_for("../../etc/passwd", None).is_none());
+        assert!(path_for("", None).is_none());
+        assert!(path_for(&"a".repeat(63), None).is_none(), "too short");
         assert!(
-            path_for(&"A".repeat(64)).is_none(),
+            path_for(&"A".repeat(64), None).is_none(),
             "uppercase is not our hex"
         );
-        assert!(path_for(&"g".repeat(64)).is_none(), "not hex at all");
+        assert!(path_for(&"g".repeat(64), None).is_none(), "not hex at all");
         if cache_dir().is_some() {
-            let p = path_for(&"0123456789abcdef".repeat(4)).expect("64 lowercase hex is a key");
+            let p =
+                path_for(&"0123456789abcdef".repeat(4), None).expect("64 lowercase hex is a key");
             assert!(p.to_string_lossy().ends_with(".json"));
         }
+    }
+
+    /// The box's catalog keeps the name it had before profiles, so an old file is the box's;
+    /// a profile's sits in the pin's folder, and a hostile id names no file.
+    #[test]
+    fn a_profile_catalog_is_filed_apart_from_the_boxs() {
+        let Some(dir) = cache_dir() else { return };
+        let pin = "0123456789abcdef".repeat(4);
+        assert_eq!(path_for(&pin, None), Some(dir.join(format!("{pin}.json"))));
+        assert_eq!(
+            path_for(&pin, Some("a1b2c3d4e5f6")),
+            Some(dir.join(&pin).join("a1b2c3d4e5f6.json"))
+        );
+        assert_eq!(path_for(&pin, Some("../x")), None);
+        assert_eq!(path_for(&pin, Some("")), None);
     }
 
     #[test]
@@ -145,5 +210,33 @@ mod tests {
             fetched_at: u64::MAX,
         };
         assert!(ahead.age().is_none());
+    }
+
+    /// The file's bytes keep a title's overrides, and the lookup finds them by id.
+    #[test]
+    fn a_cached_catalog_keeps_a_titles_overrides() {
+        let raw = r#"{"fetched_at":1,"games":[
+            {"id":"steam:570","store":"steam","title":"Dota 2","overrides":{"lines":1080,"gamepad":"dualsense"}},
+            {"id":"steam:70","store":"steam","title":"Half-Life","overrides":{"name":"Empty"}},
+            {"id":"steam:10","store":"steam","title":"Counter-Strike"}]}"#;
+        let cached: CachedLibrary = serde_json::from_str(raw).unwrap();
+        let back: CachedLibrary =
+            serde_json::from_slice(&serde_json::to_vec(&cached).unwrap()).unwrap();
+        let o = back.overrides("steam:570").expect("round-tripped");
+        assert_eq!(
+            (o.lines, o.gamepad.as_deref()),
+            (Some(1080), Some("dualsense"))
+        );
+        assert_eq!(
+            back.overrides("steam:70"),
+            None,
+            "a name alone sets nothing"
+        );
+        assert_eq!(back.overrides("steam:10"), None);
+        assert_eq!(
+            back.overrides("steam:1"),
+            None,
+            "a title the cache never listed"
+        );
     }
 }

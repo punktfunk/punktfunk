@@ -204,7 +204,7 @@ async fn dial(
     // The host streams as soon as it has `Start`, so its address is whitelisted for media
     // before the handshake. Later is the opening IDR.
     media.set_host(conn.remote_address());
-    let _ = args.shared.reconnect.set(Box::new(media.reconnector()));
+    *args.shared.reconnect.lock().unwrap() = Some(Box::new(media.reconnector()));
     // Inner future so a failure can read `conn.close_reason()`: a typed application
     // close is `Rejected`, not the generic transport error the failed read produces.
     let handshake = async {
@@ -286,6 +286,8 @@ async fn dial(
             profile: p.profile.clone(),
             access_only: false,
             screens: p.screens.clone(),
+            view: p.view,
+            screen_wish: p.screen_wish.clone(),
         };
         v2io::send(&mut send, &hello).await?;
         if let Some(unlock) = unlock {
@@ -407,7 +409,10 @@ async fn dial(
                 clock_offset_ns,
                 clock_rtt_ns,
                 profile: server.profile.clone(),
+                screen: server.screen.clone(),
+                role: server.role,
                 scroll_axis_units: server.features.has(registry::FEATURE_SCROLL_AXIS_UNITS),
+                picture: server.picture,
             },
         ))))
     };

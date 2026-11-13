@@ -1,13 +1,11 @@
 // Render-resolution scaling — the pure geometry behind `DefaultsKey.renderScale`. The client asks
-// the host to render/encode at `chosen resolution × scale` and lets the presenter downscale the
-// larger decoded frame to the display (a Catmull-Rom minification, > 1 = supersampling for
-// sharpness) or upscale a smaller one (< 1 = a performance mode for a weak host GPU / thin link).
+// the host to render at `chosen resolution × scale`. Above 1x it also names its `view`, the chosen
+// resolution, and a host that reads it scales the picture down before encoding; any other host
+// sends the mode and the presenter downscales. Below 1x the presenter upscales.
 //
-// This is where the multiplier is turned into a host-valid `Mode` dimension: multiply, preserve the
-// aspect ratio, floor to even (the host's `validate_dimensions` rejects odd sizes), and clamp to the
-// codec's per-axis ceiling so the connect can't ask for something the encoder will reject. Kept
-// dependency-free + side-effect-free so it's unit-tested (`RenderScaleTests`) and reused by both the
-// fixed-mode connect and the match-window follower.
+// Multiply, keep the aspect ratio, floor to even (the host's `validate_dimensions` rejects odd
+// sizes), and clamp to the codec's per-axis ceiling. Pinned by `RenderScaleTests` against
+// `clients/shared/render-scale-vectors.json`.
 
 import Foundation
 
@@ -27,12 +25,12 @@ public enum RenderScale {
         codec == "h264" ? 4096 : 8192
     }
 
-    /// A compact user-facing label for a multiplier: "Native (1×)", "1.5×", "2× · supersample".
+    /// A compact user-facing label for a multiplier: "Native", "1.5×", "2× (supersample)".
     /// Shared by every platform's picker so the wording stays identical.
     public static func label(_ scale: Double) -> String {
-        if scale == 1.0 { return "Native (1×)" }
-        let magnitude = String(format: "%g×", scale)
-        return scale > 1 ? "\(magnitude) · supersample" : magnitude
+        if scale == 1.0 { return String(localized: L10n.playerRenderScaleNative) }
+        if scale > 1 { return L10n.playerRenderScaleSupersample(scale: String(format: "%g", scale)) }
+        return String(format: "%g×", scale)
     }
 
     /// Clamp a raw stored multiplier into `range`, treating a missing/zero value as 1.0 (Native).
@@ -85,5 +83,32 @@ public enum RenderScale {
             return UInt32(clamped / 2 * 2)
         }
         return (evenFloor(w, minWidth), evenFloor(h, minHeight))
+    }
+
+    /// The size the picture is shown at, for the host to encode instead of the mode `apply` asks
+    /// for: the base at 1x. nil at or below 1x, or when the codec cap leaves the mode no larger
+    /// than the view. Mirrors core's `render_scale::view`.
+    public static func view(
+        baseWidth: Int, baseHeight: Int, scale: Double, maxDimension: Int
+    ) -> (width: UInt32, height: UInt32)? {
+        let view = apply(
+            baseWidth: baseWidth, baseHeight: baseHeight, scale: 1, maxDimension: maxDimension)
+        let mode = apply(
+            baseWidth: baseWidth, baseHeight: baseHeight, scale: scale, maxDimension: maxDimension)
+        return sanitize(scale) > 1 && mode != view ? view : nil
+    }
+
+    /// A further screen's mode at its `base` pixels and the view beside it: above 1x the base ×
+    /// `scale`, shown at the base, as screen 0's mode and view are. At 1x and below, and where the
+    /// codec cap leaves nothing to shrink, the base itself and no view.
+    public static func screenAsk(
+        baseWidth: Int, baseHeight: Int, scale: Double, maxDimension: Int
+    ) -> (mode: (width: UInt32, height: UInt32), view: (width: UInt32, height: UInt32)?) {
+        guard let shown = view(
+            baseWidth: baseWidth, baseHeight: baseHeight, scale: scale, maxDimension: maxDimension)
+        else { return ((UInt32(max(baseWidth, 0)), UInt32(max(baseHeight, 0))), nil) }
+        let mode = apply(
+            baseWidth: baseWidth, baseHeight: baseHeight, scale: scale, maxDimension: maxDimension)
+        return (mode, shown)
     }
 }

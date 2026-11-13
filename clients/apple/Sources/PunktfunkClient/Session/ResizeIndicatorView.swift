@@ -21,7 +21,7 @@ struct ResizeIndicatorView: View {
             if active {
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.large).tint(.white)
-                    Text("Resizing…")
+                    Text(L10n.noticeResizing)
                         .font(.geist(15, .medium, relativeTo: .callout))
                         .foregroundStyle(.white.opacity(0.85))
                 }

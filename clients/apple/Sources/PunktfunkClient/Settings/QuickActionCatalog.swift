@@ -1,6 +1,7 @@
 // The dial editors' shared vocabulary: the catalogue of actions by group with each entry's note
-// on this platform, the shortcut keys, and the ring's inert preview commands. The touch/desktop
-// editor (QuickActionsEditor) and the TV's (TVQuickActionsEditor) both read it.
+// on this platform, the shortcut draft, and the ring's inert preview commands. The touch/desktop
+// editor (QuickActionsEditor) and the TV's (TVQuickActionsEditor) both read it; the keys a
+// shortcut can hold are `Chord`'s.
 
 import PunktfunkKit
 import PunktfunkShared
@@ -13,39 +14,57 @@ struct SlotOption: Identifiable {
 }
 
 struct SlotGroup: Identifiable {
-    /// The section title.
     let id: String
+    /// The section title.
+    let title: String
     let options: [SlotOption]
 }
 
 /// The catalogue by group (design/touch-client-overlay.md §3.3), with each entry's availability
 /// note. The preset's own shortcuts and the empty slot are appended per config.
 let builtinGroups: [SlotGroup] = [
-    .init(id: "Session", options: [
-        .init(id: "end_stream", label: "End stream"),
-        .init(id: "end_game", label: "End game", note: "Only a game this device launched"),
-        .init(id: "disconnect_linger", label: "Disconnect, keep the game running"),
+    .init(id: "session", title: String(localized: L10n.ringGroupSession), options: [
+        .init(id: "end_stream", label: String(localized: L10n.ringEndStream)),
+        .init(id: "end_game", label: String(localized: L10n.ringEndGame),
+              note: String(localized: L10n.ringEndGameNote)),
+        .init(id: "disconnect_linger", label: String(localized: L10n.ringDisconnectLinger)),
     ]),
-    .init(id: "Input", options: [
-        .init(id: "touch_mode", label: "Touch mode", note: noTouchNote),
-        .init(id: "keyboard", label: "Keyboard", note: keyboardNote),
-        .init(id: "pad", label: "Virtual controller",
-              note: noTouchNote ?? "Shows or hides the on-screen controller"),
-        .init(id: "send_text", label: "Send text", note: "Not on this device yet"),
-        .init(id: "guide", label: "Guide button", note: "The host's Xbox / PS / Steam button"),
-        .init(id: "qam", label: "Quick access menu",
-              note: "Where the host runs Steam"),
-        .init(id: "pad_mouse", label: "Controller mouse",
-              note: "Your controller moves the host's pointer"),
-        .init(id: "pad_type", label: "Controller type",
-              note: "The controller the host emulates, for this stream"),
+    .init(id: "input", title: String(localized: L10n.ringGroupInput), options: [
+        .init(id: "touch_mode", label: String(localized: L10n.ringTouchMode), note: noTouchNote),
+        .init(id: "keyboard", label: String(localized: L10n.ringKeyboard), note: keyboardNote),
+        .init(id: "pad", label: String(localized: L10n.ringPad),
+              note: noTouchNote ?? String(localized: L10n.ringPadNote)),
+        .init(id: "send_text", label: String(localized: L10n.ringSendText),
+              note: String(localized: L10n.ringSendTextNote)),
+        .init(id: "guide", label: String(localized: L10n.ringGuide),
+              note: String(localized: L10n.ringGuideNote)),
+        .init(id: "qam", label: String(localized: L10n.ringQam),
+              note: String(localized: L10n.ringQamNote)),
+        .init(id: "pad_mouse", label: String(localized: L10n.ringPadMouse),
+              note: String(localized: L10n.ringPadMouseNote)),
+        .init(id: "pad_type", label: String(localized: L10n.ringPadType),
+              note: String(localized: L10n.ringPadTypeNote)),
+        .init(id: "release_input", label: String(localized: L10n.ringReleaseInput),
+              note: SlotId.releaseInput.runsHere ? nil : String(localized: L10n.ringNoPointerCapture)),
+        .init(id: "mouse_mode", label: String(localized: L10n.ringMouseMode), note: macOnlyNote),
+        .init(id: "clipboard", label: String(localized: L10n.ringClipboard),
+              note: SlotId.clipboard.runsHere ? nil : String(localized: L10n.ringClipboardUnavailable)),
     ]),
-    .init(id: "View", options: [.init(id: "stats", label: "Statistics")]),
-    .init(id: "Audio", options: [.init(id: "mic", label: "Microphone", note: micNote)]),
-    .init(id: "Host", options: [
-        .init(id: "host:power.sleep", label: "Sleep host", note: "Only where the host offers it"),
-        .init(id: "host:power.reboot", label: "Restart host", note: "Only where the host offers it"),
-        .init(id: "host:power.shutdown", label: "Shut down host", note: "Only where the host offers it"),
+    .init(id: "view", title: String(localized: L10n.ringGroupView), options: [
+        .init(id: "stats", label: String(localized: L10n.ringStats)),
+        .init(id: "fullscreen", label: String(localized: L10n.ringFullscreen), note: macOnlyNote),
+        .init(id: "minimize", label: String(localized: L10n.ringMinimize), note: macOnlyNote),
+    ]),
+    .init(id: "audio", title: String(localized: L10n.ringGroupAudio), options: [
+        .init(id: "mic", label: String(localized: L10n.ringMic), note: micNote),
+    ]),
+    .init(id: "host", title: String(localized: L10n.ringGroupHost), options: [
+        .init(id: "host:power.sleep", label: String(localized: L10n.hostPowerSleep),
+              note: String(localized: L10n.ringHostNote)),
+        .init(id: "host:power.reboot", label: String(localized: L10n.hostPowerReboot),
+              note: String(localized: L10n.ringHostNote)),
+        .init(id: "host:power.shutdown", label: String(localized: L10n.hostPowerShutdown),
+              note: String(localized: L10n.ringHostNote)),
     ]),
 ]
 
@@ -53,43 +72,35 @@ let builtinGroups: [SlotGroup] = [
 func slotGroups(for cfg: OverlayConfig) -> [SlotGroup] {
     var groups = builtinGroups
     if !cfg.shortcuts.isEmpty {
-        groups.append(SlotGroup(id: "Shortcuts", options: cfg.shortcuts.map {
+        groups.append(SlotGroup(id: "shortcuts", title: String(localized: L10n.ringGroupShortcuts),
+                                options: cfg.shortcuts.map {
             SlotOption(id: "shortcut:\($0.id)", label: $0.label.isEmpty ? chordChip($0.keys) : $0.label,
                        note: $0.label.isEmpty ? nil : chordChip($0.keys))
         }))
     }
-    groups.append(SlotGroup(id: "Empty", options: [SlotOption(id: "", label: "Empty slot")]))
+    groups.append(SlotGroup(id: "empty", title: String(localized: L10n.ringGroupEmpty),
+                            options: [SlotOption(id: "", label: String(localized: L10n.ringEmptySlot))]))
     return groups
 }
 
 // The slots this platform cannot run, said in the catalogue so a dimmed disc is never a surprise
 // found after picking it. The preset still syncs to a device that runs them.
+/// The window and mouse-model actions run only on a Mac.
+private let macOnlyNote: String? = SlotId.fullscreen.runsHere ? nil : String(localized: L10n.appleRingMacOnly)
+
 #if os(macOS)
-private let noTouchNote: String? = "Not on a Mac — no touch screen"
-private let keyboardNote: String? = "Not on a Mac — use its own keyboard"
+private let noTouchNote: String? = String(localized: L10n.appleRingNoteNoTouchMac)
+private let keyboardNote: String? = String(localized: L10n.appleRingNoteKeyboardMac)
 private let micNote: String? = nil
 #elseif os(tvOS)
-private let noTouchNote: String? = "Not on Apple TV — no touch screen"
-private let keyboardNote: String? = "Not on Apple TV"
-private let micNote: String? = "Not on Apple TV — no microphone"
+private let noTouchNote: String? = String(localized: L10n.appleRingNoteNoTouchTv)
+private let keyboardNote: String? = String(localized: L10n.appleRingNoteKeyboardTv)
+private let micNote: String? = String(localized: L10n.appleRingNoteMicTv)
 #else
 private let noTouchNote: String? = nil
 private let keyboardNote: String? = nil
 private let micNote: String? = nil
 #endif
-
-let modifierKeys = ["ctrl", "alt", "shift", "win"]
-
-/// The keys a chord can end on, as the keyboard the editor draws lays them out — every name
-/// `keyVk` knows, grouped the way a keyboard groups them.
-let keyGroups: [(title: String, keys: [String])] = [
-    ("Function", ["escape"] + (1...12).map { "f\($0)" }),
-    ("Letters", "qwertyuiopasdfghjklzxcvbnm".map(String.init)),
-    ("Numbers", (1...9).map(String.init) + ["0"]),
-    ("Editing", ["tab", "space", "enter", "backspace", "delete", "insert"]),
-    ("Navigation", ["home", "end", "pageup", "pagedown", "up", "down", "left", "right"]),
-    ("Other", ["printscreen", "pause", "capslock"]),
-]
 
 /// A shortcut being edited, new or existing.
 struct ShortcutDraft: Identifiable, Hashable {
@@ -99,31 +110,43 @@ struct ShortcutDraft: Identifiable, Hashable {
     var isNew: Bool
 }
 
-/// The three power actions as the ring would show them on a host that offers all three; an
-/// editor has no host on the line, and a dimmed "does not offer it" would lie about the slot.
-let previewHosts = [
-    HostAction(id: "power.sleep", title: "Sleep"),
-    HostAction(id: "power.reboot", title: "Restart", danger: true),
-    HostAction(id: "power.shutdown", title: "Shut down", danger: true),
-]
+/// The power actions and every other host action `cfg`'s ring holds, each by this app's word for
+/// it, as a host that offers them all lists them. An editor has no host on the line, and a dimmed
+/// "does not offer it" would lie about the slot.
+private func previewHosts(_ cfg: OverlayConfig) -> [HostAction] {
+    var ids = ["power.sleep", "power.reboot", "power.shutdown"]
+    for case .host(let id)? in cfg.ring where !ids.contains(id) { ids.append(id) }
+    return ids.map {
+        HostAction(id: $0, title: SlotId.host($0).label(), danger: ["power.reboot", "power.shutdown"].contains($0))
+    }
+}
 
-/// The ring's commands with nothing behind them: an editor shows, it never fires (§3.3).
-var previewRingActions: RingActions {
+/// A game this device started, so the preview's End game is not dimmed. Decoded: `RunningGame`'s
+/// memberwise init is PunktfunkKit's.
+private let previewGame = try? JSONDecoder().decode(
+    RunningGame.self, from: Data(#"{"title": "", "state": "running"}"#.utf8))
+
+/// The ring's commands for `cfg` with nothing behind them: an editor shows, it never fires
+/// (§3.3). Every slot this device runs reads as available.
+func previewRingActions(_ cfg: OverlayConfig) -> RingActions {
     #if os(tvOS)
     let micAvailable = false
     #else
     let micAvailable = true
     #endif
-    return RingActions(
+    var actions = RingActions(
         endStream: {}, disconnectLinger: {},
         touchMode: { .trackpad }, cycleTouchMode: {},
         keyboard: {},
         stats: { .compact }, cycleStats: {},
         micAvailable: { micAvailable }, micMuted: { false }, toggleMic: {},
-        hostActions: { previewHosts }, invokeHost: { _ in },
+        hostActions: { previewHosts(cfg) }, invokeHost: { _ in },
         sendShortcut: { _ in },
-        padAvailable: { true }, padShown: { false }, togglePad: {}, tapPadButton: { _ in },
+        padAvailable: { true }, padShown: { false }, togglePad: {}, tapPadButton: { _, _ in },
         pointerGranted: { true }, padMouseTarget: { 1 }, padMouseMode: { .off }, cyclePadMouse: {},
         currentMode: { (1920, 1080, 60) }, requestMode: { _, _, _ in },
         padTypeAvailable: { true })
+    actions.streamedGame = { previewGame }
+    actions.clipboardAvailable = { true }
+    return actions
 }

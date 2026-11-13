@@ -67,6 +67,8 @@ mod screens;
 mod shell;
 #[cfg(all(any(target_os = "linux", windows), feature = "vulkan-overlay"))]
 mod skia_overlay;
+#[cfg(test)]
+mod textprobe;
 /// The settings rows' engine — ids, platform gate, spec, step — for a shell that lays the
 /// same rows out its own way (the webOS pointer UI's page map). Same kit terms as
 /// [`widgets`]: one consumer, no stability promise.
@@ -89,9 +91,9 @@ pub use library::{
     DecodedPoster, DownloadsPush, LibraryGame, LibraryPhase, LibraryShared, Stale, TitleFiles,
 };
 pub use model::{
-    ConsoleBus, ConsoleCmd, ConsoleShared, HostAction, HostRow, LicenseSection, OtherDevice,
-    PadTestState, PairPhase, PairStatus, PresetChip, ProfilesAnswer, RequestKey, SpeedPhase,
-    SpeedStatus, WakeStatus,
+    ConsoleBus, ConsoleCmd, ConsoleShared, HiddenAnswer, HideAnswer, HostAction, HostRow,
+    LicenseSection, OtherDevice, PadTestState, PairPhase, PairStatus, PresetChip, ProfilesAnswer,
+    RequestKey, SpeedPhase, SpeedStatus, WakeStatus,
 };
 pub use platform::Platform;
 pub use ring::Ring;

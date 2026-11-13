@@ -17,7 +17,8 @@ omur = { git = "https://github.com/unom-io/omur", rev = "18981af0cd66380b06cbf52
 # `ureq-tls` is for `ctl`: ureq's own `TlsConfig` has no hook for a custom certificate verifier,
 # so the pinned operator client hands rustls a `ClientConfig` through core's shared glue — the same
 # path the tray and the desktop client already take. `quic` brings `tls` (and `PinVerify`) with it.
-punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "ureq-tls"] }
+# `serde` reads and writes `GameOverrides` in `library-overrides.json` and on `GET /library`.
+punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "ureq-tls", "serde"] }
 # Vendor libraries are dlopen'd at runtime, never linked: `libcuda.so.1` (`zerocopy::cuda`) and
 # NVML on every OS (`encoder_sessions`), so one binary runs with or without an NVIDIA driver.
 libloading = "0.9"
@@ -403,8 +404,9 @@ pyrowave = ["pf-encode/pyrowave"]
 winresource = "0.1"
 
 # x86 hosts seal every packet with aws-lc-rs's VAES kernels: 236 ns a packet against 500 on a
-# Zen 4. wasm and armv7 keep RustCrypto; the wire is the same.
-[target.'cfg(all(target_arch = "x86_64", any(target_os = "linux", windows)))'.dependencies]
+# Zen 4. Windows on ARM takes it too: RustCrypto finds no hardware AES there and runs it in
+# software. wasm and armv7 keep RustCrypto; the wire is the same.
+[target.'cfg(any(all(target_arch = "x86_64", any(target_os = "linux", windows)), all(target_arch = "aarch64", windows)))'.dependencies]
 punktfunk-core = { path = "../../core/punktfunk-core", features = ["aes-aws-lc-rs"] }
 
 [lints]

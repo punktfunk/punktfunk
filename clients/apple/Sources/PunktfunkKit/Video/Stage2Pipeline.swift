@@ -402,15 +402,15 @@ struct ArrivalSlots {
 
 /// Selects when a decoded frame enters the layer; decode and the newest-wins store are shared.
 ///
-/// - `arrival` (stage-2): render from frame arrival. This is the macOS default for every codec and
-///   an explicit A/B elsewhere; macOS smoothness can additionally schedule it on the vsync grid.
+/// Which pacing a platform takes by default is decided in `PresenterChoice.platformDefault`.
+///
+/// - `arrival` (stage-2): render from frame arrival; macOS smoothness can additionally schedule
+///   it on the vsync grid.
 /// - `glass` (stage-3): admit a bounded number of presents and reopen each slot from its on-glass
 ///   callback. Frames decoded while closed coalesce in the store instead of joining the layer FIFO.
-/// - `deadline` (stage-4): pair the newest frame with a CAMetalDisplayLink-vended drawable. This is
-///   the iOS default; tvOS retains it as an A/B path because its minimum render window spans two
-///   fixed-rate refreshes.
+/// - `deadline` (stage-4): pair the newest frame with a CAMetalDisplayLink-vended drawable.
 /// - `decoded`: send VideoToolbox's IOSurface-backed output directly to the system video renderer.
-///   This is tvOS's latency default and avoids compressed decode buffering plus the Metal FIFO.
+///   Reached only through `PUNKTFUNK_PRESENTER=decoded`.
 public enum PresentPacing: Sendable, Equatable {
     case arrival
     case glass
@@ -1087,8 +1087,9 @@ struct DeadlineSelector {
         case present(at: CFTimeInterval, switched: Bool)
     }
 
-    /// The host's rate is re-measured over this long.
-    static let rateWindow: CFTimeInterval = 2
+    /// The host's rate is re-measured over this long: one frame of count noise is 0.125 Hz, under
+    /// `Carry`'s 0.3 Hz slow threshold.
+    static let rateWindow: CFTimeInterval = 8
 
     let latePick: Bool
     private var phase = PhaseTracker()
@@ -1341,7 +1342,8 @@ extension MetalVideoPresenter {
                 isHDR: isHDR, tenBitSDR: MetalVideoPresenter.tenBitBuffer(pixelBuffer))
         case .planar(let planes):
             reconcileLayer(
-                decodedSize: CGSize(width: planes.width, height: planes.height), isHDR: planes.pq)
+                decodedSize: CGSize(width: planes.width, height: planes.height), isHDR: planes.pq,
+                tenBitSDR: planes.tenBitSDR)
         }
     }
 }
@@ -1986,16 +1988,12 @@ public final class Stage2Pipeline {
         let flight = PresentFlight()
         let latePick = cadence == nil
 
-        // The link starts LAZILY — the render thread triggers this after the FIRST decoded
-        // frame's reconcileLayer. Started eagerly it vends into the layer's initial 0×0
-        // drawableSize for the whole connect window: every vend fails allocation and the system
-        // logs "[CAMetalLayer nextDrawable] returning nil because allocation failed" once per
-        // refresh until the first frame arrives. Before that frame there is nothing to present
-        // anyway, and the first frame waits at most one refresh for the first vend.
-        // Per-GENERATION stop flag (the session `token` still stops every generation): the
-        // watchdog below retires a link that stopped vending and starts a fresh one, and the
-        // retired thread must exit without taking the session with it.
-        let startLink: (StopFlag) -> Void = { linkStop in
+        // Started by the render thread after the first frame's reconcileLayer: before it the
+        // layer is 0×0 and every vend fails allocation. Each link has its own stop flag, so
+        // retiring one leaves the session running. Returns the signal the link's thread gives
+        // once the link is invalidated.
+        let startLink: (StopFlag) -> DispatchSemaphore = { linkStop in
+            let gone = DispatchSemaphore(value: 0)
             let linkThread = Thread {
                 let delegate = DeadlineLinkDelegate(
                     presenter: presenter,
@@ -2021,10 +2019,12 @@ public final class Stage2Pipeline {
                     }
                 }
                 link.invalidate()
+                gone.signal()
             }
             linkThread.name = "punktfunk-stage4-link"
             linkThread.qualityOfService = .userInteractive
             linkThread.start()
+            return gone
         }
 
         let renderThread = Thread {
@@ -2039,11 +2039,17 @@ public final class Stage2Pipeline {
             // The live link generation's stop flag — nil until the first frame starts one.
             // Render-thread confined (only this thread starts, retires or reads it).
             var linkStop: StopFlag?
+            var linkGone: DispatchSemaphore?
+            // One link on the layer at a time. A link started while its predecessor is still
+            // attached vends two drawables in three refreshes for good: 40 presents a second
+            // at 60 Hz, none of them late. The old thread leaves within one run-loop pass.
             let restartLink = {
                 linkStop?.stop()
+                _ = linkGone?.wait(timeout: .now() + 0.5)
+                _ = stash.take() // the retired link's last vend
                 let stop = StopFlag()
                 linkStop = stop
-                startLink(stop)
+                linkGone = startLink(stop)
             }
             // What became of the last drawable this thread handled, for the late line.
             var lastFate = "presented"
@@ -2354,17 +2360,8 @@ public final class Stage2Pipeline {
         frameRateHint.stage(hz: hz)
     }
 
-    /// Pen-proximity rate boost (drawing workloads): drive the deadline link — and with it the
-    /// panel, whose cadence paces UIKit's touch/Pencil event delivery — at the range ceiling
-    /// while a Pencil is in range, so a sub-panel-rate stream stops halving pencil sampling.
-    /// Staged like the rate hint; no-op under arrival/glass pacing. MAIN thread.
-    public func setInteractionBoost(_ on: Bool) {
-        frameRateHint.setBoost(on)
-        presentLog.info("pen boost \(on ? "engaged" : "released", privacy: .public)")
-    }
-
-    /// Whether the window can scan out Direct — fullscreen, nothing of the app's own over the
-    /// video; the Direct gate probes only then (MAIN).
+    /// Whether the window is fullscreen, so can scan out Direct; the Direct gate probes only
+    /// then (MAIN).
     public func setDirectPossible(_ possible: Bool) {
         scanout.setDirectPossible(possible)
     }

@@ -12,7 +12,7 @@ pub const AUDIO_FORMAT_LOSSLESS_48: &str = "lossless48";
 /// not upsample.
 pub const AUDIO_FORMAT_LOSSLESS_96: &str = "lossless96";
 
-/// `(stored value, label)` both desktop settings UIs render.
+/// `(stored value, label)` the settings UIs render. The label is read when the row is drawn.
 ///
 /// Values are shared verbatim with Apple `AudioFormatChoice` and Android `AUDIO_FORMAT_*`.
 /// A preset round-trips through all four clients (`presets.rs`); a spelling mismatch is
@@ -23,10 +23,16 @@ pub const AUDIO_FORMAT_LOSSLESS_96: &str = "lossless96";
 /// 48/96 kHz only: jitter buffers are `ms × samples-per-ms` with an integer per-ms, so
 /// 44 100 Hz truncates to 44 (a silent 2.3 % error). See `design/hi-res-audio.md`.
 /// 48 kHz / 16-bit is omitted: ~1.5 Mbps for what 256 kbps Opus already is.
-pub const AUDIO_FORMATS: &[(&str, &str)] = &[
-    (AUDIO_FORMAT_OPUS, "Standard (Opus)"),
-    (AUDIO_FORMAT_LOSSLESS_48, "Lossless 48 kHz / 24-bit"),
-    (AUDIO_FORMAT_LOSSLESS_96, "Lossless 96 kHz / 24-bit"),
+pub const AUDIO_FORMATS: &[(&str, crate::settings::Label)] = &[
+    (AUDIO_FORMAT_OPUS, pf_l10n::client::player_audio_format_opus),
+    (
+        AUDIO_FORMAT_LOSSLESS_48,
+        pf_l10n::client::player_audio_format_lossless48,
+    ),
+    (
+        AUDIO_FORMAT_LOSSLESS_96,
+        pf_l10n::client::player_audio_format_lossless96,
+    ),
 ];
 
 /// `(rate_hz, bits)` for a stored [`AUDIO_FORMATS`] value. `None` is Opus: send wire `0`/`0`,

@@ -17,6 +17,6 @@ REPO
 ==> Checking
 
   Done. Next: let a device in.
-  Open punktfunk here and pick the PC you stream from — then approve this device in that host's console.
+  Open Punktfunk on this device and pick your host — then approve this device in that host's web console.
   https://docs.punktfunk.unom.io/docs/install-client · https://docs.punktfunk.unom.io/docs/pairing
 

@@ -12,12 +12,23 @@ recipes must install it, NixOS must declare the same groups, and no script or ru
 join or name a group it lacks.
 
 packaging/linux/payload.txt's seats rows are the seat supervisor's files. The Nix and Steam Deck
-recipes build nothing CI can read, so each must name every one of those files.
+recipes build nothing CI can read, so each must name every one of those files. The deb, rpm,
+pacman and sysext removal steps must run door-remove.
+
+A SteamOS update rebuilds /etc and keeps only what its keep lists name, so every /etc path the
+Steam Deck scripts install must be on scripts/punktfunk-atomic-keep.conf or under a tree SteamOS
+keeps itself.
+
+packaging/linux's units are system units. PID 1 reads each EnvironmentFile= as root and follows a
+link, whatever User= says, and a `+` or `!` line hands what it read to root. So each such file sits
+directly in a directory only root writes.
 
 Usage: python3 scripts/ci/check-packaging-policy.py [--self-test]
 """
 import glob
+import itertools
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -32,12 +43,31 @@ GROUP_RECIPES = ["packaging/debian/build-deb.sh", "packaging/debian/build-client
                  "packaging/rpm/punktfunk.spec", "packaging/arch/PKGBUILD",
                  "scripts/steamdeck/lib.sh"]
 PAYLOAD = "packaging/linux/payload.txt"
-# The seats recipes CI can't build, and the payload files each may leave out.
+# The seats recipes CI can't build, and the payload files each may leave out. Neither has a
+# removal step to run door-remove from.
 SEATS_RECIPES = {
     # The module orders user@ after the supervisor itself.
-    "packaging/nix/packages.nix": {"50-punktfunk-seats.conf"},
-    "scripts/steamdeck/door.sh": set(),
+    "packaging/nix/packages.nix": {"50-punktfunk-seats.conf", "door-remove"},
+    "scripts/steamdeck/door.sh": {"door-remove"},
 }
+# Each channel that removes the seats as a package: the file holding its removal step, and the line
+# that opens it. The step runs until a line opening with `}`, `EOF` or a spec section, and must run
+# door-remove, which turns the door off before the package goes.
+REMOVE_STEP = "door-remove"
+SEATS_REMOVAL = [
+    ("packaging/debian/build-seats-deb.sh", '"$STAGE/DEBIAN/prerm"'),
+    ("packaging/rpm/punktfunk.spec", "%preun seats"),
+    ("packaging/arch/punktfunk-seats.install", "pre_remove()"),
+    ("packaging/bazzite/punktfunk-sysext.sh", "cmd_remove()"),
+]
+UNITS = "packaging/linux/*.service"
+# Directories only root writes (punktfunk-seats.tmpfiles; pf-seats' env files are root's with a
+# read ACL). Their subdirectories hold seat accounts' files, so a unit's file sits directly in one.
+ROOT_DIRS = ("/var/lib/punktfunk-seats", "/run/punktfunk/seats")
+KEEP_LIST = "scripts/punktfunk-atomic-keep.conf"
+DECK_SCRIPTS = "scripts/steamdeck/*.sh"
+# The /etc trees SteamOS's own keep list holds, as KEEP_LIST's comments say.
+STOCK_KEPT = ("/etc/systemd/system/", "/etc/atomic-update.conf.d/")
 # Created on first use by door-helper and the seat supervisor, so no package ships them.
 RUNTIME_GROUPS = {"punktfunk-games"}
 # Groups the distribution provides.
@@ -226,6 +256,60 @@ def seats_errors(payload, texts):
             if name not in SEATS_RECIPES.get(path, set()) and name not in strip_comments(text)]
 
 
+def removal_errors(texts):
+    """[(path, error)] for each SEATS_REMOVAL step in `texts` ({path: text}) that is missing or
+    never runs door-remove."""
+    errors = []
+    for path, opener in SEATS_REMOVAL:
+        lines = strip_comments(texts[path]).splitlines()
+        start = next((i for i, line in enumerate(lines) if opener in line), None)
+        if start is None:
+            errors.append((path, f"has no removal step ({opener}) to run {REMOVE_STEP} from"))
+            continue
+        step = itertools.takewhile(lambda line: not re.match(r"(\}|EOF|%[a-z])", line),
+                                   lines[start + 1:])
+        if not any(REMOVE_STEP in line for line in step):
+            errors.append((path, f"{opener} never runs {REMOVE_STEP}, so a removal with the door on "
+                                 "leaves the owner's files and record behind"))
+    return errors
+
+
+def env_file_errors(units):
+    """[(path, error)] for each EnvironmentFile= in `units` ({path: unit text}) that is not directly
+    in one of ROOT_DIRS: an account that owns its directory could swap it for a link to any file
+    root reads, or for settings a root line then runs with."""
+    errors = []
+    for path, text in units.items():
+        for m in re.finditer(r"^[ \t]*EnvironmentFile[ \t]*=[ \t]*-?(.*?)[ \t]*$", text, re.M):
+            name = m.group(1)
+            if name and posixpath.dirname(name) not in ROOT_DIRS:
+                errors.append((path, f"EnvironmentFile={name}: PID 1 reads it as root, from a "
+                                     f"directory root doesn't own alone ({', '.join(ROOT_DIRS)})"))
+    return errors
+
+
+# A file path under /etc, not a tail of another path such as /usr/share/punktfunk/etc.
+ETC_PATH = re.compile(r"(?<![\w.-])/etc/[^\s\"'$)]+")
+
+
+def keep_errors(keep, texts):
+    """[(path, error)] for each /etc file a script in `texts` installs or tees that `keep`, the
+    keep list, does not keep. Its `*` matches within a path segment and `**` across."""
+    kept = [re.compile("".join(".*" if t == "**" else "[^/]*" if t == "*" else re.escape(t)
+                               for t in re.split(r"(\*\*|\*)", line.strip())) + r"\Z")
+            for line in keep.splitlines() if line.startswith("/")]
+    errors = []
+    for path, text in texts.items():
+        for line in strip_comments(text.replace("\\\n", " ")).splitlines():
+            if not re.search(r"\b(install|tee)\b", line):
+                continue
+            errors += [(path, f"installs {etc}, which {KEEP_LIST} does not keep across a SteamOS update")
+                       for etc in ETC_PATH.findall(line)
+                       if not etc.endswith("/") and not etc.startswith(STOCK_KEPT)
+                       and not any(k.match(etc) for k in kept)]
+    return errors
+
+
 def tree_errors():
     matrix = read_matrix(read(MATRIX))
     const = dict(GATE_CONST.findall(read(GATE)))
@@ -251,7 +335,15 @@ def tree_errors():
         errors += [(where.get(binary, first), e)
                    for binary, e in compare(matrix, channel, grants, covers)]
     seats = {path: read(path) for path in SEATS_RECIPES}
-    return errors + tree_group_errors() + seats_errors(read(PAYLOAD), seats)
+    deck = {os.path.relpath(f, ROOT): read(os.path.relpath(f, ROOT))
+            for f in sorted(glob.glob(os.path.join(ROOT, DECK_SCRIPTS)))}
+    units = {os.path.relpath(f, ROOT): read(os.path.relpath(f, ROOT))
+             for f in sorted(glob.glob(os.path.join(ROOT, UNITS)))}
+    if not units:
+        errors.append((UNITS, "no unit to check"))
+    return (errors + tree_group_errors() + seats_errors(read(PAYLOAD), seats)
+            + removal_errors({path: read(path) for path, _ in SEATS_REMOVAL})
+            + keep_errors(read(KEEP_LIST), deck) + env_file_errors(units))
 
 
 def check():
@@ -354,6 +446,55 @@ sudo setcap cap_sys_nice=ep ${WORKER}
     expect("seats file missing", len(seats_errors(payload, {nix: "# door-helper\n"})), 1)
     expect("seats exemption is per recipe",
            len(seats_errors(payload, {"scripts/steamdeck/door.sh": "door-helper\n"})), 1)
+
+    steps = {
+        "packaging/debian/build-seats-deb.sh":
+            "cat > \"$STAGE/DEBIAN/prerm\" <<'EOF'\nif [ \"$1\" = remove ]; then\n"
+            "    /usr/libexec/punktfunk/door-remove || true\nfi\nEOF\n",
+        "packaging/rpm/punktfunk.spec":
+            "%preun seats\nif [ \"$1\" -eq 0 ]; then\n    %{_libexecdir}/punktfunk/door-remove || :\nfi\n"
+            "%endif\n",
+        "packaging/arch/punktfunk-seats.install": "pre_remove() {\n  /usr/libexec/punktfunk/door-remove\n}\n",
+        "packaging/bazzite/punktfunk-sysext.sh": "cmd_remove() {\n  need_root\n  door-remove\n}\n",
+    }
+    expect("removal steps run door-remove", removal_errors(steps), [])
+    for name, path, text in (
+            ("only a disable", "packaging/arch/punktfunk-seats.install",
+             "pre_remove() {\n  systemctl disable --now punktfunk-door.service\n}\n"),
+            ("only in a comment", "packaging/arch/punktfunk-seats.install",
+             "pre_remove() {\n  # door-remove\n  true\n}\n"),
+            ("after the step", "packaging/rpm/punktfunk.spec",
+             "%preun seats\n%systemd_preun punktfunk-door.service\n%endif\n%{_libexecdir}/door-remove\n"),
+            ("no step", "packaging/bazzite/punktfunk-sysext.sh", "cmd_status() {\n  door-remove\n}\n")):
+        expect(f"removal: {name}", len(removal_errors({**steps, path: text})), 1)
+
+    keep = "# c\n/etc/udev/rules.d/60-punktfunk.rules\n/etc/pam.d/punktfunk-*\n/etc/a/**\n"
+    deck = ("sudo install -Dm 0644 x /etc/pam.d/punktfunk-seat\n"
+            "door_paths x \\\n    | sudo install -Dm 0644 /dev/stdin /etc/a/b/c.conf\n"
+            'sudo tee "/etc/systemd/system/$unit" >/dev/null\n'
+            'warn "sudo install -m644 x /etc/udev/rules.d/ &&"\n'
+            "# sudo install x /etc/old.conf\n"
+            "[ -f /etc/os-release ] && . /etc/os-release\n"
+            'install -D x "$PF_OPT/etc/y.conf"\n')
+    expect("deck installs kept", keep_errors(keep, {"d.sh": deck}), [])
+    for name, text in (("not kept", "sudo install x /etc/pam.d/other\n"),
+                       ("* stays in a segment", "sudo tee /etc/pam.d/punktfunk-x/y\n"),
+                       ("continued line", "sudo install x \\\n  /etc/b.conf\n")):
+        expect(f"deck install: {name}", len(keep_errors(keep, {"d.sh": text})), 1)
+
+    door = ("[Service]\nUser=punktfunk\nExecStartPre=+-/usr/libexec/punktfunk/door-helper ports\n"
+            "EnvironmentFile=-/var/lib/punktfunk-seats/host.env\n"
+            "# EnvironmentFile=-/var/lib/punktfunk/host.env\nEnvironmentFile=\n")
+    seat = "[Service]\nUser=%i\nEnvironmentFile=/run/punktfunk/seats/%i.env\nExecStopPost=-+/x %i\n"
+    expect("env files root's", env_file_errors({"door": door, "seat": seat}), [])
+    for name, text in (
+            ("the door's own host.env", door + "EnvironmentFile=-/var/lib/punktfunk/host.env\n"),
+            ("the owner's host.env", seat + "EnvironmentFile=-%h/.config/punktfunk/host.env\n"),
+            ("a console without + lines", "User=punktfunk\nEnvironmentFile=/var/lib/punktfunk/web-password\n"),
+            ("a seat's folder in root's", "EnvironmentFile=/var/lib/punktfunk-seats/hosts/%i/mgmt-token\n"),
+            ("a way out of root's", "EnvironmentFile=/var/lib/punktfunk-seats/../punktfunk/host.env\n"),
+            ("spaced", "  EnvironmentFile = /var/lib/punktfunk/host.env \n")):
+        expect(f"env file: {name}", len(env_file_errors({"u": text})), 1)
     if fails:
         return 1
     print("check-packaging-policy self-test ok")

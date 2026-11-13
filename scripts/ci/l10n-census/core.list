@@ -1,0 +1,20 @@
+crates/client/pf-client-core/src/audio.rs	Punktfunk Microphone
+crates/client/pf-client-core/src/audio.rs	Punktfunk Stream
+crates/client/pf-client-core/src/audio_rt.rs	MMCSS and SetThreadPriority refused
+crates/client/pf-client-core/src/audio_rt.rs	MMCSS ok, SetThreadPriority refused
+crates/client/pf-client-core/src/audio_rt.rs	Pro Audio
+crates/client/pf-client-core/src/audio_rt.rs	SetThreadPriority ok, MMCSS refused
+crates/client/pf-client-core/src/gamepad/worker.rs	Steam Virtual Gamepad
+crates/client/pf-client-core/src/logring.rs	{app} {version} ({} {}) — client log bundle
+crates/client/pf-client-core/src/logring.rs	… {} older lines evicted from the ring …
+crates/client/pf-client-core/src/menu_nav.rs	HORIPAD for Steam
+crates/client/pf-client-core/src/menu_nav.rs	Steam Controller
+crates/client/pf-client-core/src/menu_nav.rs	Steam Controller 2
+crates/client/pf-client-core/src/menu_nav.rs	Steam Controller 2 Puck
+crates/client/pf-client-core/src/menu_nav.rs	Xbox Elite Series 2
+crates/client/pf-client-core/src/omarchy_menu.rs	Connect and stream — {target}
+crates/client/pf-client-core/src/omarchy_menu.rs	{} does not parse as JSONC — fix it, then re-run
+crates/client/pf-client-core/src/pad_audio/mod.rs	Wireless Controller
+crates/client/pf-client-core/src/pad_audio/pipewire.rs	Punktfunk Pad Audio
+crates/client/pf-client-core/src/update.rs	Access denied
+crates/client/pf-client-core/src/update.rs	Permission denied

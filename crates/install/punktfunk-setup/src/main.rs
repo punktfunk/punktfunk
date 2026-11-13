@@ -11,9 +11,10 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use pf_l10n::tools as t;
 use punktfunk_setup::choices::{parse_web_bind, Action, Choices, Pins};
 use punktfunk_setup::exec::{Executor, Opts};
-use punktfunk_setup::facts::{Facts, Floor, DOCS};
+use punktfunk_setup::facts::{Facts, Floor, Punt};
 use punktfunk_setup::plan;
 use punktfunk_setup::report;
 use punktfunk_setup::seam::{BasePaths, CommandRunner, Env, SystemRunner};
@@ -226,6 +227,11 @@ fn run() -> Result<(), ExitCode> {
         .is_ok();
     let demo = cli.demo.clone();
     let yes = cli.yes || !tty;
+    // The screens speak the terminal's language; every transcript (`--yes`, no terminal) stays
+    // English, so a pasted log reads the same everywhere. Set before the first message is made.
+    if tty && !yes {
+        pf_l10n::set_languages(&pf_l10n::terminal_languages());
+    }
     let plain = Plain::stdio(env.get("NO_COLOR").is_none());
     let paths = match &demo {
         Some(_) => punktfunk_setup::demo::sandbox_paths(),
@@ -290,10 +296,13 @@ fn run() -> Result<(), ExitCode> {
 
     let plan = plan::build(&facts, &choices);
     let demo_runner = demo.as_ref().map(|_| {
+        // `--fail` names an English phase word, so it is matched against the English titles
+        // whatever language the screens speak.
+        let english = pf_l10n::with_language("en", || plan::build(&facts, &choices));
         let at = cli
             .fail
             .as_deref()
-            .and_then(|phase| punktfunk_setup::demo::fail_index(&plan, phase));
+            .and_then(|phase| punktfunk_setup::demo::fail_index(&english, phase));
         punktfunk_setup::demo::DemoRunner::new(DEMO_LATENCY_MS, at)
     });
     let run: &dyn CommandRunner = match &demo_runner {
@@ -371,13 +380,13 @@ fn gate_floor(
     }
     match &facts.floor {
         None => Ok(()),
-        Some(Floor::Die(msg)) => {
-            ui.die(msg);
+        Some(floor @ Floor::Die(_)) => {
+            ui.die(&floor.message());
             Err(ExitCode::FAILURE)
         }
-        Some(Floor::Confirm(msg)) => {
-            ui.warn(msg);
-            if ask(interactive, "Continue anyway?") {
+        Some(floor @ Floor::Confirm(_)) => {
+            ui.warn(&floor.message());
+            if ask(interactive, t::setup_floor_continue()) {
                 Ok(())
             } else {
                 Err(ExitCode::FAILURE)
@@ -398,7 +407,7 @@ fn interactive_choices(
     let mut screen = Screen::new(facts.clone(), choices.clone());
     let action = match tui.settings(&mut screen, drawn) {
         Step::Cancel => {
-            tui.outro(&["Nothing was changed.".to_string()]);
+            tui.outro(&[t::setup_cancelled().to_string()]);
             return Err(ExitCode::SUCCESS);
         }
         Step::Run(action) => action,
@@ -408,21 +417,18 @@ fn interactive_choices(
     choices = screen.choices;
     choices.action = action;
     let host_install = action == Action::Install && choices.components.host;
-    let ip = facts.ip.clone().unwrap_or_else(|| "this box".to_string());
+    let (ip, host) = (facts.ip.as_deref(), facts.console_host());
     // After the settings screen, not a row on it: the console password is the one thing
     // a fresh host install leaves the user needing, and a row is too easy to walk past.
     // A box that already has one keeps it — this never overwrites a password in use.
     if host_install && !facts.web_password_present {
-        choices.web_password = tui.web_password(
-            &format!("https://{ip}:47992"),
-            report::password_read(facts.family),
-        );
+        choices.web_password = tui.web_password(ip, host, report::password_read(facts.family));
     }
     // Right after it, for the same reason: the console is the whole product surface.
     // `--web-bind` pins it, and then there is nothing to ask.
     if host_install
         && pins.web_bind.is_none()
-        && let Some(bind) = tui.web_bind(&ip, &choices.web_bind)
+        && let Some(bind) = tui.web_bind(ip, host, &choices.web_bind)
     {
         choices.web_bind = bind;
     }
@@ -434,8 +440,8 @@ fn interactive_choices(
 /// gets past it.
 fn gate_host_punt(ui: &dyn Reporter, facts: &Facts, choices: &Choices) -> Result<(), ExitCode> {
     match &facts.host_punt {
-        Some(msg) if choices.action != Action::Uninstall && choices.components.host => {
-            ui.die(msg);
+        Some(punt) if choices.action != Action::Uninstall && choices.components.host => {
+            ui.die(&punt.message());
             Err(ExitCode::FAILURE)
         }
         _ => Ok(()),
@@ -446,16 +452,14 @@ fn preflight(env: &Env, paths: &BasePaths, runner: &mut SystemRunner) -> Result<
     let linux =
         std::env::consts::OS == "linux" || env.get("PUNKTFUNK_INSTALL_OS_RELEASE").is_some();
     if !linux {
-        return Err(format!(
-            "this installer is for Linux hosts — Windows: {DOCS}/windows-host"
-        ));
+        return Err(Punt::NotLinux.message());
     }
     let root = runner.first_line("id", &["-u"]).as_deref() == Some("0");
     if env.get("SUDO_USER").is_some() && root {
-        return Err("run this as your normal user, not under sudo — it calls sudo itself where needed, and the host runs as you (host.env, the services)".into());
+        return Err(t::setup_preflight_sudo().to_string());
     }
     if !runner.which("curl") {
-        return Err("curl is required (install it with your package manager first)".into());
+        return Err(t::setup_preflight_curl().to_string());
     }
     // Root without sudo (a minimal Debian container): a shim so the verbatim `sudo …`
     // lines from platforms.json still work. The dir leads root's PATH, so it is created
@@ -475,9 +479,7 @@ fn preflight(env: &Env, paths: &BasePaths, runner: &mut SystemRunner) -> Result<
         }
     }
     if !paths.os_release.exists() {
-        return Err(format!(
-            "no /etc/os-release — can't tell which distro this is: {DOCS}/install"
-        ));
+        return Err(Punt::NoOsRelease.message());
     }
     Ok(())
 }
@@ -551,7 +553,7 @@ fn ask(interactive: bool, question: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use punktfunk_setup::facts::Channel;
+    use punktfunk_setup::facts::{Channel, FloorCause};
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_string()).collect()
@@ -666,14 +668,14 @@ mod tests {
     fn the_floor_stops_an_install_but_never_an_uninstall() {
         let (ui, buf) = Plain::capture();
         let mut facts = arch();
-        facts.floor = Some(Floor::Die("glibc too old".into()));
+        facts.floor = Some(Floor::Die(FloorCause::DebianOld("12".into())));
         assert_eq!(
             gate_floor(&ui, &facts, Action::Install, false),
             Err(ExitCode::FAILURE)
         );
-        assert!(buf.borrow().contains("glibc too old"));
+        assert!(buf.borrow().contains("Debian 12 is below the glibc floor"));
         assert_eq!(gate_floor(&ui, &facts, Action::Uninstall, false), Ok(()));
-        facts.floor = Some(Floor::Confirm("untested release".into()));
+        facts.floor = Some(Floor::Confirm(FloorCause::UbuntuOld("24.04".into())));
         assert_eq!(
             gate_floor(&ui, &facts, Action::Install, false),
             Err(ExitCode::FAILURE)
@@ -685,7 +687,7 @@ mod tests {
     fn the_host_punt_leaves_a_client_install_through() {
         let (ui, _buf) = Plain::capture();
         let mut facts = arch();
-        facts.host_punt = Some("no host package here".into());
+        facts.host_punt = Some(Punt::Unsupported("Void Linux".into()));
         let mut choices = Choices::derive(&facts, &Pins::default());
         choices.components.host = true;
         assert_eq!(

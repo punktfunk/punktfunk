@@ -114,6 +114,9 @@ serde_json = "1"
 punktfunk-core = { path = "../../core/punktfunk-core" }
 # Flexbox for the element layer (`el/`). Pure Rust; flexbox and the content-size pass only.
 taffy = { version = "0.14", default-features = false, features = ["std", "taffy_tree", "flexbox", "content_size"] }
+# Every word the shell draws: the shared client messages, the controller interface's own, and
+# the host's power actions by name.
+pf-l10n = { path = "../../../l10n", features = ["client", "console", "host"] }
 
 # Linux links the system SDL3; Windows builds it from source (same choice as the rest
 # of the workspace's Windows SDL consumers).
@@ -130,6 +133,8 @@ sdl3 = { version = "0.20", features = ["hidapi", "ash", "build-from-source"], op
 # vectors the same way.
 [dev-dependencies]
 serde_json = "1"
+# `en-XA`, the pseudo-language the tests draw in to find text that does not come from pf-l10n.
+pf-l10n = { path = "../../../l10n", features = ["pseudo"] }
 
 # `examples/scene.rs`: the shell in an SDL window on a Mac with scripted hosts and pads, for
 # looking at a screen without a device. Links the Homebrew SDL3. With `--no-default-features

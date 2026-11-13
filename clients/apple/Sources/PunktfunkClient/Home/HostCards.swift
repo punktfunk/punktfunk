@@ -103,9 +103,9 @@ private struct DefaultHostBadge: View {
             .background(Circle().fill(Color.brand))
             .overlay(Circle().strokeBorder(.background, lineWidth: max(1, size * 0.035)))
             .offset(x: size * 0.06, y: size * 0.06)
-            .accessibilityLabel("Default host")
+            .accessibilityLabel(L10n.hostcardDefaultHost)
             #if os(macOS)
-            .help("Default host: Start in opens here")
+            .help(L10n.appleHostcardDefaultHostHint)
             #endif
     }
 }
@@ -149,6 +149,13 @@ struct HostActions {
     var power: [HostAction] = []
     var runPower: (HostAction) -> Void = { _ in }
     var presets: HostPresetMenu?
+    /// What this device streams from the host (`GET /display/targets`); nil: no Screen section.
+    var screens: DisplayTargets?
+    /// The preset this card connects with, when it pins the host screen: where it decides, the
+    /// Screen section shows its row alone (`DisplayTargets.rows(under:)`).
+    var screenPreset: BoundPreset?
+    /// Writes the row's pick on the host; a row without one does nothing.
+    var pickScreen: (ScreenRow) -> Void = { _ in }
 }
 
 /// Where one surface runs the acts that need more than the store: a sheet, a dial, a window.
@@ -163,39 +170,39 @@ struct HostActionSurface {
     var runPower: (HostAction) -> Void
     /// Only the grid opens the profile picker; a surface that can't leaves this empty.
     var switchProfile: () -> Void = {}
+    /// The host refused a screen pick: the sentence to show.
+    var screenRefused: (String) -> Void = { _ in }
 }
 
 extension HostActions {
-    /// What `host` offers, gated in one place for the grid and the Mac's host window. A pinned
-    /// card connects and browses with ITS preset and carries no host acts: it is a shortcut, not
-    /// a second host.
+    /// What `host` offers (`HostOffers.resolve`), run on `surface`. A pinned card connects and
+    /// browses with ITS preset. `screens` is the host's answer for this device, the pick it
+    /// streams; the pinned or bound preset's `host_screen` may decide it.
     @MainActor init(
         host: StoredHost, pinned: StreamPreset?, online: Bool, store: HostStore,
-        presets: [StreamPreset], power: [HostAction], surface: HostActionSurface
+        presets: [StreamPreset], power: [HostAction], screens: DisplayTargets?,
+        surface: HostActionSurface
     ) {
         let selection: PresetSelection = pinned.map { .preset($0.id) } ?? .inherit
-        // Library, speed test and logs dial with the pinned identity, and an unpinned host would
-        // accept any certificate. So they wait for a pairing. The demo host has neither a speed
-        // test nor a log inbox.
-        let paired = host.pinnedSHA256 != nil
-        let measurable = paired && !DemoMode.isDemo(host)
-        let wakeable = pinned == nil && !online && WakePolicy.canWake(host.wakeMacs)
+        let preset = pinned ?? host.presetID.flatMap { id in presets.first { $0.id == id } }
+        let offers = HostOffers.resolve(
+            host: host, pinned: pinned != nil, online: online, isDemo: DemoMode.isDemo(host),
+            canWake: WakePolicy.canWake(host.wakeMacs))
         self.init(
             connect: { surface.connect(selection) },
             pair: surface.pair,
             forget: { store.forgetIdentity(host) },
             remove: { store.remove(host) },
-            browseLibrary: paired ? { surface.browse(selection) } : nil,
-            speedTest: measurable ? surface.speedTest : nil,
-            sendLogs: measurable ? surface.sendLogs : nil,
-            wake: wakeable ? surface.wake : nil,
-            switchProfile: pinned == nil && paired && host.pickedProfile != nil
-                && !DemoMode.isDemo(host) ? surface.switchProfile : nil,
+            browseLibrary: offers.contains(.browse) ? { surface.browse(selection) } : nil,
+            speedTest: offers.contains(.speedTest) ? surface.speedTest : nil,
+            sendLogs: offers.contains(.sendLogs) ? surface.sendLogs : nil,
+            wake: offers.contains(.wake) ? surface.wake : nil,
+            switchProfile: offers.contains(.switchProfile) ? surface.switchProfile : nil,
             copyLink: LinkClipboard.isAvailable
                 ? { LinkClipboard.copy(DeepLink.forHost(host, preset: pinned?.id).urlString) }
                 : nil,
-            showDetails: pinned == nil ? surface.showDetails : nil,
-            power: pinned == nil ? power : [],
+            showDetails: offers.contains(.details) ? surface.showDetails : nil,
+            power: offers.contains(.power) ? power : [],
             runPower: surface.runPower,
             presets: HostPresetMenu(
                 presets: presets,
@@ -206,7 +213,18 @@ extension HostActions {
                 togglePin: { id in
                     let pinned = (host.pinnedPresetIDs ?? []).contains(id)
                     store.setPinned(host.id, presetID: id, pinned: !pinned)
-                }))
+                }),
+            screens: screens,
+            screenPreset: preset.flatMap { p in
+                p.overrides.hostScreen.map { BoundPreset(name: p.name, hostScreen: $0) }
+            },
+            pickScreen: { row in
+                guard let pick = row.pick else { return }
+                Task {
+                    let said = await HostScreenStore.shared.pick(pick, label: row.label, on: host)
+                    if let said { surface.screenRefused(said) }
+                }
+            })
     }
 }
 
@@ -242,12 +260,12 @@ enum HostStatus: Equatable {
 
     var text: String {
         switch self {
-        case .connecting: return "Connecting…"
-        case .playing(let title): return "Playing \(title)"
-        case .online: return "Online"
-        case .notPaired: return "Not paired"
-        case .offlineWakes: return "Offline · wakes on tap"
-        case .offline: return "Offline"
+        case .connecting: return String(localized: L10n.hostcardStatusConnecting)
+        case .playing(let title): return L10n.hostcardStatusPlaying(game: title)
+        case .online: return String(localized: L10n.hostcardStatusOnline)
+        case .notPaired: return String(localized: L10n.hostcardStatusNotPaired)
+        case .offlineWakes: return String(localized: L10n.hostcardStatusOfflineWakes)
+        case .offline: return String(localized: L10n.hostcardStatusOffline)
         }
     }
 
@@ -343,7 +361,7 @@ struct HostCardView: View {
                                     picture: pick.avatar, host: host)
                                     .overlay(Circle().strokeBorder(.background, lineWidth: 2))
                                     .offset(x: m.tile * 0.06, y: -m.tile * 0.06)
-                                    .accessibilityLabel("Playing as \(pick.displayName)")
+                                    .accessibilityLabel(L10n.hostcardPlayingAs(profile: pick.displayName))
                             }
                         }
                     VStack(alignment: .leading, spacing: 4) {
@@ -362,6 +380,13 @@ struct HostCardView: View {
                                     preset: preset, size: m.status,
                                     prominent: pinnedPreset != nil)
                                     .fixedSize()
+                            }
+                            // "Streams LG TV", "Second screen"; the only screen says nothing.
+                            if let screen = actions.screens?.cardLine(under: actions.screenPreset) {
+                                Text(screen)
+                                    .font(.geist(m.meta, .medium, relativeTo: .footnote))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
                             }
                         }
                         // One height with or without a chip, so preset cards line up with the rest.
@@ -414,9 +439,9 @@ struct HostCardView: View {
                 .hoverEffect(.highlight)
                 #endif
                 .padding(.trailing, 4)
-                .accessibilityLabel("Details for \(host.displayName)")
+                .accessibilityLabel(L10n.hostcardDetailsA11y(host: host.displayName))
                 #if os(macOS)
-                .help("Host details")
+                .help(L10n.hostcardDetailsHint)
                 #endif
             }
             #endif
@@ -435,18 +460,18 @@ struct HostCardView: View {
         #endif
     }
 
-    /// The daily acts, five rows at most (design §2.3). Setup, diagnostics, power and removal
-    /// live on the host page. A pinned card offers only its shortcut's acts.
+    /// The daily acts (design §2.3). Setup, diagnostics, power and removal live on the host
+    /// page. A pinned card offers only its shortcut's acts.
     @ViewBuilder private var menuItems: some View {
         if let pinned = pinnedPreset {
             if let browse = actions.browseLibrary {
-                Button("Browse Library", systemImage: "square.grid.2x2", action: browse)
+                Button(L10n.hostcardBrowseLibrary, systemImage: "square.grid.2x2", action: browse)
             }
             if let copyLink = actions.copyLink {
-                Button("Copy Link", systemImage: "link", action: copyLink)
+                Button(L10n.hostcardCopyLink, systemImage: "link", action: copyLink)
             }
             if let presets = actions.presets {
-                Button("Unpin Card", systemImage: "pin.slash", role: .destructive) {
+                Button(L10n.hostcardUnpinCard, systemImage: "pin.slash", role: .destructive) {
                     presets.togglePin(pinned.id)
                 }
             }
@@ -454,20 +479,25 @@ struct HostCardView: View {
             if let presets = actions.presets {
                 connectWithMenu(presets)
             }
+            if let screens = actions.screens {
+                screenMenu(screens)
+            }
             if let browse = actions.browseLibrary {
-                Button("Browse Library", systemImage: "square.grid.2x2", action: browse)
+                Button(L10n.hostcardBrowseLibrary, systemImage: "square.grid.2x2", action: browse)
             }
             if let wake = actions.wake {
-                Button("Wake Host", systemImage: "power", action: wake)
+                Button(L10n.hostcardWake, systemImage: "power", action: wake)
             }
             if let switchProfile = actions.switchProfile {
-                Button("Switch profile…", systemImage: "person.crop.circle", action: switchProfile)
+                Button(
+                    L10n.hostcardSwitchProfile, systemImage: "person.crop.circle",
+                    action: switchProfile)
             }
             if let copyLink = actions.copyLink {
-                Button("Copy Link", systemImage: "link", action: copyLink)
+                Button(L10n.hostcardCopyLink, systemImage: "link", action: copyLink)
             }
             if let showDetails = actions.showDetails {
-                Button("Host Details…", systemImage: "info.circle", action: showDetails)
+                Button(L10n.hostcardDetails, systemImage: "info.circle", action: showDetails)
             }
         }
     }
@@ -480,7 +510,7 @@ struct HostCardView: View {
                 Button {
                     menu.connectWith(.defaults)
                 } label: {
-                    checkable("Default settings", on: menu.boundID == nil)
+                    checkable(String(localized: L10n.hostcardDefaultSettings), on: menu.boundID == nil)
                 }
                 ForEach(menu.presets) { preset in
                     Button {
@@ -490,9 +520,47 @@ struct HostCardView: View {
                     }
                 }
             } label: {
-                Label("Connect with", systemImage: "slider.horizontal.3")
+                Label(L10n.hostcardConnectWith, systemImage: "slider.horizontal.3")
             }
         }
+    }
+
+    /// "Screen ▸": the roles, then the host's monitors under their header, the pick checked. A
+    /// greyed row says why under it; when the host or the card's preset decides, its pick greyed
+    /// and the note.
+    @ViewBuilder private func screenMenu(_ screens: DisplayTargets) -> some View {
+        let rows = screens.rows(under: actions.screenPreset)
+        let split = rows.firstIndex { $0.header != nil } ?? rows.endIndex
+        if screens.hasSection {
+            Menu {
+                Section {
+                    ForEach(rows[..<split]) { screenItem($0) }
+                }
+                if split < rows.endIndex {
+                    Section(rows[split].header ?? "") {
+                        ForEach(rows[split...]) { screenItem($0) }
+                    }
+                }
+                if let note = screens.note(under: actions.screenPreset) {
+                    Text(note)
+                }
+            } label: {
+                Label(L10n.hostcardSectionScreen, systemImage: "display")
+            }
+        }
+    }
+
+    /// One Screen row as a menu item: the checked one does nothing, a greyed one can't be picked.
+    private func screenItem(_ row: ScreenRow) -> some View {
+        Button {
+            actions.pickScreen(row)
+        } label: {
+            checkable(row.label, on: row.checked)
+            if let line = row.line {
+                Text(line)
+            }
+        }
+        .disabled(!row.pickable)
     }
 
     /// A menu row that carries a checkmark when it is the current choice. Built as two shapes
@@ -533,7 +601,7 @@ struct PresetChip: View {
         .padding(.horizontal, 7)
         .padding(.vertical, 2)
         .background(Capsule().fill(tint.opacity(prominent ? 0.24 : 0.12)))
-        .accessibilityLabel("Preset \(preset.name)")
+        .accessibilityLabel(L10n.appleHostcardPresetA11y(preset: preset.name))
     }
 }
 
@@ -565,7 +633,10 @@ struct DiscoveredCardView: View {
                             ? "lock.fill" : "antenna.radiowaves.left.and.right")
                             .font(.system(size: m.status))
                             .accessibilityHidden(true) // decorative; the adjacent text says the state
-                        Text(discovered.requiresPairing ? "PAIRING REQUIRED" : "DISCOVERED")
+                        Text(
+                            discovered.requiresPairing
+                                ? L10n.hostcardStatusPairingRequired
+                                : L10n.appleHostcardStatusDiscovered)
                     }
                     .font(.geist(m.status, .medium, relativeTo: .caption2))
                     .tracking(0.8)

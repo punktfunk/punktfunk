@@ -67,13 +67,13 @@ impl ScreenView for GrantsScreen {
 
     fn announcement(&self, _ctx: &Ctx) -> Option<String> {
         let (_, label, verb) = PASSTHROUGH[self.list.cursor];
-        Some(format!("{label}, {verb}"))
+        Some(format!("{}, {}", label(), verb()))
     }
 
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         vec![
-            Hint::new(HintKey::Confirm, PASSTHROUGH[self.list.cursor].2),
-            Hint::new(HintKey::Back, "Done"),
+            Hint::new(HintKey::Confirm, (PASSTHROUGH[self.list.cursor].2)()),
+            Hint::new(HintKey::Back, pf_l10n::common::common_done()),
         ]
     }
 
@@ -90,8 +90,8 @@ impl ScreenView for GrantsScreen {
         let rows: Vec<RowSpec> = PASSTHROUGH
             .iter()
             .map(|(_, label, verb)| RowSpec {
-                label: (*label).into(),
-                value: Some((*verb).into()),
+                label: label().into(),
+                value: Some(verb().into()),
                 ..RowSpec::default()
             })
             .collect();
@@ -105,7 +105,7 @@ impl ScreenView for GrantsScreen {
     }
 
     fn title(&self) -> String {
-        "Controller access".into()
+        pf_l10n::console::console_pad_access_title().into()
     }
 
     fn press(&mut self) {
@@ -118,23 +118,12 @@ impl ScreenView for GrantsScreen {
 }
 
 fn detail(action: PadAction) -> &'static str {
+    use pf_l10n::console as c;
     match action {
-        PadAction::Sc2Bluetooth => {
-            "A Steam Controller 2 paired over Bluetooth can't be detected at all without \
-             Bluetooth access. Wired and Puck-dongle controllers need no permission."
-        }
-        PadAction::Sc2Usb => {
-            "A wired or Puck-dongle Steam Controller 2 needs USB access to be captured; \
-             until then it stays in its built-in keyboard/mouse mode."
-        }
-        PadAction::DsUsb => {
-            "A wired DualSense or DualShock 4 needs USB access to be captured — with it, \
-             streams drive rumble, adaptive triggers, lightbar and gyro directly."
-        }
-        PadAction::DsHaptics => {
-            "Play a short tone through a wired DualSense's audio endpoint, to tell a pad \
-             that can't do haptics from a stream that is not sending them."
-        }
+        PadAction::Sc2Bluetooth => pf_l10n::client::pad_sc2_bluetooth_detail(),
+        PadAction::Sc2Usb => c::console_pad_sc2_usb_detail(),
+        PadAction::DsUsb => c::console_pad_ds_usb_detail(),
+        PadAction::DsHaptics => c::console_pad_ds_haptics_detail(),
         // Not a row; pads carry rumble.
         PadAction::Rumble => "",
     }

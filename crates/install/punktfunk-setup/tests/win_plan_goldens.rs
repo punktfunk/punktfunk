@@ -10,6 +10,7 @@
 mod common;
 
 use common::{fresh, golden, public_network, upgrade};
+use punktfunk_setup::choices::LOOPBACK_BIND;
 use punktfunk_setup::plan::Level;
 use punktfunk_setup::platform::windows::args::InnoArgs;
 use punktfunk_setup::platform::windows::choices::{NetworkAnswer, WinChoices};
@@ -35,7 +36,7 @@ fn render(facts: &WinFacts, choices: &WinChoices, artifact: Artifact, uninstall:
     let plan = plan::build(facts, choices, artifact, uninstall);
     exec::render(&plan, &ui);
     if !uninstall {
-        report::outro(&ui, facts, choices, artifact);
+        report::outro(&ui, facts, choices, artifact, "PUNKT-PC");
     }
     buf.borrow().clone()
 }
@@ -295,6 +296,18 @@ fn an_operator_mgmt_bind_is_never_rewritten() {
     };
     let plan = host_plan(&facts, &WinChoices::derive(&facts, Artifact::Host));
     assert!(!plan.commands().iter().any(|c| c.contains("--mgmt-bind")));
+}
+
+// A loopback console is opened at 127.0.0.1, with the one line that says why.
+#[test]
+fn a_loopback_console_is_opened_at_loopback() {
+    let facts = fresh();
+    let mut choices = WinChoices::derive(&facts, Artifact::Host);
+    choices.web_bind = Some(LOOPBACK_BIND.to_string());
+    let text = render(&facts, &choices, Artifact::Host, false);
+    assert!(text.contains("Web console reachable from: This device only"));
+    assert!(text.contains("  1. Open the web console:  https://127.0.0.1:47992"));
+    assert!(text.contains("     It answers on this device only."));
 }
 
 // Silent installs never touch a network profile. Skip is a warning only.

@@ -277,9 +277,8 @@ fn changed(app: &str, title: &str, state: &str) {
 /// `provider`'s titles by `external_id`: library id and title. Only published entries resolve,
 /// so a report can't name a title it doesn't own.
 fn owned_by(provider: &str) -> HashMap<String, (String, String)> {
-    super::load_custom()
+    super::provider_rows(provider)
         .into_iter()
-        .filter(|e| e.provider.as_deref() == Some(provider))
         .filter_map(|e| {
             let external = e.external_id.clone()?;
             Some((external, (super::library_id_for(&e), e.title.clone())))
@@ -469,18 +468,39 @@ pub enum Waited {
 }
 
 impl Waited {
-    /// The sentence the player gets for a launch that didn't happen; `None` for `Done` and
+    /// The refusal the player gets for a launch that didn't happen; `None` for `Done` and
     /// `Gone`, which need none.
-    pub fn sentence(&self, title: &str) -> Option<String> {
-        Some(match self {
+    pub fn outcome(&self, title: &str) -> Option<punktfunk_core::quic::LaunchOutcome> {
+        let (id, text) = match self {
             Self::Done | Self::Gone => return None,
-            Self::Failed(Some(why)) => format!("{title} didn't download — {why}"),
-            Self::Failed(None) => format!("{title} didn't download."),
-            Self::Cancelled => format!("{title}'s download was cancelled."),
-            Self::Paused => format!("{title}'s download was paused. Start it again to resume."),
-            Self::Stalled => {
-                format!("{title} stopped downloading. Start it again to try once more.")
-            }
+            Self::Failed(Some(why)) => (
+                "launch_download_failed_reason",
+                format!("{title} didn't download — {why}"),
+            ),
+            Self::Failed(None) => (
+                "launch_download_failed",
+                format!("{title} didn't download."),
+            ),
+            Self::Cancelled => (
+                "launch_download_cancelled",
+                format!("{title}'s download was canceled."),
+            ),
+            Self::Paused => (
+                "launch_download_paused",
+                format!("{title}'s download was paused. Start it again to resume."),
+            ),
+            Self::Stalled => (
+                "launch_download_stalled",
+                format!("{title} stopped downloading. Start it again to try once more."),
+            ),
+        };
+        let outcome = punktfunk_core::quic::LaunchOutcome::new(
+            punktfunk_core::quic::LaunchOutcomeKind::Refused,
+            &text,
+        );
+        Some(match self {
+            Self::Failed(Some(why)) => outcome.worded(id, &[("title", title), ("reason", why)]),
+            _ => outcome.worded(id, &[("title", title)]),
         })
     }
 }
@@ -612,9 +632,9 @@ pub fn call(provider: &str, app: &str, external_id: &str, action: Action) -> Res
 }
 
 /// Fill each entry's `free_bytes` from its `target`, which must lie under one of its plugin's
-/// write grants; a target outside them is dropped. One grant read and one stat per target.
+/// write grants, read where the plugin lives (`manifest::home_of`); a target outside them is
+/// dropped. One grant read and one stat per target.
 pub fn fill_free<'a>(games: impl IntoIterator<Item = &'a mut GameEntry>) {
-    let mut access = None;
     // (provider, target) → free bytes when granted, `None` when not.
     let mut seen: HashMap<(String, String), Option<Option<u64>>> = HashMap::new();
     for g in games {
@@ -629,9 +649,8 @@ pub fn fill_free<'a>(games: impl IntoIterator<Item = &'a mut GameEntry>) {
         let answer = seen
             .entry((provider.clone(), target.clone()))
             .or_insert_with(|| {
-                let access = access.get_or_insert_with(|| {
-                    crate::plugins::access::AccessStore::open(pf_paths::seat::library_dir())
-                });
+                let home = crate::plugins::manifest::home_of(&provider);
+                let access = crate::plugins::access::AccessStore::open(home);
                 (!provider.is_empty() && access.may_write(&provider, Path::new(&target)))
                     .then(|| free_bytes(Path::new(&target)))
             });
@@ -744,15 +763,24 @@ mod tests {
 
     #[test]
     fn the_player_hears_why_a_launch_did_not_happen() {
-        assert_eq!(Waited::Done.sentence("Quail"), None);
-        assert_eq!(Waited::Gone.sentence("Quail"), None);
+        assert_eq!(Waited::Done.outcome("Quail"), None);
+        assert_eq!(Waited::Gone.outcome("Quail"), None);
+        let failed = Waited::Failed(Some("the server is down".into()))
+            .outcome("Quail")
+            .unwrap();
+        assert_eq!(failed.message, "Quail didn't download — the server is down");
+        assert_eq!(failed.message_id, "launch_download_failed_reason");
         assert_eq!(
-            Waited::Failed(Some("the server is down".into())).sentence("Quail"),
-            Some("Quail didn't download — the server is down".into())
+            failed.message_params,
+            [
+                ("title".to_string(), "Quail".to_string()),
+                ("reason".to_string(), "the server is down".to_string())
+            ]
         );
         assert!(Waited::Stalled
-            .sentence("Quail")
+            .outcome("Quail")
             .unwrap()
+            .message
             .starts_with("Quail stopped"));
     }
 

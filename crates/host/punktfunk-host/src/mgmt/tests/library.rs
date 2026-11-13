@@ -77,21 +77,24 @@ async fn hide_route_matches_ids_containing_colons() {
 #[allow(clippy::await_holding_lock)]
 /// Seeds one custom title on a platform.
 fn seed_title(title: &str, platform: &str) {
-    crate::library::add_custom(crate::library::CustomInput {
-        title: title.into(),
-        art: Default::default(),
-        launch: None,
-        prep: None,
-        role: Default::default(),
-        icon: None,
-        detect: None,
-        on_window: None,
-        audio: None,
-        meta: crate::library::GameMeta {
-            platform: Some(platform.into()),
-            ..Default::default()
+    crate::library::add_custom(
+        crate::library::CustomInput {
+            title: title.into(),
+            art: Default::default(),
+            launch: None,
+            prep: None,
+            role: Default::default(),
+            icon: None,
+            detect: None,
+            on_window: None,
+            audio: None,
+            meta: crate::library::GameMeta {
+                platform: Some(platform.into()),
+                ..Default::default()
+            },
         },
-    })
+        false,
+    )
     .expect("seed a title");
 }
 
@@ -154,6 +157,9 @@ async fn library_pages_by_cursor_with_search_and_counts() {
     let (_, found) = send(&app, get_req("/api/v1/library/page?q=HA")).await;
     assert_eq!(titles(&found), ["alpha", "Charlie"]);
     assert_eq!(found["total"], 2);
+    // `ＨＡ`, typed at full width.
+    let (_, wide) = send(&app, get_req("/api/v1/library/page?q=%EF%BC%A8%EF%BC%A1")).await;
+    assert_eq!(titles(&wide), ["alpha", "Charlie"]);
 
     // The platform filter narrows the page, not the counts beside it.
     let (_, n64) = send(&app, get_req("/api/v1/library/page?platform=n64")).await;
@@ -168,7 +174,7 @@ async fn library_pages_by_cursor_with_search_and_counts() {
     assert_eq!(titles(&one), ["bravo"]);
 
     // A hidden title leaves every page but the operator's, where it is flagged.
-    crate::library::set_entry_hidden(id, true).expect("hide");
+    crate::library::set_entry_hidden(&crate::library::View::here(), id, true).expect("hide");
     let (_, all) = send(&app, get_req("/api/v1/library/page")).await;
     assert_eq!(all["total"], 6);
     let flagged: Vec<_> = all["items"]
@@ -220,8 +226,8 @@ async fn a_seat_plays_the_boxs_library_and_changes_none_of_it() {
     let games = crate::library::sorted_games();
     let ids: Vec<&str> = games.iter().map(|g| g.id.as_str()).collect();
     assert_eq!(ids, ["steam:400"]);
-    assert!(crate::library::resolve_launch("steam:400").is_some());
-    let sources: Vec<String> = crate::library::list_scanners()
+    assert!(crate::library::resolve_launch(&crate::library::View::here(), "steam:400").is_some());
+    let sources: Vec<String> = crate::library::list_scanners(&crate::library::View::here())
         .into_iter()
         .map(|s| s.id)
         .collect();
@@ -242,22 +248,310 @@ async fn a_seat_plays_the_boxs_library_and_changes_none_of_it() {
     assert_eq!(s, StatusCode::OK);
 }
 
+// ------------------------------------------------------------------ game overrides
+
+fn put_json(path: &str, body: serde_json::Value) -> axum::http::Request<Body> {
+    json_req(Method::PUT, path, body)
+}
+
+fn delete_req(path: &str) -> axum::http::Request<Body> {
+    axum::http::Request::delete(path)
+        .body(Body::empty())
+        .unwrap()
+}
+
+/// The entries of `GET /library` or of a page.
+fn rows(json: &serde_json::Value) -> &Vec<serde_json::Value> {
+    json.get("items")
+        .unwrap_or(json)
+        .as_array()
+        .expect("entries")
+}
+
+/// A shared override, a source's default and a game's own entry resolve onto both library
+/// routes; a set's change reaches its users, and its delete hands them back to the source.
 #[tokio::test]
-async fn library_stats_ride_on_the_entry() {
+async fn game_overrides_resolve_onto_the_library() {
     let _tmp = ConfigDirOverride::new();
     let app = test_app(test_state(), None);
-    let added = crate::library::add_custom(crate::library::CustomInput {
-        title: "Chrono Trigger".into(),
-        art: Default::default(),
-        launch: None,
-        prep: None,
-        role: Default::default(),
-        icon: None,
-        detect: None,
-        on_window: None,
-        audio: None,
-        meta: Default::default(),
-    })
+    seed_title("Alpha", "PC");
+    seed_title("Bravo", "PC");
+    let ids: Vec<String> = crate::library::sorted_games()
+        .iter()
+        .map(|g| g.id.clone())
+        .collect();
+    let alpha = format!("/api/v1/library/overrides/games/{}", ids[0]);
+
+    let (s, set) = send(
+        &app,
+        json_req(
+            Method::POST,
+            "/api/v1/library/overrides/sets",
+            serde_json::json!({"name": "1080p60 DualSense", "lines": 1080, "hz": 60, "gamepad": "ds"}),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{set}");
+    let id = set["id"].as_str().expect("an id").to_string();
+    assert_eq!(set["gamepad"], "dualsense", "the pad by its own name");
+    let (s, _) = send(&app, put_json(&alpha, serde_json::json!({"set": id}))).await;
+    assert_eq!(s, StatusCode::OK);
+    let source = "/api/v1/library/overrides/sources/custom";
+    let (s, _) = send(
+        &app,
+        put_json(source, serde_json::json!({"gamepad": "xbox"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+
+    let named = serde_json::json!({"name": "1080p60 DualSense", "lines": 1080, "hz": 60, "gamepad": "dualsense"});
+    for path in ["/api/v1/library", "/api/v1/library/page"] {
+        let (s, json) = send(&app, get_req(path)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(rows(&json)[0]["overrides"], named, "{path}");
+        assert_eq!(
+            rows(&json)[1]["overrides"],
+            serde_json::json!({"gamepad": "xbox360"}),
+            "{path}"
+        );
+    }
+
+    let set_path = format!("/api/v1/library/overrides/sets/{id}");
+    let (s, set) = send(&app, put_json(&set_path, serde_json::json!({"hz": null}))).await;
+    assert_eq!(s, StatusCode::OK, "{set}");
+    assert_eq!(
+        (set.get("hz"), &set["lines"]),
+        (None, &serde_json::json!(1080))
+    );
+    let (_, json) = send(&app, get_req("/api/v1/library")).await;
+    assert!(json[0]["overrides"].get("hz").is_none(), "{json}");
+
+    let (s, users) = send(&app, delete_req(&set_path)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(users, serde_json::json!({"games": 1, "sources": 0}));
+    let (_, json) = send(&app, get_req("/api/v1/library")).await;
+    assert_eq!(
+        json[0]["overrides"],
+        serde_json::json!({"gamepad": "xbox360"})
+    );
+
+    let (s, cleared) = send(&app, put_json(source, serde_json::json!({}))).await;
+    assert_eq!((s, cleared), (StatusCode::OK, serde_json::json!({})));
+    let (_, json) = send(&app, get_req("/api/v1/library")).await;
+    assert!(
+        rows(&json).iter().all(|g| g.get("overrides").is_none()),
+        "{json}"
+    );
+    let (_, doc) = send(&app, get_req("/api/v1/library/overrides")).await;
+    let empty = serde_json::json!({"version": 1, "sets": {}, "games": {}, "sources": {}});
+    assert_eq!(doc, empty);
+}
+
+/// A game's `none` skips its source's entry, outlives a set's delete, and stands alone; a
+/// source refuses it.
+#[tokio::test]
+async fn a_game_opts_out_of_its_source_with_none() {
+    let _tmp = ConfigDirOverride::new();
+    let app = test_app(test_state(), None);
+    seed_title("Alpha", "PC");
+    seed_title("Bravo", "PC");
+    let ids: Vec<String> = crate::library::sorted_games()
+        .iter()
+        .map(|g| g.id.clone())
+        .collect();
+    let game = |i: usize| format!("/api/v1/library/overrides/games/{}", ids[i]);
+    let source = "/api/v1/library/overrides/sources/custom";
+    let set = serde_json::json!({"name": "4K", "lines": 2160});
+    let post = json_req(Method::POST, "/api/v1/library/overrides/sets", set);
+    let (_, set) = send(&app, post).await;
+    let id = set["id"].as_str().expect("an id").to_string();
+    let none = serde_json::json!({"none": true});
+    for (path, body) in [
+        (
+            source.to_string(),
+            serde_json::json!({"gamepad": "xbox360"}),
+        ),
+        (game(0), none.clone()),
+        (game(1), serde_json::json!({"set": id})),
+    ] {
+        let (s, stored) = send(&app, put_json(&path, body.clone())).await;
+        assert_eq!((s, stored), (StatusCode::OK, body), "{path}");
+    }
+    let (_, json) = send(&app, get_req("/api/v1/library")).await;
+    assert!(json[0].get("overrides").is_none(), "{json}");
+    assert_eq!(json[1]["overrides"]["name"], "4K");
+
+    let set_path = format!("/api/v1/library/overrides/sets/{id}");
+    let (_, users) = send(&app, delete_req(&set_path)).await;
+    assert_eq!(users, serde_json::json!({"games": 1, "sources": 0}));
+    let (_, json) = send(&app, get_req("/api/v1/library")).await;
+    assert!(json[0].get("overrides").is_none(), "{json}");
+    assert_eq!(
+        json[1]["overrides"],
+        serde_json::json!({"gamepad": "xbox360"})
+    );
+
+    for (path, body) in [
+        (game(0), serde_json::json!({"none": true, "hz": 60})),
+        (
+            game(0),
+            serde_json::json!({"none": true, "set": "a1b2c3d4e5f6"}),
+        ),
+        (source.to_string(), none.clone()),
+    ] {
+        let (s, _) = send(&app, put_json(&path, body.clone())).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{path} {body}");
+    }
+    let (_, doc) = send(&app, get_req("/api/v1/library/overrides")).await;
+    assert_eq!(doc["games"], serde_json::json!({(ids[0].as_str()): none}));
+    assert_eq!(
+        doc["sources"]["custom"],
+        serde_json::json!({"gamepad": "xbox360"})
+    );
+}
+
+/// Each refusal names what it could not store. Ids with colons route, and a set that is gone
+/// overrides nothing, not even with the source's values.
+#[tokio::test]
+async fn game_override_writes_refuse_what_they_cannot_store() {
+    let tmp = ConfigDirOverride::new();
+    let app = test_app(test_state(), None);
+    let post = |body| json_req(Method::POST, "/api/v1/library/overrides/sets", body);
+    let (s, _) = send(&app, post(serde_json::json!({"lines": 1080}))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "a shared override needs a name");
+    let (s, _) = send(&app, post(serde_json::json!({"name": "4K", "lines": 100}))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, set) = send(&app, post(serde_json::json!({"name": "4K", "lines": 2160}))).await;
+    assert_eq!(s, StatusCode::CREATED);
+    let id = set["id"].as_str().unwrap().to_string();
+    let (s, e) = send(&app, post(serde_json::json!({"name": "4k", "hz": 60}))).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert_eq!(e["code"], "library_override_name_taken");
+
+    let missing = "0123456789ab";
+    let game = "/api/v1/library/overrides/games/steam:70";
+    let (s, _) = send(&app, put_json(game, serde_json::json!({"set": missing}))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (s, _) = send(
+        &app,
+        put_json(game, serde_json::json!({"set": id, "hz": 60})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "a set or values, never both");
+    let unknown = format!("/api/v1/library/overrides/sets/{missing}");
+    let (s, _) = send(&app, put_json(&unknown, serde_json::json!({"hz": 60}))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (s, _) = send(&app, delete_req(&unknown)).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let set_path = format!("/api/v1/library/overrides/sets/{id}");
+    let (s, _) = send(&app, put_json(&set_path, serde_json::json!({"name": null}))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    for title in ["steam:70", "heroic:legendary:fc0b13b7"] {
+        let path = format!("/api/v1/library/overrides/games/{title}");
+        let (s, json) = send(&app, put_json(&path, serde_json::json!({"set": id}))).await;
+        assert_eq!(s, StatusCode::OK, "`{title}` must route: {json}");
+    }
+    let (_, doc) = send(&app, get_req("/api/v1/library/overrides")).await;
+    assert_eq!(
+        doc["games"]["heroic:legendary:fc0b13b7"]["set"],
+        id.as_str()
+    );
+
+    seed_title("Alpha", "PC");
+    let alpha = crate::library::sorted_games()[0].id.clone();
+    let dangling = serde_json::json!({
+        "games": {(alpha.as_str()): {"set": missing}},
+        "sources": {"custom": {"hz": 30}},
+    });
+    std::fs::write(
+        tmp.path().join("library-overrides.json"),
+        dangling.to_string(),
+    )
+    .unwrap();
+    let (_, json) = send(&app, get_req("/api/v1/library")).await;
+    assert!(json[0].get("overrides").is_none(), "{json}");
+}
+
+/// A seat streams under the box's overrides and changes none of them.
+#[tokio::test]
+async fn a_seat_reads_the_boxs_game_overrides_and_changes_none() {
+    let boxdir = tempfile::tempdir().unwrap();
+    let catalog = serde_json::json!({
+        "entries": [{"id": "s1", "title": "Portal", "provider": "steam", "store": "steam",
+                     "external_id": "400", "launch": {"kind": "steam_appid", "value": "400"}}],
+        "claims": {"steam": "steam"},
+    });
+    std::fs::write(boxdir.path().join("library.json"), catalog.to_string()).unwrap();
+    let file = boxdir.path().join("library-overrides.json");
+    let doc = serde_json::json!({"version": 1, "sets": {}, "games": {"steam:400": {"hz": 60}}, "sources": {}});
+    std::fs::write(&file, doc.to_string()).unwrap();
+    let _seat = ConfigDirOverride::seat(boxdir.path());
+    let app = test_app_on(test_state(), None, true);
+
+    let (_, json) = send(&app, get_req("/api/v1/library")).await;
+    assert_eq!(
+        json[0]["overrides"],
+        serde_json::json!({"hz": 60}),
+        "{json}"
+    );
+    assert_eq!(
+        crate::library::overrides_for(&crate::library::View::here(), "steam:400")
+            .and_then(|o| o.hz),
+        Some(60)
+    );
+    let (s, got) = send(&app, get_req("/api/v1/library/overrides")).await;
+    assert_eq!((s, got), (StatusCode::OK, doc.clone()));
+
+    let set = serde_json::json!({"name": "4K", "lines": 2160});
+    for req in [
+        json_req(Method::POST, "/api/v1/library/overrides/sets", set),
+        put_json(
+            "/api/v1/library/overrides/sets/0123456789ab",
+            serde_json::json!({}),
+        ),
+        delete_req("/api/v1/library/overrides/sets/0123456789ab"),
+        put_json(
+            "/api/v1/library/overrides/games/steam:400",
+            serde_json::json!({}),
+        ),
+        put_json(
+            "/api/v1/library/overrides/sources/steam",
+            serde_json::json!({}),
+        ),
+    ] {
+        let what = format!("{} {}", req.method(), req.uri());
+        let (s, _) = send(&app, req).await;
+        assert_eq!(s, StatusCode::CONFLICT, "{what}");
+    }
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), doc.to_string());
+}
+
+#[tokio::test]
+async fn library_stats_ride_on_the_entry() {
+    let tmp = ConfigDirOverride::new();
+    let (kid, enrico) = ("0a0b0c0d0e0f", "0f0e0d0c0b0a");
+    let shares = |id: &str| serde_json::json!({"id": id, "display_name": id, "os_account": {"kind": "operator"}});
+    let profiles = serde_json::json!({"profiles": [shares(enrico), shares(kid)]});
+    let app = test_app(
+        super::profile_view::profiles_state(tmp.path(), profiles),
+        None,
+    );
+    let added = crate::library::add_custom(
+        crate::library::CustomInput {
+            title: "Chrono Trigger".into(),
+            art: Default::default(),
+            launch: None,
+            prep: None,
+            role: Default::default(),
+            icon: None,
+            detect: None,
+            on_window: None,
+            audio: None,
+            meta: Default::default(),
+        },
+        false,
+    )
     .expect("seed one custom title");
     let id = crate::library::library_id_for(&added);
 
@@ -269,9 +563,9 @@ async fn library_stats_ride_on_the_entry() {
         "a never-launched title carries no stats key: {json}"
     );
 
-    crate::library::record_launch(&id, Some("kid"));
-    crate::library::record_run_time(&id, Some("kid"), std::time::Duration::from_millis(1_500));
-    crate::library::record_run_time(&id, Some("kid"), std::time::Duration::from_millis(500));
+    crate::library::record_launch(&id, Some(kid));
+    crate::library::record_run_time(&id, Some(kid), std::time::Duration::from_millis(1_500));
+    crate::library::record_run_time(&id, Some(kid), std::time::Duration::from_millis(500));
     // A run credited to an id with no entry is kept but never surfaces.
     crate::library::record_run_time("steam:404", None, std::time::Duration::from_secs(1));
 
@@ -288,9 +582,10 @@ async fn library_stats_ride_on_the_entry() {
     assert!(stats.get("mine").is_none(), "no `as`, no `mine`: {json}");
 
     // Another profile's launch moves the totals, not the kid's own numbers.
-    crate::library::record_launch(&id, Some("enrico"));
-    for path in ["/api/v1/library?as=kid", "/api/v1/library/page?as=kid"] {
-        let (s, json) = send(&app, get_req(path)).await;
+    crate::library::record_launch(&id, Some(enrico));
+    for path in ["/api/v1/library", "/api/v1/library/page"] {
+        let path = format!("{path}?as={kid}");
+        let (s, json) = send(&app, get_req(&path)).await;
         assert_eq!(s, StatusCode::OK);
         let stats = json
             .get("items")
@@ -299,8 +594,11 @@ async fn library_stats_ride_on_the_entry() {
         assert_eq!(stats["mine"]["launch_count"], 1, "{path}: {json}");
         assert_eq!(stats["mine"]["play_time_ms"], 2_000, "{path}: {json}");
     }
-    let (_, json) = send(&app, get_req("/api/v1/library?as=nobody")).await;
-    assert!(json[0]["stats"].get("mine").is_none(), "{json}");
+    let (s, json) = send(&app, get_req("/api/v1/library?as=0123456789ab")).await;
+    assert_eq!(
+        (s, &json["code"]),
+        (StatusCode::NOT_FOUND, &"profile_unknown".into())
+    );
 }
 
 /// The lease watcher credits a recorded launch's run: seen running, then gone, lands on disk.
@@ -389,21 +687,24 @@ async fn metadata_sources_fill_pick_replace_and_forget() {
             .body(Body::from(body.to_string()))
             .unwrap()
     };
-    let added = crate::library::add_custom(crate::library::CustomInput {
-        title: "Hades".into(),
-        art: crate::library::Artwork {
-            portrait: Some("https://own/p.png".into()),
-            ..Default::default()
+    let added = crate::library::add_custom(
+        crate::library::CustomInput {
+            title: "Hades".into(),
+            art: crate::library::Artwork {
+                portrait: Some("https://own/p.png".into()),
+                ..Default::default()
+            },
+            launch: None,
+            prep: None,
+            role: Default::default(),
+            icon: None,
+            detect: None,
+            on_window: None,
+            audio: None,
+            meta: Default::default(),
         },
-        launch: None,
-        prep: None,
-        role: Default::default(),
-        icon: None,
-        detect: None,
-        on_window: None,
-        audio: None,
-        meta: Default::default(),
-    })
+        false,
+    )
     .expect("seed one custom title");
     let id = crate::library::library_id_for(&added);
 
@@ -506,25 +807,28 @@ async fn metadata_sources_fill_pick_replace_and_forget() {
 async fn custom_entry_hints_round_trip_and_survive_an_update() {
     let _tmp = ConfigDirOverride::new();
     let app = test_app(test_state(), None);
-    let added = crate::library::add_custom(crate::library::CustomInput {
-        title: "Eden".into(),
-        art: Default::default(),
-        launch: None,
-        prep: Some(vec![crate::hooks::PrepCmd {
-            run: "true".into(),
-            undo: None,
-            elevated: false,
-        }]),
-        role: Default::default(),
-        icon: None,
-        detect: Some(crate::library::DetectHint {
-            exe: Some("/usr/bin/eden".into()),
-            ..Default::default()
-        }),
-        on_window: None,
-        audio: None,
-        meta: Default::default(),
-    })
+    let added = crate::library::add_custom(
+        crate::library::CustomInput {
+            title: "Eden".into(),
+            art: Default::default(),
+            launch: None,
+            prep: Some(vec![crate::hooks::PrepCmd {
+                run: "true".into(),
+                undo: None,
+                elevated: false,
+            }]),
+            role: Default::default(),
+            icon: None,
+            detect: Some(crate::library::DetectHint {
+                exe: Some("/usr/bin/eden".into()),
+                ..Default::default()
+            }),
+            on_window: None,
+            audio: None,
+            meta: Default::default(),
+        },
+        false,
+    )
     .expect("seed one custom title");
     let path = format!("/api/v1/library/custom/{}", added.id);
 
@@ -638,6 +942,37 @@ fn concurrent_provider_syncs_keep_every_row() {
     });
     let rows = crate::library::load_custom();
     assert_eq!(rows.len(), 8, "one row per provider: {rows:?}");
+}
+
+/// A file that does not parse is refused by every writer, so a downgrade or a hand edit costs
+/// the next sync nothing.
+#[test]
+fn a_library_file_that_does_not_parse_is_never_replaced() {
+    let dir = ConfigDirOverride::new();
+    let junk = b"{ \"entries\": [ not json";
+    let files = [
+        "library.json",
+        "library-stats.json",
+        "library-hidden.json",
+        "library-picks.json",
+    ];
+    for f in files {
+        std::fs::write(dir.path().join(f), junk).unwrap();
+    }
+    let view = crate::library::View::here();
+    let row = serde_json::json!({"external_id": "a", "title": "A"});
+    let inputs = vec![serde_json::from_value(row).unwrap()];
+    assert!(crate::library::reconcile_provider("p", None, inputs).is_err());
+    let manual = serde_json::from_value(serde_json::json!({"title": "A"})).unwrap();
+    assert!(crate::library::add_custom(manual, false).is_err());
+    assert!(crate::library::set_entry_hidden(&view, "steam:70", true).is_err());
+    let url = Some("https://example.com/a.png".to_string());
+    let art = crate::library::ArtKind::Portrait;
+    assert!(crate::library::set_art_pick(&view, "steam:70", art, url).is_err());
+    crate::library::record_run_time("steam:70", None, std::time::Duration::from_secs(60));
+    for f in files {
+        assert_eq!(std::fs::read(dir.path().join(f)).unwrap(), junk, "{f}");
+    }
 }
 
 /// A plugin re-sends its whole set on a timer; only a set that differs is news to clients.

@@ -107,7 +107,7 @@ mod tests {
                 if entry.id.is_empty() {
                     continue; // the empty slot draws the plus, checked below
                 }
-                let name = slot_icon(&entry.id, "").unwrap_or_else(|| panic!("{}", entry.id));
+                let name = slot_icon(&entry.id, false).unwrap_or_else(|| panic!("{}", entry.id));
                 assert!(
                     set::glyph(name).is_some(),
                     "{}: the font has no '{name}'",

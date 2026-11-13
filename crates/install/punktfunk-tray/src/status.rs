@@ -11,6 +11,7 @@
 //! is readable. Windows cannot: the cert is SYSTEM/Admins-DACL'd. Platform
 //! trays: `linux.rs`, `win.rs`.
 
+use pf_l10n::tools;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -67,25 +68,21 @@ pub enum TrayStatus {
 impl TrayStatus {
     pub fn headline(&self) -> String {
         match self {
-            TrayStatus::NotInstalled => "punktfunk host — not installed".into(),
-            TrayStatus::Stopped => "punktfunk host — stopped".into(),
-            TrayStatus::Starting => "punktfunk host — starting…".into(),
-            TrayStatus::Degraded => "punktfunk host — running (status unavailable)".into(),
-            TrayStatus::Error(_) => "punktfunk host — stopped unexpectedly".into(),
+            TrayStatus::NotInstalled => tools::tray_status_not_installed().into(),
+            TrayStatus::Stopped => tools::tray_status_stopped().into(),
+            TrayStatus::Starting => tools::tray_status_starting().into(),
+            TrayStatus::Degraded => tools::tray_status_degraded().into(),
+            TrayStatus::Error(_) => tools::tray_status_failed().into(),
             TrayStatus::Running(s) => match (&s.session, self.is_streaming()) {
-                (Some(sess), true) => format!(
-                    "punktfunk host {} — streaming {}×{}@{}",
-                    s.version, sess.width, sess.height, sess.fps
-                ),
-                (_, true) => format!("punktfunk host {} — streaming", s.version),
+                (Some(sess), true) => {
+                    tools::tray_status_streaming_mode(&s.version, sess.width, sess.height, sess.fps)
+                }
+                (_, true) => tools::tray_status_streaming(&s.version),
                 // A kept display can hold physical monitors dark (exclusive topology).
-                _ if s.kept_displays > 0 => format!(
-                    "punktfunk host {} — idle · {} display{} kept",
-                    s.version,
-                    s.kept_displays,
-                    if s.kept_displays == 1 { "" } else { "s" }
-                ),
-                _ => format!("punktfunk host {} — idle", s.version),
+                _ if s.kept_displays > 0 => {
+                    tools::tray_status_idle_kept(&s.version, u64::from(s.kept_displays))
+                }
+                _ => tools::tray_status_idle(&s.version),
             },
         }
     }
@@ -130,8 +127,7 @@ impl TrayStatus {
     pub fn release_label(&self) -> Option<String> {
         match self.kept_displays() {
             0 => None,
-            1 => Some("Release kept display…".into()),
-            n => Some(format!("Release {n} kept displays…")),
+            n => Some(tools::tray_release_displays(u64::from(n))),
         }
     }
 }
@@ -139,16 +135,18 @@ impl TrayStatus {
 /// Always shown: a dead console changes the label, never hides the row.
 pub fn console_label(responding: bool) -> &'static str {
     if responding {
-        "Open web console"
+        tools::tray_open_console()
     } else {
-        "Open web console (not responding)"
+        tools::tray_open_console_down()
     }
 }
 
 /// The service restart. Clients' host-power "Restart host" reboots the machine
 /// (`design/host-actions.md`), so one phrase must not mean both.
 #[cfg(windows)]
-pub const RESTART_LABEL: &str = "Restart Punktfunk";
+pub fn restart_label() -> &'static str {
+    pf_l10n::host::host_power_restart_service()
+}
 
 /// Unreachable-summary window before Starting becomes Degraded. Re-armed while
 /// Running so a child restart shows Starting, not Degraded.
@@ -400,13 +398,52 @@ pub fn probe_service() -> ServiceState {
     }
 }
 
-/// Systemd user units the Linux packages install (`scripts/punktfunk-*.service`), with their
-/// menu names: the host, then its companions.
+/// A service the Linux tray watches. The id picks the menu text; `UNITS` holds the systemd name.
 #[cfg(target_os = "linux")]
-pub const UNITS: [(&str, &str); 3] = [
-    ("punktfunk-host.service", "Host service"),
-    ("punktfunk-web.service", "Web console"),
-    ("punktfunk-scripting.service", "Plugin runner"),
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unit {
+    Host,
+    Web,
+    Runner,
+}
+
+#[cfg(target_os = "linux")]
+impl Unit {
+    /// "<service> — <state>": one whole message per service and state.
+    pub fn label(self, st: &TrayStatus) -> &'static str {
+        match (self, st) {
+            (Unit::Host, TrayStatus::NotInstalled) => tools::tray_unit_host_not_installed(),
+            (Unit::Host, TrayStatus::Stopped) => tools::tray_unit_host_stopped(),
+            (Unit::Host, TrayStatus::Starting) => tools::tray_unit_host_starting(),
+            (Unit::Host, TrayStatus::Running(_) | TrayStatus::Degraded) => {
+                tools::tray_unit_host_running()
+            }
+            (Unit::Host, TrayStatus::Error(_)) => tools::tray_unit_host_failed(),
+            (Unit::Web, TrayStatus::NotInstalled) => tools::tray_unit_web_not_installed(),
+            (Unit::Web, TrayStatus::Stopped) => tools::tray_unit_web_stopped(),
+            (Unit::Web, TrayStatus::Starting) => tools::tray_unit_web_starting(),
+            (Unit::Web, TrayStatus::Running(_) | TrayStatus::Degraded) => {
+                tools::tray_unit_web_running()
+            }
+            (Unit::Web, TrayStatus::Error(_)) => tools::tray_unit_web_failed(),
+            (Unit::Runner, TrayStatus::NotInstalled) => tools::tray_unit_runner_not_installed(),
+            (Unit::Runner, TrayStatus::Stopped) => tools::tray_unit_runner_stopped(),
+            (Unit::Runner, TrayStatus::Starting) => tools::tray_unit_runner_starting(),
+            (Unit::Runner, TrayStatus::Running(_) | TrayStatus::Degraded) => {
+                tools::tray_unit_runner_running()
+            }
+            (Unit::Runner, TrayStatus::Error(_)) => tools::tray_unit_runner_failed(),
+        }
+    }
+}
+
+/// Systemd user units the Linux packages install (`scripts/punktfunk-*.service`): the host,
+/// then its companions.
+#[cfg(target_os = "linux")]
+pub const UNITS: [(&str, Unit); 3] = [
+    ("punktfunk-host.service", Unit::Host),
+    ("punktfunk-web.service", Unit::Web),
+    ("punktfunk-scripting.service", Unit::Runner),
 ];
 
 /// The host's state and its companions', from one `systemctl show` over [`UNITS`].
@@ -524,7 +561,7 @@ mod tests {
         let s: Summary = serde_json::from_str(json).expect("unknown fields are ignored");
         assert_eq!(
             TrayStatus::Running(s).headline(),
-            "punktfunk host 0.5.1 — idle"
+            "Punktfunk host 0.5.1 — idle"
         );
     }
 
@@ -532,11 +569,11 @@ mod tests {
     fn headline_shows_session_and_reason() {
         assert_eq!(
             TrayStatus::Running(summary(true)).headline(),
-            "punktfunk host 0.5.1 — streaming 2560×1440@120"
+            "Punktfunk host 0.5.1 — streaming 2560×1440@120"
         );
         assert_eq!(
             TrayStatus::Running(summary(false)).headline(),
-            "punktfunk host 0.5.1 — idle"
+            "Punktfunk host 0.5.1 — idle"
         );
         assert!(TrayStatus::Error("exit code 3".into())
             .headline()
@@ -555,7 +592,7 @@ mod tests {
         assert!(st.is_streaming());
         assert_eq!(
             st.headline(),
-            "punktfunk host 0.5.1 — streaming 2560×1440@120"
+            "Punktfunk host 0.5.1 — streaming 2560×1440@120"
         );
         assert!(!TrayStatus::Running(summary(false)).is_streaming());
     }

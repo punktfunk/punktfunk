@@ -1,6 +1,6 @@
 ---
 title: Your game library
-description: Fill the host's game library from your launchers, add a game by hand, and launch a title from a client, Moonlight, a link or the command line.
+description: Fill the host's game library from your launchers, add a game by hand, set how a game streams, and launch a title from a client, Moonlight, a link or the command line.
 ---
 
 Fill the host's game library once, and every client, Moonlight and the web console can launch
@@ -12,8 +12,8 @@ The library fills from [plugins](/docs/plugins), one per launcher. A fresh host 
 you add one:
 
 1. Open the web console's **Library** page.
-2. In **Game sources**, under **Add a source**, click each launcher you use. **Detected** marks the
-   ones found on this host.
+2. On its **Sources** tab, in **Game sources**, under **Add a source**, click each launcher you
+   use. **Detected** marks the ones found on this host.
 
 Each plugin reads its launcher's own files on the host, with no account or API key.
 [Plugins](/docs/plugins) lists them all and what each one covers.
@@ -36,8 +36,8 @@ A source marked **Stopped** has a plugin that isn't running: see
 ## A game's page
 
 Click a poster to open its page: **Information**, **Media** and **Launch**, plus a tab for each
-plugin that keeps something per game. A title a plugin syncs is read-only there, marked
-**Managed by** its source: change it in the launcher and the plugin syncs it again.
+plugin that keeps something per game. A title a plugin syncs is read-only there, and the page
+names the source that keeps its details: change it in the launcher and the plugin syncs it again.
 
 ## Adding a game by hand
 
@@ -103,16 +103,15 @@ details away again.
 
 ## Launching a game
 
-The client sends only the title's id. The host runs its own launch recipe for it, so a client can
-never make the host run a command. The host must be [paired](/docs/pairing).
+The host must be [paired](/docs/pairing).
 
 Every library starts with a **Desktop** tile that streams the host and launches nothing. While a
 game runs on the host, the tile reads **Resume** and the game's name.
 
 | From | How |
 |---|---|
-| Linux | The **Library** tab, or a host card's menu → **Browse Library** |
-| Windows, Android (touch) | A host card's menu → **Browse library…** |
+| Linux | The **Library** tab, or a host card's menu → **Browse library** |
+| Windows, Android (touch) | A host card's menu → **Browse library** |
 | Mac | **Library** in the window's sidebar |
 | iPhone, iPad, Apple TV | The **Library** tab |
 | Controller home (TV, Steam Deck, a client with a controller) | **Y** on a saved host, or the host's options → **Library** |
@@ -124,7 +123,50 @@ game runs on the host, the tile reads **Resume** and the game's name.
 Where the game opens (your desktop, a gamescope session, or a headless session of its own) is
 display policy: see [Dedicated game sessions](/docs/virtual-displays#dedicated-game-sessions).
 Whether quitting the game ends the session, and the reverse, is under
-[When a game ends](/docs/virtual-displays#when-a-game-ends-and-when-a-session-does).
+[When a game ends](/docs/when-a-game-ends).
+
+## Stream settings for a game
+
+Set how a game streams once on the host, and every device that launches it follows. On the game's
+page, **Launch** → **Stream** has **Use**, **Resolution**, **Refresh rate**, **HDR** and
+**Controller**, each **Device decides** until you change it. **Use** picks **Custom**, a shared
+override or **New shared override…**. A change saves right away, even on a title a plugin syncs.
+
+A value you set wins over the device's own pick, within what the device can show. The resolution
+stays within what it decodes, and at or below its screen unless **Also on smaller screens** is
+ticked. The refresh rate stays at or below the screen's; HDR **On** reaches only an HDR screen.
+**Custom…** under **Resolution** takes any height from 360 to 4320 lines, and under **Refresh
+rate** any rate from 24 to 240 Hz.
+The width follows the screen's shape: a 16:10 laptop under **1080p** streams 1728×1080.
+
+### Shared overrides
+
+A shared override is a named set of these rows, such as *1080p60 DualSense*. Editing it changes
+every game that uses it.
+
+- **Make one** with **New shared override…**, or in **Shared overrides** on the **Library** page.
+- **Several games:** **Select games** on **Library**, tick them, then **Use shared override…**.
+- **A whole source:** its **Settings** in **Game sources** has the same group, **Stream, for every
+  Lutris title**. A game's own setting wins over it, **Device decides** included; **Use** →
+  **Same as Lutris** follows the source again.
+- **Delete one** in **Shared overrides**. Its games go back to their source's settings, or to
+  **Device decides**.
+
+For example, set a demanding game's **Resolution** to **4K**, and give three couch games a shared
+override *1080p60 DualSense*. A 4K TV plays the first in 4K and a 1440p monitor in 1440p; a Steam
+Deck plays the three at 1280×800 and 60 Hz. Moving them to 1440p later is one edit.
+
+### When the settings apply
+
+They apply when a device connects to launch the game, from a Punktfunk library, a link or
+`punktfunk launch`. A game started inside a running stream, on its desktop, in Steam or from the
+library, keeps that stream's settings until the next such connect. Moonlight doesn't use them.
+
+Each app says what the host set: see [Presets and links](/docs/presets-and-links#using-a-preset).
+An app that doesn't read them (an older version, or one that hasn't loaded the library yet) still
+gets the controller and any lower resolution, refresh rate or HDR **Off**; the host never raises
+what a device asked for. The host keeps them in `library-overrides.json` beside `library.json`;
+seats use the box's, set on your own **Library** page.
 
 ## Ending a game
 
@@ -134,7 +176,7 @@ started yourself on the host.
 
 | Where | How |
 |---|---|
-| While streaming | **End game** on the [quick-action dial](/docs/input#the-quick-action-dial)'s sheet. The stream ends with it. |
+| While streaming | **End game** on the [quick-action dial](/docs/shortcuts#the-quick-action-dial)'s sheet. The stream ends with it. |
 | A library | Hold or right-click the running title → **End game** |
 | Controller home | The title's options → **End game** |
 | Steam Deck | **End game** under **Host menus** in the Decky panel |
@@ -153,7 +195,8 @@ entry with no **Process** hint, gets no play time.
 A Punktfunk session also credits its profile: the title's numbers count every launch, and each
 profile keeps its own beside them. A Moonlight session counts toward the title only.
 
-The Apple apps sort by **Recent** and **Most played** and keep a **Recently Played** row.
+The Apple, Linux and Windows apps and the controller home sort by **Recent** and **Most played**.
+The Apple and Linux apps and the controller home keep a **Recently played** row.
 
 The numbers live in `library-stats.json` in the host config directory. Delete a title's line to
 reset it.

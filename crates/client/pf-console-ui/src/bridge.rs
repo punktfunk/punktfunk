@@ -3,6 +3,7 @@
 //! and Apple (C ABI) both speak it, so Kotlin and Swift encode one contract. A push that
 //! answers a command carries the command's `req` verbatim.
 
+use crate::screens::EditField;
 use crate::store::PresetEntry;
 use crate::{
     Console, ConsoleEntry, ConsoleOptions, DeviceScreen, HostRow, Key, LibraryGame, LibraryPhase,
@@ -18,6 +19,9 @@ use std::sync::Arc;
 #[derive(serde::Deserialize)]
 pub struct CreateOptions {
     pub device_name: String,
+    /// This device's code ([`ConsoleOptions::device_code`]). Absent shows none.
+    #[serde(default)]
+    pub device_code: Option<String>,
     /// Skia's resource budget, bytes (the host sizes it from the device's memory class).
     pub gpu_cache_bytes: usize,
     /// Whether the touch shell exists as a fallback (phones/tablets; false on a TV) —
@@ -55,6 +59,10 @@ pub struct CreateOptions {
     /// means a locked profile dials as it stands.
     #[serde(default)]
     pub prompts_unlock: bool,
+    /// The host answers `SetHidden` and `FetchHidden`. Absent means it doesn't, and no title
+    /// offers Hide for me.
+    #[serde(default)]
+    pub hides: bool,
     /// The settings snapshot the shell starts from.
     pub settings: Settings,
     /// The preset catalog as `[{id, name, overrides}, …]`.
@@ -72,6 +80,11 @@ pub struct CreateOptions {
     pub screen: Option<(u32, u32)>,
     #[serde(default)]
     pub safe_area: Option<(u32, u32)>,
+    /// The OS's preferred languages as BCP-47 tags, most preferred first: `["de-AT", "en"]`.
+    /// The console's text follows the first one Punktfunk ships. Absent or empty leaves the
+    /// language as it is, English unless something set it.
+    #[serde(default)]
+    pub languages: Vec<String>,
 }
 
 /// `#[serde(default)]` for a bool an older caller may omit and that must read `true`.
@@ -92,6 +105,7 @@ impl CreateOptions {
         store.set_known_hosts(self.known_hosts);
         let opts = ConsoleOptions {
             device_name: self.device_name,
+            device_code: self.device_code,
             version: None,
             system_keyboard: self.system_keyboard,
             tv: self.tv,
@@ -108,6 +122,8 @@ impl CreateOptions {
             }),
             profiles: self.profiles,
             prompts_unlock: self.prompts_unlock,
+            hides: self.hides,
+            languages: self.languages,
         };
         (opts, self.entry.into_entry(), store)
     }
@@ -170,6 +186,9 @@ struct PadJson {
     forwarded: bool,
     #[serde(default)]
     rumble: bool,
+    /// This client plays pad audio on the pad, so its card shows the speaker rows.
+    #[serde(default)]
+    audio: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -202,6 +221,7 @@ impl PadsJson {
                 detail: j.detail,
                 forwarded: j.forwarded,
                 rumble: j.rumble,
+                audio: j.audio,
             })
             .collect();
         (self.label, self.pref.map(GamepadPref::from_u8), pads)
@@ -293,6 +313,8 @@ impl Event {
 /// The last of each edge-triggered event the host was handed, so a repeat is silence.
 pub struct Published {
     was_editing: bool,
+    /// The open field's label, digits and secure flags; its text changes as it is typed.
+    opened: Option<(String, bool, bool)>,
     /// Last string handed to the screen reader. Repeating one is worse than silence.
     spoken: Option<String>,
     saved_gen: u64,
@@ -302,6 +324,7 @@ impl Published {
     pub fn new(console: &Console, store: &SnapshotStore) -> Published {
         Published {
             was_editing: console.editing(),
+            opened: None,
             spoken: None,
             saved_gen: store.saved_gen(),
         }
@@ -318,13 +341,11 @@ impl Published {
             emit(Event::Action(a));
         }
         let editing = console.editing();
-        if editing != self.was_editing {
-            self.was_editing = editing;
-            if let Some(field) = editing.then(|| console.edit_field()).flatten() {
-                emit(Event::EditField(field));
-            }
-            emit(Event::Editing(editing));
-        }
+        self.field(
+            editing,
+            editing.then(|| console.edit_field()).flatten(),
+            &mut emit,
+        );
         let announce = console.focus_announcement();
         if announce != self.spoken {
             self.spoken = announce;
@@ -337,6 +358,23 @@ impl Published {
             self.saved_gen = current_gen;
             emit(Event::Settings(Box::new(settings)));
         }
+    }
+
+    /// Raise `field` when editing starts or stops, and when one field hands over to the next
+    /// while editing goes on (a custom width, then its height). Typing into it raises nothing.
+    fn field(&mut self, editing: bool, field: Option<EditField>, emit: &mut impl FnMut(Event)) {
+        let opened = field
+            .as_ref()
+            .map(|f| (f.label.clone(), f.digits, f.secure));
+        if editing == self.was_editing && opened == self.opened {
+            return;
+        }
+        self.was_editing = editing;
+        self.opened = opened;
+        if let Some(field) = field {
+            emit(Event::EditField(field));
+        }
+        emit(Event::Editing(editing));
     }
 }
 
@@ -464,11 +502,15 @@ mod tests {
             !opts.prompts_unlock,
             "a host that never said so gets no prompt"
         );
+        assert!(opts.languages.is_empty(), "a host that never said so");
         let o: CreateOptions = serde_json::from_str(
-            r#"{"device_name": "TV", "gpu_cache_bytes": 0, "settings": {}, "prompts_unlock": true}"#,
+            r#"{"device_name": "TV", "gpu_cache_bytes": 0, "settings": {}, "prompts_unlock": true,
+                "languages": ["de-AT", "en"]}"#,
         )
         .unwrap();
-        assert!(o.into_console(Platform::Android).0.prompts_unlock);
+        let opts = o.into_console(Platform::Android).0;
+        assert!(opts.prompts_unlock);
+        assert_eq!(opts.languages, ["de-AT", "en"]);
     }
 
     #[test]
@@ -496,6 +538,44 @@ mod tests {
             Event::EditField(field).to_json(),
             r#"{"edit_text":{"label":"PIN","text":"12","digits":true,"secure":false}}"#
         );
+    }
+
+    /// A host's keyboard closes on each field it finished, so a field that opens while
+    /// editing goes on is raised again. Typing into the open one is not.
+    #[test]
+    fn a_field_that_hands_over_reopens_the_hosts_keyboard() {
+        let mut published = Published {
+            was_editing: false,
+            opened: None,
+            spoken: None,
+            saved_gen: 0,
+        };
+        let field = |label: &str, text: &str| {
+            Some(EditField {
+                label: label.into(),
+                text: text.into(),
+                digits: true,
+                secure: false,
+            })
+        };
+        let mut step = |editing, field| {
+            let mut out = Vec::new();
+            published.field(editing, field, &mut |e: Event| out.push(e.to_json()));
+            out
+        };
+        let open = |label: &str| {
+            vec![
+                format!(
+                    r#"{{"edit_text":{{"label":"{label}","text":"","digits":true,"secure":false}}}}"#
+                ),
+                r#"{"editing":true}"#.to_string(),
+            ]
+        };
+        assert_eq!(step(true, field("Width", "")), open("Width"));
+        assert!(step(true, field("Width", "1920")).is_empty());
+        assert_eq!(step(true, field("Height", "")), open("Height"));
+        assert_eq!(step(false, None), [r#"{"editing":false}"#]);
+        assert!(step(false, None).is_empty());
     }
 
     #[test]
@@ -755,6 +835,8 @@ mod tests {
                     "WakeStatus" => read_back::<crate::WakeStatus>(s),
                     "SpeedPhase" => read_back::<crate::SpeedPhase>(s),
                     "ProfilesAnswer" => read_back::<crate::ProfilesAnswer>(s),
+                    "HiddenAnswer" => read_back::<crate::HiddenAnswer>(s),
+                    "HideAnswer" => read_back::<crate::HideAnswer>(s),
                     "PhasePush" => read_back::<PhasePush>(s),
                     "GamesPush" => read_back::<GamesPush>(s),
                     "DownloadsPush" => read_back::<crate::DownloadsPush>(s),

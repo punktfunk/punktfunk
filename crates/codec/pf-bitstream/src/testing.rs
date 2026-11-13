@@ -26,6 +26,9 @@ pub const H265_BBB: &[u8] =
 /// IVF: 250 temporal units, 274 coded frames.
 pub const AV1_25FPS: &[u8] =
     include_bytes!("../vendor/cros-codecs/src/codec/av1/test_data/test-25fps.ivf.av1");
+/// libaom shaped like the Vulkan host: every frame predicts from slot 0 and refreshes it;
+/// frame 14 alone is error-resilient, as a wave start is. 64x64, 24 frames.
+pub const AV1_ONE_SLOT_ER14: &[u8] = include_bytes!("../tests/vectors/aom-one-slot-er14.ivf");
 pub const VP9_25FPS: &[u8] =
     include_bytes!("../vendor/cros-codecs/src/codec/vp9/test_data/test-25fps.vp9");
 

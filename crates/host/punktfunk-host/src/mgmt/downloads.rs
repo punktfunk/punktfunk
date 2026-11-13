@@ -107,8 +107,9 @@ pub(crate) async fn install_library_entry(
             .map(|fp| fp.chars().take(12).collect())
             .unwrap_or_default(),
         _ => {
-            return api_error(
+            return api_error_coded(
                 StatusCode::FORBIDDEN,
+                "device_not_allowed_to_start_games",
                 "This device isn't allowed to start games on this host.",
             )
         }
@@ -200,7 +201,7 @@ pub(crate) async fn uninstall_library_entry(
 }
 
 /// A paired device whose live mask carries `bit`.
-fn granted(st: &MgmtState, fp: Option<&str>, bit: u32) -> bool {
+pub(super) fn granted(st: &MgmtState, fp: Option<&str>, bit: u32) -> bool {
     fp.is_some_and(|fp| {
         st.native
             .as_ref()
@@ -219,45 +220,70 @@ fn manages(st: &MgmtState, lane: AuthLane, device: Option<&Extension<PairedDevic
 }
 
 fn manage_refused() -> Response {
-    api_error(
+    api_error_coded(
         StatusCode::FORBIDDEN,
+        "device_not_allowed_to_manage_games",
         "This device isn't allowed to manage games on this host.",
     )
 }
 
-fn conflict(message: &str) -> Response {
-    api_error(StatusCode::CONFLICT, message)
+/// A `409` with the host sentence `apierr_<code>`.
+fn conflict(code: &str, message: &str) -> Response {
+    api_error_coded(StatusCode::CONFLICT, code, message)
 }
 
 async fn act(id: String, action: Action, by: Option<String>) -> Response {
     let Some(entry) = crate::library::entry_for_library_id(&id) else {
-        return api_error(StatusCode::NOT_FOUND, "That title isn't in the library.");
+        return api_error_coded(
+            StatusCode::NOT_FOUND,
+            "title_not_in_library",
+            "That title isn't in the library.",
+        );
     };
     let (Some(provider), Some(external)) = (entry.provider.clone(), entry.external_id.clone())
     else {
-        return conflict("That title isn't one a plugin installs.");
+        return conflict(
+            "title_not_plugin_installed",
+            "That title isn't one a plugin installs.",
+        );
     };
     let title = entry.title.clone();
     let missing = entry.install.as_ref().is_some_and(|i| i.missing());
     let pending = downloads::pending(&id);
     let refused = match action {
-        Action::Start if !missing && !pending => Some("That title is already on this host.".into()),
-        Action::Pause if !downloads::get(&id).is_some_and(|d| d.state.live()) => {
-            Some("That title isn't downloading.".into())
+        Action::Start if !missing && !pending => Some((
+            "title_already_installed",
+            "That title is already on this host.".into(),
+        )),
+        Action::Pause if !downloads::get(&id).is_some_and(|d| d.state.live()) => Some((
+            "title_not_downloading",
+            "That title isn't downloading.".into(),
+        )),
+        Action::Cancel if !pending => Some((
+            "title_not_downloading",
+            "That title isn't downloading.".into(),
+        )),
+        Action::Uninstall if entry.install.is_none() => Some((
+            "title_files_not_removable",
+            "That title's files aren't ones its plugin can remove.".into(),
+        )),
+        Action::Uninstall if pending => Some((
+            "title_still_downloading",
+            "That title is still downloading. Cancel the download instead.".into(),
+        )),
+        Action::Uninstall if missing => {
+            Some(("title_not_on_host", "That title isn't on this host.".into()))
         }
-        Action::Cancel if !pending => Some("That title isn't downloading.".into()),
-        Action::Uninstall if entry.install.is_none() => {
-            Some("That title's files aren't ones its plugin can remove.".into())
-        }
-        Action::Uninstall if pending => {
-            Some("That title is still downloading. Cancel the download instead.".into())
-        }
-        Action::Uninstall if missing => Some("That title isn't on this host.".into()),
-        Action::Uninstall if in_use(&id) => Some(format!("Quit {title} first.")),
+        Action::Uninstall if in_use(&id) => Some(("title_in_use", format!("Quit {title} first."))),
         _ => None,
     };
-    if let Some(message) = refused {
-        return conflict(&message);
+    if let Some((code, message)) = refused {
+        let refusal = ApiError::coded(code, message);
+        return match code {
+            "title_in_use" => refusal.param("title", &title),
+            _ => refusal,
+        }
+        .respond(StatusCode::CONFLICT);
     }
     let call = {
         let (provider, id, external) = (provider.clone(), id.clone(), external.clone());
@@ -270,16 +296,25 @@ async fn act(id: String, action: Action, by: Option<String>) -> Response {
         Ok(Ok(())) => {}
         Ok(Err(Refusal::NotServed)) => {
             return conflict(
+                "plugin_cannot_install",
                 "The plugin that lists this title isn't running, or can't install titles.",
             )
         }
         Ok(Err(Refusal::NotMine)) => {
-            return conflict("The plugin that listed this title doesn't know it any more.")
+            return conflict(
+                "plugin_forgot_title",
+                "The plugin that listed this title doesn't know it any more.",
+            )
         }
-        Ok(Err(Refusal::Said(message))) => return conflict(&message),
+        // The plugin's own words: an app shows them as they are.
+        Ok(Err(Refusal::Said(message))) => return api_error(StatusCode::CONFLICT, &message),
         Ok(Err(Refusal::Unreachable(e))) => {
             tracing::warn!(provider = %provider, action = ?action, error = %e, "plugin install call did not answer");
-            return api_error(StatusCode::BAD_GATEWAY, "The plugin didn't answer.");
+            return api_error_coded(
+                StatusCode::BAD_GATEWAY,
+                "plugin_did_not_answer",
+                "The plugin didn't answer.",
+            );
         }
         Err(resp) => return resp,
     }

@@ -64,7 +64,8 @@ pub unsafe extern "C" fn punktfunk_connection_clock_offset_now_ns(
 }
 
 /// Request a live mode switch. On accept, the first new-mode AU is an IDR with
-/// in-band parameter sets — rebuild the decoder from it.
+/// in-band parameter sets — rebuild the decoder from it. At the live size the host keeps the
+/// view it scales to, so a rate change alone leaves its scale in place.
 ///
 /// # Safety
 /// `c` is a valid connection handle.
@@ -82,6 +83,34 @@ pub unsafe extern "C" fn punktfunk_connection_request_mode(
             height,
             refresh_hz,
         }))
+    })
+}
+
+/// [`punktfunk_connection_request_mode`] with the size this caller shows the picture at, when
+/// smaller than the mode: the host scales the picture to it before encoding. `0` on either
+/// view axis names none: the mode is encoded as it is, which is how a caller back at 1x
+/// clears the view.
+///
+/// # Safety
+/// `c` is a valid connection handle.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_request_mode_view(
+    c: *const PunktfunkConnection,
+    width: u32,
+    height: u32,
+    refresh_hz: u32,
+    view_width: u32,
+    view_height: u32,
+) -> PunktfunkStatus {
+    with_conn!(c => {
+        let mode = punktfunk_core::config::Mode {
+            width,
+            height,
+            refresh_hz,
+        };
+        let view = (view_width > 0 && view_height > 0).then_some((view_width, view_height));
+        status_of(c.inner.request_mode_view(mode, view))
     })
 }
 

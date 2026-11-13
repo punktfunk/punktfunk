@@ -22,7 +22,7 @@ mod inbound;
 mod rate;
 
 use super::*;
-use crate::native::bitrate::{pyrowave_bounds_kbps, UnrecoveredRun};
+use crate::native::bitrate::{fec_pct, pyrowave_bounds_kbps, UnrecoveredRun, FEC_WHOLE_FRAME};
 use pf_clipboard::ClipCoordCmd;
 use punktfunk_core::abr::governor::{ShareWindow, NO_SHARE_KBPS};
 use punktfunk_core::quic::v2::{dgram::Feedback, io as v2io, msg as v2msg};
@@ -218,6 +218,8 @@ pub(super) struct Task {
     /// control stream lands in the same order-preserving line as the pointer.
     pub(super) input_tx: std::sync::mpsc::SyncSender<super::input::ClientInput>,
     pub(super) initial_mode: punktfunk_core::Mode,
+    /// `initial_mode` at the size its first epoch is encoded at: PyroWave's first bounds.
+    pub(super) initial_picture: punktfunk_core::Mode,
     /// Epoch 0's `StreamConfig` with this host's link facts, sent as the task starts.
     pub(super) stream_config: v2msg::StreamConfig,
     /// The client moves its mode on configs (`FEATURE_STREAM_CONFIG`). Otherwise a switch is
@@ -309,15 +311,19 @@ enum Tell {
     Correct(Reconfigured),
 }
 
-/// A config for an epoch, mode or format the client does not hold yet, else a correction when
-/// the client was told another mode. `stream_config` is what the client holds.
+/// A config for an epoch, mode, encoded picture or format the client does not hold yet, else a
+/// correction when the client was told another mode. `stream_config` is what the client holds.
 fn tell(
     stream_config: &mut Option<v2msg::StreamConfig>,
     d: &super::wiring::Delivered,
 ) -> Option<Tell> {
+    let picture = crate::session_plan::picture_field(d.mode, d.encoded);
     match stream_config {
-        Some(cfg) if (cfg.epoch, cfg.mode, cfg.format()) != (d.epoch, d.mode, d.format) => {
-            (cfg.epoch, cfg.mode) = (d.epoch, d.mode);
+        Some(cfg)
+            if (cfg.epoch, cfg.mode, cfg.picture, cfg.format())
+                != (d.epoch, d.mode, picture, d.format) =>
+        {
+            (cfg.epoch, cfg.mode, cfg.picture) = (d.epoch, d.mode, picture);
             cfg.set_format(d.format);
             Some(Tell::Config(*cfg))
         }
@@ -385,6 +391,8 @@ struct Closed {
     audio_config: bool,
     /// The stream thread holds the sender and ends first.
     screen_tell: bool,
+    /// The session has no screen set to take a layout ask; logged once.
+    screens_ask: bool,
     /// The input thread is the only sender, and it ends with the session.
     pad_slots: bool,
     /// `--open` anonymous sessions never spawn deadline/watch; the sender drops at once.
@@ -404,6 +412,8 @@ struct ControlTask {
     /// The mode the client holds: every `Reconfigured` this task sends carries it, and
     /// adaptive FEC sizes a frame at its refresh.
     active: punktfunk_core::Mode,
+    /// The view the last accepted switch, else the handshake, scales `active` to.
+    active_view: Option<(u32, u32)>,
     /// What the client holds; `None` for a client that takes no configs.
     held_config: Option<v2msg::StreamConfig>,
     pyrowave_pin: rate::PyroWavePin,
@@ -450,6 +460,12 @@ impl Task {
             self.pyrowave_bpp,
             self.pyrowave_max_kbps,
         )
+    }
+
+    /// This session streams a display it joined and may not change now, read at each ask
+    /// ([`joined_held`](super::wiring::joined_held)).
+    fn joined_held(&self) -> bool {
+        super::wiring::joined_held(self.shared.joined_display.load(Ordering::Relaxed))
     }
 }
 
@@ -512,7 +528,7 @@ impl ControlTask {
         let pyrowave_pin = rate::PyroWavePin {
             kbps: task.session_bitrate_kbps,
             floor: if task.codec == crate::encode::Codec::PyroWave {
-                task.pyrowave_bounds(&task.initial_mode)
+                task.pyrowave_bounds(&task.initial_picture)
                     .0
                     .min(task.session_bitrate_kbps)
             } else {
@@ -532,6 +548,10 @@ impl ControlTask {
             closed: Closed::default(),
             denied: crate::session_status::GrantDrops::new(task.plane),
             active: task.initial_mode,
+            active_view: crate::session_plan::picture_field(
+                task.initial_mode,
+                (task.initial_picture.width, task.initial_picture.height),
+            ),
             held_config: task.anchored.then_some(task.stream_config),
             pyrowave_pin,
             last_accepted_switch: None,
@@ -624,7 +644,7 @@ impl ControlTask {
                 .as_ref()
                 .is_some_and(|send| send(n.frame, n.shards().to_vec()));
             if !queued {
-                tracing::debug!(frame = n.frame, "nack dropped: the send queue is full");
+                tracing::debug!(frame = n.frame, "nack dropped: no send thread");
             }
         }
         Ok(())
@@ -652,7 +672,7 @@ impl ControlTask {
         self.link
             .note_positions(fb.head, fb.mid, fb.tail, fb.sock_drops);
         self.link.sample_bands(
-            shared.fec_target.load(Ordering::Relaxed),
+            fec_pct(shared.fec_target.load(Ordering::Relaxed)),
             shared.live_bitrate.load(Ordering::Relaxed),
         );
         // No-op when FEC is pinned (`PUNKTFUNK_FEC_PCT`).
@@ -680,12 +700,13 @@ impl ControlTask {
         }
     }
 
-    /// Adaptive FEC's proposal for this window. It lands on `fec_requested`; the stream loop
-    /// publishes it to `fec_target` (what the send loop reads per frame) once the encoder
-    /// accepts the matching rate.
+    /// Adaptive FEC's proposal for this window: the percent, and [`FEC_WHOLE_FRAME`] while the
+    /// link reads lossy. It lands on `fec_requested`; the stream loop publishes it to
+    /// `fec_target` (what the send loop reads per frame) once the encoder accepts the matching
+    /// rate.
     fn adapt_fec(&mut self, fb: &Feedback, unrecovered_run: u32) {
         let shared = &self.task.shared;
-        let prev = shared.fec_target.load(Ordering::Relaxed);
+        let prev = fec_pct(shared.fec_target.load(Ordering::Relaxed));
         let target = punktfunk_core::abr::budget::fec_target(
             fb.loss_ppm,
             prev,
@@ -703,7 +724,20 @@ impl ControlTask {
             },
             &mut self.fec_horizon,
         );
-        shared.fec_requested.store(target, Ordering::Release);
+        let whole = if self.fec_horizon.lossy() {
+            FEC_WHOLE_FRAME
+        } else {
+            0
+        };
+        let asked = shared.fec_requested.swap(target | whole, Ordering::AcqRel);
+        if asked & FEC_WHOLE_FRAME != whole && self.task.codec == crate::encode::Codec::PyroWave {
+            tracing::info!(
+                whole_frame = whole != 0,
+                loss_ppm = fb.loss_ppm,
+                unrecovered_run,
+                "PyroWave parity span moved (whole frame while the link loses, head once clean)"
+            );
+        }
         if prev != target {
             tracing::debug!(
                 loss_ppm = fb.loss_ppm,
@@ -886,7 +920,7 @@ impl ControlTask {
         let task = &self.task;
         let m = self.link.close(
             &task.counters.link,
-            task.shared.fec_target.load(Ordering::Relaxed),
+            fec_pct(task.shared.fec_target.load(Ordering::Relaxed)),
             task.shared.live_bitrate.load(Ordering::Relaxed),
         );
         crate::link_health::emit(&m, task.peer);
@@ -908,14 +942,20 @@ impl ControlTask {
     }
 
     /// What an epoch delivers. Keeps `active` truthful for later refusal echoes, an
-    /// Automatic PyroWave session's bounds on the mode it encodes, and the codec a mode is
+    /// Automatic PyroWave session's bounds on the size it encodes, and the codec a mode is
     /// checked for; then tells the client what it does not hold.
     async fn on_delivered(&mut self, delivered: Option<super::wiring::Delivered>) -> Step {
         let d = delivered.ok_or(Ended)?;
         self.active = d.mode;
         self.task.codec = crate::encode::codec_from_wire(d.format.codec);
         if self.pyrowave_pin.automatic {
-            (self.pyrowave_pin.floor, self.pyrowave_pin.kbps) = self.task.pyrowave_bounds(&d.mode);
+            let (width, height) = d.encoded;
+            let encoded = punktfunk_core::Mode {
+                width,
+                height,
+                ..d.mode
+            };
+            (self.pyrowave_pin.floor, self.pyrowave_pin.kbps) = self.task.pyrowave_bounds(&encoded);
         }
         match tell(&mut self.held_config, &d) {
             Some(Tell::Config(cfg)) => self.send(&cfg).await,
@@ -963,10 +1003,11 @@ fn clip_offer_permitted(grants: u32, clip_enabled: bool) -> bool {
     grants & punktfunk_core::quic::GRANT_CLIPBOARD != 0 && clip_enabled
 }
 
-/// A key edge off the control stream joins the datagram plane's queue: the same grant
-/// gate and count, and a press drops when the input thread is behind. A release waits up
-/// to [`RELEASE_WAIT`] for room: a lost one holds the key down on the host, and this lane
-/// exists so none is lost. The lane keeps its order; the queue keeps it too.
+/// An edge off the control stream joins the datagram plane's queue: the same grant gate
+/// and count, and a press drops when the input thread is behind. A release and a typed
+/// character wait up to [`MUST_ARRIVE_WAIT`] for room: a lost release holds the key down,
+/// a lost character is missing text, and this lane exists so neither is lost. The lane
+/// keeps its order; the queue keeps it too.
 async fn offer_edge(
     ev: InputEvent,
     grants: &AtomicU32,
@@ -985,16 +1026,16 @@ async fn offer_edge(
     if matches!(ev.kind, InputKind::KeyDown | InputKind::KeyUp) {
         ev.flags &= !crate::inject::KEY_FLAG_SEMANTIC_VK;
     }
-    let release = matches!(
+    let must_arrive = matches!(
         ev.kind,
-        InputKind::KeyUp | InputKind::MouseButtonUp | InputKind::TouchUp
+        InputKind::KeyUp | InputKind::MouseButtonUp | InputKind::TouchUp | InputKind::TextInput
     );
-    let deadline = tokio::time::Instant::now() + RELEASE_WAIT;
+    let deadline = tokio::time::Instant::now() + MUST_ARRIVE_WAIT;
     let mut msg = super::input::ClientInput::Event(ev);
     loop {
         match input_tx.try_send(msg) {
             Err(std::sync::mpsc::TrySendError::Full(back))
-                if release && tokio::time::Instant::now() < deadline =>
+                if must_arrive && tokio::time::Instant::now() < deadline =>
             {
                 msg = back;
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
@@ -1009,8 +1050,8 @@ async fn offer_edge(
 }
 
 /// A blocking pad create or the 200 ms "owned elsewhere" wait stalls the input thread; a
-/// release outlasts both. Longer, and the session is gone anyway.
-const RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+/// wait for room outlasts both. Longer, and the session is gone anyway.
+const MUST_ARRIVE_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Fire the stream loop's capture poke, so a recovery ask goes out this tick, not the next.
 fn poke_capture(poke: &super::wiring::ArrivalPoke) {
@@ -1068,6 +1109,22 @@ impl OffloadGuard {
 mod tests {
     use super::*;
     use punktfunk_core::quic::ProbeRequest;
+
+    /// A session on its own display may switch. A joiner may not until its stream knows the
+    /// display, nor off Linux; on Linux, while no other session holds that display, it may.
+    #[test]
+    fn a_joiner_switches_only_alone_on_linux() {
+        use super::super::wiring::{joined_display, joined_held, JOINED_UNSEEN};
+        assert_eq!(joined_display(false, Some(7)), 0);
+        assert_eq!(joined_display(true, None), JOINED_UNSEEN);
+        assert!(!joined_held(0), "its own display");
+        assert!(joined_held(JOINED_UNSEEN), "not known yet");
+        // No pool entry holds generation 7, so nobody shares it.
+        assert_eq!(
+            joined_held(joined_display(true, Some(7))),
+            !cfg!(target_os = "linux")
+        );
+    }
 
     #[test]
     fn offload_guard_downshifts_only_on_sustained_loss() {
@@ -1195,8 +1252,9 @@ mod tests {
         assert!(!take_newer(u32::MAX, &mut w, u32::MAX));
     }
 
-    /// A client that takes configs hears each new epoch once; one that does not hears only
-    /// the corrections.
+    /// A client that takes configs hears each new epoch, or a new encoded size, once; one that
+    /// does not hears only the corrections. Both name the display's mode; a config adds the
+    /// smaller size it is encoded at.
     #[test]
     fn a_delivered_mode_is_a_config_or_a_correction() {
         use super::super::wiring::Delivered;
@@ -1205,8 +1263,9 @@ mod tests {
             height: 720,
             refresh_hz: 60,
         };
-        let d = |epoch, width, corrects| Delivered {
+        let d = |epoch, width: u32, corrects| Delivered {
             mode: mode(width),
+            encoded: (width / 2, 360),
             format: Default::default(),
             epoch,
             corrects,
@@ -1214,6 +1273,7 @@ mod tests {
         let mut held = Some(v2msg::StreamConfig {
             epoch: 0,
             mode: mode(1280),
+            picture: Some((640, 360)),
             ..Default::default()
         });
         held.as_mut().unwrap().set_format(Default::default());
@@ -1222,7 +1282,16 @@ mod tests {
             panic!("a new epoch is configured")
         };
         assert_eq!((cfg.epoch, cfg.mode.width), (1, 1920));
+        assert_eq!(cfg.picture, Some((960, 360)));
         assert_eq!(tell(&mut held, &d(1, 1920, true)), None, "already held");
+        let unscaled = Delivered {
+            encoded: (1920, 720),
+            ..d(1, 1920, false)
+        };
+        let Some(Tell::Config(cfg)) = tell(&mut held, &unscaled) else {
+            panic!("a new encoded size is configured")
+        };
+        assert_eq!(cfg.picture, None);
 
         let mut none = None;
         assert_eq!(tell(&mut none, &d(1, 1920, false)), None);
@@ -1243,6 +1312,7 @@ mod tests {
         use punktfunk_core::quic::{VideoFormat, CODEC_H264, CODEC_HEVC};
         let d = |codec| Delivered {
             mode: Default::default(),
+            encoded: (0, 0),
             format: VideoFormat {
                 codec,
                 ..VideoFormat::default()
@@ -1672,5 +1742,57 @@ mod tests {
         offer_edge(up, &grants, &tx, &counters, &mut denied).await;
         assert_eq!(drain.join().unwrap().ok(), Some(InputKind::KeyUp));
         assert_eq!(counters.input_dropped.load(Ordering::Relaxed), 1);
+    }
+
+    /// A typed character is a lost syllable if it drops, so a full queue holds it like a
+    /// release until the input thread drains.
+    #[tokio::test]
+    async fn typed_text_waits_for_room_in_a_full_queue() {
+        use punktfunk_core::quic::GRANT_ALL;
+        let (tx, rx) = std::sync::mpsc::sync_channel::<super::super::input::ClientInput>(1);
+        let counters = crate::session_status::SessionCounters::default();
+        let mut denied = crate::session_status::GrantDrops::new(crate::events::Plane::Native);
+        let grants = AtomicU32::new(GRANT_ALL);
+        let ev = |kind, code| InputEvent {
+            kind,
+            _pad: [0; 3],
+            code,
+            x: 0,
+            y: 0,
+            flags: 0,
+        };
+        let kind_of = |m: super::super::input::ClientInput| match m {
+            super::super::input::ClientInput::Event(ev) => (ev.kind, ev.code),
+            _ => panic!("an input event"),
+        };
+        offer_edge(
+            ev(InputKind::KeyDown, 0x41),
+            &grants,
+            &tx,
+            &counters,
+            &mut denied,
+        )
+        .await;
+
+        // The queue is full: the text event waits until the input thread takes the press.
+        let hangul = '한' as u32;
+        let drain = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let first = kind_of(rx.recv().unwrap());
+            (first, kind_of(rx.recv().unwrap()))
+        });
+        offer_edge(
+            ev(InputKind::TextInput, hangul),
+            &grants,
+            &tx,
+            &counters,
+            &mut denied,
+        )
+        .await;
+        let (first, second) = drain.join().unwrap();
+        assert_eq!(first, (InputKind::KeyDown, 0x41));
+        assert_eq!(second, (InputKind::TextInput, hangul));
+        assert_eq!(counters.input_events.load(Ordering::Relaxed), 2);
+        assert_eq!(counters.input_dropped.load(Ordering::Relaxed), 0);
     }
 }

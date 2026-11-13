@@ -19,7 +19,8 @@ Click one under **When a device connects**; hover a preset to preview it on the 
 | Preset | For | After a device disconnects | Your monitors | A second device |
 |---|---|---|---|---|
 | **Default** | Most setups | Kept 10 s | Automatic | Gets its own screen |
-| **Shared desktop** | A PC you also use in person | Removed at once | Stay on | Gets its own screen |
+| **Play together** | Friends playing or watching one screen | Kept 10 s | Automatic | Shares the screen |
+| **Desk PC** | A PC you also use in person | Removed at once | Stay on | Gets its own screen |
 | **Hot-desk** | One person, roaming between their devices | Kept 5 min | Turn off | Is told it's busy |
 | **Workstation** | A multi-monitor daily driver, arranged by you | Kept 5 min | Turn off | Gets its own screen |
 | **Headless box** | A machine with no monitor | Kept until released | Turn off | Takes over |
@@ -44,16 +45,16 @@ sessions as they are.
 - **Keep until released**. The screen stays until you click **Release** on it in **Displays**, or
   **Release all kept**.
 
-Closing the client removes the screen at once. A dropped connection is noticed after the
-**Disconnect timeout** (8 s, an advanced setting in **Host**), then the window starts.
+Stopping the stream on the client skips the **Keep for** window and removes the screen at once. A
+dropped connection is noticed after the **Disconnect timeout** (8 s, an advanced setting in
+**Host**), then the window starts.
 
-**Keep for** counts while the host sleeps. A stream the host went to sleep under counts from that
-moment, so a host that sleeps past the window removes the screen a few seconds after it wakes,
-unless a device reconnects first. **Keep until released** ignores sleep.
-On gamescope the game keeps running as long as its screen does.
+**Keep for** keeps counting while the host sleeps: a host that sleeps past the window removes the
+screen a few seconds after it wakes, unless a device reconnects first. On gamescope the game keeps
+running as long as its screen does.
 
 > **Keeping a screen with Turn off keeps your monitors dark after you disconnect**, until the
-> window ends or you release it. On a PC you also use in person, pick **Shared desktop**.
+> window ends or you release it. On a PC you also use in person, pick **Desk PC**.
 
 ### Your monitors while streaming [#topology]
 
@@ -61,6 +62,9 @@ On gamescope the game keeps running as long as its screen does.
 - **Stay on, stream is main**: the stream becomes the main screen.
 - **Turn off**: the stream is the only screen until streaming ends.
 - **Automatic**: **Turn off**, or **Stay on** when `PUNKTFUNK_COMPOSITOR` pins a compositor.
+
+Devices that may [choose their screen](/docs/access-levels#individual-grants) can pick otherwise
+([Per-device settings](#per-device-settings)).
 
 | | KWin | GNOME | Sway · Hyprland · niri · Umbriel | Windows |
 |---|---|---|---|---|
@@ -84,15 +88,14 @@ On gamescope the game keeps running as long as its screen does.
 
 - **Gets its own screen**.
 - **Takes over**: the first device's stream ends.
-- **Shares the screen**: it joins the live screen at that screen's resolution. Both hear the same
-  audio; mute one from its row under **Now** on **Home**.
+- **Shares the screen**: it joins the live screen at the size, refresh rate and HDR the first
+  device set. [Play together](/docs/play-together) covers what the devices share.
 - **Is told it's busy**.
 
-On a Windows host a device that shares the screen sees the pointer as part of the picture. It
-does not see Windows permission prompts or the lock screen; the first device still does.
-
-The same device reconnecting always resumes. A Moonlight host serves one session: **Shares the
-screen** turns the second client away, and the other two hand the host over.
+The same device reconnecting always resumes. A Moonlight device that shares the screen gets the
+picture fitted into the resolution it asked for, and the app picked in Moonlight doesn't start.
+Only one Moonlight device streams at a time: **Shares the screen** turns a second one away, and
+the other two hand the host over.
 
 ### Remember display settings
 
@@ -110,44 +113,41 @@ it. **Arrange automatically**, under **Advanced**, puts them back in a row.
 Open **Display settings…** from a device's row in **Devices**. Each question offers **Follow
 host** or an answer for this device only:
 
+- **This device is** (Linux and Windows hosts): **Only screen**, **Main screen**, **Second
+  screen**, or one of your monitors. The three roles are **Turn off**, **Stay on, stream is main**
+  and **Stay on** from [Your monitors while streaming](#topology), for this device only, and each
+  keeps it off a monitor the whole host streams. A device whose access includes **Choose its
+  screen** ([Access levels](/docs/access-levels#individual-grants)) can also pick its role in its
+  own app ([Screen](/docs/client-settings#screen)); the sheet then says **Chosen on the device.**
+  The latest pick wins, from either side. Without the grant the sheet says **You decide this for**
+  the device, and the device's own pick does not count;
 - the keep-alive (including **Keep for** a number of seconds), second-device and remember
   questions above;
-- **Your monitors while streaming**. On a Windows host the first device to connect decides it for
-  every device that joins;
 - **Largest screen this device gets**, such as `2560x1440@60`. The device is told the smaller mode
-  when it asks for more;
+  when it asks for more, in its own screen's shape: a 2560×1600 device under `1920x1080@60` gets
+  1728×1080;
 - **Scale its screen at** (GNOME and niri hosts): the starting scale, until you change the scale in the
   desktop. On KDE, set the scale in System Settings while the device streams; KDE keeps it for
   that device.
 
 **Follow the host in everything** removes the device's overrides.
 
+## Two devices at once
+
+The first device to stream decides what your monitors do. A device that connects while another
+one holds a screen, live or [kept](#keep-alive), never turns them off:
+
+- A later **Only screen** acts as **Main screen**, or as **Second screen** on Sway, Hyprland, niri
+  and Umbriel. **Main screen** and **Second screen** keep their role.
+- A device set to a monitor that is off or streamed by another device gets its own screen.
+
+Monitors the first device turned off come back as each desktop restores them: see the notes
+under [Your monitors while streaming](#topology).
+
 ## Stream a real monitor instead
 
-**Linux and Windows hosts.** In **Screens**, click **Stream this monitor** on a monitor's row. Every
-device then sees that monitor instead of its own virtual screen. Click it again to give each device
-its own screen.
-
-- The monitor is never touched, so keep-alive, **Your monitors while streaming** and layout don't
-  apply.
-- The resolution is the monitor's; the client scales the picture.
-- Absolute mouse and pen input lands on that monitor.
-- Works on KWin, GNOME, Sway, Hyprland, niri (stock niri too), Umbriel and gamescope Game Mode, with no
-  chooser dialog. A nested or
-  headless gamescope has no monitor to list.
-- On Windows the pointer is part of the picture, and Windows permission prompts and the lock
-  screen are not: the stream keeps showing the desktop behind a prompt, while your input goes to
-  the prompt. A device that connects while the PC is locked or signed out gets a virtual screen
-  instead, so you can sign in; the monitor is streamed again from the next connection.
-
-On Linux, monitors are named by connector (`HDMI-A-1`, `DP-2`). `punktfunk-host list-monitors`
-lists them, and `mirror-test` checks the capture without a client
-([Host CLI](/docs/host-cli#list-monitors)). `punktfunk-host anchor-test --monitor HDMI-A-1` checks
-where absolute input lands. On Windows they carry the Windows display name (`\\.\DISPLAY1`), which
-the console shows.
-
-To pin it from the host instead, set `PUNKTFUNK_CAPTURE_MONITOR=HDMI-A-1` in
-[`host.env`](/docs/configuration). It wins over the console, which then shows the choice as locked.
+To show every device one of your real monitors instead of a virtual screen, see
+[Stream a real monitor](/docs/stream-a-monitor).
 
 ## Dedicated game sessions
 
@@ -162,41 +162,8 @@ To pin it from the host instead, set `PUNKTFUNK_CAPTURE_MONITOR=HDMI-A-1` in
 On a box in Steam Game Mode, a dedicated Steam launch borrows Game Mode's Steam and hands it back
 when the session ends. Moonlight launches follow the same choice.
 
-## When a game ends, and when a session does
-
-**Linux and Windows hosts.** In **Host → Session** in the web console. These act only on a game the
-host launched for the session, never one you started yourself.
-
-| Setting | Options (default first) |
-|---|---|
-| **When the game exits** | **End the session**: the client returns to its library · **Keep streaming** |
-| **When the session ends** | **Leave it running** · **Close it on Stop**: closing the client closes the game, a dropped connection doesn't · **Always close it**: a dropped connection closes it too, after the reconnect window |
-| **When you launch another game** | **Leave it running** · **Close it first**: only this device's earlier launch |
-| **Reconnect window** | 300 s (10 s to 24 h). Reconnecting cancels it; **Home** shows the countdown and **End now**. |
-
-Closing asks the game to quit like its window's close button, and forces it after 10 seconds.
-Unsaved progress is lost, which is why nothing closes by default. A player can still close one:
-see [Ending a game](/docs/game-library#ending-a-game).
-
-Keep-alive is how long the *screen* outlives a disconnect; the reconnect window is how long the
-*game* does.
-
-### On gamescope, keep-alive decides
-
-A game in its own gamescope (a dedicated session, or a Steam Deck or Bazzite couch box) lives
-exactly as long as its screen:
-
-| You disconnect by | The game |
-|---|---|
-| **Stop** on the client or in the console | ends with the screen at once, even on **Leave it running** |
-| a dropped connection | ends when the keep-alive window runs out |
-| a dropped connection, **Keep until released** | keeps running; **Always close it** still ends it after the reconnect window |
-| the host going to sleep | as a dropped connection, and the sleep counts against the window |
-
-To leave a game running on a gamescope box, keep its screen until released. On a desktop session
-(KWin, GNOME, Sway) the settings above apply as written.
-
-Hooks can react to `game.running` and `game.exited`: see [Automation](/docs/automation).
+What happens to a game when it or its session ends is under
+[When a game ends](/docs/when-a-game-ends).
 
 ## Advanced Windows options
 
@@ -239,12 +206,13 @@ Set scaling once while streaming and each device gets it back on the next connec
 ### My monitors stayed off after I disconnected
 
 The screen is kept with **Turn off**. Click **Release** on its row in **Displays** → **Screens**,
-or pick **Shared desktop**.
+or pick **Desk PC**.
 
 ### The streamed screen shows only my wallpaper
 
-Your monitors **Stay on**, so the stream is an empty extra screen. Pick **Stay on, stream is main**
-or **Turn off**.
+The device is a **Second screen**: your monitors **Stay on**, and the stream is an empty extra
+screen beside them. Pick **Main screen** or **Only screen** for the device, in its app or its
+**Display settings…**, or **Stay on, stream is main** or **Turn off** for every device.
 
 ### KWin can't create the virtual output
 
@@ -254,16 +222,7 @@ or **Turn off**.
 ### Keep-alive, monitors or layout settings do nothing
 
 A real monitor is being streamed, and those settings only apply to virtual screens. In
-**Screens**, click **Stream this monitor** on the streamed monitor again.
-
-### The console won't let me pick a monitor
-
-`PUNKTFUNK_CAPTURE_MONITOR` is set in `host.env`. Remove it and restart the host.
-
-### A session fails with "no monitor named …"
-
-The monitor you picked isn't connected, was renamed, or the host runs in another session. Run
-`punktfunk-host list-monitors` and pick a listed one.
+**Screens**, click **Streamed to devices** on the streamed monitor.
 
 ### My couch box's TV stayed on the stream after I disconnected
 

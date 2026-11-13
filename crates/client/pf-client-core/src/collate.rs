@@ -8,7 +8,7 @@
 //! Returns indices into the caller's slice. Art cache, fetch pump and cursor arithmetic
 //! all key off the shared model's order.
 
-use crate::library::{store_label, GameEntry, DESKTOP_ID};
+use crate::library::{store_key, store_key_label, GameEntry, DESKTOP_ID, UNKNOWN_STORE};
 
 /// What collation reads. Each shell keeps its own model — the console's
 /// `LibraryGame` carries art and running state, the desktop shells hold `GameEntry` — and
@@ -97,13 +97,14 @@ impl SortKey {
     }
 
     pub fn label(self) -> &'static str {
+        use pf_l10n::client as m;
         match self {
-            SortKey::HostOrder => "Default",
-            SortKey::Title => "A–Z",
-            SortKey::Platform => "Platform",
-            SortKey::Store => "Store",
-            SortKey::Recent => "Recent",
-            SortKey::PlayTime => "Most played",
+            SortKey::HostOrder => m::lib_sort_host(),
+            SortKey::Title => m::lib_sort_title(),
+            SortKey::Platform => m::lib_sort_platform(),
+            SortKey::Store => m::lib_sort_store(),
+            SortKey::Recent => m::lib_sort_recent(),
+            SortKey::PlayTime => m::lib_sort_playtime(),
         }
     }
 
@@ -122,7 +123,10 @@ impl SortKey {
 pub enum GroupKey {
     Launchers,
     Platform(String),
+    /// A store's name, the same in every language.
     Store(String),
+    /// Neither a platform nor a store this build knows.
+    Other,
 }
 
 #[derive(Clone, Debug)]
@@ -139,11 +143,14 @@ pub enum GroupBy {
     Store,
 }
 
-/// "The Witcher 3" belongs under W. English articles only — titles are store strings
-/// and we cannot detect language.
+/// A title's A–Z key: the search fold (case, width, kana by sound whatever the script), Latin
+/// accents relaxed, punctuation dropped, a leading article removed. Equal keys keep host order.
+///
+/// "The Witcher 3" belongs under W. English articles only: titles are store strings in no
+/// known language. Kanji, hanzi and Hangul compare by code point. ー keeps its code point, so
+/// スーパー follows the other ス titles.
 pub fn sort_title(title: &str) -> String {
-    let relaxed: String = title
-        .to_lowercase()
+    let relaxed: String = punktfunk_core::search::fold(title)
         .chars()
         .map(|c| match c {
             'á' | 'à' | 'â' | 'ä' | 'ã' | 'å' => 'a',
@@ -176,19 +183,30 @@ fn bucket<T: Collatable>(g: &T, by: GroupBy) -> GroupKey {
     match by {
         GroupBy::Platform => match g.platform().map(str::trim).filter(|p| !p.is_empty()) {
             Some(p) => GroupKey::Platform(p.to_string()),
-            None => match store_label(g.store()) {
-                "Game" => GroupKey::Platform("Other".to_string()),
+            None => match store_key(g.store()) {
+                UNKNOWN_STORE => GroupKey::Other,
                 store => GroupKey::Store(store.to_string()),
             },
         },
-        GroupBy::Store => GroupKey::Store(store_label(g.store()).to_string()),
+        GroupBy::Store => GroupKey::Store(store_key(g.store()).to_string()),
     }
 }
 
 fn label_of(key: &GroupKey) -> String {
     match key {
-        GroupKey::Launchers => "Launchers".to_string(),
-        GroupKey::Platform(p) | GroupKey::Store(p) => p.clone(),
+        GroupKey::Launchers => pf_l10n::client::lib_section_launchers().to_string(),
+        GroupKey::Other => pf_l10n::client::lib_group_other().to_string(),
+        GroupKey::Platform(p) => p.clone(),
+        GroupKey::Store(s) => store_key_label(s).to_string(),
+    }
+}
+
+/// What the groups sort A–Z on: data, so the order is the same in every language.
+fn sort_name(key: &GroupKey) -> &str {
+    match key {
+        GroupKey::Launchers => "",
+        GroupKey::Other => "Other",
+        GroupKey::Platform(p) | GroupKey::Store(p) => p,
     }
 }
 
@@ -233,8 +251,8 @@ pub fn collate<T: Collatable>(games: &[T], sort: SortKey, group_by: Option<Group
                 .cmp(gb.platform().unwrap_or(""))
                 .then_with(|| sort_title(ga.title()).cmp(&sort_title(gb.title())))
                 .then(a.cmp(&b)),
-            SortKey::Store => store_label(ga.store())
-                .cmp(store_label(gb.store()))
+            SortKey::Store => store_key(ga.store())
+                .cmp(store_key(gb.store()))
                 .then_with(|| sort_title(ga.title()).cmp(&sort_title(gb.title())))
                 .then(a.cmp(&b)),
             SortKey::Recent => gb
@@ -263,10 +281,12 @@ pub fn collate<T: Collatable>(games: &[T], sort: SortKey, group_by: Option<Group
             games: idx,
         });
     }
-    // A–Z by label; launchers stay first via the lead key (`sort_by` is stable).
+    // A–Z by name; launchers stay first via the lead key (`sort_by` is stable).
     out.sort_by(|a, b| {
         let lead = |g: &Group| u8::from(g.key != GroupKey::Launchers);
-        lead(a).cmp(&lead(b)).then_with(|| a.label.cmp(&b.label))
+        lead(a)
+            .cmp(&lead(b))
+            .then_with(|| sort_name(&a.key).cmp(sort_name(&b.key)))
     });
     out
 }
@@ -278,7 +298,7 @@ pub fn filtered<T: Collatable>(
     filter: Option<&GroupKey>,
 ) -> Vec<usize> {
     let by = match filter {
-        Some(GroupKey::Platform(_)) => Some(GroupBy::Platform),
+        Some(GroupKey::Platform(_) | GroupKey::Other) => Some(GroupBy::Platform),
         Some(GroupKey::Store(_)) => Some(GroupBy::Store),
         Some(GroupKey::Launchers) | None => None,
     };
@@ -311,6 +331,7 @@ pub fn worth_browsing<T: Collatable>(games: &[T]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::library::store_label;
 
     const EVERY_SORT: [SortKey; 6] = SortKey::ALL;
 
@@ -323,6 +344,7 @@ mod tests {
     ) -> GameEntry {
         GameEntry {
             install: None,
+            overrides: None,
             id: id.into(),
             store: store.into(),
             title: title.into(),
@@ -462,7 +484,7 @@ mod tests {
         let file: serde_json::Value =
             serde_json::from_str(raw).expect("library-collate-vectors.json must parse");
         assert_eq!(
-            file["version"], 2,
+            file["version"], 3,
             "bump the reader when the file's version moves"
         );
 
@@ -472,6 +494,7 @@ mod tests {
             .iter()
             .map(|e| GameEntry {
                 install: None,
+                overrides: None,
                 id: e["id"].as_str().expect("id").to_string(),
                 store: e["store"].as_str().expect("store").to_string(),
                 title: e["title"].as_str().expect("title").to_string(),
@@ -498,6 +521,7 @@ mod tests {
             let name = || v["name"].as_str().expect("name").to_string();
             match v["kind"].as_str().expect("kind") {
                 "launchers" => GroupKey::Launchers,
+                "platform" if v["name"] == "Other" => GroupKey::Other,
                 "platform" => GroupKey::Platform(name()),
                 "store" => GroupKey::Store(name()),
                 other => panic!("unknown group kind {other}"),
@@ -519,6 +543,18 @@ mod tests {
                 case["out"].as_str().expect("out"),
                 "sort_title({input:?})"
             );
+        }
+        for case in file["title_order"].as_array().expect("title_order") {
+            let name = case["name"].as_str().expect("name");
+            let shelf: Vec<GameEntry> = str_list(&case["titles"])
+                .iter()
+                .map(|t| game(t, t, "custom", None, false))
+                .collect();
+            let got: Vec<&str> = filtered(&shelf, SortKey::Title, None)
+                .into_iter()
+                .map(|i| shelf[i].title.as_str())
+                .collect();
+            assert_eq!(got, str_list(&case["expect"]), "{name}");
         }
         for (store, label) in file["store_labels"].as_object().expect("store_labels") {
             assert_eq!(

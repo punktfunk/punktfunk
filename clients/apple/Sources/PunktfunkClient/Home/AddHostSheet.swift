@@ -12,7 +12,9 @@ struct AddHostSheet: View {
 
     @State private var name = ""
     @State private var address = ""
-    @State private var port = 9777
+    /// Text, as every host form keeps it: a number field writes its value only on commit, and
+    /// a tap on Add Host straight after typing would save the port from before.
+    @State private var port = String(HostFormDraft.defaultPort)
     @State private var mac = ""
     #if !os(tvOS)
     /// Share the clipboard with this host (design clipboard-and-file-transfer.md §5.3). Off by
@@ -37,26 +39,11 @@ struct AddHostSheet: View {
     private static let margin: CGFloat = 16
     #endif
 
-    /// A field's placeholder, which is not the same job on both platforms.
-    ///
-    /// macOS draws a `TextField`'s title as a leading label, so the prompt only has to hint at the
-    /// VALUE. On iOS that title becomes an accessibility label the moment a prompt exists and
-    /// nothing is drawn — the prompt is the field's entire visible identity, so it has to name the
-    /// field as well as hint at it. Writing one string for both leaves you a Mac panel that says
-    /// everything twice or a phone form of unlabelled boxes.
-    private static func prompt(touch: String, desktop: String) -> Text {
-        #if os(macOS)
-        Text(desktop)
-        #else
-        Text(touch)
-        #endif
-    }
-
     /// One rule for every host form (see `HostFormDraft`): a blank port means the default, an
     /// out-of-range one is refused rather than silently clamped, and a pasted `address:port` is
     /// split rather than stored whole.
     private var draft: HostFormDraft {
-        HostFormDraft(name: name, address: address, port: String(port))
+        HostFormDraft(name: name, address: address, port: port)
     }
     private var canSave: Bool { draft.canSave }
 
@@ -65,40 +52,57 @@ struct AddHostSheet: View {
         // No inline text editing on tvOS — Settings-style value rows; pressing one
         // raises the SYSTEM fullscreen keyboard (TVTextEntry).
         VStack(spacing: 24) {
-            TVFieldRow(label: "Name", value: name, placeholder: "Optional") { editingField = .name }
-            TVFieldRow(label: "Address", value: address, placeholder: "IP or hostname") { editingField = .address }
-            TVFieldRow(label: "Port", value: String(port), placeholder: "") { editingField = .port }
             TVFieldRow(
-                label: "MAC address", value: mac,
-                placeholder: "For Wake-on-LAN, optional") { editingField = .mac }
+                label: String(localized: L10n.hostsFieldName), value: name,
+                placeholder: String(localized: L10n.hostsFieldNamePlaceholder)
+            ) { editingField = .name }
+            TVFieldRow(
+                label: String(localized: L10n.hostsFieldAddress), value: address,
+                placeholder: String(localized: L10n.hostsFieldAddressPlaceholder)
+            ) { editingField = .address }
+            TVFieldRow(
+                label: String(localized: L10n.hostsFieldPort), value: port, placeholder: ""
+            ) { editingField = .port }
+            TVFieldRow(
+                label: String(localized: L10n.hostsFieldMac), value: mac,
+                placeholder: String(localized: L10n.hostsFieldMacPlaceholder)
+            ) { editingField = .mac }
             HStack(spacing: 32) {
-                Button("Cancel", role: .cancel) { dismiss() }
-                Button("Add Host") { save() }.disabled(!canSave)
+                Button(L10n.commonCancel, role: .cancel) { dismiss() }
+                Button(L10n.hostsAddConfirm) { save() }.disabled(!canSave)
             }
             .padding(.top, 12)
         }
         .frame(maxWidth: 1000)
         .padding(60)
-        .navigationTitle("Add Host")
+        .navigationTitle(L10n.hostsAddTitle)
         .fullScreenCover(item: $editingField) { field in
             switch field {
             case .name:
-                TVTextEntry(title: "Name (optional, e.g. Living Room)", text: name) {
+                TVTextEntry(title: String(localized: L10n.hostsFieldNamePlaceholder), text: name) {
                     name = $0
                     editingField = nil
                 }
             case .address:
-                TVTextEntry(title: "IP or hostname", text: address, keyboardType: .URL) {
+                TVTextEntry(
+                    title: String(localized: L10n.hostsFieldAddressPlaceholder), text: address,
+                    keyboardType: .URL
+                ) {
                     address = $0.trimmingCharacters(in: .whitespaces)
                     editingField = nil
                 }
             case .port:
-                TVTextEntry(title: "Port", text: String(port), keyboardType: .numberPad) {
-                    if let value = Int($0), (1...65535).contains(value) { port = value }
+                TVTextEntry(
+                    title: String(localized: L10n.hostsFieldPort), text: port,
+                    keyboardType: .numberPad
+                ) {
+                    if let value = Int($0.withASCIIDigits), (1...65535).contains(value) {
+                        port = String(value)
+                    }
                     editingField = nil
                 }
             case .mac:
-                TVTextEntry(title: "MAC address(es), comma-separated — aa:bb:cc:dd:ee:ff", text: mac) {
+                TVTextEntry(title: String(localized: L10n.appleHostsFieldMacEntry), text: mac) {
                     mac = $0.trimmingCharacters(in: .whitespaces)
                     editingField = nil
                 }
@@ -110,11 +114,11 @@ struct AddHostSheet: View {
             // A visionOS sheet doesn't swipe away: the close button is the way out without adding
             // a host. Untinted, so the brand tint stays on the one primary action.
             HStack {
-                Text("Add Host")
+                Text(L10n.hostsAddTitle)
                     .font(.geist(22, .semibold, relativeTo: .title3))
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
-                Button("Close", systemImage: "xmark") { dismiss() }
+                Button(L10n.commonClose, systemImage: "xmark") { dismiss() }
                     .labelStyle(.iconOnly)
                     .buttonBorderShape(.circle)
                     .tint(nil)
@@ -123,28 +127,31 @@ struct AddHostSheet: View {
             #endif
             Form {
                 TextField(
-                    "Name", text: $name,
-                    prompt: Self.prompt(
-                        touch: "Name (optional, e.g. Living Room)",
-                        desktop: "Optional — e.g. Living Room"))
-                TextField("Address", text: $address, prompt: Text("IP or hostname"))
+                    String(localized: L10n.hostsFieldName), text: $name,
+                    prompt: Text(L10n.hostsFieldNamePlaceholder))
+                TextField(
+                    String(localized: L10n.hostsFieldAddress), text: $address,
+                    prompt: Text(L10n.hostsFieldAddressPlaceholder))
                     .autocorrectionDisabled()
                     #if os(iOS) || os(visionOS)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
                     #endif
-                TextField("Port", value: $port, format: .number.grouping(.never))
                 TextField(
-                    "MAC address", text: $mac,
-                    prompt: Self.prompt(
-                        touch: "MAC address (for Wake-on-LAN, optional)",
-                        desktop: "For Wake-on-LAN, optional"))
+                    String(localized: L10n.hostsFieldPort), text: $port,
+                    prompt: Text(verbatim: String(HostFormDraft.defaultPort)))
+                    #if os(iOS) || os(visionOS)
+                    .keyboardType(.numberPad)
+                    #endif
+                TextField(
+                    String(localized: L10n.hostsFieldMac), text: $mac,
+                    prompt: Text(L10n.hostsFieldMacPlaceholder))
                     .autocorrectionDisabled()
                     #if os(iOS) || os(visionOS)
                     .textInputAutocapitalization(.never)
                     #endif
                 #if !os(tvOS)
-                Toggle("Share clipboard with this host", isOn: $clipboardSync)
+                Toggle(L10n.hostsClipboard, isOn: $clipboardSync)
                 #endif
             }
             #if !os(tvOS)
@@ -177,10 +184,10 @@ struct AddHostSheet: View {
             #endif
             #if os(macOS)
             HStack {
-                Button("Cancel", role: .cancel) { dismiss() }
+                Button(L10n.commonCancel, role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Add Host") { save() }
+                Button(L10n.hostsAddConfirm) { save() }
                     .glassProminentButtonStyle()
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSave)
@@ -188,7 +195,7 @@ struct AddHostSheet: View {
             .padding(16)
             #else
             Button { save() } label: {
-                Text("Add Host").frame(maxWidth: .infinity)
+                Text(L10n.hostsAddConfirm).frame(maxWidth: .infinity)
             }
                 .glassProminentButtonStyle()
                 .controlSize(.large)
@@ -214,7 +221,7 @@ struct AddHostSheet: View {
     private func save() {
         var host = StoredHost(name: "", address: "")
         draft.apply(to: &host)
-        host.macAddresses = Self.parseMacs(mac)
+        host.macAddresses = HostFormDraft.parseMacs(mac)
         #if !os(tvOS)
         // nil when off: the key stays absent from the saved JSON (forward-compat, and "never
         // opted in" and "opted out" read the same — off).
@@ -222,19 +229,5 @@ struct AddHostSheet: View {
         #endif
         onSave(host)
         dismiss()
-    }
-
-    /// Split comma/space/newline-separated MACs, keep only well-formed `aa:bb:cc:dd:ee:ff` (six hex
-    /// octets, normalized lower-case); nil when none are valid, so clearing the field clears the
-    /// stored MAC.
-    static func parseMacs(_ s: String) -> [String]? {
-        let macs = s
-            .split(whereSeparator: { ",; \n\t".contains($0) })
-            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            .filter { m in
-                let parts = m.split(separator: ":")
-                return parts.count == 6 && parts.allSatisfy { $0.count == 2 && UInt8($0, radix: 16) != nil }
-            }
-        return macs.isEmpty ? nil : macs
     }
 }

@@ -24,6 +24,14 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         // `mgmt::device_auth`.
         ("POST", "/api/v1/auth/device/challenge", false, false),
         ("POST", "/api/v1/auth/device/token", false, false),
+        // A person's session on their own seat host: `require_auth` exempts the session path,
+        // whose ticket or token is the proof, the person lane reads its own profile, and
+        // verifying one is the admin lane's.
+        ("POST", "/api/v1/auth/person/session", false, false),
+        ("DELETE", "/api/v1/auth/person/session", false, false),
+        ("GET", "/api/v1/auth/person/profile", false, false),
+        ("GET", "/api/v1/auth/person/profile/avatar", false, false),
+        ("POST", "/api/v1/auth/person/verify", false, false),
         ("GET", "/api/v1/host", true, true),
         ("GET", "/api/v1/status", true, true),
         ("GET", "/api/v1/local/summary", true, false), // loopback-only, handled before the gates
@@ -43,6 +51,7 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
             true,
         ),
         ("GET", "/api/v1/profiles/{id}/devices", false, false),
+        ("POST", "/api/v1/profiles/{id}/devices", false, false),
         ("DELETE", "/api/v1/profiles/{id}/devices", false, false),
         (
             "DELETE",
@@ -50,6 +59,12 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
             false,
             false,
         ),
+        // A profile's lock is the operator's: no device reads or changes who opens a profile.
+        ("GET", "/api/v1/profiles/{id}/lock", false, false),
+        ("POST", "/api/v1/profiles/{id}/lock", false, false),
+        ("DELETE", "/api/v1/profiles/{id}/lock", false, false),
+        ("PUT", "/api/v1/profiles/{id}/lock/pin", false, false),
+        ("DELETE", "/api/v1/profiles/{id}/lock/pin", false, false),
         ("GET", "/api/v1/profiles", true, false),
         // Turning seats on installs a driver and opens Remote Desktop: the operator's alone.
         ("GET", "/api/v1/profiles/seating", false, false),
@@ -126,6 +141,8 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("PUT", "/api/v1/display/settings", true, false),
         ("GET", "/api/v1/display/state", true, false),
         ("GET", "/api/v1/display/monitors", true, false),
+        // The screen picker: a device reads its own pick and who streams each head.
+        ("GET", "/api/v1/display/targets", true, true),
         ("PUT", "/api/v1/display/layout", true, false),
         ("POST", "/api/v1/display/release", true, false),
         ("GET", "/api/v1/display/presets", true, false),
@@ -134,10 +151,10 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("DELETE", "/api/v1/display/presets/{id}", true, false),
         // Per-device display settings. Same lane as the host-wide policy above and
         // deliberately no stricter: this route changes ONE device's behaviour, while
-        // `PUT /display/settings` changes every device's. It carries no device identity
-        // either — the fingerprint is the key, and the body is display behaviour.
+        // `PUT /display/settings` changes every device's. A paired device may PUT its own
+        // row's `screen` alone; the handler refuses the rest (`a_device_sets_only_its_own_screen`).
         ("GET", "/api/v1/display/clients/{fingerprint}", true, false),
-        ("PUT", "/api/v1/display/clients/{fingerprint}", true, false),
+        ("PUT", "/api/v1/display/clients/{fingerprint}", true, true),
         (
             "DELETE",
             "/api/v1/display/clients/{fingerprint}",
@@ -164,7 +181,11 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         // for a 250 Hz input tap.
         ("GET", "/api/v1/session/{id}/pads", false, false),
         ("GET", "/api/v1/session/settings", true, false),
-        ("PUT", "/api/v1/session/settings", true, false),
+        // A locked profile's person sets and drops that profile's own game-exit choice.
+        ("PUT", "/api/v1/session/settings", true, true),
+        // Drops a profile's own settings. The plugin gate admits it as `session/{id}`; the
+        // handler refuses a plugin's `as` (`only_the_operator_writes_a_profile_s_layer`).
+        ("DELETE", "/api/v1/session/settings", true, true),
         // A device ends only games it launched; the handler scopes it.
         ("POST", "/api/v1/game/end", true, true),
         // A seat's held launch: only the host with the plugins lets it go.
@@ -175,15 +196,21 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("GET", "/api/v1/library/page", true, true),
         ("GET", "/api/v1/library/art/{id}/{kind}", true, true),
         ("GET", "/api/v1/library/scanners", true, false),
-        ("PUT", "/api/v1/library/scanners/{id}", true, false),
-        // Hide is operator curation; neither lane, unlike the scanner toggle.
-        ("PUT", "/api/v1/library/hidden/{id}", false, false),
+        // A device turns a source off or on for the locked profile it is the person of.
+        ("PUT", "/api/v1/library/scanners/{id}", true, true),
+        // Hide is curation: the operator's, or a locked profile's person's for that profile alone
+        // (`mgmt::tests::person`). Never the plugin lane, unlike the scanner toggle.
+        ("PUT", "/api/v1/library/hidden/{id}", false, true),
         ("POST", "/api/v1/library/custom", true, false),
         // The stored row names host paths (`detect`): operator only, like hide.
         ("GET", "/api/v1/library/custom/{id}", false, false),
         // A plugin reaches only its own provider's rows: `a_plugin_changes_only_its_own_library_rows`.
         ("PUT", "/api/v1/library/custom/{id}", true, false),
         ("DELETE", "/api/v1/library/custom/{id}", true, false),
+        // A seat's own titles go from its host to the box's writer by the admin tokens the door
+        // holds; a client reads them on `GET /library`.
+        ("GET", "/api/v1/library/own", false, false),
+        ("PUT", "/api/v1/library/own", false, false),
         ("PUT", "/api/v1/library/provider/{provider}", true, false),
         ("DELETE", "/api/v1/library/provider/{provider}", true, false),
         // A source writes its own result and reads its mode; order, switches and picks are
@@ -193,6 +220,25 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("PUT", "/api/v1/library/metadata/{source}", true, false),
         ("DELETE", "/api/v1/library/metadata/{source}", true, false),
         ("PUT", "/api/v1/library/picks/{id}", false, false),
+        // Game overrides are curation like picks. A client reads what each title resolves to
+        // on `GET /library`, never the document.
+        ("GET", "/api/v1/library/overrides", false, false),
+        ("POST", "/api/v1/library/overrides/sets", false, false),
+        ("PUT", "/api/v1/library/overrides/sets/{id}", false, false),
+        (
+            "DELETE",
+            "/api/v1/library/overrides/sets/{id}",
+            false,
+            false,
+        ),
+        // A game's or a source's entry in a locked profile's own overrides: its person's too.
+        ("PUT", "/api/v1/library/overrides/games/{id}", false, true),
+        (
+            "PUT",
+            "/api/v1/library/overrides/sources/{source}",
+            false,
+            true,
+        ),
         // A plugin reports its own downloads; the host maps them through the catalog.
         (
             "PUT",
@@ -370,6 +416,7 @@ async fn a_plugin_changes_only_its_own_library_rows() {
     let app = test_app(test_state(), None);
     let manual = crate::library::add_custom(
         serde_json::from_value(serde_json::json!({ "title": "Mine" })).unwrap(),
+        false,
     )
     .unwrap()
     .id;
@@ -410,6 +457,86 @@ async fn a_plugin_changes_only_its_own_library_rows() {
     assert_eq!(status, StatusCode::OK);
     let (status, _) = send(&app, delete("test-secret", &manual)).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+/// A write naming a profile (`?as=`) changes that profile's own layer: the operator's, and on the
+/// person's routes alone a locked profile's device (`mgmt::tests::person`). On every write route
+/// that takes `as`, the plugin lane gets 403 (coded where it reaches the route) and the cert lane
+/// reaches the person's routes and no other. Reads with `as` stay open where the lane reaches them.
+#[tokio::test]
+async fn only_the_operator_writes_a_profile_s_layer() {
+    use axum::http::Method;
+    let _dir = ConfigDirOverride::new();
+    let app = test_app(test_state(), None);
+    let doc: serde_json::Value = serde_json::from_str(&openapi_json()).unwrap();
+    let mut writes = 0;
+    for (path, ops) in doc["paths"].as_object().unwrap() {
+        for (method, op) in ops.as_object().unwrap() {
+            let params = op["parameters"].as_array();
+            if !params.is_some_and(|ps| ps.iter().any(|p| p["name"] == "as" && p["in"] == "query"))
+            {
+                continue;
+            }
+            let m = Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
+            let concrete: Vec<&str> = path
+                .split('/')
+                .map(|s| if s.starts_with('{') { "demo" } else { s })
+                .collect();
+            let concrete = concrete.join("/");
+            let uri = format!("{concrete}?as=a1b2c3d4e5f6");
+            let reachable = auth::plugin_may_access(&m, &concrete);
+            // `demo-secret` is the `demo` plugin's own token; `plugin-secret` the runner's.
+            for token in ["plugin-secret", "demo-secret"] {
+                let req = with_bearer(json_req(m.clone(), &uri, serde_json::json!({})), token);
+                let (status, body) = send(&app, req).await;
+                if m == Method::GET {
+                    assert!(
+                        !reachable || status != StatusCode::FORBIDDEN,
+                        "{token} {m} {uri}"
+                    );
+                    continue;
+                }
+                assert_eq!(status, StatusCode::FORBIDDEN, "{token} {m} {uri}: {body}");
+                if reachable {
+                    assert_eq!(
+                        body["code"], "profile_layer_console_only",
+                        "{token} {m} {uri}"
+                    );
+                }
+            }
+            if m != Method::GET {
+                writes += 1;
+                let person = crate::mgmt::person::person_route(m.as_str(), &concrete);
+                assert_eq!(
+                    auth::cert_may_access(&m, &concrete),
+                    person,
+                    "cert lane: {m} {path}"
+                );
+            }
+        }
+    }
+    // Hidden, scanner, pick, three on shared overrides, game, source, session settings' two, a
+    // seat's own titles.
+    assert_eq!(
+        writes, 11,
+        "a new write that takes `as` belongs in this list"
+    );
+    // The operator passes the lane check and meets the profile check.
+    let path = "/api/v1/library/hidden/steam:400?as=a1b2c3d4e5f6";
+    let req = json_req(Method::PUT, path, serde_json::json!({"hidden": true}));
+    let (status, body) = send(&app, req).await;
+    assert_eq!(
+        (status, &body["code"]),
+        (StatusCode::NOT_FOUND, &"profile_unknown".into())
+    );
+    // An empty `as` names nobody: the plugin's own switch on the box, as before.
+    let req = json_req(
+        Method::PUT,
+        "/api/v1/library/scanners/demo?as=",
+        serde_json::json!({"enabled": true}),
+    );
+    let (status, _) = send(&app, with_bearer(req, "demo-secret")).await;
+    assert_ne!(status, StatusCode::FORBIDDEN);
 }
 
 /// The seat proxy is the operator's: no plugin and no paired device reaches a seat through it.
@@ -556,6 +683,11 @@ fn every_route_has_a_side_on_the_door() {
         ("GET", "/api/v1/webtransport", true),
         ("POST", "/api/v1/auth/device/challenge", true),
         ("POST", "/api/v1/auth/device/token", true),
+        ("POST", "/api/v1/auth/person/session", true),
+        ("DELETE", "/api/v1/auth/person/session", true),
+        ("GET", "/api/v1/auth/person/profile", true),
+        ("GET", "/api/v1/auth/person/profile/avatar", true),
+        ("POST", "/api/v1/auth/person/verify", true),
         ("GET", "/api/v1/local/summary", true),
         ("GET", "/api/v1/host", true),
         ("GET", "/api/v1/host/settings", true),
@@ -573,6 +705,7 @@ fn every_route_has_a_side_on_the_door() {
         ("PUT", "/api/v1/display/settings", false),
         ("GET", "/api/v1/display/state", false),
         ("GET", "/api/v1/display/monitors", false),
+        ("GET", "/api/v1/display/targets", false),
         ("POST", "/api/v1/display/release", false),
         ("PUT", "/api/v1/display/layout", false),
         ("GET", "/api/v1/display/presets", false),
@@ -603,6 +736,7 @@ fn every_route_has_a_side_on_the_door() {
         ("GET", "/api/v1/session/last", false),
         ("GET", "/api/v1/session/settings", false),
         ("PUT", "/api/v1/session/settings", false),
+        ("DELETE", "/api/v1/session/settings", false),
         ("POST", "/api/v1/game/end", false),
         ("POST", "/api/v1/game/holds/{token}/release", false),
         // Moonlight is the owner's row's: the door never serves it.
@@ -643,12 +777,18 @@ fn every_route_has_a_side_on_the_door() {
         ("POST", "/api/v1/profiles/{id}/wake", true),
         ("POST", "/api/v1/profiles/{id}/unlock-challenge", true),
         ("GET", "/api/v1/profiles/{id}/devices", true),
+        ("POST", "/api/v1/profiles/{id}/devices", true),
         ("DELETE", "/api/v1/profiles/{id}/devices", true),
         (
             "DELETE",
             "/api/v1/profiles/{id}/devices/{fingerprint}",
             true,
         ),
+        ("GET", "/api/v1/profiles/{id}/lock", true),
+        ("POST", "/api/v1/profiles/{id}/lock", true),
+        ("DELETE", "/api/v1/profiles/{id}/lock", true),
+        ("PUT", "/api/v1/profiles/{id}/lock/pin", true),
+        ("DELETE", "/api/v1/profiles/{id}/lock/pin", true),
         ("GET", "/api/v1/actions", true),
         ("POST", "/api/v1/actions/{id}", true),
         ("GET", "/api/v1/update/status", true),
@@ -670,8 +810,17 @@ fn every_route_has_a_side_on_the_door() {
         ("POST", "/api/v1/library/custom", false),
         ("PUT", "/api/v1/library/custom/{id}", false),
         ("DELETE", "/api/v1/library/custom/{id}", false),
+        // The door calls a seat host and the owner's host for these, never its own copy.
+        ("GET", "/api/v1/library/own", false),
+        ("PUT", "/api/v1/library/own", false),
         ("PUT", "/api/v1/library/hidden/{id}", false),
         ("PUT", "/api/v1/library/picks/{id}", false),
+        ("GET", "/api/v1/library/overrides", false),
+        ("POST", "/api/v1/library/overrides/sets", false),
+        ("PUT", "/api/v1/library/overrides/sets/{id}", false),
+        ("DELETE", "/api/v1/library/overrides/sets/{id}", false),
+        ("PUT", "/api/v1/library/overrides/games/{id}", false),
+        ("PUT", "/api/v1/library/overrides/sources/{source}", false),
         ("GET", "/api/v1/library/metadata", false),
         ("PUT", "/api/v1/library/metadata", false),
         ("PUT", "/api/v1/library/metadata/{source}", false),
@@ -794,6 +943,180 @@ fn every_route_has_a_side_on_the_door() {
         assert!(
             all.iter().any(|rest| template_matches(template, rest)),
             "the door's table names {template}, which no route has"
+        );
+    }
+}
+
+/// Every route a paired device may call has a side on a door: the door's own, the owner's host
+/// or the seat it plays on, as these lists and `owner::DEVICE` say. A new device route fails
+/// here until someone decides.
+#[test]
+fn every_device_route_has_a_side_on_the_door() {
+    use crate::mgmt::owner::{device_route, template_matches, Side, DEVICE};
+    use axum::http::Method;
+
+    // What the door answers a device itself: what it merges, power, its logs, the profiles and
+    // the box's library copy.
+    const DOOR_OWN: &[(&str, &str)] = &[
+        ("GET", "/api/v1/host"),
+        ("GET", "/api/v1/status"),
+        ("GET", "/api/v1/actions"),
+        ("POST", "/api/v1/actions/{id}"),
+        ("POST", "/api/v1/client-logs"),
+        ("GET", "/api/v1/profiles/enumerate"),
+        ("GET", "/api/v1/profiles/{id}/avatar"),
+        ("POST", "/api/v1/profiles/{id}/wake"),
+        ("POST", "/api/v1/profiles/{id}/unlock-challenge"),
+        ("GET", "/api/v1/library"),
+        ("GET", "/api/v1/library/page"),
+        ("GET", "/api/v1/library/art/{id}/{kind}"),
+    ];
+    // What the owner's host answers as the device: installs land in the box's shared game files,
+    // and a person's writes in the library that host writes.
+    let owner: Vec<(&str, &str)> = [
+        ("POST", "/api/v1/library/install/{id}"),
+        ("DELETE", "/api/v1/library/install/{id}"),
+        ("POST", "/api/v1/library/install/{id}/pause"),
+    ]
+    .into_iter()
+    .chain(punktfunk_core::mgmt_routes::PERSON.iter().copied())
+    .collect();
+
+    let doc: serde_json::Value = serde_json::from_str(&openapi_json()).unwrap();
+    let mut device: Vec<(Method, &str)> = Vec::new();
+    for (path, ops) in doc["paths"].as_object().unwrap() {
+        for method in ops.as_object().unwrap().keys() {
+            let method = Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
+            if !auth::cert_may_access(&method, path) {
+                continue;
+            }
+            let rest = path.strip_prefix("/api/v1/").unwrap();
+            let row = (method.as_str(), path.as_str());
+            let want = if DOOR_OWN.contains(&row) {
+                None
+            } else if owner.contains(&row) {
+                Some(Side::Owner)
+            } else {
+                Some(Side::Seat)
+            };
+            assert_eq!(
+                device_route(&method, rest),
+                want,
+                "{method} {path}: a paired device calls it; the door's, the owner's or its seat's?"
+            );
+            device.push((method, rest));
+        }
+    }
+    for (method, path) in DOOR_OWN.iter().chain(&owner) {
+        let rest = path.strip_prefix("/api/v1/").unwrap();
+        assert!(
+            device.iter().any(|(m, p)| m == method && *p == rest),
+            "{method} {path} is in the list and no device route"
+        );
+    }
+    for (method, template, _) in DEVICE {
+        assert!(
+            device
+                .iter()
+                .any(|(m, rest)| m == method && template_matches(template, rest)),
+            "DEVICE names {method} {template}, which no device route has"
+        );
+    }
+}
+
+/// Every operation in the document has one row in `mgmt::scope::SCOPES`, and the table names
+/// nothing the document lacks. A concrete path finds its own row, and the document carries it
+/// as `x-scope`.
+#[test]
+fn every_route_has_one_scope() {
+    use crate::mgmt::scope::{row_of, scope_of, Scope, SCOPES};
+    use axum::http::Method;
+
+    let doc: serde_json::Value = serde_json::from_str(&openapi_json()).unwrap();
+    let mut live: Vec<(String, &str)> = Vec::new();
+    for (path, ops) in doc["paths"].as_object().unwrap() {
+        for (method, op) in ops.as_object().unwrap() {
+            let method = method.to_uppercase();
+            let rows: Vec<Scope> = SCOPES
+                .iter()
+                .filter(|(m, p, _)| *m == method && p == path)
+                .map(|&(.., scope)| scope)
+                .collect();
+            assert_eq!(
+                rows.len(),
+                1,
+                "{method} {path} has {} rows in SCOPES (mgmt/scope.rs): decide whose it is",
+                rows.len()
+            );
+            assert_eq!(op["x-scope"], rows[0].wire(), "{method} {path}");
+            live.push((method, path));
+        }
+    }
+    for &(method, path, scope) in SCOPES {
+        let pin = matches!(path, "/api/v1/pair" | "/api/v1/pair/pin");
+        assert!(
+            (pin && !cfg!(feature = "gamestream"))
+                || live.iter().any(|(m, p)| m == method && *p == path),
+            "SCOPES names {method} {path}, which the document lacks"
+        );
+        let concrete = path
+            .split('/')
+            .map(|s| if s.starts_with('{') { "sample" } else { s })
+            .collect::<Vec<_>>()
+            .join("/");
+        let m = Method::from_bytes(method.as_bytes()).unwrap();
+        assert_eq!(scope_of(&m, &concrete), Some(scope), "{method} {concrete}");
+    }
+    // A forward resolves a dot segment, so it has no scope; the router reads it as a segment.
+    let adopt = "/api/v1/emulators/../adopt";
+    assert_eq!(scope_of(&Method::POST, adopt), None);
+    assert_eq!(row_of(&Method::POST, adopt), Some(Scope::ProfileExec));
+    assert_eq!(scope_of(&Method::GET, "/api/v1/library/%2E/x"), None);
+    assert_eq!(
+        scope_of(&Method::HEAD, "/api/v1/library"),
+        Some(Scope::ProfileData)
+    );
+}
+
+/// What a paired device may call is a host's report, a profile's data, or one of the few routes
+/// of the box a device needs: its picker, power and its log upload. Never a route that runs code.
+#[test]
+fn a_device_reaches_no_route_of_the_box_but_its_picker_power_and_logs() {
+    use crate::mgmt::scope::{scope_of, Scope};
+    use axum::http::Method;
+
+    const DEVICE_BOX: &[(&str, &str)] = &[
+        ("GET", "/api/v1/profiles/enumerate"),
+        ("GET", "/api/v1/profiles/{id}/avatar"),
+        ("POST", "/api/v1/profiles/{id}/wake"),
+        ("POST", "/api/v1/profiles/{id}/unlock-challenge"),
+        ("GET", "/api/v1/actions"),
+        ("POST", "/api/v1/actions/{id}"),
+        ("POST", "/api/v1/client-logs"),
+    ];
+
+    let doc: serde_json::Value = serde_json::from_str(&openapi_json()).unwrap();
+    let mut device: Vec<(String, &str)> = Vec::new();
+    for (path, ops) in doc["paths"].as_object().unwrap() {
+        for method in ops.as_object().unwrap().keys() {
+            let method = Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
+            if !auth::cert_may_access(&method, path) {
+                continue;
+            }
+            let scope = scope_of(&method, path);
+            assert_ne!(scope, Some(Scope::ProfileExec), "{method} {path} runs code");
+            assert!(
+                matches!(scope, Some(Scope::Host | Scope::ProfileData))
+                    || DEVICE_BOX.contains(&(method.as_str(), path.as_str())),
+                "{method} {path} is {scope:?} and a device calls it"
+            );
+            device.push((method.to_string(), path));
+        }
+    }
+    for (method, path) in DEVICE_BOX {
+        assert!(
+            device.iter().any(|(m, p)| m == method && p == path),
+            "DEVICE_BOX names {method} {path}, which no device may call"
         );
     }
 }

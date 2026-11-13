@@ -11,6 +11,8 @@
 //! opinion — our own planner agreeing with our own encoder proves less than a decoder
 //! that shares no code with either.
 
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use common::frame;

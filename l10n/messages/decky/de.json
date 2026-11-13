@@ -1,0 +1,156 @@
+{
+	"decky_shortcut_create_failed": "Die Verknüpfung konnte nicht angelegt werden",
+	"decky_shortcut_restored_dupes": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Verknüpfung wiederhergestellt – {count} doppelter Eintrag entfernt",
+				"n=other": "Verknüpfung wiederhergestellt – {count} doppelte Einträge entfernt"
+			}
+		}
+	],
+	"decky_shortcut_restored": "Verknüpfung in der Bibliothek wiederhergestellt",
+	"decky_game_shortcuts_none": "Keine Spiel-Verknüpfungen zum Entfernen",
+	"decky_game_shortcuts_removed": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} Spiel-Verknüpfung entfernt",
+				"n=other": "{count} Spiel-Verknüpfungen entfernt"
+			}
+		}
+	],
+	"decky_force_stopped": "Stream beendet",
+	"decky_no_stream": "Es läuft kein Stream",
+	"decky_stream_unreachable": "Der Stream war nicht erreichbar",
+	"decky_client_unreachable_end": "Der Punktfunk-Client war nicht erreichbar.",
+	"decky_game_ended": "{title} beendet.",
+	"decky_end_game_failed": "Das Spiel konnte nicht beendet werden.",
+	"decky_host_trusted": "Vertraut",
+	"decky_host_needs_access": "Braucht Zugriff",
+	"decky_host_connect": "Verbinden…",
+	"decky_stream": "Streamen",
+	"decky_section_client_update": "Client-Update verfügbar",
+	"decky_newer_version": "Neuere Version",
+	"decky_section_update": "Update verfügbar",
+	"decky_update_plugin": "Plugin v{current} → v{latest}",
+	"decky_update_plugin_client": "Plugin v{current} → v{latest} + Client",
+	"decky_update_client_only": "Neue Client-Version",
+	"decky_update_hint": "Die Installation kann ein paar Minuten dauern",
+	"decky_update_button": "Punktfunk aktualisieren",
+	"decky_section_hosts": "Hosts",
+	"decky_scanning": "Suche…",
+	"decky_refresh": "Aktualisieren",
+	"decky_problem_not_installed": "Punktfunk ist nicht installiert",
+	"decky_problem_scan_failed": "Die Suche nach Hosts ist fehlgeschlagen",
+	"decky_problem_outdated": "Aktualisiere den Punktfunk-Client",
+	"decky_problem_not_installed_body": "Dieses Panel startet die Punktfunk-App, die noch nicht auf diesem Gerät ist. Installiere sie im Desktop-Modus.",
+	"decky_problem_scan_failed_body": "Bei der Suche ist etwas schiefgegangen – Aktualisieren versucht es erneut.",
+	"decky_problem_outdated_body": "Dieser Client ist zu alt, um Hosts in deinem Netzwerk zu finden. Gespeicherte Hosts funktionieren weiter.",
+	"decky_scanning_network": "Dein Netzwerk wird durchsucht…",
+	"decky_empty_body": "Öffne Punktfunk, um einen zu finden und zu koppeln.",
+	"decky_open_app": "Punktfunk öffnen",
+	"decky_open_app_hint": "Einstellungen, einen Host über seine Adresse hinzufügen und die Spiele eines Hosts durchsuchen – das alles findest du hier.",
+	"decky_play_menu": "Punktfunk im Spielen-Menü von Steam",
+	"decky_play_menu_hint": "Das ▾ neben der Spielen-Taste eines Spiels listet deine Hosts, die es haben, neben denen von Steam Link; wähl einen, und aus Spielen wird Streamen.",
+	"decky_host_steam_menu_hint": "Drückt die Steam-/Guide-Taste auf dem Host",
+	"decky_host_steam_menu": "Steam-Menü auf dem Host",
+	"decky_host_qam_hint": "Öffnet das Schnellzugriffsmenü des Hosts",
+	"decky_host_qam": "Schnellzugriff auf dem Host",
+	"decky_end_game_hint": "Schließt {title} auf dem Host und beendet dann den Stream. Nicht gespeicherter Fortschritt geht verloren.",
+	"decky_end_game_confirm_title": "{title} beenden?",
+	"decky_section_about": "Info",
+	"decky_section_troubleshooting": "Fehlerbehebung",
+	"decky_version_dev": "v{version} · Entwickler-Build",
+	"decky_checking": "Prüfe…",
+	"decky_check_updates": "Nach Updates suchen",
+	"decky_recreate_hint": "Fehlt der Punktfunk-Eintrag in deiner Bibliothek, oder siehst du mehrere? Das legt einen wieder an und entfernt die übrigen.",
+	"decky_recreate": "Bibliotheks-Verknüpfung neu anlegen",
+	"decky_remove_game_shortcuts_hint": "Streams, die von der Seite eines Spiels starten, laufen unter einem versteckten Eintrag mit dem Namen des Spiels. Das entfernt sie; jeder kommt beim nächsten Streamen wieder.",
+	"decky_remove_game_shortcuts": "Spiel-Verknüpfungen entfernen",
+	"decky_force_stop_hint": "Beendet einen Stream, der nicht mehr reagiert.",
+	"decky_force_stop": "Beenden erzwingen",
+	"decky_trust_refused": "{host} ist schon mit einer anderen Identität gespeichert. Entferne ihn in der Punktfunk-App, bevor du ihm wieder vertraust.",
+	"decky_trust_outdated": "Aktualisiere den Punktfunk-Client, um Zugriff anfordern zu können",
+	"decky_client_unreachable": "Der Punktfunk-Client war nicht erreichbar – ist er noch installiert?",
+	"decky_trust_save_failed": "{host} konnte nicht gespeichert werden",
+	"decky_trust_approve_toast": "Gib dieses Gerät in der Web-Konsole von {host} frei",
+	"decky_trust_denied": "{host} hat dieses Gerät nicht zugelassen",
+	"decky_trust_title": "Mit {host} verbinden",
+	"decky_trust_no_identity": "Dieser Host gibt keine Identität bekannt – kopple stattdessen mit einer PIN.",
+	"decky_trust_open_host": "{host} nimmt neue Geräte an. Beim Verbinden wird seine Identität gespeichert, damit spätere Streams ohne Rückfrage starten.",
+	"decky_trust_needs_approval": "{host} muss dieses Gerät zulassen, bevor es streamen kann.",
+	"decky_use_pin": "Stattdessen eine PIN verwenden…",
+	"decky_trust_request_hint": "Bittet den Besitzer von {host}, dieses Gerät in seiner Web-Konsole freizugeben – ohne PIN.",
+	"decky_pair_wrong_pin": "Falsche PIN, oder der Host zeigt keine an. Aktiviere die Kopplung erneut und versuch es noch einmal.",
+	"decky_pair_unreachable": "{host} war nicht erreichbar",
+	"decky_pair_outdated": "Aktualisiere den Punktfunk-Client, um von hier aus zu koppeln",
+	"decky_pair_failed": "Kopplung fehlgeschlagen",
+	"decky_pair_intro": "Starte die Kopplung auf der Seite „Geräte“ der Web-Konsole des Hosts und gib dann die PIN ein, die sie zeigt.",
+	"decky_boundary_title": "Punktfunk konnte diese Ansicht nicht anzeigen",
+	"decky_boundary_body": "Das Plugin hatte einen Anzeigefehler – mit diesem Gerät ist alles in Ordnung. Lade Punktfunk über die Plugin-Liste von Decky neu oder aktualisiere das Plugin.",
+	"decky_waking_to_stream": "{host} wird geweckt, um {title} zu streamen",
+	"decky_catalog_title": "Von {host} streamen",
+	"decky_catalog_ready": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} Steam-Spiel in den Spielen-Menüs bereit",
+				"n=other": "{count} Steam-Spiele in den Spielen-Menüs bereit"
+			}
+		}
+	],
+	"decky_host_asleep": "schläft",
+	"decky_host_awake": "{host} ist wach",
+	"decky_play_stream": "Streamen",
+	"decky_play_stop": "Beenden",
+	"decky_update_server_unreachable": "Der Update-Server war nicht erreichbar – bist du online?",
+	"decky_update_available_plugin": "Update verfügbar: Plugin v{current} → v{latest}.",
+	"decky_update_available_client": "Update verfügbar: Client {version}.",
+	"decky_update_available_client_unknown": "Update verfügbar: Client.",
+	"decky_update_available_both": "Update verfügbar: Plugin v{current} → v{latest} + Client {version}.",
+	"decky_update_available_both_unknown": "Update verfügbar: Plugin v{current} → v{latest} + Client.",
+	"decky_update_client_manual_note": "Der Client wird bei dieser Installation außerhalb von Punktfunk aktualisiert.",
+	"decky_update_client_outdated": "Der Client konnte nicht geprüft werden – er ist älter als die Update-Prüfung. Aktualisiere ihn einmal von Hand.",
+	"decky_update_client_check_failed": "Der Client konnte nicht auf Updates geprüft werden",
+	"decky_update_dev_build": "Entwickler-Build – Plugin-Updates sind ausgeschaltet; der Client ist aktuell.",
+	"decky_up_to_date": "Alles aktuell (Plugin v{version}).",
+	"decky_client_updated_reboot": "Client aktualisiert – starte neu, um abzuschließen.",
+	"decky_client_updated": "Client auf die neueste Version aktualisiert.",
+	"decky_client_current": "Der Client ist schon aktuell.",
+	"decky_client_manual": "Dieser Client wird außerhalb von Punktfunk aktualisiert – auf demselben Weg, auf dem du ihn installiert hast.",
+	"decky_client_update_unreachable": "Der Client war für das Update nicht erreichbar – ist er noch installiert?",
+	"decky_client_manual_command": "Dieser Client wird außerhalb von Punktfunk aktualisiert. Ausführen: {command}",
+	"decky_client_update_timeout": "Zeitüberschreitung beim Client-Update – prüf dieses Gerät und versuch es erneut",
+	"decky_client_update_failed": "Client-Update fehlgeschlagen",
+	"decky_client_updating_slow": "Der Client wird aktualisiert – das kann ein paar Minuten dauern…",
+	"decky_client_updating": "Der Client wird aktualisiert…",
+	"decky_client_update_run": "Client-Update verfügbar ({version}). Ausführen: {command}",
+	"decky_client_update_manual": "Ein neuerer Client ({version}) ist verfügbar – aktualisiere ihn auf demselben Weg, auf dem du ihn installiert hast.",
+	"decky_plugin_updating": "Das Plugin wird auf v{version} aktualisiert – bestätige die Abfrage von Decky. Das kann ein paar Minuten dauern.",
+	"decky_plugin_update_manual": "Aktualisiere das Plugin über Decky → Developer → Install Plugin from URL.",
+	"decky_launch_failed": "Start fehlgeschlagen",
+	"decky_launch_failed_named": "Start fehlgeschlagen ({name})",
+	"decky_launch_failed_preset": "Start fehlgeschlagen („{preset}“)",
+	"decky_end_game_unresolved": "Unklar, welches Spiel beendet werden soll.",
+	"decky_trust_request_failed": "Zugriff bei {host} konnte nicht angefordert werden",
+	"decky_trust_bad_fingerprint": "Die Identität von {host} ist nicht lesbar – kopple stattdessen mit einer PIN."
+}

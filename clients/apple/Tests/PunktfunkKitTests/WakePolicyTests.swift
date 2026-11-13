@@ -42,4 +42,21 @@ final class WakePolicyTests: XCTestCase {
     func testNoMacNeverWakes() {
         XCTAssertFalse(WakePolicy.autoWakes([], autoWake: true, available: true))
     }
+
+    /// A connect wakes first only where Auto-wake would, and never a host the probe reached.
+    func testWakesFirstSkipsAHostTheProbeReached() {
+        for autoWake in [false, true] {
+            for known in [[], macs] {
+                for online in [false, true] {
+                    XCTAssertEqual(
+                        WakePolicy.wakesFirst(
+                            known, autoWake: autoWake, probedOnline: online, available: true),
+                        autoWake && !known.isEmpty && !online,
+                        "\(autoWake) \(known) \(online)")
+                }
+            }
+        }
+        XCTAssertFalse(
+            WakePolicy.wakesFirst(macs, autoWake: true, probedOnline: false, available: false))
+    }
 }

@@ -1,68 +1,60 @@
 //! A network check's finding in words, from its id and figures
 //! ([`punktfunk_core::client::health::FindingId`] as a byte). Every shell shows the same
 //! sentence: what did not happen, then the next move. `clients/shared/finding-vectors.json`
-//! pins the wording and the figures for the Kotlin and Swift copies.
+//! pins the message, its arguments and the English sentence for the Kotlin and Swift copies.
 
-/// The sentence for finding `id` with its three figures. An id this build doesn't know
-/// reads `Finding {id}.`; its figures carry no unit to show them with.
-pub fn text(id: u8, numbers: [u32; 3]) -> String {
+use std::fmt::Display;
+
+/// Finding `id` with its three figures as a message: its key, and its arguments by placeholder
+/// name. Each figure is already formatted, `.` separated and rounded half to even, the same in
+/// every language. An id this build doesn't know is `finding_unknown_body`.
+pub fn message(id: u8, numbers: [u32; 3]) -> (&'static str, Vec<(&'static str, String)>) {
     let [a, b, _] = numbers;
-    let pct = |x: u32| f64::from(x) / 100.0;
+    let pct = |x: u32| format!("{:.1}", f64::from(x) / 100.0);
     match id {
-        1 => {
-            if a > 0 && b > 0 {
-                format!(
-                    "The host's port is faster than this device's ({a} vs {b} Mbit/s), so \
-                     bursts overflow the switch between them."
-                )
-            } else {
-                "The host's port is faster than this device's, so bursts overflow the \
-                 switch between them."
-                    .to_string()
-            }
-        }
-        2 => format!(
-            "This device drops the start of every burst ({:.1} % lost) \u{2014} the \
-             adapter's power saving is the usual cause.",
-            pct(a)
+        1 if a > 0 && b > 0 => (
+            "finding_speed_mismatch_body",
+            vec![("host_mbit", a.to_string()), ("device_mbit", b.to_string())],
         ),
-        3 => {
-            if a > 0 {
-                format!(
-                    "This device's own receive buffer dropped {a} packets; the system caps it \
-                     at {b} KB."
-                )
-            } else {
-                format!("The system caps this device's receive buffer at {b} KB.")
-            }
-        }
-        4 => format!(
-            "Loss at a rate no link refuses ({:.1} %): check the cable, the port or the \
-             adapter driver.",
-            pct(a)
+        1 => ("finding_speed_mismatch_unknown_body", vec![]),
+        2 => ("finding_burst_intolerant_body", vec![("loss", pct(a))]),
+        3 if a > 0 => (
+            "finding_receive_buffer_body",
+            vec![("packets", a.to_string()), ("cap_kb", b.to_string())],
         ),
-        5 => format!(
-            "Something on the path buffers instead of dropping ({:.0} ms spread); keep the \
-             bitrate under {:.0} Mbit/s.",
-            f64::from(a) / 1000.0,
-            f64::from(b) / 1000.0
+        3 => (
+            "finding_receive_buffer_cap_body",
+            vec![("cap_kb", b.to_string())],
         ),
-        6 => {
-            if a > 0 {
-                format!("The host's send buffer refused {a} packets; raise its limit.")
-            } else {
-                format!("The host's send buffer is capped at {b} KB; raise its limit.")
-            }
-        }
-        7 => {
-            if a > 0 {
-                format!("This device is on Wi-Fi; bursts lose {:.1} %.", pct(a))
-            } else {
-                "This device is on Wi-Fi.".to_string()
-            }
-        }
-        _ => format!("Finding {id}."),
+        4 => ("finding_link_fault_body", vec![("loss", pct(a))]),
+        5 => (
+            "finding_queue_build_up_body",
+            vec![
+                ("spread_ms", format!("{:.0}", f64::from(a) / 1000.0)),
+                ("max_mbit", format!("{:.0}", f64::from(b) / 1000.0)),
+            ],
+        ),
+        6 if a > 0 => (
+            "finding_host_send_buffer_body",
+            vec![("packets", a.to_string())],
+        ),
+        6 => (
+            "finding_host_send_buffer_cap_body",
+            vec![("cap_kb", b.to_string())],
+        ),
+        7 if a > 0 => ("finding_wifi_loss_body", vec![("loss", pct(a))]),
+        7 => ("finding_wifi_body", vec![]),
+        _ => ("finding_unknown_body", vec![("id", id.to_string())]),
     }
+}
+
+/// The sentence for finding `id` with its three figures, in the language set.
+pub fn text(id: u8, numbers: [u32; 3]) -> String {
+    let (key, args) = message(id, numbers);
+    let args: Vec<(&str, &dyn Display)> =
+        args.iter().map(|(k, v)| (*k, v as &dyn Display)).collect();
+    // Both plurals count `packets`, the first figure; a plain message ignores the count.
+    pf_l10n::get(key).map_or_else(String::new, |m| m.format_count(numbers[0].into(), &args))
 }
 
 #[cfg(test)]
@@ -70,7 +62,7 @@ mod tests {
     use super::*;
 
     /// The shared vectors: every known id, both branches where a figure can be zero, the
-    /// rounding ties, and an unknown id.
+    /// rounding ties, and an unknown id. Each case's message and arguments, then its English.
     #[test]
     fn shared_vectors() {
         let raw = include_str!("../../../../clients/shared/finding-vectors.json");
@@ -84,10 +76,21 @@ mod tests {
                 .map(|v| v.as_u64().unwrap() as u32)
                 .collect();
             let id = case["id"].as_u64().unwrap() as u8;
-            assert_eq!(
-                text(id, [n[0], n[1], n[2]]),
-                case["sentence"].as_str().unwrap()
-            );
+            let numbers = [n[0], n[1], n[2]];
+            let (key, args) = message(id, numbers);
+            assert_eq!(key, case["key"].as_str().unwrap(), "{case}");
+            let mut want: Vec<(String, String)> = case["args"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))
+                .collect();
+            let mut got: Vec<(String, String)> =
+                args.into_iter().map(|(k, v)| (k.into(), v)).collect();
+            got.sort();
+            want.sort();
+            assert_eq!(got, want, "{case}");
+            assert_eq!(text(id, numbers), case["sentence"].as_str().unwrap());
         }
         let ids: Vec<u64> = cases.iter().map(|c| c["id"].as_u64().unwrap()).collect();
         assert!(

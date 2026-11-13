@@ -22,6 +22,8 @@ struct Machine {
     active: AtomicBool,
     at_desk: AtomicBool,
     starts: AtomicUsize,
+    /// Starts handed the password they were proved with, and the password each got.
+    logins: Mutex<Vec<String>>,
     /// What `pam-check` prints.
     verdict: Mutex<&'static str>,
     /// The uid the account resolves to; `0` when no user has its name.
@@ -54,6 +56,16 @@ impl PlatformBackend for Warm {
         }
         self.machine.active.store(true, Ordering::SeqCst);
         Ok(RuntimeStatus::running())
+    }
+
+    fn start_with_password(
+        &self,
+        seat: &Seat,
+        password: &Secret,
+    ) -> Result<RuntimeStatus, BackendError> {
+        let typed = password.expose().to_owned();
+        self.machine.logins.lock().unwrap().push(typed);
+        self.start(seat)
     }
 
     fn stop(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
@@ -421,6 +433,31 @@ fn a_password_starts_the_session_and_admits_that_device_alone() {
     let start = rig.ask(Command::Start { id }).unwrap_err();
     assert_eq!(code(&start), "unlock_required");
     assert_eq!(rig.starts(), 1, "only an unlock starts a person's row");
+}
+
+/// Only a cold start proved with the password hands the backend that password: a password for a
+/// running session, a rejoin and a key proof's start hand it nothing.
+#[test]
+fn only_a_cold_password_start_hands_the_password_on() {
+    let rig = rig();
+    let logins = || rig.machine.logins.lock().unwrap().clone();
+    let (phone, tablet) = (device(1), device(2));
+    let (pair, key) = p256();
+    rig.unlock(&phone, password(false, Some(key))).unwrap();
+    assert_eq!(logins(), ["hunter2 Bärbel"]);
+    rig.unlock(&tablet, password(false, None)).unwrap();
+    rig.unlock(&phone, Proof::None).unwrap();
+    assert_eq!((rig.starts(), logins().len()), (1, 1), "the session ran");
+    rig.stop();
+    let challenge = rig.challenge(&phone);
+    let proof = signed(&pair, &challenge, &rig.seat.id, &phone, &box_fp());
+    let (_, started) = rig.unlock(&phone, proof).unwrap();
+    assert!(started);
+    assert_eq!(
+        (rig.starts(), logins().len()),
+        (2, 1),
+        "a key proof has no password"
+    );
 }
 
 /// Without a proof nothing starts. A device that stays signed in outlives the session and rejoins

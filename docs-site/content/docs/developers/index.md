@@ -18,8 +18,8 @@ cargo test --workspace --locked
 ```
 
 rustup installs the compiler version `rust-toolchain.toml` pins on the first build; don't override
-it, or rustfmt reformats files you never touched. Then enable the git hooks:
-`git config core.hooksPath scripts/git-hooks`.
+it, or rustfmt reformats files you never touched. Then enable the
+[git hooks](/docs/developers/contributing#git-hooks).
 
 ## Pages
 
@@ -33,4 +33,4 @@ it, or rustfmt reformats files you never touched. Then enable the git hooks:
 | [Management API](/docs/developers/management-api) | Script the host over its REST API |
 | [Writing plugins](/docs/developers/writing-plugins) | Add a library source or automation to the host |
 | [Embedding](/docs/developers/embedding) | Link the C ABI (`punktfunk-ffi`) into your own client |
-| [Multi-seat contract](/docs/developers/multi-seat-contract) | Change how the Windows host shares one box between players |
+| [Multi-seat contract](/docs/developers/multi-seat-contract) | Change how the host runs seats, so several players share one box |

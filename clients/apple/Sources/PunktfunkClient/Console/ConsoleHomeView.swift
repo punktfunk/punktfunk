@@ -35,8 +35,9 @@ struct ConsoleHomeView: View {
     let launchTitle: (LibraryTarget, String, ConnectFlow.ProfileChoice) -> Void
     let connectShelf: (LibraryTarget) -> Void
     let wakeOnly: (StoredHost) -> Void
-    /// A Back the console did not take. On a TV the press is the system's, so nothing is bound
-    /// while the console sits at its root and this never fires there.
+    /// The console asked to quit: a Mac's exit question answered yes, or a Back the console
+    /// did not take. On a TV the press is the system's, so nothing is bound while the console
+    /// sits at its root and this never fires there.
     var onQuit: () -> Void = {}
     /// The host parked the connect for its operator; the console draws the wait.
     var awaitingApproval = false
@@ -140,8 +141,8 @@ struct ConsoleHomeView: View {
     private func takeLinkConfirm() {
         guard let confirm = linkConfirm, let console else { return }
         console.prompt(
-            id: "link", title: "Open this link?", message: confirm.message,
-            choices: [confirm.actionTitle, "Cancel"]
+            id: "link", title: String(localized: L10n.linkConfirmTitle), message: confirm.message,
+            choices: [confirm.actionTitle, String(localized: L10n.commonCancel)]
         ) { choice in
             // The link may have been replaced while the question was up.
             guard linkConfirm?.id == confirm.id else { return }

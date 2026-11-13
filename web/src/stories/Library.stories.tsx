@@ -1,14 +1,22 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { ApiError } from "@/api/fetcher";
+import { getGetLibraryOverridesQueryKey } from "@/api/gen/library/library";
 import type { PluginAccessSnapshot } from "@/api/gen/model/pluginAccessSnapshot";
-import type { SeatScopeValue } from "@/api/seat";
+import { type SeatScopeValue, scopeChoices } from "@/api/seat";
 import { QueryState } from "@/components/query-state";
 import { SeatScopeView } from "@/components/seat-scope";
 import { LibraryHeader } from "@/sections/Library";
 import { LibraryGrid } from "@/sections/Library/LibraryGrid";
 import { MigrationBanner, SourcesCard } from "@/sections/Library/Sources";
-import { library } from "./lib/fixtures";
+import { SharedOverridesDialog } from "@/sections/Library/Stream";
+import {
+	library,
+	overridesDoc,
+	profilesDoor,
+	profilesWindows,
+} from "./lib/fixtures";
 import { Routed } from "./lib/routed";
+import { Seeded } from "./lib/seeded";
 
 const noop = () => {};
 const idle = { isLoading: false, error: null, refetch: noop };
@@ -59,33 +67,35 @@ const gridArgs = {
 	hidingId: null,
 };
 
-const SEATS = [
-	{ id: "a".repeat(32), name: "Ben" },
-	{ id: "b".repeat(32), name: "Guest room" },
-];
-
-/** A host with two seats of its own: the chip, on the box's library. */
-const scope = (seat: SeatScopeValue["seat"]): SeatScopeValue => ({
+/** A host with two more profiles: the pick, on the owner's library. */
+const choices = scopeChoices("library", profilesWindows.slice(0, 3), "windows");
+const scope: SeatScopeValue = {
 	page: "library",
-	seat,
-	seats: SEATS,
-	ownerName: "Enrico",
+	choices,
+	current: choices[0] ?? null,
 	pick: noop,
-});
+};
 
-/** **Whose library** on the header: the box's own is the default. */
+/** **Whose library** on the header: the owner's is the default. */
 export const WhoseLibrary: Story = {
 	render: () => (
-		<SeatScopeView {...scope(null)}>
+		<SeatScopeView {...scope}>
 			<LibraryHeader />
 		</SeatScopeView>
 	),
 };
 
-/** A seat picked, whose host is not running. */
+/** A door whose owner's host is not running: its library is read from there. */
+const door = scopeChoices("library", profilesDoor, "linux", true);
 export const SeatDown: Story = {
 	render: () => (
-		<SeatScopeView {...scope(SEATS[0] ?? null)}>
+		<SeatScopeView
+			page="library"
+			choices={door}
+			current={door[0] ?? null}
+			door
+			pick={noop}
+		>
 			<div className="flex flex-col gap-card">
 				<LibraryHeader />
 				<QueryState
@@ -161,6 +171,72 @@ export const WithHidden: Story = {
 				...idle,
 			}}
 		/>
+	),
+};
+
+/** What `GET /library` resolves per title: a shared override's name, or a game's own values. */
+const withStream = library.map((g) =>
+	g.id === "steam:1245620" || g.id === "steam:1086940"
+		? {
+				...g,
+				overrides: {
+					name: "1080p60 DualSense",
+					lines: 1080,
+					hz: 60,
+					gamepad: "dualsense",
+				},
+			}
+		: g.id === "steam:413150"
+			? { ...g, overrides: { lines: 1440, hz: 120, hdr: false } }
+			: g,
+);
+
+/** The host's stream settings, as a badge on the cover and on the line. */
+export const StreamBadges: Story = {
+	render: () => (
+		<LibraryGrid {...gridArgs} games={{ data: withStream, ...idle }} />
+	),
+};
+
+export const StreamBadgesAsList: Story = {
+	render: () => (
+		<LibraryGrid
+			{...gridArgs}
+			view="rows"
+			games={{ data: withStream, ...idle }}
+		/>
+	),
+};
+
+/** Selection mode: two titles checked, and the one action for them. */
+export const Selecting: Story = {
+	render: () => (
+		<LibraryGrid
+			{...gridArgs}
+			games={{ data: withStream, ...idle }}
+			selection={{
+				active: true,
+				ids: new Set(["steam:1086940", "custom:retroarch"]),
+				onActive: noop,
+				onToggle: noop,
+				sets: [
+					{ id: "a1b2c3d4e5f6", name: "1080p60 DualSense" },
+					{ id: "0f1e2d3c4b5a", name: "4K" },
+				],
+				onApply: noop,
+				busy: false,
+			}}
+		/>
+	),
+};
+
+/** **Shared overrides**, from the header: each with what uses it, its values, rename, delete. */
+export const SharedOverrides: Story = {
+	render: () => (
+		<Seeded data={[[getGetLibraryOverridesQueryKey(), overridesDoc]]}>
+			<LibraryHeader onShared={noop} />
+			<SharedOverridesDialog onClose={noop} />
+		</Seeded>
 	),
 };
 

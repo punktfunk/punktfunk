@@ -197,6 +197,74 @@ pub enum WorkspacePlacement {
     Current,
 }
 
+/// What a device streams: a screen of its own, or one of the host's monitors by connector.
+/// JSON `"own"` or `{"monitor": "HDMI-A-1"}`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayTarget {
+    /// A virtual display the host creates for this device.
+    Own,
+    /// A physical head, by connector (`DP-1`, `HDMI-A-2`).
+    Monitor(String),
+}
+
+impl DisplayTarget {
+    /// The connector, when this is a monitor.
+    pub fn into_monitor(self) -> Option<String> {
+        match self {
+            DisplayTarget::Monitor(c) => Some(c),
+            DisplayTarget::Own => None,
+        }
+    }
+}
+
+/// Who last wrote a device's pick: its `screen`, its `topology`, or both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SetBy {
+    /// The device itself, on its own row.
+    Device,
+    /// The operator, on the web console.
+    Console,
+}
+
+/// Why a device streams its own screen instead of the monitor it is set to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScreenReason {
+    /// Another device streams that monitor now; its pairing label.
+    Taken(String),
+    /// The monitor is listed and switched off.
+    Off,
+    /// The host has no monitor by that name it can stream.
+    Missing,
+}
+
+/// The screen a session opens, and why it is not the one the device is set to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScreenPick {
+    pub target: DisplayTarget,
+    /// `PUNKTFUNK_CAPTURE_MONITOR` fixes the screen for every device.
+    pub locked: bool,
+    /// Set when `target` fell back to [`DisplayTarget::Own`].
+    pub reason: Option<ScreenReason>,
+}
+
+/// One release, `capture_monitor` is `screen`'s alias: a document naming only the connector
+/// reads as that monitor, and the connector is rewritten from `screen`. Blank names no monitor.
+fn alias_screen(
+    screen: Option<DisplayTarget>,
+    capture_monitor: Option<String>,
+) -> (Option<DisplayTarget>, Option<String>) {
+    let named = |c: String| Some(c.trim().to_string()).filter(|c| !c.is_empty());
+    let screen = match screen {
+        Some(DisplayTarget::Monitor(c)) => named(c).map(DisplayTarget::Monitor),
+        Some(DisplayTarget::Own) => Some(DisplayTarget::Own),
+        None => capture_monitor.and_then(named).map(DisplayTarget::Monitor),
+    };
+    let mirrored = screen.clone().and_then(DisplayTarget::into_monitor);
+    (screen, mirrored)
+}
+
 /// Named bundle of the fields below. `Custom` uses the explicit fields;
 /// any other preset ignores them and expands ([`DisplayPolicy::effective`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -213,6 +281,8 @@ pub enum Preset {
     Hotdesk,
     /// Multi-monitor: manual arrangement, per-client identity, exclusive.
     Workstation,
+    /// `Default` where a second device shares the live screen.
+    PlayTogether,
 }
 
 /// File + mgmt GET/PUT shape. When [`preset`](Self::preset) is not
@@ -269,11 +339,15 @@ pub struct DisplayPolicy {
     /// `atiadlxx.dll`. Orthogonal to `preset`; default off.
     #[serde(default)]
     pub edid_lock: bool,
-    /// Stream this physical connector (`DP-1`, `HDMI-A-2`) instead of a
-    /// virtual display; `None` is the virtual path. Host-wide, orthogonal
-    /// to `preset`. `PUNKTFUNK_CAPTURE_MONITOR` overrides it so `host.env`
-    /// can pin without a console write undoing it.
+    /// What a device with no `screen` of its own streams; absent is its own screen.
+    /// Host-wide, orthogonal to `preset`. `PUNKTFUNK_CAPTURE_MONITOR` overrides it so
+    /// `host.env` can pin without a console write undoing it.
     #[serde(default)]
+    pub screen: Option<DisplayTarget>,
+    /// Deprecated: `screen`'s connector, kept one release for older consoles and SDKs. Read
+    /// when `screen` is absent; written from `screen`.
+    #[serde(default)]
+    #[schema(deprecated)]
     pub capture_monitor: Option<String>,
     /// Connectors that stay lit while streaming, even under `exclusive`
     /// (`design/web-console-overhaul.md` §5.5).
@@ -317,11 +391,16 @@ pub struct ClientOverlay {
     pub identity: Option<Identity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_session: Option<GameSession>,
-    /// Mirror this connector for this device only. Absent follows the host,
-    /// which is also the only way back to a virtual screen — a device cannot
-    /// opt OUT of a host-wide pin. Nobody has asked to; the reverse direction
-    /// is what the field exists for.
+    /// What this device streams. `own` opts it out of a host-wide monitor; absent follows
+    /// the host. The device may write this field and `topology` on its own row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen: Option<DisplayTarget>,
+    /// Who last wrote `screen` or `topology`. Absent when neither is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_by: Option<SetBy>,
+    /// Deprecated: `screen`'s connector, kept one release for older consoles and SDKs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(deprecated)]
     pub capture_monitor: Option<String>,
     /// Scale this device's screen is created at, when the desktop has not already
     /// remembered one for it (`display-management.md` §5.4). Mutter mints a fresh EDID
@@ -364,14 +443,44 @@ impl ClientOverlay {
         }
     }
 
+    /// The device's own pick: `screen`, with `topology` when it names one, else the row's stays.
+    /// A monitor drops the topology. Clearing the screen drops the topology too when the device
+    /// chose it, and keeps the console's. `capture_monitor` follows the screen, so the alias
+    /// cannot bring back the monitor it replaced.
+    pub fn set_device_pick(&mut self, screen: Option<DisplayTarget>, topology: Option<Topology>) {
+        match &screen {
+            Some(DisplayTarget::Monitor(_)) => self.topology = None,
+            Some(DisplayTarget::Own) => self.topology = topology.or(self.topology),
+            None if self.set_by == Some(SetBy::Device) => self.topology = None,
+            None => {}
+        }
+        self.set_by = match &screen {
+            Some(_) => Some(SetBy::Device),
+            None => self.set_by.filter(|_| self.topology.is_some()),
+        };
+        self.capture_monitor = screen.clone().and_then(DisplayTarget::into_monitor);
+        self.screen = screen;
+    }
+
+    /// The operator's whole-row write over `stored`: the pick keeps who chose it while its
+    /// screen and topology are both unchanged, else the console chose it.
+    pub fn console_write(mut self, stored: Option<&ClientOverlay>) -> ClientOverlay {
+        self.set_by = match stored {
+            Some(s) if s.screen == self.screen && s.topology == self.topology => s.set_by,
+            _ => Some(SetBy::Console),
+        };
+        self
+    }
+
     /// Same clamps a host-wide write gets: an overlay must not be able to
-    /// smuggle a linger window a direct PUT would refuse.
+    /// smuggle a linger window a direct PUT would refuse. `capture_monitor` reads as `screen`.
     pub fn sanitized(mut self) -> Self {
         self.keep_alive = self.keep_alive.map(clamp_keep_alive);
-        self.capture_monitor = self
-            .capture_monitor
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        (self.screen, self.capture_monitor) =
+            alias_screen(self.screen.take(), self.capture_monitor.take());
+        self.set_by = self
+            .set_by
+            .filter(|_| self.screen.is_some() || self.topology.is_some());
         // The range every desktop actually offers. A 0 or a negative would reach a
         // compositor as a scale and is not a smaller screen, it is a broken one.
         self.scale = self.scale.filter(|s| (0.25..=6.0).contains(s));
@@ -433,6 +542,7 @@ impl Default for DisplayPolicy {
             ddc_power_off: false,
             pnp_disable_monitors: true,
             edid_lock: false,
+            screen: None,
             capture_monitor: None,
             keep_monitors: Vec::new(),
             clients: BTreeMap::new(),
@@ -465,7 +575,39 @@ pub fn fp_hex(fp: Option<[u8; 32]>) -> Option<String> {
     fp.map(hex::encode)
 }
 
+/// The first session on the desk decides what its monitors do. Once another device holds a
+/// screen here, `exclusive` would darken monitors under it, so it becomes `primary`, or `extend`
+/// where `primary_real` is false. `holders` are the devices (fingerprint hex) of every live or
+/// kept screen and mirrored monitor. `me`'s own screens do not count, and neither does a holder
+/// not known (`None`): it may be `me`'s own kept screen under a shared identity. The changed
+/// topology and the holder that decided it, else `None`.
+pub fn first_session_rule(
+    wanted: Topology,
+    me: Option<&str>,
+    holders: &[Option<String>],
+    primary_real: bool,
+) -> Option<(Topology, Option<String>)> {
+    if wanted != Topology::Exclusive {
+        return None;
+    }
+    let first = holders.iter().flatten().find(|h| Some(h.as_str()) != me)?;
+    let kept = if primary_real {
+        Topology::Primary
+    } else {
+        Topology::Extend
+    };
+    Some((kept, Some(first.clone())))
+}
+
 impl DisplayPolicy {
+    /// Some device may be admitted onto a live screen: the host's policy or any device's own
+    /// says `join`.
+    pub fn any_join(&self) -> bool {
+        let join = Some(ModeConflict::Join);
+        Some(self.effective().mode_conflict) == join
+            || self.clients.values().any(|o| o.mode_conflict == join)
+    }
+
     /// This device's overlay, if it has one.
     pub fn overlay_for(&self, fp: Option<&str>) -> Option<&ClientOverlay> {
         self.clients.get(fp?)
@@ -475,7 +617,8 @@ impl DisplayPolicy {
     ///
     /// `layout` and `max_displays` stay host-wide — they describe the desktop
     /// every device shares, so letting one device move them would move them
-    /// for all of them.
+    /// for all of them. A topology the device set itself is left out: only a session that may
+    /// choose reads it ([`Self::topology_for`]).
     pub fn effective_for(&self, fp: Option<&str>) -> EffectivePolicy {
         let mut e = self.effective();
         let Some(o) = self.overlay_for(fp) else {
@@ -484,9 +627,7 @@ impl DisplayPolicy {
         if let Some(v) = o.keep_alive {
             e.keep_alive = v;
         }
-        if let Some(v) = o.topology {
-            e.topology = v;
-        }
+        e.topology = self.topology_for(fp, false);
         if let Some(v) = o.mode_conflict {
             e.mode_conflict = v;
         }
@@ -503,11 +644,23 @@ impl DisplayPolicy {
             .unwrap_or(self.game_session)
     }
 
-    /// The connector this device mirrors, else the host's pin.
-    pub fn capture_monitor_for(&self, fp: Option<&str>) -> Option<String> {
+    /// What this device streams: its row's `screen`, else the host's. `Own` on a row is an
+    /// answer, so it wins over a host-wide monitor. A screen the device set itself counts only
+    /// when it `may_choose` (`GRANT_DISPLAY`). `None` is its own screen.
+    pub fn screen_for(&self, fp: Option<&str>, may_choose: bool) -> Option<DisplayTarget> {
         self.overlay_for(fp)
-            .and_then(|o| o.capture_monitor.clone())
-            .or_else(|| self.capture_monitor.clone())
+            .filter(|o| may_choose || o.set_by != Some(SetBy::Device))
+            .and_then(|o| o.screen.clone())
+            .or_else(|| self.screen.clone())
+    }
+
+    /// The topology this device's session wants: its row's, else the host's. A topology the
+    /// device set itself counts only when it `may_choose` (`GRANT_DISPLAY`). May be `auto`.
+    pub fn topology_for(&self, fp: Option<&str>, may_choose: bool) -> Topology {
+        self.overlay_for(fp)
+            .filter(|o| may_choose || o.set_by != Some(SetBy::Device))
+            .and_then(|o| o.topology)
+            .unwrap_or(self.effective().topology)
     }
 
     /// Scale to create this device's screen at, if the operator set one.
@@ -517,9 +670,10 @@ impl DisplayPolicy {
 
     /// Clamp a requested mode to this device's cap.
     ///
-    /// Returns the mode to grant. Each axis is capped on its own: a device capped at
-    /// 2560x1440@60 asking for 3840x2160@120 gets 2560x1440@60, and one asking for
-    /// 1920x1080@120 keeps its size and loses only the refresh it cannot have.
+    /// Returns the mode to grant. The size scales down into the cap's box keeping its aspect,
+    /// even on both axes; the refresh is capped on its own. A device capped at 1920x1080@60
+    /// asking for 2560x1600@120 gets 1728x1080@60, and one asking for 1920x1080@120 keeps its
+    /// size and loses only the refresh it cannot have.
     pub fn cap_mode(&self, fp: Option<&str>, want: (u32, u32, u32)) -> (u32, u32, u32) {
         self.cap_mode_or(fp, want, None)
     }
@@ -539,7 +693,15 @@ impl DisplayPolicy {
         else {
             return want;
         };
-        (want.0.min(cap.0), want.1.min(cap.1), want.2.min(cap.2))
+        let hz = want.2.min(cap.2);
+        let s = (f64::from(cap.0) / f64::from(want.0)).min(f64::from(cap.1) / f64::from(want.1));
+        if s >= 1.0 {
+            return (want.0, want.1, hz);
+        }
+        // Rounding to even may pass an odd cap by one; the even floor under it holds.
+        let fit =
+            |v: u32, c: u32| punktfunk_core::game_overrides::even(f64::from(v) * s).min(c & !1);
+        (fit(want.0, cap.0), fit(want.1, cap.1), hz)
     }
 
     pub fn effective(&self) -> EffectivePolicy {
@@ -563,17 +725,16 @@ impl DisplayPolicy {
     }
 
     /// Clamp on write and on load. `max_displays` to `1..=16` (connector
-    /// ceiling), linger to `MAX_KEEP_ALIVE_SECS`, layout keys to slot ids.
+    /// ceiling), linger to `MAX_KEEP_ALIVE_SECS`, layout keys to slot ids, `capture_monitor`
+    /// to `screen`'s alias.
     pub fn sanitized(mut self) -> Self {
         self.version = CURRENT_VERSION;
         self.max_displays = self.max_displays.clamp(1, 16);
         self.keep_alive = clamp_keep_alive(self.keep_alive);
         self.layout.positions = canonical_positions(std::mem::take(&mut self.layout.positions));
         // A cleared picker sends `""`; that is "no pin", not a monitor named empty.
-        self.capture_monitor = self
-            .capture_monitor
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        (self.screen, self.capture_monitor) =
+            alias_screen(self.screen.take(), self.capture_monitor.take());
         // A connector named twice, or blank, is one the operator cannot have meant.
         self.keep_monitors = std::mem::take(&mut self.keep_monitors)
             .into_iter()
@@ -722,6 +883,13 @@ pub fn preset_fields(preset: Preset) -> Option<EffectivePolicy> {
             ModeConflict::Separate,
             Identity::PerClient,
             LayoutMode::Manual,
+        ),
+        Preset::PlayTogether => base(
+            KeepAlive::Duration { seconds: 10 },
+            Topology::Auto,
+            ModeConflict::Join,
+            Identity::PerClient,
+            LayoutMode::AutoRow,
         ),
     })
 }
@@ -1166,6 +1334,7 @@ pub fn seat_contract() -> DisplayPolicy {
         ddc_power_off: false,
         pnp_disable_monitors: false,
         edid_lock: false,
+        screen: None,
         capture_monitor: None,
         keep_monitors: Vec::new(),
         ..DisplayPolicy::default()
@@ -1749,6 +1918,7 @@ mod tests {
             Preset::SharedDesktop,
             Preset::Hotdesk,
             Preset::Workstation,
+            Preset::PlayTogether,
         ] {
             assert!(preset_fields(preset).is_some(), "{preset:?} must expand");
         }
@@ -1907,7 +2077,7 @@ mod tests {
             .with_box_overlays(Some(box_file))
             .with_contract(true);
         let p = seat.get();
-        assert_eq!(p.capture_monitor_for(Some("aa")), None);
+        assert_eq!(p.screen_for(Some("aa"), true), None);
         assert!(!p.ddc_power_off && !p.pnp_disable_monitors && p.keep_monitors.is_empty());
         // The box gives "aa" its own screen, which a seat has none of.
         assert_eq!(
@@ -1985,6 +2155,18 @@ mod tests {
             p.cap_mode_or(Some("tv"), (3840, 2160, 144), None),
             (3840, 2160, 144)
         );
+    }
+
+    /// A cap is a box the requested shape scales into: a 16:10 or 21:9 panel under a 16:9 cap
+    /// keeps its own aspect rather than a letterboxed 16:9.
+    #[test]
+    fn a_mode_cap_keeps_the_requested_aspect() {
+        let p = DisplayPolicy::default();
+        let cap = |want, spec| p.cap_mode_or(None, want, Some(spec));
+        assert_eq!(cap((2560, 1600, 120), "1920x1080@60"), (1728, 1080, 60));
+        assert_eq!(cap((3440, 1440, 144), "1920x1080@60"), (1920, 804, 60));
+        assert_eq!(cap((1280, 800, 90), "1920x1080@60"), (1280, 800, 60));
+        assert_eq!(cap((3840, 2160, 60), "1279x719@60"), (1278, 718, 60));
     }
 
     #[test]
@@ -2469,20 +2651,237 @@ mod tests {
         fn the_orthogonal_axes_overlay_too() {
             let mut p = host();
             p.game_session = GameSession::Auto;
-            p.capture_monitor = Some("DP-1".into());
             p.clients.insert(
                 PAD.into(),
                 ClientOverlay {
                     game_session: Some(GameSession::Dedicated),
-                    capture_monitor: Some("HDMI-1".into()),
                     ..ClientOverlay::default()
                 },
             );
             assert_eq!(p.game_session_for(Some(PAD)), GameSession::Dedicated);
-            assert_eq!(p.capture_monitor_for(Some(PAD)).as_deref(), Some("HDMI-1"));
-            // The TV pinned neither, so it still mirrors the host's monitor.
             assert_eq!(p.game_session_for(Some(TV)), GameSession::Auto);
-            assert_eq!(p.capture_monitor_for(Some(TV)).as_deref(), Some("DP-1"));
+        }
+
+        fn monitor(c: &str) -> Option<DisplayTarget> {
+            Some(DisplayTarget::Monitor(c.into()))
+        }
+
+        /// Each device streams its own row's screen; one with no row streams the host's, and
+        /// `own` on a row opts that device out of a host-wide monitor.
+        #[test]
+        fn each_device_resolves_its_own_screen() {
+            const PHONE: &str = "cc33";
+            let mut p = host();
+            p.screen = monitor("DP-1");
+            p.clients.get_mut(TV).unwrap().screen = monitor("HDMI-A-1");
+            p.clients.insert(
+                PAD.into(),
+                ClientOverlay {
+                    screen: monitor("DP-2"),
+                    ..ClientOverlay::default()
+                },
+            );
+            p.clients.insert(
+                PHONE.into(),
+                ClientOverlay {
+                    screen: Some(DisplayTarget::Own),
+                    ..ClientOverlay::default()
+                },
+            );
+            let p = p.sanitized();
+            assert_eq!(p.screen_for(Some(TV), false), monitor("HDMI-A-1"));
+            assert_eq!(p.screen_for(Some(PAD), false), monitor("DP-2"));
+            assert_eq!(p.screen_for(Some("dd44"), false), monitor("DP-1"), "no row");
+            assert_eq!(p.screen_for(None, false), monitor("DP-1"));
+            assert_eq!(p.screen_for(Some(PHONE), false), Some(DisplayTarget::Own));
+        }
+
+        /// A screen the device set itself counts only while it may choose; the host's screen
+        /// answers otherwise. One the console set counts either way.
+        #[test]
+        fn a_devices_own_pick_needs_the_grant() {
+            let mut p = host();
+            p.screen = Some(DisplayTarget::Own);
+            p.clients
+                .get_mut(TV)
+                .unwrap()
+                .set_device_pick(monitor("HDMI-A-1"), None);
+            p.clients.insert(
+                PAD.into(),
+                ClientOverlay {
+                    screen: monitor("DP-2"),
+                    set_by: Some(SetBy::Console),
+                    ..ClientOverlay::default()
+                },
+            );
+            assert_eq!(p.screen_for(Some(TV), true), monitor("HDMI-A-1"));
+            assert_eq!(p.screen_for(Some(TV), false), Some(DisplayTarget::Own));
+            assert_eq!(p.screen_for(Some(PAD), false), monitor("DP-2"));
+        }
+
+        /// A file from before `screen` reads its connector as the monitor, and a write
+        /// mirrors `screen` back into `capture_monitor` for older readers.
+        #[test]
+        fn capture_monitor_is_the_alias_of_screen() {
+            let doc = br#"{ "capture_monitor": "DP-2",
+                "clients": { "aa11": { "capture_monitor": "HDMI-1" } } }"#;
+            let mut p = DisplayPolicyStore::parse(std::path::Path::new("t.json"), doc).unwrap();
+            assert_eq!(p.screen, monitor("DP-2"));
+            assert_eq!(p.screen_for(Some(TV), false), monitor("HDMI-1"));
+
+            p.screen = Some(DisplayTarget::Own);
+            p.clients
+                .get_mut(TV)
+                .unwrap()
+                .set_device_pick(monitor("DP-3"), None);
+            let json = serde_json::to_value(p.sanitized()).unwrap();
+            assert_eq!(json["screen"], "own");
+            assert!(json["capture_monitor"].is_null(), "own names no connector");
+            let row = &json["clients"][TV];
+            assert_eq!(row["screen"], serde_json::json!({"monitor": "DP-3"}));
+            assert_eq!(row["capture_monitor"], "DP-3");
+            assert_eq!(row["set_by"], "device");
+        }
+
+        /// Clearing a row's screen drops who chose it, and a row with nothing else goes.
+        #[test]
+        fn a_cleared_screen_leaves_no_row() {
+            let mut p = DisplayPolicy::default();
+            let mut row = ClientOverlay::default();
+            row.set_device_pick(monitor("DP-1"), None);
+            row.set_device_pick(None, None);
+            p.clients.insert(PAD.into(), row);
+            assert!(p.sanitized().clients.is_empty());
+        }
+
+        /// The device writes its screen with a topology, or its screen alone. A monitor drops
+        /// the topology; a clear drops the device's topology and keeps the console's.
+        #[test]
+        fn a_device_pick_writes_the_pair() {
+            let pick = |row: &ClientOverlay| (row.screen.clone(), row.topology, row.set_by);
+            let own = Some(DisplayTarget::Own);
+            let console = ClientOverlay {
+                topology: Some(Topology::Primary),
+                set_by: Some(SetBy::Console),
+                ..ClientOverlay::default()
+            };
+
+            let mut row = console.clone();
+            row.set_device_pick(own.clone(), Some(Topology::Extend));
+            let device = (own.clone(), Some(Topology::Extend), Some(SetBy::Device));
+            assert_eq!(pick(&row), device);
+            row.set_device_pick(own.clone(), None);
+            assert_eq!(
+                pick(&row),
+                device,
+                "the screen alone keeps the row's topology"
+            );
+            row.set_device_pick(monitor("DP-1"), Some(Topology::Extend));
+            assert_eq!(pick(&row), (monitor("DP-1"), None, Some(SetBy::Device)));
+            row.set_device_pick(own.clone(), Some(Topology::Exclusive));
+            row.set_device_pick(None, None);
+            assert_eq!(pick(&row), (None, None, None), "the device's pair goes");
+
+            let mut row = ClientOverlay {
+                screen: own,
+                ..console
+            };
+            row.set_device_pick(None, None);
+            assert_eq!(
+                pick(&row),
+                (None, Some(Topology::Primary), Some(SetBy::Console)),
+                "the console's topology stays its own"
+            );
+        }
+
+        /// The operator's whole-row write keeps who chose the pick while screen and topology
+        /// are both unchanged; changing either makes it the console's.
+        #[test]
+        fn an_operator_write_keeps_who_chose_an_unchanged_pick() {
+            let mut stored = ClientOverlay::default();
+            stored.set_device_pick(Some(DisplayTarget::Own), Some(Topology::Extend));
+            let same = ClientOverlay {
+                keep_alive: Some(KeepAlive::Forever),
+                ..stored.clone()
+            };
+            let by = |o: ClientOverlay| o.console_write(Some(&stored)).set_by;
+            assert_eq!(by(same.clone()), Some(SetBy::Device));
+            let topology = ClientOverlay {
+                topology: Some(Topology::Primary),
+                ..same.clone()
+            };
+            assert_eq!(by(topology), Some(SetBy::Console));
+            let screen = ClientOverlay {
+                screen: monitor("DP-1"),
+                ..same.clone()
+            };
+            assert_eq!(by(screen), Some(SetBy::Console));
+            assert_eq!(same.console_write(None).set_by, Some(SetBy::Console));
+        }
+
+        /// A session wants the device's topology only while it may choose; else the console's
+        /// row, else the host's. Every ungated reader sees the device's as absent.
+        #[test]
+        fn the_wanted_topology_follows_the_grant() {
+            let mut p = host();
+            p.preset = Preset::Custom;
+            p.topology = Topology::Exclusive;
+            p.clients
+                .get_mut(TV)
+                .unwrap()
+                .set_device_pick(Some(DisplayTarget::Own), Some(Topology::Extend));
+            p.clients.insert(
+                PAD.into(),
+                ClientOverlay {
+                    topology: Some(Topology::Primary),
+                    set_by: Some(SetBy::Console),
+                    ..ClientOverlay::default()
+                },
+            );
+            assert_eq!(p.topology_for(Some(TV), true), Topology::Extend);
+            assert_eq!(p.topology_for(Some(TV), false), Topology::Exclusive);
+            assert_eq!(p.effective_for(Some(TV)).topology, Topology::Exclusive);
+            assert_eq!(p.topology_for(Some(PAD), false), Topology::Primary);
+            assert_eq!(p.effective_for(Some(PAD)).topology, Topology::Primary);
+            assert_eq!(p.topology_for(Some("dd44"), true), Topology::Exclusive);
+        }
+
+        /// Only `exclusive` changes, and only for a screen some other device holds.
+        #[test]
+        fn the_first_session_decides_the_monitors() {
+            use Topology::{Exclusive, Extend, Primary};
+            let rule = |wanted, me: Option<&str>, holders: &[Option<&str>], primary| {
+                let holders: Vec<Option<String>> =
+                    holders.iter().map(|h| h.map(String::from)).collect();
+                first_session_rule(wanted, me, &holders, primary)
+            };
+            let pad = Some(PAD.to_string());
+            assert_eq!(rule(Exclusive, Some(TV), &[], true), None, "alone");
+            assert_eq!(
+                rule(Exclusive, Some(TV), &[Some(TV)], true),
+                None,
+                "its own"
+            );
+            assert_eq!(
+                rule(Exclusive, Some(TV), &[Some(TV), Some(PAD)], true),
+                Some((Primary, pad.clone()))
+            );
+            assert_eq!(
+                rule(Exclusive, Some(TV), &[Some(PAD)], false),
+                Some((Extend, pad)),
+                "no primary here"
+            );
+            assert_eq!(
+                rule(Exclusive, Some(TV), &[None], true),
+                None,
+                "a holder not known may be its own kept screen"
+            );
+            assert_eq!(
+                rule(Exclusive, None, &[Some(TV)], true),
+                Some((Primary, Some(TV.into())))
+            );
+            assert_eq!(rule(Primary, Some(TV), &[Some(PAD)], true), None);
+            assert_eq!(rule(Extend, Some(TV), &[Some(PAD)], false), None);
         }
 
         /// An overlay must not smuggle a window a host-wide PUT would clamp.
@@ -2506,6 +2905,7 @@ mod tests {
                 })
             );
             assert_eq!(o.capture_monitor, None, "a blank pin is no pin");
+            assert_eq!(o.screen, None);
         }
 
         /// "Pins nothing" is what an absent key already means; keeping the
@@ -2556,10 +2956,10 @@ mod tests {
             assert_eq!(p.effective_for(None).keep_alive, KeepAlive::Off);
         }
 
-        /// A cap is per axis, so a device that asks for less than the cap in one
-        /// dimension keeps what it asked for there.
+        /// A device that asks for less than the cap keeps it; one over only in refresh
+        /// keeps its size.
         #[test]
-        fn a_mode_cap_clamps_each_axis_on_its_own() {
+        fn a_mode_cap_takes_only_what_is_over_it() {
             let mut p = DisplayPolicy::default();
             p.clients.insert(
                 PAD.into(),

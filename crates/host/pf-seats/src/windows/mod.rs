@@ -22,7 +22,7 @@ mod supervisor;
 mod util;
 mod wts;
 
-use crate::backend::{BackendError, PlatformBackend};
+use crate::backend::{Adopted, BackendError, PlatformBackend};
 use crate::doctor::{report_rows, seat_rows, BoxFacts, SeatFacts};
 use crate::ipc::{Diagnostic, DiagnosticLevel, SeatingStatus};
 use crate::model::{Ledger, RuntimeStatus, Seat};
@@ -31,9 +31,10 @@ use crate::secret::Secret;
 use accounts::AccountManager;
 pub use accounts::{seats_group_sid, SEATS_GROUP};
 use credentials::CredentialStore;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use supervisor::Supervisor;
 use util::{backend_error, io_error, require_local_system, WinResult};
@@ -45,7 +46,7 @@ use windows::Win32::System::SystemInformation::{
 use windows::Win32::System::Threading::{GetCurrentProcess, IsWow64Process2};
 use windows_service::service::{ServiceAccess, ServiceState};
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
-use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_QUERY_VALUE, KEY_WOW64_64KEY};
+use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_QUERY_VALUE, KEY_READ, KEY_WOW64_64KEY};
 use winreg::RegKey;
 
 /// Whose existence reserves display slots 12 through 15, and turns seats on unless it holds
@@ -64,8 +65,9 @@ pub struct WindowsBackend {
     host_path: PathBuf,
     accounts: AccountManager,
     supervisor: Supervisor,
-    /// Set by a stop, cleared by the next start: a start reads it between its steps.
-    stopped: Arc<AtomicBool>,
+    /// The seats a stop reached since their last start: a start reads its own seat's between
+    /// its steps.
+    stopped: Arc<Mutex<HashSet<String>>>,
 }
 
 /// The profile folder of the local account `account`, where its own emulator data lives. `None`
@@ -161,7 +163,7 @@ impl WindowsBackend {
             host_path,
             accounts,
             supervisor,
-            stopped: Arc::new(AtomicBool::new(false)),
+            stopped: Arc::default(),
         })
     }
 
@@ -170,9 +172,16 @@ impl WindowsBackend {
     }
 
     /// Narrows Remote Desktop to this PC again where the operator chose that and a firewall
-    /// rule has opened it since. For the service's start.
+    /// rule has opened it since. For the service's start and its tick: a registry read decides
+    /// whether anything runs.
     pub fn keep_rdp_local(&self) {
         enable::keep_rdp_local();
+    }
+
+    /// Deletes the profiles of removed seat accounts this install made whose profile was still
+    /// loaded at the removal. For the service's start.
+    pub fn delete_owed_profiles(&self) {
+        accounts::delete_owed_profiles();
     }
 
     /// With seats on, waits until TermService runs, `stop` is set or [`TERMSERVICE_WAIT`] is
@@ -188,10 +197,16 @@ impl WindowsBackend {
         }
     }
 
-    /// Ends the start in flight once a stop has reached it, between two of its steps. The
-    /// service tells the start's caller the seat was stopped.
-    fn unless_stopped(&self) -> WinResult<()> {
-        if self.stopped.load(Ordering::SeqCst) {
+    fn stopped(&self) -> MutexGuard<'_, HashSet<String>> {
+        self.stopped
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// Ends `seat`'s start in flight once a stop of that seat has reached it, between two of its
+    /// steps. The service tells the start's caller the seat was stopped.
+    fn unless_stopped(&self, seat: &Seat) -> WinResult<()> {
+        if self.stopped().contains(seat.id.as_str()) {
             return Err(backend_error(
                 "seat_stopped",
                 "the seat was stopped while it started",
@@ -225,18 +240,18 @@ impl PlatformBackend for WindowsBackend {
     }
 
     fn start(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
-        self.stopped.store(false, Ordering::SeqCst);
+        self.stopped().remove(seat.id.as_str());
         self.ensure_runtime_prerequisites()?;
         // An uninstall deletes the seat display driver and an upgrade only stages the new one:
         // without it the seat logs on to Microsoft's adapter and never streams.
         enable::ensure_driver(&self.host_path)?;
-        self.unless_stopped()?;
+        self.unless_stopped(seat)?;
         // An upgrade's new enumerator reaches the listener here. Without it the seat still
         // starts, on `RDP-Tcp`, with Remote Audio and no pad audio.
         if let Err(cause) = seat_listener::ensure(&self.host_path) {
             tracing::warn!(%cause, "seat listener not ready — seats start without pad audio");
         }
-        self.unless_stopped()?;
+        self.unless_stopped(seat)?;
         // The box's shared Steam shortcuts start a seat's own copy on a seat.
         match self.root.open_child_dir("temp") {
             Ok(temp) => steam::wrap_box_shortcuts(&self.host_path, temp.path()),
@@ -246,21 +261,20 @@ impl PlatformBackend for WindowsBackend {
     }
 
     fn stop(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
-        self.stopped.store(true, Ordering::SeqCst);
-        self.supervisor.stop(seat, true)
+        self.stopped().insert(seat.id.to_string());
+        self.supervisor.stop(seat)
     }
 
     /// The seat host's own directories go with the seat: its identity key, token and logs, as a
     /// Linux seat's directory does. A directory that won't go is logged; the seat is gone anyway.
     /// An account that isn't the seat's is refused before the stop logs anything off, except an
-    /// adopted row whose name the person gave to a new account: its sessions are left alone and
-    /// its release works by the row's SID alone.
+    /// adopted row whose name the person gave to a new account: its release works by the row's
+    /// SID alone.
     fn remove(&self, seat: &Seat) -> Result<(), BackendError> {
-        let reassigned = self.accounts.name_reassigned(seat);
-        if !reassigned {
+        if !self.accounts.name_reassigned(seat) {
             self.accounts.ensure_owned_or_absent(seat)?;
         }
-        let _ = self.supervisor.stop(seat, !reassigned)?;
+        let _ = self.supervisor.stop(seat)?;
         self.accounts.delete(seat)?;
         for parent in ["hosts", "temp"] {
             let dir = self
@@ -276,7 +290,7 @@ impl PlatformBackend for WindowsBackend {
         Ok(())
     }
 
-    fn adopt_account(&self, seat: &Seat, password: &Secret) -> Result<bool, BackendError> {
+    fn adopt_account(&self, seat: &Seat, password: &Secret) -> Result<Adopted, BackendError> {
         self.ensure_runtime_prerequisites()?;
         self.accounts.adopt(seat, password)
     }
@@ -379,9 +393,7 @@ impl WindowsBackend {
         let driver = enable::driver_state(&self.host_path);
         let inbox_driver_newer = enable::inbox_display_driver_newer(&self.host_path);
         let pin = match rdp::load_pin_optional(&self.root) {
-            Ok(Some(pin)) => {
-                Some(rdp::require_live(&self.host_path, pin).map_err(|error| error.message))
-            }
+            Ok(Some(pin)) => Some(rdp::require_live(&self.host_path, pin)),
             _ => None,
         };
         let steam_box = steam::box_install();
@@ -399,6 +411,8 @@ impl WindowsBackend {
             checks,
             licensing,
             termservice,
+            rdp_local_only: enable::rdp_local_chosen(),
+            rdp_reachable: enable::rdp_reachable(),
             missing_file,
             driver,
             inbox_driver_newer,
@@ -432,9 +446,11 @@ impl WindowsBackend {
     }
 }
 
-/// Steam's streaming speakers driver, which a seat's sound device binds, is on disk.
+/// Steam's streaming speakers driver, which a seat's sound device binds, is on disk, or already
+/// bound to a sound device whose INF Windows still holds: the host mints a seat's from either,
+/// as `pf_audio`'s `discover_driver` does, so Steam itself may be gone.
 fn seat_sound() -> bool {
-    std::env::var_os("CommonProgramFiles(x86)")
+    let staged = std::env::var_os("CommonProgramFiles(x86)")
         .map(PathBuf::from)
         .is_some_and(|dir| {
             dir.join(r"Steam\drivers\Windows10")
@@ -445,6 +461,33 @@ fn seat_sound() -> bool {
                 })
                 .join("SteamStreamingSpeakers.inf")
                 .is_file()
+        });
+    staged || speakers_bound()
+}
+
+/// The MEDIA class's driver keys: one per sound device with a driver, naming the hardware id
+/// it matched and the INF it came from.
+const MEDIA_CLASS: &str =
+    r"SYSTEM\CurrentControlSet\Control\Class\{4d36e96c-e325-11ce-bfc1-08002be10318}";
+
+/// A sound device runs Steam's streaming speakers driver and its INF is still in `%WINDIR%\INF`.
+fn speakers_bound() -> bool {
+    let Ok(class) = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(MEDIA_CLASS, KEY_READ | KEY_WOW64_64KEY)
+    else {
+        return false;
+    };
+    class
+        .enum_keys()
+        .flatten()
+        .filter_map(|name| class.open_subkey_with_flags(name, KEY_QUERY_VALUE).ok())
+        .any(|driver| {
+            let matched = driver.get_value::<String, _>("MatchingDeviceId");
+            let inf = driver.get_value::<String, _>("InfPath");
+            matched.is_ok_and(|id| id.to_ascii_lowercase().contains("steamstreamingspeakers"))
+                && inf.is_ok_and(|inf| {
+                    Path::new(&pf_paths::windows_dir(&format!(r"INF\{inf}"))).is_file()
+                })
         })
 }
 
@@ -505,31 +548,38 @@ mod tests {
         hkcu.delete_subkey(&path).unwrap();
     }
 
-    /// A stop ends the start in flight at its next step.
+    /// A stop ends its own seat's start in flight at its next step, and no other seat's.
     #[test]
     fn a_stop_ends_the_start_in_flight_between_its_steps() {
         let temp = tempfile::tempdir().unwrap();
         let backend =
             WindowsBackend::open(temp.path(), PathBuf::from(r"C:\Windows\System32\cmd.exe"))
                 .unwrap();
-        let seat = Seat {
+        let seat = |account: &str| Seat {
             id: SeatId::random(),
             name: "test".into(),
-            account: "pfs-absent".into(),
+            account: account.into(),
             display_slot: 12,
             native_port: 9779,
             mgmt_port: 47995,
             autostart: false,
             runtime: RuntimeStatus::stopped(),
             owner: false,
+            owner_uid: None,
             fingerprint: None,
             adopted_sid: None,
             adopted_uid: None,
             rdp_granted: false,
+            console_deny_kept: false,
         };
-        assert!(backend.unless_stopped().is_ok());
-        backend.stop(&seat).unwrap();
-        assert_eq!(backend.unless_stopped().unwrap_err().code, "seat_stopped");
+        let (stopped, starting) = (seat("pfs-absent"), seat("pfs-absent-2"));
+        assert!(backend.unless_stopped(&stopped).is_ok());
+        backend.stop(&stopped).unwrap();
+        assert_eq!(
+            backend.unless_stopped(&stopped).unwrap_err().code,
+            "seat_stopped"
+        );
+        assert!(backend.unless_stopped(&starting).is_ok());
     }
 
     #[test]

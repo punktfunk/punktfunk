@@ -3,17 +3,22 @@
 //! [`Targets::pass`] is the fused pass the source's own thread runs on each new frame;
 //! [`Targets::frame`] wraps a filled slot as the `CapturedFrame` `submit` takes.
 //!
-//! A blended pointer costs that pass nothing: it then only copies the source into a slot-sized
-//! RGB scratch, and `frame` (the encode thread) draws the cursor quad and runs the converter
-//! from there. A composed kind's slot (BGRA, FP16) is its own scratch, so it copies once either
-//! way; the converter kinds pay one extra full-frame copy while the client draws no pointer.
+//! A blended pointer costs that pass nothing: it then only copies the source into a
+//! source-sized RGB scratch, and `frame` (the encode thread) draws the cursor quad and runs the
+//! converter from there. A composed kind's slot (BGRA, FP16) is its own scratch, so it copies
+//! once either way; the converter kinds pay one extra full-frame copy while the client draws no
+//! pointer.
+//!
+//! [`Targets::framed`] scales: the scale pass runs where the converter would, before it, so a
+//! composed slot is no longer its own scratch and the pointer lands at source size first.
 
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::{Arc, Mutex};
 
-use pf_driver_proto::encode::EncodeInput;
+use pf_driver_proto::encode::{EncodeInput, Framing};
 use pf_encode_win::convert::{
-    BgraToYuvPlanes, CursorBlendPass, HdrP010Converter, HdrRgb10Converter, VideoConverter,
+    BgraToYuvPlanes, CursorBlendPass, HdrP010Converter, HdrRgb10Converter, ReframePass,
+    VideoConverter,
 };
 use pf_frame::dxgi::{D3d11Frame, PyroFrameShare};
 use pf_frame::{CapturedFrame, CursorOverlay, FramePayload, PixelFormat, Provenance};
@@ -214,11 +219,28 @@ enum Planes {
     },
 }
 
+/// A framed session's scale ([`Targets::framed`]): the source's size, the pass, and where it
+/// writes.
+struct Scale {
+    /// The surface the source hands over: the scratch's size and the pointer's frame.
+    source: (u32, u32),
+    pass: ReframePass,
+    target: ScaleTarget,
+}
+
+enum ScaleTarget {
+    /// A composed kind's slots, which the pass writes directly.
+    Slots(Vec<Rtv>),
+    /// The encode-size picture, in the source format, that a converter kind's converter reads.
+    Picture(Tex, Srv, Rtv),
+}
+
 /// The per-slot input targets for one backend, built once from the slot count.
 ///
 /// GPU cost per composed frame: in forward mode (the client draws the pointer) exactly one pass
 /// and nothing cursor-related; in blend mode one save of at most 256², one quad, and — converter
-/// kinds — the scratch copy the deferred pass already makes.
+/// kinds — the scratch copy the deferred pass already makes. Framed, the scale pass runs before
+/// the converter, and a composed kind in blend mode pays the converter kinds' scratch copy.
 pub struct Targets {
     kind: InputKind,
     dev: d3d::ID3D11Device,
@@ -245,6 +267,8 @@ pub struct Targets {
     /// owner: a blend on another slot replaces it, and only the newest blended slot is ever
     /// restored — it is the pool's stash.
     under: Option<(usize, (u32, u32, u32, u32))>,
+    /// Set by [`Self::framed`] when the source is not the encode picture.
+    scale: Option<Scale>,
 }
 
 impl Targets {
@@ -369,18 +393,80 @@ impl Targets {
             blend_failed: false,
             patch: None,
             under: None,
+            scale: None,
         })
+    }
+
+    /// These targets fed `framing`'s source surfaces: `crop` of each, scaled to the size they
+    /// were built at. A framing that does not scale changes nothing, so its frames take exactly
+    /// the unframed path.
+    pub fn framed(mut self, framing: &Framing) -> Result<Self, Fail> {
+        if !framing.scales() {
+            return Ok(self);
+        }
+        let size = (self.width, self.height);
+        if framing.encode != size {
+            return Err((-2, "scale"));
+        }
+        let fail = |e: anyhow::Error| {
+            tracing::info!("encode: scale pass build failed: {e:#}");
+            (-2, "scale")
+        };
+        let fp16 = source_format(self.kind) == dxgi::DXGI_FORMAT_R16G16B16A16_FLOAT;
+        let pass = ReframePass::new(&self.dev, framing.crop, size, fp16).map_err(fail)?;
+        let target = match &self.planes {
+            Planes::Composed(slots) => ScaleTarget::Slots(
+                slots
+                    .iter()
+                    .map(|t| rtv(&self.dev, t))
+                    .collect::<Result<_, _>>()?,
+            ),
+            _ => {
+                let bind =
+                    (d3d::D3D11_BIND_RENDER_TARGET.0 | d3d::D3D11_BIND_SHADER_RESOURCE.0) as u32;
+                let t = make_tex(&self.dev, size, source_format(self.kind), bind, 0)?;
+                let (v, r) = (srv(&self.dev, &t)?, rtv(&self.dev, &t)?);
+                ScaleTarget::Picture(t, v, r)
+            }
+        };
+        self.scale = Some(Scale {
+            source: framing.source,
+            pass,
+            target,
+        });
+        Ok(self)
+    }
+
+    /// The source's size: the encode size unless [`Self::framed`] scales.
+    fn source_size(&self) -> (u32, u32) {
+        self.scale
+            .as_ref()
+            .map_or((self.width, self.height), |s| s.source)
+    }
+
+    /// An unframed composed slot: the source's own size and format, so it is its own scratch.
+    fn slot_is_scratch(&self) -> bool {
+        matches!(self.planes, Planes::Composed(_)) && self.scale.is_none()
+    }
+
+    /// The picture slot `i`'s pointer is drawn on: the slot when it is its own scratch, else
+    /// its RGB scratch.
+    fn blend_target(&self, i: usize) -> Option<Tex> {
+        match &self.planes {
+            Planes::Composed(slots) if self.scale.is_none() => Some(slots[i].clone()),
+            _ => self.rgb[i].as_ref().map(|(t, _)| t.clone()),
+        }
     }
 
     /// Undo the last cursor blend on slot `i`, so the next one draws the pointer onto a
     /// pointer-free picture instead of piling onto the old one. Nothing saved means nothing to
     /// put back — a slot no blend has touched is already clean.
     ///
-    /// `Err` when a converter kind's slot has no frame in its RGB scratch: blending began after
-    /// the pass that filled the slot, so there is nothing to re-blend until the next compose.
-    /// A composed slot is its own scratch and is always restorable.
+    /// `Err` when a slot that is not its own scratch has no frame in its RGB scratch: blending
+    /// began after the pass that filled the slot, so there is nothing to re-blend until the
+    /// next compose. An unframed composed slot is its own scratch and is always restorable.
     pub fn restore_under(&mut self, i: usize) -> Result<(), Fail> {
-        let converter = !matches!(self.planes, Planes::Composed(_));
+        let converter = !self.slot_is_scratch();
         if converter && !self.scratch_holds_frame[i] {
             return Err((-2, "scratch"));
         }
@@ -388,10 +474,7 @@ impl Targets {
         if let Some((owner, (x, y, w, h))) = self.under
             && owner == i
         {
-            let dst = match &self.planes {
-                Planes::Composed(slots) => slots[i].clone(),
-                _ => self.rgb[i].as_ref().ok_or((-2, "scratch"))?.0.clone(),
-            };
+            let dst = self.blend_target(i).ok_or((-2, "scratch"))?;
             let patch = self.patch.as_ref().ok_or((-2, "patch"))?;
             let region = d3d::D3D11_BOX {
                 left: 0,
@@ -418,11 +501,12 @@ impl Targets {
         Ok(())
     }
 
-    /// One GPU pass from `src` (BGRA or FP16, the pool's size) into slot `i`: a copy for the
-    /// composed kinds, the video engine for NV12, a draw for P010 and the planar pair. With `defer` the
-    /// converter kinds copy into the slot's RGB scratch instead and convert in [`Self::frame`],
-    /// after the cursor blend. `src` needs no bind flags beyond what the shader kinds read
-    /// through an SRV created per call.
+    /// One GPU pass from `src` (BGRA or FP16, the source's size) into slot `i`: a copy for the
+    /// composed kinds, the video engine for NV12, a draw for P010 and the planar pair, each
+    /// after the scale pass when framed. With `defer` every slot that is not its own scratch
+    /// copies into its RGB scratch instead and converts in [`Self::frame`], after the cursor
+    /// blend. `src` needs no bind flags beyond what the shader passes read through an SRV
+    /// created per call.
     pub fn pass(&mut self, src: &Tex, i: usize, defer: bool) -> Result<(), Fail> {
         let _ctx = lock(&CTX);
         self.deferred[i] = false;
@@ -431,7 +515,7 @@ impl Targets {
         if self.under.is_some_and(|(owner, _)| owner == i) {
             self.under = None;
         }
-        if let Planes::Composed(slots) = &self.planes {
+        if let (Planes::Composed(slots), None) = (&self.planes, &self.scale) {
             // SAFETY: `src` and the slot are live same-size textures on the same device, whose
             // immediate context is multithread-protected by whoever made it.
             unsafe { self.ctx.CopyResource(&slots[i], src) };
@@ -444,7 +528,7 @@ impl Targets {
             let bind = (d3d::D3D11_BIND_RENDER_TARGET.0 | d3d::D3D11_BIND_SHADER_RESOURCE.0) as u32;
             let t = make_tex(
                 &self.dev,
-                (self.width, self.height),
+                self.source_size(),
                 source_format(self.kind),
                 bind,
                 0,
@@ -473,7 +557,8 @@ impl Targets {
             cursor.w.min(CURSOR_SHAPE_MAX),
             cursor.h.min(CURSOR_SHAPE_MAX),
         );
-        let Some(rect) = clip_rect(cursor.x, cursor.y, w, h, self.width, self.height) else {
+        let (sw, sh) = self.source_size();
+        let Some(rect) = clip_rect(cursor.x, cursor.y, w, h, sw, sh) else {
             return;
         };
         if self.patch.is_none() {
@@ -508,8 +593,28 @@ impl Targets {
         self.under = Some((i, rect));
     }
 
-    /// The converter for slot `i` from `src`; `view` is its cached SRV, else one is made.
+    /// The scale pass when framed, then the converter, for slot `i` from `src`; `view` is its
+    /// cached SRV, else one is made. Unframed, this is [`Self::convert_from`] alone.
     fn convert(&self, src: &Tex, view: Option<&Srv>, i: usize) -> Result<(), Fail> {
+        let Some(scale) = &self.scale else {
+            return self.convert_from(src, view, i);
+        };
+        let view = match view {
+            Some(v) => v.clone(),
+            None => srv(&self.dev, src)?,
+        };
+        match &scale.target {
+            ScaleTarget::Slots(rtvs) => scale.pass.scale(&self.ctx, &view, &rtvs[i]),
+            ScaleTarget::Picture(t, v, r) => {
+                scale.pass.scale(&self.ctx, &view, r);
+                return self.convert_from(t, Some(v), i);
+            }
+        }
+        Ok(())
+    }
+
+    /// The converter for slot `i` from `src`; `view` is its cached SRV, else one is made.
+    fn convert_from(&self, src: &Tex, view: Option<&Srv>, i: usize) -> Result<(), Fail> {
         let convert_err = |e: anyhow::Error| {
             tracing::info!("encode: convert failed: {e:#}");
             (-2, "convert")
@@ -549,17 +654,16 @@ impl Targets {
         Ok(())
     }
 
-    /// Draw `cursor` over slot `i`'s RGB image — a composed slot itself, or the deferred scratch.
-    /// A failure loses the pointer, never the frame, and is logged once.
+    /// Draw `cursor` over slot `i`'s RGB image at source size — the slot itself when it is its
+    /// own scratch, else the deferred scratch. A failure loses the pointer, never the frame, and
+    /// is logged once.
     fn blend(&mut self, i: usize, cursor: &CursorImage, scale: f32) {
         let fp16 = source_format(self.kind) == dxgi::DXGI_FORMAT_R16G16B16A16_FLOAT;
-        let dst = match &self.planes {
-            Planes::Composed(slots) => slots[i].clone(),
-            _ if self.deferred[i] => match &self.rgb[i] {
-                Some((t, _)) => t.clone(),
-                None => return,
-            },
-            _ => return,
+        if !self.slot_is_scratch() && !self.deferred[i] {
+            return;
+        }
+        let Some(dst) = self.blend_target(i) else {
+            return;
         };
         if self.blend.is_none() && !self.blend_failed {
             match CursorBlendPass::new(&self.dev) {
@@ -597,8 +701,8 @@ impl Targets {
     }
 
     /// Wrap the source's own surface as the frame `submit` takes — no pass, no slot, and no
-    /// pointer, because there is no image of ours to draw one on. Only a composed kind reaches
-    /// this; every other kind's converter has to run first.
+    /// pointer, because there is no image of ours to draw one on. Only an unframed composed kind
+    /// reaches this; every other kind's converter or scale pass has to run first.
     pub fn direct_frame(&self, src: &Tex, pts_ns: u64) -> CapturedFrame {
         CapturedFrame {
             width: self.width,
@@ -689,6 +793,7 @@ impl Drop for Targets {
         self.rgb.clear();
         self.patch = None;
         self.blend = None;
+        self.scale = None;
         let _ctx = lock(&CTX);
         // SAFETY: a single call on the device's multithread-protected context.
         unsafe { self.ctx.Flush() };
@@ -909,6 +1014,50 @@ mod tests {
         t.blend(0, &pointer(200, 200), 0.0);
         t.restore_under(0).expect("restore");
         assert_eq!(read_back(&t, &ctx, w, h), clean);
+    }
+
+    /// A framed slot holds the source scaled to the encode size, and a pointer blended at
+    /// source size lands at half its place. Flats wider than the kernel come through exactly.
+    #[test]
+    fn a_framed_slot_holds_the_scaled_picture() {
+        let Some((dev, ctx)) = device() else {
+            eprintln!("no D3D11 device (not even WARP) — skipping");
+            return;
+        };
+        let framing = Framing {
+            source: (64, 64),
+            crop: [0, 0, 64, 64],
+            encode: (32, 32),
+        };
+        let mut t = Targets::new(InputKind::Bgra, &dev, &ctx, (32, 32), 1, true)
+            .and_then(|t| t.framed(&framing))
+            .expect("framed targets");
+        let dark = [0x20u8, 0x40, 0x80, 0xFF];
+        let src = upload(
+            &dev,
+            (64, 64),
+            dxgi::DXGI_FORMAT_B8G8R8A8_UNORM,
+            &dark.repeat(64 * 64),
+        );
+        t.pass(&src, 0, false).expect("pass");
+        let flat = read_back(&t, &ctx, 32, 32);
+        assert!(
+            flat.chunks(4).all(|p| p == dark),
+            "a flat source scaled unevenly"
+        );
+
+        // Deferred, with the pointer at source (32, 32): output (20, 20) reads source 35..=47,
+        // all pointer; output (4, 4) reads 3..=15, all desktop.
+        t.pass(&src, 0, true).expect("deferred pass");
+        t.frame(0, 0, Some((pointer(32, 32), 0.0))).expect("frame");
+        let got = read_back(&t, &ctx, 32, 32);
+        let at = |x: usize, y: usize| &got[(y * 32 + x) * 4..][..4];
+        assert_eq!(
+            at(20, 20),
+            [0xFF; 4],
+            "the pointer did not scale with the picture"
+        );
+        assert_eq!(at(4, 4), dark);
     }
 
     /// Each YUV converter writes the range it was built for. In 10-bit codes, black's Y, white's

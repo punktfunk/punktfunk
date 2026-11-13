@@ -102,13 +102,14 @@ export const homeLink = (p = "/home"): HomeLink | undefined => {
  * The `bwrap` argv for one plugin: everything before the program it runs.
  *
  * Read-only for the system, the plugin's own code, manifest `reads`, and granted roots; read-write
- * for exactly its state dir, manifest `writes`, grants marked `write: true`, and `/tmp` (VirtualHere's
- * client IPC is a FIFO pair there, which is why the unit keeps the real `/tmp`).
+ * for exactly its state dir, manifest `writes` under `/tmp`, grants marked `write: true`, and `/tmp`
+ * (VirtualHere's client IPC is a FIFO pair there, which is why the unit keeps the real `/tmp`).
+ * Any other manifest write binds through the grant the owner gives its request.
  *
  * The host's `/home` link is mirrored and every host path binds where it resolves, so a canonical
  * grant and a launcher's `$HOME` path both resolve, and `realpath` inside agrees with the host.
  * A link the plugin asked through into a grant (`~/Games/SteamLibrary` → `/mnt/ssd/games`) is
- * recreated the same way.
+ * recreated the same way. A manifest path, grant or link with a `..` component is left out.
  */
 /**
  * The namespaces and the minimal root every sandbox gets, shared with {@link sandboxProbe} so a
@@ -209,26 +210,31 @@ export const bwrapArgv = (
 	// What it said it needs. `-try` so an uninstalled launcher's dir is simply absent rather
 	// than a sandbox that refuses to start.
 	for (const p of [...(manifest.reads ?? []), ...(manifest.files ?? [])]) {
-		const abs = expandHome(p, paths.home);
-		if (bindable(abs, paths)) argv.push("--ro-bind-try", abs, at(abs));
+		const abs = bindable(p, paths, false, false);
+		if (abs) argv.push("--ro-bind-try", abs, at(abs));
 	}
 	for (const p of manifest.writes ?? []) {
-		const abs = expandHome(p, paths.home);
-		if (bindable(abs, paths)) argv.push("--bind-try", abs, at(abs));
+		const abs = bindable(p, paths, true, false);
+		if (abs) argv.push("--bind-try", abs, at(abs));
 	}
 	// Operator grants are read-only unless one opts into write.
 	for (const grant of grants) {
-		const abs = expandHome(grant.path, paths.home);
-		if (bindable(abs, paths))
-			argv.push(grant.write ? "--bind-try" : "--ro-bind-try", abs, at(abs));
+		const abs = bindable(grant.path, paths, grant.write, true);
+		if (abs) argv.push(grant.write ? "--bind-try" : "--ro-bind-try", abs, at(abs));
 	}
-	// bwrap fails on a link it can't place, so none lands on, in or above anything placed.
+	// bwrap fails on a link it can't place, so none lands on, in or above anything placed. A
+	// link is a symlink inside the sandbox, not a bind, so it is judged as a read.
 	const placed = destinations(argv);
 	for (const grant of grants) {
-		if (!bindable(expandHome(grant.path, paths.home), paths)) continue;
+		if (!bindable(grant.path, paths, grant.write, true)) continue;
 		for (const link of grant.links ?? []) {
 			const dest = at(link.path);
-			if (link.path !== path.resolve(link.path) || !bindable(link.path, paths)) continue;
+			if (
+				link.path !== path.resolve(link.path) ||
+				traverses(link.target) ||
+				!bindable(link.path, paths, false, true)
+			)
+				continue;
 			if (placed.some((p) => under(p, dest) || under(dest, p))) continue;
 			argv.push("--symlink", link.target, dest);
 			placed.push(dest);
@@ -263,16 +269,99 @@ const destinations = (argv: readonly string[]): string[] => {
 };
 
 /**
- * A root no manifest or grant may bind: the host's processes, devices, the session bus and
- * runtime sockets, the home or anything above it, keys, and the host's config dir (`configDir`,
- * and `~/.config/punktfunk*` wherever the config lives) or anything above it, which holds every
- * plugin's token. Checked on the path and on what it resolves to in the runner's view. The
- * host's `refusal_rule` is the other half; path-refusal-vectors.json pins the two.
+ * Under the home: what the user's login, session, desktop or compositor runs. A writable bind
+ * escapes the sandbox.
  */
-export const refusedRoot = (abs: string, home: string, configDir: string): boolean => {
+const STARTUP = [
+	".config/systemd",
+	".local/share/systemd",
+	".config/autostart",
+	".config/environment.d",
+	".config/fish",
+	".local/bin",
+	".bashrc",
+	".bash_profile",
+	".bash_login",
+	".bash_logout",
+	".profile",
+	".zshrc",
+	".zshenv",
+	".zprofile",
+	".zlogin",
+	".pam_environment",
+	".xprofile",
+	".xinitrc",
+	".config/plasma-workspace/env",
+	".config/autostart-scripts",
+	".local/share/applications",
+	".local/share/gnome-shell",
+	".local/share/dbus-1",
+	".local/share/kwin",
+	".config/hypr",
+	".config/sway",
+	".config/i3",
+	".config/labwc",
+	".xsession",
+];
+
+/** Under the home: browser profiles, keyrings and cloud credentials. No bind holds one. */
+const SECRETS = [
+	".mozilla",
+	".config/mozilla",
+	".config/google-chrome",
+	".config/chromium",
+	".config/BraveSoftware",
+	".config/microsoft-edge",
+	".config/vivaldi",
+	".var/app/org.mozilla.firefox",
+	".var/app/com.google.Chrome",
+	".var/app/org.chromium.Chromium",
+	".var/app/com.brave.Browser",
+	".var/app/com.microsoft.Edge",
+	".var/app/com.vivaldi.Vivaldi",
+	"snap/firefox",
+	"snap/chromium",
+	".local/share/keyrings",
+	".local/share/kwalletd",
+	".password-store",
+	".aws",
+	".azure",
+	".kube",
+	".docker",
+	".config/gcloud",
+	".config/gh",
+];
+
+/**
+ * A root no manifest or grant may bind: the host's processes, devices, the session bus and
+ * runtime sockets, the home or anything above it, keys, credential stores (`SECRETS`) or a parent
+ * of one, and the host's config dir (`configDir`, and `~/.config/punktfunk*` wherever the config
+ * lives) or anything above it, which holds every plugin's token. A read-write bind (`write`) also
+ * may not hold what the session runs (`STARTUP`) or a parent of one, and one outside `/tmp` needs
+ * the owner's grant (`operator`): a manifest's `writes` there waits for the owner's yes. Checked on
+ * the path and on what it resolves to in the runner's view. The host's `bind_refusal` is the other
+ * half; path-refusal-vectors.json pins the two.
+ */
+export const refusedRoot = (
+	abs: string,
+	home: string,
+	configDir: string,
+	write: boolean,
+	operator = false,
+): boolean => {
+	const real = (p: string) => {
+		try {
+			return fs.realpathSync(p);
+		} catch {
+			return p;
+		}
+	};
+	// `/tmp` by either spelling: where it is a link, a path there resolves outside the name.
+	const tmps = ["/tmp", real("/tmp")];
 	const refused = (p: string, h: string, c: string) => {
 		const under = (base: string) => p === base || p.startsWith(`${base}/`);
 		const above = (base: string) => `${base}/`.startsWith(`${p}/`);
+		const near = (d: string) => under(path.join(h, d)) || above(path.join(h, d));
 		return (
 			p === "/" ||
 			above(h) ||
@@ -282,15 +371,11 @@ export const refusedRoot = (abs: string, home: string, configDir: string): boole
 			["/proc", "/sys", "/dev"].some(under) ||
 			(under("/run") && !p.startsWith("/run/media/")) ||
 			[".ssh", ".gnupg"].some((d) => under(path.join(h, d))) ||
+			SECRETS.some(near) ||
+			(write && STARTUP.some(near)) ||
+			(write && !operator && !tmps.some(under)) ||
 			p.startsWith(path.join(h, ".config", "punktfunk"))
 		);
-	};
-	const real = (p: string) => {
-		try {
-			return fs.realpathSync(p);
-		} catch {
-			return p;
-		}
 	};
 	// Every spelling of every side: on Fedora Atomic `/home` is a link to `/var/home`.
 	const p = path.resolve(abs);
@@ -300,8 +385,23 @@ export const refusedRoot = (abs: string, home: string, configDir: string): boole
 	return paths.some((x) => homes.some((h) => configs.some((c) => refused(x, h, c))));
 };
 
-const bindable = (abs: string, paths: SandboxPaths): boolean =>
-	path.isAbsolute(abs) && !refusedRoot(abs, paths.home, paths.configDir);
+/** `p` has a `..` component, which the kernel resolves past a link the text check never saw. */
+const traverses = (p: string): boolean => p.split("/").includes("..");
+
+/** Where manifest or grant path `p` binds, or `undefined` when it may not. */
+const bindable = (
+	p: string,
+	paths: SandboxPaths,
+	write: boolean,
+	operator: boolean,
+): string | undefined => {
+	const abs = expandHome(p, paths.home);
+	return path.isAbsolute(abs) &&
+		!traverses(p) &&
+		!refusedRoot(abs, paths.home, paths.configDir, write, operator)
+		? abs
+		: undefined;
+};
 
 /**
  * A seccomp program refusing netlink sockets, as the bytes bwrap reads from `--add-seccomp-fd`.

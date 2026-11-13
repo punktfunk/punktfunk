@@ -161,6 +161,8 @@ lipo -create \
 # Headers dir: the generated C headers (core's with the quic API force-enabled) + a modulemap
 # so Swift can `import PunktfunkCore`. Regenerated first: no build step writes include/.
 cargo run -q -p gen-headers
+# PunktfunkShared's String Catalog and L10n.swift, which no Swift build writes either.
+bash scripts/gen-l10n-apple.sh
 mkdir -p "$STAGE/include"
 {
     echo "#define PUNKTFUNK_FEATURE_QUIC 1"

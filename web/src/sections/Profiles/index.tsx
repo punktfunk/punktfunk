@@ -27,15 +27,19 @@ import {
 	useUpdateProfile,
 	useWindowsAccounts,
 } from "@/api/gen/profiles/profiles";
-import { useDialogs } from "@/components/dialogs";
+import { isFullSeat } from "@/api/seat";
 import { apiErrorMessage } from "@/lib/errors";
+import { doorUnavailable, seatCheckText } from "@/lib/host-messages";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
 import { SignedInDevices } from "./devices";
+import { useProfileLocks } from "./lock";
+import { GameExitPreference } from "./session";
 import {
 	AddProfileDialog,
 	DoctorDialog,
 	DoorDialog,
+	EditProfileDialog,
 	ProfilesView,
 	RemoveProfileDialog,
 	SeatPasswordDialog,
@@ -56,7 +60,6 @@ const SEAT_ACT = {
 export const SectionProfiles: FC = () => {
 	useLocale();
 	const qc = useQueryClient();
-	const { promptText } = useDialogs();
 	// A seat that is starting changes within seconds; the rest of the time the list is a glance.
 	const profiles = useListProfiles({
 		query: {
@@ -107,9 +110,12 @@ export const SectionProfiles: FC = () => {
 	const [seatsOpen, setSeatsOpen] = useState(false);
 	const [doctorOpen, setDoctorOpen] = useState(false);
 	const ownerName = profiles.data?.find((p) => p.owner)?.display_name ?? "";
+	const ownerId = profiles.data?.find((p) => p.owner)?.id;
 	const [adding, setAdding] = useState(false);
 	const [removing, setRemoving] = useState<ProfileAdmin | null>(null);
+	const [editing, setEditing] = useState<ProfileAdmin | null>(null);
 	const [passwordFor, setPasswordFor] = useState<ProfileAdmin | null>(null);
+	const locks = useProfileLocks(profiles.data ?? []);
 	const refresh = () =>
 		qc.invalidateQueries({ queryKey: getListProfilesQueryKey() });
 	const failed = (fallback: string) => (e: unknown) =>
@@ -172,7 +178,11 @@ export const SectionProfiles: FC = () => {
 	const doctorLine =
 		seatsOn && (doctor.data || doctor.error)
 			? {
-					message: doctor.data ? (firstError?.message ?? null) : doctorError,
+					message: doctor.data
+						? firstError
+							? seatCheckText(firstError)
+							: null
+						: doctorError,
 					notes:
 						doctor.data?.diagnostics.filter((d) => d.level === "warning")
 							.length ?? 0,
@@ -206,19 +216,20 @@ export const SectionProfiles: FC = () => {
 			},
 		);
 
-	const onRename = async (p: ProfileAdmin) => {
-		const next = await promptText({
-			title: m.profiles_rename_title(),
-			label: m.profiles_name(),
-			defaultValue: p.display_name,
-			confirmLabel: m.action_rename(),
-		});
-		if (!next?.trim() || next.trim() === p.display_name) return;
+	const onRename = (p: ProfileAdmin, name: string) =>
 		update.mutate(
-			{ id: p.id, data: { display_name: next.trim() } },
+			{ id: p.id, data: { display_name: name } },
 			{ onSuccess: refresh, onError: failed(m.profiles_rename_failed()) },
 		);
-	};
+	// A seat with a host of its own keeps what a game's exit does per profile.
+	const exitOf = (p: ProfileAdmin) =>
+		!p.owner && isFullSeat(p, host.data?.os, door) ? (
+			<GameExitPreference
+				profile={p}
+				{...(door && ownerId ? { via: ownerId } : {})}
+				fixed={linux && door && !!p.seat?.account}
+			/>
+		) : undefined;
 
 	const onRemove = async (id: string, erase: boolean, password: string) => {
 		await remove.mutateAsync({ id, erase, password });
@@ -254,7 +265,7 @@ export const SectionProfiles: FC = () => {
 						? {
 								on: door,
 								changing: switching !== null,
-								unavailable: host.data?.door_unavailable,
+								unavailable: host.data ? doorUnavailable(host.data) : undefined,
 								onChange: () => setDoorAsk(!door),
 							}
 						: undefined
@@ -264,7 +275,7 @@ export const SectionProfiles: FC = () => {
 					void qc.invalidateQueries({ queryKey: getWindowsAccountsQueryKey() });
 					setAdding(true);
 				}}
-				onRename={onRename}
+				onRename={setEditing}
 				onPicture={(p, file) => upload(p.id, file)}
 				onRemovePicture={(p) =>
 					clearPicture.mutate(
@@ -280,7 +291,18 @@ export const SectionProfiles: FC = () => {
 				devices={
 					linux && door ? (p) => <SignedInDevices profile={p} /> : undefined
 				}
+				onLock={locks.onLock}
 			/>
+			{locks.dialogs}
+			{editing && (
+				<EditProfileDialog
+					key={editing.id}
+					profile={editing}
+					exit={exitOf(editing)}
+					onRename={(name) => onRename(editing, name)}
+					onClose={() => setEditing(null)}
+				/>
+			)}
 			<AddProfileDialog
 				open={adding}
 				ownerName={ownerName}

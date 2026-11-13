@@ -242,7 +242,9 @@ impl MenuNav {
 #[derive(Clone, Debug)]
 pub struct PadInfo {
     pub name: String,
-    /// `vid:pid:name`. SDL instance ids are per-run; [`Settings::forward_pad`](crate::trust::Settings) persists this.
+    /// Stable per physical controller on this platform: `vid:pid:serial` where the pad reports
+    /// one (a DualSense reports its MAC), else `vid:pid:name`. SDL instance ids are per-run;
+    /// [`Settings::forward_pad`](crate::trust::Settings) and `Settings::pads` persist this.
     pub key: String,
     /// What "Automatic" resolves this physical pad to. Fallback is Xbox 360.
     pub pref: GamepadPref,
@@ -256,6 +258,9 @@ pub struct PadInfo {
     /// Forwarded: real, non-virtual, OS-classified GAMEPAD. Joystick siblings are listed, not forwarded.
     pub forwarded: bool,
     pub rumble: bool,
+    /// This client plays the host's pad audio on this pad (a DualSense with a lane open), so
+    /// its card offers the per-controller audio rows.
+    pub audio: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -265,30 +270,43 @@ pub struct PadBattery {
     pub charging: bool,
 }
 
+/// A pad kind by name, Automatic and Xbox 360 included.
+pub fn pad_name(pref: GamepadPref) -> &'static str {
+    match pref {
+        GamepadPref::Auto => pf_l10n::client::ring_pad_type_automatic(),
+        GamepadPref::Xbox360 => "Xbox 360",
+        p => kind_label(p),
+    }
+}
+
 impl PadInfo {
     /// Settings-list kind; `""` for a plain Xbox / standard pad.
     pub fn kind_label(&self) -> &'static str {
-        match self.pref {
-            GamepadPref::DualSense => "DualSense",
-            GamepadPref::DualSenseEdge => "DualSense Edge",
-            GamepadPref::DualShock4 => "DualShock 4",
-            GamepadPref::XboxOne => "Xbox One",
-            // SDL has no Elite GamepadType, but a pinned setting can carry it.
-            GamepadPref::XboxElite => "Xbox Elite Series 2",
-            GamepadPref::SteamDeck => "Steam Deck",
-            GamepadPref::SteamController => "Steam Controller",
-            GamepadPref::SteamController2 => "Steam Controller 2",
-            GamepadPref::SteamController2Puck => "Steam Controller 2 Puck",
-            GamepadPref::SwitchPro => "Switch Pro",
-            GamepadPref::EightBitDoUltimate2 => "8BitDo Ultimate 2",
-            GamepadPref::EightBitDoPro2 => "8BitDo Pro 2",
-            GamepadPref::EightBitDoPro3 => "8BitDo Pro 3",
-            GamepadPref::HoripadSteam => "HORIPAD for Steam",
-            GamepadPref::JoyConPair => "Joy-Con pair",
-            GamepadPref::Switch2Pro => "Switch 2 Pro",
-            GamepadPref::Switch2GameCube => "GameCube (Switch 2)",
-            _ => "",
-        }
+        kind_label(self.pref)
+    }
+}
+
+fn kind_label(pref: GamepadPref) -> &'static str {
+    match pref {
+        GamepadPref::DualSense => "DualSense",
+        GamepadPref::DualSenseEdge => "DualSense Edge",
+        GamepadPref::DualShock4 => "DualShock 4",
+        GamepadPref::XboxOne => "Xbox One",
+        // SDL has no Elite GamepadType, but a pinned setting can carry it.
+        GamepadPref::XboxElite => "Xbox Elite Series 2",
+        GamepadPref::SteamDeck => "Steam Deck",
+        GamepadPref::SteamController => "Steam Controller",
+        GamepadPref::SteamController2 => "Steam Controller 2",
+        GamepadPref::SteamController2Puck => "Steam Controller 2 Puck",
+        GamepadPref::SwitchPro => "Switch Pro",
+        GamepadPref::EightBitDoUltimate2 => "8BitDo Ultimate 2",
+        GamepadPref::EightBitDoPro2 => "8BitDo Pro 2",
+        GamepadPref::EightBitDoPro3 => "8BitDo Pro 3",
+        GamepadPref::HoripadSteam => "HORIPAD for Steam",
+        GamepadPref::JoyConPair => pf_l10n::client::pad_kind_joycon_pair(),
+        GamepadPref::Switch2Pro => "Switch 2 Pro",
+        GamepadPref::Switch2GameCube => "GameCube (Switch 2)",
+        _ => "",
     }
 }
 

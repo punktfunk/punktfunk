@@ -23,17 +23,21 @@ Group=punktfunk-door
 Environment=PUNKTFUNK_CONFIG_DIR=/var/lib/punktfunk
 # The box's library: the seat supervisor's copy of the owner's, which every client reads here.
 Environment=PUNKTFUNK_LIBRARY_DIR=/var/lib/punktfunk-seats/library
-# The ports the owner moved in their host.env: door-helper copies them here before each start,
-# so an update or a later edit reaches the door. `+` runs it as root, to read the owner's file
-# and keep the door's account in `punktfunk-door`.
+# The ports the owner moved in their host.env: door-helper copies them to the file below before
+# each start, so an update or a later edit reaches the door. `+` runs it as root, to read the
+# owner's file and keep the door's account in `punktfunk-door`. That root line gets the file's
+# environment too, so the file sits where only root writes.
 ExecStartPre=+-/usr/libexec/punktfunk/door-helper ports
-EnvironmentFile=-/var/lib/punktfunk/host.env
+EnvironmentFile=-/var/lib/punktfunk-seats/host.env
 ExecStart=/usr/bin/punktfunk-host serve --door
 Restart=always
 RestartSec=2
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=full
+# It opens no device and reads no home: door-helper copies the owner's files, from a `+` line.
+ProtectHome=yes
+PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

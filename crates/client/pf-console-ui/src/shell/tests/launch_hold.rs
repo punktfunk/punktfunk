@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::library::LibraryGame;
-use crate::shell::connect::{launch_gave_up, LAUNCH_HOLD_MAX, LAUNCH_NO_LEASE};
+use crate::shell::connect::{launch_gave_up, LAUNCH_HOLD_MAX, LAUNCH_NO_LEASE, LAUNCH_POLL_STALL};
 use pf_client_core::library::RunningGame;
 
 fn game(id: &str, title: &str, launcher: bool) -> LibraryGame {
@@ -20,6 +20,7 @@ fn game(id: &str, title: &str, launcher: bool) -> LibraryGame {
         running: false,
         endable: false,
         install: None,
+        overrides: None,
     }
 }
 
@@ -140,6 +141,31 @@ fn a_launched_title_holds_the_stream_until_the_host_says_running() {
     assert!(!s.holds_stream() && s.in_stream);
 }
 
+/// The hold says what the host set for the game; a title it set nothing for shows no line.
+#[test]
+fn the_hold_names_what_the_host_set_for_the_game() {
+    let (mut s, library, _bus) = on_shelf();
+    let mut dota = game("steam:570", "Dota 2", false);
+    dota.overrides = Some(pf_client_core::library::GameOverrides {
+        lines: Some(1080),
+        hz: Some(60),
+        gamepad: Some("dualsense".into()),
+        ..Default::default()
+    });
+    library.set_games(&library.req(), vec![dota]);
+    s.start_connect(intent("steam:570"));
+    assert_eq!(
+        s.connect.launching().map(|l| l.host_line.as_str()),
+        Some("Host: 1080p60, DualSense")
+    );
+    let (mut plain, _library, _bus) = on_shelf();
+    plain.start_connect(intent("steam:570"));
+    assert_eq!(
+        plain.connect.launching().map(|l| l.host_line.as_str()),
+        Some("")
+    );
+}
+
 /// B belongs to the dial while it is in flight: the hold stands where the connect
 /// card used to, so it has to answer for it.
 #[test]
@@ -187,6 +213,33 @@ fn the_hold_ignores_state_read_before_the_launch_and_says_so_without_a_lease() {
     );
     s.handle_menu(MenuEvent::Confirm);
     assert!(s.in_stream, "and a press is \"show the desktop anyway\"");
+}
+
+/// The host's own sentence for a launch it did not start ends the hold at once; one that lands
+/// with no hold up is dropped, never said on the next launch.
+#[test]
+fn the_hosts_refusal_is_the_holds_sentence_at_once() {
+    let (mut s, _library, bus) = on_shelf();
+    s.console.set_launch_refused("stale".into());
+    s.sync();
+    s.start_connect(intent("steam:570"));
+    s.session_streaming();
+    s.sync();
+    assert!(s.connect.launching().is_some_and(|l| l.failed.is_none()));
+    bus.drain();
+    let hidden = "Couldn't start that game \u{2014} it isn't in this host's library anymore.";
+    s.console.set_launch_refused(hidden.into());
+    at(&mut s, 100.0 + LAUNCH_POLL_STALL);
+    s.sync();
+    assert_eq!(
+        s.connect.launching().and_then(|l| l.failed.as_deref()),
+        Some(hidden)
+    );
+    assert!(bus.drain().is_empty(), "and it asks the host nothing more");
+    assert!(
+        !s.in_stream && s.holds_stream(),
+        "the hold keeps the screen"
+    );
 }
 
 /// The three sentences, against the host's own `games[]` words. The touch shell's
@@ -318,4 +371,36 @@ fn launcher_tiles_skip_the_hold_and_a_press_ends_it() {
     assert!(s.holds_stream(), "a nudge is not a request to see");
     s.handle_menu(MenuEvent::Confirm);
     assert!(s.in_stream && !s.holds_stream());
+}
+
+/// A host that asks the shell whether it holds (Android's `ShowStream` wait) must read false for
+/// every session the shell did not launch off its shelf, or that session is never released.
+#[test]
+fn only_a_game_launched_off_the_shelf_holds() {
+    let (mut s, _library, _bus) = on_shelf();
+    // A link dials with no `Launch` from the shell: the handshake finds no hold to wait on.
+    s.session_streaming();
+    assert!(!s.holds_stream() && s.in_stream);
+
+    s.session_ended(None);
+    let mut desktop = intent("steam:570");
+    desktop.launch = None;
+    s.start_connect(desktop);
+    s.session_streaming();
+    assert!(
+        !s.holds_stream(),
+        "a desktop connect has no title to wait for"
+    );
+
+    s.session_ended(None);
+    s.start_connect(intent("steam:unlisted"));
+    s.session_streaming();
+    assert!(
+        !s.holds_stream(),
+        "a title the shelf does not list is not held"
+    );
+
+    s.session_ended(None);
+    s.start_connect(intent("steam:570"));
+    assert!(s.holds_stream(), "a listed game off the shelf is");
 }

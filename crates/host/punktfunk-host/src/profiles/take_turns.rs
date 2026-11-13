@@ -94,6 +94,30 @@ pub(crate) fn turn_seat(action: &ConsoleAction, console_busy: bool, switching: b
     }
 }
 
+/// The session a `wake` attaches to the console: only a seat that reads `Switchable` switches,
+/// so a wake never cuts a live stream or repeats a switch in flight.
+pub(crate) fn wake_switch(action: &ConsoleAction, seat: &TurnSeat) -> Option<u32> {
+    match (action, seat) {
+        (ConsoleAction::Switch(session), TurnSeat::Switchable) => Some(*session),
+        _ => None,
+    }
+}
+
+/// `account`'s action and seat from what Windows reports now. The card and the wake both read
+/// this, so they can't disagree. Blocking (WTS).
+pub(crate) fn seat_now(account: &str) -> (ConsoleAction, TurnSeat) {
+    let action = decide(&account_state(account));
+    // A stream on the console as another account: a switch would cut it.
+    let console_busy = console_account().is_some() && crate::telemetry::session_status::count() > 0;
+    let switching = switch_in_flight(
+        switch_marker().as_ref().map(|(a, t)| (a.as_str(), *t)),
+        account,
+        crate::clock::unix_secs(),
+    );
+    let seat = turn_seat(&action, console_busy, switching);
+    (action, seat)
+}
+
 /// How long a switch marker counts as in flight before a fresh `wake` may try again: the console
 /// change plus the host relaunch. Past this, the marker is stale (the switch never took) and the
 /// card goes back to `Switchable`.
@@ -124,6 +148,30 @@ pub(crate) fn console_account() -> Option<String> {
 }
 #[cfg(not(windows))]
 pub(crate) fn console_account() -> Option<String> {
+    None
+}
+
+/// Whether a profile bound to `account` plays on a console signed in as `console`, whose session
+/// SID is `console_sid`. A profile bound with a SID plays only on that SID, so a new account that
+/// takes a deleted one's name is not it; one stored without a SID matches by name.
+pub(crate) fn holds_console(
+    account: &str,
+    sid: Option<&str>,
+    console: Option<&str>,
+    console_sid: Option<&str>,
+) -> bool {
+    console.is_some_and(|user| user.eq_ignore_ascii_case(account))
+        && sid.is_none_or(|sid| console_sid.is_some_and(|c| c.eq_ignore_ascii_case(sid)))
+}
+
+/// The SID of the account signed in to this host's session, which a take-turns box keeps on the
+/// console. `None` off Windows.
+#[cfg(windows)]
+pub(crate) fn session_sid() -> Option<String> {
+    crate::windows::theme::session_sid()
+}
+#[cfg(not(windows))]
+pub(crate) fn session_sid() -> Option<String> {
     None
 }
 
@@ -263,6 +311,31 @@ mod tests {
         assert_eq!(turn_seat(&switch, true, false), TurnSeat::Occupied);
         // A switch in flight shows the wait even while the old console is still busy.
         assert_eq!(turn_seat(&switch, true, true), TurnSeat::Switching);
+    }
+
+    #[test]
+    fn a_wake_switches_only_a_switchable_seat() {
+        let switch = ConsoleAction::Switch(4);
+        let wake = |busy, switching| wake_switch(&switch, &turn_seat(&switch, busy, switching));
+        assert_eq!(wake(false, false), Some(4));
+        assert_eq!(wake(true, false), None);
+        assert_eq!(wake(false, true), None);
+        let here = ConsoleAction::Here;
+        assert_eq!(wake_switch(&here, &turn_seat(&here, false, false)), None);
+    }
+
+    /// A profile bound with a SID plays only on it, whatever the name; one stored without a SID,
+    /// as every older one is, plays on the name.
+    #[test]
+    fn a_namesake_account_does_not_hold_a_profile_bound_by_sid() {
+        let ben = "S-1-5-21-1-2-3-1002";
+        let console = |user, sid| holds_console("Ben", Some(ben), Some(user), sid);
+        assert!(console("ben", Some("s-1-5-21-1-2-3-1002")));
+        assert!(!console("Ben", Some("S-1-5-21-1-2-3-1009")), "a namesake");
+        assert!(!console("Ben", None), "a SID nobody could read");
+        assert!(!console("Alex", Some(ben)));
+        assert!(holds_console("Ben", None, Some("BEN"), None));
+        assert!(!holds_console("Ben", None, None, None));
     }
 
     #[test]

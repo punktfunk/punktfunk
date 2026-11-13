@@ -11,12 +11,13 @@ import {
 } from "@/api/gen/emulators/emulators";
 import type { AdoptRequest } from "@/api/gen/model/adoptRequest";
 import type { EmulatorStatus } from "@/api/gen/model/emulatorStatus";
-import { useOwnAccount } from "@/api/seat";
 import { PasswordConfirmDialog } from "@/components/password-confirm";
 import { ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
+import { apiErrorMessage } from "@/lib/errors";
+import { usePerson } from "@/lib/person";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { SourceGroup, SourceItem } from "./AddSource";
@@ -41,16 +42,30 @@ const Where: FC<{ e: EmulatorStatus }> = ({ e }) => {
 };
 
 /**
- * The operator's own copy, one no rule finds: its program's path, adopted on Add. The host runs
- * that program for the emulator's games, so Add asks for the console password first.
+ * A copy of the caller's own, one no rule finds: its program's path, adopted on Add. The host
+ * runs that program for the emulator's games, so the operator's Add asks for the console password
+ * first. A person's own seat host takes theirs on their session, as their account.
  */
 const Adopt: FC<{ id: string; onDone: () => void }> = ({ id, onDone }) => {
 	const [exe, setExe] = useState("");
 	const [asking, setAsking] = useState(false);
 	const adopt = useAdoptEmulator();
+	const person = usePerson() !== null;
 	const submit = (e: FormEvent) => {
 		e.preventDefault();
-		if (exe.trim()) setAsking(true);
+		if (!exe.trim()) return;
+		if (!person) {
+			setAsking(true);
+			return;
+		}
+		adopt.mutate(
+			{ id, data: { exe: exe.trim() } },
+			{
+				onSuccess: onDone,
+				onError: (err) =>
+					toast.error(apiErrorMessage(err) ?? m.emulators_adopt_failed()),
+			},
+		);
 	};
 	return (
 		<>
@@ -92,12 +107,14 @@ const Adopt: FC<{ id: string; onDone: () => void }> = ({ id, onDone }) => {
 /**
  * Every emulator the host knows: installed by punktfunk or found on the box first, the rest one
  * tap away. Installing and pointing at the operator's own copy are the operator's acts here; a
- * plugin's own ask lands in its source's Access rows instead. A seat on a person's own account
- * takes no copy added by hand.
+ * plugin's own ask lands in its source's Access rows instead. Of the operator's views only the
+ * owner's library shows them. A person's own console shows their seat host's; on their own
+ * account that host takes only a copy of theirs, so no install is offered there.
  */
 export const EmulatorsCard: FC = () => {
 	const qc = useQueryClient();
-	const own = useOwnAccount();
+	const me = usePerson();
+	const installs = me?.own !== true;
 	const rows = useGetEmulators();
 	const refresh = () =>
 		qc.invalidateQueries({ queryKey: getGetEmulatorsQueryKey() });
@@ -128,7 +145,13 @@ export const EmulatorsCard: FC = () => {
 		<SourceGroup
 			icon={<Cpu className="size-4" />}
 			title={m.emulators_title()}
-			description={m.emulators_description()}
+			description={
+				!me
+					? m.emulators_description()
+					: installs
+						? m.person_emulators_description()
+						: m.person_emulators_description_own()
+			}
 		>
 			<Stagger gap={ROW_GAP} className="divide-y">
 				{shown.map((e) => (
@@ -140,7 +163,7 @@ export const EmulatorsCard: FC = () => {
 						hint={`${e.platforms.join(", ")}\n${e.detected[0]?.exe ?? ""}`.trim()}
 						actions={
 							<>
-								{!here(e) && e.offered && (
+								{installs && !here(e) && e.offered && (
 									<Button
 										size="sm"
 										disabled={busy}
@@ -151,23 +174,21 @@ export const EmulatorsCard: FC = () => {
 									</Button>
 								)}
 								<RowMenu label={m.common_more_actions()} disabled={busy}>
-									{here(e) && e.offered && (
+									{installs && here(e) && e.offered && (
 										<MenuItem onSelect={() => install.mutate({ id: e.id })}>
 											{e.managed
 												? m.emulators_reinstall()
 												: m.emulators_install()}
 										</MenuItem>
 									)}
-									{!own && (
-										<MenuItem
-											onSelect={() =>
-												setAdopting(adopting === e.id ? undefined : e.id)
-											}
-										>
-											{m.emulators_adopt()}
-										</MenuItem>
-									)}
-									{e.managed && (
+									<MenuItem
+										onSelect={() =>
+											setAdopting(adopting === e.id ? undefined : e.id)
+										}
+									>
+										{m.emulators_adopt()}
+									</MenuItem>
+									{installs && e.managed && (
 										<>
 											<MenuSeparator />
 											<MenuItem

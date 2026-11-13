@@ -131,14 +131,19 @@ private struct MacShotWindowConfigurator: NSViewRepresentable {
             // NavigationStack / Form / material chrome follow the appearance, not the SwiftUI
             // colorScheme. App-wide, so the Settings window and sheets a scene opens match.
             NSApp.appearance = NSAppearance(named: scene.colorScheme == .dark ? .darkAqua : .aqua)
-            let size = ShotDevice.mac.points(scene.orientation)
+            let size = Self.pointsOverride ?? ShotDevice.mac.points(scene.orientation)
+            let fullScreen = scene.macFullScreen && !Self.windowed
             let name = scene.name
             let area = NSScreen.screens.lazy
                 .filter { $0.backingScaleFactor == ShotDevice.mac.scale }
-                .map { scene.macFullScreen ? $0.frame : $0.visibleFrame }
+                .map { fullScreen ? $0.frame : $0.visibleFrame }
                 .first { $0.width >= size.width && $0.height >= size.height }
-            if scene.macFullScreen { window.styleMask = [.borderless] }
-            if let area {
+            if fullScreen { window.styleMask = [.borderless] }
+            if Self.pointsOverride != nil, !fullScreen {
+                // A window with desktop around it sits where macOS opens one.
+                window.setFrame(NSRect(origin: .zero, size: size), display: true)
+                window.center()
+            } else if let area {
                 let top = area.maxY.rounded(.down)
                 window.setFrame(NSRect(x: area.minX, y: top - size.height,
                                        width: size.width, height: size.height), display: true)
@@ -151,6 +156,18 @@ private struct MacShotWindowConfigurator: NSViewRepresentable {
             MacSelfCapture.canvas = Self.globalRect(window.frame)
             Self.announce(window, name, size)
         }
+    }
+
+    /// PUNKTFUNK_SHOT_MAC_POINTS=WxH sizes the window, for a shot with desktop around it.
+    private static var pointsOverride: CGSize? {
+        let parts = ProcessInfo.processInfo.environment["PUNKTFUNK_SHOT_MAC_POINTS"]?
+            .split(separator: "x").compactMap { Double($0) } ?? []
+        return parts.count == 2 ? CGSize(width: parts[0], height: parts[1]) : nil
+    }
+
+    /// PUNKTFUNK_SHOT_MAC_WINDOWED keeps the title bar on a full-screen scene.
+    private static var windowed: Bool {
+        ProcessInfo.processInfo.environment["PUNKTFUNK_SHOT_MAC_WINDOWED"] != nil
     }
 
     /// `frame` in the top-left global space that window captures take.

@@ -62,38 +62,52 @@ extension SettingsView {
     func described<Content: View>(
         _ caption: String, field: String? = nil, @ViewBuilder content: () -> Content
     ) -> some View {
+        described(caption, fields: field.map { [$0] } ?? [], content: content)
+    }
+
+    /// `described` for a row that writes several overrides: its marker shows while any of
+    /// `fields` is overridden, and its Reset clears them all. An empty caption draws no line.
+    func described<Content: View>(
+        _ caption: String, fields: [String], @ViewBuilder content: () -> Content
+    ) -> some View {
         // A name the overlay does not model silently loses both the marker and its Reset, with no
-        // compile error to say so — the one-way door the marker exists to prevent. Caught here in
-        // debug rather than by noticing a missing badge.
-        assert(field.map { OverlayField.isModelled($0) } ?? true,
-               "described(field:) got \(field ?? "") — not a field SettingsOverlay models")
+        // compile error to say so. Caught here in debug rather than by a missing badge.
+        assert(fields.allSatisfy(OverlayField.isModelled),
+               "described(fields:) got \(fields) — not all fields SettingsOverlay models")
         #if os(tvOS)
         // A TV row carries no caption of its own: its focus names the one the pane's band shows,
         // and an overridden row wears a dot and resets from its context menu.
-        let overridden = field.map(isOverridden) ?? false
+        let overridden = fields.contains(where: isOverridden)
         return content()
             .modifier(TVOverrideMark(overridden: overridden) {
-                if let field { resetOverride(field) }
+                fields.forEach(resetOverride)
             })
             .focused($tvCaption, equals: SettingsCaption(text: caption, overridden: overridden))
         #else
         return VStack(alignment: .leading, spacing: 5) {
             content()
-            Text(caption)
-                .font(.geist(13, relativeTo: .footnote))
-                .foregroundStyle(.secondary)
-                // Wrap, never truncate, in Form cells.
-                .fixedSize(horizontal: false, vertical: true)
-                .modifier(CaptionWidth())
-            if let field {
-                // Full cell width, deliberately: the marker's Reset is a CONTROL, and it belongs
-                // on the same trailing edge as the row's own control above it. Sharing the
-                // caption's reserved column left it stranded mid-row.
-                overrideMarker(field)
+            if !caption.isEmpty {
+                Text(caption)
+                    .font(.geist(13, relativeTo: .footnote))
+                    .foregroundStyle(.secondary)
+                    // Wrap, never truncate, in Form cells.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .modifier(CaptionWidth())
             }
+            // Full cell width, deliberately: the marker's Reset is a CONTROL, and it belongs on
+            // the same trailing edge as the row's own control above it.
+            overrideMarker(fields)
         }
         .padding(.vertical, 2)
         #endif
+    }
+
+    /// `described` with a caption from `L10n`.
+    func described<Content: View>(
+        _ caption: LocalizedStringResource, field: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        described(String(localized: caption), field: field, content: content)
     }
 
     /// One picker row for every platform: the system `Picker`, or on tvOS the pushed selection
@@ -113,16 +127,19 @@ extension SettingsView {
         #endif
     }
 
+    /// `settingPicker` with a title from `L10n`.
+    func settingPicker<Tag: Hashable>(
+        _ title: LocalizedStringResource, options: [(label: String, tag: Tag)],
+        selection: Binding<Tag>
+    ) -> some View {
+        settingPicker(String(localized: title), options: options, selection: selection)
+    }
+
     // MARK: - Bitrate
 
-    /// Slider domain, log-scale: the useful range spans three orders of magnitude
-    /// (a few Mbps … 3 Gbps) — linear would cram everything below 100 Mbps into the
-    /// first pixels.
-    private static let minSliderKbps = 2_000.0
-    private static let maxSliderKbps = 3_000_000.0
-
-    static let gigabitWarning =
-        "Above 1 Gbps — more than the link sustains causes loss and stutter. Speed-test first."
+    static var gigabitWarning: String {
+        String(localized: L10n.appleBitrateKbpsGigabitWarning)
+    }
 
     /// `bitrateKbps == 0` is Automatic; switching to manual lands on the host default. Scoped, so
     /// flipping it in a preset records the override there rather than moving the global.
@@ -133,42 +150,31 @@ extension SettingsView {
             set: { bitrate.wrappedValue = $0 ? 0 : 20_000 })
     }
 
-    /// Slider position 0...1 ↔ kbps on the log scale, snapped to two significant figures
-    /// so the readout shows round numbers instead of 47_322.
+    /// The manual rate's slider, on `BitrateScale`.
     var bitrateSlider: Binding<Double> {
         let bitrate = scoped(SettingsFields.bitrateKbps)
         return Binding(
-            get: {
-                let v = min(max(Double(bitrate.wrappedValue), Self.minSliderKbps),
-                            Self.maxSliderKbps)
-                return log(v / Self.minSliderKbps)
-                    / log(Self.maxSliderKbps / Self.minSliderKbps)
-            },
-            set: { pos in
-                let raw = Self.minSliderKbps
-                    * pow(Self.maxSliderKbps / Self.minSliderKbps, pos)
-                let mag = pow(10, floor(log10(raw)) - 1)
-                bitrate.wrappedValue = Int((raw / mag).rounded() * mag)
-            })
+            get: { BitrateScale.position(kbps: bitrate.wrappedValue) },
+            set: { bitrate.wrappedValue = BitrateScale.kbps(position: $0) })
     }
 
     // MARK: - Statistics
 
     static var statisticsDescription: String {
         // No "Live session stats in a corner overlay" preamble: it restates the row's own label.
-        let base = "Compact is a one-line pill; Detailed adds the latency breakdown."
+        let base = String(localized: L10n.playerStatsVerbosityHint)
         #if os(macOS)
-        return base + " ⌃⌥⇧S cycles it."
+        return base + "\n" + L10n.playerStatsVerbosityCycleHint(keys: "⌃⌥⇧S")
         #elseif os(iOS) || os(visionOS)
-        return base + " ⌃⌥⇧S or a three-finger tap cycles it."
+        return base + "\n" + L10n.playerStatsVerbosityCycleTouchHint(keys: "⌃⌥⇧S")
         #else
         return base
         #endif
     }
 
-    static let advancedStatisticsDescription =
-        "Off shows the figures Moonlight's overlay also shows. On shows capture to glass as "
-            + "p50/p95 and every stage between."
+    static var advancedStatisticsDescription: String {
+        String(localized: L10n.playerAdvancedStatsHint)
+    }
 
     static let statsDocsURL = URL(string: "https://docs.punktfunk.unom.io/docs/stats")!
 
@@ -202,7 +208,7 @@ extension SettingsView {
                         Image(systemName: "waveform")
                     }
                     if let level = controller.batteryLevel {
-                        Text("\(Int(level * 100))%")
+                        Text(L10n.commonPercent(value: String(Int(level * 100))))
                         if controller.isCharging {
                             Image(systemName: "bolt.fill")
                         }
@@ -215,7 +221,7 @@ extension SettingsView {
             // Every forwarded controller is surfaced (not just the primary `active`) with its
             // wire pad index as a player number — a pin forwards only one, Automatic forwards all.
             if let pad = gamepads.padIndex(for: controller) {
-                Text("Player \(pad + 1)")
+                Text(L10n.padPlayerNumber(n: String(pad + 1)))
                     .font(.geist(11, .semibold, relativeTo: .caption2))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
@@ -246,7 +252,7 @@ extension SettingsView {
     #if os(macOS)
     /// Write one of `SettingsOptions.macDisplayModes()` into the mode fields, at the screen's top
     /// rate.
-    func applyDisplayMode(_ mode: (name: String, w: Int, h: Int)) {
+    func applyDisplayMode(_ mode: (kind: SettingsOptions.ModeKind, w: Int, h: Int)) {
         customMode = false
         setResolution(width: mode.w, height: mode.h)
         scoped(SettingsFields.refreshHz).wrappedValue = NSScreen.main?.maximumFramesPerSecond ?? 60
@@ -258,14 +264,16 @@ extension SettingsView {
     @ViewBuilder var displayModeControl: some View {
         let modes = SettingsOptions.macDisplayModes()
         if modes.count > 1 {
-            Menu("Use this display's mode") {
-                ForEach(modes, id: \.name) { mode in
-                    Button("\(mode.name) · \(mode.w) × \(mode.h)") { applyDisplayMode(mode) }
+            Menu(L10n.appleUseDisplayMode) {
+                ForEach(modes, id: \.kind) { mode in
+                    Button(SettingsOptions.modeLabel(mode.kind, w: mode.w, h: mode.h)) {
+                        applyDisplayMode(mode)
+                    }
                 }
             }
             .fixedSize()
         } else {
-            Button("Use this display's mode") { fillFromMainScreen() }
+            Button(L10n.appleUseDisplayMode) { fillFromMainScreen() }
         }
     }
     #endif
@@ -299,7 +307,7 @@ struct SettingsCaptionBand: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if caption?.overridden == true {
-                Label("Overrides Default settings — hold to reset", systemImage: "circle.fill")
+                Label(L10n.applePrefsOverriddenTv, systemImage: "circle.fill")
                     .foregroundStyle(Color.brand)
             }
             Text(caption?.text ?? "")
@@ -332,7 +340,7 @@ struct TVOverrideMark: ViewModifier {
                         .accessibilityHidden(true)
                 }
                 .contextMenu {
-                    Button("Reset to Default settings", systemImage: "arrow.uturn.backward",
+                    Button(L10n.prefsOverrideResetFull, systemImage: "arrow.uturn.backward",
                            action: reset)
                 }
         } else {

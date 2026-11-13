@@ -1,6 +1,9 @@
 use super::*;
 use crate::max_forced_split_mode;
 use crate::nvenc_core::{cached_split_verdict, slice_offsets_len, BitstreamLock};
+use crate::test_dmabuf::{
+    assert_edge_is_straight, decode_first, edge_frame, LinearDmabuf, ODD_H, ODD_W,
+};
 use pf_frame::{CapturedFrame, FramePayload, PixelFormat};
 use pf_zerocopy::cuda::{DeviceBuffer, PlaneLayout};
 
@@ -30,6 +33,37 @@ fn raw_source_hold_is_cloned_for_the_pending_encode() {
     assert_eq!(std::sync::Arc::strong_count(&hold), 3);
     drop(pending);
     assert_eq!(std::sync::Arc::strong_count(&hold), 2);
+}
+
+/// A producer NV12 buffer with a zero stride is left to the worker, not divided by.
+#[test]
+fn a_zero_stride_nv12_buffer_is_not_read_in_place() {
+    let frame = |stride| CapturedFrame {
+        provenance: Default::default(),
+        width: 64,
+        height: 64,
+        pts_ns: 0,
+        format: PixelFormat::Nv12,
+        payload: FramePayload::Dmabuf(pf_frame::DmabufFrame {
+            fd: std::fs::File::open("/dev/null").unwrap().into(),
+            fourcc: u32::from_le_bytes(*b"NV12"),
+            modifier: 0,
+            plane1: None,
+            offset: 0,
+            stride,
+            hold: None,
+            health: pf_zerocopy::zero_copy_health(0x5001),
+            rebuild: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }),
+        cursor: None,
+    };
+    for (stride, in_place) in [(0, false), (64, true)] {
+        let f = frame(stride);
+        let FramePayload::Dmabuf(d) = &f.payload else {
+            unreachable!()
+        };
+        assert_eq!(direct_span(&f, d).is_some(), in_place, "stride {stride}");
+    }
 }
 
 /// Env helper for ignored hardware tests. Run `--test-threads=1` — they mutate process env.
@@ -312,6 +346,47 @@ fn nvenc_cuda_wave_soak() {
             }
         },
     );
+}
+
+/// The anchor soak ([`crate::smoke_pattern::Soak`], its `PF_WAVE_*` knobs) on the CUDA
+/// session. With `PF_WAVE_CONFIRM` and a `PF_WAVE_LAG` past the short-term window, every ask
+/// anchors on a kept long-term picture instead of starting a wave.
+///
+/// `cargo test -p pf-encode --features nvenc --release nvenc_cuda_anchor_soak -- --ignored --nocapture`
+#[test]
+#[ignore = "requires an NVIDIA GPU + driver — run manually on an NVIDIA Linux box"]
+fn nvenc_cuda_anchor_soak() {
+    let soak = crate::smoke_pattern::Soak::from_env();
+    let (w, h, fps) = (soak.w, soak.h, soak.fps);
+    pf_zerocopy::cuda::make_current().expect("shared CUDA context current");
+    let mut enc = NvencCudaEncoder::open(
+        soak.codec,
+        PixelFormat::Bgra,
+        w,
+        h,
+        fps,
+        soak.mbps * 1_000_000,
+        true,
+        8,
+        false,
+        ChromaFormat::Yuv420,
+        false,
+        1,
+        true,
+        &Knobs::from_env(),
+    )
+    .expect("open NVENC CUDA session");
+    soak.run("nvenc-cuda", &mut enc, |i| CapturedFrame {
+        provenance: Default::default(),
+        width: w,
+        height: h,
+        pts_ns: i as u64 * 1_000_000_000 / u64::from(fps),
+        format: PixelFormat::Bgra,
+        payload: FramePayload::Cpu(crate::smoke_pattern::scroll_pattern(
+            w as usize, h as usize, i,
+        )),
+        cursor: None,
+    });
 }
 
 /// Packed `X2Rgb10` (NVENC `ARGB10`, no host CSC). Uninit VRAM: session machinery, not
@@ -2775,175 +2850,6 @@ fn nvenc_cuda_chunked_poll_fallback_whole_au() {
     assert!(au.keyframe && !au.data.is_empty());
 }
 
-/// A LINEAR dma-buf holding `bytes`, exported from its own Vulkan device the way gamescope
-/// shares a screencast buffer. Lives until this drops.
-struct LinearDmabuf {
-    fd: std::os::fd::OwnedFd,
-    _vk: (ash::Entry, ash::Instance, ash::Device),
-}
-
-impl LinearDmabuf {
-    fn new(bytes: &[u8]) -> LinearDmabuf {
-        use ash::vk;
-        use pf_zerocopy::vkdev::{memory_type, MappedMemory};
-        // SAFETY: test fixture over raw Vulkan handles it creates; the device outlives the fd's
-        // users because the struct keeps it.
-        unsafe {
-            let entry = ash::Entry::load().expect("load libvulkan");
-            let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_2);
-            let instance = entry
-                .create_instance(
-                    &vk::InstanceCreateInfo::default().application_info(&app),
-                    None,
-                )
-                .expect("instance");
-            let phys = instance
-                .enumerate_physical_devices()
-                .expect("devices")
-                .into_iter()
-                .find(|&p| instance.get_physical_device_properties(p).vendor_id == 0x10DE)
-                .expect("an NVIDIA device");
-            let mp = instance.get_physical_device_memory_properties(phys);
-            let exts = [
-                ash::khr::external_memory_fd::NAME.as_ptr(),
-                ash::ext::external_memory_dma_buf::NAME.as_ptr(),
-            ];
-            let prio = [1.0f32];
-            let qci = [vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(0)
-                .queue_priorities(&prio)];
-            let device = instance
-                .create_device(
-                    phys,
-                    &vk::DeviceCreateInfo::default()
-                        .queue_create_infos(&qci)
-                        .enabled_extension_names(&exts),
-                    None,
-                )
-                .expect("device");
-            let size = bytes.len() as u64;
-            let buffer = |usage, export: bool| {
-                let mut ext = vk::ExternalMemoryBufferCreateInfo::default()
-                    .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
-                let mut info = vk::BufferCreateInfo::default().size(size).usage(usage);
-                if export {
-                    info = info.push_next(&mut ext);
-                }
-                let buf = device.create_buffer(&info, None).expect("buffer");
-                let req = device.get_buffer_memory_requirements(buf);
-                let flags = if export {
-                    vk::MemoryPropertyFlags::DEVICE_LOCAL
-                } else {
-                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT
-                };
-                let mut exp = vk::ExportMemoryAllocateInfo::default()
-                    .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
-                let mut alloc = vk::MemoryAllocateInfo::default()
-                    .allocation_size(req.size)
-                    .memory_type_index(
-                        memory_type(&mp, req.memory_type_bits, flags).expect("type"),
-                    );
-                if export {
-                    alloc = alloc.push_next(&mut exp);
-                }
-                let mem = device.allocate_memory(&alloc, None).expect("memory");
-                device.bind_buffer_memory(buf, mem, 0).expect("bind");
-                (buf, mem)
-            };
-            let (dst, dst_mem) = buffer(vk::BufferUsageFlags::TRANSFER_DST, true);
-            let (src, src_mem) = buffer(vk::BufferUsageFlags::TRANSFER_SRC, false);
-            MappedMemory::map(&device, src_mem, bytes.len())
-                .expect("map staging")
-                .copy_from_slice(bytes);
-            let pool = device
-                .create_command_pool(&vk::CommandPoolCreateInfo::default(), None)
-                .expect("pool");
-            let cmd = device
-                .allocate_command_buffers(
-                    &vk::CommandBufferAllocateInfo::default()
-                        .command_pool(pool)
-                        .command_buffer_count(1),
-                )
-                .expect("cmd")[0];
-            device
-                .begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::default())
-                .expect("begin");
-            device.cmd_copy_buffer(cmd, src, dst, &[vk::BufferCopy::default().size(size)]);
-            device.end_command_buffer(cmd).expect("end");
-            let cmds = [cmd];
-            let queue = device.get_device_queue(0, 0);
-            device
-                .queue_submit(
-                    queue,
-                    &[vk::SubmitInfo::default().command_buffers(&cmds)],
-                    vk::Fence::null(),
-                )
-                .expect("submit");
-            device.queue_wait_idle(queue).expect("wait");
-            let fd = ash::khr::external_memory_fd::Device::new(&instance, &device)
-                .get_memory_fd(
-                    &vk::MemoryGetFdInfoKHR::default()
-                        .memory(dst_mem)
-                        .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT),
-                )
-                .expect("export dma-buf");
-            LinearDmabuf {
-                fd: std::os::fd::FromRawFd::from_raw_fd(fd),
-                _vk: (entry, instance, device),
-            }
-        }
-    }
-
-    /// One captured frame over this buffer, held the way the capture holds it.
-    fn frame(
-        &self,
-        fmt: PixelFormat,
-        fourcc: &[u8; 4],
-        w: u32,
-        h: u32,
-        stride: u32,
-        i: u32,
-    ) -> CapturedFrame {
-        CapturedFrame {
-            provenance: Default::default(),
-            width: w,
-            height: h,
-            pts_ns: u64::from(i) * 16_666_667,
-            format: fmt,
-            payload: FramePayload::Dmabuf(pf_frame::DmabufFrame {
-                fd: self.fd.try_clone().expect("dup"),
-                fourcc: u32::from_le_bytes(*fourcc),
-                modifier: 0,
-                plane1: None,
-                offset: 0,
-                stride,
-                hold: Some(std::sync::Arc::new(())),
-                health: pf_zerocopy::zero_copy_health(0x5002),
-                rebuild: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            }),
-            cursor: None,
-        }
-    }
-}
-
-/// The first picture of `stream` as raw `pix_fmt` bytes, through ffmpeg.
-fn decode_first(stream: &[u8], name: &str, pix_fmt: &str) -> Vec<u8> {
-    let path = std::env::temp_dir().join(name);
-    std::fs::write(&path, stream).expect("write the stream");
-    let out = std::process::Command::new("ffmpeg")
-        .args(["-v", "error", "-i"])
-        .arg(&path)
-        .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", pix_fmt, "-"])
-        .output()
-        .expect("run ffmpeg");
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    out.stdout
-}
-
 /// Encode `frames` of one LINEAR buffer through the in-place lane and return the stream.
 /// Asserts the lane took them: a mapped buffer, never the worker.
 fn encode_in_place(
@@ -3259,4 +3165,62 @@ fn nvenc_cuda_in_place_repeats_in_flight() {
         "repeats in flight shared one registration ({regs})"
     );
     println!("in-place repeats: {aus} AUs over {regs} registrations of one buffer");
+}
+
+/// Hardware: a packed-RGB row off any driver's pitch alignment encodes in place unsheared.
+#[test]
+#[ignore = "requires an NVIDIA GPU + driver and ffmpeg"]
+fn nvenc_cuda_in_place_unaligned_pitch() {
+    let buf = LinearDmabuf::new(&edge_frame(ODD_W, ODD_H, ODD_W * 4));
+    let frame = |i| buf.frame(PixelFormat::Bgrx, b"XR24", ODD_W, ODD_H, ODD_W * 4, i);
+    let (_enc, stream) = encode_in_place(&buf, frame, 8, false, ChromaFormat::Yuv420, 3);
+    assert_edge_is_straight(&stream, "in-place-unaligned.h265", ODD_W, ODD_H);
+}
+
+/// Hardware: the same row through the worker's convert, the lane a frame takes once the host
+/// draws the cursor. NVIDIA reads a LINEAR image at a pitch rounded up to 32 bytes; the convert
+/// reads the buffer's bytes instead. Run alone: it sets process env.
+#[test]
+#[ignore = "requires an NVIDIA GPU + driver and ffmpeg"]
+fn nvenc_cuda_convert_lane_unaligned_pitch() {
+    // In-process, so the convert under test is this build's and not an installed worker's.
+    set_env("PUNKTFUNK_ZEROCOPY_INPROC", "1");
+    set_env("PUNKTFUNK_NVENC_DIRECT", "0");
+    let bytes = edge_frame(ODD_W, ODD_H, ODD_W * 4);
+    let buf = LinearDmabuf::new(&bytes);
+    pf_zerocopy::cuda::make_current().expect("shared CUDA context current");
+    let mut enc = NvencCudaEncoder::open(
+        Codec::H265,
+        PixelFormat::Bgrx,
+        ODD_W,
+        ODD_H,
+        60,
+        80_000_000,
+        false,
+        8,
+        false,
+        ChromaFormat::Yuv420,
+        false,
+        1,
+        true,
+        &Knobs::from_env(),
+    )
+    .expect("open NVENC CUDA session");
+    let mut stream = Vec::new();
+    for i in 0..3 {
+        let frame = buf.frame(PixelFormat::Bgrx, b"XR24", ODD_W, ODD_H, ODD_W * 4, i);
+        enc.submit_indexed(&frame, i).expect("submit");
+        while let Some(au) = enc.poll().expect("poll") {
+            stream.extend_from_slice(&au.data);
+        }
+    }
+    enc.flush().expect("flush");
+    while let Some(au) = enc.poll().expect("poll") {
+        stream.extend_from_slice(&au.data);
+    }
+    remove_env("PUNKTFUNK_ZEROCOPY_INPROC");
+    remove_env("PUNKTFUNK_NVENC_DIRECT");
+    assert!(enc.direct.is_none(), "a frame was encoded in place");
+    assert!(enc.worker.is_some(), "no frame went through the worker");
+    assert_edge_is_straight(&stream, "convert-lane-unaligned.h265", ODD_W, ODD_H);
 }

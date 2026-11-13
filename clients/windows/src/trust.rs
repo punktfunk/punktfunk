@@ -9,7 +9,8 @@
 //! still load via a serde alias in core.
 
 pub use pf_client_core::trust::{
-    access_error_message, device_name, hex, learn_from_advert, load_or_create_identity,
-    pair_and_save, pair_error_message, parse_hex32, probe_known, request_access_to_host,
-    save_paired, HostEdit, KnownHosts, Settings, PROBE_INTERVAL, PROBE_TIMEOUT,
+    access_error_message, device_code, device_name, grouped, hex, learn_from_advert,
+    load_or_create_identity, pair_and_save, pair_error_message, parse_hex32, probe_known,
+    request_access_to_host, save_paired, HostEdit, KnownHosts, Settings, PROBE_INTERVAL,
+    PROBE_TIMEOUT,
 };

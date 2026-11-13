@@ -24,7 +24,12 @@ the handshake advertised could differ.
    that changes an answer joins the key; no answer keeps a cache of its own.
 3. **Probes are lazy and kept.** Each probe fills a cell the first time a method needs it;
    building a `Resolved` probes nothing. An explicit Encoder row never runs the `auto` probe. A
-   codec-set probe that found nothing leaves its cell empty, warns once, and runs again next time.
+   probe that could not ask (a codec set that found nothing, a driver that listed no codecs, no
+   VAAPI display, no Vulkan instance) leaves its cell empty and is not asked again for 30
+   seconds: asks inside that window answer "unanswered" without probing, so asks made together
+   agree and a box that never answers costs one probe per window. The first ask after it
+   probes again; a codec probe warns about the miss once. The 4:4:4 and 10-bit verdicts read
+   off such a cell are kept only once it holds an answer.
 4. **Methods read the value.** A method reads the inputs and the cells, never the config or the
    GPU again, so the resolution table runs over hand-filled cells without a GPU.
 5. **Edges.** Capture never asks encode: the host resolves and hands pf-capture values

@@ -20,30 +20,50 @@ struct HiddenSettings {
     hidden: Vec<String>,
 }
 
-fn settings_path() -> PathBuf {
-    pf_paths::seat::library_dir().join("library-hidden.json")
-}
+const FILE: &str = "library-hidden.json";
 
 /// Malformed or absent file → nothing hidden. A bad parse must show too much,
 /// not an empty library.
-fn load_settings() -> HiddenSettings {
-    read_json_or_default(&settings_path())
+fn load_settings(view: &View) -> HiddenSettings {
+    read_json_or_default(&view.path(FILE))
 }
 
+/// The ids the box hides.
 pub(crate) fn hidden_ids() -> HashSet<String> {
-    load_settings().hidden.into_iter().collect()
+    load_settings(&View::default()).ids()
+}
+
+/// The ids the box hides, and those the profile in view hides itself.
+pub(crate) fn hidden_layers(view: &View) -> (HashSet<String>, HashSet<String>) {
+    let own = view
+        .own_file(FILE)
+        .map(|path| read_json_or_default::<HiddenSettings>(&path).ids());
+    (hidden_ids(), own.unwrap_or_default())
+}
+
+impl HiddenSettings {
+    /// The hidden ids, less the host's own [`GAME_MODE_ID`] tile, which no hide takes away.
+    fn ids(self) -> HashSet<String> {
+        self.hidden
+            .into_iter()
+            .filter(|id| id != GAME_MODE_ID)
+            .collect()
+    }
 }
 
 /// `library.changed` source. A missing `:` yields the whole id, not `""` —
 /// a blank source matches no cache key.
-fn store_of(id: &str) -> &str {
+pub(super) fn store_of(id: &str) -> &str {
     id.split_once(':').map_or(id, |(store, _)| store)
 }
 
-/// Not checked against the live catalog: a title can be absent (launcher closed,
-/// disk unmounted) and the hide must still stick when it returns.
-pub fn set_entry_hidden(id: &str, hidden: bool) -> Result<bool> {
-    let mut settings = load_settings();
+/// Hides `id` in `view`'s layer. Not checked against the live catalog: a title can be absent
+/// (launcher closed, disk unmounted) and the hide must still stick when it returns. Load-edit-save
+/// runs under one lock, and a file that does not parse is refused rather than replaced.
+pub fn set_entry_hidden(view: &View, id: &str, hidden: bool) -> Result<bool> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut settings: HiddenSettings = read_json_for_write(&view.path(FILE))?;
     let was_hidden = settings.hidden.iter().any(|h| h == id);
     if was_hidden == hidden {
         return Ok(hidden);
@@ -55,7 +75,7 @@ pub fn set_entry_hidden(id: &str, hidden: bool) -> Result<bool> {
     } else {
         settings.hidden.retain(|h| h != id);
     }
-    save_json(&settings_path(), &serde_json::to_string_pretty(&settings)?)?;
+    save_json(&view.path(FILE), &serde_json::to_string_pretty(&settings)?)?;
     crate::events::emit(crate::events::EventKind::LibraryChanged {
         source: store_of(id).to_string(),
     });
@@ -93,5 +113,14 @@ mod tests {
         assert_eq!(s.hidden, vec!["steam:70", "lutris:4"]);
         let json = serde_json::to_string(&s).expect("serializes");
         assert_eq!(json, r#"{"hidden":["steam:70","lutris:4"]}"#);
+    }
+
+    /// A hide of the host's Game Mode tile, written or hand-edited, takes nothing away.
+    #[test]
+    fn the_game_mode_tile_cannot_be_hidden() {
+        let s = HiddenSettings {
+            hidden: vec![GAME_MODE_ID.into(), "steam:70".into()],
+        };
+        assert_eq!(s.ids(), HashSet::from(["steam:70".to_string()]));
     }
 }

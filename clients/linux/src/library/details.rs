@@ -5,8 +5,9 @@
 use super::{LibraryMsg, Shelf, View};
 use crate::store::Store;
 use adw::prelude::*;
-use pf_client_core::library::store_label;
+use pf_client_core::library::{host_line, store_label};
 use pf_client_core::library_layout::stats_line;
+use pf_l10n::{client, common, desktop};
 use std::rc::Rc;
 
 pub fn show(
@@ -73,6 +74,9 @@ pub fn show(
     if !g.genres.is_empty() {
         body.append(&dim(&g.genres.join(", ")));
     }
+    if let Some(line) = g.overrides.as_ref().and_then(host_line) {
+        body.append(&dim(&line));
+    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64);
@@ -81,7 +85,11 @@ pub fn show(
     }
 
     let play = gtk::Button::builder()
-        .label(if running.is_some() { "Resume" } else { "Play" })
+        .label(if running.is_some() {
+            client::lib_resume()
+        } else {
+            common::common_play()
+        })
         .css_classes(["pill", "suggested-action"])
         .build();
     {
@@ -94,7 +102,7 @@ pub fn show(
     let heart = gtk::ToggleButton::builder()
         .child(&crate::widgets::lucide::row_icon("heart"))
         .active(view.favorites.borrow().contains(&g.id))
-        .tooltip_text("Favorite")
+        .tooltip_text(client::lib_favorite())
         .css_classes(["circular"])
         .valign(gtk::Align::Center)
         .build();
@@ -126,10 +134,18 @@ pub fn show(
         });
         r
     };
-    group.add(&row("Copy Link", LibraryMsg::CopyLink, false));
-    group.add(&row("Create Shortcut\u{2026}", LibraryMsg::Shortcut, false));
+    group.add(&row(
+        client::hostcard_copy_link(),
+        LibraryMsg::CopyLink,
+        false,
+    ));
+    group.add(&row(
+        desktop::desktop_hostcard_create_shortcut(),
+        LibraryMsg::Shortcut,
+        false,
+    ));
     if running.as_ref().is_some_and(|r| r.endable) {
-        let end = row("End Game", LibraryMsg::EndGame, true);
+        let end = row(client::lib_end_game(), LibraryMsg::EndGame, true);
         end.add_css_class("error");
         group.add(&end);
     }
@@ -163,11 +179,11 @@ fn preset_row(store: &Rc<Store>, shelf: &Shelf, id: &str) -> adw::ComboRow {
             .index(&known)
             .and_then(|i| known.hosts[i].preset_for_game(id).map(str::to_string))
     };
-    let mut labels = vec!["Same as the host"];
+    let mut labels = vec![client::lib_title_preset_same()];
     labels.extend(presets.iter().map(|(_, n)| n.as_str()));
     let combo = adw::ComboRow::builder()
-        .title("Always stream with")
-        .subtitle("For this title on this host")
+        .title(client::lib_title_preset_row())
+        .subtitle(client::lib_title_preset_row_hint())
         .model(&gtk::StringList::new(&labels))
         .build();
     let at = bound

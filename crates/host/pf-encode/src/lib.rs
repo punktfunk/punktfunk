@@ -151,6 +151,14 @@ mod vk_ring;
 #[cfg(all(target_os = "linux", feature = "vulkan-encode"))]
 #[path = "enc/linux/vk_av1_encode.rs"]
 mod vk_av1_encode;
+// The VCN firmware's version and the pairs its EFC converts. Pure but for the kernel query.
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "vulkan-encode")),
+    allow(dead_code)
+)]
+#[path = "enc/linux/vcn_firmware.rs"]
+mod vcn_firmware;
+pub use vcn_firmware::VcnFirmware;
 // Vendored `VK_VALVE_video_encode_rgb_conversion`. Same ash-pin as `vk_av1_encode`.
 // See `design/vulkan-rgb-direct-encode.md`.
 #[cfg(all(target_os = "linux", feature = "vulkan-encode"))]
@@ -183,6 +191,13 @@ mod vk_import;
 ))]
 #[path = "enc/linux/vk_csc.rs"]
 mod vk_csc;
+// The crop and scale ahead of the CSC, which PyroWave and Vulkan Video share.
+#[cfg(all(
+    target_os = "linux",
+    any(feature = "vulkan-encode", feature = "pyrowave")
+))]
+#[path = "enc/linux/vk_reframe.rs"]
+mod vk_reframe;
 // PyroWave: Vulkan-compute intra wavelet. Explicit `PUNKTFUNK_ENCODER=pyrowave`.
 // See `design/pyrowave-codec-plan.md`.
 #[cfg(all(target_os = "linux", feature = "pyrowave"))]
@@ -209,6 +224,14 @@ pub mod worker;
 ))]
 #[path = "enc/linux/test_frames.rs"]
 mod test_frames;
+// The LINEAR dmabuf the NVENC and Vulkan Video tests share.
+#[cfg(all(
+    test,
+    target_os = "linux",
+    any(feature = "nvenc", feature = "vulkan-encode")
+))]
+#[path = "enc/linux/test_dmabuf.rs"]
+mod test_dmabuf;
 // Live tests pairing a `pf_encode_win` backend with the P010 converter's real output.
 #[cfg(all(test, target_os = "windows"))]
 #[path = "enc/windows/live_tests.rs"]

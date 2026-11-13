@@ -9,6 +9,7 @@
 //! Types (`GameEntry`, `Artwork`, `RunningGame`, `LibraryError`, `base_url`) are
 //! portable. The ureq/rustls fetch path is desktop-gated (`linux` / `windows`).
 
+pub use punktfunk_core::game_overrides::GameOverrides;
 use serde::{Deserialize, Serialize};
 #[cfg(desktop)]
 use std::collections::VecDeque;
@@ -97,6 +98,58 @@ pub struct GameEntry {
     /// doesn't install is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub install: Option<TitleInstall>,
+    /// What the host set for this game, applied at the connect that launches it. `None`
+    /// from a host that sets nothing, or predates game overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<GameOverrides>,
+}
+
+/// One host-set field as a player reads it: `1080p`, `60 Hz`, `HDR off`, `DualSense`. `field`
+/// is the settings row's preset field (`resolution`, `refresh_hz`, `hdr_enabled`, `gamepad`);
+/// `None` when the override leaves it to the device.
+pub fn override_value(o: &GameOverrides, field: &str) -> Option<String> {
+    use pf_l10n::client as c;
+    match field {
+        "resolution" => o.lines.map(|l| format!("{l}p")),
+        "refresh_hz" => o.hz.map(pf_l10n::common::common_hz),
+        "hdr_enabled" => o.hdr.map(|on| {
+            if on {
+                c::lib_host_override_hdr_on()
+            } else {
+                c::lib_host_override_hdr_off()
+            }
+            .to_string()
+        }),
+        "gamepad" => o
+            .gamepad_pref()
+            .map(|p| crate::menu_nav::pad_name(p).to_string()),
+        _ => None,
+    }
+}
+
+/// `Host: 1080p60 DualSense` for a launch hold, a details sheet or a link prompt: the shared
+/// override's name, else the values, `Host: 1080p60, DualSense`. `None` when nothing is set.
+pub fn host_line(o: &GameOverrides) -> Option<String> {
+    if o.is_empty() {
+        return None;
+    }
+    if let Some(name) = o.name.as_deref().filter(|n| !n.trim().is_empty()) {
+        return Some(pf_l10n::client::lib_host_override(name));
+    }
+    let mode = match (o.lines, o.hz) {
+        (Some(l), Some(z)) => Some(format!("{l}p{z}")),
+        _ => override_value(o, "resolution").or_else(|| override_value(o, "refresh_hz")),
+    };
+    let values: Vec<String> = [
+        mode,
+        override_value(o, "hdr_enabled"),
+        override_value(o, "gamepad"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    // `beyond_screen` alone sets no value a player reads.
+    (!values.is_empty()).then(|| pf_l10n::client::lib_host_override(values.join(", ")))
 }
 
 /// A title's files on the host, from the library entry's `install`.
@@ -156,15 +209,34 @@ pub fn initials(title: &str) -> String {
 /// Store id → display label. One table: the console, the GTK dialog and the WinUI dialog all
 /// drew this from a copy of their own, and a store added to one never reached the others.
 pub fn store_label(store: &str) -> &'static str {
+    store_key_label(store_key(store))
+}
+
+/// [`store_key`] of a store this build does not know.
+pub(crate) const UNKNOWN_STORE: &str = "Game";
+const CUSTOM_STORE: &str = "Custom";
+
+/// Store id → the name group keys and the Store sort use: the same in every language, never
+/// drawn.
+pub(crate) fn store_key(store: &str) -> &'static str {
     match store {
         "steam" => "Steam",
-        "custom" => "Custom",
+        "custom" => CUSTOM_STORE,
         "heroic" => "Heroic",
         "lutris" => "Lutris",
         "epic" => "Epic",
         "gog" => "GOG",
         "xbox" => "Xbox",
-        _ => "Game",
+        _ => UNKNOWN_STORE,
+    }
+}
+
+/// The text for a [`store_key`]. A brand is its own.
+pub(crate) fn store_key_label(key: &str) -> &str {
+    match key {
+        CUSTOM_STORE => pf_l10n::client::lib_store_custom(),
+        UNKNOWN_STORE => pf_l10n::client::lib_store_other(),
+        brand => brand,
     }
 }
 
@@ -203,15 +275,12 @@ impl std::fmt::Display for LibraryError {
     /// "{label} failed — " lead on a host action, "Couldn't send logs — " on
     /// an upload. A sentence here reads as a second headline under the first.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use pf_l10n::client as m;
         match self {
-            LibraryError::NotPaired => {
-                f.write_str("the host doesn't recognize this device — pair with it first")
-            }
-            LibraryError::PinMismatch => {
-                f.write_str("the host's certificate isn't the one you paired with — pair again")
-            }
-            LibraryError::Http(code) => write!(f, "the host refused it ({code})"),
-            LibraryError::Unreachable(why) => write!(f, "couldn't reach the host — {why}"),
+            LibraryError::NotPaired => f.write_str(m::error_mgmt_not_paired()),
+            LibraryError::PinMismatch => f.write_str(m::error_mgmt_pin_mismatch()),
+            LibraryError::Http(code) => f.write_str(&m::error_mgmt_refused(code)),
+            LibraryError::Unreachable(why) => f.write_str(&m::error_mgmt_unreachable(why)),
         }
     }
 }
@@ -257,8 +326,8 @@ pub fn agent(
 /// One answer of `GET /api/v1/library/page`. `total` and `platforms` stay undecoded:
 /// every shell collates the whole catalog itself.
 #[derive(Deserialize)]
-struct LibraryPage {
-    items: Vec<GameEntry>,
+struct LibraryPage<T> {
+    items: Vec<T>,
     #[serde(default)]
     next_cursor: Option<String>,
 }
@@ -272,15 +341,15 @@ const MAX_PAGES: usize = 500;
 /// The whole catalog, a page at a time, so no answer grows with the library. `get` takes
 /// the cursor of the page before and answers one page's body; `bad_reply` words a body
 /// that does not decode. Any page failing fails the walk: half a catalog is not one.
-pub fn walk_pages<E>(
+pub fn walk_pages<T: serde::de::DeserializeOwned, E>(
     mut get: impl FnMut(Option<&str>) -> Result<String, E>,
     bad_reply: impl Fn(String) -> E,
-) -> Result<Vec<GameEntry>, E> {
+) -> Result<Vec<T>, E> {
     let mut games = Vec::new();
     let mut cursor: Option<String> = None;
     for _ in 0..MAX_PAGES {
         let body = get(cursor.as_deref())?;
-        let page: LibraryPage =
+        let page: LibraryPage<T> =
             serde_json::from_str(&body).map_err(|e| bad_reply(format!("bad JSON: {e}")))?;
         games.extend(page.items);
         match page.next_cursor {
@@ -299,13 +368,11 @@ pub fn walk_pages<E>(
 const TUNNEL_WAIT: Duration = Duration::from_secs(3);
 
 /// A management answer: its status and body.
-#[cfg(desktop)]
 pub(crate) struct Reply {
     pub(crate) status: u16,
     pub(crate) body: Vec<u8>,
 }
 
-#[cfg(desktop)]
 impl Reply {
     /// The body of a 2xx; 401/403 → [`LibraryError::NotPaired`], anything else `Http`.
     pub(crate) fn ok(self) -> Result<Vec<u8>, LibraryError> {
@@ -433,8 +500,7 @@ impl HostApi {
 }
 
 /// `s` percent-encoded for a query value.
-#[cfg(desktop)]
-fn query_value(s: &str) -> String {
+pub(crate) fn query_value(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
@@ -445,42 +511,73 @@ fn query_value(s: &str) -> String {
         .collect()
 }
 
-/// The host's catalog, walked by `GET /api/v1/library/page` over [`HostApi`]'s lanes. A host
-/// older than the paged route refuses it, so `GET /api/v1/library` answers whole instead.
-/// 401/403 → [`LibraryError::NotPaired`]; pin failure → [`LibraryError::PinMismatch`].
+/// The catalog as `profile` plays it (`as=`), else the box's, with the profile it was fetched
+/// as. `get` answers one path's status and body. A host older than the paged route refuses it,
+/// so `GET /api/v1/library` answers whole instead. A profile the host no longer holds (404
+/// `profile_unknown`) is asked once more as the box, and that answer stands, as the box's.
+/// `clients/shared/library-profile-vectors.json` pins this here, in Swift and in Kotlin.
+pub fn fetch_catalog(
+    profile: Option<&str>,
+    mut get: impl FnMut(&str) -> Result<(u16, Vec<u8>), LibraryError>,
+) -> Result<(Vec<GameEntry>, Option<&str>), LibraryError> {
+    let gone = std::cell::Cell::new(false);
+    let mut walk = |profile: Option<&str>| {
+        let mut body = |mut path: String| {
+            if let Some(p) = profile {
+                let sep = if path.contains('?') { '&' } else { '?' };
+                path = format!("{path}{sep}as={}", query_value(p));
+            }
+            let (status, body) = get(&path)?;
+            if profile.is_some() && status == 404 {
+                let coded = serde_json::from_slice::<serde_json::Value>(&body);
+                gone.set(coded.is_ok_and(|v| v["code"] == "profile_unknown"));
+            }
+            let body = Reply { status, body }.ok()?;
+            Ok(String::from_utf8_lossy(&body).into_owned())
+        };
+        let paged = walk_pages(
+            |cursor| {
+                let mut path = format!("/api/v1/library/page?limit={PAGE_LIMIT}");
+                if let Some(c) = cursor {
+                    path.push_str("&cursor=");
+                    path.push_str(&query_value(c));
+                }
+                body(path)
+            },
+            LibraryError::Unreachable,
+        );
+        match paged {
+            Err(LibraryError::NotPaired | LibraryError::Http(404)) if !gone.get() => {
+                let all = body("/api/v1/library".into())?;
+                serde_json::from_str(&all)
+                    .map_err(|e| LibraryError::Unreachable(format!("bad JSON: {e}")))
+            }
+            walked => walked,
+        }
+    };
+    match walk(profile) {
+        Err(_) if gone.replace(false) => walk(None).map(|games| (games, None)),
+        walked => walked.map(|games| (games, profile)),
+    }
+}
+
+/// [`fetch_catalog`] over [`HostApi`]'s lanes. 401/403 → [`LibraryError::NotPaired`]; pin
+/// failure → [`LibraryError::PinMismatch`].
 #[cfg(desktop)]
-pub fn fetch_games(
+pub fn fetch_games<'p>(
     addr: &str,
     mgmt_port: u16,
     stream_port: u16,
     identity: &(String, String),
     pin: Option<[u8; 32]>,
-) -> Result<Vec<GameEntry>, LibraryError> {
+    profile: Option<&'p str>,
+) -> Result<(Vec<GameEntry>, Option<&'p str>), LibraryError> {
     let https = agent(identity, pin)?;
     let api = HostApi::new(addr, mgmt_port, stream_port, identity, pin);
-    let get = |path: &str| {
-        let body = api.call(&https, "GET", path, None)?.ok()?;
-        Ok(String::from_utf8_lossy(&body).into_owned())
-    };
-    let bad_reply = LibraryError::Unreachable;
-    let paged = walk_pages(
-        |cursor| {
-            let mut path = format!("/api/v1/library/page?limit={PAGE_LIMIT}");
-            if let Some(c) = cursor {
-                path.push_str("&cursor=");
-                path.push_str(&query_value(c));
-            }
-            get(&path)
-        },
-        bad_reply,
-    );
-    match paged {
-        Err(LibraryError::NotPaired | LibraryError::Http(404)) => {
-            let body = get("/api/v1/library")?;
-            serde_json::from_str(&body).map_err(|e| bad_reply(format!("bad JSON: {e}")))
-        }
-        walked => walked,
-    }
+    fetch_catalog(profile, |path| {
+        let reply = api.call(&https, "GET", path, None)?;
+        Ok((reply.status, reply.body))
+    })
 }
 
 /// One title currently launched, from `GET /api/v1/status`. Partial
@@ -551,28 +648,30 @@ impl DownloadProgress {
     /// What a launch screen says under the title: `12.3 GB of 26 GB · 48 MB/s · about 4 min
     /// left`, `Installing…`, `Waiting for its turn to download…`.
     pub fn line(&self) -> String {
+        use pf_l10n::client as m;
         match self.state.as_str() {
-            "queued" => return "Waiting for its turn to download\u{2026}".into(),
+            "queued" => return m::lib_download_queued().into(),
             "installing" => {
                 return self
                     .phase
                     .clone()
-                    .unwrap_or_else(|| "Installing\u{2026}".into())
+                    .unwrap_or_else(|| m::lib_download_installing().into())
             }
             _ => {}
         }
+        let done = human_bytes(self.done_bytes);
         let mut parts = vec![match self.total_bytes.filter(|t| *t > 0) {
-            Some(total) => format!("{} of {}", human_bytes(self.done_bytes), human_bytes(total)),
-            None => format!("{} so far", human_bytes(self.done_bytes)),
+            Some(total) => m::lib_download_progress(done, human_bytes(total)),
+            None => m::lib_download_so_far(done),
         }];
         if let Some(rate) = self.rate_bps.filter(|_| self.state == "downloading") {
-            parts.push(format!("{}/s", human_bytes(rate)));
+            parts.push(m::lib_download_rate(human_bytes(rate)));
         }
         if let Some(eta) = self.eta_s.filter(|_| self.state == "downloading") {
             parts.push(match eta {
-                0..60 => "less than a minute left".into(),
-                60..3600 => format!("about {} min left", (eta + 30) / 60),
-                _ => format!("about {} h {} min left", eta / 3600, (eta % 3600) / 60),
+                0..60 => m::lib_download_eta_soon().into(),
+                60..3600 => m::lib_download_eta_minutes((eta + 30) / 60),
+                _ => m::lib_download_eta_hours(eta / 3600, (eta % 3600) / 60),
             });
         }
         parts.join(" \u{b7} ")
@@ -580,13 +679,14 @@ impl DownloadProgress {
 
     /// Why a launch that waited on it didn't start the title; `None` while it may still.
     pub fn stopped(&self, title: &str) -> Option<String> {
+        use pf_l10n::client as m;
         Some(match self.state.as_str() {
             "failed" => match self.error.as_deref() {
-                Some(why) => format!("{title} didn't download \u{2014} {why}"),
-                None => format!("{title} didn't download."),
+                Some(why) => m::lib_download_failed_why(title, why),
+                None => m::lib_download_failed(title),
             },
-            "cancelled" => format!("{title}'s download was cancelled."),
-            "paused" => format!("{title}'s download was paused. Start it again to resume."),
+            "cancelled" => m::lib_download_cancelled(title),
+            "paused" => m::lib_download_paused(title),
             _ => return None,
         })
     }
@@ -630,31 +730,23 @@ impl InstallAction {
 
     /// The menu row: `Install · 26 GB (212 GB free)`, `Remove download · 26 GB`.
     pub fn label(self, install: Option<&TitleInstall>) -> String {
+        use pf_l10n::client as m;
         let size = install.and_then(|i| i.size_bytes).map(human_bytes);
         match self {
             InstallAction::Install => {
                 let free = install.and_then(|i| i.free_bytes).map(human_bytes);
                 match (size, free) {
-                    (Some(s), Some(f)) => format!("Install \u{b7} {s} ({f} free)"),
-                    (Some(s), None) => format!("Install \u{b7} {s}"),
-                    _ => "Install".into(),
+                    (Some(s), Some(f)) => m::lib_install_size_free(s, f),
+                    (Some(s), None) => m::lib_install_size(s),
+                    _ => m::lib_install().into(),
                 }
             }
-            InstallAction::Pause => "Pause download".into(),
-            InstallAction::Resume => "Resume download".into(),
+            InstallAction::Pause => m::lib_download_pause().into(),
+            InstallAction::Resume => m::lib_download_resume().into(),
             InstallAction::Remove => match size {
-                Some(s) => format!("Remove download \u{b7} {s}"),
-                None => "Remove download".into(),
+                Some(s) => m::lib_download_remove_size(s),
+                None => m::lib_download_remove().into(),
             },
-        }
-    }
-
-    fn verb(self) -> &'static str {
-        match self {
-            InstallAction::Install => "install",
-            InstallAction::Pause => "pause",
-            InstallAction::Resume => "resume",
-            InstallAction::Remove => "remove",
         }
     }
 }
@@ -673,9 +765,10 @@ impl TileBadge {
         install: Option<&TitleInstall>,
         download: Option<&DownloadProgress>,
     ) -> Option<TileBadge> {
+        use pf_l10n::client as m;
         let pct = |d: &DownloadProgress| match d.fraction() {
-            Some(f) => format!("{} %", (f * 100.0).floor()),
-            None => "Queued".into(),
+            Some(f) => m::lib_badge_percent((f * 100.0).floor()),
+            None => m::lib_badge_queued().into(),
         };
         match download {
             Some(d) if d.live() => Some(TileBadge {
@@ -688,7 +781,7 @@ impl TileBadge {
             }),
             Some(d) if d.state == "failed" => Some(TileBadge {
                 icon: "alert",
-                text: "Not installed".into(),
+                text: m::lib_badge_not_installed().into(),
             }),
             _ => {
                 let install = install.filter(|i| i.missing())?;
@@ -697,7 +790,7 @@ impl TileBadge {
                     text: install
                         .size_bytes
                         .map(human_bytes)
-                        .unwrap_or_else(|| "Not installed".into()),
+                        .unwrap_or_else(|| m::lib_badge_not_installed().into()),
                 })
             }
         }
@@ -716,35 +809,34 @@ pub enum InstallOutcome {
 }
 
 impl InstallOutcome {
-    /// A non-2xx answer: the host's sentence from its `{"error": …}` body when it sent one,
-    /// else the route is missing.
+    /// A non-2xx answer: the host's sentence from its `ApiError` body when it sent one,
+    /// worded by its code ([`crate::host_text::api_error`]), else the route is missing.
     pub fn from_reply(code: u16, body: &str) -> InstallOutcome {
-        let said = serde_json::from_str::<serde_json::Value>(body)
-            .ok()
-            .and_then(|v| v["error"].as_str().map(str::to_string));
-        match (code, said) {
+        match (code, crate::host_text::api_error(body)) {
             (200..=299, _) => InstallOutcome::Done,
-            (_, Some(m)) if !m.is_empty() => InstallOutcome::Refused(m),
+            (_, Some(m)) => InstallOutcome::Refused(m),
             (401 | 404 | 405, _) => InstallOutcome::Unsupported,
-            (code, _) => InstallOutcome::Failed(format!("the host refused it ({code})")),
+            (code, _) => InstallOutcome::Failed(pf_l10n::client::error_mgmt_refused(code)),
         }
     }
 
     /// The player-facing line. The Swift and Kotlin clients use the same words.
     pub fn notice(&self, action: InstallAction, title: &str) -> String {
+        use pf_l10n::client as m;
         match self {
             InstallOutcome::Done => match action {
-                InstallAction::Install | InstallAction::Resume => format!("Downloading {title}."),
-                InstallAction::Pause => format!("Paused {title}'s download."),
-                InstallAction::Remove => format!("Removed {title}. Saves stay on the host."),
+                InstallAction::Install | InstallAction::Resume => m::lib_install_started(title),
+                InstallAction::Pause => m::lib_download_paused_done(title),
+                InstallAction::Remove => m::lib_removed(title),
             },
             InstallOutcome::Refused(why) => why.clone(),
-            InstallOutcome::Unsupported => {
-                "This host needs an update to manage games from here.".into()
-            }
-            InstallOutcome::Failed(why) => {
-                format!("Couldn't {} {title} \u{2014} {why}", action.verb())
-            }
+            InstallOutcome::Unsupported => m::lib_install_unsupported().into(),
+            InstallOutcome::Failed(why) => match action {
+                InstallAction::Install => m::lib_install_failed(title, why),
+                InstallAction::Pause => m::lib_pause_failed(title, why),
+                InstallAction::Resume => m::lib_resume_failed(title, why),
+                InstallAction::Remove => m::lib_remove_failed(title, why),
+            },
         }
     }
 }
@@ -778,8 +870,7 @@ pub fn change_install(
 }
 
 /// `id` as one URL path segment: unreserved characters and `:` stay, the rest is escaped.
-#[cfg(desktop)]
-fn path_segment(id: &str) -> String {
+pub(crate) fn path_segment(id: &str) -> String {
     id.bytes()
         .map(|b| match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b':' => {
@@ -792,19 +883,22 @@ fn path_segment(id: &str) -> String {
 
 /// Decimal units, as stores count: `12.3 GB`, `48 MB`, `512 kB`.
 pub fn human_bytes(n: u64) -> String {
-    let n = n as f64;
-    let (value, unit) = if n >= 1e9 {
-        (n / 1e9, "GB")
-    } else if n >= 1e6 {
-        (n / 1e6, "MB")
-    } else {
-        (n / 1e3, "kB")
+    use pf_l10n::common as m;
+    let num = |value: f64| {
+        let rounded = (value * 10.0).round() / 10.0;
+        if value >= 100.0 || rounded.fract() == 0.0 {
+            format!("{value:.0}")
+        } else {
+            format!("{rounded:.1}")
+        }
     };
-    let rounded = (value * 10.0).round() / 10.0;
-    if value >= 100.0 || rounded.fract() == 0.0 {
-        format!("{value:.0} {unit}")
+    let n = n as f64;
+    if n >= 1e9 {
+        m::common_size_gb(num(n / 1e9))
+    } else if n >= 1e6 {
+        m::common_size_mb(num(n / 1e6))
     } else {
-        format!("{rounded:.1} {unit}")
+        m::common_size_kb(num(n / 1e3))
     }
 }
 
@@ -842,18 +936,19 @@ impl GameEnd {
             409 => GameEnd::NotRunning,
             401 | 404 => GameEnd::Unsupported,
             403 => GameEnd::Expired,
-            code => GameEnd::Failed(format!("the host refused it ({code})")),
+            code => GameEnd::Failed(pf_l10n::client::error_mgmt_refused(code)),
         }
     }
 
     /// The player-facing line. The Swift, Kotlin and web clients use the same words.
     pub fn notice(&self, title: &str) -> String {
+        use pf_l10n::client as m;
         match self {
-            GameEnd::Ended => format!("Ended {title}."),
-            GameEnd::NotRunning => format!("{title} isn't running any more."),
-            GameEnd::Unsupported => "This host needs an update to end games from here.".into(),
-            GameEnd::Expired => "This device's access to the host has expired.".into(),
-            GameEnd::Failed(why) => format!("Couldn't end {title} \u{2014} {why}"),
+            GameEnd::Ended => m::lib_end_game_done(title),
+            GameEnd::NotRunning => m::lib_end_game_not_running(title),
+            GameEnd::Unsupported => m::lib_end_game_unsupported().into(),
+            GameEnd::Expired => m::lib_end_game_expired().into(),
+            GameEnd::Failed(why) => m::lib_end_game_failed(title, why),
         }
     }
 }
@@ -1031,6 +1126,12 @@ impl<T: Clone + Send + 'static> FpCache<T> {
 
     pub(crate) fn invalidate(&self, fp_hex: &str) {
         self.map().remove(fp_hex);
+    }
+
+    /// Store rows a caller fetched itself, as fresh as a [`FpCache::refresh`] landing now.
+    pub(crate) fn put(&self, fp_hex: &str, rows: Vec<T>) {
+        self.map()
+            .insert(fp_hex.to_string(), (Instant::now(), rows));
     }
 }
 
@@ -1338,7 +1439,6 @@ mod tests {
     use super::*;
 
     /// A host's opaque cursor survives the query string whatever it holds.
-    #[cfg(desktop)]
     #[test]
     fn a_cursor_is_percent_encoded() {
         assert_eq!(query_value("a1-_.~"), "a1-_.~");
@@ -1553,9 +1653,9 @@ mod tests {
             ..Default::default()
         };
         let live = badge(Some(&missing), Some(&d("downloading", Some(1000)))).unwrap();
-        assert_eq!((live.icon, live.text.as_str()), ("download", "42 %"));
+        assert_eq!((live.icon, live.text.as_str()), ("download", "42%"));
         let paused = badge(Some(&missing), Some(&d("paused", Some(1000)))).unwrap();
-        assert_eq!((paused.icon, paused.text.as_str()), ("pause", "42 %"));
+        assert_eq!((paused.icon, paused.text.as_str()), ("pause", "42%"));
         assert_eq!(
             badge(Some(&missing), Some(&d("queued", None)))
                 .unwrap()
@@ -1590,6 +1690,17 @@ mod tests {
             ),
             "Quit Quail first."
         );
+        // The code outranks the English beside it: it is the message in the app's language.
+        let coded =
+            r#"{"error":"Quit the game first.","code":"title_in_use","params":{"title":"Quail"}}"#;
+        assert_eq!(
+            notice(409, coded, InstallAction::Remove),
+            "Quit Quail first."
+        );
+        pf_l10n::with_language("en-XA", || {
+            let said = notice(409, coded, InstallAction::Remove);
+            assert!(said.starts_with('[') && said.contains("Quail"), "{said}");
+        });
         assert_eq!(
             notice(404, "", InstallAction::Pause),
             "This host needs an update to manage games from here."
@@ -1613,7 +1724,7 @@ mod tests {
         assert_eq!(GameEnd::from_status(403), GameEnd::Expired);
         assert_eq!(
             GameEnd::NotRunning.notice("Hades"),
-            "Hades isn't running any more."
+            "Hades isn't running anymore."
         );
     }
 
@@ -1759,7 +1870,7 @@ mod tests {
     #[test]
     fn a_walk_ends_on_a_cursor_that_does_not_move() {
         let mut calls = 0;
-        let games = walk_pages(
+        let games = walk_pages::<GameEntry, _>(
             |_| {
                 calls += 1;
                 Ok::<_, String>(page(&["a"], Some("stuck")))
@@ -1776,7 +1887,7 @@ mod tests {
 
     #[test]
     fn a_failed_page_fails_the_walk() {
-        let walked = walk_pages(
+        let walked = walk_pages::<GameEntry, _>(
             |cursor| match cursor {
                 None => Ok(page(&["a"], Some("c1"))),
                 Some(_) => Err("the host went away".to_string()),
@@ -1784,13 +1895,118 @@ mod tests {
             |why| why,
         );
         assert_eq!(walked.unwrap_err(), "the host went away");
-        let undecodable = walk_pages(|_| Ok::<_, String>("[]".into()), |why| why);
+        let undecodable = walk_pages::<GameEntry, _>(|_| Ok::<_, String>("[]".into()), |why| why);
         assert!(undecodable.unwrap_err().starts_with("bad JSON"));
+    }
+
+    #[derive(Deserialize)]
+    struct ProfileVectors {
+        cases: Vec<ProfileCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct ProfileCase {
+        name: String,
+        pick: Option<String>,
+        host: std::collections::BTreeMap<String, HostAnswer>,
+        expect: ProfileExpect,
+    }
+
+    #[derive(Deserialize)]
+    struct HostAnswer {
+        status: u16,
+        body: serde_json::Value,
+    }
+
+    #[derive(Deserialize)]
+    struct ProfileExpect {
+        asked: Vec<String>,
+        #[serde(rename = "as")]
+        served: Option<String>,
+        ids: Option<Vec<String>>,
+    }
+
+    #[test]
+    fn a_library_fetch_follows_the_shared_profile_vectors() {
+        let raw = include_str!("../../../../clients/shared/library-profile-vectors.json");
+        let v: ProfileVectors = serde_json::from_str(raw).expect("vectors parse");
+        assert!(!v.cases.is_empty());
+        for c in v.cases {
+            let mut asked = Vec::new();
+            let shown = fetch_catalog(c.pick.as_deref(), |path| {
+                asked.push(path.to_string());
+                Ok(c.host.get(path).map_or((404, Vec::new()), |a| {
+                    (a.status, a.body.to_string().into_bytes())
+                }))
+            });
+            assert_eq!(asked, c.expect.asked, "{}: asked", c.name);
+            let served = shown.as_ref().ok().and_then(|(_, p)| p.map(str::to_string));
+            assert_eq!(served, c.expect.served, "{}: as", c.name);
+            let shown = shown
+                .ok()
+                .map(|(g, _)| g.into_iter().map(|g| g.id).collect());
+            assert_eq!(shown, c.expect.ids, "{}: ids", c.name);
+        }
     }
 
     #[test]
     fn ipv6_base_url_is_bracketed() {
         assert_eq!(base_url("fe80::1", 47990), "https://[fe80::1]:47990");
         assert_eq!(base_url("192.168.1.42", 1234), "https://192.168.1.42:1234");
+    }
+
+    /// The host line names a shared override, else the values it set, and nothing for none.
+    #[test]
+    fn the_host_line_names_the_set_or_its_values() {
+        let named = GameOverrides {
+            name: Some("1080p60 DualSense".into()),
+            lines: Some(1080),
+            ..Default::default()
+        };
+        assert_eq!(
+            host_line(&named).as_deref(),
+            Some("Host: 1080p60 DualSense")
+        );
+        let values = GameOverrides {
+            lines: Some(1080),
+            hz: Some(60),
+            hdr: Some(false),
+            gamepad: Some("dualsense".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            host_line(&values).as_deref(),
+            Some("Host: 1080p60, HDR off, DualSense")
+        );
+        let hz = GameOverrides {
+            hz: Some(120),
+            ..Default::default()
+        };
+        assert_eq!(host_line(&hz).as_deref(), Some("Host: 120 Hz"));
+        assert_eq!(host_line(&GameOverrides::default()), None);
+        let beyond = GameOverrides {
+            beyond_screen: true,
+            ..Default::default()
+        };
+        assert_eq!(host_line(&beyond), None, "the option alone shows nothing");
+    }
+
+    /// A catalog entry keeps the host's overrides through the cache's write and read.
+    #[test]
+    fn a_game_entry_round_trips_its_overrides() {
+        let wire = r#"{"id":"steam:570","store":"steam","title":"Dota 2",
+            "overrides":{"name":"4K","lines":2160,"beyond_screen":true,"future":1}}"#;
+        let g: GameEntry = serde_json::from_str(wire).unwrap();
+        let o = g.overrides.clone().expect("decoded");
+        assert_eq!(
+            (o.name.as_deref(), o.lines, o.beyond_screen),
+            (Some("4K"), Some(2160), true)
+        );
+        let back: GameEntry = serde_json::from_str(&serde_json::to_string(&g).unwrap()).unwrap();
+        assert_eq!(back.overrides, Some(o));
+        let plain: GameEntry =
+            serde_json::from_str(r#"{"id":"a","store":"steam","title":"A"}"#).unwrap();
+        assert!(plain.overrides.is_none());
+        assert!(!serde_json::to_string(&plain).unwrap().contains("overrides"));
     }
 }

@@ -9,7 +9,7 @@ use crate::h264::PicId;
 
 /// What the backend was last told, plus the unclean marks behind
 /// `references_clean`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct AuReporter {
     /// Display-ready pictures. Not cleared on a failed AU: the next
     /// [`DpbUpdate`] carries them, so an error cannot swallow a frame.

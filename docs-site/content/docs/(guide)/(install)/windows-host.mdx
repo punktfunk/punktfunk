@@ -37,9 +37,9 @@ The wizard's **Configure** step lists what it sets up. The defaults suit most PC
 | Row | What it is | Default | Task |
 | --- | --- | --- | --- |
 | **Virtual display driver** | The display the host streams from. Required. | on | `installdriver` |
-| **Gamepad drivers** | Controllers arrive as real gamepads. | on | `installgamepad` |
+| **Controller drivers** | Controllers arrive as real gamepads. | on | `installgamepad` |
 | **HDR Vulkan layer** | HDR for Vulkan and DXVK games. | on | `installhdrlayer` |
-| **Moonlight compat** | GameStream for stock [Moonlight](/docs/moonlight). Trusted LAN only. | off | `gamestream` |
+| **Moonlight support** | GameStream for stock [Moonlight](/docs/moonlight). Trusted LAN only. | off | `gamestream` |
 | **Public-network firewall rules** | Opens the firewall on networks marked Public too. | off | `allowpublicfw` |
 | **Start the service** | Streams as soon as setup finishes. | on | `startservice` |
 | **Tray autostart** | The status icon next to the clock. The console can change it later. | on | `trayicon` |
@@ -49,7 +49,7 @@ The wizard's **Configure** step lists what it sets up. The defaults suit most PC
 - **Network set to Public?** The wizard offers to make it Private or to open the firewall there.
   Skip both and clients can't connect ([Windows firewall](/docs/troubleshooting#windows-firewall)).
 - **Sunshine, Apollo, Vibeshine, Vibepollo or LuminalShine set to start on its own?** Setup moves
-  Punktfunk's management API to TCP 47991 and keeps Moonlight compat off
+  Punktfunk's management API to TCP 47991 and keeps Moonlight support off
   ([Switching from Sunshine](/docs/switching-from-sunshine)).
 
 ### winget
@@ -66,8 +66,7 @@ punktfunk-host-setup-<ver>.exe /VERYSILENT /SUPPRESSMSGBOXES
 
 Change a default with `/MERGETASKS` and the task names above: a bare name turns a task on, `!name`
 turns it off. `/WEBBIND=localhost` keeps the console on this PC (`lan` or an address also work).
-With winget, pass the whole line through `--override`; `--custom` appends and leaves two
-`/MERGETASKS`:
+With winget, pass the whole line through `--override`:
 
 ```powershell
 winget install unom.PunktfunkHost --override "/VERYSILENT /SUPPRESSMSGBOXES /MERGETASKS=gamestream"
@@ -87,11 +86,8 @@ The drivers carry a separate self-signed certificate (`CN=punktfunk-driver`, SHA
 
 ## Pair
 
-1. Open `https://<this-PC>:47992` from any browser on your network. It warns once about the
-   certificate; continue.
-2. Sign in with the console password. Lost it? See
-   [Login password](/docs/web-console#login-password).
-3. Go to **Devices** → **Pair a device** and enter the PIN on your [client](/docs/clients).
+**Next:** [Quick Start, step 3](/docs/quickstart#3-open-the-web-console): open the console and pair
+a device.
 
 ## Good to know
 
@@ -100,7 +96,7 @@ The drivers carry a separate self-signed certificate (`CN=punktfunk-driver`, SHA
   While **Tray autostart** is on, the service restarts the icon if it closes;
   [`punktfunk-host tray`](/docs/host-cli#tray-windows) controls it by hand. **Punktfunk Host** in
   the Start menu opens it and starts a stopped host.
-- **Settings.** Change them in the console under **Host**; Moonlight compat is
+- **Settings.** Change them in the console under **Host**; **Moonlight support** is
   **GameStream** there. A line in `%ProgramData%\punktfunk\host.env` pins a setting. After editing
   it, run `punktfunk-host service restart` from an elevated prompt. See
   [Configuration](/docs/configuration).
@@ -111,8 +107,8 @@ The drivers carry a separate self-signed certificate (`CN=punktfunk-driver`, SHA
 - **HDR.** For a 10-bit session the host turns HDR on for its virtual display; you never touch
   **Use HDR** in Windows. See [HDR → Windows](/docs/hdr#windows).
 - **Logs.** `%ProgramData%\punktfunk\logs\` holds `service.log` and `host.log`, each rotated at
-  10 MB. Only Administrators can read them, so use an elevated PowerShell or the console's
-  **Troubleshooting** page. `RUST_LOG=debug` in `host.env` adds detail.
+  10 MB. Only Administrators can read them, so use an elevated PowerShell or **Diagnostics** →
+  **Troubleshooting** in the console. `RUST_LOG=debug` in `host.env` adds detail.
 - **Several people, taking turns.** Give each person their own account, Steam and saves with a
   [take-turns profile](/docs/profiles#on-windows) — any edition, no extra licence. Playing at the
   **same time** is the part that needs **Windows Server** and a Remote Desktop Services CAL per
@@ -135,5 +131,5 @@ Open **Settings** → **Apps** → **Installed apps** → **Punktfunk Host** →
 service, the status icon and its Start menu entry, the virtual display, gamepad and audio devices
 with the driver certificate, the scheduled task, the firewall rules, the HDR layer and the `PATH`
 entry. `%ProgramData%\punktfunk` stays, so
-a reinstall keeps your identity and pairings; [Uninstall → Windows host](/docs/uninstall#windows-host)
+a reinstall keeps your identity and pairings; [Uninstall → Windows host](/docs/uninstall-windows)
 clears it.

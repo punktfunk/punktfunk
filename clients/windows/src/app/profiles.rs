@@ -13,6 +13,7 @@ use pf_client_core::library::HostApi;
 use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::profiles::{self, Decision, ListedProfile, ProfilePick, SeatGate};
 use pf_fluent::Palette;
+use pf_l10n::{client, common};
 use punktfunk_core::quic::v2::msg::ProfileUnlock;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -502,7 +503,7 @@ pub(crate) fn seat_slot(
     };
     let click = cancel.clone();
     body.push(
-        button("Cancel")
+        button(common::common_cancel())
             .on_click(click)
             .horizontal_alignment(HorizontalAlignment::Right)
             .into(),
@@ -519,23 +520,23 @@ pub(crate) fn picker_slot(
     let Some(a) = ask else {
         return Border::new().into();
     };
-    let mut body: Vec<View> = vec![text(format!("Who\u{2019}s playing on {}?", a.host))
+    let mut body: Vec<View> = vec![text(client::profile_title(&a.host))
         .font_size(20.0)
         .font_weight(FontWeight::BOLD)
         .text_wrapping(TextWrapping::Wrap)
         .into()];
     if let Some(gone) = &a.gone {
-        body.push(quiet(pal, format!("{gone} is gone from this host.")));
+        body.push(quiet(pal, client::profile_gone(gone)));
     }
-    let mut close_label = "Cancel";
+    let mut close_label = common::common_cancel();
     match a.listed.as_deref() {
         None => {
-            body.push(quiet(pal, "Couldn\u{2019}t load the profiles.".into()));
-            close_label = "Close";
+            body.push(quiet(pal, client::profile_load_failed().into()));
+            close_label = common::common_close();
         }
         Some(l) if l.is_empty() => {
-            body.push(quiet(pal, "No profiles on this host.".into()));
-            close_label = "Close";
+            body.push(quiet(pal, client::profile_none().into()));
+            close_label = common::common_close();
         }
         Some(l) => {
             // The saved pick leads; the sort is stable, so the host's order holds after it.

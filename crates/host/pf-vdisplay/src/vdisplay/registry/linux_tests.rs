@@ -555,6 +555,67 @@ fn a_kept_display_goes_back_to_its_owner() {
     });
 }
 
+/// A device's kept display goes back to it only under the topology it was made under. Under
+/// another it is retired, its group's restore first, and the acquire creates.
+#[test]
+fn a_kept_display_is_reused_only_under_its_topology() {
+    in_child(
+        "a_kept_display_is_reused_only_under_its_topology",
+        KEPT,
+        || {
+            use crate::policy::Topology;
+            let fake = owned_by(1);
+            fake.script(|s| {
+                s.restore = true;
+                s.topology = Some(Topology::Exclusive);
+            });
+            drop(acquire(&fake, MODE, false));
+            let again = acquire(&fake, MODE, false);
+            assert!(again.reused_gen.is_some(), "the same topology reuses it");
+            drop(again);
+            fake.take_calls();
+
+            fake.script(|s| s.topology = Some(Topology::Extend));
+            let out = acquire(&fake, MODE, false);
+            let mut want = vec![Call::RestoreRan(1), Call::KeepaliveDropped(1)];
+            want.extend(created(true, MODE));
+            assert_eq!(fake.take_calls(), want);
+            assert!(out.reused_gen.is_none());
+            assert_eq!(pool(), [("kwin", lifecycle::State::Active { refs: 1 })]);
+        },
+    );
+}
+
+/// The monitors are off by every device on a group one of whose live or kept displays was made
+/// `exclusive`; an extended desk keeps them on. Another device's acquire under another
+/// topology leaves that display alone.
+#[test]
+fn the_monitors_are_off_by_a_group_with_an_exclusive_display() {
+    let name = "the_monitors_are_off_by_a_group_with_an_exclusive_display";
+    in_child(name, KEPT, || {
+        use crate::policy::Topology;
+        let (only, second) = (owned_by(1), owned_by(2));
+        only.script(|s| s.topology = Some(Topology::Exclusive));
+        second.script(|s| s.topology = Some(Topology::Extend));
+        let first = acquire(&second, MODE, false);
+        assert!(crate::monitors_off_by().is_empty(), "an extended desk");
+        drop(first);
+        drop(acquire(&only, MODE, false));
+        second.take_calls();
+        let _live = acquire(&second, MODE, false);
+        assert_eq!(second.take_calls(), [Call::KeptDisplayAlive(1)]);
+        let hex = |n: u8| crate::policy::fp_hex(Some([n; 32]));
+        assert_eq!(crate::monitors_off_by(), [hex(2), hex(1)]);
+        assert!(matches!(
+            pool().as_slice(),
+            [
+                ("kwin", lifecycle::State::Active { refs: 1 }),
+                ("kwin", lifecycle::State::Lingering { .. }),
+            ]
+        ));
+    });
+}
+
 /// A kept display with no owner goes to the first device that asks, and is that device's from
 /// then on: `/display/state` shows its slot, and a shared device no longer takes it.
 #[test]
@@ -725,6 +786,40 @@ fn a_mode_switch_successor_takes_the_group_from_the_display_it_replaces() {
             [Call::RestoreRan(1), Call::KeepaliveDropped(2)]
         );
     });
+}
+
+/// A joiner takes a hold on its owner's display, under the owner's generation. Once the owner
+/// leaves, the joiner's mode switch acquires as an owner and retires what it joined: one
+/// display, at the new mode, held once.
+#[test]
+fn a_lone_joiners_mode_switch_leaves_one_display_of_its_own() {
+    in_child(
+        "a_lone_joiners_mode_switch_leaves_one_display_of_its_own",
+        KEPT,
+        || {
+            let owner = FakeDisplay::new("kwin");
+            owner.script(|s| s.output_name = Some("Virtual-1"));
+            let owned = acquire(&owner, MODE, false);
+            let generation = owned.pool_gen.expect("pooled");
+            let joiner = FakeDisplay::new("kwin");
+            joiner.script(|s| s.join_live = true);
+            let joined = acquire(&joiner, MODE, false);
+            assert_eq!(joined.pool_gen, Some(generation));
+            assert!(registry::shared(generation), "owner and joiner");
+            drop(owned);
+            assert!(!registry::shared(generation), "the joiner alone");
+
+            joiner.script(|s| s.join_live = false);
+            let quit = Arc::new(AtomicBool::new(false));
+            let own = registry::acquire(&mut joiner.boxed(), QHD, quit, Some(generation))
+                .expect("its own display");
+            drop(joined);
+            registry::retire(generation);
+            assert_eq!(modes(), [QHD]);
+            assert_eq!(pool(), [("kwin", lifecycle::State::Active { refs: 1 })]);
+            drop(own);
+        },
+    );
 }
 
 /// `Entry::drop`: gamescope is the one virtual output that offers HDR, so only its

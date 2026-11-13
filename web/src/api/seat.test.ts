@@ -2,8 +2,15 @@ import { afterEach, expect, test } from "bun:test";
 import { MutationObserver, QueryClient } from "@tanstack/react-query";
 import type { CatalogEntry } from "@/api/gen/model";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
-import { apiFetch } from "./fetcher";
-import { isFullSeat, seatChoices, seatClient } from "./seat";
+import { ApiError, apiFetch } from "./fetcher";
+import {
+	isFullSeat,
+	onProfileGone,
+	scopeChoices,
+	seatChoices,
+	seatClient,
+	whose,
+} from "./seat";
 import { installable } from "./store";
 
 const KID = "0a1b2c3d4e5f";
@@ -89,6 +96,93 @@ test("a seat on a person's own account is marked with its host's platform", () =
 	]);
 });
 
+const OWNER = "4f1c3a9b0e27";
+const owner = profile({ id: OWNER, owner: true, display_name: "Enrico" });
+const sharer = profile({ id: "0b7d5e2a91c4", display_name: "Anna" });
+const turns = profile({
+	id: "1c2d3e4f5a6b",
+	display_name: "Tom",
+	seat: { ...seat, take_turns: true } as typeof seat,
+});
+const own = profile({
+	id: "3d5f7b9a1c3e",
+	display_name: "Oma",
+	seat: { ...seat, account: "oma" } as typeof seat,
+});
+const made = profile({ display_name: "Kid", seat });
+
+test("the library offers the owner and then every profile, each seen as itself", () => {
+	const all = [owner, sharer, turns, made, own];
+	expect(scopeChoices("library", all, "windows")).toEqual([
+		{ id: null, name: "Enrico", seat: null },
+		{ id: sharer.id, name: "Anna", seat: null, as: sharer.id },
+		{ id: turns.id, name: "Tom", seat: null, as: turns.id },
+		// Only a desktop the box made runs games of its own.
+		{ id: KID, name: "Kid", seat: null, as: KID, ownGames: true },
+		{ id: own.id, name: "Oma", seat: null, as: own.id },
+	]);
+	// A door has no library of its own: every view is read from the owner's host.
+	const shared = profile({
+		id: "5a7c9e1b3d5f",
+		display_name: "Mia",
+		seat: { ...seat, kind: "shared" } as typeof seat,
+	});
+	const linuxOwn = profile({
+		id: own.id,
+		display_name: "Oma",
+		seat: { ...seat, account: "oma" } as typeof seat,
+	});
+	const door = scopeChoices(
+		"library",
+		[owner, sharer, shared, made, linuxOwn],
+		"linux",
+		true,
+	);
+	const ownerSeat = { id: OWNER, name: "Enrico" };
+	expect(door).toEqual([
+		{ id: null, name: "Enrico", seat: ownerSeat },
+		{ id: sharer.id, name: "Anna", seat: ownerSeat, as: sharer.id },
+		{ id: shared.id, name: "Mia", seat: ownerSeat, as: shared.id },
+		{ id: KID, name: "Kid", seat: ownerSeat, as: KID, ownGames: true },
+		{ id: own.id, name: "Oma", seat: ownerSeat, as: own.id },
+	]);
+	// A Linux box with no door has no desktop of a profile's own.
+	expect(
+		scopeChoices("library", [owner, made], "linux")[1]?.ownGames,
+	).toBeUndefined();
+	// One person: one choice, so the title stays plain.
+	expect(scopeChoices("library", [owner], "linux")).toHaveLength(1);
+	expect(scopeChoices("library", undefined, undefined)).toHaveLength(1);
+});
+
+test("plugins and automation offer the owner and the seats with a host of their own", () => {
+	const all = [owner, sharer, turns, made, own];
+	const seats = [
+		{ id: null, name: "Enrico", seat: null },
+		{ id: KID, name: "Kid", seat: { id: KID, name: "Kid" } },
+		{
+			id: own.id,
+			name: "Oma",
+			seat: { id: own.id, name: "Oma", own: "windows" },
+		},
+	];
+	expect(scopeChoices("plugins", all, "windows")).toEqual(seats);
+	expect(scopeChoices("automation", all, "windows")).toEqual(seats);
+	// On a door the owner's plugins are on its seat; its hooks the door forwards itself.
+	const desk = profile({
+		id: "7e1f3b5d9a2c",
+		display_name: "Leon",
+		seat: { port: 9779, state: "ready", kind: "desktop" },
+	});
+	const door = [{ ...owner, seat: { ...seat, kind: "shared" } }, desk];
+	expect(scopeChoices("plugins", door, "linux", true)[0]?.seat).toEqual({
+		id: OWNER,
+		name: "Enrico",
+	});
+	expect(scopeChoices("automation", door, "linux", true)[0]?.seat).toBeNull();
+	expect(scopeChoices("automation", door, "linux", true)).toHaveLength(2);
+});
+
 const entry = (id: string, tier: string): CatalogEntry =>
 	({ id, tier, source: "unom", pkg: id }) as CatalogEntry;
 
@@ -131,6 +225,33 @@ test("a seat's writes go to the seat's host", async () => {
 	expect(urls).toEqual([`/api/v1/profiles/${KID}/proxy/library/custom`]);
 });
 
+test("a profile the host no longer has is reported once per failed call", async () => {
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false } },
+	});
+	const gone = new ApiError(404, {
+		error: "That profile is gone from this host. Pick another one.",
+		code: "profile_unknown",
+	});
+	const seen: boolean[] = [];
+	const stop = onProfileGone(client, (_e, read) => seen.push(read));
+	const fail = (e: unknown) => () => Promise.reject(e);
+	await client
+		.fetchQuery({ queryKey: ["anna"], queryFn: fail(gone) })
+		.catch(() => {});
+	await client
+		.fetchQuery({ queryKey: ["busy"], queryFn: fail(new ApiError(409, {})) })
+		.catch(() => {});
+	await new MutationObserver(client, { mutationFn: fail(gone) })
+		.mutate()
+		.catch(() => {});
+	stop();
+	await client
+		.fetchQuery({ queryKey: ["later"], queryFn: fail(gone) })
+		.catch(() => {});
+	expect(seen).toEqual([true, false]);
+});
+
 test("a seat's cache is kept and takes the box's defaults", () => {
 	const root = new QueryClient({
 		defaultOptions: { queries: { staleTime: 7 } },
@@ -139,4 +260,12 @@ test("a seat's cache is kept and takes the box's defaults", () => {
 	expect(seatClient("a".repeat(32), root)).toBe(kid);
 	expect(kid).not.toBe(root);
 	expect(kid.getDefaultOptions().queries?.staleTime).toBe(7);
+});
+
+test("the operator reads a profile's marks by name, the person reads them as theirs", () => {
+	const theirs = Object.values(whose("Anna", false));
+	const yours = Object.values(whose("Anna", true));
+	for (const line of theirs) expect(line).toContain("Anna");
+	for (const line of yours) expect(line).not.toContain("Anna");
+	expect(whose("Anna", true).own).toBe("Only for you");
 });

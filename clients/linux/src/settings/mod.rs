@@ -7,7 +7,8 @@
 //! value, and only the row's reset drops the pin.
 //!
 //! [`spec`] holds each row's key and text, [`field`] binds a row to its setting and writes it,
-//! [`pages`] lays the rows out, and [`presets`] is the scope switcher.
+//! [`pages`] lays the rows out, and [`presets`] is the scope switcher. [`quick_actions`] and
+//! [`shortcuts`] are the editors the Input page opens.
 
 mod about;
 mod choice;
@@ -15,6 +16,7 @@ mod field;
 mod pages;
 mod presets;
 pub mod quick_actions;
+pub mod shortcuts;
 mod spec;
 mod tables;
 
@@ -88,8 +90,9 @@ pub fn show_scoped(
         Some(p) => p.overrides.apply(&store.settings()),
         None => store.settings().clone(),
     };
+    shortcuts::show_scope(&seed);
     let dialog = adw::PreferencesDialog::new();
-    dialog.set_title("Preferences");
+    dialog.set_title(pf_l10n::desktop::desktop_preferences_title());
     dialog.set_search_enabled(true);
     // Wide enough that the page switcher sits in the header: the dialog moves it to a bottom
     // bar below 110 pt per page, ≈ 733 px for five.
@@ -111,7 +114,7 @@ pub fn show_scoped(
         show_advanced: None,
     };
     let switcher = presets::scope_group(&b, &scope, active.as_ref(), &next, parent.as_ref());
-    pages::general(&mut b, switcher);
+    pages::general(&mut b, switcher, &next);
     pages::display(&mut b);
     pages::input(&mut b);
     pages::audio(&mut b);

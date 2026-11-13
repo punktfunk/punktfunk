@@ -274,18 +274,36 @@ fn parse_spec_pkg(spec: &str) -> Option<String> {
     )
 }
 
-pub(crate) fn spawn_install(plan: Plan, plugin_tokens: PluginTokens) -> Result<String> {
-    let target = plan.pkg.clone().unwrap_or_else(|| plan.spec.clone());
-    let id = begin("install", &target)?;
-    let job_id = id.clone();
+/// Runs `work` for job `id` on a thread of its own and ends the job with its result. A refused
+/// spawn or a panic ends it `Failed`, so the single-flight slot always frees.
+fn spawn_worker(
+    name: &str,
+    id: &str,
+    work: impl FnOnce(&str) -> Result<()> + Send + 'static,
+) -> Result<()> {
+    let job_id = id.to_string();
     std::thread::Builder::new()
-        .name("pf-store-install".into())
+        .name(name.into())
         .spawn(move || {
-            let result = run_install(&job_id, plan, &plugin_tokens);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&job_id)))
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("the plugin worker panicked")));
             finish(&job_id, result);
             crate::events::emit(crate::events::EventKind::StoreChanged);
         })
-        .context("spawn the plugin-install worker")?;
+        .map(drop)
+        .map_err(|e| {
+            let e = anyhow::anyhow!("spawn the plugin worker: {e}");
+            finish(id, Err(anyhow::anyhow!("{e:#}")));
+            e
+        })
+}
+
+pub(crate) fn spawn_install(plan: Plan, plugin_tokens: PluginTokens) -> Result<String> {
+    let target = plan.pkg.clone().unwrap_or_else(|| plan.spec.clone());
+    let id = begin("install", &target)?;
+    spawn_worker("pf-store-install", &id, move |id| {
+        run_install(id, plan, &plugin_tokens)
+    })?;
     Ok(id)
 }
 
@@ -298,15 +316,9 @@ pub(crate) fn spawn_uninstall(
         bail!("not an installable plugin package name");
     }
     let id = begin("uninstall", &pkg)?;
-    let job_id = id.clone();
-    std::thread::Builder::new()
-        .name("pf-store-uninstall".into())
-        .spawn(move || {
-            let result = run_uninstall(&job_id, &pkg, &plugin_tokens, delete_titles);
-            finish(&job_id, result);
-            crate::events::emit(crate::events::EventKind::StoreChanged);
-        })
-        .context("spawn the plugin-uninstall worker")?;
+    spawn_worker("pf-store-uninstall", &id, move |id| {
+        run_uninstall(id, &pkg, &plugin_tokens, delete_titles)
+    })?;
     Ok(id)
 }
 
@@ -444,6 +456,11 @@ fn run_install(id: &str, plan: Plan, plugin_tokens: &PluginTokens) -> Result<()>
         },
     )
     .context("record install provenance")?;
+    // On a person's own account the store answers their lane alone: what it installs is theirs.
+    if pf_paths::seat::own_account() {
+        crate::plugins::manifest::mark_person(&pf_paths::config_dir(), &pkg, true)
+            .context("mark the plugin as the person's")?;
+    }
 
     refresh_plugin_tokens(id, plugin_tokens)?;
     start_runner(id);
@@ -487,6 +504,10 @@ fn run_uninstall(
     )?;
     set_phase(id, "recording");
     manifest::forget(&dir, pkg).context("update install provenance")?;
+    if pf_paths::seat::own_account() {
+        crate::plugins::manifest::mark_person(&pf_paths::config_dir(), pkg, false)
+            .context("unmark the person's plugin")?;
+    }
     if let Some(provider) = provider {
         match delete_titles(&provider) {
             Ok(n) if n > 0 => log_line(id, format!("removed {n} library titles of {provider}")),
@@ -772,6 +793,21 @@ mod tests {
         assert!(!busy());
         let second = begin("install", "@c/d").expect("a finished job frees the slot");
         finish(&second, Ok(()));
+    }
+
+    #[test]
+    fn a_panicking_worker_ends_its_job_failed() {
+        let _g = exclusive();
+        let id = begin("install", "@panic/test").unwrap();
+        spawn_worker("pf-store-test", &id, |_| panic!("worker panic")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while busy() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let job = get(&id).unwrap();
+        assert_eq!(job.state, State::Failed);
+        assert!(job.error.unwrap().contains("panicked"));
+        assert!(!busy(), "the slot is free for the next job");
     }
 
     #[test]

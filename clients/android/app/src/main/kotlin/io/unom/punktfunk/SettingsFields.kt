@@ -69,6 +69,9 @@ internal object SettingsFields {
             overlay({ it.echoCancel }, { o, v -> o.copy(echoCancel = v) })),
         field("keepHostAudio", "keep_host_audio", BoolKind, { it.keepHostAudio }, { s, v -> s.copy(keepHostAudio = v) },
             overlay({ it.keepHostAudio }, { o, v -> o.copy(keepHostAudio = v) })),
+        // A preset's alone: the host card holds the default. Pinning it empty clears the pin.
+        field("hostScreen", "host_screen", StrKind, { it.hostScreen }, { s, v -> s.copy(hostScreen = v) },
+            overlay({ it.hostScreen }, { o, v -> o.copy(hostScreen = v?.ifEmpty { null }) }), global = false),
         field("statsVerbosity", "stats_verbosity", StatsVerbosityKind, { it.statsVerbosity },
             { s, v -> s.copy(statsVerbosity = v) },
             overlay({ it.statsVerbosity }, { o, v -> o.copy(statsVerbosity = v) }),
@@ -119,6 +122,9 @@ internal object SettingsFields {
             overlay({ it.invertScroll }, { o, v -> o.copy(invertScroll = v) })),
         field("overlayActions", "overlay_actions", StrKind, { it.overlayActions }, { s, v -> s.copy(overlayActions = v) },
             overlay({ it.overlayActions }, { o, v -> o.copy(overlayActions = v) })),
+        // The console writes an empty blob for its Reset to defaults: there it is a value.
+        field("shortcuts", "shortcuts", StrKind, { it.shortcuts }, { s, v -> s.copy(shortcuts = v) },
+            overlay({ it.shortcuts }, { o, v -> o.copy(shortcuts = v) }), console = Console(BlobKind)),
         field("backOpensRing", "android.back_opens_ring", BoolKind, { it.backOpensRing },
             { s, v -> s.copy(backOpensRing = v) }, prefsKey = "back_opens_ring"),
         // Cross-client start-screen keys; the console writes the same two names.
@@ -145,7 +151,8 @@ internal object SettingsFields {
     /**
      * One field. [name] is the Kotlin property (the reflection check keys on it), [key] the JSON
      * key on the preset overlay and, unless [console] renames it, the console document;
-     * [prefsKey] the SharedPreferences key when it differs from [key].
+     * [prefsKey] the SharedPreferences key when it differs from [key]. A field that is not
+     * [global] lives in presets alone: the prefs and the console document never carry it.
      */
     class Field<T>(
         val name: String,
@@ -156,9 +163,13 @@ internal object SettingsFields {
         val set: (Settings, T) -> Settings,
         val overlay: Overlay<T>?,
         val console: Console<T>?,
+        val global: Boolean,
     ) {
-        fun load(s: Settings, p: SharedPreferences): Settings = set(s, kind.read(p, prefsKey, get(s)))
-        fun save(e: SharedPreferences.Editor, s: Settings) = kind.write(e, prefsKey, get(s))
+        fun load(s: Settings, p: SharedPreferences): Settings =
+            if (global) set(s, kind.read(p, prefsKey, get(s))) else s
+        fun save(e: SharedPreferences.Editor, s: Settings) {
+            if (global) kind.write(e, prefsKey, get(s))
+        }
 
         /** [base] under this field's override, if the overlay carries one. */
         fun applyOverlay(o: SettingsOverlay, base: Settings): Settings =
@@ -186,8 +197,11 @@ internal object SettingsFields {
 
         private val consoleKey get() = console?.key ?: key
         private val consoleKind get() = console?.kind ?: kind
-        fun consoleWrite(j: JSONObject, s: Settings) = consoleKind.write(j, consoleKey, get(s))
-        fun consoleRead(j: JSONObject, s: Settings): Settings = set(s, consoleKind.apply(j, consoleKey, get(s)))
+        fun consoleWrite(j: JSONObject, s: Settings) {
+            if (global) consoleKind.write(j, consoleKey, get(s))
+        }
+        fun consoleRead(j: JSONObject, s: Settings): Settings =
+            if (global) set(s, consoleKind.apply(j, consoleKey, get(s))) else s
     }
 
     class Overlay<T>(val get: (SettingsOverlay) -> T?, val set: (SettingsOverlay, T?) -> SettingsOverlay)
@@ -252,6 +266,14 @@ internal object SettingsFields {
         override fun read(p: SharedPreferences, k: String, def: String) = p.getString(k, def) ?: def
         override fun write(e: SharedPreferences.Editor, k: String, v: String) { e.putString(k, v) }
         override fun read(j: JSONObject, k: String): String? = if (j.has(k)) j.optString(k).ifEmpty { null } else null
+        override fun write(j: JSONObject, k: String, v: String) { j.put(k, v) }
+    }
+
+    /** A blob whose empty string is a value (this client's defaults), not an absent field. */
+    object BlobKind : Kind<String> {
+        override fun read(p: SharedPreferences, k: String, def: String) = p.getString(k, def) ?: def
+        override fun write(e: SharedPreferences.Editor, k: String, v: String) { e.putString(k, v) }
+        override fun read(j: JSONObject, k: String): String? = if (j.has(k)) j.optString(k) else null
         override fun write(j: JSONObject, k: String, v: String) { j.put(k, v) }
     }
 
@@ -334,7 +356,8 @@ internal object SettingsFields {
         overlay: Overlay<T>? = null,
         prefsKey: String = key,
         console: Console<T>? = null,
-    ) = Field(name, key, prefsKey, kind, get, set, overlay, console)
+        global: Boolean = true,
+    ) = Field(name, key, prefsKey, kind, get, set, overlay, console, global)
 
     private fun <T> overlay(get: (SettingsOverlay) -> T?, set: (SettingsOverlay, T?) -> SettingsOverlay) =
         Overlay(get, set)

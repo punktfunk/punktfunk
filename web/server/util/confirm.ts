@@ -22,11 +22,7 @@ import {
 	setResponseHeader,
 } from "h3";
 import { authConfigured, peerAddress, verifyUiPassword } from "./auth";
-import {
-	recordLoginFailure,
-	recordLoginSuccess,
-	throttleRetryAfterMs,
-} from "./loginThrottle";
+import { recordLoginSuccess, takeAttempt } from "./loginThrottle";
 
 /**
  * Verify the re-entered console password, or throw the right HTTP error (503 unconfigured,
@@ -46,7 +42,7 @@ export async function confirmPassword(
 		});
 	}
 	const ip = peerAddress(event);
-	const wait = throttleRetryAfterMs(ip);
+	const wait = takeAttempt(ip);
 	if (wait > 0) {
 		setResponseHeader(event, "Retry-After", Math.ceil(wait / 1000));
 		throw createError({
@@ -55,7 +51,6 @@ export async function confirmPassword(
 		});
 	}
 	if (!(await verifyUiPassword(String(password ?? "")))) {
-		recordLoginFailure(ip);
 		throw createError({
 			statusCode: 401,
 			statusMessage: "password confirmation failed",

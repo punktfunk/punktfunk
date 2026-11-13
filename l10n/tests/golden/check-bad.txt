@@ -1,0 +1,35 @@
+messages/one/en.json: Bad_Key: not a key; write <area>_<thing> in lowercase snake_case
+messages/one/en.json: one_brace: a { is never closed; write \{ for a literal brace
+messages/two/notes.json: missing; write {} for a part without notes
+glossary.json: needs terms, a list, and never_translate, a list of strings
+locales.json: ar ships without a plural rule in src/plural.rs
+messages/two/en.json: one_args: also in messages/one/en.json
+rules.json: debt: one_gone: no part has this key
+messages/one/de.json: one_ghost: not in messages/one/en.json
+messages/one/de.json: one_args: placeholders are {nom}, the source has {name}
+messages/one/notes.json: one_nothing: no message has this key
+messages/one/notes.json: one_args: has placeholders, so it needs a note
+messages/one/notes.json: one_pads: has placeholders, so it needs a note
+messages/one/en.json: one_pads: en plurals need one, other; this has other
+messages/one/en.json: one_label: 45 characters, over the budget of 40
+messages/one/en.json: one_wait_hint: "please": say what to do, without Please
+messages/one/en.json: one_done_title: "!": end with a period, not an exclamation mark
+messages/one/en.json: one_speed_hint: "Mbps" is retired; write "Mbit/s"
+messages/one/de.json: one_pads: de plurals need one, other; this has one, few, other
+messages/web/de.json: web_joined: placeholders are {count} {nom}, the source has {count} {name}
+messages/web/en.json: web_joined: 47 characters, over the budget of 30
+missing: messages/one/ar.json: one_label: not translated
+missing: messages/one/ar.json: one_wait_hint: not translated
+missing: messages/one/ar.json: one_done_title: not translated
+missing: messages/one/ar.json: one_speed_hint: not translated
+missing: messages/one/ar.json: one_args: not translated
+missing: messages/one/ar.json: one_pads: not translated
+missing: messages/one/ar.json: one_debt_hint: not translated
+missing: messages/one/de.json: one_label: not translated
+missing: messages/one/de.json: one_wait_hint: not translated
+missing: messages/one/de.json: one_done_title: not translated
+missing: messages/one/de.json: one_speed_hint: not translated
+missing: messages/one/de.json: one_debt_hint: not translated
+missing: messages/two/ar.json: one_args: not translated
+missing: messages/two/de.json: one_args: not translated
+missing: messages/web/ar.json: web_joined: not translated

@@ -288,6 +288,9 @@ pub(super) struct StreamState {
     /// The session's place among the seat's followers, left when it ends.
     #[cfg(target_os = "linux")]
     pub(super) following: Option<crate::seats::session_switch::Following>,
+    /// The watch on what the session's gamescope shows, for a session that follows its source.
+    #[cfg(target_os = "linux")]
+    pub(super) content: Option<super::session_watch::ContentFollow>,
     /// Screens past the first, when the session negotiated them. Before `send`: their loops
     /// hold senders the send thread waits out.
     pub(super) screens: Option<super::screens::ScreenSet>,
@@ -338,13 +341,13 @@ pub(in crate::native) fn video_format(
 }
 
 impl StreamState {
-    /// The encoder-rate derivation for a FEC percentage.
+    /// The encoder-rate derivation for an adaptive-FEC target.
     pub(super) fn enc_derive(&self, fec: u8) -> EncDerive {
         EncDerive {
             audio_kbps: self.facts.audio_reserved_kbps,
             shard_payload: self.facts.shard_payload,
-            fec_percent: fec,
-            head_only_hz: self.facts.pyrowave.then_some(self.live.cur_mode.refresh_hz),
+            fec_target: fec,
+            pyrowave_hz: self.facts.pyrowave.then_some(self.live.cur_mode.refresh_hz),
             share_permille: self
                 .shared
                 .screen_wire
@@ -354,11 +357,18 @@ impl StreamState {
     }
 
     /// Follow the further screens: the client's list, their layout, and the first screen's
-    /// share of the video, which its encoder retargets to in place.
+    /// share of the video at the size it encodes, which its encoder retargets to in place.
     pub(super) fn on_screens(&mut self) {
         let (mode, first_gen) = (self.delivered_mode(), self.live.cur_display_gen);
         if let Some(set) = self.screens.as_mut() {
-            set.poll(mode, first_gen);
+            let out = self
+                .shared
+                .frame_map
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .out;
+            let encoded = Some(out).filter(|&(w, h)| w > 0 && h > 0);
+            set.poll(mode, crate::session_plan::picture(mode, encoded), first_gen);
         }
         let share = self
             .shared
@@ -456,7 +466,7 @@ impl StreamState {
             bitrate_auto: self.facts.bitrate_auto,
             bit_depth: self.bit_depth,
             enc_of: EncDerive {
-                head_only_hz: self.facts.pyrowave.then_some(mode.refresh_hz),
+                pyrowave_hz: self.facts.pyrowave.then_some(mode.refresh_hz),
                 ..self.enc_now()
             },
             plan: self.plan,
@@ -521,9 +531,16 @@ impl StreamState {
         self.tell_delivered(actual, actual != asked);
     }
 
-    /// Tell the control task what the current epoch delivers, and `/status` what it encodes.
+    /// Tell the control task what the current epoch delivers and the size its encoder takes it
+    /// to, and `/status` what it encodes.
     pub(super) fn tell_delivered(&self, mode: punktfunk_core::Mode, corrects: bool) {
         let format = format_of(&self.plan, &*self.live.capturer, self.bit_depth);
+        let encoded = self
+            .shared
+            .frame_map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .out;
         crate::session_status::set_format(
             self.live_session.id,
             self.plan.codec,
@@ -536,6 +553,7 @@ impl StreamState {
             .reconfig_result_tx
             .send(crate::native::wiring::Delivered {
                 mode,
+                encoded,
                 format,
                 epoch: self.live.epoch,
                 corrects,
@@ -544,15 +562,17 @@ impl StreamState {
 
     /// Bring the session up in phases. What the context settles comes first: the plan, the
     /// display and wire requests, a mode queued meanwhile, the facts and the shared handles.
-    /// Then the bring-up ramp, the display and its first pipeline, the launch and game lease,
-    /// the send thread, the registration, and the further screens on the assembled state. A
-    /// phase's result is a local until the struct is assembled, so one that fails drops what the
-    /// phases before it started: the lease, the pipeline, the display, the ramp.
+    /// Then the bring-up ramp, the display and its first pipeline, whose capture settles the
+    /// plan ([`SessionPlan::captured_by`](crate::session_plan::SessionPlan::captured_by)), the
+    /// launch and game lease, the send thread, the registration, and the further screens on the
+    /// assembled state. A phase's result is a local until the struct is assembled, so one that
+    /// fails drops what the phases before it started: the lease, the pipeline, the display, the
+    /// ramp.
     pub(super) fn new(ctx: SessionContext, prepared: Option<PreparedDisplay>) -> Result<Self> {
-        let plan = session_plan(&ctx);
+        let mut plan = session_plan(&ctx);
         let (cursor, vd_params) = display_request(&ctx, &plan);
         let (streamed_wire, slice_wire) = wire_request(&ctx);
-        let (mode, bitrate_kbps, adopted) = settle_mode(&ctx, &plan, prepared.is_some());
+        let (mode, bitrate_kbps, adopted) = settle_mode(&ctx, &mut plan, prepared.is_some());
         let mut facts = session_facts(&ctx, &plan, mode, streamed_wire);
         let (shared, fec) = shared_handles(&ctx);
         let c = ctx.common;
@@ -574,6 +594,7 @@ impl StreamState {
             Some(pipe) => pipe,
             None => build_first(&mut display, &facts, plan, c.bit_depth, bitrate_kbps, &fec)?,
         };
+        plan = plan.captured_by(&*pipe.capturer);
         let live = first_live(
             pipe,
             &mut display,
@@ -583,7 +604,13 @@ impl StreamState {
             &c.ends.retarget_tx,
         );
         if adopted {
-            tell_adopted(&c.ends.reconfig_result_tx, &live, &plan, c.bit_depth);
+            tell_adopted(
+                &c.ends.reconfig_result_tx,
+                &live,
+                &shared,
+                &plan,
+                c.bit_depth,
+            );
         }
         let (game_shared, game_life) = spawn_launch_and_lease(
             &display,
@@ -682,6 +709,8 @@ impl StreamState {
             seat_join: ctx.follows_seat.then_some(ctx.join_live),
             #[cfg(target_os = "linux")]
             following: None,
+            #[cfg(target_os = "linux")]
+            content: None,
             game_life,
         };
         let (rx, tell) = (c.ends.screens_rx, c.ends.screen_tell_tx);
@@ -744,6 +773,11 @@ impl StreamState {
         let _session_span = tracing::info_span!("session", id = self.live_session.id).entered();
         self.facts.life.enter(crate::lifecycle::Phase::Streaming);
         self.spawn_session_watcher();
+        #[cfg(target_os = "linux")]
+        if self.facts.format_facts.follows {
+            let stop = self.facts.life.stop_flag().clone();
+            self.content = Some(super::session_watch::ContentFollow::spawn(stop));
+        }
         self.publish_arrival_poke();
         let result = self.tick_loop();
         self.finish(result.is_ok());
@@ -756,6 +790,7 @@ impl StreamState {
             self.on_mode_switch();
             self.on_screens();
             self.on_format_change();
+            self.on_content()?;
             self.on_topology_reassert()?;
             self.on_fec_moved();
             self.on_bitrate_request();
@@ -860,6 +895,7 @@ fn session_plan(ctx: &SessionContext) -> crate::session_plan::SessionPlan {
         c.session.shard_payload(),
         ctx.reframe_to,
         ctx.join_live,
+        ctx.mirrored,
     );
     tracing::info!(?plan, "resolved session plan");
     plan
@@ -875,8 +911,8 @@ type CursorPlan = (
 
 /// The display request: the cursor plan, and what every display of this session opens with.
 /// Bring-up's launch rides the params; a rebuild swaps in its own cursor and route, and drops
-/// the launch. `hdr` is the HDR verdict, not the depth: a 10-bit SDR session leaves the output
-/// SDR.
+/// the launch. `hdr` is the display's HDR verdict, not the depth or what the stream carries:
+/// a 10-bit SDR session leaves the output SDR, and SDR content leaves it lit in HDR.
 fn display_request(
     ctx: &SessionContext,
     plan: &crate::session_plan::SessionPlan,
@@ -902,9 +938,11 @@ fn display_request(
         );
     }
     let params = crate::vdisplay::SessionParams {
+        screen: ctx.screen.clone(),
+        topology: ctx.topology,
         client_fp: ctx.conn.peer_fingerprint(),
         client_hdr: ctx.client_hdr,
-        hdr: ctx.common.hdr,
+        hdr: ctx.display_hdr,
         hw_cursor: ctx.cursor_forward || metadata_composite,
         join_live: ctx.join_live,
         quit: ctx.common.life.quit_flag().clone(),
@@ -938,13 +976,14 @@ fn wire_request(ctx: &SessionContext) -> (bool, bool) {
     )
 }
 
-/// The mode and total wire budget (kbps) bring-up builds at, and whether it adopted a mode the
-/// control task accepted meanwhile. Adopting builds once: two RecordVirtual monitors ~400 ms
-/// apart segfault mutter inside `meta_monitor_manager_rebuild`. A prepared pipeline stays as
-/// built. PyroWave's pin follows an adopted mode.
+/// The mode and total wire budget (kbps) bring-up builds at, and whether it adopted a mode ask
+/// the control task accepted meanwhile; an adopted view moves into `plan`. Adopting builds once:
+/// two RecordVirtual monitors ~400 ms apart segfault mutter inside
+/// `meta_monitor_manager_rebuild`. A prepared pipeline stays as built. PyroWave's pin follows
+/// an adopted ask's picture.
 fn settle_mode(
     ctx: &SessionContext,
-    plan: &crate::session_plan::SessionPlan,
+    plan: &mut crate::session_plan::SessionPlan,
     prepared: bool,
 ) -> (punktfunk_core::Mode, u32, bool) {
     let c = &ctx.common;
@@ -954,18 +993,22 @@ fn settle_mode(
     } else {
         c.ends.reconfig.try_iter().last()
     };
-    let adopted = queued.filter(|m| *m != mode);
-    if let Some(m) = adopted {
+    let view = plan.reframe_to.map(|(_, v)| v);
+    let adopted = queued.filter(|ask| *ask != (mode, view));
+    if let Some((m, v)) = adopted {
         tracing::info!(
             stale = ?mode,
             adopted = ?m,
+            view = ?v,
             "a mode switch was accepted before bring-up finished — building at the new mode \
              instead of building twice"
         );
         mode = m;
+        plan.reframe_to = v.map(|v| (punktfunk_core::video_fit::VideoFit::Fit, v));
         if plan.codec == crate::encode::Codec::PyroWave {
             let running = ctx.bitrate_auto.then_some(bitrate_kbps);
-            bitrate_kbps = pyrowave_mode_kbps(running, &mode, plan, ctx.knobs.pyrowave_max_kbps);
+            let picture = plan.picture(mode);
+            bitrate_kbps = pyrowave_mode_kbps(running, &picture, plan, ctx.knobs.pyrowave_max_kbps);
         }
     }
     tracing::info!(
@@ -1019,6 +1062,7 @@ fn shared_handles(ctx: &SessionContext) -> (Shared, FecState) {
         driver_dropped: Default::default(),
         screen_wire: s.screens.clone(),
         send_spread_us: Default::default(),
+        keyframe_left: Default::default(),
         wire_rekeys: Default::default(),
         live_mode: Default::default(),
         force_idr: Default::default(),
@@ -1033,6 +1077,7 @@ fn shared_handles(ctx: &SessionContext) -> (Shared, FecState) {
         cadence_behind_score: s.cadence_behind_score.clone(),
         client_packets_received: s.client_packets_received.clone(),
         cursor_client_draws: s.cursor_client_draws.clone(),
+        joined_display: s.joined_display.clone(),
     };
     let fec = FecState {
         requested: s.fec_requested.clone(),
@@ -1056,7 +1101,11 @@ fn open_display(
         Some(p) => (p.vd, Some(p.pipeline)),
         None => {
             // Open first: Windows `open` inits the manager; `vdm()` before that panics.
-            let mut vd = crate::vdisplay::open(compositor)?;
+            let mut vd = crate::vdisplay::open_for(
+                compositor,
+                vd_params.client_fp,
+                vd_params.screen.clone(),
+            )?;
             vd_params.apply(&mut *vd);
             (vd, None)
         }
@@ -1111,8 +1160,8 @@ fn build_first(
         enc_of: EncDerive {
             audio_kbps: facts.audio_reserved_kbps,
             shard_payload: facts.shard_payload,
-            fec_percent: fec.target.load(Ordering::Relaxed),
-            head_only_hz: facts.pyrowave.then_some(mode.refresh_hz),
+            fec_target: fec.target.load(Ordering::Relaxed),
+            pyrowave_hz: facts.pyrowave.then_some(mode.refresh_hz),
             share_permille: crate::native::bitrate::SHARE_ALL,
         },
         plan,
@@ -1135,7 +1184,8 @@ fn build_first(
 
 /// The first pipeline as the loop's live one at `mode`. The input thread's framing, the
 /// clipboard's gamescope and the portal's cursor verdict follow it, the rate it opened at is
-/// adopted, and `/status` gets the mode it delivers.
+/// adopted, the control task learns the display it joined, and `/status` gets the mode it
+/// delivers.
 fn first_live(
     pipe: Pipeline,
     display: &mut DisplayRequest,
@@ -1165,8 +1215,8 @@ fn first_live(
         display.no_overlay_means_off_output =
             settle_portal_cursor(&*display.vd, &mut display.metadata_composite);
     }
-    #[cfg(not(target_os = "linux"))]
-    let _ = display;
+    let joined = crate::native::wiring::joined_display(display.vd_params.join_live, display_gen);
+    shared.joined_display.store(joined, Ordering::Relaxed);
     adopt_built_bitrate(&mut bitrate_kbps, built, &shared.live_bitrate, retarget);
     // Stats slot only — an ordinary connect is not owed a corrective Reconfigured.
     let delivered = delivered_mode(frame.width, frame.height, interval);
@@ -1195,26 +1245,32 @@ fn first_live(
     }
 }
 
-/// An adopted mode is not the one the control task's first config names: tell it what epoch 0
-/// delivers. It sends only what the client does not hold, and corrects a client acked with
-/// another mode.
+/// An adopted ask is not the one the control task's first config names: tell it what epoch 0
+/// delivers and encodes. It sends only what the client does not hold, and corrects a client
+/// acked with another mode.
 fn tell_adopted(
     tell: &tokio::sync::mpsc::UnboundedSender<crate::native::wiring::Delivered>,
     live: &Live,
+    shared: &Shared,
     plan: &crate::session_plan::SessionPlan,
     bit_depth: u8,
 ) {
     let actual = delivered_mode(live.frame.width, live.frame.height, live.interval);
     let _ = tell.send(crate::native::wiring::Delivered {
         mode: actual,
+        encoded: shared
+            .frame_map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .out,
         format: format_of(plan, &*live.capturer, bit_depth),
         epoch: 0,
         corrects: actual != live.cur_mode,
     });
 }
 
-/// Start the send thread on the data plane the ramp hands back, and the resend hook the control
-/// task's NACKs ride beside the frames. A ramp step in flight finishes first, which is ≤ 50 ms.
+/// Start the send thread on the data plane the ramp hands back, and the hook that queues the
+/// control task's NACKs ahead of its frames. A ramp step in flight finishes first, ≤ 50 ms.
 /// Depth 3: encode blocks if send falls behind, rather than drop a frame (infinite GOP freeze).
 /// Returns the thread and a sender for the further screens.
 #[allow(clippy::too_many_arguments)]
@@ -1237,13 +1293,8 @@ fn start_send(
 )> {
     let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<SendMsg>(3);
     let frame_tx = Arc::new(frame_tx);
-    let nack_tx = Arc::downgrade(&frame_tx);
-    *wiring.resend.lock().unwrap_or_else(|e| e.into_inner()) =
-        Some(Box::new(move |frame, shards| {
-            nack_tx
-                .upgrade()
-                .is_some_and(|tx| tx.try_send(SendMsg::Resend { frame, shards }).is_ok())
-        }));
+    let (hook, asks) = super::send::resend_hook(&frame_tx);
+    *wiring.resend.lock().unwrap_or_else(|e| e.into_inner()) = Some(hook);
     let stats = SendStats {
         rec: facts.stats.clone(),
         mode: shared.live_mode.clone(),
@@ -1259,6 +1310,7 @@ fn start_send(
         bringup: facts.bringup.clone(),
         wire_sock,
         driver_dropped: shared.driver_dropped.clone(),
+        keyframe_left: shared.keyframe_left.clone(),
         counters: facts.counters.clone(),
     };
     let (session, probe_rx) = ramp.finish()?;
@@ -1273,6 +1325,7 @@ fn start_send(
             send_loop(
                 session,
                 frame_rx,
+                asks,
                 probe_rx,
                 probe_result_tx,
                 stop,
@@ -1510,27 +1563,31 @@ fn launch_verdict(
     if spawned {
         return LaunchOutcome::new(Kind::Spawned, "");
     }
-    match claim.and_then(|c| c.adopted()) {
-        Some(Liveness::Running) => LaunchOutcome::new(
+    let (kind, id, text) = match claim.and_then(|c| c.adopted()) {
+        Some(Liveness::Running) => (
             Kind::Adopted,
-            &format!(
+            "launch_adopted",
+            format!(
                 "{title} was already running from an earlier session — this picked that copy up \
                  instead of starting a second one."
             ),
         ),
         // Adopted on the in-flight window: the host reused a launch it cannot see.
-        Some(_) => LaunchOutcome::new(
+        Some(_) => (
             Kind::AdoptedUnknown,
-            &format!(
+            "launch_adopted_unknown",
+            format!(
                 "{title} was started a moment ago, so this picked that launch up rather than \
                  starting a second copy. Start it again if nothing comes up."
             ),
         ),
-        None => LaunchOutcome::new(
+        None => (
             Kind::Refused,
-            &format!("Couldn't start {title} — this host had nothing to run for it."),
+            "launch_nothing_to_run",
+            format!("Couldn't start {title} — this host had nothing to run for it."),
         ),
-    }
+    };
+    LaunchOutcome::new(kind, &text).worded(id, &[("title", title)])
 }
 
 /// Point the clipboard at the gamescope behind `lease`. A lease with no seat is the box's own
@@ -1639,7 +1696,7 @@ mod tests {
             ..f.st.live.cur_mode
         };
         let req = f.st.build_request(to, f.st.live.bitrate_kbps);
-        assert_eq!(req.enc_of.head_only_hz, Some(to.refresh_hz));
+        assert_eq!(req.enc_of.pyrowave_hz, Some(to.refresh_hz));
     }
 
     /// A swapped-in encoder opened at the first screen's share in force, whatever the swap's

@@ -2,6 +2,7 @@ package io.unom.punktfunk
 
 import io.unom.punktfunk.console.ConsoleJson
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
+import io.unom.punktfunk.kit.nameOrder
 import io.unom.punktfunk.kit.security.KnownHost
 import java.io.File
 import org.json.JSONArray
@@ -67,7 +68,7 @@ class HostRowVectorTest {
             // The store hands its records over by name; the added stamps restore store order.
             val rows = JSONArray(
                 ConsoleJson.hostRows(
-                    saved.sortedBy { it.name.lowercase() },
+                    saved.sortedWith(nameOrder { it.name }),
                     discovered,
                     case.getJSONArray("online").strings().toSet(),
                     presets,
@@ -90,5 +91,18 @@ class HostRowVectorTest {
                 assertEquals("$at pin", if (w.isNull("pin")) null else w.getString("pin"), pin)
             }
         }
+    }
+
+    /** A preset chip carries the host screen it pins, for the console's card under that preset. */
+    @Test
+    fun aPresetChipCarriesItsHostScreen() {
+        val couch = StreamPreset("couch", "Couch", overrides = SettingsOverlay(hostScreen = "second"))
+        val desk = KnownHost(
+            "10.0.0.2", 9777, "Desk", "ab12", paired = true,
+            presetId = "couch", pinnedPresetIds = listOf("couch"),
+        )
+        val rows = JSONArray(ConsoleJson.hostRows(listOf(desk), emptyList(), emptySet(), listOf(couch)))
+        assertEquals("second", rows.getJSONObject(0).getJSONObject("bound_preset").getString("host_screen"))
+        assertEquals("second", rows.getJSONObject(1).getJSONObject("pin").getString("host_screen"))
     }
 }

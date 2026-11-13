@@ -8,7 +8,7 @@
 // Session readers read their own session's copy: `PunktfunkConnection.settings` in the kit,
 // `SessionModel.settings` in the app. Never the globals mid-session, and never another window's.
 //
-// Only SESSION-CONSUMED values live here. Pure app-level preferences — the library toggle, the
+// Only SESSION-CONSUMED values live here. Pure app-level preferences — the
 // gamepad-UI switch, HUD placement, auto-wake, background keep-alive — stay plain `@AppStorage`
 // where they are read: they are about the app, not about a stream.
 
@@ -28,6 +28,9 @@ public struct EffectiveSettings: Equatable, Sendable {
     public var videoFit = SettingDefault.videoFit
     /// `"all"`: a host screen on each display; anything else is this one.
     public var screens = SettingDefault.screens
+    /// A preset's `host_screen`, the Hello's screen wish. Empty, as no global writes it, is the
+    /// pick on the host's card.
+    public var hostScreen = ""
     public var codec = SettingDefault.codec
     public var hdrEnabled = SettingDefault.hdrEnabled
     public var compositor = SettingDefault.compositor
@@ -43,6 +46,8 @@ public struct EffectiveSettings: Equatable, Sendable {
     public var invertScroll = SettingDefault.invertScroll
     /// Cross-client `overlay_actions`: the ring blob, empty = the platform default.
     public var overlayActions = SettingDefault.overlayActions
+    /// Cross-client `shortcuts`: the shortcuts blob, empty = this platform's defaults.
+    public var shortcuts = SettingDefault.shortcuts
     /// Cross-client `inhibit_shortcuts` (default on): system chords reach the host while input is
     /// captured. See `DefaultsKey.inhibitShortcuts` — on macOS this is the ⌘-chord passthrough.
     public var inhibitShortcuts = SettingDefault.inhibitShortcuts
@@ -54,7 +59,8 @@ public struct EffectiveSettings: Equatable, Sendable {
     public var sc2Capture = SettingDefault.sc2Capture
     /// Cross-client `system_buttons`: "auto" | "forward" | "local".
     public var systemButtons = SettingDefault.systemButtons
-    /// Cross-client `guide_gesture`: "auto" | "on" | "off".
+    /// The retired `guide_gesture` ("auto" | "on" | "off"): it decides the Hold Select row of
+    /// the default shortcuts.
     public var guideGesture = SettingDefault.guideGesture
     /// A `StatsVerbosity` raw value; the enum lives in PunktfunkKit, which this module can't see.
     public var statsVerbosity = SettingDefault.statsVerbosity
@@ -86,8 +92,8 @@ public struct EffectiveSettings: Equatable, Sendable {
 
     public init() {}
 
-    /// The global defaults, as every `@AppStorage` in the settings surface sees them. `.standard`
-    /// by default — settings are per-device, unlike the App-Group-shared host store.
+    /// The global defaults, as every `@AppStorage` in the settings surface sees them. Callers
+    /// pass `.standard`: settings are per-device, unlike the App-Group-shared host store.
     public init(defaults: UserDefaults) {
         func int(_ key: String, _ fallback: Int) -> Int {
             defaults.object(forKey: key) as? Int ?? fallback
@@ -122,6 +128,7 @@ public struct EffectiveSettings: Equatable, Sendable {
         mouseMode = str(DefaultsKey.mouseMode, mouseMode)
         invertScroll = bool(DefaultsKey.invertScroll, invertScroll)
         overlayActions = str(DefaultsKey.overlayActions, overlayActions)
+        shortcuts = str(DefaultsKey.shortcuts, shortcuts)
         inhibitShortcuts = bool(DefaultsKey.inhibitShortcuts, inhibitShortcuts)
         gamepadType = int(DefaultsKey.gamepadType, gamepadType)
         gamepadForwarding = bool(DefaultsKey.gamepadForwarding, gamepadForwarding)
@@ -168,22 +175,14 @@ public struct EffectiveSettings: Equatable, Sendable {
         }
     }
 
-    /// The hold-Select guide gesture resolved for this platform ([`guideGesture`]). Auto =
-    /// on everywhere but macOS: iOS reserves the physical Home press (the Game Overlay,
-    /// uncapturable pre-27) and tvOS never delivers it, so holding Select is the controller
-    /// route to the host's guide — and, held on, to a Gaming-Mode host's QAM. On macOS the
-    /// raw press reaches the host, so auto stays off and Select keeps its exact timing.
-    public var guideGestureEnabled: Bool {
-        switch guideGesture {
-        case "on": return true
-        case "off": return false
-        default:
-            #if os(macOS)
-            return false
-            #else
-            return true
-            #endif
-        }
+    /// This device's shortcuts: the stored blob, or the platform's defaults. Hold Select for
+    /// Guide is a default off macOS: iOS keeps the physical Home press and tvOS never delivers it.
+    public var resolvedShortcuts: Shortcuts {
+        #if os(macOS)
+        Shortcuts.resolve(shortcuts, client: .mac, legacyGuideGesture: guideGesture)
+        #else
+        Shortcuts.resolve(shortcuts, client: .apple, legacyGuideGesture: guideGesture)
+        #endif
     }
 
     /// The one resolution seam: this overlay on top of these settings. Pure — no store reads, no
@@ -200,6 +199,7 @@ public struct EffectiveSettings: Equatable, Sendable {
         if let v = overlay.renderScale { s.renderScale = v }
         if let v = overlay.videoFit { s.videoFit = v }
         if let v = overlay.screens { s.screens = v }
+        if let v = overlay.hostScreen { s.hostScreen = v }
         if let v = overlay.codec { s.codec = v }
         if let v = overlay.hdrEnabled { s.hdrEnabled = v }
         if let v = overlay.compositor { s.compositor = v }
@@ -212,6 +212,7 @@ public struct EffectiveSettings: Equatable, Sendable {
         if let v = overlay.mouseMode { s.mouseMode = v }
         if let v = overlay.invertScroll { s.invertScroll = v }
         if let v = overlay.overlayActions { s.overlayActions = v }
+        if let v = overlay.shortcuts { s.shortcuts = v }
         if let v = overlay.inhibitShortcuts { s.inhibitShortcuts = v }
         if let v = overlay.gamepadType { s.gamepadType = v }
         if let v = overlay.gamepadForwarding { s.gamepadForwarding = v }
@@ -390,6 +391,32 @@ extension EffectiveSettings {
             maxDimension: RenderScale.maxDimension(codec: codec))
         let hz = refreshHz == 0 ? max(native.hz, 30) : refreshHz
         return (mode.width, mode.height, UInt32(clamping: hz))
+    }
+
+    /// The size `streamMode(native:)` shows the picture at when render scale makes the mode larger
+    /// (`RenderScale.view`). `mode` is what the session asks for after any game override; the
+    /// view goes only while that is still larger on both axes.
+    public func streamView(
+        native: (width: Int, height: Int, hz: Int), mode: (width: UInt32, height: UInt32, hz: UInt32)
+    ) -> (width: UInt32, height: UInt32)? {
+        guard let view = RenderScale.view(
+            baseWidth: width == 0 ? native.width : width,
+            baseHeight: height == 0 ? native.height : height, scale: renderScale,
+            maxDimension: RenderScale.maxDimension(codec: codec)),
+            mode.width >= view.width, mode.height >= view.height,
+            (mode.width, mode.height) != (view.width, view.height)
+        else { return nil }
+        return view
+    }
+
+    /// The picture a host that scales encodes for `streamMode(native:)`: its view at the mode's
+    /// refresh, else the mode.
+    public func streamPicture(
+        native: (width: Int, height: Int, hz: Int)
+    ) -> (width: UInt32, height: UInt32, hz: UInt32) {
+        let mode = streamMode(native: native)
+        let view = streamView(native: native, mode: mode)
+        return (view?.width ?? mode.width, view?.height ?? mode.height, mode.hz)
     }
 
     /// `pyrowaveBpp` in the hundredths the dial carries, held inside 0.5…2.

@@ -53,6 +53,7 @@ pub(super) struct LoopEnds {
     /// Arrivals awaiting their renders. A consumer that falls behind loses the oldest.
     pub(super) queue: FrameQueue,
     pub(super) wake: SyncSender<()>,
+    pub(super) viewers: Arc<super::share::Viewers>,
     pub(super) shared: StreamShared,
     pub(super) cursor_slot: CursorSlot,
     pub(super) importer: ImporterCell,
@@ -81,8 +82,10 @@ pub(super) fn pipewire_thread(
         let (quit_loop, seen) = (mainloop.clone(), quit_seen.clone());
         // This clone dies with the thread, like the one `.process` holds: the consumer
         // still sees the channel close when the loop ends.
-        let poke_wake = ends.wake.clone();
-        quit_rx.attach(loop_, move |ctl| on_ctl(ctl, &quit_loop, &seen, &poke_wake))
+        let (poke_wake, viewers) = (ends.wake.clone(), ends.viewers.clone());
+        quit_rx.attach(loop_, move |ctl| {
+            on_ctl(ctl, &quit_loop, &seen, &poke_wake, &viewers)
+        })
     };
     let context = pw::context::ContextRc::new(&mainloop, None).context("pw Context")?;
     let core = connect_core(&context, fd)?;
@@ -164,6 +167,7 @@ fn on_ctl(
     mainloop: &pw::main_loop::MainLoopRc,
     quit_seen: &Cell<bool>,
     wake: &SyncSender<()>,
+    viewers: &super::share::Viewers,
 ) {
     match ctl {
         PwCtl::Quit => {
@@ -174,6 +178,9 @@ fn on_ctl(
         // A full channel already holds an edge; the consumer wakes either way.
         PwCtl::Poke => {
             let _ = wake.try_send(());
+            if viewers.fanned() {
+                viewers.wake_joined();
+            }
         }
     }
 }
@@ -255,10 +262,12 @@ fn listener_state(
         modifier: 0,
         queue: ends.queue,
         wake: ends.wake,
+        viewers: ends.viewers,
         shared: ends.shared,
         cursor_slot: ends.cursor_slot,
         importer: ends.importer,
         vaapi_passthrough: plan.vaapi_passthrough,
+        va_import: cfg.policy.backend_is_vaapi && !cfg.policy.pyrowave_session,
         // Same predicate `hdr_modifier_offers` used for the NVENC raw lane.
         hdr_tiled_raw,
         import_policy: plan.import_policy.for_ten_bit_sdr(opts.ten_bit_sdr),
@@ -1469,8 +1478,8 @@ mod tests {
             hdr_cuda_ok: matches!(lane, NvencRaw | Cuda),
             nvenc_raw_dmabuf: lane == NvencRaw,
             gamescope_tiled: gamescope,
-            // The host proves encoder modifiers only for a tiled gamescope.
-            encoder_modifiers: if gamescope && lane == Vaapi {
+            // The host proves encoder modifiers for every producer on the VA lane.
+            encoder_modifiers: if lane == Vaapi {
                 let proved = |f| (pf_frame::drm_fourcc(f).unwrap(), vec![T]);
                 formats.map(proved).to_vec()
             } else {
@@ -1609,9 +1618,9 @@ mod tests {
     /// 10-bit dmabufs: SHM carries 8 bits.
     #[rustfmt::skip]
     const MATRIX: &[(Producer, Lane, Depth, &str, &str)] = &[
-        (Kwin, Vaapi, Sdr, "dmabuf-passthrough", "NV12(L)@60 BGRx(L)@60 BGRA(L)@60 NV12(L) BGRx(L) BGRA(L) | dmabuf+sync dmabuf | cursor sync header damage"),
-        (Kwin, Vaapi, Hdr, "dmabuf-passthrough", "P010/pq(L)@60 xBGR10/pq(L)@60 xRGB10/pq(L)@60 P010/pq(L) xBGR10/pq(L) xRGB10/pq(L) | dmabuf+sync dmabuf | cursor sync header damage"),
-        (Kwin, Vaapi, Sdr10, "dmabuf-passthrough", "NV12(L)@60 BGRx(L)@60 BGRA(L)@60 NV12(L) BGRx(L) BGRA(L) | dmabuf+sync dmabuf | cursor sync header damage"),
+        (Kwin, Vaapi, Sdr, "dmabuf-passthrough", "NV12(L)@60 BGRx(T,L)@60 BGRA(T,L)@60 NV12(L) BGRx(T,L) BGRA(T,L) | dmabuf+sync dmabuf | cursor sync header damage"),
+        (Kwin, Vaapi, Hdr, "dmabuf-passthrough", "P010/pq(L)@60 xBGR10/pq(T,L)@60 xRGB10/pq(T,L)@60 P010/pq(L) xBGR10/pq(T,L) xRGB10/pq(T,L) | dmabuf+sync dmabuf | cursor sync header damage"),
+        (Kwin, Vaapi, Sdr10, "dmabuf-passthrough", "NV12(L)@60 BGRx(T,L)@60 BGRA(T,L)@60 NV12(L) BGRx(T,L) BGRA(T,L) | dmabuf+sync dmabuf | cursor sync header damage"),
         (Kwin, NvencRaw, Sdr, "dmabuf-to-encoder", "NV12(L)@60 BGRx(A,L)@60 BGRA(A,L)@60 NV12(L) BGRx(A,L) BGRA(A,L) | dmabuf+sync dmabuf | cursor sync header damage"),
         (Kwin, NvencRaw, Hdr, "dmabuf-to-encoder", "P010/pq(L)@60 xBGR10/pq(L)@60 xRGB10/pq(L)@60 P010/pq(L) xBGR10/pq(L) xRGB10/pq(L) | dmabuf+sync dmabuf | cursor sync header damage"),
         (Kwin, NvencRaw, Sdr10, "dmabuf-to-encoder", "NV12(L)@60 BGRx(A,L)@60 BGRA(A,L)@60 NV12(L) BGRx(A,L) BGRA(A,L) | dmabuf+sync dmabuf | cursor sync header damage"),
@@ -1633,9 +1642,9 @@ mod tests {
         (Gamescope, Cpu, Sdr, "cpu", "RGB* | mappable | -"),
         (Gamescope, Cpu, Hdr, "cpu", "xBGR10/pq(L)@60 xRGB10/pq(L)@60 | dmabuf+sync dmabuf | sync header damage"),
         (Gamescope, Cpu, Sdr10, "cpu", "RGB* | mappable | -"),
-        (Mutter, Vaapi, Sdr, "dmabuf-passthrough", "NV12(L) BGRx(L) BGRA(L) | dmabuf+sync dmabuf | cursor sync header damage"),
-        (Mutter, Vaapi, Hdr, "dmabuf-passthrough", "P010/pq(L) xBGR10/pq(L) xRGB10/pq(L) | dmabuf+sync dmabuf | cursor sync header damage"),
-        (Mutter, Vaapi, Sdr10, "dmabuf-passthrough", "NV12(L) BGRx(L) BGRA(L) | dmabuf+sync dmabuf | cursor sync header damage"),
+        (Mutter, Vaapi, Sdr, "dmabuf-passthrough", "NV12(L) BGRx(T,L) BGRA(T,L) | dmabuf+sync dmabuf | cursor sync header damage"),
+        (Mutter, Vaapi, Hdr, "dmabuf-passthrough", "P010/pq(L) xBGR10/pq(T,L) xRGB10/pq(T,L) | dmabuf+sync dmabuf | cursor sync header damage"),
+        (Mutter, Vaapi, Sdr10, "dmabuf-passthrough", "NV12(L) BGRx(T,L) BGRA(T,L) | dmabuf+sync dmabuf | cursor sync header damage"),
         (Mutter, NvencRaw, Sdr, "dmabuf-to-encoder", "NV12(L) BGRx(A,L) BGRA(A,L) | dmabuf+sync dmabuf | cursor sync header damage"),
         (Mutter, NvencRaw, Hdr, "dmabuf-to-encoder", "P010/pq(L) xBGR10/pq(L) xRGB10/pq(L) | dmabuf+sync dmabuf | cursor sync header damage"),
         (Mutter, NvencRaw, Sdr10, "dmabuf-to-encoder", "NV12(L) BGRx(A,L) BGRA(A,L) | dmabuf+sync dmabuf | cursor sync header damage"),
@@ -1878,10 +1887,12 @@ mod callbacks {
                 modifier: 0,
                 queue: Default::default(),
                 wake,
+                viewers: Default::default(),
                 shared,
                 cursor_slot: Default::default(),
                 importer: Default::default(),
                 vaapi_passthrough: false,
+                va_import: false,
                 hdr_tiled_raw: false,
                 import_policy: ImportPolicy::default(),
                 import_state: ImportState::default(),

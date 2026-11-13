@@ -1,5 +1,5 @@
 {
-  "$comment": "Render scale → host Mode, pinned by punktfunk-core render_scale, the Swift RenderScale and the Kotlin RenderScale tests; pf-encode-core checks max_dimension against its Codec walls. A null scale is NaN. `apply` rows take their ceiling from max_dimension(codec). `percent` rows are a typed percent, the scale it stores and the percent that scale reads back as. `preset` rows name the picker stop a stored scale is, null for a typed one; stops are 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4.",
+  "$comment": "Render scale → host Mode, pinned by punktfunk-core render_scale, the Swift RenderScale and the Kotlin RenderScale tests; pf-encode-core checks max_dimension against its Codec walls. A null scale is NaN. `apply` rows take their ceiling from max_dimension(codec). `percent` rows are a typed percent, the scale it stores and the percent that scale reads back as. `preset` rows name the picker stop a stored scale is, null for a typed one; stops are 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4. `view` rows are the size the host encodes instead of the mode above 1x, null for none, with the ceiling as `max`.",
   "max_dimension": [
     {"codec": "h264", "max": 4096},
     {"codec": "hevc", "max": 8192},
@@ -53,5 +53,15 @@
     {"name": "zero scale is native", "base": [1920, 1080], "scale": 0.0, "codec": "hevc", "want": [1920, 1080]},
     {"name": "tiny scale clamps", "base": [1920, 1080], "scale": 0.1, "codec": "hevc", "want": [960, 540]},
     {"name": "huge scale clamps", "base": [1280, 720], "scale": 9.0, "codec": "pyrowave", "want": [5120, 2880]}
+  ],
+  "view": [
+    {"base": [1366, 768], "scale": 1.5, "max": 8192, "want": [1366, 768]},
+    {"base": [1920, 1080], "scale": 2.0, "max": 8192, "want": [1920, 1080]},
+    {"base": [1367, 769], "scale": 2.0, "max": 8192, "want": [1366, 768]},
+    {"base": [1920, 1080], "scale": 4.0, "max": 4096, "want": [1920, 1080]},
+    {"base": [5120, 2880], "scale": 2.0, "max": 4096, "want": null},
+    {"base": [1920, 1080], "scale": 1.0, "max": 8192, "want": null},
+    {"base": [1920, 1080], "scale": 0.5, "max": 8192, "want": null},
+    {"base": [1920, 1080], "scale": null, "max": 8192, "want": null}
   ]
 }

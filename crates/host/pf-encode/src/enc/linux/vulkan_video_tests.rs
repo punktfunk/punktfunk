@@ -1,8 +1,49 @@
 use super::{
-    build_h265_rps_s0, intra_refresh_caps, PhaseStats, VulkanVideoEncoder, PHASE_IMPORT,
-    PHASE_REPORT_EVERY, PHASE_SPIKE, PHASE_SPIKE_EVERY, PHASE_WAIT,
+    build_h265_rps_s0, intra_refresh_caps, setup_slot, trusted_refs, PhaseStats,
+    VulkanVideoEncoder, PHASE_IMPORT, PHASE_REPORT_EVERY, PHASE_SPIKE, PHASE_SPIKE_EVERY,
+    PHASE_WAIT,
 };
+
+/// Frame 300 is lost at 120 fps; confirmations trail by 12 frames and the report lands 20
+/// frames later, when the 8-slot ring holds only frames after the loss. The kept pin is still
+/// resident and older than the loss, so the loss heals by anchor, not a wave.
+#[test]
+fn a_late_loss_report_finds_the_kept_pin() {
+    let (lost, lag, report) = (300i64, 12i64, 20i64);
+    let run = |keep: bool| {
+        let (mut slot_wire, mut kept, mut prev) = (vec![-1i64; 8], crate::rfi::Kept::default(), 0);
+        for wire in 0..lost + report {
+            let setup = if wire == 0 {
+                0
+            } else {
+                setup_slot(wire as u64, prev, &slot_wire, &kept)
+            };
+            slot_wire[setup] = wire;
+            let confirmed = crate::Acked {
+                last: (wire - lag).min(lost - 1),
+                mask: 0xffff,
+            };
+            if keep {
+                let held = slot_wire.clone();
+                kept.step(wire, true, Some(&confirmed), |w| held.contains(&w));
+            }
+            prev = setup;
+        }
+        crate::rfi::pick_anchor(&trusted_refs(&slot_wire), lost)
+    };
+    let anchor = run(true).expect("the kept pin answers the late report");
+    assert!(
+        anchor.1 < lost && lost - anchor.1 <= 2 * lag + 1,
+        "{anchor:?}"
+    );
+    assert_eq!(
+        run(false),
+        None,
+        "the bare ring holds nothing older than the loss"
+    );
+}
 use crate::env_knobs::Knobs;
+use crate::test_dmabuf::{assert_edge_is_straight, edge_frame, LinearDmabuf, ODD_H, ODD_W};
 use crate::test_frames::{cpu_frame, cpu_frame_24};
 use crate::{Codec, Encoder};
 use pf_frame::{CapturedFrame, FramePayload, PixelFormat};
@@ -515,6 +556,23 @@ fn vulkan_wave_smoke() {
 #[ignore = "needs VK_KHR_video_encode_intra_refresh (RADV >= Mesa 25.3 on VCN hardware)"]
 fn vulkan_wave_smoke_av1() {
     run_wave_smoke(Codec::Av1, "obu");
+}
+
+/// The anchor soak ([`crate::smoke_pattern::Soak`], its `PF_WAVE_*` knobs). With
+/// `PF_WAVE_CONFIRM` and a `PF_WAVE_LAG` past the DPB ring, every ask anchors on the kept
+/// picture instead of starting a wave.
+#[test]
+#[ignore = "needs a real VK_KHR_video_encode device"]
+fn vulkan_anchor_soak() {
+    let soak = crate::smoke_pattern::Soak::from_env();
+    let (w, h, fps) = (soak.w, soak.h, soak.fps);
+    let mut enc =
+        VulkanVideoEncoder::open_opts(soak.codec, w, h, fps, soak.mbps * 1_000_000, false)
+            .expect("open");
+    let pts = |i: usize| i as u64 * 1_000_000_000 / u64::from(fps);
+    soak.run("vulkan", &mut enc, |i| {
+        cpu_frame_scroll(w, h, pts(i), i as u32)
+    });
 }
 
 /// Packed 2:10:10:10 (`xRGB_210LE` / `PixelFormat::X2Rgb10`) CPU frame. Channels are 10-bit
@@ -1159,4 +1217,28 @@ fn phase_stats_warn_once_a_second_then_report_the_window() {
         (100_000, 400_000)
     );
     assert_eq!(p.max_us, [0; 4], "the next window starts empty");
+}
+
+/// Hardware: a LINEAR packed-RGB dmabuf whose row is off any driver's pitch alignment goes
+/// through the compute CSC unsheared. NVIDIA reads it as an image at a pitch rounded up to 32
+/// bytes; there the CSC reads the buffer's words.
+#[test]
+#[ignore = "needs a real VK_KHR_video_encode_h265 device, a dma-buf exporting driver and ffmpeg"]
+fn vulkan_csc_reads_a_linear_source_at_its_stride() {
+    let buf = LinearDmabuf::new(&edge_frame(ODD_W, ODD_H, ODD_W * 4));
+    let mut enc = VulkanVideoEncoder::open_opts(Codec::H265, ODD_W, ODD_H, 60, 40_000_000, false)
+        .expect("open");
+    let mut stream = Vec::new();
+    for i in 0..3 {
+        let frame = buf.frame(PixelFormat::Bgrx, b"XR24", ODD_W, ODD_H, ODD_W * 4, i);
+        enc.submit_indexed(&frame, i).expect("submit");
+        while let Some(au) = enc.poll().expect("poll") {
+            stream.extend_from_slice(&au.data);
+        }
+    }
+    enc.flush().expect("flush");
+    while let Some(au) = enc.poll().expect("poll") {
+        stream.extend_from_slice(&au.data);
+    }
+    assert_edge_is_straight(&stream, "vulkan-csc-linear.h265", ODD_W, ODD_H);
 }

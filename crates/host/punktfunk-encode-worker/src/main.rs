@@ -27,7 +27,10 @@ fn main() -> std::process::ExitCode {
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
         let run = match args.first().map(String::as_str) {
-            Some("zerocopy-worker") => pf_zerocopy::worker::run_from_args(&args[1..]),
+            Some("zerocopy-worker") => {
+                pf_frame::thread_qos::boost_thread_priority(true);
+                pf_zerocopy::worker::run_from_args(&args[1..])
+            }
             _ => pf_encode::worker::run_from_args(&args),
         };
         match run {

@@ -42,16 +42,17 @@ impl SessionSwitch {
     }
 }
 
-/// The session's `PUNKTFUNK_SESSION_WATCH` (`row`) on/off wins. Auto is on for Bazzite/SteamOS
-/// (they flip Gaming↔Desktop mid-stream) and off elsewhere.
+/// The session's `PUNKTFUNK_SESSION_WATCH` (`row`) on/off wins. Auto is on where the box has a
+/// Game Mode to flip to mid-stream, and off elsewhere.
 pub(super) fn session_watch_enabled(row: Option<bool>) -> bool {
-    row.unwrap_or_else(is_steam_htpc_platform)
+    row.unwrap_or_else(has_game_mode)
 }
 
-/// Bazzite or SteamOS (`ID`/`ID_LIKE`). Absent os-release (non-Linux) → false.
-fn is_steam_htpc_platform() -> bool {
+/// Bazzite, SteamOS, or any box with a gamescope session (Nobara). Only the watcher removes the
+/// takeover's idle drop-in when a capture-loss rebuild reaches the desktop first.
+fn has_game_mode() -> bool {
     let os = pf_host_config::os_release::os_release();
-    os.is("bazzite") || os.is("steamos")
+    os.is("bazzite") || os.is("steamos") || crate::vdisplay::managed_session_available()
 }
 
 pub(super) fn session_watcher_loop(
@@ -104,6 +105,82 @@ pub(super) fn session_watcher_loop(
             }
             Some((k, _)) if k == cur => {}
             _ => pending = Some((cur, std::time::Instant::now())),
+        }
+    }
+}
+
+/// The loop's end of following the HDR state of what its gamescope shows. gamescope
+/// composites every app into the range its capture negotiated, so SDR content on an HDR stream
+/// is SDR mapped into PQ: the watcher looks at the content, and the loop reopens the capture
+/// in its range ([`StreamState::on_content`]).
+#[cfg(target_os = "linux")]
+pub(super) struct ContentFollow {
+    rx: std::sync::mpsc::Receiver<bool>,
+    /// The gamescope the watcher looks at: its seat, `None` inside for the box's own. `None`
+    /// idles the watcher.
+    target: ContentTarget,
+    /// What `target` was set from: whether the stream follows content, and on which display.
+    pointed: (bool, Option<u64>),
+    _watcher: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(target_os = "linux")]
+type ContentTarget = Arc<std::sync::Mutex<Option<Option<String>>>>;
+
+#[cfg(target_os = "linux")]
+impl ContentFollow {
+    pub(super) fn spawn(stop: Arc<AtomicBool>) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let target = ContentTarget::default();
+        let seen = target.clone();
+        let watcher = std::thread::Builder::new()
+            .name("punktfunk1-content".into())
+            .spawn(move || content_watcher_loop(tx, seen, stop))
+            .ok();
+        ContentFollow {
+            rx,
+            target,
+            pointed: (false, None),
+            _watcher: watcher,
+        }
+    }
+
+    /// Point the watcher at the gamescope behind `display_gen` while the stream `follows` its
+    /// content.
+    pub(super) fn point(&mut self, follows: bool, display_gen: Option<u64>) {
+        if self.pointed == (follows, display_gen) {
+            return;
+        }
+        self.pointed = (follows, display_gen);
+        let seat = follows.then(|| display_gen.and_then(crate::vdisplay::registry::seat_for));
+        *self.target.lock().unwrap_or_else(|e| e.into_inner()) = seat;
+    }
+
+    /// The range the stream moves to: the watcher's newest look, where it is not what is
+    /// `streamed`.
+    pub(super) fn wants(&mut self, streamed: bool) -> Option<bool> {
+        self.rx.try_iter().last().filter(|&hdr| hdr != streamed)
+    }
+}
+
+/// Look at `target`'s content once a second and send every look: the loop asks again by
+/// itself while a shared display holds it back.
+#[cfg(target_os = "linux")]
+fn content_watcher_loop(
+    tx: std::sync::mpsc::Sender<bool>,
+    target: ContentTarget,
+    stop: Arc<AtomicBool>,
+) {
+    let mut content = pf_vdisplay::GamescopeHdrContent::default();
+    while !stop.load(Ordering::SeqCst) {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let Some(seat) = target.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+            continue;
+        };
+        if let Some(hdr) = content.poll(seat.as_deref()) {
+            if tx.send(hdr).is_err() {
+                break;
+            }
         }
     }
 }

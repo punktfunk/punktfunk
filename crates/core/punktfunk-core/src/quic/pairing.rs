@@ -105,14 +105,23 @@ pub struct PairResult {
 /// `host → client`: the close that follows, in words. `code` is one of
 /// [`crate::reject`]'s close codes; `reason` is the sentence the native plane would have put in
 /// the close frame, capped so a hostile host cannot make a client render pages of it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Refused {
     pub code: u32,
     pub reason: String,
+    /// The host message `reason` is the English of (`close_*`, `reject_*`), empty when it
+    /// has none. `punktfunk/1` framing leaves it out.
+    pub reason_id: String,
+    /// That message's placeholder values, by name.
+    pub reason_params: Vec<(String, String)>,
 }
 
 /// Longest `reason` on the wire. Enough for one host sentence.
 pub const REFUSED_REASON_MAX: usize = 256;
+
+/// Most [`Refused::reason_params`]. With every field at its cap the frame stays under the
+/// 1 KiB a client reads.
+pub const REFUSED_PARAMS_MAX: usize = 2;
 
 fn put_bytes(b: &mut Vec<u8>, x: &[u8]) {
     b.extend_from_slice(&(x.len() as u16).to_le_bytes());
@@ -240,6 +249,23 @@ impl PairResult {
 }
 
 impl Refused {
+    /// Names the host message `reason` words, with its placeholder values, each kept plain
+    /// and capped.
+    pub fn worded(mut self, id: &str, params: &[(&str, &str)]) -> Self {
+        self.reason_id = super::control::plain_capped(id, LAUNCH_ID_MAX);
+        self.reason_params =
+            super::control::capped_params(params, REFUSED_PARAMS_MAX, LAUNCH_MESSAGE_MAX);
+        self
+    }
+
+    /// Every field within its cap: what a `punktfunk/2` decoder accepts.
+    pub(crate) fn bounded(&self) -> bool {
+        self.reason.len() <= REFUSED_REASON_MAX
+            && self.reason_id.len() <= LAUNCH_ID_MAX
+            && self.reason_params.len() <= REFUSED_PARAMS_MAX
+            && super::control::params_within(&self.reason_params, LAUNCH_MESSAGE_MAX)
+    }
+
     pub fn encode_pkf1(&self) -> Vec<u8> {
         let reason = super::handshake::truncate_to(&self.reason, REFUSED_REASON_MAX).as_bytes();
         let mut b = Vec::with_capacity(11 + reason.len());
@@ -264,6 +290,7 @@ impl Refused {
         Ok(Refused {
             code,
             reason: reason.to_string(),
+            ..Refused::default()
         })
     }
 }
@@ -277,11 +304,13 @@ mod tests {
         let r = Refused {
             code: crate::reject::SETUP_FAILED_CLOSE_CODE,
             reason: "no usable compositor".into(),
+            ..Refused::default()
         };
         assert_eq!(Refused::decode_pkf1(&r.encode_pkf1()).unwrap(), r);
         let long = Refused {
             code: 1,
             reason: "é".repeat(400),
+            ..Refused::default()
         };
         let back = Refused::decode_pkf1(&long.encode_pkf1()).unwrap();
         assert!(back.reason.len() <= REFUSED_REASON_MAX, "capped");

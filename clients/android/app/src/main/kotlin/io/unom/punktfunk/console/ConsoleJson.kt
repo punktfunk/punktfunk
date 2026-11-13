@@ -1,7 +1,9 @@
 package io.unom.punktfunk.console
 
+import android.content.res.Resources
 import android.os.Vibrator
 import android.view.InputDevice
+import io.unom.punktfunk.DisplayTargets
 import io.unom.punktfunk.HostActions
 import io.unom.punktfunk.ProfilesAnswer
 import io.unom.punktfunk.Settings
@@ -9,6 +11,7 @@ import io.unom.punktfunk.SettingsFields
 import io.unom.punktfunk.SpeedTestPhase
 import io.unom.punktfunk.StatsVerbosity
 import io.unom.punktfunk.StreamPreset
+import io.unom.punktfunk.kit.DsDevice
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
 import io.unom.punktfunk.kit.library.DEFAULT_MGMT_PORT
@@ -16,6 +19,7 @@ import io.unom.punktfunk.kit.library.Download
 import io.unom.punktfunk.kit.library.GameEntry
 import io.unom.punktfunk.kit.library.RunningGame
 import io.unom.punktfunk.kit.library.TitleInstall
+import io.unom.punktfunk.kit.nameOrder
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.deviceDetail
 import io.unom.punktfunk.matches
@@ -53,18 +57,23 @@ internal object ConsoleJson {
         // Read by the speed test alone: a preset that PINS bitrate is the layer its host
         // streams at, so the console must not offer to write the global default instead.
         .put("bitrate_kbps", p.overrides.bitrateKbps ?: JSONObject.NULL)
+        // The card's Screen section and line show a preset that pins the host screen.
+        .put("host_screen", p.overrides.hostScreen ?: JSONObject.NULL)
 
-    /** A host's advertised actions in the console model's shape (`HostRow.actions`). */
-    private fun actionRows(actions: List<HostActions.Action>?): JSONArray {
+    /**
+     * A host's advertised actions in the console model's shape (`HostRow.actions`), worded in
+     * [res]'s language; the host's own words without it.
+     */
+    private fun actionRows(actions: List<HostActions.Action>?, res: Resources?): JSONArray {
         val arr = JSONArray()
         for (a in actions.orEmpty()) {
             arr.put(
                 JSONObject()
                     .put("id", a.id)
-                    .put("label", a.label)
+                    .put("label", res?.let(a::text) ?: a.label)
                     .put("danger", a.danger)
                     .put("available", a.available)
-                    .put("unavailable_reason", a.unavailableReason),
+                    .put("unavailable_reason", res?.let(a::reason) ?: a.unavailableReason),
             )
         }
         return arr
@@ -88,6 +97,11 @@ internal object ConsoleJson {
         /** What each paired host has up, by fingerprint. Absent = nothing, or nobody has
          *  asked yet; the tile draws no line either way. */
         running: Map<String, String> = emptyMap(),
+        /** The language of the actions' words. */
+        res: Resources? = null,
+        /** What each paired host last said this device may stream, by fingerprint. Absent = no
+         *  Screen section. */
+        screens: Map<String, DisplayTargets.Targets> = emptyMap(),
     ): String {
         val out = JSONArray()
         // The store keeps no insertion order; an undated record predates the stamp, so it
@@ -115,7 +129,7 @@ internal object ConsoleJson {
                 .put("clipboard_sync", h.clipboardSync)
                 .put("last_used", h.lastUsed ?: JSONObject.NULL)
                 .put("os", advert?.os?.takeIf { it.isNotEmpty() } ?: h.os)
-                .put("actions", actionRows(hostActions[h.fpHex]))
+                .put("actions", actionRows(hostActions[h.fpHex], res))
                 .put("pin", JSONObject.NULL)
                 .put(
                     "bound_preset",
@@ -127,6 +141,7 @@ internal object ConsoleJson {
                 // inherit the map — a card is the same host's shelf.
                 .put("game_presets", JSONObject(h.gamePresets))
                 .put("profile", profileJson(h))
+                .put("screens", screens[h.fpHex]?.json() ?: JSONObject.NULL)
             out.put(base)
             // A pinned card shares the primary tile's live state under its own key.
             for (pid in h.pinnedPresetIds.distinct()) {
@@ -140,7 +155,7 @@ internal object ConsoleJson {
             }
         }
         val extra = discovered.filter { d -> saved.none { it.matches(d) } }
-            .sortedBy { it.name.lowercase() }
+            .sortedWith(nameOrder { it.name })
         for (d in extra) {
             val fp = d.fingerprint.orEmpty()
             out.put(
@@ -196,8 +211,12 @@ internal object ConsoleJson {
             .put("profile", profileJson(h))
     }
 
-    /** One `enumerate` row, as the console's `ListedProfile` reads it. */
-    fun profileRow(p: io.unom.punktfunk.kit.ListedProfile): JSONObject = JSONObject()
+    /**
+     * One `enumerate` row, as the console's `ListedProfile` reads it; the seat line in [res]'s
+     * language. `person` rides only when true, as the Rust row writes it.
+     */
+    fun profileRow(p: io.unom.punktfunk.kit.ListedProfile, res: Resources): JSONObject = JSONObject()
+        .apply { if (p.person) put("person", true) }
         .put("id", p.id)
         .put("display_name", p.displayName)
         .put("accent", p.accent ?: JSONObject.NULL)
@@ -209,7 +228,7 @@ internal object ConsoleJson {
             p.seat?.let {
                 JSONObject()
                     .put("state", it.state.name.lowercase())
-                    .put("detail", it.detail ?: JSONObject.NULL)
+                    .put("detail", it.line?.words(res) ?: JSONObject.NULL)
                     .put("occupant", it.occupant ?: JSONObject.NULL)
                     .put("steam_sign_in", it.steamSignIn ?: JSONObject.NULL)
             } ?: JSONObject.NULL,
@@ -325,10 +344,11 @@ internal object ConsoleJson {
         JSONObject().put("Progress", JSONObject().put("kbps", kbps)).toString()
 
     /** The answer to `ConsoleCmd::FetchProfiles`, as the console's `ProfilesAnswer`. */
-    fun profilesAnswer(answer: ProfilesAnswer): String = when (answer) {
-        is ProfilesAnswer.Listed -> JSONObject().put("Listed", JSONArray(answer.rows.map(::profileRow))).toString()
+    fun profilesAnswer(answer: ProfilesAnswer, res: Resources): String = when (answer) {
+        is ProfilesAnswer.Listed ->
+            JSONObject().put("Listed", JSONArray(answer.rows.map { profileRow(it, res) })).toString()
         ProfilesAnswer.NoProfiles -> "\"NoProfiles\""
-        is ProfilesAnswer.Failed -> JSONObject().put("Failed", answer.why).toString()
+        is ProfilesAnswer.Failed -> JSONObject().put("Failed", answer.why.words(res)).toString()
     }
 
     // ---- library ------------------------------------------------------------------------------
@@ -336,29 +356,43 @@ internal object ConsoleJson {
     /**
      * `{"req", "games": [LibraryGame]}` from the Kotlin catalog — the desktop service's
      * `to_model` mapping, under the `FetchLibrary` command's `req`. Without `stats` the Recent
-     * and Most played sorts fall back to host order.
+     * and Most played sorts fall back to host order. `overrides` rides only when the host set
+     * some, for the launch hold's "Host: …" line.
      */
-    fun libraryGames(req: JSONObject, games: List<GameEntry>): String {
-        val out = JSONArray()
-        for (g in games) {
-            out.put(
-                JSONObject()
-                    .put("id", g.id)
-                    .put("title", g.title)
-                    .put("store", g.store)
-                    .put("launcher", g.isLauncher)
-                    .put("icon", g.icon?.takeIf(::validIconToken) ?: "")
-                    .put("platform", g.platform ?: JSONObject.NULL)
-                    .put("developer", g.developer ?: JSONObject.NULL)
-                    .put("year", g.releaseYear ?: JSONObject.NULL)
-                    .put("genres", JSONArray(g.genres))
-                    .put("stats", g.stats?.toJson() ?: JSONObject.NULL)
-                    .put("running", false)
-                    .put("install", g.install?.let(::installJson) ?: JSONObject.NULL),
-            )
-        }
-        return JSONObject().put("req", req).put("games", out).toString()
-    }
+    fun libraryGames(req: JSONObject, games: List<GameEntry>): String =
+        JSONObject().put("req", req).put("games", JSONArray(games.map(::libraryGame))).toString()
+
+    /** One `LibraryGame`, as [libraryGames] writes each. */
+    private fun libraryGame(g: GameEntry): JSONObject = JSONObject()
+        .put("id", g.id)
+        .put("title", g.title)
+        .put("store", g.store)
+        .put("launcher", g.isLauncher)
+        .put("icon", g.icon?.takeIf(::validIconToken) ?: "")
+        .put("platform", g.platform ?: JSONObject.NULL)
+        .put("developer", g.developer ?: JSONObject.NULL)
+        .put("year", g.releaseYear ?: JSONObject.NULL)
+        .put("genres", JSONArray(g.genres))
+        .put("stats", g.stats?.toJson() ?: JSONObject.NULL)
+        .put("running", false)
+        .put("install", g.install?.let(::installJson) ?: JSONObject.NULL)
+        .apply { g.overrides?.let { put("overrides", it.toJson()) } }
+
+    /** The answer to `ConsoleCmd::FetchHidden`, as the console's `HiddenAnswer`: the titles, or [why] it failed. */
+    fun hiddenAnswer(games: List<GameEntry>?, why: String = ""): String =
+        if (games != null) JSONObject().put("Listed", JSONArray(games.map(::libraryGame))).toString()
+        else JSONObject().put("Failed", why).toString()
+
+    /** The answer to `ConsoleCmd::SetHidden`, as the console's `HideAnswer`. */
+    fun hideAnswer(fp: String, profile: String, appId: String, hidden: Boolean, done: Boolean, notice: String): String =
+        JSONObject()
+            .put("fp_hex", fp)
+            .put("profile", profile)
+            .put("app_id", appId)
+            .put("hidden", hidden)
+            .put("done", done)
+            .put("notice", notice)
+            .toString()
 
     private fun installJson(i: TitleInstall): JSONObject = JSONObject().put("state", i.state).apply {
         i.sizeBytes?.let { put("size_bytes", it) }
@@ -429,6 +463,9 @@ internal object ConsoleJson {
      * console's Connected-controllers screen. [extras] are appended, and the first one names the
      * chip when no `InputDevice` drives it. [body] is this device's own vibrator.
      *
+     * [padAudio] says this client plays pad audio on a USB DualSense; those pads' rows carry
+     * `audio`, which shows the per-controller audio rows.
+     *
      * `detail`/`forwarded`/`rumble` come straight from [padInfoOf], the same reader the touch
      * Controllers screen renders from: the support answer a user gets must not depend on which
      * interface asked, and two readers of `InputDevice` would be two answers waiting to drift.
@@ -439,6 +476,7 @@ internal object ConsoleJson {
         extras: List<ExtraPad> = emptyList(),
         body: Vibrator? = null,
         others: List<InputDevice> = emptyList(),
+        padAudio: Boolean = false,
     ): String {
         val arr = JSONArray()
         for (d in pads) {
@@ -463,6 +501,7 @@ internal object ConsoleJson {
                         )
                 } else null
             } else null
+            if (padAudio && hasSpeaker(d)) entry.put("audio", true)
             entry.put("battery", battery ?: JSONObject.NULL)
             arr.put(entry)
         }
@@ -491,6 +530,16 @@ internal object ConsoleJson {
             .put("others", otherRows)
             .toString()
     }
+
+    /** A DualSense or Edge: the Sony pads with a speaker (the DualShock 4 has none). */
+    private fun hasSpeaker(d: InputDevice): Boolean =
+        d.vendorId == DsDevice.VID_SONY && DsDevice.modelFor(d.productId).let {
+            it != null && it != DsDevice.Model.DUALSHOCK4
+        }
+
+    /** `pads[key].speaker_volume` of the saved document [base]; 100 (unscaled) without an entry. */
+    fun padSpeakerVolume(base: JSONObject?, key: String): Int =
+        base?.optJSONObject("pads")?.optJSONObject(key)?.optInt("speaker_volume", 100)?.coerceIn(0, 100) ?: 100
 
     /**
      * Real, plugged-in input devices that are not controllers — a pad Android misreads lands

@@ -46,11 +46,13 @@ pub const AUDIO_MUTE_HOST: u8 = 1 << 1;
 
 /// The sentence the overlay shows for a mute mask; `None` when the stream is audible. One
 /// place, so no client invents its own wording for whose mute it is.
+#[cfg(feature = "l10n")]
 pub fn audio_mute_label(mask: u8) -> Option<&'static str> {
+    use pf_l10n::client as c;
     match (mask & AUDIO_MUTE_HOST != 0, mask & AUDIO_MUTE_LOCAL != 0) {
-        (true, true) => Some("Muted by the host and on this device"),
-        (true, false) => Some("Muted by the host"),
-        (false, true) => Some("Muted on this device"),
+        (true, true) => Some(c::notice_audio_muted_host_and_device()),
+        (true, false) => Some(c::notice_audio_muted_host()),
+        (false, true) => Some(c::notice_audio_muted_device()),
         (false, false) => None,
     }
 }
@@ -64,6 +66,7 @@ pub const LOCAL_MUTE_NOTICE: Duration = Duration::from_secs(5);
 /// able to hide behind a local unmute. A local mute is the player's own press from the dial
 /// that still shows its state, so it says so long enough to read and then leaves the picture
 /// alone — a standing badge over the game is the operator's language, not the player's.
+#[cfg(feature = "l10n")]
 pub fn audio_mute_notice(mask: u8, since: Duration) -> Option<&'static str> {
     if mask & AUDIO_MUTE_HOST == 0 && since >= LOCAL_MUTE_NOTICE {
         return None;
@@ -79,11 +82,12 @@ pub fn mic_mute_notice(muted: bool, since: Duration) -> Option<bool> {
 }
 
 /// What [`mic_mute_notice`] says on screen.
-pub const fn mic_mute_label(muted: bool) -> &'static str {
+#[cfg(feature = "l10n")]
+pub fn mic_mute_label(muted: bool) -> &'static str {
     if muted {
-        "Microphone muted"
+        pf_l10n::client::notice_mic_muted()
     } else {
-        "Microphone live"
+        pf_l10n::client::notice_mic_live()
     }
 }
 

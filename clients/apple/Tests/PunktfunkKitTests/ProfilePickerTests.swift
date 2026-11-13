@@ -95,7 +95,7 @@ final class ProfilePickerTests: XCTestCase {
         XCTAssertEqual(
             HostProfiles.seatGate(row(.unavailable)),
             .refuse("That profile can't play on this host right now."))
-        XCTAssertEqual(HostProfiles.wakingLine("Kid"), "Getting Kid's desk ready…")
+        XCTAssertEqual(HostProfiles.wakingLine("Kid"), "Getting Kid's desktop ready…")
     }
 
     func testAnOldSavedHostDecodesWithoutAPick() throws {

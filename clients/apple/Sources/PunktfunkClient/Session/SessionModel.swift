@@ -78,23 +78,6 @@ struct LaunchHoldTarget: Equatable {
     let seq: Int
 }
 
-/// The entry behind a `connect(launchID:)`, handed over out of band: the shelf's launch callbacks
-/// carry only the id (five call sites, three tile views), and the launch hold needs the title, art
-/// and tile rect. Keyed by id on the way out, so a stale entry can never dress a different launch.
-enum LaunchedEntry {
-    private static var last: (entry: GameEntry, rect: CGRect?)?
-
-    static func remember(_ entry: GameEntry?, from rect: CGRect?) {
-        last = entry.map { ($0, rect) }
-    }
-
-    static func take(_ id: String, seq: Int) -> LaunchHoldTarget? {
-        defer { last = nil }
-        guard let last, last.entry.id == id else { return nil }
-        return LaunchHoldTarget(entry: last.entry, sourceRect: last.rect, seq: seq)
-    }
-}
-
 /// The values the views read for one session, each documented on its `SessionModel` property.
 /// `disconnect` assigns a fresh one, so the next session starts with no hold, hint or mute.
 struct SessionUI {
@@ -192,6 +175,7 @@ final class SessionModel: ObservableObject {
         var host: StoredHost
         let effective: EffectiveSettings
         let gamepad: PunktfunkConnection.GamepadType
+        let overrides: GameOverrides?
         let launchID: String?
         let profileID: String?
         let shelf: LibraryTarget?
@@ -224,6 +208,8 @@ final class SessionModel: ObservableObject {
     /// connect (design/client-settings-profiles.md §4.2). The connection carries the same value
     /// for the readers that live in PunktfunkKit and can't see this model.
     @Published private(set) var settings = EffectiveSettings()
+    /// The host set something for this session's game: the stats line says so.
+    private var hostOverrides = false
     /// The stats-overlay tier for this session: the resolved one at connect, then whatever the
     /// live cycle surfaces (⌃⌥⇧S, the three-finger tap) move it to. Separate from the @AppStorage
     /// global so a preset that overrides the tier actually gets it, without the cycle breaking.
@@ -255,6 +241,11 @@ final class SessionModel: ObservableObject {
     /// hopped to main), TIMEOUT = safety net for a rejected/capped switch that never yields a
     /// differently-sized frame. Ticked from the 1 Hz stats timer.
     private var resizeIndicator = ResizeIndicator()
+    /// The last decoded picture's size: smaller than the host's mode when the host encodes the
+    /// view. nil until the first frame.
+    private var picture: (width: UInt32, height: UInt32)?
+    /// `picture` as the Live Activity names it, `1920×1080`; empty until the first frame.
+    @Published private(set) var pictureText = ""
 
     /// Received AUs, for the once-a-second log gate: nothing is logged while no frame flows.
     let meter = FrameMeter()
@@ -270,13 +261,18 @@ final class SessionModel: ObservableObject {
     private let resources = SessionResources()
     private var audio: SessionAudio? { resources.part() }
     private var gamepadCapture: GamepadCapture? { resources.part() }
-    /// The in-stream ring's pad path (design/touch-client-overlay.md §2.6), forwarded from the
-    /// capture so the view can wire them once per session. The chord carries the pad's wire
-    /// index; a remote's Back and a captured Steam Controller carry none.
+    /// The in-stream ring's remote path (design/touch-client-overlay.md §2.6): the Siri Remote's
+    /// short Back. Wired by the view once per session.
     var onRingChord: ((UInt32?) -> Void)?
+    /// A pad or Steam Controller shortcut the session runs (design/client-shortcuts.md): the
+    /// action, its phase and the wire pad that fired it, `nil` for a captured Steam Controller.
+    var onShortcut: ((Shortcuts.Action, Shortcuts.Phase, UInt32?) -> Void)?
     var onRingNav: ((RingNav) -> Void)?
     /// A connect the host parked for its operator: the view shows the approval wait.
     var onAwaitingApproval: ((StoredHost) -> Void)?
+    /// The saved record for a host as it is now, which a redial dials. Unset, a redial dials the
+    /// copy its first dial took.
+    var currentRecord: (@MainActor (StoredHost.ID) -> StoredHost?)?
 
     /// The ring is up: the pad belongs to it (flushed on the host, edges become navigation).
     func setRingOpen(_ open: Bool) {
@@ -292,8 +288,24 @@ final class SessionModel: ObservableObject {
 
     /// One synthetic system-button tap on the host's pad (a `GamepadWire` bit) — the ring's
     /// guide / quick-access slots, which reach the host where the physical button cannot.
-    func tapPadButton(_ bit: UInt32) {
-        gamepadCapture?.tapButton(bit)
+    func tapPadButton(_ bit: UInt32, pad: UInt32? = nil) {
+        gamepadCapture?.tapButton(bit, pad: pad)
+    }
+
+    /// A system button a shortcut holds down on the host's pad, or lets go of.
+    func holdPadButton(_ bit: UInt32, down: Bool, pad: UInt32?) {
+        gamepadCapture?.holdButton(bit, down: down, pad: pad)
+    }
+
+    /// A shortcut to a danger action arms on its first press and fires on a second within 2 s,
+    /// as the dial's does. True when this press is the second.
+    func confirmShortcut(_ id: String, prompt: String) -> Bool {
+        if notices.shortcutArm.value?.id == id {
+            notices.shortcutArm.clear()
+            return true
+        }
+        flash(\.shortcutArm, ShortcutArm(id: id, text: prompt), for: 2)
+        return false
     }
 
     /// The ring's Controller type slot: what every forwarded pad declares, whether one is
@@ -374,6 +386,7 @@ final class SessionModel: ObservableObject {
 
     /// Dial `host` with `effective`, the session's settings already resolved from the globals and
     /// its preset (§4.4). The connection carries them, so kit-side readers never re-read globals.
+    /// A mode render scale makes larger goes with its view (`EffectiveSettings.streamView`).
     ///
     /// `allowTofu` is true only for an unpinned host that advertised `pair=optional` (rule 3a);
     /// any other unpinned host is refused and routed to pairing (rule 3b). A pinned host's stored
@@ -388,6 +401,9 @@ final class SessionModel: ObservableObject {
     /// over (the Wake-on-LAN wait). It never fires for `requestAccess`.
     func connect(to host: StoredHost, effective: EffectiveSettings,
                  gamepad: PunktfunkConnection.GamepadType = .auto,
+                 /// The host's overrides for the launched game; `effective` already carries
+                 /// their HDR and pad. Their lines and refresh are fitted to this display here.
+                 overrides: GameOverrides? = nil,
                  launchID: String? = nil,
                  /// The host profile to play as; nil lets the host choose.
                  profileID: String? = nil,
@@ -402,6 +418,9 @@ final class SessionModel: ObservableObject {
                  autoWake: Bool = false,
                  /// When the host first refused as still waking; nil on a first dial.
                  wakeSince: ContinuousClock.Instant? = nil,
+                 /// A wake redial's launch hold, still up from the dial it repeats. nil raises
+                 /// the launch's own from `LaunchedEntry`.
+                 hold: LaunchHoldTarget? = nil,
                  /// The host refused `profileID` as unknown. Return true to re-dial: the error
                  /// is then not shown.
                  onProfileUnknown: (@MainActor () -> Bool)? = nil,
@@ -416,14 +435,16 @@ final class SessionModel: ObservableObject {
         guard phase == .idle else { return }
         guard !Self.activeHosts.contains(where: { $0.key != ObjectIdentifier(self) && $0.value == host.id })
         else {
-            errorMessage = "\(host.displayName) is already streaming in another window."
+            // A redial refused here has no next attempt: the connect overlay must not wait on one.
+            redial = nil
+            errorMessage = L10n.appleDialAlreadyStreamingHere(host: host.displayName)
             return
         }
         connectSeq += 1
         let attempt = connectSeq
         lastDial = Redial(
-            host: host, effective: effective, gamepad: gamepad, launchID: launchID,
-            profileID: profileID, shelf: shelf, allowTofu: allowTofu,
+            host: host, effective: effective, gamepad: gamepad, overrides: overrides,
+            launchID: launchID, profileID: profileID, shelf: shelf, allowTofu: allowTofu,
             autoWake: autoWake && !requestAccess, wakeSince: wakeSince)
         phase = .connecting
         activeHost = host
@@ -431,26 +452,33 @@ final class SessionModel: ObservableObject {
         launchedShelf = shelf
         // The host never tracks a launcher tile, so there is nothing to wait for.
         launchSeq += 1
-        launchHold = launchID.flatMap { LaunchedEntry.take($0, seq: launchSeq) }
-            .flatMap { $0.entry.isLauncher ? nil : $0 }
+        launchHold = hold ?? launchID.flatMap(LaunchedEntry.take).flatMap {
+            $0.entry.isLauncher
+                ? nil : LaunchHoldTarget(entry: $0.entry, sourceRect: $0.rect, seq: launchSeq)
+        }
         launchWindowWait = false
         launchDownload = nil
         errorMessage = nil
         settings = effective
+        hostOverrides = overrides.map { !$0.isEmpty } ?? false
         statsVerbosity = StatsVerbosity(rawValue: effective.statsVerbosity) ?? .normal
         #if os(iOS)
         // An attached monitor shows the picture (StreamViewController), so Native is its mode.
-        let mode = ExternalDisplay.streamMode(effective)
-            ?? effective.streamMode(native: NativeDisplay.mode)
+        let native = ExternalDisplay.nativeMode ?? NativeDisplay.mode
         #else
-        let mode = effective.streamMode(native: NativeDisplay.mode)
+        let native = NativeDisplay.mode
         #endif
+        let own = effective.streamMode(native: native)
+        let mode = overrides?.fit(
+            own, native: native, codecMax: RenderScale.maxDimension(codec: effective.codec)) ?? own
+        let view = effective.streamView(native: native, mode: mode)
         let pin = host.pinnedSHA256
         // Screens (main-actor — screen APIs): with All monitors, a host screen per display now and
         // the promise to show more as displays come.
         #if os(macOS)
         let showsScreens = effective.screens == "all"
-        let screenAsk = showsScreens ? ScreenAsk.ofThisMac(mode: mode) : .none
+        let scale = (effective.renderScale, RenderScale.maxDimension(codec: effective.codec))
+        let screenAsk = showsScreens ? ScreenAsk.ofThisMac(mode: mode, scale: scale) : .none
         #else
         let showsScreens = false
         let screenAsk = ScreenAsk.none
@@ -461,12 +489,9 @@ final class SessionModel: ObservableObject {
         // metadata we apply (Step 2) when it IS HDR.
         let displayHDR: Bool = {
             #if os(macOS)
-                // POTENTIAL, not current, headroom: `maximumExtendedDynamicRangeColorComponentValue`
-                // is the CURRENTLY-ALLOCATED headroom, which macOS hands out on demand — on an idle
-                // SDR desktop it reads 1.0 even with HDR enabled and active (external HDR displays
-                // like the Samsung G95SC allocate EDR only when content asks). Gating on it means an
-                // HDR monitor never gets advertised at connect time. `maximumPotential…` is the
-                // mode-independent capability (the macOS analogue of the tvOS/iOS gates below).
+                // The potential headroom, not the current one: macOS allocates EDR only when content
+                // asks, so the current value reads 1.0 on an idle desktop and an HDR monitor would
+                // never be advertised at connect.
                 return (NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0) > 1.0
             #elseif os(tvOS)
                 // NOT the EDR headroom here: on tvOS that reflects the CURRENT output mode, and
@@ -496,16 +521,18 @@ final class SessionModel: ObservableObject {
                 hw444EightBit: Stage444Probe.hwDecode444_8bit,
                 hw444TenBit: Stage444Probe.hwDecode444_10bit)
             let connectLine = "connect \(host.displayName) \(host.address):\(host.port) "
-                + "mode=\(offer.width)x\(offer.height)@\(offer.hz) codec=\(effective.codec) "
+                + "mode=\(offer.width)x\(offer.height)@\(offer.hz) "
+                + "view=\(view.map { "\($0.width)x\($0.height)" } ?? "-") codec=\(effective.codec) "
                 + "bitrate=\(offer.bitrateKbps)kbps "
                 + "hdr=\(offer.hdr) 10bit=\(offer.tenBit) 444=\(offer.want444) "
                 + "audio=\(offer.audioChannels)ch/\(offer.audioRateHz)Hz/\(offer.audioBits)bit "
                 + "pinned=\(pin != nil) tofu=\(allowTofu) launch=\(launchID ?? "-") "
+                + "overrides=\(overrides.map { !$0.isEmpty } ?? false) "
                 + "unlock=\(unlock.map { "\($0.kind)" } ?? "-")"
             sessionLog.info("\(connectLine, privacy: .public)")
             let result = Result { try PunktfunkConnection(
                 host: host.address, port: host.port,
-                width: offer.width, height: offer.height, refreshHz: offer.hz,
+                width: offer.width, height: offer.height, refreshHz: offer.hz, view: view,
                 pinSHA256: pin, identity: identity, compositor: offer.compositor,
                 gamepad: gamepad, bitrateKbps: offer.bitrateKbps, videoCaps: offer.videoCaps,
                 audioChannels: offer.audioChannels,
@@ -554,35 +581,50 @@ final class SessionModel: ObservableObject {
                         "connect \(host.displayName, privacy: .public) failed: \(String(describing: error), privacy: .public)")
                     self.phase = .idle
                     self.activeHost = nil
-                    // The launch hold is an OPAQUE cover; only `revealStream` drops it, and
-                    // otherwise nothing here does. It would sit over the home screen until the
-                    // next session, and on tvOS it makes the host grid unfocusable behind it.
-                    self.revealStream()
-                    // true: the caller re-dials and says what it ends in.
-                    if case PunktfunkClientError.rejected(.profileUnknown, _) = error,
-                       onProfileUnknown?() == true {
-                        return
-                    }
-                    if case PunktfunkClientError.rejected(.profileLocked, let said) = error,
-                       onProfileLocked?(said) == true {
-                        return
-                    }
-                    let wake = PunktfunkConnection.wakeRedialDelay(
-                        after: error, autoWake: self.lastDial?.autoWake ?? false,
-                        sinceFirst: self.sinceFirstWake)
-                    if self.redialWhileWaking(self.lastDial, after: wake) { return }
-                    if let message = ConnectOffer.failureMessage(
-                        error, hostName: host.displayName, pinned: pin != nil,
+                    let recovery = DialRecovery.decide(
+                        error,
+                        wakeDelay: self.lastDial.flatMap {
+                            PunktfunkConnection.wakeRedialDelay(
+                                after: error, autoWake: $0.autoWake,
+                                sinceFirst: self.sinceFirstWake)
+                        },
+                        hostName: host.displayName, pinned: pin != nil,
                         requestAccess: requestAccess, callerRecovers: onUnreachable != nil)
-                    {
-                        self.redial = nil
-                        self.errorMessage = message
-                    } else {
-                        // The caller owns recovery (wake-and-retry); its overlay explains it.
-                        onUnreachable?()
-                    }
+                    // The launch hold is an opaque cover only `revealStream` drops. Left up, it
+                    // sits over the home screen, and on tvOS the host grid can't take focus.
+                    if !recovery.keepsLaunchHold { self.revealStream() }
+                    self.recover(
+                        recovery, onProfileUnknown: onProfileUnknown,
+                        onProfileLocked: onProfileLocked, onUnreachable: onUnreachable)
                 }
             }
+        }
+    }
+
+    /// Perform a failed dial's recovery. A profile handler returns true when it takes the failure
+    /// over (it dials again or prompts); otherwise the recovery after it runs.
+    private func recover(
+        _ recovery: DialRecovery,
+        onProfileUnknown: (@MainActor () -> Bool)?,
+        onProfileLocked: (@MainActor (String?) -> Bool)?,
+        onUnreachable: (@MainActor () -> Void)?
+    ) {
+        switch recovery {
+        case .profileUnknown(let otherwise):
+            guard onProfileUnknown?() != true else { return }
+            recover(
+                otherwise, onProfileUnknown: nil, onProfileLocked: nil, onUnreachable: onUnreachable)
+        case .profileLocked(let said, let otherwise):
+            guard onProfileLocked?(said) != true else { return }
+            recover(
+                otherwise, onProfileUnknown: nil, onProfileLocked: nil, onUnreachable: onUnreachable)
+        case .wakeRedial(let wait):
+            if let plan = lastDial { redialWhileWaking(plan, after: wait) }
+        case .alert(let message):
+            redial = nil
+            errorMessage = message
+        case .handBack:
+            onUnreachable?()
         }
     }
 
@@ -605,11 +647,13 @@ final class SessionModel: ObservableObject {
         if trusted {
             connection = conn
             noteTouchFallback(conn)
+            noteScreen(conn)
             startStatsTimer()
             beginStreaming()
         } else if allowTofu {
             connection = conn
             noteTouchFallback(conn)
+            noteScreen(conn)
             startStatsTimer()
             phase = .awaitingTrust(fingerprint: conn.hostFingerprint)
         } else {
@@ -617,8 +661,7 @@ final class SessionModel: ObservableObject {
             phase = .idle
             activeHost = nil
             revealStream() // no stream is coming; the hold must not outlive the dial
-            errorMessage = "\(host.displayName) is not paired yet. "
-                + "Pair with its PIN before streaming."
+            errorMessage = L10n.appleDialNotPaired(host: host.displayName)
         }
     }
 
@@ -633,12 +676,13 @@ final class SessionModel: ObservableObject {
         isBackgrounded = true
         conn.setVideoDropped(true)
         applyMicMute() // now muted for privacy — on top of the user's own mute, not instead of it
-        // Non-deliberate on fire (keep the host linger) so a user who returns late reconnects fast,
-        // exactly like today's network-drop path. min 1 minute guards a nonsense setting.
+        // Non-deliberate on fire (the host lingers), so a late return reconnects fast. At least a
+        // minute. On the wall clock, as the Live Activity's countdown: the mach clock stops while
+        // the device sleeps.
         let minutes = max(1, timeoutMinutes)
         backgroundDeadline = Date().addingTimeInterval(TimeInterval(minutes * 60))
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + .seconds(minutes * 60))
+        timer.schedule(wallDeadline: .now() + .seconds(minutes * 60))
         timer.setEventHandler { [weak self] in
             // The timer fires on `.main`, so the actor's executor is the main thread here.
             MainActor.assumeIsolated { self?.disconnect(deliberate: false) }
@@ -672,24 +716,12 @@ final class SessionModel: ObservableObject {
 
     // MARK: - Microphone mute (in-stream, per session)
 
-    /// Whether this session has a mic uplink there is any point in muting: the mic must be on in
-    /// the session's RESOLVED settings (a preset can turn it on or off), the platform must have
-    /// an app-accessible input at all, and the OS must not have refused us one. Drives whether the
-    /// mute control is offered — a live-looking mute button over a session that sends no
-    /// microphone would be a lie. Same three conditions `SessionAudio` starts an uplink on
-    /// (`.notDetermined` counts: the prompt is pending and a grant starts the uplink mid-session).
+    /// Whether this session has a mic uplink there is any point in muting (`SessionMic`): drives
+    /// whether the mute control is offered.
     var micAvailable: Bool {
-        #if os(tvOS)
-        return false // no app-accessible microphone — SessionAudio never opens an uplink either
-        #else
-        // The session's grants must include MIC (per-client access §7 — hide the mic UI when
-        // ungranted; a mute button over a mic the host drops would be a lie twice over).
-        guard settings.micEnabled, connection?.canUseMic != false else { return false }
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized, .notDetermined: return true
-        default: return false // denied / restricted — there is no uplink to mute
-        }
-        #endif
+        SessionMic.available(
+            enabled: settings.micEnabled, granted: connection?.canUseMic != false,
+            authorization: AVCaptureDevice.authorizationStatus(for: .audio))
     }
 
     /// Flip the user's mute. The in-stream surfaces (HUD button, Stream menu, ⌃⌥⇧A while
@@ -717,6 +749,15 @@ final class SessionModel: ObservableObject {
         notices[keyPath: slot].show(value, for: seconds) { [weak self] in
             self?.notices[keyPath: slot].clear()
         }
+    }
+
+    /// Say once, at stream start, that this screen is another device's and sized by it, else
+    /// that the host did not give the preset's screen. One line in the launch line's slot, a
+    /// shared screen first: a joiner's dropped game is about the same screen.
+    private func noteScreen(_ conn: PunktfunkConnection) {
+        let shared = conn.sharesScreen ? String(localized: L10n.noticeSharedScreen) : nil
+        guard let line = shared ?? conn.screenWishLine else { return }
+        flash(\.launch, line, for: SessionNotices.launchSeconds)
     }
 
     /// Say so when the passthrough touch model meets a host without touch injection — the same
@@ -765,22 +806,24 @@ final class SessionModel: ObservableObject {
         if forever { UserDefaults.standard.set(true, forKey: DefaultsKey.vrrWarningMuted) }
     }
 
-    /// How to leave, in one line, for the input in hand: the pad chord when a controller is
-    /// forwarded, else this device's own way out. Touch passthrough reads no twist, so it
-    /// names the edge pull (`EdgeDial`) instead.
+    /// How to leave, in one line, for the input in hand: the pad's End stream shortcut when a
+    /// controller is connected, else this device's own way out. Touch passthrough reads no
+    /// twist, so it names the edge pull (`EdgeDial`) instead.
     var exitHintText: String {
-        if connection?.settings.gamepadForwarding ?? true, !GCController.controllers().isEmpty {
-            return "Hold L1 + R1 + Start + Select to leave"
+        let shortcuts = settings.resolvedShortcuts
+        func line(_ device: Shortcuts.Device) -> String? {
+            guard let t = shortcuts.trigger(for: .slot(.endStream), device: device) else { return nil }
+            let keys = t.chord(client: shortcutClient)
+            return t.hold ? L10n.noticeExitHold(keys: keys) : L10n.noticeExitKeys(keys: keys)
         }
+        if !GCController.controllers().isEmpty, let pad = line(.pad) { return pad }
         #if os(tvOS)
-        return "Hold Back to leave"
+        return L10n.noticeExitHold(keys: "Back")
         #elseif os(macOS)
-        return "⌃⌥⇧D to leave"
+        return line(.keyboard) ?? line(.pad) ?? ""
         #else
-        if GCKeyboard.coalesced != nil { return "⌃⌥⇧D to leave" }
-        return touchPassthrough
-            ? "Pull two fingers in from a side edge for quick actions"
-            : "Two-finger twist opens quick actions"
+        if GCKeyboard.coalesced != nil, let keys = line(.keyboard) { return keys }
+        return String(localized: touchPassthrough ? L10n.noticeRingEdgePull : L10n.noticeRingTwist)
         #endif
     }
 
@@ -801,13 +844,10 @@ final class SessionModel: ObservableObject {
         }
     }
 
-    /// Push the EFFECTIVE mute — the user's choice OR the background keep-alive's privacy mute —
-    /// onto the audio engine. The two reasons are composed here and nowhere else: whichever one
-    /// changed, the other still holds, so returning from the background can't un-mute a user who
-    /// muted mid-stream, and a user unmuting while backgrounded (Live Activity, another window)
-    /// doesn't open the mic behind their back.
+    /// Push the effective mute (`SessionMic.muted`) onto the audio engine, whichever of its two
+    /// reasons changed.
     private func applyMicMute() {
-        audio?.setMicMuted(micMuted || isBackgrounded)
+        audio?.setMicMuted(SessionMic.muted(user: micMuted, backgrounded: isBackgrounded))
     }
 
     // MARK: - Per-client access (chip state + expiry warnings)
@@ -816,7 +856,8 @@ final class SessionModel: ObservableObject {
     /// called by the 1 Hz stats tick, which is also what makes a mid-session `AccessUpdate`
     /// (a console edit) reach the chip and the capture gates within a second. Every write is
     /// guarded: `notices` publishes on any assignment, and a full-and-permanent session (every
-    /// old host) must publish nothing.
+    /// old host) must publish nothing. The capture release and the T−5 m / T−1 m toasts (§7)
+    /// are `AccessWarning`'s; engaging a capture is gated at the stream views.
     private func updateAccessState() {
         guard let conn = connection else { return }
         let grants = conn.accessGrants
@@ -826,36 +867,19 @@ final class SessionModel: ObservableObject {
         if notices.accessRemainingSecs != remaining { notices.accessRemainingSecs = remaining }
         let limited = level != .fullControl || remaining != 0
         if notices.accessLimited != limited { notices.accessLimited = limited }
-        // A mid-session edit that removed BOTH input classes releases an engaged capture:
-        // holding a frozen cursor and swallowed keys over input the host now drops is
-        // exactly the "keyboard does nothing and nobody says why" failure §7 exists to
-        // prevent. (Engage is gated at the stream views; this is the live-revoke half.)
-        if mouseCaptured,
-           grants & (PunktfunkConnection.grantPointer | PunktfunkConnection.grantKeyboard) == 0 {
+        if AccessWarning.releasesCapture(captured: mouseCaptured, grants: grants) {
             NotificationCenter.default.post(name: .punktfunkReleaseCapture, object: nil)
         }
-        // The T−5 m / T−1 m warning toasts (§7). Derived from the countdown CROSSING the
-        // marks rather than from the AccessUpdate messages alone: the host's warnings
-        // re-anchor the same countdown, so this shows them when they arrive AND still fires
-        // on plain clock progress if a warning datagram never lands. One shot each; an edit
-        // that extends the deadline back above a mark re-arms it.
-        guard remaining != 0 else { return }
-        if remaining > 300 {
-            // The 1 m latch never stands without the 5 m one.
-            if notices.accessWarned5m {
-                notices.accessWarned5m = false
-                notices.accessWarned1m = false
-            }
-        } else if remaining > 60 {
-            if notices.accessWarned1m { notices.accessWarned1m = false }
-            if !notices.accessWarned5m {
-                notices.accessWarned5m = true
-                flash(\.accessWarning, "Access ends in \(Self.accessCountdown(remaining))")
-            }
-        } else if !notices.accessWarned1m {
-            notices.accessWarned1m = true
-            notices.accessWarned5m = true
-            flash(\.accessWarning, "Access ends in under a minute")
+        let (warned, toast) = AccessWarning.step(
+            remaining: remaining,
+            warned: AccessWarning(fiveMinutes: notices.accessWarned5m, oneMinute: notices.accessWarned1m))
+        if notices.accessWarned5m != warned.fiveMinutes { notices.accessWarned5m = warned.fiveMinutes }
+        if notices.accessWarned1m != warned.oneMinute { notices.accessWarned1m = warned.oneMinute }
+        switch toast {
+        case .endsIn(let secs)?:
+            flash(\.accessWarning, L10n.grantEndsIn(time: Self.accessCountdown(secs)))
+        case .endsSoon?: flash(\.accessWarning, String(localized: L10n.grantEndsSoon))
+        case nil: break
         }
     }
 
@@ -866,12 +890,22 @@ final class SessionModel: ObservableObject {
         flash(\.launch, text, for: SessionNotices.launchSeconds)
     }
 
-    /// "1 h 58 m" / "12 m" / "45 s" — the countdown wording the chip and the warnings share.
+    /// "1 h 58 m" / "12 m" — the countdown wording the chip and the warnings share, for a
+    /// minute or more.
     static func accessCountdown(_ secs: UInt32) -> String {
         let s = Int(secs)
-        if s >= 3600 { return "\(s / 3600) h \((s % 3600) / 60) m" }
-        if s >= 60 { return "\(s / 60) m" }
-        return "\(s) s"
+        if s >= 3600 {
+            return L10n.grantRemainingHoursMinutes(
+                hours: String(s / 3600), minutes: String((s % 3600) / 60))
+        }
+        return L10n.grantRemainingMinutes(minutes: String(s / 60))
+    }
+
+    /// The chip's tail: "ends in 12 m", or "ends in under 1 m" in the last minute.
+    static func accessChipEnd(_ secs: UInt32) -> String {
+        secs < 60
+            ? String(localized: L10n.grantChipEndsSoon)
+            : L10n.grantChipEnds(time: accessCountdown(secs))
     }
 
     /// Move this session's overlay tier: a Settings change to the stored tier, or `cycleStats`.
@@ -956,80 +990,57 @@ final class SessionModel: ObservableObject {
         // link may never come up (a non-deadline rung has none at all).
         PresentLinkInfo.shared.clear()
         resizeIndicator = ResizeIndicator() // no stale target/timer into the next session
+        picture = nil
+        pictureText = ""
     }
 
-    /// Called (via the main actor) when the pump hits end-of-session.
+    /// Called (via the main actor) when the pump hits end-of-session: reads why off the ended
+    /// connection, tears the session down, then takes the `SessionEndRoute` those facts name.
     func sessionEnded() {
         guard let conn = connection else { return }
         let name = activeHost?.displayName ?? "host"
         // WHY it ended, asked while the connection is still up — `disconnect` tears it down.
         let reason = conn.sessionEndReason
-        // A typed mid-session rejection outranks the coarse reason: an access-expiry close
-        // (per-client access §4) files under `.hostError` there, and "ended with an error"
-        // is the wrong sentence for "your access expired".
         let rejection = conn.endRejection
-        // The host's own words when it sent any: it can name the monitor it was told to
-        // capture and no longer has, which our generic line cannot.
-        let said = conn.endRejectionMessage
-        // Where a game exit sends us: back into the library this session started from, so the
-        // next title is a tap away. A plain desktop connect has no shelf, and so no way back.
-        let host = activeHost
-        // The SHELF is what says this came from the library, not the launch id: a Resume off a
-        // shelf launches nothing and still has somewhere to go back to.
-        let shelf = launchedShelf
         let endLine = "session ended by \(name) reason=\(reason) "
             + "rejection=\(rejection.map { String(describing: $0) } ?? "-")"
         sessionLog.info("\(endLine, privacy: .public)")
-        // The streamed session proved the host's identity, so its redial is pinned to it.
-        let lostDial = lastDial.map { plan -> Redial in
-            var plan = plan
-            plan.host.pinnedSHA256 = conn.hostFingerprint
-            return plan
-        }
-        let wake = conn.wakeRedialDelay(
-            autoWake: lastDial?.autoWake ?? false, sinceFirst: sinceFirstWake)
+        // The shelf, not the launch id, says this came from the library: a Resume launches nothing.
+        let shelf = activeHost == nil ? nil : launchedShelf
+        let hold = launchHold
+        let route = SessionEndRoute.decide(
+            phase: phase, reason: reason, rejection: rejection, said: conn.endRejectionMessage,
+            wakeDelay: conn.wakeRedialDelay(
+                autoWake: lastDial?.autoWake ?? false, sinceFirst: sinceFirstWake),
+            dialed: lastDial?.host, live: conn.hostFingerprint, shelf: shelf != nil)
         disconnect(deliberate: false) // host/network ended it — keep the linger for a reconnect
-        if redialWhileWaking(lastDial, after: wake) { return }
-        if reason == .lost, rejection == nil, let lostDial {
-            redialAfterLoss(lostDial)
-            return
-        }
-        if let rejection {
-            // The host's sentence, else the shared typed-rejection wording
-            // ("Your access to this host has expired…").
-            errorMessage = "\(name): \(said ?? rejection.userMessage)"
-            return
-        }
-        switch reason {
-        case .gameExited:
-            // The player quit their own game. Not a failure, and they are probably after the next
-            // title — so no banner, and back to the library it came from.
-            if host != nil, let shelf {
-                returnToLibrary = shelf
-            }
-        case .hostEnded, .local:
-            // Someone asked for this: an operator "End" on the host, or our own close racing in.
-            // Say it plainly, without the error framing.
-            errorMessage = "\(name) ended the session"
-        case .hostError:
-            errorMessage = "\(name) ended the session with an error"
-        case .lost:
-            errorMessage = "Lost the connection to \(name)"
+        switch route {
+        case .wakeRedial(let wait):
+            // `disconnect` dropped the hold; a wake redial keeps it up to the game.
+            launchHold = hold
+            if let plan = lastDial { redialWhileWaking(plan, after: wait) }
+        case .lossRedial(let pin):
+            guard var plan = lastDial else { return }
+            plan.host.pinnedSHA256 = pin
+            redialAfterLoss(plan)
+        case .message(let message):
+            errorMessage = message.text(host: name)
+        case .library:
+            returnToLibrary = shelf
         case .none:
-            // No verdict (an older core, or the close raced the read): keep the wording this path
-            // has always used rather than inventing one.
-            errorMessage = "Session ended by \(name)"
+            break
         }
     }
 
-    /// Dial a lost session again on the schedule every client shares, with the dial that started
-    /// it; the host resumes the session it still holds. A redial that can't reach the host is the
-    /// next attempt, and a spent schedule says the connection is lost.
+    /// Dial a lost session again on the schedule every client shares: the dial that started it,
+    /// to the host's record as it is now, pinned as the session proved. The host resumes the
+    /// session it still holds. A redial that can't reach the host is the next attempt, and a
+    /// spent schedule says the connection is lost.
     private func redialAfterLoss(_ plan: Redial) {
         guard let wait = PunktfunkConnection.SessionEndReason.lost.redialDelay(attempt: plan.attempt)
         else {
             redial = nil
-            errorMessage = "Lost the connection to \(plan.host.displayName)"
+            errorMessage = L10n.appleEndedLost(host: plan.host.displayName)
             return
         }
         var next = plan
@@ -1040,8 +1051,11 @@ final class SessionModel: ObservableObject {
             try? await Task.sleep(for: wait)
             guard let self, self.redial?.attempt == next.attempt, self.phase == .idle else { return }
             self.connect(
-                to: next.host, effective: next.effective, gamepad: next.gamepad,
-                launchID: next.launchID, profileID: next.profileID, shelf: next.shelf,
+                to: next.host.redialed(
+                    current: self.currentRecord?(next.host.id), pin: next.host.pinnedSHA256),
+                effective: next.effective, gamepad: next.gamepad,
+                overrides: next.overrides, launchID: next.launchID, profileID: next.profileID,
+                shelf: next.shelf,
                 onUnreachable: { [weak self] in self?.redialAfterLoss(next) })
         }
     }
@@ -1049,11 +1063,12 @@ final class SessionModel: ObservableObject {
     /// Time since the host this dial is for first refused as a host still waking.
     private var sinceFirstWake: Duration? { lastDial?.wakeSince.map { ContinuousClock.Instant.now - $0 } }
 
-    /// Dial `plan` again after `wait`, the core's answer for a woken host that answered before
-    /// it could stream. True when that redial is on its way; the connect overlay stays up for it,
-    /// and Cancel ends it. A refusal past the window shows as it always has.
-    private func redialWhileWaking(_ plan: Redial?, after wait: Duration?) -> Bool {
-        guard let wait, var next = plan else { return false }
+    /// Dial `plan` again after `wait`, to the host's record as it is now: the core's answer for
+    /// a woken host that answered before it could stream. The connect overlay stays up for the
+    /// redial, and Cancel ends it. The launch hold still up rides into the redial; one the player
+    /// dismissed stays down.
+    private func redialWhileWaking(_ plan: Redial, after wait: Duration) {
+        var next = plan
         next.wakeSince = next.wakeSince ?? .now
         redial = next
         let seq = connectSeq
@@ -1063,27 +1078,35 @@ final class SessionModel: ObservableObject {
             guard let self, self.connectSeq == seq, self.redial != nil, self.phase == .idle
             else { return }
             self.connect(
-                to: next.host, effective: next.effective, gamepad: next.gamepad,
-                launchID: next.launchID, profileID: next.profileID, shelf: next.shelf,
-                allowTofu: next.allowTofu, autoWake: next.autoWake, wakeSince: next.wakeSince)
+                to: next.host.redialed(current: self.currentRecord?(next.host.id)),
+                effective: next.effective, gamepad: next.gamepad,
+                overrides: next.overrides, launchID: next.launchID, profileID: next.profileID,
+                shelf: next.shelf,
+                allowTofu: next.allowTofu, autoWake: next.autoWake, wakeSince: next.wakeSince,
+                hold: self.launchHold)
         }
-        return true
     }
 
     /// Resize overlay START (main actor — from the Match-window follower's `onResizeTarget`): the
-    /// window began differing from the live mode, so a `Reconfigure` toward `(width, height)` is
-    /// imminent. Show the blur+spinner immediately, before the debounced request even leaves.
-    func resizeTargeted(width: UInt32, height: UInt32) {
+    /// window began differing from the live mode, so a `Reconfigure` toward `(width, height)`,
+    /// shown at `view`, is imminent. Show the blur+spinner immediately, before the debounced
+    /// request even leaves.
+    func resizeTargeted(width: UInt32, height: UInt32, view: (width: UInt32, height: UInt32)?) {
         resizeIndicator.steering(
-            width: width, height: height, now: ProcessInfo.processInfo.systemUptime)
+            width: width, height: height, view: view, now: ProcessInfo.processInfo.systemUptime)
         resizing = resizeIndicator.active
     }
 
     /// Resize overlay END (main actor — hopped from the decode pump's `onDecodedSize`): a new-mode
-    /// IDR decoded at `(width, height)`. Clears the overlay only when that matches the size we're
-    /// steering to (a same-size loss-recovery IDR, or the initial connect IDR, is a no-op).
+    /// IDR decoded at `(width, height)`. Notes the picture's size for the stats line, and clears
+    /// the overlay only when that matches the mode or view we're steering to (a same-size
+    /// loss-recovery IDR, or the initial connect IDR, is a no-op).
     func resizeDecoded(width: Int, height: Int) {
-        resizeIndicator.decoded(width: UInt32(max(width, 0)), height: UInt32(max(height, 0)))
+        let size = (width: UInt32(max(width, 0)), height: UInt32(max(height, 0)))
+        picture = size
+        let text = "\(size.width)×\(size.height)"
+        if text != pictureText { pictureText = text } // an unchanged size must not re-render
+        resizeIndicator.decoded(width: size.width, height: size.height)
         resizing = resizeIndicator.active
     }
 
@@ -1091,26 +1114,31 @@ final class SessionModel: ObservableObject {
     /// ring's End game. Read from `/status` when the stream starts and when the ring opens.
     private(set) var streamedGame: RunningGame? { get { ui.streamedGame } set { ui.streamedGame = newValue } }
 
-    /// Ask the host what this stream plays. Best-effort: a failed read keeps the last answer.
+    /// Ask the host what this stream plays. Best-effort: a failed read keeps the last answer, and
+    /// an answer lands only in the session it was asked for.
     func refreshStreamedGame() {
         guard let host = activeHost, !DemoMode.isDemo(host),
               case .success(let target) = MgmtTarget.make(host: host, port: connection?.hostMgmtPort)
         else { return }
+        let seq = connectSeq
         Task { [weak self] in
             let games = await LibraryClient.running(target)
-            guard let self, self.activeHost?.id == host.id, self.phase == .streaming else { return }
+            guard let self, self.connectSeq == seq, self.activeHost?.id == host.id,
+                  self.phase == .streaming else { return }
             self.streamedGame = games.first(where: \.streamedHere)
         }
     }
 
     /// End the streamed game on the host, then the stream. A refusal keeps the stream and says why.
+    /// The answer acts only on the session it was asked from, never a newer one to the same host.
     func endStreamedGame() {
         guard let game = streamedGame, let appID = game.appID, let host = activeHost,
               case .success(let target) = MgmtTarget.make(host: host, port: connection?.hostMgmtPort)
         else { return }
+        let seq = connectSeq
         Task { [weak self] in
             let outcome = await LibraryClient.endGame(appID: appID, on: target)
-            guard let self, self.activeHost?.id == host.id else { return }
+            guard let self, self.connectSeq == seq, self.activeHost?.id == host.id else { return }
             if outcome.gameGone {
                 self.disconnect()
             } else {
@@ -1128,8 +1156,8 @@ final class SessionModel: ObservableObject {
         launchDownload = nil
     }
 
-    /// Poll the host once a second for the launched title's state, and reveal when it has
-    /// answered — or when it never will. Same lane and identity as the shelf's Resume badge.
+    /// Poll the host once a second for the launched title's state and take `LaunchHoldRule`'s
+    /// step. Same lane and identity as the shelf's Resume badge.
     private func watchLaunch() {
         guard let hold = launchHold?.entry, let host = activeHost else { return }
         // The demo host has no `/status` and its title is up at once; hold as a real start would,
@@ -1151,40 +1179,27 @@ final class SessionModel: ObservableObject {
         launchWatch = Task { [weak self] in
             var began = Date()
             while !Task.isCancelled {
-                let status = await LibraryClient.status(target)
-                let game = status.games.first { $0.appID == hold.id }
-                let state = game?.state
-                let download = status.downloads.first { $0.appID == hold.id }
-                // The host fetches the title's files before it starts it: no cap while they come,
-                // and the clocks start over once they are in.
-                if let download, download.live {
+                let answer = await LibraryClient.statusIfAnswered(target)
+                // A cancelled read comes back as a miss.
+                guard !Task.isCancelled else { return }
+                let title = answer.map {
+                    LaunchHoldRule.Title(of: hold, games: $0.games, downloads: $0.downloads)
+                }
+                let step = LaunchHoldRule.step(
+                    title, elapsed: Date().timeIntervalSince(began), cap: launchHoldMax,
+                    noLease: launchNoLease)
+                switch step {
+                case .keep(let windowWait, let download):
+                    if step.restartsClock { began = Date() }
                     if self?.launchDownload != download { self?.launchDownload = download }
-                    began = Date()
-                    try? await Task.sleep(nanoseconds: NSEC_PER_SEC)
-                    continue
-                }
-                if self?.launchDownload != nil { self?.launchDownload = nil }
-                // A download that stopped: nothing will start. The host's notice says why.
-                if download?.stopped(title: hold.title) != nil, state == nil || state == "launching" {
+                    if self?.launchWindowWait != windowWait { self?.launchWindowWait = windowWait }
+                case .unchanged:
+                    break
+                case .reveal:
+                    // A stopped download reveals too: the host's notice says why.
                     self?.revealStream()
                     return
                 }
-                let elapsed = Date().timeIntervalSince(began)
-                let windowWait = state == "running" && game?.awaitingWindow == true
-                let done: Bool
-                switch state {
-                case "launching": done = elapsed >= launchHoldMax
-                // A Proton prefix or a splash can sit behind a running process for a minute.
-                case "running" where windowWait: done = elapsed >= launchHoldMax
-                // window, running, exited, untracked, grace: the host has said all it will.
-                case .some: done = true
-                case nil: done = elapsed >= launchNoLease
-                }
-                if done {
-                    self?.revealStream()
-                    return
-                }
-                if self?.launchWindowWait != windowWait { self?.launchWindowWait = windowWait }
                 try? await Task.sleep(nanoseconds: NSEC_PER_SEC)
             }
         }
@@ -1253,8 +1268,8 @@ final class SessionModel: ObservableObject {
             let sc2 = Sc2Capture(connection: conn, manager: .shared)
             // A captured SC2's raw feed bypasses GC, so it brings its own escape chord.
             sc2.onDisconnectRequest = { [weak self] in self?.disconnect() }
-            // The ring's pad path, the same two hooks GamepadCapture gets below.
-            sc2.onRingChord = { [weak self] in self?.onRingChord?(nil) }
+            // The shortcuts and the ring's pad path, the same hooks GamepadCapture gets below.
+            sc2.onShortcut = { [weak self] action, phase in self?.onShortcut?(action, phase, nil) }
             sc2.onRingNav = { [weak self] nav in self?.onRingNav?(nav) }
             // Claim/release → the bottom-stack badge (the capture's only UI surface).
             sc2.onPhaseChange = { [weak self] phase in self?.noteSc2Phase(phase) }
@@ -1264,18 +1279,17 @@ final class SessionModel: ObservableObject {
             resources.add(sc2, stop: { feedback.setHidRawSink(nil); sc2.stop() })
         }
         // Every controller GamepadManager selected, each on its own wire pad. With forwarding
-        // off the host gets the pads elsewhere: capture still watches for the escape chord.
+        // off the host gets the pads elsewhere: capture still runs the shortcuts.
         let capture = GamepadCapture(
             connection: conn, manager: .shared, forwarding: settings.gamepadForwarding,
-            systemForward: settings.systemButtonsForward,
-            guideGesture: settings.guideGestureEnabled)
-        // The cross-client escape chord (hold L1+R1+Start+Select 1.5 s) — on tvOS the only
-        // controller way out of a stream (B/Menu is swallowed during sessions; see ContentView).
+            systemForward: settings.systemButtonsForward)
+        // End stream (by default L1+R1+Start+Select held 1 s) — on tvOS the only controller way
+        // out of a stream (B/Menu is swallowed during sessions; see ContentView).
         capture.onDisconnectRequest = { [weak self] in self?.disconnect() }
         // A pad with a gyro that this session cannot carry — say so once, briefly, and name the
         // setting that fixes it. Already main-actor (GamepadCapture fires it there).
         capture.onMotionUnreachable = { [weak self] kind in self?.flash(\.motionUnreachable, kind) }
-        capture.onRingChord = { [weak self] pad in self?.onRingChord?(pad) }
+        capture.onShortcut = { [weak self] action, phase, pad in self?.onShortcut?(action, phase, pad) }
         capture.onRingNav = { [weak self] nav in self?.onRingNav?(nav) }
         capture.start()
         capture.onOwnershipChange = { [weak feedback] owned in feedback?.setSilenced(!owned) }
@@ -1350,7 +1364,7 @@ final class SessionModel: ObservableObject {
                 // The window in the unified log, once a second while frames flow: the Advanced
                 // Detailed text whatever the overlay shows (and stdout, see `statsToStdout`).
                 if frames > 0 {
-                    let text = conn.hudLines(tier: .detailed, advanced: true, facts: self.hudFacts())
+                    let text = self.overlayLines(conn, tier: .detailed, advanced: true)
                         .map(\.text).joined(separator: " | ")
                     statsLog.info("\(text, privacy: .public)")
                     if statsToStdout { print("pf.stats \(text)") }
@@ -1370,15 +1384,24 @@ final class SessionModel: ObservableObject {
             return
         }
         let advanced = UserDefaults.standard.bool(forKey: DefaultsKey.advancedStats)
-        let lines = conn.hudLines(tier: statsVerbosity, advanced: advanced, facts: hudFacts())
+        let lines = overlayLines(conn, tier: statsVerbosity, advanced: advanced)
         if lines != hudLines { hudLines = lines } // an unchanged overlay must not re-render
     }
 
-    /// What only the app knows: the floor policy, this app's audio ring, the preset, and the
-    /// Apple-only lines. Display and end-to-end charge what the client controls. The deadline
-    /// link's pick → glass lead is pipeline depth no client paces under, so it comes off both
-    /// and Detailed names it, as on Android. macOS presents straight to the display and feeds
-    /// no floor, so nothing is shaved there.
+    /// The core's lines for `tier`, naming the decoded size beside a larger host mode.
+    private func overlayLines(
+        _ conn: PunktfunkConnection, tier: StatsVerbosity, advanced: Bool
+    ) -> [PunktfunkConnection.HudLine] {
+        PunktfunkConnection.HudLine.naming(
+            picture: picture, mode: conn.currentMode(),
+            in: conn.hudLines(tier: tier, advanced: advanced, facts: hudFacts()))
+    }
+
+    /// What only the app knows: the floor policy, this app's audio ring, the preset and whether
+    /// the host set the game's mode or pad, and the Apple-only lines. Display and end-to-end
+    /// charge what the client controls. The deadline link's pick → glass lead is pipeline depth
+    /// no client paces under, so it comes off both and Detailed names it, as on Android. macOS
+    /// presents straight to the display and feeds no floor, so nothing is shaved there.
     private func hudFacts() -> PunktfunkConnection.HudFacts {
         var f = PunktfunkConnection.HudFacts()
         #if !os(macOS)
@@ -1388,7 +1411,9 @@ final class SessionModel: ObservableObject {
             f.audioBufferMs = UInt32(clamping: a.bufferMS)
             f.avOffsetMs = Int32(clamping: a.avOffsetMS)
         }
-        f.preset = settings.presetName
+        let byHost = hostOverrides ? String(localized: L10n.overlayHostOverride) : nil
+        let preset = [settings.presetName, byHost].compactMap { $0 }
+        f.preset = preset.isEmpty ? nil : preset.joined(separator: " \u{b7} ")
         // The deadline link's ask beside its readback: a readback that differs is the one clamp
         // signal the API gives, and on tvOS the screen is the only place to read it.
         if let l = PresentLinkInfo.shared.snapshot() {

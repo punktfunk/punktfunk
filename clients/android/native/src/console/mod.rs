@@ -23,7 +23,8 @@ use pf_console_ui::bridge::{
     self, CreateOptions, EntryJson, GamesPush, MenuCode, PadsJson, PhasePush, PresetJson,
 };
 use pf_console_ui::{
-    HostRow, Insets, PairStatus, Platform, ProfilesAnswer, SpeedPhase, Stale, WakeStatus,
+    HiddenAnswer, HideAnswer, HostRow, Insets, PairStatus, Platform, ProfilesAnswer, SpeedPhase,
+    Stale, WakeStatus,
 };
 use punktfunk_core::quic::v2::msg::UNLOCK_PASSWORD;
 use std::time::Duration;
@@ -169,7 +170,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSurf
 ) {
     jni_guard((), || {
         if let Some(h) = CONSOLES.get(handle) {
-            h.shared.destroy_surface_blocking();
+            h.shared.destroy_surface_blocking(Cmd::SurfaceDestroyed);
         }
     })
 }
@@ -347,6 +348,22 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSess
     .resolve::<LogErrorAndDefault>()
 }
 
+/// `NativeBridge.nativeConsoleHoldsLaunch(handle): Boolean` — the shell's launch hold is up, so
+/// the session it launched waits for `ShowStream`. False when the shell raised no hold, as for a
+/// link's launch.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleHoldsLaunch(
+    _env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+) -> jboolean {
+    jni_guard(false, || {
+        CONSOLES
+            .get(handle)
+            .is_some_and(|h| h.shared.holds_launch())
+    })
+}
+
 /// `NativeBridge.nativeConsoleTakeUnlock(handle, stays): ByteArray?` — the password the
 /// console's prompt holds for the `Launch` it just raised, moved out of the console's model:
 /// null when it holds none. `stays[0]` gets its "Stay signed in" switch. The model's copy wipes
@@ -512,6 +529,40 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSetP
     .resolve::<LogErrorAndDefault>()
 }
 
+/// `NativeBridge.nativeConsoleSetHiddenList(handle, fpHex, profile, json)` — the answer to
+/// `ConsoleCmd::FetchHidden` for `profile` on the host pinned to `fpHex`: `{"Listed": [games]}`
+/// or `{"Failed": "why"}`. The posters follow through `nativeConsoleLibraryArt`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSetHiddenList(
+    mut env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    fp_hex: JString,
+    profile: JString,
+    json: JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        if let (Some(h), Ok(fp), Ok(p), Some(a)) = (
+            CONSOLES.get(handle),
+            fp_hex.try_to_string(env),
+            profile.try_to_string(env),
+            json_arg::<HiddenAnswer>(env, &json),
+        ) {
+            h.handles.console.set_hidden_list(&fp, &p, a);
+        }
+        Ok(())
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
+json_pusher!(
+/// `NativeBridge.nativeConsoleSetHideAnswer(handle, json)` — what a `ConsoleCmd::SetHidden` came
+/// to, echoing its host, profile, title and `hidden`. The console shows the notice.
+    Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSetHideAnswer,
+    HideAnswer,
+    |h, a| h.handles.console.set_hide_answer(a)
+);
+
 /// `NativeBridge.nativeConsoleNotice(handle, text)` — a one-shot toast from a service worker.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleNotice(
@@ -523,6 +574,42 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleNoti
     env.with_env(|env| -> jni::errors::Result<()> {
         if let (Some(h), Ok(t)) = (CONSOLES.get(handle), text.try_to_string(env)) {
             h.handles.console.set_notice(t);
+        }
+        Ok(())
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
+/// `NativeBridge.nativeConsoleLaunchRefused(handle, text)` — the host's sentence for the held
+/// launch it did not start; the hold says it in place of waiting.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleLaunchRefused(
+    mut env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    text: JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        if let (Some(h), Ok(t)) = (CONSOLES.get(handle), text.try_to_string(env)) {
+            h.handles.console.set_launch_refused(t);
+        }
+        Ok(())
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
+/// `NativeBridge.nativeConsoleSetDeviceCode(handle, code)` — this device's code, once its
+/// identity has loaded. The console shows it while a request waits for approval.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSetDeviceCode(
+    mut env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    code: JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        if let (Some(h), Ok(c)) = (CONSOLES.get(handle), code.try_to_string(env)) {
+            h.handles.console.set_device_code(c);
         }
         Ok(())
     })

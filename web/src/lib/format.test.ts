@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { fmtAgo, fmtClockDuration, fmtSpan } from "./format";
+import { deviceCode, fmtAgo, fmtClockDuration, fmtSpan } from "./format";
+
+describe("deviceCode", () => {
+	test("spells the core's vector", () => {
+		const fp = `4f2a91c307bed512${"0".repeat(48)}`;
+		expect(deviceCode(fp)).toBe("4F2A 91C3 07BE D512");
+	});
+});
 
 describe("fmtClockDuration", () => {
 	test("reads seconds as m:ss and clamps below zero", () => {

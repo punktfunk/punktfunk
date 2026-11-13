@@ -2,6 +2,7 @@ package io.unom.punktfunk
 
 import android.content.Context
 import android.content.SharedPreferences
+import io.unom.punktfunk.kit.nameOrder
 import io.unom.punktfunk.kit.security.KnownHost
 import java.security.SecureRandom
 import org.json.JSONObject
@@ -53,12 +54,17 @@ data class SettingsOverlay(
     val micEnabled: Boolean? = null,
     val echoCancel: Boolean? = null,
     val keepHostAudio: Boolean? = null,
+    /** The role or monitor a connect with this preset asks for ([Settings.hostScreen]); null is
+     *  the pick on the host's card. */
+    val hostScreen: String? = null,
     val touchMode: TouchMode? = null,
     val mouseMode: MouseMode? = null,
     val invertScroll: Boolean? = null,
     /** The whole ring blob (design/touch-client-overlay.md D10): a preset inherits the default
      *  ring entirely or owns its own ring and shortcuts. */
     val overlayActions: String? = null,
+    /** The whole shortcuts blob, like the ring's: a preset inherits them or owns its own. */
+    val shortcuts: String? = null,
     val gamepad: Int? = null,
     val gamepadForwarding: Boolean? = null,
     val systemButtons: String? = null,
@@ -174,7 +180,7 @@ class PresetStore(context: Context) {
     /** Every preset, name-sorted — the order the scope switcher and the menus show. */
     fun all(): List<StreamPreset> = prefs.all.values
         .mapNotNull { (it as? String)?.let(::parse) }
-        .sortedBy { it.name.lowercase() }
+        .sortedWith(nameOrder { it.name })
 
     /** `as? String`: the file also holds a Boolean flag, and `id` can come from a link. */
     fun byId(id: String): StreamPreset? = (prefs.all[id] as? String)?.let(::parse)
@@ -319,6 +325,14 @@ fun nextAccent(existing: List<StreamPreset>): String {
  */
 fun newPreset(name: String, accent: String? = null): StreamPreset =
     StreamPreset(id = newPresetId(), name = name, accent = accent)
+
+/** The Second screen starter: a new preset with the second screen pinned and nothing else. */
+fun secondScreenPreset(name: String, accent: String? = null): StreamPreset =
+    newPreset(name, accent).copy(overrides = SettingsOverlay(hostScreen = DisplayTargets.Role.SECOND.id))
+
+/** [base] while [taken] lets it through, else the first free "base N" from 2. */
+fun freeName(base: String, taken: (String) -> Boolean): String =
+    (sequenceOf(base) + generateSequence(2) { it + 1 }.map { "$base $it" }).first { !taken(it) }
 
 private val PRESET_ID_RNG = SecureRandom()
 

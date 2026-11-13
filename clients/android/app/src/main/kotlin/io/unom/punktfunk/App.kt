@@ -45,6 +45,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.res.stringResource
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.discovery.HostDiscovery
 import io.unom.punktfunk.kit.link.DeepLinkResult
 import io.unom.punktfunk.kit.link.DeepLinks
@@ -132,10 +134,7 @@ fun App(forceGamepadUi: Boolean = false) {
         if (granted) {
             discovery.restart()
         } else if (gamepadUi) {
-            SkiaConsole.notice(
-                "Punktfunk can't find or reach hosts without local network access. " +
-                    "Allow it in Android's app settings.",
-            )
+            SkiaConsole.notice(context.getString(R.string.android_lnp_denied_body))
         }
     }
     val nearbyLauncher = rememberLauncherForActivityResult(
@@ -214,7 +213,7 @@ fun App(forceGamepadUi: Boolean = false) {
         if (!sameHost) {
             Toast.makeText(
                 context,
-                "Already streaming — end this session first.",
+                context.getString(R.string.android_already_streaming),
                 Toast.LENGTH_LONG,
             ).show()
         }
@@ -282,7 +281,7 @@ fun App(forceGamepadUi: Boolean = false) {
                 if (wait == null) {
                     Toast.makeText(
                         context,
-                        "Lost the connection to $name — the host may be asleep. Wake it to reconnect.",
+                        context.getString(R.string.android_redial_gave_up, name),
                         Toast.LENGTH_LONG,
                     ).show()
                     break
@@ -296,7 +295,9 @@ fun App(forceGamepadUi: Boolean = false) {
                     is HostServices.Failed -> if (!dialed.unreachable) {
                         Toast.makeText(
                             context,
-                            dialed.said.ifEmpty { ConnectErrors.connectMessage(dialed.token, requestAccess = false) },
+                            dialed.said.ifEmpty {
+                                context.getString(ConnectErrors.connectMessage(dialed.token, requestAccess = false))
+                            },
                             Toast.LENGTH_LONG,
                         ).show()
                         break
@@ -317,7 +318,9 @@ fun App(forceGamepadUi: Boolean = false) {
                 is HostServices.Connected -> owner.open(dialed.session)
                 is HostServices.Failed -> Toast.makeText(
                     context,
-                    dialed.said.ifEmpty { ConnectErrors.connectMessage(dialed.token, requestAccess = false) },
+                    dialed.said.ifEmpty {
+                        context.getString(ConnectErrors.connectMessage(dialed.token, requestAccess = false))
+                    },
                     Toast.LENGTH_LONG,
                 ).show()
                 HostServices.Cancelled -> {}
@@ -472,8 +475,8 @@ private fun TouchTabs(tab: Tab, onTab: (Tab) -> Unit, content: @Composable (Tab)
                         NavigationRailItem(
                             selected = tab == t,
                             onClick = { onTab(t) },
-                            icon = { Icon(t.icon, contentDescription = t.label) },
-                            label = { Text(t.label) },
+                            icon = { Icon(t.icon, contentDescription = stringResource(t.label)) },
+                            label = { Text(stringResource(t.label)) },
                         )
                     }
                     Spacer(Modifier.weight(1f))
@@ -491,8 +494,8 @@ private fun TouchTabs(tab: Tab, onTab: (Tab) -> Unit, content: @Composable (Tab)
                             NavigationBarItem(
                                 selected = tab == t,
                                 onClick = { onTab(t) },
-                                icon = { Icon(t.icon, contentDescription = t.label) },
-                                label = { Text(t.label) },
+                                icon = { Icon(t.icon, contentDescription = stringResource(t.label)) },
+                                label = { Text(stringResource(t.label)) },
                             )
                         }
                     }

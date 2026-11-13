@@ -1,5 +1,7 @@
-//! Codec creation, low-latency config, thread/frame-rate tuning, HDR static-info encode.
+//! Codec creation, the configure format, thread and frame-rate tuning.
 
+use crate::codec_format::{low_latency_keys, low_latency_profile, qti_fence_eligible};
+use crate::colour::android_hdr_static_info;
 use crate::sys::{set_thread_nice, sysprop};
 use ndk::media::media_codec::MediaCodec;
 use ndk::media::media_format::MediaFormat;
@@ -8,18 +10,6 @@ use punktfunk_core::client::NativeClient;
 use punktfunk_core::config::Mode;
 use std::ffi::c_void;
 use std::time::Duration;
-
-/// The MediaCodec MIME for the codec the host resolved (`Welcome.codec`). Shared by the decode
-/// thread and `nativeVideoMime` (which tells Kotlin what to rank decoders for). AV1 uses the
-/// AOSP `video/av01` type; anything not H.264/AV1 is treated as HEVC (every pre-negotiation host
-/// emitted HEVC).
-pub(crate) fn codec_mime(codec: u8) -> &'static str {
-    match codec {
-        punktfunk_core::quic::CODEC_H264 => "video/avc",
-        punktfunk_core::quic::CODEC_AV1 => "video/av01",
-        _ => "video/hevc",
-    }
-}
 
 /// The codec the host resolved, as every overlay names it: empty for an id this build does not
 /// know, which the stream notification leaves out.
@@ -38,100 +28,6 @@ pub(super) fn create_codec(mime: &str, preferred: Option<&str>) -> Option<MediaC
         );
     }
     MediaCodec::from_decoder_type(mime)
-}
-
-/// Apply the low-latency MediaFormat keys for `codec_name`.
-///
-/// `aggressive` = the "Low-latency mode" master toggle. **Off** ⇒ the pre-overhaul key set,
-/// byte-for-byte — the standard `low-latency` key, the blind Qualcomm vendor twin, `priority = 0` AND
-/// `operating-rate = MAX` set together — kept as the per-device escape hatch (the profile every device
-/// streamed with before the overhaul). **On** (default) ⇒ the Moonlight-parity
-/// profile: MediaTek's `vdec-lowlatency` (unconditionally — ignored off MediaTek), the per-SoC
-/// vendor extension keys (gated on the decoder-name prefix the way Moonlight-Android does, since a
-/// key one vendor honours is meaningless on another), and one *mutually exclusive* clock hint.
-///
-/// Vendor keys mirror Moonlight's `MediaCodecHelper` (verified against current source): Qualcomm
-/// picture-order + low-latency, Exynos (also Google Tensor), Amlogic, HiSilicon, MediaTek. NVIDIA
-/// Tegra / Rockchip / Realtek expose no such key (nor does Moonlight) — they're covered by the
-/// standard key + clock hint + being ranked first in `VideoDecoders`.
-///
-/// `standard_key` = false leaves out the standard `low-latency` key (see [`low_latency_format`]).
-pub(super) fn configure_low_latency(
-    format: &mut MediaFormat,
-    codec_name: &str,
-    aggressive: bool,
-    standard_key: bool,
-) {
-    // Standard key: request the no-reorder low-latency path where the platform decoder supports it.
-    if standard_key {
-        format.set_i32("low-latency", 1);
-    }
-    if !aggressive {
-        // The original profile: the Qualcomm vendor twin set blind (unknown keys are ignored by
-        // other vendors' codecs), realtime priority, and the AOSP "unbounded" operating-rate
-        // sentinel — decode each frame at max clocks rather than pacing to the frame rate.
-        format.set_i32("vendor.qti-ext-dec-low-latency.enable", 1);
-        format.set_i32("priority", 0); // 0 = realtime
-        format.set_i32("operating-rate", i16::MAX as i32); // 32767 = "as fast as possible"
-        return;
-    }
-    // MediaTek's low-latency key — very common (mid/budget phones + many Google TV / Fire TV boxes).
-    // Set unconditionally like the standard key: MediaTek decoders honour it, others ignore it, so it
-    // covers MediaTek whatever the exact decoder name (omx.mtk / c2.mtk / an OEM rename). Moonlight
-    // does the same, and also relies on it for Amazon's Amlogic fork.
-    format.set_i32("vdec-lowlatency", 1);
-    let name = codec_name.to_ascii_lowercase();
-    let is = |prefix: &str| name.starts_with(prefix);
-    // Qualcomm Snapdragon (the most common phone SoC): picture-order forces decode-order output
-    // (kills the reorder buffer on decoders that predate the standard key); low-latency is the older
-    // vendor twin.
-    if is("omx.qcom") || is("c2.qti") {
-        format.set_i32("vendor.qti-ext-dec-picture-order.enable", 1);
-        format.set_i32("vendor.qti-ext-dec-low-latency.enable", 1);
-    }
-    // Samsung Exynos — also covers Google Tensor (Pixel 6+), whose hardware decoder is `c2.exynos.*`.
-    if is("omx.exynos") || is("c2.exynos") {
-        format.set_i32("vendor.rtc-ext-dec-low-latency.enable", 1);
-    }
-    // Amlogic — the Android TV boxes (onn 4K, Chromecast w/ Google TV, Homatics).
-    if is("omx.amlogic") || is("c2.amlogic") {
-        format.set_i32("vendor.low-latency.enable", 1);
-    }
-    // HiSilicon / Kirin (older Huawei; paired req/rdy keys).
-    if is("omx.hisi") || is("c2.hisi") {
-        format.set_i32(
-            "vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req",
-            1,
-        );
-        format.set_i32(
-            "vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-rdy",
-            -1,
-        );
-    }
-    // NVIDIA Tegra (Shield TV) and Rockchip/Realtek (budget TV boxes / smart TVs) expose no
-    // low-latency vendor key (Moonlight has none either) — their decoders are already low-latency
-    // oriented, so the standard `low-latency` key + the clock hint below + being ranked first
-    // (see `VideoDecoders`) is their treatment.
-    //
-    // Clock hint, mutually exclusive (matching Moonlight): the AOSP "unbounded" operating-rate
-    // sentinel (Short.MAX) tells the decoder to run each frame at max clocks and finish ASAP rather
-    // than pace to the frame rate — shaving per-frame decode latency at a power/heat cost. Only
-    // Qualcomm is known to handle the sentinel; every other vendor mis-paces on it, so they get the
-    // plain realtime `priority` hint instead.
-    if decoder_supports_max_operating_rate(&name) {
-        format.set_i32("operating-rate", i16::MAX as i32); // 32767 = "as fast as possible"
-    } else {
-        format.set_i32("priority", 0); // 0 = realtime
-    }
-}
-
-/// Whether a decoder tolerates `operating-rate = Short.MAX` rather than regressing on it. Follows
-/// Moonlight's allowlist: Qualcomm decoders honour the sentinel (the Adreno 620 generation is the
-/// known exception Moonlight excludes by GPU model — undetectable from native code here, so it
-/// rides the master toggle as its escape hatch). Other vendors fall back to the plain `priority`
-/// hint above.
-fn decoder_supports_max_operating_rate(name_lower: &str) -> bool {
-    name_lower.starts_with("omx.qcom") || name_lower.starts_with("c2.qti")
 }
 
 /// Raise the pipeline's OTHER hot threads — the core's data-plane pump (UDP receive + FEC
@@ -212,38 +108,6 @@ pub(super) fn try_set_frame_rate(window: &NativeWindow, frame_rate: f32, always:
     }
 }
 
-/// Serialize [`HdrMeta`](punktfunk_core::quic::HdrMeta) into Android's `KEY_HDR_STATIC_INFO`
-/// (`hdr-static-info`) layout: a 25-byte CTA-861.3 / `HDRStaticInfo.Type1` blob — descriptor id 0,
-/// then primaries in **R, G, B** order, white point, max/min display luminance, MaxCLL, MaxFALL, all
-/// **little-endian** `u16`. Two conversions vs our wire form: HdrMeta stores primaries in ST.2086
-/// **G, B, R** order (reorder to R, G, B), and `max_display_mastering_luminance` is in 0.0001-cd/m²
-/// units while Android wants **whole nits** (min stays 0.0001-nit). Chromaticities (1/50000) and
-/// MaxCLL/MaxFALL (nits) match 1:1.
-pub(super) fn android_hdr_static_info(m: &punktfunk_core::quic::HdrMeta) -> [u8; 25] {
-    let [g, b_, r] = m.display_primaries; // ST.2086 G, B, R
-    let max_nits = (m.max_display_mastering_luminance / 10_000).min(u16::MAX as u32) as u16;
-    let min_units = m.min_display_mastering_luminance.min(u16::MAX as u32) as u16;
-    let fields: [u16; 12] = [
-        r[0],
-        r[1],
-        g[0],
-        g[1],
-        b_[0],
-        b_[1], // R, G, B primaries
-        m.white_point[0],
-        m.white_point[1], // white point
-        max_nits,
-        min_units, // max (nits) / min (0.0001-nit) display luminance
-        m.max_cll,
-        m.max_fall, // MaxCLL / MaxFALL (nits)
-    ];
-    let mut out = [0u8; 25]; // out[0] = 0 (Type 1 descriptor id), already zero
-    for (i, v) in fields.iter().enumerate() {
-        out[1 + i * 2..3 + i * 2].copy_from_slice(&v.to_le_bytes());
-    }
-    out
-}
-
 /// HDR static metadata (ST.2086 mastering + content light level) for `KEY_HDR_STATIC_INFO`, so the
 /// display tone-maps from the source's real grade. MediaCodec wants it BEFORE configure(), and the
 /// host sends a 0xCE right after the handshake, so it's typically already queued; wait briefly
@@ -278,13 +142,6 @@ pub(super) fn hdr_static(client: &NativeClient) -> Option<punktfunk_core::quic::
 /// `adb shell setprop debug.punktfunk.low_latency_key mtk-boost`.
 pub(super) const LOW_LATENCY_KEY_PROP: &std::ffi::CStr = c"debug.punktfunk.low_latency_key";
 
-/// The Qualcomm output-fence keys fit a Codec2 Qualcomm decoder on Android 13+. Only
-/// `CCodecBufferChannel` since 13 forwards the codec's fence to the consumer; earlier releases
-/// queue the buffer unfenced, and SurfaceFlinger would show it unfinished.
-fn qti_fence_eligible(codec_name: &str, sdk: u32) -> bool {
-    codec_name.to_ascii_lowercase().starts_with("c2.qti") && sdk >= 33
-}
-
 /// TV platforms that show half the stream rate, as (`ro.product.manufacturer`, `ro.product.device`):
 /// Philips' Pentonic 1000 sets (OLED809/810/888, PUS8508) and TCL's Pentonic 700 `G08` (C6K, C755,
 /// C805). Under the standard `low-latency` key their display stack registers the stream at the
@@ -307,9 +164,9 @@ fn half_rate_tv() -> bool {
 /// The decoder's configure format: the mode, the stream rate (`frame-rate`, the standard key a
 /// decoder's clock table may read), an input buffer generous enough that a large keyframe AU is
 /// never truncated, the HDR static info, and the low-latency keys for `codec_name`.
-/// `keys` is `Some(aggressive)` for [`configure_low_latency`]'s profile, `None` for no
-/// low-latency key at all. A `c2.mtk` decoder on a [`HALF_RATE_TVS`] platform swaps the `Some`
-/// profile for `mtk-tv`; [`LOW_LATENCY_KEY_PROP`] overrides either way.
+/// `keys` is `Some(aggressive)` for [`low_latency_keys`]' profile, `None` for no low-latency key
+/// at all. A `c2.mtk` decoder on a [`HALF_RATE_TVS`] platform swaps the `Some` profile for
+/// `mtk-tv`; [`LOW_LATENCY_KEY_PROP`] overrides either way.
 /// ACodec ignores a refused `max-input-size`, so that key stays.
 pub(super) fn low_latency_format(
     mime: &str,
@@ -331,54 +188,21 @@ pub(super) fn low_latency_format(
     );
     if let Some(aggressive) = keys {
         let forced = sysprop(LOW_LATENCY_KEY_PROP);
-        let profile = match forced.as_deref() {
-            Some(p @ ("standard" | "off" | "mtk-tv" | "mtk-boost" | "qti-fence")) => p,
-            _ if codec_name.to_ascii_lowercase().starts_with("c2.mtk") && half_rate_tv() => {
-                "mtk-tv"
-            }
-            _ => "standard",
-        };
-        let standard_key = matches!(profile, "standard" | "mtk-boost" | "qti-fence");
-        configure_low_latency(&mut format, codec_name, aggressive, standard_key);
+        let profile = low_latency_profile(forced.as_deref(), codec_name, half_rate_tv);
         if profile != "standard" {
             log::info!("decode: low-latency profile {profile}");
         }
-        match profile {
-            "mtk-tv" => {
-                format.set_i32("vendor.mtk-codec2.game-mode", 1);
-                format.set_i32("vendor.mtk-codec2.low-latency-mode", 1);
-                format.set_i32("operating-rate", mode.refresh_hz as i32);
-            }
-            "mtk-boost" => format.set_i32("vendor.mtk.vdec.cpu.boost.mode.value", 1),
-            "qti-fence" if qti_fence_eligible(codec_name, crate::sys::sdk_int()) => {
-                // Decode-order output is the fence's prerequisite. The sw-fence key is the
-                // 8 Gen 2 spelling, the output-fence pair the 8 Gen 3 / 8 Elite one (type 1:
-                // the driver signals). A codec without a key ignores it.
-                format.set_i32("vendor.qti-ext-dec-picture-order.enable", 1);
-                format.set_i32("vendor.qti-ext-output-sw-fence-enable.value", 1);
-                format.set_i32("vendor.qti-ext-output-fence.enable", 1);
-                format.set_i32("vendor.qti-ext-output-fence.fence_type", 1);
-            }
-            "qti-fence" => log::warn!("decode: qti-fence needs a c2.qti decoder on Android 13+"),
-            _ => {}
+        let sdk = crate::sys::sdk_int();
+        for (key, value) in low_latency_keys(profile, codec_name, aggressive, mode.refresh_hz, sdk)
+        {
+            format.set_i32(key, value);
+        }
+        if profile == "qti-fence" && !qti_fence_eligible(codec_name, sdk) {
+            log::warn!("decode: qti-fence needs a c2.qti decoder on Android 13+");
         }
     }
     if let Some(meta) = hdr_static {
         format.set_buffer("hdr-static-info", &android_hdr_static_info(meta));
     }
     format
-}
-
-#[cfg(test)]
-mod tests {
-    use super::qti_fence_eligible;
-
-    #[test]
-    fn qti_fence_needs_a_codec2_qualcomm_decoder_on_13() {
-        assert!(qti_fence_eligible("c2.qti.hevc.decoder.low_latency", 33));
-        assert!(qti_fence_eligible("C2.QTI.avc.decoder", 35));
-        assert!(!qti_fence_eligible("c2.qti.hevc.decoder", 32));
-        assert!(!qti_fence_eligible("omx.qcom.video.decoder.hevc", 34));
-        assert!(!qti_fence_eligible("c2.mtk.hevc.decoder", 34));
-    }
 }

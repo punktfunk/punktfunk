@@ -16,12 +16,18 @@ use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use pf_l10n::tools;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM,
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, HWND, LPARAM, LRESULT,
+    WPARAM,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, SYNCHRONIZATION_ACCESS_RIGHTS};
+use windows::Win32::System::Pipes::WaitNamedPipeW;
+use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+use windows::Win32::System::Threading::{
+    CreateMutexW, OpenMutexW, CREATE_NO_WINDOW, SYNCHRONIZATION_ACCESS_RIGHTS,
+};
 use windows::Win32::UI::HiDpi::GetSystemMetricsForDpi;
 use windows::Win32::UI::Shell::{
     SetCurrentProcessExplicitAppUserModelID, ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_INFO,
@@ -367,15 +373,12 @@ fn notify_on_connect(hwnd: HWND) {
         TrayStatus::Running(s) => (
             // Trust-store name, else the client's Hello name; missing → generic title.
             match &s.client_name {
-                Some(name) => format!("{name} connected"),
-                None => "Client connected".to_string(),
+                Some(name) => tools::tray_toast_connected(name),
+                None => tools::tray_toast_client_connected().to_string(),
             },
             match &s.session {
-                Some(sess) => format!(
-                    "Streaming {}×{} @ {} fps",
-                    sess.width, sess.height, sess.fps
-                ),
-                None => "A client is streaming from this host".to_string(),
+                Some(sess) => tools::tray_toast_streaming_mode(sess.width, sess.height, sess.fps),
+                None => tools::tray_toast_streaming().to_string(),
             },
         ),
         _ => return, // is_streaming() implies Running
@@ -457,7 +460,7 @@ fn show_menu(hwnd: HWND) {
         if status.pairing_attention() {
             add(
                 IDM_PAIRING,
-                "Approve pairing request…",
+                tools::tray_approve_pairing(),
                 false,
                 Some(win_theme::GLYPH_APPROVE),
             );
@@ -471,18 +474,23 @@ fn show_menu(hwnd: HWND) {
             if status.can_start() {
                 add(
                     IDM_START,
-                    "Start host",
+                    tools::tray_start_host(),
                     false,
                     Some(win_theme::GLYPH_SHIELD),
                 );
             }
             if running {
-                add(IDM_STOP, "Stop host", false, Some(win_theme::GLYPH_SHIELD));
+                add(
+                    IDM_STOP,
+                    tools::tray_stop_host(),
+                    false,
+                    Some(win_theme::GLYPH_SHIELD),
+                );
             }
             if status.can_restart() {
                 add(
                     IDM_RESTART,
-                    crate::status::RESTART_LABEL,
+                    crate::status::restart_label(),
                     false,
                     Some(win_theme::GLYPH_SHIELD),
                 );
@@ -490,7 +498,7 @@ fn show_menu(hwnd: HWND) {
         }
         add(
             IDM_LOGS,
-            "Open logs folder",
+            tools::tray_open_logs(),
             false,
             Some(win_theme::GLYPH_FOLDER),
         );
@@ -499,12 +507,17 @@ fn show_menu(hwnd: HWND) {
         if can_control && running {
             add(
                 IDM_EXIT,
-                "Stop host and exit tray",
+                tools::tray_stop_and_exit(),
                 false,
                 Some(win_theme::GLYPH_SHIELD),
             );
         } else {
-            add(IDM_EXIT, "Exit tray", false, Some(win_theme::GLYPH_POWER));
+            add(
+                IDM_EXIT,
+                tools::tray_exit(),
+                false,
+                Some(win_theme::GLYPH_POWER),
+            );
         }
 
         let mut pt = Default::default();
@@ -574,6 +587,40 @@ fn start_host_if_down(hwnd: HWND) {
     }
 }
 
+/// Whether this desktop is a seat's: its host serves this session's person pipe
+/// (`punktfunk-host`'s `windows/person_pipe.rs`). A busy pipe still exists.
+fn on_seat() -> bool {
+    let mut session = 0u32;
+    // SAFETY: this process's own id and a live out-param.
+    if unsafe { ProcessIdToSessionId(std::process::id(), &mut session) }.is_err() {
+        return false;
+    }
+    let name = to_wide(&format!(r"\\.\pipe\punktfunk-person-{session}"));
+    // SAFETY: a NUL-terminated name that outlives the call.
+    if unsafe { WaitNamedPipeW(PCWSTR(name.as_ptr()), 1) }.as_bool() {
+        return true;
+    }
+    // SAFETY: read on this thread right after the call that set it.
+    let why = unsafe { GetLastError() };
+    why != ERROR_FILE_NOT_FOUND
+}
+
+/// The console; on a seat the person's own Punktfunk, which `ctl console-url --open` opens.
+fn open_console(hwnd: HWND) {
+    if let Some(exe) = app().host_exe.as_ref().filter(|_| on_seat()) {
+        use std::os::windows::process::CommandExt;
+        let spawned = std::process::Command::new(exe)
+            .args(["ctl", "console-url", "--open"])
+            .creation_flags(CREATE_NO_WINDOW.0)
+            .spawn();
+        match spawned {
+            Ok(_) => return,
+            Err(e) => log(&format!("person console did not start: {e}")),
+        }
+    }
+    open_web_console(hwnd, "");
+}
+
 /// Open the web console at `path` (`""` = dashboard).
 fn open_web_console(hwnd: HWND, path: &str) {
     // `127.0.0.1`, not `localhost`: the console binds IPv4 only (`PUNKTFUNK_UI_BIND`) and Windows
@@ -627,7 +674,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 WM_CONTEXTMENU => show_menu(hwnd),
                 x if x == NIN_SELECT || x == NIN_KEYSELECT => {
                     if app.web_console.load(Ordering::SeqCst) {
-                        open_web_console(hwnd, "");
+                        open_console(hwnd);
                     } else {
                         show_menu(hwnd);
                     }
@@ -638,7 +685,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
         WM_COMMAND => {
             match (wparam.0) & 0xffff {
-                IDM_OPEN_WEB => open_web_console(hwnd, ""),
+                IDM_OPEN_WEB => open_console(hwnd),
                 IDM_PAIRING => open_web_console(hwnd, "pairing"),
                 IDM_DISPLAYS => open_web_console(hwnd, "displays"),
                 IDM_START => {

@@ -16,8 +16,11 @@
 
 use std::cell::RefCell;
 
+use pf_l10n::tools as t;
+
 use crate::choices::{Action, LAN_BIND, LOOPBACK_BIND};
 use crate::facts::Channel;
+use crate::ui::columns;
 use crate::ui::logo::{self, Intro, MARK_TEXT_ROWS};
 use crate::ui::summary::{Field, Item, Key as UiKey, Screen, Step};
 use crate::ui::term::{Key, Terminal};
@@ -156,7 +159,7 @@ impl<'a> Tui<'a> {
         self.dim(BAR)
     }
 
-    /// Truncate to terminal width in printable columns.
+    /// Truncate to terminal width in display columns, cutting between characters.
     ///
     /// `clear_last_lines` counts physical rows; a wrap makes rewind short and
     /// leftovers pile up. Truncating keeps the two counts equal.
@@ -178,12 +181,13 @@ impl<'a> Tui<'a> {
                     }
                     continue;
                 }
-                if cols == width {
+                let wide = columns::of_char(c);
+                if cols + wide > width {
                     cut = true;
                     break;
                 }
                 out.push(c);
-                cols += 1;
+                cols += wide;
             }
             if cut {
                 out.push_str(&self.caps.reset());
@@ -197,22 +201,7 @@ impl<'a> Tui<'a> {
     ///
     /// Row values are truncated instead: a wrapped column stops lining up.
     fn wrap(&self, text: &str) -> Vec<String> {
-        let width = usize::from(self.caps.width).saturating_sub(3).max(24);
-        let mut lines = Vec::new();
-        let mut cur = String::new();
-        for word in text.split_whitespace() {
-            if !cur.is_empty() && cur.chars().count() + 1 + word.chars().count() > width {
-                lines.push(std::mem::take(&mut cur));
-            }
-            if !cur.is_empty() {
-                cur.push(' ');
-            }
-            cur.push_str(word);
-        }
-        if !cur.is_empty() {
-            lines.push(cur);
-        }
-        lines
+        columns::wrap(text, usize::from(self.caps.width).saturating_sub(3).max(24))
     }
 
     fn marked(&self) -> bool {
@@ -305,12 +294,13 @@ impl<'a> Tui<'a> {
         out.push_str(&format!("{bar}  {}\n", self.dim(&screen.facts.docs_page)));
         out.push_str(&format!("{bar}\n"));
 
+        let label_width = Screen::label_width();
         for (index, item) in screen.items.iter().enumerate() {
             let on = index == screen.cursor;
             let mark = if on { self.accent(CURSOR) } else { " ".into() };
             match item {
                 Item::Row(field) => {
-                    let label = format!("{:<25}", Screen::label(*field));
+                    let label = columns::pad(Screen::label(*field), label_width);
                     let value = screen.value(*field);
                     let text = if on {
                         format!("{}{}", self.highlight(&label), value)
@@ -321,23 +311,29 @@ impl<'a> Tui<'a> {
                 }
                 Item::Go => {
                     let label = if screen.manage_mode() {
-                        "Apply these changes"
+                        t::setup_go_apply()
                     } else {
-                        "Install now with these settings"
+                        t::setup_go_install()
                     };
                     out.push_str(&format!("{bar}  {mark} {}\n", self.highlight(label)));
                     out.push_str(&format!("{bar}  {rule}\n"));
                 }
                 Item::Uninstall => out.push_str(&format!(
                     "{bar}  {mark} {}\n",
-                    self.dim("Uninstall — remove the packages and the repo")
+                    self.dim(t::setup_uninstall_item())
                 )),
             }
         }
         out.push_str(&format!("{bar}\n"));
         out.push_str(&format!(
             "{bar}  {}\n",
-            self.dim("↑↓ move · Enter select/edit · q quit — nothing runs until you confirm")
+            self.dim(&format!(
+                "{} · {} · {} — {}",
+                t::setup_keys_move("↑↓"),
+                t::setup_keys_select("Enter"),
+                t::setup_keys_quit("q"),
+                t::setup_keys_nothing_runs()
+            ))
         ));
         out
     }
@@ -363,9 +359,9 @@ impl<'a> Tui<'a> {
                     _ => 2,
                 };
                 let options = [
-                    "The PC I stream from (host)",
-                    "Both (host + client)",
-                    "The device I play on (client)",
+                    t::setup_components_host(),
+                    t::setup_components_option_both(),
+                    t::setup_components_client(),
                 ];
                 if let Some(pick) = self.choose(why, &options, current) {
                     screen.set_components(pick != 2, pick != 0);
@@ -373,7 +369,7 @@ impl<'a> Tui<'a> {
             }
             other => {
                 let current = usize::from(!self.current_bool(screen, other));
-                if let Some(pick) = self.choose(why, &["yes", "no"], current) {
+                if let Some(pick) = self.choose(why, &[t::setup_yes(), t::setup_no()], current) {
                     screen.set_bool(other, pick == 0);
                 }
             }
@@ -413,11 +409,19 @@ impl<'a> Tui<'a> {
     /// The password step: a fresh host install must not end with the console asking for
     /// something the user never saw mentioned. `None` keeps the generated one — backing out
     /// of either prompt is that same answer, never a cancelled install.
-    pub fn web_password(&self, url: &str, read_cmd: &str) -> Option<String> {
+    pub fn web_password(&self, ip: Option<&str>, host: &str, read_cmd: &str) -> Option<String> {
+        let ask = match ip {
+            Some(ip) => t::setup_password_prompt(format!("https://{ip}:47992")),
+            None => t::setup_password_prompt_no_ip(host),
+        };
         let prompt = format!(
-            "The web console ({url}) asks for a password.\nOne is generated for you unless you set your own. Print it any time with:\n{read_cmd}"
+            "{ask}\n{}\n{read_cmd}",
+            t::setup_password_prompt_generated()
         );
-        let options = ["Use the generated password", "Set my own now"];
+        let options = [
+            t::setup_password_use_generated(),
+            t::setup_password_set_own(),
+        ];
         match self.choose(&prompt, &options, 0)? {
             0 => None,
             _ => self.ask_secret(),
@@ -430,13 +434,20 @@ impl<'a> Tui<'a> {
     /// `None` on Esc leaves `current` standing, so backing out of a re-run never moves a console
     /// someone already placed. "Any address" is deliberately not an option: a console on the open
     /// internet is a route the operator builds on purpose, not one a list offers them.
-    pub fn web_bind(&self, ip: &str, current: &str) -> Option<String> {
-        let prompt =
-            "Where should the web console be reachable?\nIt is how you pair devices and change every setting.";
+    pub fn web_bind(&self, ip: Option<&str>, host: &str, current: &str) -> Option<String> {
+        let prompt = format!(
+            "{}\n{}",
+            t::setup_bind_prompt(),
+            t::setup_bind_prompt_body()
+        );
+        let lan = match ip {
+            Some(ip) => t::setup_bind_option_lan(ip),
+            None => t::setup_bind_option_lan_no_ip(host),
+        };
         let options = [
-            "This machine only (https://127.0.0.1:47992)",
-            &format!("This local network (https://{ip}:47992)"),
-            "A specific address (e.g. a VPN interface)",
+            t::setup_bind_option_loopback(),
+            lan.as_str(),
+            t::setup_bind_option_address(),
         ];
         // The cursor starts on what the box already answers, so Enter is always "leave it".
         let initial = match current {
@@ -444,25 +455,32 @@ impl<'a> Tui<'a> {
             LAN_BIND => 1,
             _ => 2,
         };
-        match self.choose(prompt, &options, initial)? {
+        match self.choose(&prompt, &options, initial)? {
             0 => Some(LOOPBACK_BIND.to_string()),
             1 => Some(LAN_BIND.to_string()),
-            _ => self.ask_line(
-                "Type the address the console should listen on. It has to be an address this machine already has.",
-                "an IPv4 or IPv6 address · Esc leaves it unchanged",
-                "Enter accepts · Esc leaves it unchanged",
-                |typed| typed.parse::<std::net::IpAddr>().is_ok(),
-            ),
+            _ => {
+                let unchanged = t::setup_hint_esc_unchanged("Esc");
+                self.ask_line(
+                    t::setup_bind_address_prompt(),
+                    &format!("{} · {unchanged}", t::setup_hint_ip_address()),
+                    &format!("{} · {unchanged}", t::setup_hint_enter_accepts("Enter")),
+                    |typed| typed.parse::<std::net::IpAddr>().is_ok(),
+                )
+            }
         }
     }
 
     /// Inline text entry for the console password. `None` on Esc — the caller reads that as
     /// "generate one after all", so there is no way to leave here with nothing set.
     fn ask_secret(&self) -> Option<String> {
+        let generates = t::setup_hint_esc_generates("Esc");
         self.ask_line(
-            "Type the console password. It is stored on this box only, and shown here as you type.",
-            &format!("at least {MIN_PASSWORD} characters · Esc generates one instead"),
-            "Enter accepts · Esc generates one instead",
+            t::setup_password_type_prompt(),
+            &format!(
+                "{} · {generates}",
+                t::setup_hint_min_chars(MIN_PASSWORD as u64)
+            ),
+            &format!("{} · {generates}", t::setup_hint_enter_accepts("Enter")),
             |typed| typed.chars().count() >= MIN_PASSWORD,
         )
     }
@@ -669,5 +687,69 @@ pub fn action_of(step: Step) -> Option<Action> {
     match step {
         Step::Run(action) => Some(action),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::term::ScriptedTerm;
+
+    fn caps(colors: Colors, width: u16) -> Caps {
+        Caps {
+            tty: true,
+            colors,
+            width,
+        }
+    }
+
+    fn fit(colors: Colors, width: u16, text: &str) -> String {
+        let mut term = ScriptedTerm::new(&[]);
+        Tui::new(&mut term, caps(colors, width), 0).fit(text)
+    }
+
+    fn wrap(width: u16, text: &str) -> Vec<String> {
+        let mut term = ScriptedTerm::new(&[]);
+        Tui::new(&mut term, caps(Colors::None, width), 0).wrap(text)
+    }
+
+    #[test]
+    fn fit_leaves_a_line_that_fits_alone() {
+        assert_eq!(fit(Colors::None, 40, "one\ntwo"), "one\ntwo\n");
+    }
+
+    #[test]
+    fn fit_cuts_ascii_at_the_width_and_closes_the_colour() {
+        let line = format!("\x1b[2m{}\x1b[0m", "x".repeat(30));
+        let cut = format!("\x1b[2m{}\x1b[0m\n", "x".repeat(20));
+        assert_eq!(fit(Colors::Ansi256, 20, &line), cut);
+        assert_eq!(
+            fit(Colors::None, 20, &"x".repeat(30)),
+            "x".repeat(20) + "\n"
+        );
+    }
+
+    #[test]
+    fn fit_cuts_mixed_text_on_a_character_boundary() {
+        let line = format!("abc{}def", "田".repeat(10));
+        let cut = format!("abc{}\n", "田".repeat(8));
+        assert_eq!(fit(Colors::None, 20, &line), cut);
+        let exact = "田".repeat(10);
+        assert_eq!(fit(Colors::None, 20, &exact), exact + "\n");
+    }
+
+    #[test]
+    fn wrap_breaks_ascii_prose_between_words() {
+        assert_eq!(
+            wrap(
+                30,
+                "the quick brown fox jumps over the lazy dog again and again"
+            ),
+            [
+                "the quick brown fox jumps",
+                "over the lazy dog again and",
+                "again"
+            ]
+        );
     }
 }

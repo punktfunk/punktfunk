@@ -5,7 +5,6 @@
   + sudo rm -f /etc/apt/sources.list.d/punktfunk.list /etc/apt/keyrings/punktfunk.asc
   + sudo apt update
 
-  Removed. Left on purpose: ~/.config/punktfunk (identity, pairings, host.env, plugins — a reinstall
-  picks them up), the punktfunk, punktfunk-door and punktfunk-update groups, and any firewall
-  rules you opened.
+  Removed. Kept for a reinstall: ~/.config/punktfunk, the punktfunk, punktfunk-door and
+  punktfunk-update groups, and your firewall rules.
   The one-command cleanups for each are on https://docs.punktfunk.unom.io/docs/uninstall#linux-hosts

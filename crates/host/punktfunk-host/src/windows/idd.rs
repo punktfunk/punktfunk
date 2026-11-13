@@ -63,10 +63,11 @@ pub(crate) fn capture_virtual_output(
         screen,
         // gamescope is Linux-only.
         gamescope_cursor: _gamescope_cursor,
+        mirrored,
     } = request;
     // A monitor this host did not create is captured by a worker; the driver has no part in it.
     if vout.ownership == crate::vdisplay::DisplayOwnership::External {
-        return capture_external_output(vout, want, stream_hz, screen);
+        return capture_external_output(vout, want, stream_hz, screen, mirrored);
     }
     let target = vout.win_capture.clone().ok_or_else(|| {
         anyhow::anyhow!(
@@ -153,13 +154,15 @@ pub(crate) fn capture_virtual_output(
 /// and open the monitor in it. The absolute-input aim moves to that monitor, as the IDD-push
 /// open does for its own.
 ///
-/// A mirror's worker gets the GPU scheduling class a session's encoder gets. A viewer of
-/// another session's display keeps the default, below the driver that encodes for its owner.
+/// A `mirrored` session's worker gets the GPU scheduling class a session's encoder gets. A
+/// viewer of another session's display keeps the default, below the driver that encodes for
+/// its owner.
 fn capture_external_output(
     vout: crate::vdisplay::VirtualOutput,
     want: OutputFormat,
     stream_hz: u32,
     screen: u8,
+    mirrored: bool,
 ) -> Result<Box<dyn Capturer>> {
     let target = vout
         .win_capture
@@ -177,27 +180,30 @@ fn capture_external_output(
         target_id: target.target_id,
         hdr,
     };
-    let own_priority = crate::session_plan::mirrored();
     pf_capture::open_wgc(
         worker,
         source,
         want.hdr,
         stream_hz,
-        own_priority,
+        mirrored,
         vout.keepalive,
     )
     .context("WGC capture open (no fallback)")
 }
 
 /// Open a remote-encoder source's encoder (the driver's, or a capture worker's) at the depth the
-/// display composes now, and record it under the name of what opened. The heap is sized from
-/// the opening rate; ABR climbs past twice it eat the burst margin. `client_hdr` replaces the
-/// capturer's HDR baseline, as the stream loop does, so the first IDR carries the client's panel.
+/// display composes now, and record it under the name of what opened. The heap is sized for the
+/// most the client's ABR climbs to on this stream, so a later IDR still fits. `client_hdr`
+/// replaces the capturer's HDR baseline, as the stream loop does, so the first IDR carries the
+/// client's panel.
+/// `framing` is the picture asked of each surface, sent with the open: a far side that frames
+/// takes the crop and scales to `framing.out`, any other opens at `framing.source`, and the caps
+/// say which happened.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn open_driver_encoder(
     plan: &crate::session_plan::SessionPlan,
     capturer: &dyn Capturer,
-    size: (u32, u32),
+    framing: punktfunk_core::video_fit::Reframe,
     fps: u32,
     bitrate_bps: u64,
     bit_depth: u8,
@@ -215,6 +221,19 @@ pub(crate) fn open_driver_encoder(
         EncoderBackend::MediaFoundation => Some(be::MEDIA_FOUNDATION),
         EncoderBackend::Software | EncoderBackend::PlatformAuto => None,
     };
+    // The client's ABR climbs no higher than the stream's shape can use; PyroWave keeps its pin.
+    let peak_bitrate_bps = match plan.codec {
+        crate::encode::Codec::PyroWave => bitrate_bps,
+        codec => {
+            let (w, h) = framing.out;
+            let (wire, chroma) = (
+                crate::encode::codec_to_wire(codec),
+                crate::encode::chroma_idc(plan.chroma),
+            );
+            let kbps = punktfunk_core::abr::stream_ceiling_kbps(w, h, fps, wire, bit_depth, chroma);
+            u64::from(kbps) * 1000
+        }
+    };
     // The capturer reports HDR metadata exactly while the display composes FP16.
     let colour = capturer.colour();
     let (hdr, bit_depth) =
@@ -228,9 +247,12 @@ pub(crate) fn open_driver_encoder(
         full_range: plan.full_range(hdr, bit_depth),
         colour,
         client_hdr,
-        size,
+        size: framing.source,
+        crop: framing.crop,
+        out: framing.out,
         fps,
         bitrate_bps,
+        peak_bitrate_bps,
         slices: plan.slices,
         wire_chunk: plan.wire_chunk,
         wire_seq_base,
@@ -289,6 +311,7 @@ mod live_tests {
                 stream_hz: 60,
                 screen: 0,
                 gamescope_cursor: false,
+                mirrored: false,
             },
         )
         .expect("open the IDD-push capturer");
@@ -416,6 +439,7 @@ mod live_tests {
                 stream_hz: 60,
                 screen: 0,
                 gamescope_cursor: false,
+                mirrored: false,
             },
         )
         .expect("open the IDD-push capturer");

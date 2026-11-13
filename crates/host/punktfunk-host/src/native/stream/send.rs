@@ -45,11 +45,54 @@ pub(super) struct FrameMsg {
 }
 
 /// Whole AU, one slice-boundary chunk of a streamed AU (seal/pace while the encoder still
-/// runs), or shards a client asked for again.
+/// runs), or a doorbell for the NACKs waiting in [`ResendAsks`].
 pub(super) enum SendMsg {
     Frame(FrameMsg),
     Chunk(ChunkMsg),
-    Resend { frame: u32, shards: Vec<u16> },
+    Resend,
+}
+
+/// The client's NACKs for the send thread, which sends them before its next message: one per
+/// frame, the newest ask replacing an older one. Past the ring's three frames the oldest goes.
+#[derive(Default)]
+pub(super) struct ResendAsks(std::sync::Mutex<std::collections::VecDeque<(u32, Vec<u16>)>>);
+
+impl ResendAsks {
+    /// Queue frame `frame`'s ask. `true` when the queue was empty and the loop needs a ring.
+    fn push(&self, frame: u32, shards: Vec<u16>) -> bool {
+        let mut q = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let ring = q.is_empty();
+        q.retain(|(f, _)| *f != frame);
+        if q.len() >= super::recovery::RESEND_FRAMES {
+            q.pop_front();
+        }
+        q.push_back((frame, shards));
+        ring
+    }
+
+    fn take(&self) -> Option<(u32, Vec<u16>)> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).pop_front()
+    }
+}
+
+/// The control task's NACK hook for the send thread `frame_tx` feeds, and the queue it fills
+/// for that thread's [`send_loop`]. A ring that finds the channel full is dropped: the loop is
+/// busy and drains the queue before its next message. `false` once the thread is gone.
+pub(super) fn resend_hook(
+    frame_tx: &Arc<std::sync::mpsc::SyncSender<SendMsg>>,
+) -> (crate::native::wiring::ResendFn, Arc<ResendAsks>) {
+    let asks = Arc::new(ResendAsks::default());
+    let (tx, queue) = (Arc::downgrade(frame_tx), asks.clone());
+    let hook: crate::native::wiring::ResendFn = Box::new(move |frame, shards| {
+        let Some(tx) = tx.upgrade() else {
+            return false;
+        };
+        if queue.push(frame, shards) {
+            let _ = tx.try_send(SendMsg::Resend);
+        }
+        true
+    });
+    (hook, asks)
 }
 
 /// One encoder chunk of a streamed AU. Splits matter on `last`.
@@ -264,6 +307,8 @@ pub(super) struct SendStats {
     /// Frames the Windows driver dropped at its pool, session-cumulative. Written by the
     /// encode thread from the driver's telemetry; stays 0 off the driver.
     pub(super) driver_dropped: Arc<AtomicU64>,
+    /// The encode loop's `keyframe_left`, stamped when a keyframe's last packet leaves.
+    pub(super) keyframe_left: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     /// Sealed wire bytes go here each aggregation tick; the control task diffs them into the
     /// per-minute `link health` line's `egress_mbps`.
     pub(super) counters: Arc<crate::session_status::SessionCounters>,
@@ -272,9 +317,9 @@ pub(super) struct SendStats {
 /// Whether this session may accept a mid-stream `Reconfigure`.
 ///
 /// Off for gamescope (a resize respawns the nested game), a per-client-mode identity (the mode
-/// is part of the slot key, so a resize is a different display), and a `shared` display: a
-/// monitor mirror (`design/per-monitor-portal-capture.md`) or a `mode_conflict: join` session.
-/// Both stream a display whose mode belongs to someone else. The client scales.
+/// is part of the slot key, so a resize is a different display), and a `shared` display, a
+/// monitor mirror (`design/per-monitor-portal-capture.md`), whose mode belongs to someone else.
+/// The client scales. A `mode_conflict: join` session is asked at each switch instead.
 pub(crate) fn reconfig_allowed(
     compositor: Option<crate::vdisplay::Compositor>,
     per_client_mode: bool,
@@ -376,6 +421,7 @@ impl Drop for SendThread {
 pub(super) fn send_loop(
     session: Session,
     frame_rx: std::sync::mpsc::Receiver<SendMsg>,
+    asks: Arc<ResendAsks>,
     probe_rx: std::sync::mpsc::Receiver<ProbeShaped>,
     probe_result_tx: tokio::sync::mpsc::UnboundedSender<ProbeResult>,
     stop: Arc<AtomicBool>,
@@ -393,6 +439,8 @@ pub(super) fn send_loop(
     probe_seq: bool,
 ) {
     pf_frame::thread_qos::boost_thread_priority(false);
+    // A large frame waits on the session's seal and parity lanes: they run at this priority.
+    punktfunk_core::session::set_lane_boost(|| pf_frame::thread_qos::boost_thread_priority(false));
     let wire = WireLine::new(stats.wire_sock.take());
     let mut session = session;
     session.tap_plaintext(true);
@@ -410,6 +458,7 @@ pub(super) fn send_loop(
         probe_seq,
         pacer: crate::send_pacing::Pacer::new(stats.ports, crate::send_pacing::forced()),
         ring: ResendRing::default(),
+        asks,
         link: None,
         streamed: None,
         deferred: std::collections::VecDeque::new(),
@@ -465,6 +514,7 @@ struct SendLoop {
     pacer: crate::send_pacing::Pacer,
     /// The last frames' plaintext, for a client's NACK.
     ring: ResendRing,
+    asks: Arc<ResendAsks>,
     /// The `L` last paced at, logged when it moves.
     link: Option<crate::send_pacing::LinkRate>,
     streamed: Option<punktfunk_core::packet::StreamedAu>,
@@ -604,14 +654,14 @@ impl SendLoop {
         );
     }
 
-    /// One message off the encode loop: pace it out and account for it. `false` when a send
-    /// failed and the stream ends.
+    /// One message off the encode loop, after the NACKs waiting: pace it out and account for
+    /// it. `false` when a send failed and the stream ends.
     fn step(&mut self, send_msg: SendMsg) -> bool {
+        while let Some((frame, shards)) = self.asks.take() {
+            self.resend(frame, &shards);
+        }
         let send_msg = match send_msg {
-            SendMsg::Resend { frame, shards } => {
-                self.resend(frame, &shards);
-                return true;
-            }
+            SendMsg::Resend => return true,
             SendMsg::Frame(f) if f.meta.stream != 0 && self.streamed.is_some() => {
                 if defer(&mut self.deferred, f) {
                     tracing::debug!(
@@ -628,7 +678,7 @@ impl SendLoop {
         let opens = match &send_msg {
             SendMsg::Frame(f) => Some(f.meta),
             SendMsg::Chunk(c) if c.first => Some(c.meta),
-            SendMsg::Chunk(_) | SendMsg::Resend { .. } => None,
+            SendMsg::Chunk(_) | SendMsg::Resend => None,
         };
         if let Some(m) = opens {
             self.session.set_epoch(m.epoch);
@@ -664,7 +714,7 @@ impl SendLoop {
                 &mut self.pacer,
                 &mut self.ring,
             ),
-            SendMsg::Resend { .. } => Ok(None),
+            SendMsg::Resend => Ok(None),
         };
         match outcome {
             Ok(None) => {}
@@ -698,11 +748,18 @@ impl SendLoop {
         }
     }
 
-    /// An AU is on the wire: the bring-up mark, host timing, the spread EWMA and the windows,
-    /// each the first screen's alone.
+    /// An AU is on the wire: the bring-up mark, host timing, the spread EWMA, the windows and a
+    /// keyframe's departure, each the first screen's alone.
     fn sent(&mut self, m: &AuMeta, stat: &PaceStat) {
         if m.stream != 0 {
             return;
+        }
+        if m.flags & u32::from(FLAG_SOF) != 0 {
+            *self
+                .stats
+                .keyframe_left
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
         }
         let probe = m.flags & FLAG_PROBE as u32 != 0;
         if !probe {
@@ -935,7 +992,7 @@ mod tests {
         let started = std::time::Instant::now();
         send.join_within(std::time::Duration::from_millis(50));
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
-        assert!(!send.send(resend(), || false));
+        assert!(!send.send(SendMsg::Resend, || false));
         drop(send);
         drop(hold_tx);
     }
@@ -950,10 +1007,13 @@ mod tests {
             let _ = hold_rx.recv();
         });
         let send = SendThread::new(Arc::new(tx), thread);
-        assert!(send.send(resend(), || false), "the first fills the queue");
+        assert!(
+            send.send(SendMsg::Resend, || false),
+            "the first fills the queue"
+        );
         let started = std::time::Instant::now();
         let mut asked = 0;
-        assert!(!send.send(resend(), || {
+        assert!(!send.send(SendMsg::Resend, || {
             asked += 1;
             asked >= 3
         }));
@@ -963,25 +1023,21 @@ mod tests {
         drop(hold_tx);
     }
 
-    fn resend() -> SendMsg {
-        SendMsg::Resend {
-            frame: 0,
-            shards: Vec::new(),
-        }
-    }
+    type Spawned = (
+        Arc<std::sync::mpsc::SyncSender<SendMsg>>,
+        crate::native::wiring::ResendFn,
+        Arc<AtomicBool>,
+        Arc<crate::session_status::SessionCounters>,
+        std::thread::JoinHandle<()>,
+    );
 
     /// A send thread on `transport` at 20 Mbit/s in `shape`, its link refuted or not: its
-    /// frame channel, its stop flag, the counters it reports into and the thread.
+    /// frame channel, its NACK hook, its stop flag, the counters it reports into and the thread.
     fn spawn_loop(
         transport: Box<dyn Transport>,
         shape: crate::send_pacing::Shape,
         refuted: bool,
-    ) -> (
-        std::sync::mpsc::SyncSender<SendMsg>,
-        Arc<AtomicBool>,
-        Arc<crate::session_status::SessionCounters>,
-        std::thread::JoinHandle<()>,
-    ) {
+    ) -> Spawned {
         use punktfunk_core::config::{Config, FecConfig, FecScheme, Role};
         let cfg = Config {
             role: Role::Host,
@@ -1002,6 +1058,8 @@ mod tests {
         };
         let session = punktfunk_core::session::Session::new(cfg, media, transport).unwrap();
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel(3);
+        let frame_tx = Arc::new(frame_tx);
+        let (hook, asks) = super::resend_hook(&frame_tx);
         let (_, probe_rx) = std::sync::mpsc::channel();
         let (probe_result_tx, _) = tokio::sync::mpsc::unbounded_channel();
         let (_, shard_rx) = std::sync::mpsc::channel();
@@ -1030,6 +1088,7 @@ mod tests {
             bringup: crate::bringup::Trace::start("test", Arc::new(AtomicU32::new(0))),
             wire_sock: None,
             driver_dropped: Arc::new(AtomicU64::new(0)),
+            keyframe_left: Default::default(),
             counters: counters.clone(),
         };
         let thread = std::thread::spawn({
@@ -1038,6 +1097,7 @@ mod tests {
                 send_loop(
                     session,
                     frame_rx,
+                    asks,
                     probe_rx,
                     probe_result_tx,
                     stop,
@@ -1053,7 +1113,7 @@ mod tests {
                 )
             }
         });
-        (frame_tx, stop, counters, thread)
+        (frame_tx, hook, stop, counters, thread)
     }
 
     /// One whole 8 KiB AU as frame `index`.
@@ -1083,7 +1143,7 @@ mod tests {
     #[test]
     fn a_whole_au_in_one_chunk_sends_its_data_first() {
         let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
-        let (frame_tx, stop, _, thread) =
+        let (frame_tx, _, stop, _, thread) =
             spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto, false);
         let SendMsg::Frame(f) = frame(5) else {
             unreachable!()
@@ -1120,7 +1180,7 @@ mod tests {
         use std::time::{Duration, Instant};
         let spread = |refuted: bool| {
             let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
-            let (frame_tx, stop, _, thread) =
+            let (frame_tx, _, stop, _, thread) =
                 spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto, refuted);
             let SendMsg::Frame(mut f) = frame(3) else {
                 unreachable!()
@@ -1157,29 +1217,22 @@ mod tests {
     #[test]
     fn a_resend_sends_the_named_shards_again() {
         let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
-        let (frame_tx, stop, counters, thread) =
+        let (frame_tx, nack, stop, counters, thread) =
             spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto, false);
         frame_tx.send(frame(7)).unwrap();
-        frame_tx
-            .send(SendMsg::Resend {
-                frame: 7,
-                shards: vec![1, 9],
-            })
-            .unwrap();
-        frame_tx
-            .send(SendMsg::Resend {
-                frame: 99,
-                shards: vec![0],
-            })
-            .unwrap();
         let mut got = Vec::new();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while got.len() < 12 && std::time::Instant::now() < deadline {
-            match client_tp.recv().unwrap() {
-                Some(p) => got.push(p),
-                None => std::thread::sleep(std::time::Duration::from_millis(1)),
+        let mut take = |n: usize| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while got.len() < n && std::time::Instant::now() < deadline {
+                match client_tp.recv().unwrap() {
+                    Some(p) => got.push(p),
+                    None => std::thread::sleep(std::time::Duration::from_millis(1)),
+                }
             }
-        }
+        };
+        take(10);
+        assert!(nack(7, vec![1, 9]) && nack(99, vec![0]));
+        take(12);
         std::thread::sleep(std::time::Duration::from_millis(50));
         while let Some(p) = client_tp.recv().unwrap() {
             got.push(p);
@@ -1195,6 +1248,73 @@ mod tests {
         let mut m = crate::link_health::LinkMinute::default();
         counters.link.take(&mut m);
         assert_eq!(m.resend_pkts, 2);
+    }
+
+    /// A NACK asked while three frames wait behind the one on the pacer leaves right after that
+    /// frame's last packet, before the next frame is taken, and a full channel drops nothing.
+    /// The resent packets are the frame's own under fresh packet numbers. The ask queue keeps
+    /// the newest ask per frame and the ring's three frames at most.
+    #[test]
+    fn a_resend_goes_ahead_of_the_queued_frames() {
+        use std::time::{Duration, Instant};
+        let asks = super::ResendAsks::default();
+        assert!(asks.push(1, vec![0]), "the first ask rings");
+        for f in [2, 3, 1, 4] {
+            assert!(!asks.push(f, vec![f as u16]));
+        }
+        let held: Vec<_> = std::iter::from_fn(|| asks.take()).collect();
+        assert_eq!(held, [(3, vec![3]), (1, vec![1]), (4, vec![4])]);
+
+        // A refuted link paces each 100 KiB frame over about 30 ms.
+        let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
+        let (frame_tx, nack, stop, _, thread) =
+            spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto, true);
+        for i in 7..=10 {
+            let SendMsg::Frame(mut f) = frame(i) else {
+                unreachable!()
+            };
+            f.data = vec![3u8; 100 * 1024];
+            frame_tx.send(SendMsg::Frame(f)).unwrap();
+        }
+        let mut got: Vec<(Instant, Vec<u8>)> = Vec::new();
+        let (mut asked, mut quiet) = (None, Instant::now());
+        while quiet.elapsed() < Duration::from_millis(200) {
+            if !got.is_empty() && asked.is_none() {
+                // Frame 7 is on the pacer and 8, 9, 10 fill the channel, where a NACK would
+                // queue behind them if it fit.
+                let ring = frame_tx.try_send(SendMsg::Resend);
+                assert!(matches!(ring, Err(std::sync::mpsc::TrySendError::Full(_))));
+                asked = Some(Instant::now());
+                assert!(nack(7, vec![1, 9]), "a full channel drops no NACK");
+            }
+            match client_tp.recv().unwrap() {
+                Some(p) => {
+                    quiet = Instant::now();
+                    got.push((quiet, p));
+                }
+                None => std::thread::sleep(Duration::from_micros(100)),
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(frame_tx);
+        thread.join().unwrap();
+        let asked = asked.unwrap();
+        let index = |p: &[u8]| u32::from_le_bytes(p[8..12].try_into().unwrap());
+        let frames: Vec<u32> = got.iter().map(|(_, p)| index(p)).collect();
+        let n = frames.iter().filter(|&&f| f == 10).count();
+        assert!(n > 100, "{n} packets a frame");
+        assert!(frames[..n].iter().all(|&f| f == 7), "frame 7 whole first");
+        assert_eq!(frames[n..n + 2], [7, 7], "then its resend");
+        assert!(frames[n + 2..].is_sorted() && frames.len() == 4 * n + 2);
+        for (_, p) in &got[n..n + 2] {
+            let (_, own) = got[..n].iter().find(|(_, o)| o[5..] == p[5..]).unwrap();
+            assert_eq!(p[0], own[0]);
+            assert_ne!(p[1..5], own[1..5], "a fresh packet number");
+        }
+        let now = got[n].0 - asked;
+        let behind = got.last().unwrap().0 - asked;
+        println!("nack asked into a full channel: resent after {now:?}, frames 8-10 done after {behind:?}");
+        assert!(got[n + 1].0 <= got[n + 2].0 && now < behind);
     }
 
     /// A further screen's frame sent while a streamed AU is open leaves after that AU's last
@@ -1218,7 +1338,7 @@ mod tests {
         assert_eq!(held.back().map(|f| f.meta.frame_index), Some(99));
 
         let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
-        let (frame_tx, stop, _, thread) =
+        let (frame_tx, nack, stop, _, thread) =
             spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto, false);
         let meta = |stream| match frame(1) {
             SendMsg::Frame(f) => AuMeta { stream, ..f.meta },
@@ -1240,23 +1360,23 @@ mod tests {
             }))
             .unwrap();
         frame_tx.send(chunk(false, true)).unwrap();
-        frame_tx
-            .send(SendMsg::Resend {
-                frame: 1,
-                shards: vec![0],
-            })
-            .unwrap();
         let mut tags = Vec::new();
-        let mut quiet = std::time::Instant::now();
-        while quiet.elapsed() < std::time::Duration::from_millis(200) {
-            match client_tp.recv().unwrap() {
-                Some(p) => {
-                    tags.push(p[0]);
-                    quiet = std::time::Instant::now();
+        let mut until_quiet = || {
+            let mut quiet = std::time::Instant::now();
+            while quiet.elapsed() < std::time::Duration::from_millis(200) {
+                match client_tp.recv().unwrap() {
+                    Some(p) => {
+                        tags.push(p[0]);
+                        quiet = std::time::Instant::now();
+                    }
+                    None => std::thread::sleep(std::time::Duration::from_millis(1)),
                 }
-                None => std::thread::sleep(std::time::Duration::from_millis(1)),
             }
-        }
+        };
+        until_quiet();
+        // Frame 1 of both screens is out; the NACK names the first screen's.
+        assert!(nack(1, vec![0]));
+        until_quiet();
         stop.store(true, std::sync::atomic::Ordering::SeqCst);
         drop(frame_tx);
         thread.join().unwrap();

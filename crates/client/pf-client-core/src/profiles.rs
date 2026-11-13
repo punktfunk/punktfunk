@@ -43,26 +43,44 @@ pub enum SeatState {
 #[serde(default)]
 pub struct Seat {
     pub state: SeatState,
-    /// The progress line while starting, or why while unavailable.
+    /// The progress line while starting, or why while unavailable. The host's English until
+    /// [`Self::worded`] puts this app's wording of [`Self::detail_id`] here.
     pub detail: Option<String>,
+    /// The host message of `detail` (`seatline_*`), absent for the supervisor's own text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail_id: Option<String>,
+    /// The values of that message's placeholders, by name.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub detail_params: std::collections::BTreeMap<String, String>,
     /// The device playing on it while occupied.
     pub occupant: Option<String>,
     /// Its Steam has no account yet. `None` where the host can't tell.
     pub steam_sign_in: Option<bool>,
 }
 
-/// What this device must send to open a profile on a person's own account, as `enumerate`
-/// says for it ([`crate::unlock`]). An old host omits it: [`UnlockNeed::None`]. A word a later
-/// host adds reads as [`UnlockNeed::Password`], the prompt every client has.
+/// What this device must send to open a profile on a person's own account or a locked one, as
+/// `enumerate` says for it ([`crate::unlock`]). An old host omits it: [`UnlockNeed::None`]. A
+/// word a later host adds reads as [`UnlockNeed::Password`], the prompt every client has.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnlockNeed {
     #[default]
     None,
-    /// A signature from this device's unlock key.
+    /// A signature from this device's unlock key, else the account password.
     Key,
+    /// The locked profile's PIN.
+    Pin,
+    /// A signature from this device's unlock key, else the locked profile's PIN.
+    PinKey,
     #[serde(other)]
     Password,
+}
+
+impl UnlockNeed {
+    /// The prompt asks for the profile's PIN, not an account password.
+    pub fn pin(self) -> bool {
+        matches!(self, UnlockNeed::Pin | UnlockNeed::PinKey)
+    }
 }
 
 /// One row of `enumerate`. Every field defaults, so a host that adds one never fails the list.
@@ -81,9 +99,36 @@ pub struct ListedProfile {
     pub legacy_seat: bool,
     /// What opens the profile from this device.
     pub unlock: UnlockNeed,
+    /// This device may hide titles for this profile now ([`crate::hide`]). An old host omits it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub person: bool,
+}
+
+impl Seat {
+    /// The seat with its detail in this app's language when the host named the message; the
+    /// host's English stands for an id this build does not know.
+    pub fn worded(mut self) -> Self {
+        if let Some(id) = &self.detail_id {
+            let params: Vec<(&str, &str)> = self
+                .detail_params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let english = self.detail.as_deref().unwrap_or_default();
+            let said = crate::host_text::word(id, &params, english);
+            self.detail = Some(said).filter(|s| !s.is_empty());
+        }
+        self
+    }
 }
 
 impl ListedProfile {
+    /// The row with its seat worded ([`Seat::worded`]).
+    pub fn worded(mut self) -> Self {
+        self.seat = self.seat.map(Seat::worded);
+        self
+    }
+
     pub fn pick(&self) -> ProfilePick {
         ProfilePick {
             id: self.id.clone(),
@@ -98,18 +143,22 @@ impl ListedProfile {
         let seat = self.seat.as_ref()?;
         match seat.state {
             SeatState::Occupied => Some(match &seat.occupant {
-                Some(device) => format!("In use by {device}"),
-                None => "In use".into(),
+                Some(device) => pf_l10n::client::profile_in_use_by(device),
+                None => pf_l10n::client::profile_in_use().into(),
             }),
             SeatState::Starting => Some(
                 seat.detail
                     .clone()
-                    .unwrap_or_else(|| "Getting ready…".into()),
+                    .unwrap_or_else(|| pf_l10n::client::profile_getting_ready().into()),
             ),
-            SeatState::Unavailable => {
-                Some(seat.detail.clone().unwrap_or_else(|| "Unavailable".into()))
+            SeatState::Unavailable => Some(
+                seat.detail
+                    .clone()
+                    .unwrap_or_else(|| pf_l10n::client::profile_unavailable().into()),
+            ),
+            _ if seat.steam_sign_in == Some(true) => {
+                Some(pf_l10n::client::profile_steam_sign_in().into())
             }
-            _ if seat.steam_sign_in == Some(true) => Some("Steam sign-in once".into()),
             _ => None,
         }
     }
@@ -223,7 +272,7 @@ pub fn picker_decision(
 pub enum SeatGate {
     /// Dial now. The host places the connect, or says why it can't.
     Dial,
-    /// `POST /api/v1/profiles/{id}/wake`, then wait: `Getting Kid's desk ready…`.
+    /// `POST /api/v1/profiles/{id}/wake`, then wait: `Getting Kid's desktop ready…`.
     Wake,
     /// The seat is coming up. Poll `enumerate` every 2 s, show `detail`, offer **Cancel**; there
     /// is no timeout.
@@ -251,25 +300,22 @@ pub fn seat_gate(p: &ListedProfile) -> SeatGate {
         SeatState::Unavailable => SeatGate::Refuse(
             seat.detail
                 .clone()
-                .unwrap_or_else(|| "That profile can't play on this host right now.".into()),
+                .unwrap_or_else(|| pf_l10n::host::reject_seat_unavailable().into()),
         ),
     }
 }
 
-/// The line while a seat comes up: `Getting Kid's desk ready…`.
+/// The line while a seat comes up: `Getting Kid's desktop ready…`.
 pub fn waking_line(display_name: &str) -> String {
-    format!("Getting {display_name}'s desk ready…")
+    pf_l10n::client::profile_waking(display_name)
 }
 
-/// The host's refusal of another profile's seat (403), in its own words.
-pub const WAKE_REFUSED: &str = "This device isn't allowed to start another profile's seat.";
-
-/// The line a failed [`wake`] ends a seat wait with: the refusal as its own sentence, any
-/// other failure under the desk it was for.
+/// The line a failed [`wake`] ends a seat wait with: the host's refusal of another profile's
+/// seat (403) as its own sentence, any other failure under the desk it was for.
 pub fn wake_failed(display_name: &str, e: &crate::library::LibraryError) -> String {
     match e {
-        crate::library::LibraryError::Http(403) => WAKE_REFUSED.to_string(),
-        e => format!("Couldn't wake {display_name}'s desk \u{2014} {e}"),
+        crate::library::LibraryError::Http(403) => pf_l10n::client::profile_wake_refused().into(),
+        e => pf_l10n::client::profile_wake_failed(display_name, e),
     }
 }
 
@@ -289,8 +335,8 @@ pub fn fetch_enumerate(
     if reply.status == 404 {
         return Ok(None);
     }
-    serde_json::from_slice(&reply.ok()?)
-        .map(Some)
+    serde_json::from_slice::<Vec<ListedProfile>>(&reply.ok()?)
+        .map(|rows| Some(rows.into_iter().map(ListedProfile::worded).collect()))
         .map_err(|e| LibraryError::Unreachable(format!("bad JSON: {e}")))
 }
 
@@ -322,34 +368,51 @@ pub fn wake(
     let https = agent(identity, pin)?;
     let api = HostApi::new(addr, mgmt_port, stream_port, identity, pin);
     let reply = api.call(&https, "POST", &format!("/api/v1/profiles/{id}/wake"), None)?;
-    serde_json::from_slice(&wake_answer(reply)?)
+    serde_json::from_slice::<ListedProfile>(&wake_answer(reply)?)
+        .map(ListedProfile::worded)
         .map_err(|e| LibraryError::Unreachable(format!("bad JSON: {e}")))
 }
 
-/// What `unlock-challenge` answers: 32 fresh bytes, good once for two minutes, and the seat
-/// they are for.
+/// What `unlock-challenge` answers: 32 fresh bytes, good once for two minutes, and what the
+/// signed message names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnlockChallenge {
     pub challenge: [u8; 32],
-    /// The `SeatId`'s 32 lowercase hex characters.
-    pub seat: String,
+    pub names: ChallengeNames,
+}
+
+/// What a key proof's message names besides the challenge and the two certificates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChallengeNames {
+    /// A person's own account: the `SeatId`'s 32 lowercase hex characters.
+    Seat(String),
+    /// A locked profile: its id.
+    Profile(String),
 }
 
 impl UnlockChallenge {
-    /// The host's answer, `{ "challenge": "<64 hex>", "seat": "<32 hex>" }`. `None` for any
-    /// other shape.
+    /// The host's answer, `{ "challenge": "<64 hex>", "seat": "<32 hex>" }` or
+    /// `{ "challenge": "<64 hex>", "profile": "<id>" }`. `None` for any other shape.
     pub fn parse(body: &[u8]) -> Option<UnlockChallenge> {
         #[derive(Deserialize)]
         struct Wire {
             challenge: String,
-            seat: String,
+            seat: Option<String>,
+            profile: Option<String>,
         }
         let w: Wire = serde_json::from_slice(body).ok()?;
         let lower_hex = |s: &str| s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-        (lower_hex(&w.challenge) && w.seat.len() == 32 && lower_hex(&w.seat)).then_some(())?;
+        let names = match (w.seat, w.profile) {
+            (Some(seat), None) if seat.len() == 32 && lower_hex(&seat) => {
+                ChallengeNames::Seat(seat)
+            }
+            (None, Some(id)) if crate::unlock::is_profile_id(&id) => ChallengeNames::Profile(id),
+            _ => return None,
+        };
+        lower_hex(&w.challenge).then_some(())?;
         Some(UnlockChallenge {
             challenge: crate::trust::parse_hex32(&w.challenge)?,
-            seat: w.seat,
+            names,
         })
     }
 }
@@ -465,7 +528,7 @@ pub fn watch_seat(
             }
         };
         let Some(polled) = listed.into_iter().flatten().find(|p| p.id == row.id) else {
-            each(Err(format!("{name} is gone from this host.")));
+            each(Err(pf_l10n::client::profile_gone(name)));
             return;
         };
         if !each(Ok(polled)) {
@@ -551,11 +614,11 @@ mod tests {
             seat_gate(&with("unavailable", Some("Seats are off."))),
             SeatGate::Refuse("Seats are off.".into())
         );
-        assert_eq!(waking_line("Kid"), "Getting Kid's desk ready…");
+        assert_eq!(waking_line("Kid"), "Getting Kid's desktop ready…");
     }
 
     /// A wake the host refuses (403) reads as its sentence; an unpaired device (401) and any
-    /// other failure keep the desk's frame.
+    /// other failure keep the desktop's frame.
     #[test]
     fn a_refused_wake_reads_as_the_hosts_sentence() {
         use crate::library::LibraryError;
@@ -565,7 +628,7 @@ mod tests {
         );
         assert_eq!(
             wake_failed("Kid", &LibraryError::Http(500)),
-            "Couldn't wake Kid's desk \u{2014} the host refused it (500)"
+            "Couldn't get Kid's desktop ready \u{2014} the host refused it (500)"
         );
         #[cfg(desktop)]
         {
@@ -673,6 +736,44 @@ mod tests {
         assert_eq!(initials("anna lena x"), "AL");
     }
 
+    /// A seat line the host names is worded by its id; the supervisor's own text, and an id
+    /// from a newer host, stay the host's English.
+    #[test]
+    fn a_seat_line_is_worded_by_its_id() {
+        let seat = |id: Option<&str>| -> ListedProfile {
+            serde_json::from_value::<ListedProfile>(serde_json::json!({
+                "id": "kid", "display_name": "Kid",
+                "seat": {
+                    "state": "starting", "detail": "The host's English.", "detail_id": id,
+                    "detail_params": { "attempt": "2", "total": "3" },
+                },
+            }))
+            .unwrap()
+            .worded()
+        };
+        let line = |p: &ListedProfile| p.note().unwrap();
+        let known = seat(Some("seatline_stage_sign_in_try"));
+        assert_eq!(
+            line(&known),
+            "Signing in to the seat's Windows account (try 2 of 3)…"
+        );
+        pf_l10n::with_language("en-XA", || {
+            let again: ListedProfile = known.clone().worded();
+            assert!(line(&again).starts_with('['), "{}", line(&again));
+        });
+        assert_eq!(
+            line(&seat(Some("seatline_from_a_newer_host"))),
+            "The host's English."
+        );
+        assert_eq!(line(&seat(None)), "The host's English.");
+        assert_eq!(
+            seat_gate(&known),
+            SeatGate::Wait {
+                detail: Some("Signing in to the seat's Windows account (try 2 of 3)…".into())
+            }
+        );
+    }
+
     #[cfg(desktop)]
     #[test]
     fn a_seat_watch_hands_on_the_first_row_or_the_wake_failure() {
@@ -690,7 +791,7 @@ mod tests {
             true
         });
         assert!(
-            matches!(&seen[..], [Err(l)] if l.starts_with("Couldn't wake Kid's desk \u{2014} "))
+            matches!(&seen[..], [Err(l)] if l.starts_with("Couldn't get Kid's desktop ready \u{2014} "))
         );
         seen.clear();
         watch_seat(

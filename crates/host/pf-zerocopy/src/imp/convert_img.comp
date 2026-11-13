@@ -1,9 +1,14 @@
 #version 450
 // The fused convert for the direct-SDK NVENC path: the compositor's dmabuf (tiled or linear,
-// 8- or 10-bit RGB) sampled once, the cursor blended in, the NVENC input slot written — one
+// 8- or 10-bit RGB) read once, the cursor blended in, the NVENC input slot written — one
 // pass per frame and no staging. It runs in the zero-copy worker on slot memory the host
 // registered with NVENC (OPAQUE_FD on both sides), so this shader writes the bytes NVENC
 // encodes.
+//
+// SOURCE (push lin_fmt): 0 = the sampled image, for a tiled dmabuf. A LINEAR dmabuf is read as
+// words at its own offset and stride instead: a driver may read a LINEAR image at a rounded
+// row pitch (NVIDIA: 32 bytes), which shears any other stride. 1 = B,G,R,x bytes (XR24),
+// 2 = R,G,B,x bytes (XB24), 3 = x:R:G:B 2:10:10:10 (XR30), 4 = x:B:G:R 2:10:10:10 (XB30).
 //
 // MODE (push): 0 = packed ARGB 8-bit (NVENC byte order B,G,R,A), 1 = NV12 (Y plane +
 // interleaved half-res UV at row plane_rows), 2 = planar YUV444 (3 full-res planes stacked at
@@ -27,6 +32,7 @@ layout(constant_id = 0) const bool FULL_RANGE = true;
 layout(binding = 0) uniform sampler2D src; // the dmabuf as imported, any modifier; normalized
 layout(std430, binding = 1) writeonly buffer Dst { uint dw[]; };
 layout(std430, binding = 2) readonly buffer Cur { uint cur[]; }; // RGBA8, tight rows
+layout(std430, binding = 3) readonly buffer Lin { uint lin[]; }; // a LINEAR dmabuf's bytes
 
 layout(push_constant) uniform Push {
     uint mode;
@@ -38,13 +44,35 @@ layout(push_constant) uniform Push {
     uint cur_h;
     int cur_x;       // cursor top-left in source pixels (may be negative)
     int cur_y;
+    uint lin_fmt;    // 0 = sample `src`; else the word layout of `lin`
+    uint lin_off_w;  // first pixel of `lin`, in words
+    uint lin_pitch_w; // row stride of `lin`, in words
 } pc;
+
+// One source pixel, normalized: the sampled image, or a LINEAR word unpacked.
+vec3 texel(uint x, uint y) {
+    if (pc.lin_fmt == 0u) {
+        return texelFetch(src, ivec2(int(x), int(y)), 0).rgb;
+    }
+    uint w = lin[pc.lin_off_w + y * pc.lin_pitch_w + x];
+    if (pc.lin_fmt == 1u) {
+        return vec3(float((w >> 16) & 0xFFu), float((w >> 8) & 0xFFu), float(w & 0xFFu)) / 255.0;
+    }
+    if (pc.lin_fmt == 2u) {
+        return vec3(float(w & 0xFFu), float((w >> 8) & 0xFFu), float((w >> 16) & 0xFFu)) / 255.0;
+    }
+    if (pc.lin_fmt == 3u) {
+        return vec3(float((w >> 20) & 0x3FFu), float((w >> 10) & 0x3FFu), float(w & 0x3FFu))
+            / 1023.0;
+    }
+    return vec3(float(w & 0x3FFu), float((w >> 10) & 0x3FFu), float((w >> 20) & 0x3FFu)) / 1023.0;
+}
 
 // Edge-clamped source texel with the cursor blended over it.
 vec3 fetch(uint x, uint y) {
     x = min(x, pc.width - 1u);
     y = min(y, pc.height - 1u);
-    vec3 c = texelFetch(src, ivec2(int(x), int(y)), 0).rgb;
+    vec3 c = texel(x, y);
     if (pc.cur_w != 0u) {
         int cx = int(x) - pc.cur_x;
         int cy = int(y) - pc.cur_y;

@@ -84,11 +84,11 @@ impl TritonWinPad {
     /// descriptor lacks never reaches Steam, so it is not published over an unread state; a
     /// state report waits out a sparse report's hold and the next one carries the newest.
     fn write_state(&mut self, st: &TritonState) {
-        let (r, _) = st.report(&mut self.seq);
+        let now = std::time::Instant::now();
+        let (r, _) = st.report(&mut self.seq, now);
         if pf_driver_proto::triton::input_len(r[0]).is_none() {
             return;
         }
-        let now = std::time::Instant::now();
         let sparse = !matches!(r[0], 0x42 | 0x45);
         if !sparse && self.hold_until.is_some_and(|t| now < t) {
             return;
@@ -147,8 +147,7 @@ impl PadProto for TritonWinProto {
     type State = TritonState;
     const LABEL: &'static str = "Steam Controller 2/Windows";
     const DEVICE: &'static str = "Steam Controller 2";
-    const CREATE_HINT: &'static str =
-        " (install/repair: punktfunk-host.exe driver install --gamepad)";
+    const CREATE_HINT: &'static str = " (install/repair: run the Punktfunk installer again)";
 
     fn open(&mut self, idx: u8) -> Result<TritonWinPad> {
         let identity = crate::triton_proto::identity_for(idx);
@@ -168,11 +167,15 @@ impl PadProto for TritonWinProto {
         prev: &TritonState,
         f: &punktfunk_core::input::GamepadFrame,
     ) -> TritonState {
-        TritonState::merge_frame(prev, f)
+        TritonState::merge_frame(prev, f, std::time::Instant::now())
     }
 
     fn apply_rich(&self, st: &mut TritonState, rich: RichInput) {
-        st.apply_rich(rich);
+        st.apply_rich(rich, std::time::Instant::now());
+    }
+
+    fn heard(&self, st: &mut TritonState, now: std::time::Instant) {
+        st.hear(now);
     }
 
     fn write_state(&self, pad: &mut TritonWinPad, st: &TritonState) {

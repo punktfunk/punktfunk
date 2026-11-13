@@ -21,9 +21,9 @@ use bytemuck::{Pod, Zeroable};
 pub const MAGIC: u32 = u32::from_le_bytes(*b"PFCW");
 
 /// Bumped on any change to a body here. Not a floor: [`Hello`] must match exactly.
-pub const WORKER_PROTOCOL: u32 = 1;
+pub const WORKER_PROTOCOL: u32 = 2;
 
-/// Largest body either side accepts. The longest message is `SET_ENCODE` at 144 bytes; a
+/// Largest body either side accepts. The longest message is `SET_ENCODE` at 168 bytes; a
 /// length past this is a corrupt or hostile stream and ends the channel.
 pub const MAX_BODY: u32 = 1024;
 

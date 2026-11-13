@@ -1,7 +1,8 @@
 // The single server-side gate. Runs for EVERY request to the deployed Bun/Nitro server
 // (pages, the /api proxy, everything) before routing. Unauthenticated requests are
-// redirected to /login (page navigations) or rejected 401 (/api). Fails CLOSED when no password
-// is configured either way, so a misconfigured LAN-exposed server admits no one.
+// redirected to /login (page navigations) or rejected 401 (/api); the plugin listener takes a
+// page path instead of the session, and a person's cookie its own gate (`personGate`). Fails
+// CLOSED when no password is configured either way.
 import {
 	defineEventHandler,
 	getCookie,
@@ -11,6 +12,7 @@ import {
 	type H3Event,
 	sendRedirect,
 	setResponseHeader,
+	setResponseHeaders,
 	setResponseStatus,
 	useSession,
 } from "h3";
@@ -18,12 +20,16 @@ import {
 	authConfigured,
 	csrfRequestOrigin,
 	isCrossSiteMutation,
+	peerAddress,
 	SESSION_NAME,
 	type SessionData,
 	sessionConfig,
 	sessionEpoch,
 } from "../util/auth";
 import { isPublicPath, safeNextPath } from "../util/paths";
+import { forgetSession, isLoopbackPeer, personCookie } from "../util/person";
+import { ended, personApi } from "../util/personApi";
+import { personPluginPage } from "../util/personPlugins";
 import {
 	consoleOriginPort,
 	consoleOriginScheme,
@@ -31,6 +37,12 @@ import {
 	isPluginUiPath,
 	listenerOf,
 } from "../util/pluginOrigin";
+import {
+	PLUGIN_PAGE_CORS,
+	PLUGIN_PAGE_SANDBOX,
+	pluginPage,
+	pluginPagePreflight,
+} from "../util/pluginPage";
 
 export default defineEventHandler(async (event) => {
 	const url = getRequestURL(event);
@@ -45,10 +57,8 @@ export default defineEventHandler(async (event) => {
 	//
 	//  - the console origin must not serve `/plugin-ui/**`, or the old same-origin path still works
 	//    and nothing has changed;
-	//  - the plugin origin must not serve anything ELSE — above all not `/api/**`. Plugin JS is
-	//    same-origin with the plugin listener, so if that listener proxied `/api/**` the BFF would
-	//    attach the operator's admin bearer to the plugin's own fetch and hand back exactly the
-	//    escalation we just moved.
+	//  - the plugin origin must not serve anything ELSE — above all not `/api/**`, where the BFF
+	//    would attach the operator's admin bearer to whatever a plugin page sends there.
 	//
 	// Unconditional, not conditional on the plugin listener having bound: if it did not, plugin UIs
 	// are disabled and refusing here is the correct answer, not a reason to fall back. (`vite dev`
@@ -74,19 +84,22 @@ export default defineEventHandler(async (event) => {
 	//   Referrer-Policy— never leak a console path (which can carry ids) to an external homepage link
 	setResponseHeader(event, "X-Content-Type-Options", "nosniff");
 	setResponseHeader(event, "Referrer-Policy", "no-referrer");
-	// `frame-ancestors 'self'` is right for the console and WRONG for the plugin origin: 'self'
-	// there means the plugin origin, and the console — now a different origin — is precisely who
-	// needs to frame it. So the plugin origin names the console explicitly, and nobody else.
+	// The plugin origin names the console as its only framer, where 'self' would name itself, and
+	// sandboxes every document it serves so each plugin page gets an opaque origin of its own.
 	setResponseHeader(
 		event,
 		"Content-Security-Policy",
-		`frame-ancestors ${listener === "plugin" ? consoleFrameAncestor(event) : "'self'"}; object-src 'none'; base-uri 'self'`,
+		listener === "plugin"
+			? `${PLUGIN_PAGE_SANDBOX}; frame-ancestors ${consoleFrameAncestor(event)}; object-src 'none'; base-uri 'self'`
+			: "frame-ancestors 'self'; object-src 'none'; base-uri 'self'",
 	);
+
+	const method = event.method?.toUpperCase?.() ?? "GET";
+	if (listener === "plugin") return pluginGate(event, pathname, method);
 
 	// Mutating requests must be same-origin. Origin covers browsers that omit
 	// Sec-Fetch-Site; Fetch-Site still rejects `same-site` (another port).
 	// Applies to public paths too (login CSRF), before any session logic.
-	const method = event.method?.toUpperCase?.() ?? "GET";
 	if (
 		isCrossSiteMutation({
 			method,
@@ -103,6 +116,9 @@ export default defineEventHandler(async (event) => {
 		setResponseStatus(event, 403);
 		return { error: "cross-site request refused" };
 	}
+
+	const person = await personGate(event, pathname);
+	if (person !== undefined) return person === PASS ? undefined : person;
 
 	// A signed-in visitor on the login page is sent on to `next`. This is also what makes a login
 	// land when the browser lost the client's redirect: Firefox aborts in-flight chunk imports on
@@ -144,13 +160,6 @@ export default defineEventHandler(async (event) => {
 		setResponseStatus(event, 401);
 		return { error: "unauthorized" };
 	}
-	// The plugin origin has no /login to bounce to — it serves plugin UIs and nothing else, so a
-	// redirect there would land on this middleware's own 404. Answer plainly instead; the console
-	// probes plugin liveness server-side and renders the session-expired state itself.
-	if (listener === "plugin") {
-		setResponseStatus(event, 401);
-		return { error: "unauthorized" };
-	}
 	// Page navigation → bounce to the login screen, remembering where they were headed.
 	return sendRedirect(
 		event,
@@ -158,6 +167,80 @@ export default defineEventHandler(async (event) => {
 		302,
 	);
 });
+
+/** `personGate`'s word for "a person's request, let it through to its page or `/_auth/` route". */
+const PASS = Symbol("pass");
+
+/**
+ * A browser holding a person's cookie is a person's console. Their `/api/**` is answered here by
+ * personApi, so no route file ever runs for them, and the operator's session is not read. A
+ * person cookie that ended gives way to an operator signed in on the same browser; without one,
+ * the person sees that it ended. `undefined`: no person cookie, the operator's gate decides.
+ */
+async function personGate(
+	event: H3Event,
+	pathname: string,
+): Promise<unknown | typeof PASS> {
+	const person = personCookie(event);
+	if (!person) return undefined;
+	const api = pathname === "/api" || pathname.startsWith("/api/");
+	if (person.session && isLoopbackPeer(peerAddress(event))) {
+		event.context.person = person.session;
+		if (api) return personApi(event, person.session);
+		return PASS;
+	}
+	if (await operatorSignedIn(event)) {
+		forgetSession(event);
+		return undefined;
+	}
+	if (api) return ended(event, "person_session_ended");
+	if (isPublicPath(pathname)) return PASS;
+	forgetSession(event);
+	return new Response(null, {
+		status: 302,
+		headers: { location: "/closed?why=ended" },
+	});
+}
+
+/** A live operator session, read only when its cookie exists: `useSession` would mint one. */
+async function operatorSignedIn(event: H3Event): Promise<boolean> {
+	if (!authConfigured() || !getCookie(event, SESSION_NAME)) return false;
+	const session = await useSession<SessionData>(event, sessionConfig());
+	return (
+		session.data.authenticated === true && session.data.epoch === sessionEpoch()
+	);
+}
+
+/**
+ * The plugin listener's gate: a page path minted for that plugin, by the operator's session or a
+ * person's live one, and never a cookie, which a sandboxed page sends to some requests and not
+ * others. Every refusal is the same 401. Requests come from `Origin: null`, so a valid path
+ * answers CORS and its preflight, and needs no CSRF check: a page that cannot name the path
+ * cannot reach it.
+ */
+function pluginGate(event: H3Event, pathname: string, method: string) {
+	if (!authConfigured()) {
+		setResponseStatus(event, 503);
+		return { error: "auth not configured: set PUNKTFUNK_UI_PASSWORD_HASH" };
+	}
+	// A person's pages, like their console, answer this computer alone.
+	const person = () =>
+		isLoopbackPeer(peerAddress(event)) && personPluginPage(pathname) !== null;
+	if (!pluginPage(pathname) && !person()) {
+		setResponseStatus(event, 401);
+		return { error: "unauthorized" };
+	}
+	setResponseHeaders(event, PLUGIN_PAGE_CORS);
+	const asked = getRequestHeader(event, "access-control-request-method");
+	if (method !== "OPTIONS" || !asked) return;
+	setResponseHeaders(
+		event,
+		pluginPagePreflight(
+			getRequestHeader(event, "access-control-request-headers"),
+		),
+	);
+	return null;
+}
 
 /**
  * The console origin, as a `frame-ancestors` source, derived from the request the PLUGIN origin is

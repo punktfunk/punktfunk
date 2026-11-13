@@ -16,7 +16,9 @@ final class HostDownloadTests: XCTestCase {
         XCTAssertEqual(status.games?.first?.state, "launching")
         let d = try XCTUnwrap(status.downloads?.first)
         XCTAssertTrue(d.live)
-        XCTAssertEqual(d.line, "12.3 GB of 26 GB \u{b7} 48 MB/s \u{b7} about 4 min left")
+        // A fraction wears the reader's decimal mark: the number is formatted, not spelled.
+        let mark = Locale.current.decimalSeparator ?? "."
+        XCTAssertEqual(d.line, "12\(mark)3 GB of 26 GB \u{b7} 48 MB/s \u{b7} about 4 min left")
         XCTAssertEqual((d.fraction ?? 0) * 100, 47.3, accuracy: 0.1)
         XCTAssertNil(d.stopped(title: "Quail"))
         let old = try JSONDecoder().decode(LibraryClient.HostStatus.self, from: Data(#"{"games":[]}"#.utf8))
@@ -31,7 +33,9 @@ final class HostDownloadTests: XCTestCase {
             HostDownload(appID: "a", state: "paused").stopped(title: "Quail"),
             "Quail's download was paused. Start it again to resume.")
         XCTAssertEqual(HostDownload(appID: "a", state: "installing", phase: "Verifying").line, "Verifying")
-        XCTAssertEqual(HostDownload(appID: "a", state: "downloading", doneBytes: 3_100_000_000).line, "3.1 GB so far")
+        XCTAssertEqual(
+            HostDownload(appID: "a", state: "downloading", doneBytes: 3_100_000_000).line,
+            "3\(Locale.current.decimalSeparator ?? ".")1 GB so far")
         XCTAssertEqual(HostDownload.bytes(512_000), "512 kB")
     }
 
@@ -62,7 +66,7 @@ final class HostDownloadTests: XCTestCase {
             TileBadge.forTitle(
                 missing,
                 download: HostDownload(appID: "a", state: "paused", doneBytes: 429, totalBytes: 1000)),
-            TileBadge(icon: "pause", text: "42 %"))
+            TileBadge(icon: "pause", text: "42%"))
         XCTAssertEqual(
             InstallOutcome.from(status: 409, message: "Quit Quail first.").notice(.remove, title: "Quail"),
             "Quit Quail first.")

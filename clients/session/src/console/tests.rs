@@ -402,6 +402,7 @@ fn service(library: &LibraryShared) -> ServiceState {
         rescan: None,
         stores: Stores::default(),
         learn_due: false,
+        hidden: Arc::default(),
     }
 }
 
@@ -424,6 +425,7 @@ fn open_shelf(library: &LibraryShared, req: &RequestKey) {
         running: false,
         endable: false,
         install: None,
+        overrides: None,
     };
     library.set_games(req, vec![title]);
     library.set_running(&[library::RunningGame {
@@ -543,7 +545,7 @@ fn a_library_fetch_a_newer_fetch_outlived_writes_nothing() {
             LOOPBACK.into(),
             (0, port),
             svc.identity.clone(),
-            fp('a'),
+            (fp('a'), None),
             Vec::new(),
             a.clone(),
         )
@@ -600,4 +602,34 @@ fn the_console_opens_where_the_target_or_the_policy_says() {
     let e = console_entry(None, &known, false, policy("stream"));
     assert!(matches!(e.entry, ConsoleEntry::Stream(ref r) if r.name == "Desk"));
     assert!(e.label.is_none() && e.seed.is_none());
+}
+
+/// The shell's titles keep what the host set for each, so the hold and the settings rows
+/// can say so.
+#[test]
+fn the_shell_model_keeps_a_titles_overrides() {
+    let games: Vec<library::GameEntry> = serde_json::from_str(
+        r#"[{"id":"steam:570","store":"steam","title":"Dota 2","overrides":{"lines":1080}},
+            {"id":"steam:70","store":"steam","title":"Half-Life"}]"#,
+    )
+    .unwrap();
+    let model = to_model(&games);
+    assert_eq!(
+        model[0].overrides.as_ref().and_then(|o| o.lines),
+        Some(1080)
+    );
+    assert!(model[1].overrides.is_none());
+}
+
+/// The input test hears Xbox names, a paddle by its drawn name, and a trigger past half as held.
+#[test]
+fn a_pad_reading_names_what_the_input_test_draws() {
+    let r = PadReading {
+        buttons: wire::BTN_B | wire::BTN_BACK | wire::BTN_PADDLE2,
+        axes: [0.0, -1.0, 0.0, 0.0, 0.8, 0.3],
+    };
+    let s = pad_test_state(r);
+    assert_eq!(s.held, ["B", "Back", "L4", "LT"]);
+    assert_eq!(s.axes[1], ("LY".to_string(), -1.0));
+    assert_eq!(s.axes[5], ("RT".to_string(), 0.3));
 }

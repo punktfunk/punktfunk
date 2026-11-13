@@ -82,6 +82,8 @@ public final class InputCapture {
     /// itself (`takeRelease`). Whatever is still here when the last ⌘ comes up is released then
     /// (`flushCommandChord`), so a chord key never outlives its ⌘ on the host.
     private var commandChordVKs: Set<UInt32> = []
+    /// The Caps Lock state the host was last sent, `nil` before the first. See `capsLockTap`.
+    private var capsLockOn: Bool?
 
     #endif
 
@@ -92,11 +94,13 @@ public final class InputCapture {
     private var autoRepeatTimer: Timer?
     #endif
 
-    /// Physical Control/Option/Shift keys currently held (Windows VKs, both L/R sides). iPad only:
-    /// the ⌃⌥⇧ chords (`padChords`) are recognized from the HID stream here (iOS has no NSEvent
-    /// monitor, like the ⌘⎋ toggle), so they need the live modifier state — tracked in both states,
-    /// exactly like `cmdKeysDown`, and flushed by `releaseAll` when GC delivery stops.
-    private var chordModifiersDown: Set<UInt32> = []
+    /// The keyboard's shortcuts (design/client-shortcuts.md §4), fed every physical key in both
+    /// capture states. Built at `start`, when `onShortcut` is known.
+    private var keyEngine = Shortcuts.Engine([], device: .keyboard)
+    /// Physical keys the engine counts as down (Windows VKs, both sides of each modifier).
+    private var shortcutKeys: Set<UInt32> = []
+    /// Keys whose press fired a shortcut: their repeats and their release stay off the host.
+    private var firedVKs: Set<UInt32> = []
 
     /// While true, mouse/keyboard flow to the host and key NSEvents are swallowed
     /// locally; while false the user is interacting with the local UI (dragging the
@@ -116,11 +120,6 @@ public final class InputCapture {
     /// event itself is swallowed). Main queue.
     public var onToggleCapture: (() -> Void)?
 
-    /// Fired on ⌃⌥⇧M (the mouse-model flip, capture ⇄ desktop — cross-client parity with the
-    /// SDL clients' Ctrl+Alt+Shift+M; detected here, like ⌘⎋, so it works regardless of the
-    /// current capture state and the event itself is swallowed). macOS only; the
-    /// absolute-vs-relative forwarding lives entirely in StreamLayerView. Main queue.
-    public var onToggleMouseMode: (() -> Void)?
 
     #if os(macOS)
     /// Whether a key event belongs to this capture's window. Every capture's key monitor sees
@@ -129,19 +128,10 @@ public final class InputCapture {
     public var ownsEvent: ((NSEvent) -> Bool)?
     #endif
 
-    /// The cross-client ⌃⌥⇧ combos (Ctrl+Alt+Shift on Windows and Linux), fired through
-    /// `takeChord` as `macChords`/`padChords` say: Q releases the captured mouse and keyboard, D
-    /// disconnects, S cycles the stats tier, A mutes the microphone uplink (M is long since the
-    /// mouse-model flip, so A is "audio in"), O toggles the quick-action ring, C starts or stops
-    /// clipboard sharing. Captured, the stream swallows the Stream menu's identical key
-    /// equivalents, so these are the captured state's path; released, the menu takes most of
-    /// them. Main queue.
-    public var onReleaseCapture: (() -> Void)?
-    public var onDisconnect: (() -> Void)?
-    public var onCycleStats: (() -> Void)?
-    public var onToggleMicMute: (() -> Void)?
-    public var onQuickActions: (() -> Void)?
-    public var onToggleClipboard: (() -> Void)?
+    /// A keyboard shortcut fired (by default the ⌃⌥⇧ letters, Ctrl+Alt+Shift elsewhere), in
+    /// either capture state; the key is swallowed. The only dispatch of a bound press: the macOS
+    /// monitor runs before the Stream menu, which carries no key equivalents elsewhere. Main queue.
+    public var onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
 
     /// Fired on ⌃⌘F (macOS) — toggle the streaming window in/out of fullscreen. Detected in the
     /// monitor only WHILE FORWARDING with `inhibit_shortcuts` off: a captured stream view swallows
@@ -149,65 +139,52 @@ public final class InputCapture {
     /// ⌃⌘F is the host's like any ⌘ chord; released, the menu handles it. Main queue.
     public var onToggleFullscreen: (() -> Void)?
 
-    #if os(iOS) || os(visionOS)
-    /// Windows VKs of the three modifier classes in the ⌃⌥⇧ chords, both L/R sides:
-    /// control (0xA2/0xA3), option (0xA4/0xA5), shift (0xA0/0xA1). Used to sift the HID key stream.
-    nonisolated private static let chordModifierVKs: Set<UInt32> = [0xA2, 0xA3, 0xA4, 0xA5, 0xA0, 0xA1]
 
-    private var hasChordModifiers: Bool { Self.holdsChordModifiers(chordModifiersDown) }
-    #endif
-
-    /// Whether `held` (Windows VKs) has Control AND Option AND Shift, either side of each — the
-    /// modifier precondition for the iPad's `padChords`.
-    nonisolated static func holdsChordModifiers(_ held: Set<UInt32>) -> Bool {
-        (held.contains(0xA2) || held.contains(0xA3)) // control
-            && (held.contains(0xA4) || held.contains(0xA5)) // option
-            && (held.contains(0xA0) || held.contains(0xA1)) // shift
+    /// The engine's id for a physical key: either side of a modifier is one key.
+    nonisolated static func shortcutKey(_ vk: UInt32) -> UInt32 {
+        switch vk {
+        case 0xA0, 0xA1: return 0x10 // Shift
+        case 0xA2, 0xA3: return 0x11 // Control
+        case 0xA4, 0xA5: return 0x12 // Option = Alt
+        case 0x5C: return 0x5B // either ⌘
+        default: return vk
+        }
     }
 
-    /// One ⌃⌥⇧ chord: the letter's Windows VK (a physical key, layout-independent), the action it
-    /// fires, and whether it fires while released too. Otherwise a released press passes on.
-    typealias Chord = (vk: UInt32, action: KeyPath<InputCapture, (() -> Void)?>, alsoWhenReleased: Bool)
-
-    /// The Mac's chords. M flips the mouse model in both states so it can be set before
-    /// capture; released, the Stream menu takes the rest.
-    static let macChords: [Chord] = [
-        (0x4D, \.onToggleMouseMode, true), // M
-        (0x51, \.onReleaseCapture, false), // Q
-        (0x44, \.onDisconnect, false), // D
-        (0x53, \.onCycleStats, false), // S
-        (0x41, \.onToggleMicMute, false), // A
-        (0x4F, \.onQuickActions, false), // O
-        (0x43, \.onToggleClipboard, false), // C
-    ]
-    /// The iPad's chords: no mouse-model flip, and O in both states because its Stream menu has
-    /// no Quick Actions item.
-    static let padChords: [Chord] = [
-        (0x51, \.onReleaseCapture, false), // Q
-        (0x44, \.onDisconnect, false), // D
-        (0x53, \.onCycleStats, false), // S
-        (0x41, \.onToggleMicMute, false), // A
-        (0x4F, \.onQuickActions, true), // O
-        (0x43, \.onToggleClipboard, false), // C
-    ]
-    #if os(macOS)
-    static let chords = macChords
-    #else
-    static let chords = padChords
-    #endif
-
-    /// Take a ⌃⌥⇧ letter the caller saw with the three modifiers held: fire its action on the
-    /// first press and latch it in `suppressedVK`, so neither its repeats nor its release reach
-    /// the host. False when `vk` is no chord in the current capture state.
-    private func takeChord(vk: UInt32, isRepeat: Bool = false) -> Bool {
-        guard let chord = Self.chords.first(where: { $0.vk == vk }),
-              forwarding || chord.alsoWhenReleased
-        else { return false }
-        if !isRepeat {
-            suppressedVK = vk
-            self[keyPath: chord.action]?()
+    /// One physical key through the keyboard's shortcut engine. True when a shortcut took it:
+    /// its press fired one, so the press and its release stay off the host. Modifiers always
+    /// pass; a firing chord lifts the ones the host holds.
+    private func shortcutTakes(_ vk: UInt32, down: Bool) -> Bool {
+        let id = Self.shortcutKey(vk)
+        let otherSide = shortcutKeys.contains { $0 != vk && Self.shortcutKey($0) == id }
+        if down { shortcutKeys.insert(vk) } else { shortcutKeys.remove(vk) }
+        var fired = false
+        if !otherSide {
+            for out in keyEngine.step(down ? .press(id) : .release(id), at: .now) {
+                switch out {
+                case .lift(let ids):
+                    for held in pressedVKs where ids.contains(Self.shortcutKey(held)) {
+                        pressedVKs.remove(held)
+                        emitKey(held, down: false)
+                    }
+                case .fire(let action, let phase):
+                    fired = true
+                    onShortcut?(action, phase)
+                case .forward:
+                    break
+                }
+            }
         }
-        return true
+        if down, fired { firedVKs.insert(vk) }
+        return down ? fired : firedVKs.remove(vk) != nil
+    }
+
+    /// The keyboard engine forgets every key: GC delivers nothing while inactive, so a key
+    /// released in another app would otherwise stay down here.
+    private func forgetShortcutKeys() {
+        _ = keyEngine.flush()
+        shortcutKeys.removeAll()
+        firedVKs.removeAll()
     }
 
     /// Fired when a newer InputCapture takes the process-global GC handler slots (the
@@ -262,6 +239,9 @@ public final class InputCapture {
             previous.onPreempted?()
         }
         Self.activeCapture = self
+        keyEngine = Shortcuts.Engine(
+            connection.settings.resolvedShortcuts.runnable(dial: onShortcut != nil), device: .keyboard)
+        forgetShortcutKeys()
         // Attach EVERY connected mouse, not just GCMouse.current. With two pointing devices (e.g.
         // the iPad's own Magic Keyboard trackpad AND a Universal Control "V-UC Automouse"), only one
         // is `current` at a time; attaching just that one left the OTHER device's motion handler
@@ -303,7 +283,10 @@ public final class InputCapture {
         observers.append(NotificationCenter.default.addObserver(
             forName: .GCKeyboardDidDisconnect, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.releaseAll() }
+            MainActor.assumeIsolated {
+                self?.releaseAll()
+                self?.forgetShortcutKeys()
+            }
         })
         #endif
         // Focus loss: GC stops delivering, so release everything still held host-side.
@@ -315,18 +298,33 @@ public final class InputCapture {
         observers.append(NotificationCenter.default.addObserver(
             forName: resignActive, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.releaseAll() }
+            MainActor.assumeIsolated {
+                self?.releaseAll()
+                self?.forgetShortcutKeys()
+            }
         })
         // Runs before any menu key equivalent and StreamLayerView's keyDown, the host's only key
         // path on macOS, so an event it swallows must be handled or forwarded right here.
-        // ⌘⎋ is the client's in both states, the ⌃⌥⇧ letters as `macChords` says. Every other
-        // ⌘ chord, ⌃⌘F included, is the host's while captured (`forwardsCommandChord`).
+        // ⌘⎋ is the client's in both states, then the keyboard shortcuts. Every other ⌘ chord,
+        // ⌃⌘F included, is the host's while captured (`forwardsCommandChord`).
         #if os(macOS)
         keyEventMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.keyDown, .keyUp]
+            matching: [.keyDown, .keyUp, .flagsChanged]
         ) { [weak self] event in
             guard let self, self.ownsEvent?(event) ?? true else { return event }
+            // Modifiers only feed the shortcut engine; StreamLayerView still sends them.
+            if event.type == .flagsChanged {
+                if let (vk, down) = Self.resolveModifier(
+                    keyCode: event.keyCode, rawFlags: UInt(event.modifierFlags.rawValue),
+                    isDown: { self.shortcutKeys.contains($0) }) {
+                    _ = self.shortcutTakes(vk, down: down)
+                }
+                return event
+            }
             if event.type == .keyUp {
+                if let vk = Self.keyCodeToVK[event.keyCode], self.shortcutTakes(vk, down: false) {
+                    return nil
+                }
                 guard let vk = Self.takeRelease(
                     event, forwarding: self.forwarding, pressedVKs: self.pressedVKs,
                     chordVKs: &self.commandChordVKs)
@@ -343,10 +341,13 @@ public final class InputCapture {
             if event.keyCode == 53 /* Esc */, flags == .command {
                 return take(0x1B, self.onToggleCapture) // VK_ESC
             }
-            // Swallowed, so a taken chord never beeps. Its modifiers already went to the host as
-            // they went down; their releases follow.
-            if flags == [.control, .option, .shift], let vk = Self.keyCodeToVK[event.keyCode],
-               self.takeChord(vk: vk, isRepeat: event.isARepeat) {
+            // A modifier let go while another window was key never reached the engine.
+            for (flag, vks) in Self.modifierVKs where !event.modifierFlags.contains(flag) {
+                for vk in vks where self.shortcutKeys.contains(vk) { _ = self.shortcutTakes(vk, down: false) }
+            }
+            // Swallowed, so a fired shortcut never beeps; a held one swallows its repeats.
+            if let vk = Self.keyCodeToVK[event.keyCode],
+               event.isARepeat ? self.firedVKs.contains(vk) : self.shortcutTakes(vk, down: true) {
                 return nil
             }
             // Every OTHER ⌘ chord is the HOST's while captured, or the menu takes ⌘Q first. It is
@@ -381,6 +382,7 @@ public final class InputCapture {
 
     public func stop() {
         releaseAll()
+        forgetShortcutKeys()
         observers.forEach(NotificationCenter.default.removeObserver(_:))
         observers.removeAll()
         #if os(macOS)
@@ -423,11 +425,8 @@ public final class InputCapture {
         stopAutoRepeat() // before the releases below, so the ticker can't outlive the key-up
         #endif
         cmdKeysDown.removeAll()
-        // Rebuilt from what is still PHYSICALLY down rather than cleared. On iOS these sets are
-        // the only source for the release chord, and the chord itself calls this — so clearing
-        // them left the user holding three modifiers the client no longer knew about, with no way
-        // back out until every one of them was lifted and pressed again.
-        chordModifiersDown = chordModifiersDown.intersection(pressedVKs)
+        // The shortcut engine keeps its keys: Release input itself lands here, with its
+        // modifiers still held. A lost device forgets them (`forgetShortcutKeys`).
         suppressedVK = nil
         #if os(macOS)
         commandChordVKs.removeAll() // their releases are in `pressedVKs`, flushed just below
@@ -604,15 +603,24 @@ public final class InputCapture {
     /// from the flags. Fed `event.keyCode` + `UInt(event.modifierFlags.rawValue)` — LOW 16
     /// bits intact, they carry the device-dependent L/R bits (the .deviceIndependentFlagsMask
     /// the ⌘⎋ monitor uses deliberately strips exactly these — do NOT pre-mask here).
+    /// Caps Lock carries a lock state instead, and goes out as a tap (`capsLockTap`).
     public func handleFlagsChanged(keyCode: UInt16, rawFlags: UInt) {
         if inputDebug {
             inputLog.debug(
                 "flagsChanged keyCode \(keyCode, privacy: .public) flags 0x\(String(rawFlags, radix: 16), privacy: .public) forwarding \(self.forwarding, privacy: .public)")
         }
         guard forwarding else { return }
+        if let caps = Self.capsLockTap(keyCode: keyCode, rawFlags: rawFlags, was: capsLockOn) {
+            capsLockOn = caps.on
+            if caps.tap {
+                sendKey(0x14, down: true) // VK_CAPITAL
+                sendKey(0x14, down: false)
+            }
+            return
+        }
         guard let (vk, down) = Self.resolveModifier(
             keyCode: keyCode, rawFlags: rawFlags, isDown: { pressedVKs.contains($0) })
-        else { return } // Fn / Caps Lock / unknown — nothing the host consumes on this path
+        else { return } // Fn / unknown — nothing the host consumes on this path
         // Keep cmdKeysDown in step (the ⌘⎋ toggle + Esc suppression read it); sendKey
         // adds the VK to pressedVKs so releaseAll/blur flushes a held modifier cleanly.
         if vk == 0x5B || vk == 0x5C {
@@ -638,7 +646,7 @@ public final class InputCapture {
     /// say which side is held now; class bit set with NO device bits → flip the held state
     /// we track (`isDown`, from pressedVKs — SDL ships the same fallback). Each keyCode
     /// maps to the L/R modifier VK `hidToVK` already emits, so the host needs no change.
-    /// Returns nil for modifiers the host doesn't consume on this path (Fn, Caps Lock).
+    /// Returns nil for Fn and Caps Lock; Caps Lock goes through `capsLockTap`.
     nonisolated static func resolveModifier(
         keyCode: UInt16, rawFlags: UInt, isDown: (UInt32) -> Bool
     ) -> (vk: UInt32, down: Bool)? {
@@ -654,7 +662,23 @@ public final class InputCapture {
         return (mod.vk, down)
     }
 
+    /// Caps Lock (kVK_CapsLock) reaches flagsChanged once per toggle, as the `.capsLock` bit, never
+    /// as a press and a release. A host toggles its lock on a press, so a state that differs from
+    /// `was`, the one the host was last sent, is one tap. Nil for any other key.
+    nonisolated static func capsLockTap(
+        keyCode: UInt16, rawFlags: UInt, was: Bool?
+    ) -> (on: Bool, tap: Bool)? {
+        guard keyCode == 57 else { return nil }
+        let on = rawFlags & NSEvent.ModifierFlags.capsLock.rawValue != 0
+        return (on, on != was)
+    }
+
     // MARK: - ⌘ chord passthrough
+
+    /// Each chord modifier's flag and the Windows VKs of its two keys.
+    nonisolated static let modifierVKs: [(NSEvent.ModifierFlags, [UInt32])] = [
+        (.control, [0xA2, 0xA3]), (.option, [0xA4, 0xA5]), (.shift, [0xA0, 0xA1]), (.command, [0x5B, 0x5C]),
+    ]
 
     /// The four modifiers a client chord is ever spelled with, isolated from the incidental bits
     /// `deviceIndependentFlagsMask` also carries: Caps Lock, and the `.function`/`.numericPad`
@@ -898,13 +922,6 @@ public final class InputCapture {
                     self.cmdKeysDown.remove(vk)
                 }
             }
-            #if os(iOS) || os(visionOS)
-            // Track Control/Option/Shift for the ⌃⌥⇧ chords below — in both forwarding
-            // states (like `cmdKeysDown`) so a modifier held before capture engaged still counts.
-            if Self.chordModifierVKs.contains(vk) {
-                if pressed { self.chordModifiersDown.insert(vk) } else { self.chordModifiersDown.remove(vk) }
-            }
-            #endif
             // The ⌘⎋ toggle's Esc — checked before the forwarding gate, because in the
             // engage direction forwarding is already true when this fires.
             if vk == self.suppressedVK {
@@ -919,9 +936,9 @@ public final class InputCapture {
                 self.onToggleCapture?()
                 return
             }
-            // ⌃⌥⇧ + a letter in `padChords`. Captured, the modifiers already went to the host
-            // and their releases follow.
-            if pressed, self.hasChordModifiers, self.takeChord(vk: vk) { return }
+            // The keyboard shortcuts, in both states: a modifier held before capture engaged
+            // still counts.
+            if self.shortcutTakes(vk, down: pressed) { return }
             #endif
             guard self.forwarding else { return }
             // Release direction of the toggle: GC's Esc-down can beat the NSEvent

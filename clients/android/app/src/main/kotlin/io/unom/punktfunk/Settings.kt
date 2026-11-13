@@ -7,7 +7,11 @@ import android.util.Log
 import android.view.Display
 import android.view.WindowInsets
 import android.view.WindowManager
+import androidx.annotation.StringRes
 import androidx.core.content.ContextCompat
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Shortcuts
+import kotlin.math.roundToInt
 
 /**
  * User-tunable stream settings, persisted in `SharedPreferences`. A `0` resolution/refresh means
@@ -24,11 +28,10 @@ data class Settings(
      *  as the rate it needs ([PyroWaveQuality]), never as bits per pixel. */
     val pyrowaveBpp: Double = 1.6,
     /**
-     * Render-resolution multiplier: the client asks the host to render/encode at `chosen mode ×
-     * renderScale` and the compositor downscales the larger decoded frame to the SurfaceView
-     * (`> 1` supersamples for sharpness, at more bandwidth AND decode; `< 1` renders under native
-     * for a lighter host/link). `1.0` = Native. Applied at connect via [RenderScale.apply], clamped
-     * even + to the codec's max dimension. Mirrors the Apple/Linux clients' render scale.
+     * Render-resolution multiplier: the client asks the host to render at `chosen mode ×
+     * renderScale` ([RenderScale.apply]). Above 1x it names the chosen mode as the view
+     * ([RenderScale.view]): a host that reads it encodes that, any other host the larger mode,
+     * which the compositor shrinks. Below 1x the compositor upscales. `1.0` = Native.
      */
     val renderScale: Double = 1.0,
     /**
@@ -74,11 +77,9 @@ data class Settings(
      */
     val systemButtons: String = "auto",
     /**
-     * The hold-Select guide gesture — the cross-client `guide_gesture` key: `"auto"` (off
-     * on Android) | `"on"` | `"off"`. On: holding Select alone ≥350 ms sends the HOST's
-     * guide, down until release (long hold = the host's long-press → a Gaming-Mode host's
-     * QAM); a Select tap is delivered on release, slightly delayed. For devices whose
-     * shell intercepts the physical guide button.
+     * The retired Hold Select for guide setting — the cross-client `guide_gesture` key:
+     * `"auto"` | `"on"` | `"off"`. No row any more: `on` adds the Hold Select row to the
+     * default [shortcuts] ([shortcutBindings]), which the player edits from there.
      */
     val guideGesture: String = "auto",
     /** Requested audio channel count: 2 (stereo), 6 (5.1) or 8 (7.1). The host clamps to what it
@@ -132,6 +133,12 @@ data class Settings(
      * always did ("audio still works, the host went quiet"), never a broken session.
      */
     val keepHostAudio: Boolean = false,
+    /**
+     * The screen a preset asks the host for, as the cross-client `host_screen` spells it: `only`,
+     * `main`, `second` or `monitor:<connector>`. Empty is the pick on the host's card. Only a
+     * preset sets it: no global value is stored ([SettingsFields.Field.global]).
+     */
+    val hostScreen: String = "",
     /**
      * How much the in-stream stats overlay shows — see [StatsVerbosity]. Defaults to
      * [StatsVerbosity.NORMAL] (the res/fps line + latency headline + reliability counters); the full
@@ -332,6 +339,11 @@ data class Settings(
      */
     val overlayActions: String = "",
     /**
+     * The in-stream shortcuts, one JSON blob parsed by [Shortcuts.parse]. Empty = Android's
+     * defaults ([shortcutBindings]), the chords every build before had.
+     */
+    val shortcuts: String = "",
+    /**
      * Back mid-stream opens the ring. Off, Back does nothing while a pad, the twist or a keyboard
      * chord can open it instead; with none of those it still opens, so a session keeps a way out.
      */
@@ -368,9 +380,9 @@ enum class TouchMode { TRACKPAD, POINTER, TOUCH, OFF }
  *   remote-desktop model, and Android's default (a phone/TV is far more often driven by touch or a
  *   pad than by a locked mouse, and this is what the platform did before the setting existed).
  */
-enum class MouseMode(val storedName: String, val label: String) {
-    CAPTURE("capture", "Capture (games)"),
-    DESKTOP("desktop", "Desktop (absolute)"),
+enum class MouseMode(val storedName: String, @StringRes val label: Int) {
+    CAPTURE("capture", R.string.player_mouse_mode_capture),
+    DESKTOP("desktop", R.string.player_mouse_mode_desktop),
 }
 
 /**
@@ -384,15 +396,21 @@ enum class MouseMode(val storedName: String, val label: String) {
  *   latency, and the pipeline counters (skipped / FEC / judder) that read as faults at NORMAL.
  * A 3-finger tap in-stream cycles Off → Compact → Normal → Detailed → Off (see [next]).
  */
-enum class StatsVerbosity(val label: String) {
-    OFF("Off"),
-    COMPACT("Compact"),
-    NORMAL("Normal"),
-    DETAILED("Detailed");
+enum class StatsVerbosity(@StringRes val label: Int) {
+    OFF(R.string.player_stats_verbosity_off),
+    COMPACT(R.string.player_stats_verbosity_compact),
+    NORMAL(R.string.player_stats_verbosity_normal),
+    DETAILED(R.string.player_stats_verbosity_detailed);
 
     /** The next tier for the live 3-finger-tap cycle (wraps Detailed → Off). */
     fun next(): StatsVerbosity = entries[(ordinal + 1) % entries.size]
 }
+
+/**
+ * What Reset leaves: a fresh install's settings on this kind of device, [Settings.defaultHost]
+ * kept because it names a host record. Hosts, pairing and presets live in their own stores.
+ */
+fun Settings.reset(tv: Boolean): Settings = Settings(reduceUiResolution = tv, defaultHost = defaultHost)
 
 /** Loads/saves [Settings] in the app-private `punktfunk_settings` prefs. */
 class SettingsStore(
@@ -664,14 +682,8 @@ object RenderScale {
     fun presetIndex(scale: Double): Int? =
         PRESETS.indexOfFirst { kotlin.math.abs(it - scale) < 0.005 }.takeIf { it >= 0 }
 
-    /** "Native (1×)" / "1.5×" / "2× · supersample" — the picker label. */
-    fun label(scale: Double): String = when {
-        scale == 1.0 -> "Native (1×)"
-        scale > 1.0 -> "${trim(scale)}× · supersample"
-        else -> "${trim(scale)}×"
-    }
-
-    private fun trim(s: Double): String =
+    /** A multiplier's digits for the picker label: "2", "1.5". */
+    fun digits(s: Double): String =
         if (s == s.toLong().toDouble()) s.toLong().toString() else s.toString()
 
     /** Apply [scale] to a base size → a host-valid even, aspect-preserved, codec-clamped (w, h). */
@@ -688,22 +700,45 @@ object RenderScale {
         return Pair(evenFloor(w, 320), evenFloor(h, 200))
     }
 
+    /**
+     * The size the picture is shown at, for the host to encode instead of the mode [apply] asks
+     * for: the base at 1x. Null at or below 1x, or when the codec clamp leaves the mode no larger
+     * than the view. Twin of core's `render_scale::view`.
+     */
+    fun view(baseW: Int, baseH: Int, scale: Double, maxDim: Int): Pair<Int, Int>? {
+        val view = apply(baseW, baseH, 1.0, maxDim)
+        return view.takeIf { sanitize(scale) > 1.0 && it != apply(baseW, baseH, scale, maxDim) }
+    }
+
+    /** [view] while a [w]×[h] mode is still larger: at least the view on both axes, not equal. */
+    fun viewUnder(w: Int, h: Int, view: Pair<Int, Int>?): Pair<Int, Int>? =
+        view?.takeIf { w >= it.first && h >= it.second && (w to h) != it }
+
     private fun evenFloor(value: Double, minimum: Int): Int {
         val v = maxOf(kotlin.math.floor(value).toInt(), minimum).coerceAtLeast(0)
         return v / 2 * 2
     }
 }
 
-/** (scale, label) for the render-scale picker. `1.0` = Native. */
-val RENDER_SCALE_OPTIONS = RenderScale.PRESETS.map { it to RenderScale.label(it) }
-
 /** Dropdown sentinel for "Custom…" in the render-scale picker: no multiplier is negative. */
 const val CUSTOM_RENDER_SCALE = -1.0
 
-/** [Settings.videoFit] values and labels, the desktop and console wording. */
-val VIDEO_FIT_OPTIONS = listOf("fit" to "Fit", "crop" to "Crop to fill", "stretch" to "Stretch to fill")
-
 // ---- UI option tables (value, label). The first entry is always the "auto/native" default. ----
+// A label is a message id; a table with a name no language changes holds [OptionLabel]. A label
+// built from its value (a rate, a size, a count) is not in the table: the picker words it.
+
+/** What an option reads as: a message, or a name every language writes the same way. */
+sealed interface OptionLabel {
+    data class Message(@StringRes val id: Int) : OptionLabel
+    data class Name(val text: String) : OptionLabel
+}
+
+/** [Settings.videoFit] values and labels, the desktop and console wording. */
+val VIDEO_FIT_OPTIONS = listOf(
+    "fit" to R.string.player_video_fit_fit,
+    "crop" to R.string.player_video_fit_crop,
+    "stretch" to R.string.player_video_fit_stretch,
+)
 
 /**
  * Stream-mode presets grouped by aspect ratio — the Kotlin twin of `punktfunk_core::resolutions`
@@ -713,9 +748,15 @@ val VIDEO_FIT_OPTIONS = listOf("fit" to "Fit", "crop" to "Crop to fill", "stretc
  * by [ResolutionsTest].
  */
 object Resolutions {
-    /** One family: the switch label, width over height, and its common panels ascending (all
-     * sides even — the host rejects odd modes). */
-    class Aspect(val label: String, val shape: Double, val sizes: List<Pair<Int, Int>>)
+    /** One family: its id (the ratio, or [SCREEN] / [SAFE_AREA]), width over height, and its common
+     * panels ascending (all sides even — the host rejects odd modes). A device entry has a
+     * [nameRes] for the switch; a ratio is its own name. */
+    class Aspect(
+        val id: String,
+        val shape: Double,
+        val sizes: List<Pair<Int, Int>>,
+        @StringRes val nameRes: Int? = null,
+    )
 
     /** Families in the order the switch shows them: most common first. */
     val ASPECTS = listOf(
@@ -761,8 +802,8 @@ object Resolutions {
         return family.sizes.minBy { kotlin.math.abs(it.second - want) }
     }
 
-    const val SCREEN = "Screen"
-    const val SAFE_AREA = "Safe area"
+    const val SCREEN = "screen"
+    const val SAFE_AREA = "safe_area"
 
     /** Heights a device entry offers below the screen's own. */
     private val DEVICE_HEIGHTS = listOf(720, 1080, 1440, 2160)
@@ -777,13 +818,17 @@ object Resolutions {
      * differs from the screen. Twin of `punktfunk_core::resolutions::families`.
      */
     fun families(screen: Pair<Int, Int>?, safe: Pair<Int, Int>?): List<Aspect> {
-        val own = listOf(SCREEN to screen, SAFE_AREA to safe).mapNotNull { (label, dims) ->
+        val devices = listOf(
+            Triple(SCREEN, R.string.player_resolution_aspect_screen, screen),
+            Triple(SAFE_AREA, R.string.player_resolution_aspect_safe_area, safe),
+        )
+        val own = devices.mapNotNull { (id, name, dims) ->
             val (w, h) = dims?.takeIf { it.first > 0 && it.second > 0 } ?: return@mapNotNull null
-            if (label == SAFE_AREA && dims == screen) return@mapNotNull null
+            if (id == SAFE_AREA && dims == screen) return@mapNotNull null
             if (aspectOf(w, h) != null) return@mapNotNull null
             val sizes = DEVICE_HEIGHTS.filter { it < h }.map { dh -> (w.toLong() * dh / h).toInt() / 2 * 2 to dh } +
                 (w / 2 * 2 to h / 2 * 2)
-            Aspect(label, w.toDouble() / h, sizes)
+            Aspect(id, w.toDouble() / h, sizes, name)
         }
         return own + ASPECTS
     }
@@ -794,7 +839,7 @@ object Resolutions {
         if (w <= 0 || h <= 0) return null
         val shape = w.toDouble() / h
         fun within(a: Aspect, tol: Double) = kotlin.math.abs(shape / a.shape - 1) < tol
-        fun device(a: Aspect) = a.label == SCREEN || a.label == SAFE_AREA
+        fun device(a: Aspect) = a.id == SCREEN || a.id == SAFE_AREA
         return families.indexOfFirst { device(it) && within(it, DEVICE_TOLERANCE) }.takeIf { it >= 0 }
             ?: families.indexOfFirst { !device(it) && within(it, TOLERANCE) }.takeIf { it >= 0 }
     }
@@ -817,22 +862,19 @@ object Resolutions {
     }
 }
 
-/** (width, height, label) rows every family shares: `(0,0)` = native display; [SAFE_AREA_MODE] =
- * native minus the cutout. */
-val NATIVE_RESOLUTION_OPTIONS = listOf(
-    Triple(0, 0, "Native display"),
-    Triple(SAFE_AREA_MODE, SAFE_AREA_MODE, "Native display (safe area)"),
-)
+/** (width, height) rows every family shares: `(0,0)` = native display; [SAFE_AREA_MODE] =
+ * native minus the cutout. The picker words them with the size they resolve to. */
+val NATIVE_RESOLUTION_OPTIONS = listOf(0 to 0, SAFE_AREA_MODE to SAFE_AREA_MODE)
 
 /** The Resolution picker's rows for one family: the native rows, then that family's sizes. */
-fun resolutionOptions(family: Resolutions.Aspect): List<Triple<Int, Int, String>> =
-    NATIVE_RESOLUTION_OPTIONS + family.sizes.map { (w, h) -> Triple(w, h, "$w × $h") }
+fun resolutionOptions(family: Resolutions.Aspect): List<Pair<Int, Int>> =
+    NATIVE_RESOLUTION_OPTIONS + family.sizes
 
 /** The entry the Resolution picker lists for the stored size: its shape. Native and the safe-area
  * mode read as this device's own entries where it has them; otherwise, and for a shape none has,
  * the first entry. */
 fun Settings.resolutionFamily(families: List<Resolutions.Aspect>): Int {
-    fun own(label: String) = families.indexOfFirst { it.label == label }.takeIf { it >= 0 }
+    fun own(id: String) = families.indexOfFirst { it.id == id }.takeIf { it >= 0 }
     return when {
         width == 0 -> own(Resolutions.SCREEN)
         width == SAFE_AREA_MODE -> own(Resolutions.SAFE_AREA) ?: own(Resolutions.SCREEN)
@@ -844,25 +886,16 @@ fun Settings.resolutionFamily(families: List<Resolutions.Aspect>): Int {
  * in the touch settings. Detected from the size itself rather than a persisted flag, so it can
  * never disagree with what's actually stored (mirrors the Apple client). */
 fun Settings.isCustomResolution(families: List<Resolutions.Aspect> = Resolutions.families(null, null)): Boolean =
-    resolutionOptions(families[resolutionFamily(families)]).none { (w, h, _) -> w == width && h == height }
+    resolutionOptions(families[resolutionFamily(families)]).none { (w, h) -> w == width && h == height }
 
-/** (hz, label). `0` = native refresh. */
-val REFRESH_OPTIONS = listOf(
-    0 to "Native",
-    30 to "30 Hz",
-    60 to "60 Hz",
-    90 to "90 Hz",
-    120 to "120 Hz",
-    144 to "144 Hz",
-    165 to "165 Hz",
-    240 to "240 Hz",
-)
+/** The refresh rates in Hz. `0` = native refresh, worded with the rate it resolves to. */
+val REFRESH_OPTIONS = listOf(0, 30, 60, 90, 120, 144, 165, 240)
 
 /** (channel count, label). 2 = stereo (default), 6 = 5.1, 8 = 7.1. */
 val AUDIO_CHANNEL_OPTIONS = listOf(
-    2 to "Stereo",
-    6 to "5.1 Surround",
-    8 to "7.1 Surround",
+    2 to R.string.player_audio_channels_2,
+    6 to R.string.player_audio_channels_6,
+    8 to R.string.player_audio_channels_8,
 )
 
 /** Opus 48 kHz — the default, and byte-for-byte the session every earlier build ran. */
@@ -931,12 +964,12 @@ const val AUDIO_FORMAT_LOSSLESS_1764 = "lossless1764"
  * bandwidth.
  */
 val AUDIO_FORMAT_OPTIONS = listOf(
-    AUDIO_FORMAT_OPUS to "Standard (Opus)",
-    AUDIO_FORMAT_LOSSLESS_441 to "Lossless 44.1 kHz / 24-bit",
-    AUDIO_FORMAT_LOSSLESS_48 to "Lossless 48 kHz / 24-bit",
-    AUDIO_FORMAT_LOSSLESS_882 to "Lossless 88.2 kHz / 24-bit",
-    AUDIO_FORMAT_LOSSLESS_96 to "Lossless 96 kHz / 24-bit",
-    AUDIO_FORMAT_LOSSLESS_1764 to "Lossless 176.4 kHz / 24-bit",
+    AUDIO_FORMAT_OPUS to R.string.player_audio_format_opus,
+    AUDIO_FORMAT_LOSSLESS_441 to R.string.player_audio_format_lossless441,
+    AUDIO_FORMAT_LOSSLESS_48 to R.string.player_audio_format_lossless48,
+    AUDIO_FORMAT_LOSSLESS_882 to R.string.player_audio_format_lossless882,
+    AUDIO_FORMAT_LOSSLESS_96 to R.string.player_audio_format_lossless96,
+    AUDIO_FORMAT_LOSSLESS_1764 to R.string.player_audio_format_lossless1764,
 )
 
 /**
@@ -992,12 +1025,12 @@ val AUDIO_FORMAT_WIRE_UNSPECIFIED = 0 to 0
  * the codec's compute feature set (`NativeBridge.nativePyrowaveCapable`) — it is the one codec
  * here that is not a MediaCodec at all.
  */
-val CODEC_OPTIONS = listOf(
-    "auto" to "Automatic",
-    "hevc" to "HEVC (H.265)",
-    "h264" to "H.264 (AVC)",
-    "av1" to "AV1",
-    "pyrowave" to "PyroWave (wired LAN)",
+val CODEC_OPTIONS: List<Pair<String, OptionLabel>> = listOf(
+    "auto" to OptionLabel.Message(R.string.player_codec_auto),
+    "hevc" to OptionLabel.Name("HEVC"),
+    "h264" to OptionLabel.Name("H.264"),
+    "av1" to OptionLabel.Name("AV1"),
+    "pyrowave" to OptionLabel.Message(R.string.player_codec_pyrowave),
 )
 
 /**
@@ -1013,7 +1046,7 @@ fun codecOptionsFor(
     stored: String,
     av1Capable: Boolean,
     pyrowaveCapable: Boolean,
-): List<Pair<String, String>> =
+): List<Pair<String, OptionLabel>> =
     CODEC_OPTIONS.mapNotNull { (v, label) ->
         val capable = when (v) {
             "av1" -> av1Capable
@@ -1023,8 +1056,8 @@ fun codecOptionsFor(
         when {
             capable -> v to label
             stored != v -> null
-            v == "av1" -> v to "AV1 — no hardware decoder here; HEVC is used"
-            else -> v to "PyroWave — this GPU can't decode it; HEVC is used"
+            v == "av1" -> v to OptionLabel.Message(R.string.player_codec_av1_unsupported)
+            else -> v to OptionLabel.Message(R.string.player_codec_pyrowave_unsupported)
         }
     }
 
@@ -1033,9 +1066,10 @@ fun codecOptionsFor(
  * for it that's the shell's business. */
 fun Settings.systemButtonsForward(): Boolean = systemButtons != "local"
 
-/** Resolved [Settings.guideGesture]: auto = OFF on Android (the raw press already reaches the
- * host); "on" is for devices whose shell intercepts the physical guide button. */
-fun Settings.guideGestureEnabled(): Boolean = guideGesture == "on"
+/** The shortcuts the next stream binds: the blob, or Android's defaults, with the Hold Select
+ *  row when the retired [Settings.guideGesture] was on. */
+fun Settings.shortcutBindings(): Shortcuts =
+    Shortcuts.resolve(shortcuts, Shortcuts.Client.ANDROID, gameMode = false, legacyGuideGesture = guideGesture)
 
 /** The [Settings.codec] string as a `quic::CODEC_*` preference byte (`0` = auto). H264=1, HEVC=2,
  * AV1=4, PyroWave=8 — the shared cross-client contract. */
@@ -1047,51 +1081,36 @@ fun Settings.preferredCodec(): Int = when (codec) {
     else -> 0
 }
 
-/** (kbps, label). `0` = Automatic. 5 Mbps apart to 50, where most links settle. */
+/** The rates in kbps. `0` = Automatic. 5 Mbit/s apart to 50, where most links settle. */
 val BITRATE_OPTIONS = listOf(
-    0 to "Automatic",
-    5_000 to "5 Mbps",
-    10_000 to "10 Mbps",
-    15_000 to "15 Mbps",
-    20_000 to "20 Mbps",
-    25_000 to "25 Mbps",
-    30_000 to "30 Mbps",
-    35_000 to "35 Mbps",
-    40_000 to "40 Mbps",
-    45_000 to "45 Mbps",
-    50_000 to "50 Mbps",
-    60_000 to "60 Mbps",
-    80_000 to "80 Mbps",
-    100_000 to "100 Mbps",
-    150_000 to "150 Mbps",
-    200_000 to "200 Mbps",
-    300_000 to "300 Mbps",
-    500_000 to "500 Mbps",
+    0, 5_000, 10_000, 15_000, 20_000, 25_000, 30_000, 35_000, 40_000, 45_000, 50_000,
+    60_000, 80_000, 100_000, 150_000, 200_000, 300_000, 500_000,
 )
 
-/** The Bitrate menu's "Custom…" entry. Never stored: picking it opens the Mbps field. */
+/** The Bitrate menu's "Custom…" entry. Never stored: picking it opens the Mbit/s field. */
 const val CUSTOM_BITRATE = -1
 
 /** The typed field's ceiling, the console shell's on Android: 2 Gbps. The host takes up to 8. */
 const val CUSTOM_BITRATE_MAX_MBPS = 2_000
 
 /** True when the stored rate is none of [BITRATE_OPTIONS] — typed, or written by the speed test. */
-fun Settings.isCustomBitrate(): Boolean = BITRATE_OPTIONS.none { it.first == bitrateKbps }
+fun Settings.isCustomBitrate(): Boolean = bitrateKbps !in BITRATE_OPTIONS
 
-/** "14 Mbps" or "14.9 Mbps": any stored rate, so an off-menu one never reads as Automatic. */
-fun bitrateLabel(kbps: Int): String =
-    if (kbps % 1000 == 0) "${kbps / 1000} Mbps" else "%.1f Mbps".format(kbps / 1000.0)
+/** "14" or "14.9": any stored rate in Mbit/s, the `{value}` of `common_mbits`, so an off-menu one
+ * never reads as Automatic. */
+fun bitrateMbits(kbps: Int): String =
+    if (kbps % 1000 == 0) (kbps / 1000).toString() else "%.1f".format(kbps / 1000.0)
 
 /** (CompositorPref wire byte, label). Byte 6, a Windows host's echo, is never a choice. */
-val COMPOSITOR_OPTIONS = listOf(
-    0 to "Automatic",
-    1 to "KWin (KDE Plasma)",
-    3 to "Mutter (GNOME)",
-    5 to "Hyprland",
-    7 to "niri",
-    8 to "Umbriel",
-    2 to "wlroots (Sway / River)",
-    4 to "gamescope",
+val COMPOSITOR_OPTIONS: List<Pair<Int, OptionLabel>> = listOf(
+    0 to OptionLabel.Message(R.string.player_compositor_auto),
+    1 to OptionLabel.Name("KWin (KDE Plasma)"),
+    3 to OptionLabel.Name("Mutter (GNOME)"),
+    5 to OptionLabel.Name("Hyprland"),
+    7 to OptionLabel.Name("niri"),
+    8 to OptionLabel.Name("Umbriel"),
+    2 to OptionLabel.Name("wlroots (Sway, River)"),
+    4 to OptionLabel.Name("gamescope"),
 )
 
 /** (verbosity, label) for the stats-overlay detail picker. Order = the live 3-finger-tap cycle. */
@@ -1099,14 +1118,14 @@ val STATS_VERBOSITY_OPTIONS = StatsVerbosity.entries.map { it to it.label }
 
 /** (cross-client `hud_placement` name, label) — core's `HudCorner`. */
 val HUD_PLACEMENT_OPTIONS = listOf(
-    "topLeading" to "Top left",
-    "topTrailing" to "Top right",
-    "bottomLeading" to "Bottom left",
-    "bottomTrailing" to "Bottom right",
+    "topLeading" to R.string.player_hud_placement_top_leading,
+    "topTrailing" to R.string.player_hud_placement_top_trailing,
+    "bottomLeading" to R.string.player_hud_placement_bottom_leading,
+    "bottomTrailing" to R.string.player_hud_placement_bottom_trailing,
 )
 
 /** The overlay's size in percent — core's `STATS_SCALE_PCTS`. */
-val STATS_SCALE_OPTIONS = listOf(75, 100, 125, 150, 175, 200).map { it to "$it %" }
+val STATS_SCALE_OPTIONS = listOf(75, 100, 125, 150, 175, 200)
 
 /** [Settings.presentPriority] as the wire int `nativeStartVideo` takes (0 = latency, 1 = smooth).
  * Unrecognized values resolve to latency — same rule as the Apple client. */
@@ -1114,36 +1133,25 @@ fun Settings.presentPriorityWire(): Int = if (presentPriority == "smooth") 1 els
 
 /** (stored value, label) for the presenter-intent picker — the Apple client's table verbatim. */
 val PRESENT_PRIORITY_OPTIONS = listOf(
-    "latency" to "Lowest latency",
-    "smooth" to "Smoothness",
+    "latency" to R.string.player_present_priority_latency,
+    "smooth" to R.string.player_present_priority_smooth,
 )
 
-/** (minutes, label) for the background keep-alive's give-up timer — the Apple client's table. */
-val BACKGROUND_TIMEOUT_OPTIONS = listOf(
-    1 to "1 minute",
-    5 to "5 minutes",
-    10 to "10 minutes",
-    30 to "30 minutes",
-)
+/** The minutes for the background keep-alive's give-up timer — the Apple client's table. */
+val BACKGROUND_TIMEOUT_OPTIONS = listOf(1, 5, 10, 30)
 
-/** (frames, label) for the smoothness-buffer picker; each buffered frame ≈ one refresh interval
- * of jitter absorbed for one interval of added display latency ([hz] labels the cost). */
-fun smoothBufferOptions(hz: Int): List<Pair<Int, String>> {
+/** (frames, ms) for the smoothness-buffer picker: each buffered frame absorbs one refresh
+ * interval of jitter for one interval of added display latency, so the cost is at [hz]. */
+fun smoothBufferCosts(hz: Int): List<Pair<Int, Int>> {
     val periodMs = 1000.0 / maxOf(24, hz)
-    fun cost(frames: Int) = "+%.0f ms".format(periodMs * frames)
-    return listOf(
-        0 to "Automatic",
-        1 to "1 frame (${cost(1)})",
-        2 to "2 frames (${cost(2)})",
-        3 to "3 frames (${cost(3)})",
-    )
+    return (1..3).map { it to (periodMs * it).roundToInt() }
 }
 
 /** (stored value, label) for when the console UI takes over — the Apple client's table verbatim.
  * Only offered while [Settings.gamepadUiEnabled] is on; a TV is in console mode either way. */
 val GAMEPAD_UI_MODE_OPTIONS = listOf(
-    GAMEPAD_UI_WHEN_CONNECTED to "With a controller",
-    GAMEPAD_UI_ALWAYS to "Always",
+    GAMEPAD_UI_WHEN_CONNECTED to R.string.player_gamepad_ui_mode_connected,
+    GAMEPAD_UI_ALWAYS to R.string.player_gamepad_ui_mode_always,
 )
 
 /** (stored value, label) for where a bare launch opens — the cross-client table verbatim. */
@@ -1151,10 +1159,10 @@ val START_IN_OPTIONS = io.unom.punktfunk.kit.link.StartIn.entries.map { it.store
 
 /** (mode, label) for the touch-input model. */
 val TOUCH_MODE_OPTIONS = listOf(
-    TouchMode.TRACKPAD to "Trackpad",
-    TouchMode.POINTER to "Direct pointer",
-    TouchMode.TOUCH to "Touch passthrough",
-    TouchMode.OFF to "Off",
+    TouchMode.TRACKPAD to R.string.player_touch_mode_trackpad,
+    TouchMode.POINTER to R.string.player_touch_mode_pointer,
+    TouchMode.TOUCH to R.string.player_touch_mode_touch,
+    TouchMode.OFF to R.string.player_touch_mode_off,
 )
 
 /** (mode, label) for the physical-mouse model. */
@@ -1166,25 +1174,25 @@ val MOUSE_MODE_OPTIONS = MouseMode.entries.map { it to it.label }
  * with `5` (the classic Steam Controller) deliberately not offered — the same subset the desktop
  * clients' picker shows.
  */
-val GAMEPAD_OPTIONS = listOf(
+val GAMEPAD_OPTIONS: List<Pair<Int, OptionLabel>> = listOf(
     io.unom.punktfunk.kit.Gamepad.PREF_AUTO,
     io.unom.punktfunk.kit.Gamepad.PREF_XBOX360,
     io.unom.punktfunk.kit.Gamepad.PREF_DUALSENSE,
     io.unom.punktfunk.kit.Gamepad.PREF_XBOXONE,
     io.unom.punktfunk.kit.Gamepad.PREF_DUALSHOCK4,
     io.unom.punktfunk.kit.Gamepad.PREF_STEAMDECK,
-).map { it to io.unom.punktfunk.kit.Gamepad.prefLabel(it) }
+).map {
+    it to if (it == io.unom.punktfunk.kit.Gamepad.PREF_AUTO) {
+        OptionLabel.Message(R.string.player_gamepad_auto)
+    } else {
+        OptionLabel.Name(io.unom.punktfunk.kit.Gamepad.prefLabel(it))
+    }
+}
 
 /** (stored `system_buttons` value, label) — where the guide/share presses land while streaming. */
 val SYSTEM_BUTTON_OPTIONS = listOf(
-    "auto" to "Automatic",
-    "forward" to "Send to host",
-    "local" to "This device",
+    "auto" to R.string.player_system_buttons_auto,
+    "forward" to R.string.player_system_buttons_forward,
+    "local" to R.string.player_system_buttons_local,
 )
 
-/** (stored `guide_gesture` value, label) — the hold-Select guide gesture. */
-val GUIDE_GESTURE_OPTIONS = listOf(
-    "auto" to "Automatic",
-    "on" to "On",
-    "off" to "Off",
-)

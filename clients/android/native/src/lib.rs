@@ -36,10 +36,19 @@ mod audio_track;
 // `decode`'s AU intake rules, `test`-gated like `input_stall` so their table runs off-device.
 #[cfg(any(target_os = "android", test))]
 mod au_intake;
+// `decode`'s codec and picture rules, `test`-gated like `au_intake` so their tables run off-device.
+#[cfg(any(target_os = "android", test))]
+mod codec_format;
+// `decode`'s colour tags, `test`-gated like `au_intake` so their tables run off-device.
+#[cfg(any(target_os = "android", test))]
+mod colour;
 // The Skia console UI host (design/android-skia-console-port.md): the shared `pf-console-ui`
 // shell over EGL/GLES, on every ABI (the armv7 Skia archive is self-hosted — see Cargo.toml).
 #[cfg(target_os = "android")]
 mod console;
+// `console`'s surface lifecycle, `test`-gated like `run_end` so its table runs off-device.
+#[cfg(any(target_os = "android", test))]
+mod console_lifecycle;
 // "Send logs to host" and the log file behind it, `test`-gated on top of Android like
 // `audio_format`. `crash` turns the previous run's exit record into log lines.
 #[cfg(any(target_os = "android", test))]
@@ -49,6 +58,14 @@ mod logs;
 // AAudio callback arithmetic, `test`-gated on top of Android so its proof runs off-device.
 #[cfg(any(target_os = "android", test))]
 mod audio_format;
+// `audio`'s open and recovery rules, `test`-gated like `audio_format` so their tables run
+// off-device.
+#[cfg(any(target_os = "android", test))]
+mod audio_policy;
+// `decode`'s bring-up ladder and decoder pick, `test`-gated like `run_end` so their tests run
+// off-device.
+#[cfg(any(target_os = "android", test))]
+mod bring_up;
 #[cfg(target_os = "android")]
 mod decode;
 // Gated like `pf_client_core::discovery`, the browse it folds: the Linux and Windows host builds
@@ -58,11 +75,15 @@ mod discovery;
 // `decode`'s per-piece feed rules, `test`-gated like `au_intake` so their table runs off-device.
 #[cfg(any(target_os = "android", test))]
 mod feed_rules;
+// `decode`'s feed step, `test`-gated like `feed_rules` so its table runs off-device.
+#[cfg(any(target_os = "android", test))]
+mod feed_step;
 mod feedback;
 // `decode`'s hung-decoder checks, `test`-gated like `audio_format` so their proof runs off-device.
 #[cfg(any(target_os = "android", test))]
 mod input_stall;
-#[cfg(target_os = "android")]
+// The mic uplink; its open ladder is `test`-gated like `audio_format` so its walk runs off-device.
+#[cfg(any(target_os = "android", test))]
 mod mic;
 /// Tier-A DualSense pad audio: the 0xD1 plane rendered on the pad's own USB endpoint.
 mod pad_audio;
@@ -73,6 +94,10 @@ pub(crate) mod present;
 // path (design/pyrowave-codec-plan.md). Ungated so the host build compiles the dispatch; the
 // implementation inside is 64-bit-Android-only, like `pyrowave-sys`.
 mod pyro;
+// `pyro`'s present rules, `test`-gated like `run_end` so their tables run off-device; 64-bit
+// only, like `pyro`'s implementation.
+#[cfg(any(all(target_os = "android", target_pointer_width = "64"), test))]
+mod pyro_ring;
 // `decode`'s rung memory, `test`-gated like `input_stall` so its rules run off-device.
 #[cfg(any(target_os = "android", test))]
 mod rung_memory;
@@ -83,6 +108,9 @@ mod run_end;
 mod session;
 mod stats;
 mod sys;
+// `decode`'s vsync clock arithmetic, `test`-gated like `au_intake` so its table runs off-device.
+#[cfg(any(target_os = "android", test))]
+mod vsync_grid;
 // Ungated: pure `jni` + `punktfunk_core::wol` (no Android framework), so it links
 // into the host workspace build too. Kotlin only ever calls it on device.
 mod wol;
@@ -182,6 +210,29 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleAvai
     _this: JObject,
 ) -> jni::sys::jboolean {
     cfg!(target_os = "android")
+}
+
+/// `NativeBridge.nativeSetLanguages(tags: String)` — word the Rust side's text in the first of
+/// `tags` that Punktfunk ships: a JSON array of BCP-47 tags, most preferred first. The console
+/// does this from its `languages`; call it first when the PyroWave row or the stats overlay's
+/// warnings are read with no console. Bad JSON leaves the language as it was.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSetLanguages<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    tags: jni::objects::JString<'local>,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let tags = tags.try_to_string(env)?;
+        match serde_json::from_str::<Vec<String>>(&tags) {
+            Ok(tags) => {
+                pf_l10n::set_languages(&tags);
+            }
+            Err(e) => log::warn!("nativeSetLanguages: not a JSON array of tags: {e}"),
+        }
+        Ok(())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 /// The symbol `name` in the `dlopen` handle `lib`, as the fn-pointer type `F`; `None` when absent.

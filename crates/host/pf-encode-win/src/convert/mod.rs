@@ -1,14 +1,17 @@
 //! D3D11 colour converters shared by capture and encode: FP16 scRGB → P010
 //! ([`HdrP010Converter`]) and → packed 10-bit ([`HdrRgb10Converter`]), BGRA →
 //! PyroWave planes ([`BgraToYuvPlanes`]), the video-engine CSC
-//! ([`VideoConverter`]), and the cursor blend ([`CursorBlendPass`]). HLSL is
-//! compiled at first use through [`compile_shader`]. [`hdr_p010_selftest_at`]
-//! checks the P010 converter on a real GPU.
+//! ([`VideoConverter`]), the cursor blend ([`CursorBlendPass`]), and the scale pass a
+//! framed session runs before them ([`ReframePass`]). HLSL is compiled at first use
+//! through [`compile_shader`]. [`hdr_p010_selftest_at`] and [`reframe_selftest_at`]
+//! check the P010 converter and the scale pass on a real GPU.
 
 mod cursor_blend;
 pub use cursor_blend::CursorBlendPass;
+mod reframe;
+pub use reframe::ReframePass;
 mod selftest;
-pub use selftest::{hdr_p010_convert_bars_on_luid, hdr_p010_selftest_at};
+pub use selftest::{hdr_p010_convert_bars_on_luid, hdr_p010_selftest_at, reframe_selftest_at};
 
 use anyhow::{bail, Context, Result};
 use std::ffi::c_void;

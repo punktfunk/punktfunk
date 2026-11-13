@@ -127,12 +127,26 @@ extension ConsoleModel {
             hostAction(
                 fp: a["fp_hex"] as? String ?? "", id: a["action_id"] as? String ?? "",
                 label: a["label"] as? String ?? "")
+        case .setScreen:
+            setScreen(
+                fp: a["fp_hex"] as? String ?? "", mgmt: port(a["mgmt"]),
+                pick: ConsoleJSON.screenPick(a), label: a["label"] as? String ?? "")
         case .padAction:
             padAction(a["action"] as? String ?? "", key: a["pad_key"] as? String ?? "")
         case .padTest:
             padTest(a["on"] as? Bool ?? false)
         case .promptAnswer:
             answerPrompt(id: a["id"] as? String ?? "", choice: a["choice"] as? Int)
+        case .setHidden:
+            setHidden(
+                addr: a["addr"] as? String ?? "", mgmt: port(a["mgmt"]),
+                fp: a["fp_hex"] as? String ?? "", profile: a["profile"] as? String ?? "",
+                name: a["name"] as? String ?? "", appID: a["app_id"] as? String ?? "",
+                title: a["title"] as? String ?? "", hidden: a["hidden"] as? Bool ?? false)
+        case .fetchHidden:
+            fetchHidden(
+                addr: a["addr"] as? String ?? "", mgmt: port(a["mgmt"]),
+                fp: a["fp_hex"] as? String ?? "", profile: a["profile"] as? String ?? "")
         case .speedTest:
             speedTest(
                 key: a["key"] as? String ?? "", addr: a["addr"] as? String ?? "",
@@ -154,9 +168,9 @@ extension ConsoleModel {
     /// What this app bundles beside the console's own texts, for its Licences screen.
     private func pushLicenses() {
         let sections: [[String: String]] = [
-            ["heading": "Swift packages", "text": Licenses.swiftPackages],
+            ["heading": String(localized: L10n.appleAboutSwiftPackages), "text": Licenses.swiftPackages],
             [
-                "heading": "Third-party software",
+                "heading": String(localized: L10n.aboutThirdPartyHeading),
                 "text": Licenses.thirdPartyIntro + "\n\n" + Licenses.thirdPartyNotices,
             ],
         ]
@@ -172,7 +186,7 @@ extension ConsoleModel {
     /// would be slower for nothing. The recommendation is that module's integer rule.
     private func speedTest(key: String, addr: String, port: UInt16, fp: String) {
         guard let identity = (try? ClientIdentityStore.shared.load())?.identity else {
-            pushSpeed(key, ["Failed": "This device has no client certificate yet."])
+            pushSpeed(key, ["Failed": String(localized: L10n.appleTrustNoIdentity)])
             return
         }
         let pin = host(fp: fp, addr: addr, port: port)?.pinnedSHA256
@@ -185,7 +199,7 @@ extension ConsoleModel {
                     pinSHA256: pin, identity: identity,
                     deliveryFlags: PunktfunkConnection.deliveryProbeOnly)
             } catch {
-                await self?.pushSpeed(key, ["Failed": "Couldn't reach \(addr) — it may be asleep."])
+                await self?.pushSpeed(key, ["Failed": L10n.appleSpeedtestUnreachableBody(address: addr)])
                 return
             }
             defer { conn.close() }
@@ -193,7 +207,7 @@ extension ConsoleModel {
             // The whole check, reported once: the ceiling, the clean round and the findings.
             guard let r = conn.networkCheck() else {
                 await self?.pushSpeed(
-                    key, ["Failed": "The measurement never finished — the connection may have dropped."])
+                    key, ["Failed": String(localized: L10n.speedtestNoResultBody)])
                 return
             }
             var done: [String: Any] = [
@@ -237,7 +251,7 @@ extension ConsoleModel {
             // The closure holds the engine until the pulse has played.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { engine.stop() }
         } catch {
-            notice("Couldn't run the rumble test — \(error.localizedDescription)")
+            notice(L10n.applePadRumbleFailed(error: error.localizedDescription))
         }
     }
 
@@ -246,7 +260,8 @@ extension ConsoleModel {
     /// The shelf's catalog, its cached copy first so the grid is never empty while the fetch
     /// runs, then what the host answers; a sleeping host is woken when auto-wake is on.
     /// `refreshOnly` asks about running titles alone. The list and phase go up under the last
-    /// `FetchLibrary`'s `req`; a refetch this model starts reuses it, and only for its host.
+    /// `FetchLibrary`'s `req`; a refetch this model starts reuses it, and `openShelf` says
+    /// whether a fetch or an answer still belongs to the shelf the console has open.
     /// The host is the record `fp` pins, else the unpinned one at `addr:port` (the stream port):
     /// never one pinned to another fingerprint, the other OS of a dual-boot box.
     func fetchLibrary(
@@ -255,9 +270,9 @@ extension ConsoleModel {
         let placeholder = store.hosts.first {
             $0.pinnedSHA256 == nil && $0.address == addr && $0.port == port
         }
-        guard let host = host(fp: fp, addr: "", port: 0) ?? placeholder else { return }
-        // The console has moved off this host: no shelf to refill.
-        if !refreshOnly, fetchReq.fp != fp { return }
+        guard let host = host(fp: fp, addr: "", port: 0) ?? placeholder,
+              openShelf.accepts(refreshOnly ? .refresh : .list, fp: fp)
+        else { return }
         if !refreshOnly { fetchSerial += 1 }
         let serial = fetchSerial
         let req = fetchReq.req
@@ -271,6 +286,7 @@ extension ConsoleModel {
         if builtIn {
             bridge.push(.libraryRunning, ConsoleJSON.runningGames([]))
             if refreshOnly { return }
+            artShown = []
             bridge.push(.libraryBegin, "{}")
             bridge.push(.libraryGames, ConsoleJSON.libraryGames(req, DemoMode.games))
             bridge.push(.libraryPhase, ConsoleJSON.libraryPhase(req, "Ready"))
@@ -283,13 +299,13 @@ extension ConsoleModel {
             bridge.push(
                 .libraryPhase,
                 ConsoleJSON.libraryError(
-                    req, title: "Couldn't load the library", body: why, canRetry: false))
+                    req, title: String(localized: L10n.libLoadFailed), body: why, canRetry: false))
         }) else { return }
         // A running-titles refresh must not cut a list fetch short; only a new fetch does.
         if refreshOnly {
             Task { [weak self] in
-                let status = await LibraryClient.status(target)
-                self?.pushStatus(status, serial: serial)
+                let status = await LibraryClient.statusIfAnswered(target)
+                self?.pushStatus(status, serial: serial, fp: fp)
             }
             return
         }
@@ -300,12 +316,13 @@ extension ConsoleModel {
         // The session binary's console wakes on the same switch.
         let autoWake = UserDefaults.standard.object(forKey: DefaultsKey.autoWake) as? Bool
             ?? SettingDefault.autoWake
+        // The console plays as a remembered pick only, so its shelf is that profile's.
         let events = LibraryLoad.run(
-            target: target, hostID: host.id.uuidString, wakeMacs: host.wakeMacs, autoWake: autoWake)
+            target: target, hostID: host.id.uuidString, wakeMacs: host.wakeMacs, autoWake: autoWake,
+            profile: host.pickedProfile.flatMap { $0.remember ? $0.id : nil })
         fetching = Task { [weak self] in
             for await event in events {
-                // A newer fetch owns the shelf by the time a slow host answers.
-                guard let self, serial == self.fetchSerial else { return }
+                guard let self, openShelf.accepts(.answer(serial: serial), fp: fp) else { return }
                 switch event {
                 case .cached(let cached):
                     bridge.push(.libraryCached, ConsoleJSON.libraryGames(req, cached.games))
@@ -325,20 +342,25 @@ extension ConsoleModel {
                     bridge.push(
                         .libraryPhase,
                         ConsoleJSON.libraryError(
-                            req, title: "Couldn't load the library",
+                            req, title: String(localized: L10n.libLoadFailed),
                             body: error.errorDescription ?? "", canRetry: true))
-                case .status(let games, let downloads, let grants):
-                    pushStatus((games, downloads, grants), serial: serial)
+                case .status(let answer):
+                    pushStatus(answer, serial: serial, fp: fp)
                 }
             }
         }
     }
 
-    /// What the host runs and downloads, unless a newer fetch owns the shelf.
+    /// The shelf the console has open: the last `FetchLibrary`'s host and its list fetch.
+    private var openShelf: FetchGuard { FetchGuard(fp: fetchReq.fp, serial: fetchSerial) }
+
+    /// What the host runs and downloads, while the shelf it was read for is open. A read the
+    /// host didn't answer (nil) changes nothing, so a live download keeps its badge and its poll.
     private func pushStatus(
-        _ status: (games: [RunningGame], downloads: [HostDownload], grants: UInt32?), serial: Int
+        _ status: (games: [RunningGame], downloads: [HostDownload], grants: UInt32?)?,
+        serial: Int, fp: String
     ) {
-        guard serial == fetchSerial else { return }
+        guard let status, openShelf.accepts(.answer(serial: serial), fp: fp) else { return }
         bridge.push(.libraryDownloads, ConsoleJSON.downloads(status.downloads, grants: status.grants))
         bridge.push(.libraryRunning, ConsoleJSON.runningGames(status.games))
     }
@@ -353,23 +375,93 @@ extension ConsoleModel {
         }
     }
 
-    /// Each title's first poster that loads, in the order the touch grid takes them. A title
-    /// this fetch already has a poster for is skipped.
+    /// Each title's first poster that loads. A title this fetch already has a poster for is
+    /// skipped.
     private func pushArt(_ games: [GameEntry], poster: @escaping @Sendable (URL) async -> Data?) {
         artTask?.cancel()
         artTask = Task { [weak self] in
             for game in games {
                 guard let self, !Task.isCancelled else { return }
                 if artShown.contains(game.id) { continue }
-                // The capsule first, then the header: the same order the touch grid takes.
-                for url in game.art.posterCandidates {
-                    guard let bytes = await poster(url) else { continue }
-                    // A newer fetch owns the shelf and its `artShown` by now.
-                    if Task.isCancelled { return }
-                    bridge.art(id: game.id, bytes: bytes)
-                    artShown.insert(game.id)
-                    break
-                }
+                guard let bytes = await Self.firstPoster(game, poster) else { continue }
+                // A newer fetch owns the shelf and its `artShown` by now.
+                if Task.isCancelled { return }
+                bridge.art(id: game.id, bytes: bytes)
+                artShown.insert(game.id)
+            }
+        }
+    }
+
+    /// The capsule first, then the header: the same order the touch grid takes.
+    private static func firstPoster(
+        _ game: GameEntry, _ poster: (URL) async -> Data?
+    ) async -> Data? {
+        for url in game.art.posterCandidates {
+            if let bytes = await poster(url) { return bytes }
+        }
+        return nil
+    }
+
+    // MARK: - hide for me
+
+    /// Hide or show a title for the profile this device is the person of. What the host took,
+    /// the cached catalog follows at once: a shown title as the last hidden list had it. The
+    /// shell moves the title and shows the line.
+    private func setHidden(
+        addr: String, mgmt: UInt16, fp: String, profile: String, name: String, appID: String,
+        title: String, hidden: Bool
+    ) {
+        let answer: (Bool, String) -> Void = { [weak self] done, notice in
+            self?.bridge.push(
+                .hide,
+                ConsoleJSON.hideAnswer(
+                    fp: fp, profile: profile, appID: appID, hidden: hidden, done: done,
+                    notice: notice))
+        }
+        guard let host = host(fp: fp, addr: addr, port: 0) else {
+            return answer(false, String(localized: L10n.appleHostNotSaved))
+        }
+        guard let target = MgmtTarget.make(host: host, port: mgmt)
+            .target(orSay: { answer(false, $0) })
+        else { return }
+        Task { [weak self] in
+            let outcome = await HideForMe.setHidden(
+                appID, hidden: hidden, profile: profile, on: target)
+            if outcome == .done {
+                let back = hidden ? nil : self?.hiddenSeen.first { $0.id == appID }
+                await LibraryCache.shared?.noteHidden(
+                    appID, back: back, hostID: host.id.uuidString, profile: profile)
+            }
+            answer(outcome == .done, outcome.notice(hidden: hidden, title: title, name: name))
+        }
+    }
+
+    /// What a profile hides, for the shell's hidden shelf, then their posters as a shelf's come.
+    private func fetchHidden(addr: String, mgmt: UInt16, fp: String, profile: String) {
+        let answer: ([GameEntry]?, String) -> Void = { [weak self] games, why in
+            self?.bridge.push(
+                .hidden, ConsoleJSON.hiddenList(fp: fp, profile: profile, games: games, why: why))
+        }
+        guard let host = host(fp: fp, addr: addr, port: 0) else {
+            return answer(nil, String(localized: L10n.appleHostNotSaved))
+        }
+        guard let target = MgmtTarget.make(host: host, port: mgmt)
+            .target(orSay: { answer(nil, $0) })
+        else { return }
+        Task { [weak self] in
+            let games: [GameEntry]
+            do {
+                games = try await HideForMe.hidden(profile: profile, on: target)
+            } catch {
+                return answer(nil, (error as? LocalizedError)?.errorDescription ?? "\(error)")
+            }
+            self?.hiddenSeen = games
+            answer(games, "")
+            let loader = LibraryArtLoader(target)
+            for game in games {
+                guard let bytes = await Self.firstPoster(game, { try? await loader.data(for: $0) })
+                else { continue }
+                self?.bridge.art(id: game.id, bytes: bytes)
             }
         }
     }
@@ -379,7 +471,7 @@ extension ConsoleModel {
     /// The host's profile list, handed back to the shell's connect or Switch-profile screen.
     private func fetchProfiles(addr: String, mgmt: UInt16, fp: String) {
         guard let host = host(fp: fp, addr: addr, port: 0) else {
-            pushProfiles(fp, ["Failed": "That host is no longer saved."])
+            pushProfiles(fp, ["Failed": String(localized: L10n.appleHostNotSaved)])
             return
         }
         Task { [weak self] in
@@ -392,7 +484,7 @@ extension ConsoleModel {
             case .listed(nil):
                 self?.pushProfiles(fp, "NoProfiles")
             case .failed:
-                self?.pushProfiles(fp, ["Failed": "Couldn't load the profiles."])
+                self?.pushProfiles(fp, ["Failed": String(localized: L10n.profileLoadFailed)])
             }
         }
     }
@@ -447,8 +539,11 @@ extension ConsoleModel {
         store.update(host)
     }
 
+    /// Wake the host on row `key`; with `thenConnect`, connect once it answers, with the preset
+    /// a pinned card's key carries.
     private func wake(key: String, thenConnect: Bool) {
         guard let host = host(key: key) else { return }
+        let preset = PresetSelection(presetID: ConsoleJSON.preset(ofKey: key))
         waker.start(
             host: host, connectsAfter: thenConnect, macs: host.wakeMacs, lastIP: host.address,
             isOnline: { [weak self] in
@@ -461,7 +556,7 @@ extension ConsoleModel {
             onOnline: { [weak self] in
                 guard let self else { return }
                 bridge.push(.wake, "null")
-                if thenConnect { actions.connect(host, .inherit, .send(host.pickedProfile?.id)) }
+                if thenConnect { actions.connect(host, preset, .send(host.pickedProfile?.id)) }
             })
     }
 
@@ -507,6 +602,8 @@ extension ConsoleModel {
         Task { @MainActor [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
                 Result {
+                    // The console offers a request only for a host that advertised one.
+                    guard let pin else { throw PunktfunkClientError.invalidPin }
                     let identity = try ClientIdentityStore.shared.loadForPairing()
                     return try PunktfunkKit.requestAccess(
                         host: addr, port: port, identity: identity, pinSHA256: pin, name: name)
@@ -526,13 +623,12 @@ extension ConsoleModel {
         }
     }
 
-    /// Pin `cert` and tell the Pair screen that sent `req`. The record is the one pinned to
-    /// `cert`, else the unpinned one at `addr:port`, else the advert there, saved as a tap on it
-    /// would. A record pinned to another fingerprint is the other OS of a dual-boot box.
+    /// Pin `cert` and tell the Pair screen that sent `req`. The record is the one a command
+    /// naming `cert` at `addr:port` means (`ConsoleJSON.host`), else the advert there, saved as
+    /// a tap on it would.
     private func paired(addr: String, port: UInt16, cert: Data, req: Any) {
         let fp = cert.map { String(format: "%02x", $0) }.joined()
-        let host = store.hosts.first { $0.pinnedSHA256 == cert }
-            ?? store.hosts.first { $0.pinnedSHA256 == nil && $0.address == addr && $0.port == port }
+        let host = self.host(fp: fp, addr: addr, port: port)
             ?? saveAdvert(addr: addr, port: port, fp: fp)
         store.pin(host.id, fingerprint: cert)
         actions.paired(host, cert)
@@ -585,6 +681,17 @@ extension ConsoleModel {
             self?.notice(outcome.notice(action, title: title))
             let removed = outcome == .done && action == .remove
             self?.fetchLibrary(addr: addr, mgmt: mgmt, fp: fp, refreshOnly: !removed)
+        }
+    }
+
+    /// Write a Screen row's pick on the host. Only a refusal says anything: the pick shows on
+    /// the card once the rows come back.
+    private func setScreen(fp: String, mgmt: UInt16, pick: ScreenPick?, label: String) {
+        guard let host = host(fp: fp, addr: "", port: 0), let pick else { return }
+        Task { [weak self] in
+            if let why = await self?.screens.pick(pick, label: label, on: host, port: mgmt) {
+                self?.notice(why)
+            }
         }
     }
 

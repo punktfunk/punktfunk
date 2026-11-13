@@ -63,6 +63,8 @@ struct HomeView: View {
     @State private var sendLogsResult: (ok: Bool, message: String)?
     /// What each paired host says this device may do to it (`design/host-actions.md` §7).
     @StateObject private var hostPower = HostPowerStore.shared
+    /// The screen each paired host streams this device, on the same beat.
+    @StateObject private var hostScreens = HostScreenStore.shared
     /// "Switch profile…": the picker, opened from a card's menu.
     @StateObject private var profileSwitch = ProfileSwitch()
     /// What each paired host is playing right now — refreshed on the same beat below.
@@ -124,7 +126,7 @@ struct HomeView: View {
                             Button {
                                 showAddHost = true
                             } label: {
-                                Label("Add Host", systemImage: "plus")
+                                Label(L10n.hostsAdd, systemImage: "plus")
                             }
                             refreshButton
                         }
@@ -166,7 +168,7 @@ struct HomeView: View {
             }
             .navigationDestination(item: $speedTestTarget) { host in
                 SpeedTestView(host: host)
-                    .navigationTitle("Speed Test")
+                    .navigationTitle(L10n.speedtestTitle)
                     #if os(iOS) || os(visionOS)
                     .navigationBarTitleDisplayMode(.inline)
                     #endif
@@ -199,34 +201,35 @@ struct HomeView: View {
                 if showsArrangeMenu {
                     ToolbarItem(placement: .primaryAction) {
                         arrangeMenu
-                            .help("Sort and group the host list")
+                            .help(L10n.appleHostsArrangeHint)
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     refreshButton
-                        .help("Scan the network for hosts again")
+                        .help(L10n.hostsRescanHint)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     addHostButton
-                        .help("Add a host")
+                        .help(L10n.hostsAddTileHint)
                 }
                 ToolbarItem {
                     SettingsLink {
-                        Label("Settings", systemImage: "gearshape")
+                        Label(L10n.hostsOpenSettings, systemImage: "gearshape")
                     }
-                    .help("Stream mode and settings")
+                    .help(L10n.appleHostsSettingsHint)
                 }
                 #endif
             }
             #endif
         }
         .alert(
-            sendLogsResult?.ok == true ? "Logs sent" : "Couldn't send logs",
+            sendLogsResult?.ok == true
+                ? L10n.appleHostcardLogsSentTitle : L10n.appleHostcardLogsFailedTitle,
             isPresented: Binding(
                 get: { sendLogsResult != nil },
                 set: { if !$0 { sendLogsResult = nil } })
         ) {
-            Button("OK", role: .cancel) {}
+            Button(L10n.commonOk, role: .cancel) {}
         } message: {
             Text(sendLogsResult?.message ?? "")
         }
@@ -234,12 +237,12 @@ struct HomeView: View {
         // on that machine, and a mis-tap on a phone must not be able to do that. Sleep is
         // reversible from the same menu ("Wake Host"), so it never reaches here.
         .alert(
-            confirmHostAction.map { "\($0.action.label)?" } ?? "",
+            confirmHostAction.map { L10n.hostPowerConfirmTitle(action: $0.action.label) } ?? "",
             isPresented: Binding(
                 get: { confirmHostAction != nil },
                 set: { if !$0 { confirmHostAction = nil } })
         ) {
-            Button("Cancel", role: .cancel) { confirmHostAction = nil }
+            Button(L10n.commonCancel, role: .cancel) { confirmHostAction = nil }
             if let pending = confirmHostAction {
                 Button(pending.action.label, role: .destructive) {
                     confirmHostAction = nil
@@ -249,17 +252,17 @@ struct HomeView: View {
         } message: {
             Text(
                 confirmHostAction.map {
-                    "This ends every stream from \($0.host.displayName) and anything running "
-                        + "on it. You'll need to wake or start it again."
+                    L10n.hostcardActionConfirmBody(host: $0.host.displayName)
                 } ?? "")
         }
         .alert(
-            hostActionResult?.ok == true ? "On its way" : "Couldn't do that",
+            hostActionResult?.ok == true
+                ? L10n.appleHostcardActionDoneTitle : L10n.appleHostcardActionFailedTitle,
             isPresented: Binding(
                 get: { hostActionResult != nil },
                 set: { if !$0 { hostActionResult = nil } })
         ) {
-            Button("OK", role: .cancel) {}
+            Button(L10n.commonOk, role: .cancel) {}
         } message: {
             Text(hostActionResult?.message ?? "")
         }
@@ -322,8 +325,6 @@ struct HomeView: View {
             Text(title)
                 .font(.geist(13, .semibold, relativeTo: .subheadline))
                 .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-                .tracking(0.6)
         }
         .padding(.top, 4)
     }
@@ -346,6 +347,7 @@ struct HomeView: View {
         HostActions(
             host: host, pinned: pinned, online: isOnline(host), store: store,
             presets: presets.presets, power: hostPower.actions(for: host),
+            screens: hostScreens.targets(for: host),
             surface: HostActionSurface(
                 connect: { connect(host, $0) },
                 pair: { if !model.isBusy { pairingTarget = host } },
@@ -355,7 +357,8 @@ struct HomeView: View {
                 wake: { wake(host) },
                 showDetails: { showDetails(host) },
                 runPower: { hostAction($0, on: host) },
-                switchProfile: { profileSwitch.start(host, store: store) }))
+                switchProfile: { profileSwitch.start(host, store: store) },
+                screenRefused: { hostActionResult = (false, $0) }))
     }
 
     /// The host page: its own window on the Mac, a sheet of sections on the iPad, pushed on the
@@ -386,19 +389,12 @@ struct HomeView: View {
     }
     #endif
 
-    /// A host action picked from a card's menu: explain an unavailable one, confirm a
-    /// destructive one, run the rest.
+    /// A host action picked from a card's menu, on its `HostOffers.route`.
     private func hostAction(_ action: HostAction, on host: StoredHost) {
-        guard action.available else {
-            hostActionResult = (
-                false,
-                action.unavailableReason ?? "\(action.label) isn't available right now")
-            return
-        }
-        if action.danger {
-            confirmHostAction = PendingHostAction(host: host, action: action)
-        } else {
-            runHostAction(action, on: host)
+        switch HostOffers.route(action: action) {
+        case .explain(let why): hostActionResult = (false, why)
+        case .confirm: confirmHostAction = PendingHostAction(host: host, action: action)
+        case .run: runHostAction(action, on: host)
         }
     }
 
@@ -408,7 +404,7 @@ struct HomeView: View {
 
     private var discoveredSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("On this network", systemImage: "antenna.radiowaves.left.and.right")
+            Label(L10n.hostsSectionDiscovered, systemImage: "antenna.radiowaves.left.and.right")
                 .font(.geist(15, .semibold, relativeTo: .headline))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal)
@@ -443,18 +439,18 @@ struct HomeView: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label("No Hosts", systemImage: "rectangle.connected.to.line.below")
+            Label(L10n.hostsEmptyTitle, systemImage: "rectangle.connected.to.line.below")
         } description: {
-            Text("Add your Punktfunk host with the + button, or scan the network again.")
+            Text(L10n.hostsEmptyBody)
         } actions: {
-            Button("Add Host") { showAddHost = true }
+            Button(L10n.hostsAdd) { showAddHost = true }
                 .glassProminentButtonStyle()
                 #if os(iOS) || os(visionOS)
                 .controlSize(.large)
                 #endif
             // The screen a host SHOULD have appeared on is where a rescan is worth offering
             // outright rather than hiding behind a pull gesture.
-            Button("Scan Again") { discovery.refresh() }
+            Button(L10n.hostsRescan) { discovery.refresh() }
                 .disabled(discovery.isScanning)
                 #if os(iOS) || os(visionOS)
                 .controlSize(.large)
@@ -466,7 +462,7 @@ struct HomeView: View {
         Button {
             showAddHost = true
         } label: {
-            Label("Add Host", systemImage: "plus")
+            Label(L10n.hostsAdd, systemImage: "plus")
         }
     }
 
@@ -477,7 +473,7 @@ struct HomeView: View {
         Button {
             discovery.refresh()
         } label: {
-            Label("Refresh", systemImage: "arrow.clockwise")
+            Label(L10n.hostsRescan, systemImage: "arrow.clockwise")
         }
         .disabled(discovery.isScanning)
     }
@@ -495,26 +491,26 @@ struct HomeView: View {
         Menu {
             #if os(visionOS)
             MenuChoices(
-                title: "Sort By",
+                title: String(localized: L10n.hostsSort),
                 choices: HostSort.allCases.map {
                     MenuChoice(label: $0.label, symbol: $0.symbol, tag: $0.rawValue)
                 },
                 selection: $sortRaw)
             MenuChoices(
-                title: "Group By",
+                title: String(localized: L10n.hostsGroup),
                 choices: HostGrouping.allCases.map {
                     MenuChoice(label: $0.label, symbol: $0.symbol, tag: $0.rawValue)
                 },
                 selection: $groupingRaw)
             #else
-            Picker("Sort By", selection: $sortRaw) {
+            Picker(L10n.hostsSort, selection: $sortRaw) {
                 ForEach(HostSort.allCases) { option in
                     Label(option.label, systemImage: option.symbol).tag(option.rawValue)
                 }
             }
             .pickerStyle(.inline)
             Divider()
-            Picker("Group By", selection: $groupingRaw) {
+            Picker(L10n.hostsGroup, selection: $groupingRaw) {
                 ForEach(HostGrouping.allCases) { option in
                     Label(option.label, systemImage: option.symbol).tag(option.rawValue)
                 }
@@ -522,7 +518,7 @@ struct HomeView: View {
             .pickerStyle(.inline)
             #endif
         } label: {
-            Label("Sort and Group", systemImage: "line.3.horizontal.decrease.circle")
+            Label(L10n.hostsArrange, systemImage: "line.3.horizontal.decrease.circle")
         }
         #if os(visionOS)
         // The menu indicator widened it to a capsule.
@@ -544,7 +540,7 @@ struct HomeView: View {
         Button {
             showSettings = true
         } label: {
-            Label("Settings", systemImage: "gearshape")
+            Label(L10n.hostsOpenSettings, systemImage: "gearshape")
         }
     }
     #endif

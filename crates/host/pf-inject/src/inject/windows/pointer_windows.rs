@@ -124,11 +124,13 @@ fn inject_following_desktop(
 /// Windows pen pressure is 0..1024 (vs the wire's full-scale u16).
 const WIN_PEN_PRESSURE_MAX: u32 = 1024;
 
-/// Map a normalized [0,1] pair onto the STREAMED output's rect ([`crate::stream_target`])
-/// — the same surface SendInput absolute mouse uses. Mapping over the whole virtual
-/// desktop is only right when they coincide (Exclusive topology; the no-target fallback).
+/// Map a normalized [0,1] pair onto the STREAMED output's rect ([`crate::stream_target`]),
+/// as a synthetic pointer's `ptPixelLocation`: counted from the virtual screen's top-left,
+/// not the primary's origin. Both are the same until a monitor sits left of or above the
+/// primary.
 fn to_screen(screen: u8, x: f32, y: f32) -> POINT {
-    let (px, py) = crate::stream_target::map_normalized(screen, x as f64, y as f64);
+    let desktop = crate::stream_target::map_normalized(screen, x as f64, y as f64);
+    let (px, py) = crate::stream_target::desktop_px_to_virtual_screen(desktop);
     POINT { x: px, y: py }
 }
 

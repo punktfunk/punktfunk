@@ -13,6 +13,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useLocale } from "@/lib/i18n";
+import { usePerson } from "@/lib/person";
 import { isBoolean, useLocalPref } from "@/lib/prefs";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -51,9 +53,12 @@ export const BrowseTab: FC<{
 	onInstall: (entry: CatalogEntry) => void;
 	onInstallSpec: () => void;
 }> = ({ onInstall, onInstallSpec }) => {
+	const locale = useLocale();
 	const catalog = useGetPluginCatalog();
 	const seat = useSeat();
 	const own = seat?.own ?? null;
+	// A person installs from the catalog alone: a raw package is the operator's call.
+	const person = usePerson() !== null;
 	// Sources that could not be fetched — the difference between "this host has no plugins" and
 	// "the console could not find out".
 	const failedSources = (catalog.data?.sources ?? []).filter(
@@ -91,8 +96,9 @@ export const BrowseTab: FC<{
 						(group === null || groupOf(e) === group) &&
 						matches(e, query),
 				),
+				locale,
 			),
-		[forHost, source, group, query],
+		[forHost, source, group, query, locale],
 	);
 
 	return (
@@ -233,7 +239,7 @@ export const BrowseTab: FC<{
 
 			{/* The ONLY way to the raw-spec install. Deliberately a quiet footer link, not a button on
 			    a card: an unverified install should take a decision, never a stray click. */}
-			{!own && (
+			{!own && !person && (
 				<div className="text-center">
 					<button
 						type="button"

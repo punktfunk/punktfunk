@@ -11,4 +11,4 @@ pub mod i915_boost;
 #[cfg(target_os = "linux")]
 mod map;
 #[cfg(target_os = "linux")]
-pub use map::{byte_len, ReadMap, Share};
+pub use map::{byte_len, CpuRead, ReadMap, Share};

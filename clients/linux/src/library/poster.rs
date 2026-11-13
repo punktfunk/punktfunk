@@ -9,6 +9,7 @@ use gtk::subclass::prelude::*;
 use gtk::{gdk, gio, glib};
 use pf_client_core::library::{initials, store_label, GameEntry};
 use pf_client_core::library_layout::ago;
+use pf_l10n::{client, common};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -148,7 +149,7 @@ impl Poster {
                 .build()
         };
         let (badge, running) = (pill(gtk::Align::Start), pill(gtk::Align::End));
-        running.set_label("Running");
+        running.set_label(client::lib_badge_running());
         let overlay = gtk::Overlay::builder()
             .css_classes(["pf-poster"])
             .overflow(gtk::Overflow::Hidden)
@@ -215,21 +216,11 @@ impl Poster {
         self.face.imp().shows.borrow().clone()
     }
 
-    /// Click plays; right-click, a long press or the Menu key opens the title's menu.
+    /// Click plays; right-click, a long press or the Menu key opens the title's menu. A
+    /// hidden title plays nowhere: a click opens its menu, which brings it back.
     fn wire(&self, view: &Rc<View>) {
         let (view, face) = (Rc::downgrade(view), self.face.downgrade());
         let shows = move || face.upgrade().map(|f| f.imp().shows.borrow().clone());
-        {
-            let (view, shows) = (view.clone(), shows.clone());
-            self.button.connect_clicked(move |_| {
-                let Some(view) = view.upgrade() else { return };
-                match shows() {
-                    Some(Shows::Game(id)) => view.sender.emit(LibraryMsg::Play(id)),
-                    Some(Shows::Desktop) => view.sender.emit(LibraryMsg::Desktop(None)),
-                    _ => {}
-                }
-            });
-        }
         let open = {
             let (view, shows, button) = (view.clone(), shows.clone(), self.button.downgrade());
             Rc::new(move |at: Option<(f64, f64)>| {
@@ -240,6 +231,18 @@ impl Poster {
                 }
             })
         };
+        {
+            let (view, shows, open) = (view.clone(), shows.clone(), open.clone());
+            self.button.connect_clicked(move |_| {
+                let Some(view) = view.upgrade() else { return };
+                match shows() {
+                    _ if view.hidden.borrow().is_some() => open(None),
+                    Some(Shows::Game(id)) => view.sender.emit(LibraryMsg::Play(id)),
+                    Some(Shows::Desktop) => view.sender.emit(LibraryMsg::Desktop(None)),
+                    _ => {}
+                }
+            });
+        }
         let right = gtk::GestureClick::builder().button(3).build();
         {
             let open = open.clone();
@@ -284,6 +287,11 @@ impl Poster {
             self.set_shows(Shows::Game(g.id.clone()));
         }
         let launcher = g.is_launcher();
+        set_class(
+            self.button.upcast_ref(),
+            "pf-hidden-title",
+            view.hidden.borrow().is_some(),
+        );
         self.with_parts(|p| {
             p.title.set_label(&g.title);
             self.button.set_tooltip_text(Some(&g.title));
@@ -332,10 +340,11 @@ impl Poster {
     /// The host itself, in the grid when Desktops is off.
     pub fn show_desktop(&self) {
         self.set_shows(Shows::Desktop);
+        set_class(self.button.upcast_ref(), "pf-hidden-title", false);
         self.with_parts(|p| {
-            p.title.set_label("Desktop");
+            p.title.set_label(client::lib_desktop());
             self.button
-                .set_tooltip_text(Some("Stream the host's desktop"));
+                .set_tooltip_text(Some(client::lib_desktop_stream()));
             p.caption.set_visible(false);
             p.badge.set_visible(false);
             p.running.set_visible(false);
@@ -404,40 +413,30 @@ fn caption_text(g: &GameEntry, caption: Caption) -> Option<String> {
             Some(ago(now.saturating_sub(s.last_played_unix_ms)))
         }
         Caption::PlayTime if s.play_time_ms > 0 => Some(match s.play_time_ms / 3_600_000 {
-            0 => "Under an hour".into(),
-            h => format!("{h} h"),
+            0 => client::lib_played_under_hour().into(),
+            h => client::lib_played_hours_short(h),
         }),
         _ => None,
     }
 }
 
-/// The title's menu, built from its state now: End Game only while the host can end it. The
-/// rows name the page's `title.*` actions with the title's id.
+/// The title's menu, built from its state now: End Game only while the host can end it, Hide
+/// for its profile only where the box lets this device. A hidden title's menu only brings it
+/// back. The rows name the page's `title.*` actions with the title's id.
 fn open_menu(button: &gtk::Button, view: &View, id: &str, at: Option<(f64, f64)>) {
     let running = view.running.borrow().get(id).cloned();
     let favorite = view.favorites.borrow().iter().any(|f| f == id);
+    let hides = view.hides.borrow().clone();
     let menu = gio::Menu::new();
     let item = |label: &str, action: &str| {
         let item = gio::MenuItem::new(Some(label), None);
         item.set_action_and_target_value(Some(action), Some(&id.to_variant()));
         menu.append_item(&item);
     };
-    item(
-        if running.is_some() { "Resume" } else { "Play" },
-        "title.play",
-    );
-    item(
-        if favorite {
-            "Remove from Favorites"
-        } else {
-            "Add to Favorites"
-        },
-        "title.favorite",
-    );
-    item("Details\u{2026}", "title.details");
-    item("Copy Link", "title.copy-link");
-    if running.is_some_and(|r| r.endable) {
-        item("End Game", "title.end-game");
+    match (&hides, view.hidden.borrow().is_some()) {
+        (Some(name), true) => item(&client::lib_show_for(name), "title.show"),
+        (None, true) => return,
+        (_, false) => title_items(&item, running.as_ref(), favorite, hides.as_deref()),
     }
     let popover = gtk::PopoverMenu::from_model(Some(&menu));
     popover.set_parent(button);
@@ -450,4 +449,37 @@ fn open_menu(button: &gtk::Button, view: &View, id: &str, at: Option<(f64, f64)>
         glib::idle_add_local_once(move || p.unparent());
     });
     popover.popup();
+}
+
+/// A title's rows on the shelf, `hides` the name of the profile it may hide for.
+fn title_items(
+    item: &impl Fn(&str, &str),
+    running: Option<&pf_client_core::library::RunningGame>,
+    favorite: bool,
+    hides: Option<&str>,
+) {
+    item(
+        if running.is_some() {
+            client::lib_resume()
+        } else {
+            common::common_play()
+        },
+        "title.play",
+    );
+    item(
+        if favorite {
+            client::lib_favorite_remove()
+        } else {
+            client::lib_favorite_add()
+        },
+        "title.favorite",
+    );
+    if let Some(name) = hides {
+        item(&client::lib_hide_for(name), "title.hide");
+    }
+    item(client::lib_title_details(), "title.details");
+    item(client::hostcard_copy_link(), "title.copy-link");
+    if running.is_some_and(|r| r.endable) {
+        item(client::lib_end_game(), "title.end-game");
+    }
 }

@@ -406,6 +406,28 @@ impl MonitorNotFound {
                  virtual display instead."
             );
         }
+        let names = self.named();
+        format!(
+            "The host is set to capture a monitor called \"{want}\", which isn't connected to \
+             it. Change it to one the host has ({names}) in the host's display settings, or \
+             clear it to stream a virtual display instead."
+        )
+    }
+
+    /// The host message that words [`Self::user_message`], and its placeholder values. The
+    /// message names no heads; only the English sentence does.
+    pub fn message(&self) -> (&'static str, Vec<(&'static str, String)>) {
+        let monitor = ("monitor", self.want.clone());
+        let id = if self.available.is_empty() {
+            "close_monitor_none"
+        } else {
+            "close_monitor_missing"
+        };
+        (id, vec![monitor])
+    }
+
+    /// The heads the host has, at most [`NAMED_IN_SENTENCE`] of them.
+    fn named(&self) -> String {
         let mut names = self
             .available
             .iter()
@@ -416,11 +438,7 @@ impl MonitorNotFound {
         if self.available.len() > NAMED_IN_SENTENCE {
             names.push_str(", …");
         }
-        format!(
-            "The host is set to capture a monitor called \"{want}\", which isn't connected to \
-             it. Change it to one the host has ({names}) in the host's display settings, or \
-             clear it to stream a virtual display instead."
-        )
+        names
     }
 }
 

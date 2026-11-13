@@ -1,5 +1,6 @@
 package io.unom.punktfunk
 
+import io.unom.punktfunk.kit.R
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -34,7 +35,7 @@ class SettingsFieldsTest {
         bitrateKbps = 40_000, pyrowaveBpp = 1.0, renderScale = 0.5, videoFit = "crop", secondScreen = false,
         hdrEnabled = false, tenBitSdr = true, compositor = 2, gamepad = 3, gamepadForwarding = false,
         systemButtons = "host", guideGesture = "off", audioChannels = 6, audioFormat = AUDIO_FORMAT_LOSSLESS_96,
-        codec = "av1", micEnabled = true, echoCancel = false, keepHostAudio = true,
+        codec = "av1", micEnabled = true, echoCancel = false, keepHostAudio = true, hostScreen = "second",
         statsVerbosity = StatsVerbosity.DETAILED, advancedStats = true, hudPlacement = "bottomTrailing",
         statsScalePct = 150, exitHint = false, showAdvanced = true, touchMode = TouchMode.TOUCH, gamepadUiEnabled = false,
         reduceUiResolution = true, gamepadUiMode = GAMEPAD_UI_ALWAYS, uiPalette = "crimson",
@@ -43,7 +44,8 @@ class SettingsFieldsTest {
         keepAwake = false,
         rumbleOnPhone = true, gyroOnPhone = true, dsCapture = false,
         padHaptics = false, padSpeaker = true, mouseMode = MouseMode.CAPTURE, invertScroll = true,
-        overlayActions = "{\"ring\":[]}", backOpensRing = false, startIn = "library", defaultHost = "desk",
+        overlayActions = "{\"ring\":[]}", shortcuts = "{\"bindings\":[]}", backOpensRing = false,
+        startIn = "library", defaultHost = "desk",
     )
 
     @Test
@@ -66,9 +68,10 @@ class SettingsFieldsTest {
 
         val kept = codecOptionsFor("av1", av1Capable = false, pyrowaveCapable = false)
         assertEquals(listOf("auto", "hevc", "h264", "av1"), kept.map { it.first })
-        val label = kept.first { it.first == "av1" }.second
-        assertNotEquals("AV1", label)
-        assert(label.contains("no hardware decoder")) { label }
+        assertEquals(
+            OptionLabel.Message(R.string.player_codec_av1_unsupported),
+            kept.first { it.first == "av1" }.second,
+        )
     }
 
     @Test

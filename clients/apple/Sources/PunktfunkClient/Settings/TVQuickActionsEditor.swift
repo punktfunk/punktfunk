@@ -15,6 +15,14 @@ struct TVQuickActionsEditor: View {
     @Binding var blob: String
     /// The edited preset owns its own dial.
     let overridden: Bool
+    /// The Shortcuts page of the same layer, a push away. A new shortcut skips every id its
+    /// bindings name.
+    let shortcuts: ShortcutsEditor
+    /// The pad chord that opens the dial, from the live shortcuts; nil when none does.
+    let padOpener: String?
+    /// The edited layer holds the Shortcuts page's blob itself, so removing a shortcut drops
+    /// its bindings there. False where the layer inherits them: another layer is never written.
+    var ownsBindings = false
     /// Back to the TV dial: drops the override in preset scope, clears the global otherwise.
     let reset: () -> Void
     @State private var picking: Int?
@@ -47,12 +55,18 @@ struct TVQuickActionsEditor: View {
                 }
                 shortcutsSection
                 Section {
-                    Button("Reset to Default", role: .destructive, action: reset)
+                    NavigationLink(String(localized: L10n.playerShortcuts)) { shortcuts }
                 } footer: {
-                    Text(overridden
-                        ? "This preset has its own quick actions; the default dial no longer reaches it."
-                        : "A short press of Back opens the dial mid-stream, and so does Select + A on a "
-                            + "controller.")
+                    Text(L10n.playerShortcutsHint)
+                }
+                Section {
+                    Button(L10n.ringReset, role: .destructive, action: reset)
+                } footer: {
+                    if overridden {
+                        Text(L10n.ringEditorPresetOwns)
+                    } else if let padOpener {
+                        Text(L10n.appleTvRingFooter(remote: "Back", pad: padOpener))
+                    }
                 }
             }
         }
@@ -82,7 +96,7 @@ struct TVQuickActionsEditor: View {
                 disc(k)
                     .position(position(k))
             }
-            Text(focused.map(label) ?? "Quick Actions")
+            Text(focused.map(label) ?? String(localized: L10n.ringEditorTitle))
                 .font(.geist(22, .medium, relativeTo: .caption))
                 .multilineTextAlignment(.center)
                 .frame(width: 220)
@@ -99,7 +113,7 @@ struct TVQuickActionsEditor: View {
     }
 
     private func disc(_ k: Int) -> some View {
-        let s = cfg.ring[k].map { spec($0, cfg, previewRingActions) }
+        let s = cfg.ring[k].map { spec($0, cfg, previewRingActions(cfg)) }
         return Button {
             if let from = moving {
                 swapSlots(from, k)
@@ -112,12 +126,12 @@ struct TVQuickActionsEditor: View {
         .buttonStyle(DiscButtonStyle())
         .focused($focused, equals: k)
         .contextMenu {
-            Button("Move", systemImage: "arrow.left.arrow.right") { moving = k }
+            Button(L10n.appleTvRingMove, systemImage: "arrow.left.arrow.right") { moving = k }
             if s != nil {
-                Button("Clear", systemImage: "xmark.circle", role: .destructive) { set(k, "") }
+                Button(L10n.appleTvRingClear, systemImage: "xmark.circle", role: .destructive) { set(k, "") }
             }
         }
-        .accessibilityLabel(s?.label ?? "Empty slot")
+        .accessibilityLabel(s?.label ?? String(localized: L10n.ringSlotEmpty))
     }
 
     private var shortcutsSection: some View {
@@ -134,59 +148,63 @@ struct TVQuickActionsEditor: View {
                 }
             }
             Button {
-                shortcut = ShortcutDraft(id: cfg.nextShortcutID, label: "", keys: [], isNew: true)
+                shortcut = ShortcutDraft(id: cfg.nextShortcutID(bindings: Shortcuts.parse(shortcuts.blob)),
+                                         label: "", keys: [], isNew: true)
             } label: {
-                Label("Add Shortcut", systemImage: "plus")
+                Label(L10n.ringShortcutAdd, systemImage: "plus")
             }
         } header: {
-            Text("Shortcuts")
+            Text(L10n.ringEditorShortcuts)
         } footer: {
-            Text("A new shortcut takes the first empty slot.")
+            Text(L10n.ringEditorShortcutsHint)
         }
     }
 
     private func label(_ k: Int) -> String {
-        cfg.ring[k].map { spec($0, cfg, previewRingActions).label } ?? "Empty slot"
+        cfg.ring[k].map { spec($0, cfg, previewRingActions(cfg)).label } ?? String(localized: L10n.ringSlotEmpty)
     }
 
     private var detailTitle: String {
-        if let moving { return "Moving \(label(moving))" }
-        return focused.map(label) ?? "Quick Actions"
+        if let moving { return label(moving) }
+        return focused.map(label) ?? String(localized: L10n.ringEditorTitle)
     }
 
     private var detailNote: String {
-        if moving != nil { return "Select another button to swap the two. Back puts it down." }
+        if moving != nil { return L10n.appleTvRingMovingHint(back: "Back") }
         guard let k = focused, let slot = cfg.ring[k] else {
-            return "Select a button to choose its action; hold it to move or clear it."
+            return String(localized: L10n.appleTvRingPickHint)
         }
-        let s = spec(slot, cfg, previewRingActions)
-        return s.enabled ? "Select to change it; hold to move or clear it." : s.reason
+        let s = spec(slot, cfg, previewRingActions(cfg))
+        return s.enabled ? String(localized: L10n.appleTvRingSlotHint) : s.reason
+    }
+
+    /// Writes the blob as `change` leaves the config.
+    private func edit(_ change: (inout OverlayConfig) -> Void) {
+        var c = cfg
+        change(&c)
+        blob = c.toJSON()
     }
 
     private func set(_ k: Int, _ id: String) {
-        var c = cfg
-        c.ring[k] = SlotId.parse(id)
-        blob = c.toJSON()
+        edit { $0.assign(k, id: id) }
     }
 
+    /// Puts the lifted disc down on slot `b`; on its own slot it changes nothing.
     private func swapSlots(_ a: Int, _ b: Int) {
         moving = nil
         guard a != b else { return }
-        var c = cfg
-        c.ring.swapAt(a, b)
-        blob = c.toJSON()
+        edit { $0.swap(a, b) }
     }
 
     private func save(_ d: ShortcutDraft) {
-        var c = cfg
-        c.saveShortcut(OverlayShortcut(id: d.id, label: d.label, keys: d.keys))
-        blob = c.toJSON()
+        edit { $0.saveShortcut(OverlayShortcut(id: d.id, label: d.label, keys: d.keys)) }
     }
 
     private func remove(_ id: String) {
-        var c = cfg
-        c.removeShortcut(id)
-        blob = c.toJSON()
+        var sent = Shortcuts.parse(shortcuts.blob)
+        let before = sent
+        edit { $0.removeShortcut(id, bindings: &sent) }
+        if ownsBindings, sent != before { shortcuts.blob = sent.toJSON() }
     }
 }
 
@@ -228,17 +246,17 @@ private struct DiscButtonStyle: ButtonStyle {
 
 /// The catalogue as the TV's pushed list: grouped, each entry's note under it, the current one
 /// ticked. Picking one sets the slot and comes back.
-private struct TVSlotPicker: View {
+struct TVSlotPicker: View {
     let groups: [SlotGroup]
     let current: String
     let choose: (String) -> Void
 
     var body: some View {
         List {
-            TVScreenTitle("Slot Action")
+            TVScreenTitle(String(localized: L10n.ringPickerTitle))
                 .listRowBackground(Color.clear)
             ForEach(groups) { group in
-                Section(group.id) {
+                Section(group.title) {
                     ForEach(group.options) { option in
                         Button {
                             choose(option.id)
@@ -272,25 +290,25 @@ private struct TVShortcutEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var editingName = false
 
-    private var mods: [String] { draft.keys.filter { modifierKeys.contains($0) } }
-    private var key: String? { draft.keys.first { !modifierKeys.contains($0) } }
+    private var chord: Chord { Chord.parse(keys: draft.keys) }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                TVScreenTitle(draft.isNew ? "New Shortcut" : "Shortcut")
+                TVScreenTitle(String(localized: draft.isNew ? L10n.ringShortcutNewTitle : L10n.ringShortcutTitle))
                 TVFieldRow(
-                    label: "Name", value: draft.label,
-                    placeholder: key == nil ? "Optional" : chordChip(draft.keys)
+                    label: String(localized: L10n.ringShortcutName), value: draft.label,
+                    placeholder: draft.keys.isEmpty ? String(localized: L10n.ringShortcutNamePlaceholder)
+                        : chordChip(draft.keys)
                 ) { editingName = true }
-                heading("Hold")
+                heading(String(localized: L10n.ringShortcutModifiers))
                 HStack(spacing: 24) {
-                    ForEach(modifierKeys, id: \.self) { m in
-                        chip(keyLegend(m), on: mods.contains(m)) { toggle(m) }
+                    ForEach(Chord.modifiers, id: \.self) { m in
+                        chip(keyLegend(m), on: chord.mods.contains(m)) { toggle(m) }
                     }
                 }
                 .focusSection()
-                ForEach(keyGroups, id: \.title) { group in
+                ForEach(Chord.keyGroups, id: \.id) { group in
                     heading(group.title)
                     let wide = group.keys.contains { keyLegend($0).count > 2 }
                     LazyVGrid(
@@ -298,32 +316,33 @@ private struct TVShortcutEditor: View {
                         alignment: .leading, spacing: 20
                     ) {
                         ForEach(group.keys, id: \.self) { k in
-                            chip(keyLegend(k), on: key == k) { pick(k) }
+                            chip(keyLegend(k), on: chord.key == k) { pick(k) }
                         }
                     }
                     .focusSection()
                 }
                 HStack(spacing: 32) {
-                    Button(draft.isNew ? "Add" : "Save") {
+                    Button(draft.isNew ? L10n.commonAdd : L10n.commonSave) {
                         save(draft)
                         dismiss()
                     }
-                    .disabled(key == nil)
+                    // A modifier alone is a combination: Win opens the host's Start menu.
+                    .disabled(draft.keys.isEmpty)
                     if !draft.isNew {
-                        Button("Remove Shortcut", role: .destructive) {
+                        Button(L10n.ringShortcutRemove, role: .destructive) {
                             delete()
                             dismiss()
                         }
                     }
-                    Button("Cancel", role: .cancel) { dismiss() }
+                    Button(L10n.commonCancel, role: .cancel) { dismiss() }
                 }
                 .padding(.top, 12)
             }
             .padding(60)
         }
         .fullScreenCover(isPresented: $editingName) {
-            TVTextEntry(title: "Name", text: draft.label) { typed in
-                draft.label = typed
+            TVTextEntry(title: String(localized: L10n.ringShortcutName), text: draft.label) { typed in
+                draft.label = typed.trimmingCharacters(in: .whitespaces)
                 editingName = false
             }
         }
@@ -351,19 +370,16 @@ private struct TVShortcutEditor: View {
         }
     }
 
-    /// Modifiers first in keyboard order, then the key — the order the chord is sent.
-    private func rebuild(mods: [String], key: String?) {
-        draft.keys = modifierKeys.filter { mods.contains($0) } + (key.map { [$0] } ?? [])
-    }
-
     private func toggle(_ m: String) {
-        var next = mods
-        if let i = next.firstIndex(of: m) { next.remove(at: i) } else { next.append(m) }
-        rebuild(mods: next, key: key)
+        var c = chord
+        c.toggle(m)
+        draft.keys = c.keys
     }
 
     private func pick(_ k: String) {
-        rebuild(mods: mods, key: k)
+        var c = chord
+        c.key = k
+        draft.keys = c.keys
     }
 }
 #endif

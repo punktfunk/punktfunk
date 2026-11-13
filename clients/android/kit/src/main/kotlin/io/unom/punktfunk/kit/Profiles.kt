@@ -6,7 +6,8 @@ import org.json.JSONObject
 /**
  * Profiles on a box: what `GET /api/v1/profiles/enumerate` lists, when a client shows the picker,
  * and which id its hello carries. A port of `pf-client-core`'s `profiles.rs`;
- * `clients/shared/profile-picker-vectors.json` pins [pickerDecision] in both.
+ * `clients/shared/profile-picker-vectors.json` pins [pickerDecision] in both, and
+ * `profile-unlock-vectors.json` pins [UnlockNeed.of].
  */
 
 /**
@@ -55,18 +56,24 @@ enum class SeatState {
 }
 
 /**
- * What a profile on a person's own account needs from this device before it plays: nothing, the
- * account password, or a proof from this device's unlock key. An old host sends none: [NONE].
+ * What a profile on a person's own account or a locked one needs from this device before it
+ * plays: nothing, the account password, the profile's PIN, or a proof from this device's unlock
+ * key ([KEY] else the password, [PIN_KEY] else the PIN). An old host sends none: [NONE]. A word a
+ * newer host adds reads as [PASSWORD], the prompt every client has.
  */
 enum class UnlockNeed {
-    NONE, PASSWORD, KEY;
+    NONE, PASSWORD, KEY, PIN, PIN_KEY;
+
+    /** The prompt asks for the profile's PIN, not an account password. */
+    val pin: Boolean get() = this == PIN || this == PIN_KEY
 
     companion object {
         fun of(word: String?): UnlockNeed = when (word) {
-            "password" -> PASSWORD
+            null, "none" -> NONE
             "key" -> KEY
-            // A word a newer host adds dials bare; the host refuses what it can't admit.
-            else -> NONE
+            "pin" -> PIN
+            "pin_key" -> PIN_KEY
+            else -> PASSWORD
         }
     }
 }
@@ -74,13 +81,21 @@ enum class UnlockNeed {
 /** A profile's own seat. Absent for one that plays on the box's own session. */
 data class Seat(
     val state: SeatState = SeatState.READY,
-    /** The progress line while starting, or why while unavailable. */
+    /** The progress line while starting, or why while unavailable: the host's English. */
     val detail: String? = null,
+    /** The host message of [detail] (`seatline_*`), absent for the supervisor's own text. */
+    val detailId: String? = null,
+    /** The values of that message's placeholders, by name. */
+    val detailParams: Map<String, String> = emptyMap(),
     /** The device playing on it while occupied. */
     val occupant: String? = null,
     /** Its Steam has no account yet. `null` where the host can't tell. */
     val steamSignIn: Boolean? = null,
-)
+) {
+    /** [detail] in the app's language when the host names its message, else as the host said it. */
+    val line: Say?
+        get() = detail?.let { if (detailId != null) Say.Host(detailId, detailParams, it) else Say.Text(it) }
+}
 
 /** One row of `enumerate`. Every field defaults, so a host that adds one never fails the list. */
 data class ListedProfile(
@@ -96,18 +111,20 @@ data class ListedProfile(
     val avatar: String? = null,
     /** What this device must send to play as it, as the host judged for this device. */
     val unlock: UnlockNeed = UnlockNeed.NONE,
+    /** This device may hide titles for this profile now ([io.unom.punktfunk.kit.library.Hide]). An old host omits it. */
+    val person: Boolean = false,
 ) {
     fun pick() = ProfilePick(id, displayName, avatar = avatar)
 
     /** The one line under a picker card, if any. */
-    fun note(): String? {
+    fun note(): Say? {
         val seat = seat ?: return null
         return when {
             seat.state == SeatState.OCCUPIED ->
-                seat.occupant?.let { "In use by $it" } ?: "In use"
-            seat.state == SeatState.STARTING -> seat.detail ?: "Getting ready…"
-            seat.state == SeatState.UNAVAILABLE -> seat.detail ?: "Unavailable"
-            seat.steamSignIn == true -> "Steam sign-in once"
+                seat.occupant?.let { say(R.string.profile_in_use_by, it) } ?: say(R.string.profile_in_use)
+            seat.state == SeatState.STARTING -> seat.line ?: say(R.string.profile_getting_ready)
+            seat.state == SeatState.UNAVAILABLE -> seat.line ?: say(R.string.profile_unavailable)
+            seat.steamSignIn == true -> say(R.string.profile_steam_sign_in)
             else -> null
         }
     }
@@ -125,12 +142,15 @@ data class ListedProfile(
                 Seat(
                     state = SeatState.of(str(it, "state")),
                     detail = str(it, "detail"),
+                    detailId = str(it, "detail_id"),
+                    detailParams = HostText.paramsOf(it.optJSONObject("detail_params")),
                     occupant = str(it, "occupant"),
                     steamSignIn = if (it.isNull("steam_sign_in")) null else it.optBoolean("steam_sign_in"),
                 )
             },
             legacySeat = j.optBoolean("legacy_seat", false),
             unlock = UnlockNeed.of(str(j, "unlock")),
+            person = j.optBoolean("person", false),
         )
 
         /** The body of `enumerate`, or `null` when it isn't a JSON array. */
@@ -148,7 +168,10 @@ fun pictureUrl(base: String, path: String?): String? = path?.takeIf { it.startsW
 
 /** Initials for a profile without a picture: the first letters of its first two words. */
 fun initials(name: String): String = name.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
-    .take(2).joinToString("") { it.substring(0, it.offsetByCodePoints(0, 1)).uppercase() }
+    .take(2).joinToString("") { firstLetter(it) }
+
+/** The first character of a non-empty [word], upper-cased. A character past U+FFFF stays whole. */
+fun firstLetter(word: String): String = word.substring(0, word.offsetByCodePoints(0, 1)).uppercase()
 
 /** The profile [wanted] names in [listed]: its id, else its name in any case. */
 fun findProfile(listed: List<ListedProfile>, wanted: String): ListedProfile? =
@@ -209,10 +232,10 @@ sealed interface SeatGate {
     data object Wake : SeatGate
 
     /** The seat is coming up: poll `enumerate`, show [detail], offer Cancel. */
-    data class Wait(val detail: String?) : SeatGate
+    data class Wait(val detail: Say?) : SeatGate
 
     /** The seat can't play now; [line] says why. Don't dial. */
-    data class Refuse(val line: String) : SeatGate
+    data class Refuse(val line: Say) : SeatGate
 }
 
 /**
@@ -224,11 +247,10 @@ fun seatGate(p: ListedProfile): SeatGate {
     return when (seat.state) {
         SeatState.READY, SeatState.OCCUPIED, SeatState.OTHER -> SeatGate.Dial
         SeatState.STOPPED -> if (p.unlock == UnlockNeed.NONE) SeatGate.Wake else SeatGate.Dial
-        SeatState.STARTING -> SeatGate.Wait(seat.detail)
-        SeatState.UNAVAILABLE ->
-            SeatGate.Refuse(seat.detail ?: "That profile can't play on this host right now.")
+        SeatState.STARTING -> SeatGate.Wait(seat.line)
+        SeatState.UNAVAILABLE -> SeatGate.Refuse(seat.line ?: say(R.string.reject_seat_unavailable))
     }
 }
 
 /** The line while a seat comes up: `Getting Kid's desk ready…`. */
-fun wakingLine(displayName: String): String = "Getting $displayName's desk ready…"
+fun wakingLine(displayName: String): Say = say(R.string.profile_waking, displayName)

@@ -7,9 +7,10 @@ agreements and installation notes stay under normal code review.
 
 | File | Purpose |
 | --- | --- |
-| `unom.PunktfunkHost.yaml` | Version manifest — ties the other two together. |
+| `unom.PunktfunkHost.yaml` | Version manifest — ties the others together. |
 | `unom.PunktfunkHost.installer.yaml` | Installer type, scope, silent switches, `ProductCode`, URL + hash. |
 | `unom.PunktfunkHost.locale.en-US.yaml` | User-facing metadata, `Agreements`, `InstallationNotes`. |
+| `unom.PunktfunkHost.locale.<locale>.yaml` | One language's descriptions and notes. No `Agreements` or `Moniker`: winget takes those from en-US. |
 
 ## Why these choices
 
@@ -79,7 +80,7 @@ scripts/ci/winget-manifest.ps1 -Version 0.19.2 `
   -InstallerPath C:\t\out\punktfunk-host-setup-0.19.2.exe -OutDir C:\t\out\winget
 ```
 
-The generated trio is attached to the same release. Canary builds are excluded: winget pins one
+The generated manifests are attached to the same release. Canary builds are excluded: winget pins one
 immutable artifact per version, so the rolling `canary/` alias has nothing it could point at.
 
 ## Validating a change

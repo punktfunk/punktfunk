@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
 	GRANT_ALL,
 	GRANT_CLIPBOARD,
+	GRANT_DISPLAY,
 	GRANT_GAMEPAD,
 	GRANT_KEYBOARD,
 	GRANT_LAUNCH,
@@ -16,7 +17,8 @@ import {
 	normalizeLegacyFull,
 } from "./access";
 
-// Written by punktfunk-core's grant_vectors_are_checked_in; Kotlin replays the same file.
+// Written by punktfunk-core's grant_vectors_are_checked_in. The console replays the stored
+// columns: the management API's masks are in the current vocabulary.
 const vectors = JSON.parse(
 	readFileSync(
 		join(
@@ -28,7 +30,7 @@ const vectors = JSON.parse(
 ) as {
 	bits: Record<string, number>;
 	all: number;
-	masks: { mask: number; normalized: number; level: string }[];
+	masks: { mask: number; stored: number; stored_level: string }[];
 };
 
 test("grant bits match core", () => {
@@ -41,14 +43,15 @@ test("grant bits match core", () => {
 		LAUNCH: GRANT_LAUNCH,
 		POWER: GRANT_POWER,
 		MANAGE_GAMES: GRANT_MANAGE_GAMES,
+		DISPLAY: GRANT_DISPLAY,
 	}).toEqual(vectors.bits);
 	expect(GRANT_ALL).toBe(vectors.all);
 });
 
 for (const c of vectors.masks) {
-	test(`mask ${c.mask} reads as ${c.level}`, () => {
-		expect(normalizeLegacyFull(c.mask)).toBe(c.normalized);
-		expect(levelOfMask(c.mask)).toBe(c.level);
+	test(`mask ${c.mask} reads as ${c.stored_level}`, () => {
+		expect(normalizeLegacyFull(c.mask)).toBe(c.stored);
+		expect(levelOfMask(c.mask)).toBe(c.stored_level);
 	});
 }
 

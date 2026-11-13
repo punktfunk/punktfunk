@@ -9,10 +9,13 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
+import androidx.annotation.StringRes
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
+import io.unom.punktfunk.R as AppR
 import io.unom.punktfunk.console.fetchArt
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.link.DeepLinkResult
 import io.unom.punktfunk.kit.link.DeepLinks
 import io.unom.punktfunk.kit.link.LinkError
@@ -37,16 +40,17 @@ internal fun putLinkOnClipboard(context: Context, url: String): Boolean {
 }
 
 /**
- * What to tell the user about a copy, or null for "say nothing".
+ * The message id to tell the user about a copy, or null for "say nothing".
  *
  * Android 13 draws its own clipboard confirmation, and stacking a second one on top of it is the
  * platform's own documented anti-pattern. Below it nothing visible happens at all unless we say
  * so — a silent menu item reads as a broken one.
  */
-internal fun linkCopyMessage(copied: Boolean): String? = when {
+@StringRes
+internal fun linkCopyMessage(copied: Boolean): Int? = when {
     copied && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> null
-    copied -> "Link copied."
-    else -> "Couldn't copy the link to the clipboard."
+    copied -> R.string.link_copied
+    else -> R.string.link_copy_failed
 }
 
 /** False on Android TV's launchers and any home screen that takes no pinned shortcuts. */
@@ -66,7 +70,7 @@ internal fun pinLinkShortcut(
     art: Bitmap?,
 ): Boolean {
     val icon = art?.let { IconCompat.createWithAdaptiveBitmap(squareIcon(it)) }
-        ?: IconCompat.createWithResource(context, R.mipmap.ic_launcher)
+        ?: IconCompat.createWithResource(context, AppR.mipmap.ic_launcher)
     val info = ShortcutInfoCompat.Builder(context, id)
         .setShortLabel(label)
         .setIcon(icon)
@@ -96,7 +100,11 @@ internal fun pinTitleShortcut(
         }.getOrNull()
     }
     val art = bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
-    return if (pinLinkShortcut(context, id, title, url, art)) null else "Your home screen doesn't take shortcuts."
+    return if (pinLinkShortcut(context, id, title, url, art)) {
+        null
+    } else {
+        context.getString(R.string.android_shortcut_unsupported)
+    }
 }
 
 /** The shortcut id for one link target: the same title pinned twice is one shortcut. */

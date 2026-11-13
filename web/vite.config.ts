@@ -18,10 +18,10 @@ const serverDir = fileURLToPath(new URL("./server", import.meta.url));
 // route-rule proxies it (below). Override the upstream with PUNKTFUNK_MGMT_URL.
 const MGMT_URL = process.env.PUNKTFUNK_MGMT_URL ?? "https://127.0.0.1:47990";
 
-// Dev-only `/plugin-ui/<id>/**` proxy: the route (server/routes/plugin-ui/[...].ts) needs Bun's
-// `tls` fetch option. Same secret, cookie strip and 127.0.0.1-only dial, but it skips `callPlugin`:
-// no host relay for a port-0 (viaHost) plugin and no 401 retry. Needs PUNKTFUNK_MGMT_TOKEN in the
-// dev environment.
+// Dev-only `/plugin-ui/<id>-<exp>-<mac>/**` proxy: the route (server/routes/plugin-ui/[...].ts)
+// needs Bun's `tls` fetch option. Same page-path check, sandbox, CORS, secret, cookie strip and
+// 127.0.0.1-only dial, but it skips `callPlugin`: no host relay for a port-0 (viaHost) plugin and
+// no 401 retry. Needs PUNKTFUNK_MGMT_TOKEN in the dev environment.
 function pluginUiDevProxy(): Plugin {
 	const fetchCred = (
 		id: string,
@@ -61,16 +61,45 @@ function pluginUiDevProxy(): Plugin {
 		name: "punktfunk-plugin-ui-dev-proxy",
 		configureServer(server) {
 			server.middlewares.use("/plugin-ui", async (req, res) => {
+				// Through Vite rather than a config import: server code imports without extensions.
+				const {
+					PLUGIN_PAGE_CORS,
+					PLUGIN_PAGE_SANDBOX,
+					pluginPage,
+					pluginPagePreflight,
+				} = (await server.ssrLoadModule(
+					"/server/util/pluginPage.ts",
+				)) as typeof import("./server/util/pluginPage");
 				const raw = req.url ?? "/"; // connect strips the /plugin-ui mount prefix
-				const m = raw.match(/^\/([a-z][a-z0-9-]*)(\/[^?]*)?(\?.*)?$/);
-				const id = m?.[1];
-				if (!id) {
-					res.statusCode = 404;
-					res.end("bad plugin-ui path");
+				const q = raw.indexOf("?");
+				const page = pluginPage(`/plugin-ui${q < 0 ? raw : raw.slice(0, q)}`);
+				if (!page) {
+					res.statusCode = 401;
+					res.end("unauthorized");
 					return;
 				}
-				const rest = m?.[2] ?? "/";
-				const search = m?.[3] ?? "";
+				const { id, prefix, rest } = page;
+				const search = q < 0 ? "" : raw.slice(q);
+				// Set after the plugin's own headers too, so a plugin can't replace them.
+				const ours = () => {
+					res.setHeader("content-security-policy", PLUGIN_PAGE_SANDBOX);
+					for (const [k, v] of Object.entries(PLUGIN_PAGE_CORS))
+						res.setHeader(k, v);
+				};
+				if (
+					req.method === "OPTIONS" &&
+					req.headers["access-control-request-method"]
+				) {
+					ours();
+					const asked = req.headers["access-control-request-headers"];
+					for (const [k, v] of Object.entries(
+						pluginPagePreflight(typeof asked === "string" ? asked : undefined),
+					))
+						res.setHeader(k, v);
+					res.statusCode = 204;
+					res.end();
+					return;
+				}
 				const token = process.env.PUNKTFUNK_MGMT_TOKEN;
 				if (!token) {
 					res.statusCode = 503;
@@ -87,7 +116,7 @@ function pluginUiDevProxy(): Plugin {
 				delete headers.host;
 				delete headers.cookie;
 				delete headers.authorization;
-				headers["x-forwarded-prefix"] = `/plugin-ui/${id}`;
+				headers["x-forwarded-prefix"] = prefix;
 				const proxyReq = nodeHttp.request(
 					{
 						host: "127.0.0.1",
@@ -101,6 +130,7 @@ function pluginUiDevProxy(): Plugin {
 						for (const [k, v] of Object.entries(pr.headers)) {
 							if (v !== undefined) res.setHeader(k, v);
 						}
+						ours();
 						pr.pipe(res); // stream (SSE included)
 					},
 				);
@@ -110,6 +140,9 @@ function pluginUiDevProxy(): Plugin {
 				});
 				req.pipe(proxyReq);
 			});
+			// First in the stack: Vite's own CORS would answer a page's preflight without `null`.
+			const mine = server.middlewares.stack.pop();
+			if (mine) server.middlewares.stack.unshift(mine);
 		},
 	};
 }
@@ -160,7 +193,9 @@ export default defineConfig({
 				configure(proxy) {
 					const token = process.env.PUNKTFUNK_MGMT_TOKEN;
 					if (!token) return;
-					proxy.on("proxyReq", (proxyReq) => {
+					proxy.on("proxyReq", (proxyReq, req) => {
+						// A person's console never carries the admin bearer, in dev either.
+						if (/(?:^|;\s*)pf_person=/.test(req.headers.cookie ?? "")) return;
 						proxyReq.setHeader("authorization", `Bearer ${token}`);
 					});
 				},

@@ -93,13 +93,23 @@ impl Arrivals {
     /// consumer takes that one alone, and the producer needs the buffers of the rest to
     /// send anything newer. Frames still rendering stay; one of them is the next to finish.
     pub(super) fn push(&mut self, frame: CapturedFrame, fence: Option<RenderFence>, now: Instant) {
+        self.push_shared(frame, fence.map(Arc::new), now);
+    }
+
+    /// [`Self::push`] under a fence other queues wait on too.
+    pub(super) fn push_shared(
+        &mut self,
+        frame: CapturedFrame,
+        fence: Option<Arc<RenderFence>>,
+        now: Instant,
+    ) {
         self.supersede(now);
         while self.q.len() >= MAX_PENDING {
             self.q.pop_front();
         }
         self.q.push_back(Pending {
             frame,
-            fence: fence.map(Arc::new),
+            fence,
             arrived: now,
         });
     }
@@ -150,39 +160,58 @@ impl Arrivals {
     }
 }
 
-/// Block until [`Arrivals::take_ready`] has a frame, `deadline` passes, a poke lands
-/// (`poked`, taken here), or the loop thread is gone: `false` for the last. Never consumes.
+/// How [`wait_ready`] ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::linux) enum Woke {
+    /// A frame is ready, or `deadline` passed.
+    Ready,
+    /// A poke landed, and the wait took it.
+    Poked,
+    /// The loop thread is gone.
+    Gone,
+}
+
+/// Block until [`Arrivals::take_ready`] has a frame and `not_before` has passed, `deadline`
+/// passes, a poke lands (`poked`, taken here), or the loop thread is gone. Before `not_before`
+/// only a poke ends it: an arrival edge re-arms the wait. Never consumes a frame.
 pub(in crate::linux) fn wait_ready(
     queue: &FrameQueue,
     wake: &Receiver<()>,
     poked: &AtomicBool,
+    not_before: Instant,
     deadline: Instant,
-) -> bool {
+) -> Woke {
     use std::sync::mpsc::RecvTimeoutError;
     loop {
         if poked.swap(false, Ordering::Relaxed) {
-            return true;
+            return Woke::Poked;
         }
         let now = Instant::now();
+        if now < not_before {
+            if let Err(RecvTimeoutError::Disconnected) = wake.recv_timeout(not_before - now) {
+                return Woke::Gone;
+            }
+            continue;
+        }
         let Ok(wait) = queue.lock().map(|q| q.wait(now)) else {
-            return true;
+            return Woke::Ready;
         };
         match wait {
-            Wait::Ready => return true,
+            Wait::Ready => return Woke::Ready,
             Wait::Arrival => {
                 let Some(left) = deadline.checked_duration_since(now) else {
-                    return true;
+                    return Woke::Ready;
                 };
                 match wake.recv_timeout(left) {
                     Ok(()) => {}
-                    Err(RecvTimeoutError::Timeout) => return true,
-                    Err(RecvTimeoutError::Disconnected) => return false,
+                    Err(RecvTimeoutError::Timeout) => return Woke::Ready,
+                    Err(RecvTimeoutError::Disconnected) => return Woke::Gone,
                 }
             }
             Wait::Render(fence, guard) => {
                 let _ = fence.wait(deadline.min(guard).saturating_duration_since(now));
                 if Instant::now() >= deadline {
-                    return true;
+                    return Woke::Ready;
                 }
             }
         }
@@ -340,12 +369,8 @@ mod tests {
                 signal(&w);
             });
             let poked = AtomicBool::new(false);
-            assert!(super::wait_ready(
-                &queue,
-                &rx,
-                &poked,
-                t0 + Duration::from_secs(2)
-            ));
+            let woke = super::wait_ready(&queue, &rx, &poked, t0, t0 + Duration::from_secs(2));
+            assert_eq!(woke, super::Woke::Ready);
         });
         assert!(t0.elapsed() < Duration::from_secs(1), "woke on the fence");
         assert!(queue.lock().unwrap().take_ready(Instant::now()).is_some());
@@ -357,36 +382,51 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
         drop(tx);
         let poked = AtomicBool::new(false);
-        assert!(!super::wait_ready(
-            &queue,
-            &rx,
-            &poked,
-            Instant::now() + Duration::from_secs(2)
-        ));
+        let now = Instant::now();
+        let woke = super::wait_ready(&queue, &rx, &poked, now, now + Duration::from_secs(2));
+        assert_eq!(woke, super::Woke::Gone);
     }
 
     /// A poke ends the wait with no frame and is consumed, so the loop ticks on what it
-    /// has once and then waits as before.
+    /// has once and then waits as before. It ends the gate before `not_before` too.
     #[test]
     fn a_poke_ends_the_wait_before_any_frame() {
+        for gate in [Duration::ZERO, Duration::from_secs(2)] {
+            let queue = super::FrameQueue::default();
+            let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
+            let poked = Arc::new(AtomicBool::new(false));
+            let t0 = Instant::now();
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    std::thread::sleep(Duration::from_millis(20));
+                    poked.store(true, Ordering::Relaxed);
+                    let _ = tx.try_send(());
+                });
+                let deadline = t0 + Duration::from_secs(3);
+                let woke = super::wait_ready(&queue, &rx, &poked, t0 + gate, deadline);
+                assert_eq!(woke, super::Woke::Poked, "gate {gate:?}");
+            });
+            assert!(t0.elapsed() < Duration::from_secs(1), "woke on the poke");
+            assert!(!poked.load(Ordering::Relaxed), "the poke is consumed");
+        }
+    }
+
+    /// A frame ready before `not_before` waits for it: an arrival edge does not end the gate.
+    #[test]
+    fn a_ready_frame_waits_out_the_gate() {
         let queue = super::FrameQueue::default();
         let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
-        let poked = Arc::new(AtomicBool::new(false));
+        let poked = AtomicBool::new(false);
         let t0 = Instant::now();
-        std::thread::scope(|s| {
-            s.spawn(|| {
-                std::thread::sleep(Duration::from_millis(20));
-                poked.store(true, Ordering::Relaxed);
-                let _ = tx.try_send(());
-            });
-            assert!(super::wait_ready(
-                &queue,
-                &rx,
-                &poked,
-                t0 + Duration::from_secs(2)
-            ));
-        });
-        assert!(t0.elapsed() < Duration::from_secs(1), "woke on the poke");
-        assert!(!poked.load(Ordering::Relaxed), "the poke is consumed");
+        queue.lock().unwrap().push(frame(1), None, t0);
+        tx.try_send(()).unwrap();
+        let gate = t0 + Duration::from_millis(60);
+        let woke = super::wait_ready(&queue, &rx, &poked, gate, t0 + Duration::from_secs(2));
+        assert_eq!(woke, super::Woke::Ready);
+        assert!(Instant::now() >= gate, "returned inside the gate");
+        assert!(
+            t0.elapsed() < Duration::from_secs(1),
+            "the frame ended the wait"
+        );
     }
 }

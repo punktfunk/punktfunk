@@ -478,8 +478,9 @@ fn packed_frame_geometry(
     Some((row, stride, needed, tight))
 }
 
-/// The CPU lane: wait the render out, de-pad one packed plane out of the mapped buffer, blit
-/// the pointer the path bakes in, and publish.
+/// The CPU lane: wait the render out, de-pad one packed plane out of the mapped buffer (a
+/// dmabuf's CPU read bracketed with `DMA_BUF_IOCTL_SYNC`), blit the pointer the path bakes in,
+/// and publish.
 fn copy_depad(path: &mut impl Path, buf: Buffer) {
     let Buffer {
         width: w,
@@ -526,6 +527,10 @@ fn copy_depad(path: &mut impl Path, buf: Buffer) {
     // `data.maxsize` past the mapped bytes — reading to maxsize segfaults. Also covers
     // MAP_BUFFERS skipping Vulkan dmabufs. MemPtr (no fd) is same-process: trust `mapped`.
     let fd = fd.filter(|fd| fd.as_raw_fd() > 0);
+    // After the fence wait: a cached, non-coherent exporter drops stale CPU lines here.
+    let cpu_read = fd
+        .filter(|_| memory == Memory::DmaBuf)
+        .map(pf_dmabuf::CpuRead::begin);
     let fd_len = fd
         .and_then(|fd| pf_dmabuf::byte_len(fd).ok())
         .and_then(|n| usize::try_from(n).ok())
@@ -580,6 +585,7 @@ fn copy_depad(path: &mut impl Path, buf: Buffer) {
     for y in 0..h {
         tight.extend_from_slice(&region[y * stride..y * stride + row]);
     }
+    drop(cpu_read);
     // A baked copy would double a pointer the host forwards or blends. The producer's
     // hardware cursor plane stays out of the captured buffer.
     if let Some(cursor) = path.baked_cursor() {

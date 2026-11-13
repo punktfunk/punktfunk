@@ -96,6 +96,13 @@ data class ConnectRequest(
     /** This display shows full-range video as studio ([VideoDecoders.showsFullRangeAsStudio]):
      *  asks the host for studio-range SDR. An older host ignores it. */
     val studioRange: Boolean = false,
+    /** The size the picture is shown at when the mode is larger (render scale above 1x): a host
+     *  that reads it encodes this instead. `0`×`0` names none. An older host ignores it. */
+    val viewWidth: Int = 0,
+    val viewHeight: Int = 0,
+    /** A preset's screen wish, as `host_screen` spells it (`second`, `monitor:HDMI-A-1`); empty
+     *  asks for none. Rides the Hello; the host may not grant it. */
+    val hostScreen: String = "",
 ) {
     fun toJson(): String = JSONObject()
         .put("host", host)
@@ -132,5 +139,8 @@ data class ConnectRequest(
         .put("preset_name", presetName ?: JSONObject.NULL)
         .put("profile", profile ?: JSONObject.NULL)
         .put("studio_range", studioRange)
+        .put("view_width", viewWidth)
+        .put("view_height", viewHeight)
+        .put("host_screen", hostScreen)
         .toString()
 }

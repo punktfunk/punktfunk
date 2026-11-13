@@ -32,9 +32,21 @@ pub struct PunktfunkScreen {
     pub y: i32,
 }
 
+/// The size an asked screen is shown at when smaller than its mode: the host scales that screen's
+/// picture to it before encoding. `0` on either axis names none. Read beside the screens, the one
+/// at `i` for `screens[i]`; screen 0's view is the connect's or the mode ask's.
+#[cfg(feature = "quic")]
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct PunktfunkScreenView {
+    pub width: u32,
+    pub height: u32,
+}
+
 #[cfg(feature = "quic")]
 const _: () = {
     assert!(std::mem::size_of::<PunktfunkScreen>() == 24);
+    assert!(std::mem::size_of::<PunktfunkScreenView>() == 8);
     assert!(PUNKTFUNK_SCREENS_MAX == SCREENS_MAX);
 };
 
@@ -66,23 +78,43 @@ impl PunktfunkScreen {
             x: self.x,
             y: self.y,
             primary: self.primary != 0,
+            view: None,
         }
     }
 }
 
-/// The `n` records at `screens` as core screens; none for null.
+/// The `n` records at `screens` as core screens, each with the view at its place in `views`;
+/// none for null `screens`, no views for null `views`.
 ///
 /// # Safety
-/// `screens` is null or readable for `n` records.
+/// `screens` and `views` are each null or readable for `n` records.
 #[cfg(feature = "quic")]
-pub(super) unsafe fn screens_at(screens: *const PunktfunkScreen, n: usize) -> Vec<Screen> {
+pub(super) unsafe fn screens_at(
+    screens: *const PunktfunkScreen,
+    views: *const PunktfunkScreenView,
+    n: usize,
+) -> Vec<Screen> {
     if screens.is_null() || n == 0 {
         return Vec::new();
     }
     // SAFETY: non-null and readable for `n` records (caller contract); copied out here.
-    unsafe { std::slice::from_raw_parts(screens, n) }
+    let records = unsafe { std::slice::from_raw_parts(screens, n) };
+    let views = if views.is_null() {
+        &[][..]
+    } else {
+        // SAFETY: as `screens`.
+        unsafe { std::slice::from_raw_parts(views, n) }
+    };
+    records
         .iter()
-        .map(|s| s.to_core())
+        .enumerate()
+        .map(|(i, s)| Screen {
+            view: views
+                .get(i)
+                .filter(|v| v.width > 0 && v.height > 0)
+                .map(|v| (v.width, v.height)),
+            ..s.to_core()
+        })
         .collect()
 }
 
@@ -132,6 +164,25 @@ pub unsafe extern "C" fn punktfunk_connection_request_screens(
     screens: *const PunktfunkScreen,
     n: usize,
 ) -> PunktfunkStatus {
+    // SAFETY: the caller's contract, with no views.
+    unsafe { punktfunk_connection_request_screens_view(c, screens, std::ptr::null(), n) }
+}
+
+/// [`punktfunk_connection_request_screens`] with each screen's view, `views[i]` for
+/// `screens[i]`: a further screen shown smaller than its mode is scaled to its view before
+/// encoding. Null `views` names none.
+///
+/// # Safety
+/// `c` is a valid connection handle; `screens` and `views` are each null or readable for `n`
+/// records.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_request_screens_view(
+    c: *const PunktfunkConnection,
+    screens: *const PunktfunkScreen,
+    views: *const PunktfunkScreenView,
+    n: usize,
+) -> PunktfunkStatus {
     with_conn!(c => {
         if n > PUNKTFUNK_SCREENS_MAX {
             return PunktfunkStatus::InvalidArg;
@@ -139,8 +190,8 @@ pub unsafe extern "C" fn punktfunk_connection_request_screens(
         if screens.is_null() && n > 0 {
             return PunktfunkStatus::NullPointer;
         }
-        // SAFETY: `screens` is null or readable for `n` records (caller contract).
-        let list = unsafe { screens_at(screens, n) };
+        // SAFETY: `screens` and `views` are null or readable for `n` records (caller contract).
+        let list = unsafe { screens_at(screens, views, n) };
         status_of(c.inner.request_screens(list))
     })
 }

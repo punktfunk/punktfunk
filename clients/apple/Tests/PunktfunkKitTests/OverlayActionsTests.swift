@@ -89,6 +89,16 @@ final class OverlayActionsTests: XCTestCase {
         XCTAssertEqual(keyLegend("f4"), "F4")
         XCTAssertEqual(keyLegend("left"), "←")
     }
+
+    /// A modifier alone is a key combination the editors save and the ring sends: Win.
+    func testAModifierAloneIsAKeyCombination() {
+        let cfg = OverlayConfig(ring: [.shortcut("s1"), nil, nil, nil, nil, nil],
+                                shortcuts: [OverlayShortcut(id: "s1", label: "", keys: ["win"])])
+        let back = OverlayConfig.parse(cfg.toJSON())
+        XCTAssertEqual(back, cfg)
+        XCTAssertEqual(back.shortcut("s1").map { chordChip($0.keys) }, "Win")
+        XCTAssertEqual(keyVk("win"), 0x5B)
+    }
 }
 
 extension OverlayActionsTests {
@@ -101,13 +111,14 @@ extension OverlayActionsTests {
 
     func testANewShortcutTakesTheFirstEmptySlotAndRemovalEmptiesIt() {
         var cfg = OverlayConfig.platformDefault(.tv)
-        cfg.saveShortcut(OverlayShortcut(id: cfg.nextShortcutID, keys: ["ctrl", "escape"]))
+        cfg.saveShortcut(OverlayShortcut(id: cfg.nextShortcutID(bindings: Shortcuts()), keys: ["ctrl", "escape"]))
         XCTAssertEqual(cfg.ring[5], .shortcut("s1"))
-        XCTAssertEqual(cfg.nextShortcutID, "s2")
+        XCTAssertEqual(cfg.nextShortcutID(bindings: Shortcuts()), "s2")
         cfg.saveShortcut(OverlayShortcut(id: "s1", label: "Menu", keys: ["escape"]))
         XCTAssertEqual(cfg.shortcuts.count, 1, "saving an existing id replaces it")
         XCTAssertEqual(cfg.shortcut("s1")?.label, "Menu")
-        cfg.removeShortcut("s1")
+        var bindings = Shortcuts()
+        cfg.removeShortcut("s1", bindings: &bindings)
         XCTAssertTrue(cfg.shortcuts.isEmpty)
         XCTAssertNil(cfg.ring[5], "the slot that sent it is empty")
     }

@@ -10,8 +10,10 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+# Not `punktfunk-client`: the Linux client builds that bin, and two same-named bins collide in
+# one workspace target dir. pack-msix.ps1 ships this exe as `punktfunk-client.exe`.
 [[bin]]
-name = "punktfunk-client"
+name = "punktfunk-client-windows"
 path = "src/main.rs"
 
 # The couch/HTPC Start-menu entry. Its own executable because an MSIX <Application> cannot
@@ -42,6 +44,8 @@ punktfunk-core = { path = "../../crates/core/punktfunk-core", features = ["quic"
 # binary is in the same build (x64). On the ARM64 leg both are built --no-default-features, so
 # nothing enables it and the C++ is never compiled.
 pf-client-core = { path = "../../crates/client/pf-client-core", default-features = false, features = ["desktop"] }
+# The words, in the OS's language.
+pf-l10n = { path = "../../l10n", features = ["client", "desktop", "os"] }
 
 # WinUI 3 UI via windows-reactor (a declarative React-like framework backed by WinUI). The
 # windows-rs rev is the workspace entry's (root Cargo.toml). `wasapi` (via pf-client-core) still
@@ -90,10 +94,12 @@ windows = { workspace = true, features = [
 # pf-client-core with the same `build-from-source,hidapi` features, so it is not a direct dep here.
 tracing = "0.1"
 
-# The settings rows' catalog test reads `clients/shared/settings-catalog.json`. Not
-# Windows-gated: `tests/settings_catalog.rs` builds that test where the client is a stub.
+# The settings rows' catalog test reads `clients/shared/settings-catalog.json`, and the rows
+# read their labels from pf-l10n. Not Windows-gated: `tests/settings_catalog.rs` builds that
+# test where the client is a stub.
 [dev-dependencies]
 serde_json = "1"
+pf-l10n = { path = "../../l10n", features = ["client", "desktop"] }
 
 # Embeds the app icon as an exe resource (build.rs) — Windows hosts only (rc.exe from the SDK).
 [target.'cfg(windows)'.build-dependencies]

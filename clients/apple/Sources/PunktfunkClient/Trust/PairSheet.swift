@@ -39,18 +39,17 @@ struct PairSheet: View {
     var body: some View {
         #if os(tvOS)
         VStack(spacing: 24) {
-            Text("The PIN is shown in the host's web console "
-                + "(https://<host>:47992 → Pairing). "
-                + "Pairing verifies both sides at once — no fingerprint comparison "
-                + "needed.")
+            Text(L10n.pairIntroPinOnly)
                 .font(.geist(22, relativeTo: .callout)) // TV-legible (system callout is ~25 there)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             TVFieldRow(
-                label: "PIN", value: pin, placeholder: "Shown in the host's web console"
+                label: String(localized: L10n.pairPin), value: pin,
+                placeholder: String(localized: L10n.pairPinPlaceholder)
             ) { editing = .pin }
             TVFieldRow(
-                label: "Device name", value: clientName, placeholder: "Apple TV"
+                label: String(localized: L10n.pairDeviceName), value: clientName,
+                placeholder: "Apple TV"
             ) { editing = .clientName }
             if let errorText {
                 Text(errorText)
@@ -58,34 +57,34 @@ struct PairSheet: View {
                     .foregroundStyle(.red)
             }
             HStack(spacing: 32) {
-                Button("Cancel", role: .cancel) {
+                Button(L10n.commonCancel, role: .cancel) {
                     ceremony.abandon()
                     dismiss()
                 }
                 if busy {
                     ProgressView()
                 }
-                Button("Pair") { runCeremony() }
-                    .disabled(busy || pin.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button(L10n.pairAction) { runCeremony() }
+                    .disabled(busy || pin.asciiDigits.isEmpty)
             }
             .padding(.top, 12)
         }
         .frame(maxWidth: 1000)
         .padding(60)
-        .navigationTitle("Pair with \(host.displayName)")
+        .navigationTitle(L10n.pairTitle(host: host.displayName))
         .onDisappear { ceremony.abandon() }
         .fullScreenCover(item: $editing) { field in
             switch field {
             case .pin:
                 TVTextEntry(
-                    title: "PIN (shown in the host's web console)", text: pin,
+                    title: String(localized: L10n.pairPin), text: pin,
                     keyboardType: .numberPad
                 ) {
-                    pin = $0.trimmingCharacters(in: .whitespaces)
+                    pin = $0.asciiDigits
                     editing = nil
                 }
             case .clientName:
-                TVTextEntry(title: "Device name", text: clientName) {
+                TVTextEntry(title: String(localized: L10n.pairDeviceName), text: clientName) {
                     clientName = $0
                     editing = nil
                 }
@@ -96,26 +95,23 @@ struct PairSheet: View {
             Form {
                 Section {
                     TextField(
-                        "PIN", text: $pin,
-                        prompt: Text("Shown in the host's web console"))
+                        String(localized: L10n.pairPin), text: $pin,
+                        prompt: Text(L10n.pairPinPlaceholder))
                         .font(.geistFixed(16)) // prominent, but on-brand mono (not oversized title3)
                         #if os(iOS) || os(visionOS)
                         .keyboardType(.numberPad)
                         #endif
                     TextField(
-                        "Client name", text: $clientName,
-                        prompt: Text(Self.clientNamePrompt))
+                        String(localized: L10n.pairDeviceName), text: $clientName,
+                        prompt: Text(L10n.pairDeviceNamePlaceholder))
                         #if os(tvOS)
                         .labelsHidden() // prefilled → tvOS floats the label off-center
                         #endif
                 } header: {
-                    Label("Pair with \(host.displayName)", systemImage: "lock.shield")
+                    Label(L10n.pairTitle(host: host.displayName), systemImage: "lock.shield")
                         .foregroundStyle(.tint)
                 } footer: {
-                    Text("The PIN is shown in the host's web console "
-                        + "(https://<host>:47992 → Pairing). "
-                        + "Pairing verifies both sides at once — no fingerprint "
-                        + "comparison needed.")
+                    Text(L10n.pairIntroPinOnly)
                         .font(.geist(12, relativeTo: .caption))
                         .foregroundStyle(.secondary)
                 }
@@ -136,7 +132,7 @@ struct PairSheet: View {
         .controlSize(.small)
         #endif
             HStack {
-                Button("Cancel", role: .cancel) {
+                Button(L10n.commonCancel, role: .cancel) {
                     ceremony.abandon()
                     dismiss()
                 }
@@ -149,12 +145,12 @@ struct PairSheet: View {
                         .controlSize(.small)
                         .padding(.trailing, 8)
                 }
-                Button("Pair") { runCeremony() }
+                Button(L10n.pairAction) { runCeremony() }
                     .glassProminentButtonStyle()
                     #if !os(tvOS)
                     .keyboardShortcut(.defaultAction)
                     #endif
-                    .disabled(busy || pin.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(busy || pin.asciiDigits.isEmpty)
             }
             #if os(iOS) || os(visionOS)
             .controlSize(.large)
@@ -176,16 +172,6 @@ struct PairSheet: View {
         #endif
         .interactiveDismissDisabled(busy)
         .onDisappear { ceremony.abandon() } // any other dismissal path
-        #endif
-    }
-
-    /// The field prompt names the device you are actually on — it said "this Mac" on every
-    /// platform, which on an iPhone is simply wrong.
-    private static var clientNamePrompt: String {
-        #if os(macOS)
-        "How the host lists this Mac"
-        #else
-        "How the host lists this device"
         #endif
     }
 

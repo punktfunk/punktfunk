@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Fri, 18 Sep 2026 12:00:00 +0200
-Subject: [PATCH 23/33] headless: change the virtual display's mode at runtime
+Subject: [PATCH 23/38] headless: change the virtual display's mode at runtime
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -43,7 +43,7 @@ request, so a caller can tell the two apart. Stamp pfhdr17.
  5 files changed, 92 insertions(+), 2 deletions(-)
 
 diff --git a/src/Backends/HeadlessBackend.cpp b/src/Backends/HeadlessBackend.cpp
-index 48af2e9..1466c97 100644
+index 48af2e99..1466c974 100644
 --- a/src/Backends/HeadlessBackend.cpp
 +++ b/src/Backends/HeadlessBackend.cpp
 @@ -4,6 +4,7 @@
@@ -96,7 +96,7 @@ index 48af2e9..1466c97 100644
  
  	/////////////////////////
 diff --git a/src/backend.h b/src/backend.h
-index b7a7bfb..99b9ec3 100644
+index c2190101..f9c67b45 100644
 --- a/src/backend.h
 +++ b/src/backend.h
 @@ -331,6 +331,12 @@ namespace gamescope
@@ -113,10 +113,10 @@ index b7a7bfb..99b9ec3 100644
          template <typename T>
          std::shared_ptr<BackendBlob> CreateBackendBlob( const T& thing )
 diff --git a/src/meson.build b/src/meson.build
-index bb2edfc..ff79b78 100644
+index f03c5348..bbf8fc9e 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -201,7 +201,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -209,7 +209,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr16 — …and capture maps SDR into BT.2020 colorimetrically at the live SDR-on-HDR nits
  #   +pfhdr17 — …and a capture push never drops a buffer the PipeWire thread has not taken
  #   +pfhdr18 — …and the capture stream is reliable and cycles while it waits for its consumer
@@ -127,10 +127,10 @@ index bb2edfc..ff79b78 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index a947970..2d33aa0 100644
+index fa29ad43..2e555469 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -7533,6 +7533,51 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
+@@ -7771,6 +7771,51 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
  		GetBackend()->DirtyState( true );
  		XDeleteProperty( ctx->dpy, ctx->root, ctx->atoms.gamescopeDisplayModeNudge );
  	}
@@ -182,7 +182,7 @@ index a947970..2d33aa0 100644
  	if ( ev->atom == ctx->atoms.gamescopeNewScalingFilter )
  	{
  		uint32_t uScalingFilter = get_prop( ctx, ctx->root, ctx->atoms.gamescopeNewScalingFilter, 0 );
-@@ -9184,6 +9229,9 @@ void init_xwayland_ctx(uint32_t serverId, gamescope_xwayland_server_t *xwayland_
+@@ -9695,6 +9740,9 @@ void init_xwayland_ctx(uint32_t serverId, gamescope_xwayland_server_t *xwayland_
  	ctx->atoms.gamescopeDisplayIsExternal = XInternAtom( ctx->dpy, "GAMESCOPE_DISPLAY_IS_EXTERNAL", false );
  	ctx->atoms.gamescopeDisplayModeListExternal = XInternAtom( ctx->dpy, "GAMESCOPE_DISPLAY_MODE_LIST_EXTERNAL", false );
  
@@ -192,7 +192,7 @@ index a947970..2d33aa0 100644
  	ctx->atoms.gamescopeCursorVisibleFeedback = XInternAtom( ctx->dpy, "GAMESCOPE_CURSOR_VISIBLE_FEEDBACK", false );
  
  	ctx->atoms.gamescopeSteamMaxHeight = XInternAtom( ctx->dpy, "GAMESCOPE_STEAM_MAX_HEIGHT", false );
-@@ -10514,6 +10562,14 @@ steamcompmgr_main(int argc, char **argv)
+@@ -11041,6 +11089,14 @@ steamcompmgr_main(int argc, char **argv)
  					XChangeProperty(server->ctx->dpy, server->ctx->root, server->ctx->atoms.gamescopeHDROutputFeedback, XA_CARDINAL, 32, PropModeReplace,
  						(unsigned char *)&hdr_value, 1 );
  
@@ -208,10 +208,10 @@ index a947970..2d33aa0 100644
  
  					if (server->ctx.get() == root_ctx)
 diff --git a/src/xwayland_ctx.hpp b/src/xwayland_ctx.hpp
-index 35474dc..6a55c8f 100644
+index 69c90003..641dd06b 100644
 --- a/src/xwayland_ctx.hpp
 +++ b/src/xwayland_ctx.hpp
-@@ -193,6 +193,9 @@ struct xwayland_ctx_t final : public gamescope::IWaitable
+@@ -198,6 +198,9 @@ struct xwayland_ctx_t final : public gamescope::IWaitable
  		Atom gamescopeDisplayIsExternal;
  		Atom gamescopeDisplayModeListExternal;
  

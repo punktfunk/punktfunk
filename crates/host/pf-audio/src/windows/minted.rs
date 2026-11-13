@@ -5,15 +5,15 @@
 //! * Microphone (`SteamStreamingMicrophone.inf`): host writes decoded voice to render; capture
 //!   is the mic host apps record.
 //!
-//! A background worker mints one `ROOT\MEDIA` devnode per role and process audio identity.
-//! `PunktfunkAudioRole` owns the node; seat hosts also match `PunktfunkAudioSeat` from a
-//! validated `PUNKTFUNK_SEAT_ID`. [`minted_ids`] publishes the endpoint ids for the wiring
-//! plan. Missing Steam drivers, a denied install, or `PUNKTFUNK_NO_AUDIO_MINT` leaves the ids
-//! empty and keeps the name-based ladder.
+//! A background worker mints one `ROOT\MEDIA` devnode per role; `PunktfunkAudioRole` owns it.
+//! [`minted_ids`] publishes the endpoint ids for the wiring plan. A seat host mints nothing
+//! ([`mints_nothing`]); the console host removes the nodes seat hosts once marked
+//! `PunktfunkAudioSeat`. Missing Steam drivers, a denied install, or `PUNKTFUNK_NO_AUDIO_MINT`
+//! leaves the ids empty and keeps the name-based ladder.
 //!
-//! Endpoints persist across host restarts and re-resolve by marker. The console Speakers hide
+//! Endpoints persist across host restarts and re-resolve by marker. The Speakers hide
 //! (`DEVICE_STATE_DISABLED`) while no capture binds them, so Windows never picks the silent
-//! sink as the box's default by itself; a seat's stay visible. Evidence:
+//! sink as the box's default by itself. Evidence:
 //! `design/windows-audio-endpoints-and-vbcable.md`. Probe: `punktfunk-host audio-probe mint`.
 
 use super::devnode_api as da;
@@ -28,7 +28,8 @@ use std::time::{Duration, Instant};
 
 /// Durable ownership marker. The uninstall sweep matches every minted role on it.
 pub const ROLE_MARKER: &str = "PunktfunkAudioRole";
-/// Secondary marker that partitions minted roles between validated seat hosts.
+/// Secondary marker of a node a seat host minted. A seat host mints nothing ([`mints_nothing`]),
+/// so each such node is a leftover ([`remove_seat_devnodes`]).
 pub const SEAT_MARKER: &str = "PunktfunkAudioSeat";
 const SEAT_MARKER_DOMAIN: &[u8] = b"punktfunk/audio-seat/v1\0";
 /// Audiosrv can take this long to register a freshly minted endpoint.
@@ -226,9 +227,12 @@ fn gave_up() -> bool {
     true
 }
 
-/// `PUNKTFUNK_NO_AUDIO_MINT=1`: keep the name-based ladder; `=0` mints as if unset.
-fn mint_opted_out() -> bool {
-    pf_host_config::env_on("PUNKTFUNK_NO_AUDIO_MINT") == Some(true)
+/// Nothing is minted on a seat host, whose remote session lists no machine-wide devnode: its
+/// audio is the session's own. Nor with `PUNKTFUNK_NO_AUDIO_MINT=1`, which keeps the name-based
+/// ladder; `=0` mints as if unset.
+fn mints_nothing() -> bool {
+    pf_paths::seat::role().is_seat_host()
+        || pf_host_config::env_on("PUNKTFUNK_NO_AUDIO_MINT") == Some(true)
 }
 
 /// Wiring-plan tier-0: minted endpoint ids, or all-empty while nothing is provisioned.
@@ -308,7 +312,7 @@ pub fn provision_at_startup(hide_idle: bool) {
     if hide_idle {
         HIDE_IDLE.store(true, Ordering::Relaxed);
     }
-    if mint_opted_out() || gave_up() {
+    if mints_nothing() || gave_up() {
         return;
     }
     if PROVISIONED.get().is_some() || PROVISIONING.swap(true, Ordering::SeqCst) {
@@ -380,10 +384,14 @@ pub fn ensure_provisioned() {
 }
 
 /// Provisions both roles for one validated identity; one failed role leaves the other usable.
+/// The console's pass first removes what seat hosts left.
 fn ensure_all(identity: &'static AudioIdentity) -> Result<MintedAudio> {
     wasapi::initialize_mta()
         .ok()
         .context("CoInitializeEx (MTA, minted-audio)")?;
+    if identity.seat.is_none() {
+        remove_seat_devnodes();
+    }
     let mut out = MintedAudio::default();
     for role in [Role::Speakers, Role::Mic] {
         match ensure_role(identity, role) {
@@ -718,6 +726,29 @@ fn find_role_devnode(identity: &AudioIdentity, role: Role) -> Result<Option<Stri
     Ok(None)
 }
 
+/// Removes every node a seat host minted. A seat's session never listed them, and each seat left
+/// a Speakers and a Microphone in the box's Sound panel and in the console's device ladder.
+fn remove_seat_devnodes() {
+    let leftovers: Vec<String> = match da::media_class_devs() {
+        Ok(set) => set
+            .iter()
+            .filter(|did| da::read_devparam_dword(&set, did, SEAT_MARKER).is_some())
+            .filter_map(|did| da::instance_id(&set, &did))
+            .filter(|inst| super::devnode_cleanup::is_removable_instance(inst))
+            .collect(),
+        Err(e) => {
+            tracing::warn!(error = %format!("{e:#}"), "seat audio devnodes not listed");
+            return;
+        }
+    };
+    for inst in leftovers {
+        match pf_paths::remove_device(&inst) {
+            Ok(()) => tracing::info!(devnode = %inst, "removed a seat's audio devnode"),
+            Err(e) => tracing::warn!(devnode = %inst, error = %e, "seat audio devnode not removed"),
+        }
+    }
+}
+
 /// Recovers a console `ROOT\MEDIA\NNNN` with this hwid and no ownership marker.
 /// Steam's own nodes use another instance prefix; any marked Punktfunk family stays untouched.
 fn adopt_console_orphan_devnode(role: Role, hwid: &str) -> Result<Option<String>> {
@@ -797,10 +828,10 @@ pub fn discover_driver(needle: &str, inf_name: &str) -> Result<(String, String)>
 
 /// Runs the mic pump's first resolve without racing the startup worker.
 ///
-/// A latched result or `PUNKTFUNK_NO_AUDIO_MINT=1` returns immediately. Otherwise an in-flight
-/// pass wins, failed passes respect [`RETRY_COOLDOWN`], and the process attempt cap still applies.
+/// A latched result or [`mints_nothing`] returns immediately. Otherwise an in-flight pass
+/// wins, failed passes respect [`RETRY_COOLDOWN`], and the process attempt cap still applies.
 pub fn ensure_blocking() {
-    if mint_opted_out() || PROVISIONED.get().is_some() || gave_up() {
+    if mints_nothing() || PROVISIONED.get().is_some() || gave_up() {
         return;
     }
     // One SetupAPI/PnP sweep runs at a time inside this process.

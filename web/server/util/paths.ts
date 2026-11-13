@@ -1,8 +1,8 @@
 // Path rules the gate and the proxies share: which paths need no session, the canonical form a
 // denylist matches against, and where a login may send the browser next.
 
-/** Paths reachable WITHOUT a session: the login page, the auth endpoints, and the build's
- * static assets (the login page needs its own CSS/JS, all of which live under /assets/).
+/** Paths reachable WITHOUT a session: the login page, the page a closed person's console shows,
+ * the auth endpoints, and the build's static assets (under /assets/).
  * Everything else — crucially ALL of /api — is gated.
  *
  * Note: do NOT allowlist by file extension. The client assets are all under /assets/, and a
@@ -11,6 +11,8 @@
 export function isPublicPath(pathname: string): boolean {
 	if (pathname === "/api" || pathname.startsWith("/api/")) return false; // always gated
 	if (pathname === "/login") return true;
+	// Where a person's console says it closed: a sentence, no data.
+	if (pathname === "/closed") return true;
 	if (pathname.startsWith("/_auth/")) return true;
 	if (pathname.startsWith("/assets/")) return true;
 	if (pathname === "/favicon.ico" || pathname === "/robots.txt") return true;

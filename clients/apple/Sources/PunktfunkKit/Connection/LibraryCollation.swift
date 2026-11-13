@@ -15,6 +15,7 @@
 // values in, pure values out, and PunktfunkKit is the target the tests can reach.
 
 import Foundation
+import PunktfunkShared
 
 /// How titles are ordered within a group. The raw value is the persisted `punktfunk.librarySort`
 /// string — a FILE FORMAT shared with the desktop's `library_sort` (`host|title|platform|store`);
@@ -47,12 +48,12 @@ public enum LibrarySortKey: String, CaseIterable, Hashable, Sendable {
     /// The pill's label.
     public var label: String {
         switch self {
-        case .hostOrder: return "Default"
-        case .title: return "A–Z"
-        case .platform: return "Platform"
-        case .store: return "Store"
-        case .recent: return "Recent"
-        case .playTime: return "Most played"
+        case .hostOrder: return String(localized: L10n.libSortHost)
+        case .title: return String(localized: L10n.libSortTitle)
+        case .platform: return String(localized: L10n.libSortPlatform)
+        case .store: return String(localized: L10n.libSortStore)
+        case .recent: return String(localized: L10n.libSortRecent)
+        case .playTime: return String(localized: L10n.libSortPlaytime)
         }
     }
 
@@ -63,21 +64,22 @@ public enum LibrarySortKey: String, CaseIterable, Hashable, Sendable {
 }
 
 /// The two arrangements of the gamepad library. Persisted as `punktfunk.libraryView`
-/// (`shelf|grid`, the desktop's `library_view`); unknown → shelf.
+/// (`shelf|grid`, the desktop's `library_view`); unset and unknown → grid, as the console that
+/// draws the library reads it.
 public enum LibraryArrangement: String, CaseIterable, Hashable, Sendable {
     case shelf = "shelf"
     case grid = "grid"
 
     public init(stored: String?) {
-        self = LibraryArrangement(rawValue: stored ?? "") ?? .shelf
+        self = LibraryArrangement(rawValue: stored ?? "") ?? .grid
     }
 
     public var stored: String { rawValue }
 
     public var label: String {
         switch self {
-        case .shelf: return "Shelf"
-        case .grid: return "Grid"
+        case .shelf: return String(localized: L10n.playerLibraryViewShelf)
+        case .grid: return String(localized: L10n.playerLibraryViewGrid)
         }
     }
 
@@ -98,20 +100,25 @@ public enum LibraryGroupKey: Hashable, Sendable {
     case platform(String)
     case store(String)
 
+    /// The platform name of the bucket for a game with neither platform nor known store. An id,
+    /// never drawn: ``label`` words it.
+    static let otherPlatform = "Other"
+
     /// The heading this group wears.
     public var label: String {
         switch self {
-        case .launchers: return "Launchers"
+        case .launchers: return String(localized: L10n.libSectionLaunchers)
+        case .platform(Self.otherPlatform): return String(localized: L10n.libGroupOther)
         case .platform(let name), .store(let name): return name
         }
     }
 
-    /// The kind caption a collection tile wears (`LAUNCHERS` / `PLATFORM` / `STORE`).
+    /// The kind caption a collection tile wears (Launchers / Platform / Store).
     public var kindCaption: String {
         switch self {
-        case .launchers: return "LAUNCHERS"
-        case .platform: return "PLATFORM"
-        case .store: return "STORE"
+        case .launchers: return String(localized: L10n.libCollectionKindLaunchers)
+        case .platform: return String(localized: L10n.libCollectionKindPlatform)
+        case .store: return String(localized: L10n.libCollectionKindStore)
         }
     }
 }
@@ -131,10 +138,10 @@ public struct LibraryGroup: Hashable, Sendable {
 }
 
 public enum LibraryCollation {
-    /// The desktop tile's id — the synthetic entry every shelf leads with, so Library is never a
-    /// dead end for the desktop-only user and a plugin-less host is still one press from
-    /// streaming. The `\0` prefix is the desktop console's (`pf-console-ui`'s `DESKTOP_ID`): a
-    /// host title id is a store reference, and none of them can start with a NUL.
+    /// The desktop tile's id. No shelf in the app carries the tile: the Library tab lists desktops
+    /// in their own section, and only the shot gallery builds a `desktopEntry`. The `\0` prefix
+    /// is the desktop console's (`pf-client-core`'s `DESKTOP_ID`): a host title id is a store
+    /// reference, and none of them can start with a NUL.
     ///
     /// Presentation only. It is never persisted, never fetched, and never grouped.
     public static let desktopID = "\u{0}desktop"
@@ -145,21 +152,19 @@ public enum LibraryCollation {
 
     /// The synthetic tile itself. No art and an empty store: nothing tries to fetch a poster for
     /// it, and the shelf draws the mark above instead of a monogram.
-    public static func desktopEntry(title: String = "Desktop") -> GameEntry {
+    public static func desktopEntry(title: String = String(localized: L10n.libDesktop)) -> GameEntry {
         GameEntry(id: desktopID, store: "", title: title, art: Artwork(), icon: desktopIcon)
     }
 
-    /// Fold a title down to something sortable: lowercase, diacritics relaxed to their base
-    /// letter, punctuation dropped, and a leading article removed.
+    /// A title's A–Z key: the search fold (case, width, kana by sound whatever the script),
+    /// Latin accents relaxed, punctuation dropped, a leading article removed.
     ///
-    /// The article fold is what a user actually means by A–Z. "The Witcher 3" belongs under W;
-    /// left alone, every "The …" in a library piles up under T and the sort is useless exactly
-    /// where it is most needed. English articles only — the host's titles are whatever the store
-    /// called them, and inventing rules for languages we cannot detect would file things under
-    /// letters nobody expects.
+    /// "The Witcher 3" belongs under W. English articles only: titles are store strings in no
+    /// known language. Kanji, hanzi and Hangul compare by code point. ー keeps its code point,
+    /// so スーパー follows the other ス titles.
     public static func sortTitle(_ title: String) -> String {
         var relaxed = String.UnicodeScalarView()
-        for scalar in title.lowercased().unicodeScalars {
+        for scalar in searchFold(title) {
             let folded = fold(scalar)
             let props = folded.properties
             // Rust's `is_alphanumeric() || is_whitespace()`: Alphabetic, or a numeric type,
@@ -208,6 +213,83 @@ public enum LibraryCollation {
         }
     }
 
+    /// `punktfunk_core::search::fold`, scalar for scalar: lowercase, full-width ASCII and the
+    /// ideographic space as ASCII, half-width kana at full width, a kana and a combining voiced
+    /// mark composed, conjoining jamo composed, then katakana as hiragana. ー stays.
+    static func searchFold(_ text: String) -> [Unicode.Scalar] {
+        var out: [Unicode.Scalar] = []
+        // Held back one scalar: the next may be a mark or a jamo that composes with it.
+        var held: UInt32?
+        for scalar in text.lowercased().unicodeScalars {
+            let c = compat(scalar.value)
+            if let h = held, let both = compose(h, c) {
+                held = both
+                continue
+            }
+            if let h = held { out.append(hiragana(h)) }
+            held = c
+        }
+        if let h = held { out.append(hiragana(h)) }
+        return out
+    }
+
+    /// U+FF61–FF9F as NFKC maps them. The two marks at the end are the combining voiced marks.
+    private static let halfWidthKana: [UInt32] = Array(
+        "。「」、・ヲァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン\u{3099}\u{309A}"
+            .unicodeScalars.map(\.value))
+
+    private static func compat(_ c: UInt32) -> UInt32 {
+        switch c {
+        case 0x3000: return 0x20
+        case 0xFF01...0xFF5E: return c - 0xFEE0
+        case 0xFF61...0xFF9F: return halfWidthKana[Int(c - 0xFF61)]
+        default: return c
+        }
+    }
+
+    /// The precomposed character canonical composition makes of `a` then `b`, if any.
+    private static func compose(_ a: UInt32, _ b: UInt32) -> UInt32? {
+        switch b {
+        case 0x1161...0x1175 where (0x1100...0x1112).contains(a):
+            return 0xAC00 + ((a - 0x1100) * 21 + (b - 0x1161)) * 28
+        case 0x11A8...0x11C2 where (0xAC00...0xD7A3).contains(a) && (a - 0xAC00) % 28 == 0:
+            return a + (b - 0x11A7)
+        case 0x3099: return voiced(a)
+        case 0x309A where haRow(kanaRow(a)): return a + 2
+        default: return nil
+        }
+    }
+
+    /// Katakana sits 0x60 above hiragana, row for row.
+    private static func kanaRow(_ a: UInt32) -> UInt32 {
+        (0x30A1...0x30FE).contains(a) ? a - 0x60 : a
+    }
+
+    /// は ひ ふ へ ほ: the one row that takes both marks.
+    private static func haRow(_ h: UInt32) -> Bool {
+        [0x306F, 0x3072, 0x3075, 0x3078, 0x307B].contains(h)
+    }
+
+    /// The voiced form of kana `a`, which is the next code point except for う and ワ ヰ ヱ ヲ.
+    private static func voiced(_ a: UInt32) -> UInt32? {
+        let h = kanaRow(a)
+        switch h {
+        case 0x304B...0x3061 where h % 2 == 1: return a + 1
+        case 0x3064, 0x3066, 0x3068, 0x309D: return a + 1
+        case _ where haRow(h): return a + 1
+        case 0x3046: return a + 0x4E
+        case 0x308F...0x3092 where a > 0x30A0: return a + 8
+        default: return nil
+        }
+    }
+
+    /// U+30A1–30F6 as the hiragana U+3041–3096.
+    private static func hiragana(_ c: UInt32) -> Unicode.Scalar {
+        let n = (0x30A1...0x30F6).contains(c) ? c - 0x60 : c
+        // Every value the fold hands here is a scalar it read or a kana it built.
+        return Unicode.Scalar(n) ?? "\u{FFFD}"
+    }
+
     /// The bucket for one game under `by`.
     ///
     /// The interesting case is a game with no platform. It does NOT go to "Unknown": a Steam
@@ -219,8 +301,7 @@ public enum LibraryCollation {
         case .platform:
             let platform = game.platform?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !platform.isEmpty { return .platform(platform) }
-            let store = game.storeLabel
-            return store == "Game" ? .platform("Other") : .store(store)
+            return game.hasStoreName ? .store(game.storeLabel) : .platform(LibraryGroupKey.otherPlatform)
         case .store:
             return .store(game.storeLabel)
         }

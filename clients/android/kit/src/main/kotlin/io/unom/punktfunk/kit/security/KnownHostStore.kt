@@ -2,6 +2,7 @@ package io.unom.punktfunk.kit.security
 
 import android.content.Context
 import io.unom.punktfunk.kit.ProfilePick
+import io.unom.punktfunk.kit.nameOrder
 import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
@@ -306,7 +307,7 @@ class KnownHostStore(context: Context) {
         .filterKeys { it != K_SCHEMA }
         .values
         .mapNotNull { (it as? String)?.let(::parse) }
-        .sortedBy { it.name.lowercase() }
+        .sortedWith(nameOrder { it.name })
 
     /**
      * One-time move from the `"address:port"`-keyed schema to id-keyed records, run on first

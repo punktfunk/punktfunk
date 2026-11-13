@@ -393,6 +393,8 @@ install -Dm0644 scripts/punktfunk-modules.conf %{buildroot}%{_prefix}/lib/module
 # UDP socket-buffer tuning (32 MB) — without it the kernel clamps the host's SO_SNDBUF to ~416 KB
 # and high-bitrate frames overflow it (send-side loss). systemd-sysctl applies it at boot.
 install -Dm0644 scripts/99-punktfunk-net.conf %{buildroot}%{_prefix}/lib/sysctl.d/99-punktfunk-net.conf
+# Keeps a connected Steam Frame wireless adapter out of power save, which drops the headset link.
+install -Dm0755 packaging/linux/90-punktfunk-frame-adapter %{buildroot}%{_prefix}/lib/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter
 
 # Web-console-triggered updates (host-update-from-web-console.md §7): the dep-free root
 # helper + its oneshot system unit + the polkit rule scoping it to the (shipped-empty)
@@ -414,11 +416,14 @@ for f in punktfunk-seats.service punktfunk-seat@.service; do
   install -Dm0644 packaging/linux/$f %{buildroot}%{_unitdir}/$f
 done
 install -Dm0644 packaging/linux/punktfunk-seats-user.conf %{buildroot}%{_unitdir}/user@.service.d/50-punktfunk-seats.conf
+# The login helper's PAM service, in /usr/lib/pam.d on every architecture: libpam's own path.
+install -Dm0644 packaging/linux/punktfunk-seat.pam %{buildroot}%{_prefix}/lib/pam.d/punktfunk-seat
 install -Dm0644 packaging/linux/punktfunk-seats.tmpfiles %{buildroot}%{_tmpfilesdir}/punktfunk-seats.conf
 # A seat's pads: udev hands each one to its seat's user alone.
 install -Dm0644 packaging/linux/65-punktfunk-seats.rules %{buildroot}%{_udevrulesdir}/65-punktfunk-seats.rules
 # The door: the box's host as a system service, and the root helper the console turns it on with.
 install -Dm0755 packaging/linux/door-helper %{buildroot}%{_libexecdir}/punktfunk/door-helper
+install -Dm0755 packaging/linux/door-remove.sh %{buildroot}%{_libexecdir}/punktfunk/door-remove
 for f in punktfunk-door.service punktfunk-web-door.service punktfunk-door-on@.service punktfunk-door-off@.service; do
   install -Dm0644 packaging/linux/$f %{buildroot}%{_unitdir}/$f
 done
@@ -466,6 +471,9 @@ install -Dm0644 packaging/linux/50-punktfunk-nice.conf \
 install -Dm0755 target/release/punktfunk-tray %{buildroot}%{_bindir}/punktfunk-tray
 install -Dm0644 packaging/linux/io.unom.punktfunk.starthost.desktop \
                 %{buildroot}%{_datadir}/applications/io.unom.punktfunk.starthost.desktop
+# Opens the web console signed in: a person's own inside their seat, the operator's elsewhere.
+install -Dm0644 packaging/linux/io.unom.punktfunk.webconsole.desktop \
+                %{buildroot}%{_datadir}/applications/io.unom.punktfunk.webconsole.desktop
 for sz in 22x22 48x48; do
   for png in packaging/linux/icons/hicolor/$sz/apps/*.png; do
     install -Dm0644 "$png" %{buildroot}%{_datadir}/icons/hicolor/$sz/apps/"$(basename "$png")"
@@ -602,6 +610,8 @@ chmod 0755 %{buildroot}%{_bindir}/punktfunk-scripting
 # systemd --user unit — installed but NOT auto-enabled (opt-in; the runner is inert until you add
 # scripts/plugins). Enable with `systemctl --user enable --now punktfunk-scripting`.
 install -Dm0644 scripts/punktfunk-scripting.service %{buildroot}%{_userunitdir}/punktfunk-scripting.service
+install -Dm0644 scripts/punktfunk-scripting-seat@.service \
+  %{buildroot}%{_userunitdir}/punktfunk-scripting-seat@.service
 # Where AppArmor restricts unprivileged user namespaces, the generator trades the unit's namespace
 # sandbox for this profile.
 install -Dm0644 packaging/linux/apparmor/punktfunk-scripting %{buildroot}%{_sysconfdir}/apparmor.d/punktfunk-scripting
@@ -688,6 +698,7 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %{_datadir}/polkit-1/actions/io.unom.punktfunk.dm-helper.policy
 %{_prefix}/lib/modules-load.d/punktfunk.conf
 %{_prefix}/lib/sysctl.d/99-punktfunk-net.conf
+%{_prefix}/lib/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter
 %{_prefix}/lib/firewalld/services/punktfunk-gamestream.xml
 %{_prefix}/lib/firewalld/services/punktfunk-native.xml
 %{_prefix}/lib/firewalld/services/punktfunk-web.xml
@@ -695,6 +706,7 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %{_userunitdir}/punktfunk-kde-session.service
 %{_datadir}/applications/io.unom.punktfunk.host.desktop
 %{_datadir}/applications/io.unom.punktfunk.starthost.desktop
+%{_datadir}/applications/io.unom.punktfunk.webconsole.desktop
 %{_datadir}/icons/hicolor/*/apps/punktfunk-tray*.png
 %dir /etc/gamescope-session-plus
 %dir /etc/gamescope-session-plus/sessions.d
@@ -711,9 +723,11 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %{_libexecdir}/punktfunk/seat-session
 %{_libexecdir}/punktfunk/seat-reap
 %{_libexecdir}/punktfunk/door-helper
+%{_libexecdir}/punktfunk/door-remove
 %{_unitdir}/punktfunk-seats.service
 %{_unitdir}/punktfunk-seat@.service
 %{_unitdir}/user@.service.d/50-punktfunk-seats.conf
+%{_prefix}/lib/pam.d/punktfunk-seat
 %{_unitdir}/punktfunk-door.service
 %{_unitdir}/punktfunk-web-door.service
 %{_unitdir}/punktfunk-door-on@.service
@@ -767,6 +781,7 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %dir %{_datadir}/punktfunk-scripting
 %{_datadir}/punktfunk-scripting/runner-cli.js
 %{_userunitdir}/punktfunk-scripting.service
+%{_userunitdir}/punktfunk-scripting-seat@.service
 %dir %{_sysconfdir}/apparmor.d
 %config(noreplace) %{_sysconfdir}/apparmor.d/punktfunk-scripting
 %{_prefix}/lib/systemd/user-generators/punktfunk-scripting-apparmor
@@ -821,10 +836,12 @@ fi
 
 %if %{with host}
 %preun seats
-# No %%systemd_post: nothing here enables the daemon. door-helper enables the door's units, so
-# removal disables them. The host's %%post makes the directories and its file trigger restarts
-# the daemon, which leaves running seats up.
-%systemd_preun punktfunk-web-door.service punktfunk-door.service punktfunk-seats.service
+# No %%systemd_post: nothing here enables the daemon. A removal ($1 is 0), not an upgrade, turns
+# the door off for its owner or disables its units. The host's %%post makes the directories and
+# its file trigger restarts the daemon, which leaves running seats up.
+if [ "$1" -eq 0 ]; then
+    %{_libexecdir}/punktfunk/door-remove || :
+fi
 %endif
 
 %if %{with web}

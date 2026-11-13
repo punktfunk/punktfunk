@@ -260,9 +260,14 @@ impl VideoPacketizer {
             }
 
             // `encode_into` overwrites every parity row, so recycled bytes never survive.
-            // Wire percent is `(100·m)/k` so the client derives the same `m`.
+            // Wire percent is `(100·m)/k` so the client derives the same `m`; its field is
+            // 8 bits, so `m` stops at `255·k/100` (a tiny block with a high floor).
             let m = if pct > 0 {
-                (k * pct).div_ceil(100).max(self.min_fec).min(255 - k)
+                (k * pct)
+                    .div_ceil(100)
+                    .max(self.min_fec)
+                    .min(255 - k)
+                    .min(255 * k / 100)
             } else {
                 0
             };
@@ -704,6 +709,25 @@ mod tests {
                 "one data loss per block recovers (len={len} pct={pct})"
             );
         }
+    }
+
+    /// A parity floor above 2.55 x k overflows the 8-bit percent into `fecIndex`.
+    #[test]
+    fn a_high_floor_on_a_one_shard_block_keeps_the_fec_index() {
+        let mut pk = VideoPacketizer::new(1392, 20, 16);
+        let au = synthetic_au(100, 0xFEED);
+        let pkts = pk.packetize(&au, FrameType::P, 0, None);
+        let fec: Vec<u32> = pkts
+            .iter()
+            .map(|p| u32::from_le_bytes(p[28..32].try_into().unwrap()))
+            .collect();
+        assert_eq!(fec[0] >> 22, 1, "one data shard");
+        for (i, f) in fec.iter().enumerate() {
+            assert_eq!(((f >> 12) & 0x3ff) as usize, i, "fecIndex of shard {i}");
+        }
+        let mut lossy: Vec<Option<Vec<u8>>> = pkts.into_iter().map(Some).collect();
+        lossy[0] = None;
+        assert_eq!(recover_au(&lossy).as_deref(), Some(&au[..]));
     }
 
     #[test]

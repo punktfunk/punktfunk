@@ -37,7 +37,8 @@ final class PairCeremony: ObservableObject {
     ) {
         busy = true
         errorText = nil
-        let pin = rawPIN.trimmingCharacters(in: .whitespaces)
+        // The host's PIN is ASCII digits; a CJK keyboard types full-width ones.
+        let pin = rawPIN.asciiDigits
         let name = rawName.trimmingCharacters(in: .whitespaces)
         token = Token()
         let token = token
@@ -58,20 +59,15 @@ final class PairCeremony: ObservableObject {
                 case .success(let fingerprint):
                     onPaired(fingerprint)
                 case .failure(PunktfunkClientError.wrongPIN):
-                    self.errorText = "Wrong PIN — check the host's web console (port 47992) "
-                        + "and try again."
+                    self.errorText = String(localized: L10n.pairWrongPin)
                 case .failure(PunktfunkClientError.rejected(let rejection, let said)):
                     // The host answered and said why (not armed / rate-limited / armed for
                     // another device) — show that instead of the guessing-game fallback.
                     self.errorText = said ?? rejection.userMessage
                 case .failure(is ClientIdentityStore.IdentityError):
-                    self.errorText = "Can't store this Mac's identity in the Keychain, so the "
-                        + "pairing would not survive a relaunch. Unlock the login "
-                        + "keychain and try again."
+                    self.errorText = String(localized: L10n.applePairKeychainFailed)
                 case .failure:
-                    self.errorText = "Pairing failed — the host didn't answer. Is it running, "
-                        + "and is this device on the same network (no VPN, no guest-Wi-Fi "
-                        + "isolation)?"
+                    self.errorText = String(localized: L10n.errorHostUnreachable)
                 }
             }
         }

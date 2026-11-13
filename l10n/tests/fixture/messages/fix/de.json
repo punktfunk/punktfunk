@@ -1,0 +1,20 @@
+{
+  "fix_plain": "Link kopieren",
+  "fix_order": "{app} läuft auf {host}",
+  "fix_pads": [{
+    "declarations": ["input count", "input host", "local n = count: plural"],
+    "selectors": ["n"],
+    "match": {
+      "n=one": "{count} Controller an {host}",
+      "n=other": "{count} Controller an {host}"
+    }
+  }],
+  "fix_files": [{
+    "declarations": ["input count", "local n = count: plural"],
+    "selectors": ["n"],
+    "match": {
+      "n=one": "{count} Datei",
+      "n=other": "{count} Dateien"
+    }
+  }]
+}

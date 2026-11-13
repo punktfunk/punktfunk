@@ -1,11 +1,24 @@
 [Desktop Entry]
 Type=Application
 Name=Punktfunk
-Comment=Stream a remote punktfunk host
+Name[de]=Punktfunk
+Name[es]=Punktfunk
+Name[fr]=Punktfunk
+Comment=Stream a remote Punktfunk host
+Comment[de]=Von einem entfernten Punktfunk-Host streamen
+Comment[es]=Transmite desde un host Punktfunk remoto
+Comment[fr]=Jouer en streaming depuis un hôte Punktfunk distant
+Comment[it]=Streaming da un host Punktfunk remoto
+Comment[pt_BR]=Transmita de um host remoto do Punktfunk
 Exec=punktfunk-client %u
 Icon=io.unom.punktfunk
 Terminal=false
 Categories=Network;Game;
 Keywords=streaming;remote;game;moonlight;
+Keywords[de]=Streaming;Fernzugriff;Spiel;Moonlight;
+Keywords[es]=transmisión;streaming;remoto;juego;juegos;moonlight;
+Keywords[fr]=streaming;diffusion;distant;jeu;jeux;moonlight;
+Keywords[it]=streaming;remoto;gioco;giochi;moonlight;
+Keywords[pt_BR]=streaming;transmissão;remoto;jogo;jogos;moonlight;
 StartupNotify=true
 MimeType=x-scheme-handler/punktfunk;

@@ -5,7 +5,8 @@ description: Let a friend stream from your host without joining your home networ
 
 Let a friend outside your home stream from your host, and reach nothing else on your network.
 [Pairing](/docs/pairing) and [access levels](/docs/access-levels) already decide what their device
-may do; this page only gets them to the host.
+may do; this page only gets them to the host. To share your screen with them once they're in, see
+[Play together](/docs/play-together).
 
 ## Pick a path
 
@@ -17,8 +18,8 @@ may do; this page only gets them to the host.
 | A browser, with nothing to install | [The browser client from outside your network](/docs/browser-client#from-outside-your-network) |
 
 The paths on this page open one port: UDP `9777` carries the stream, video and audio included. With
-[seats](/docs/profiles#what-a-seat-can-do) on, open UDP `9777`–`9782`: a host that places your
-friend on a seat sends them to that seat's port.
+[seats](/docs/profiles#what-a-seat-can-do) on, open UDP `9779`–`9782` too: a host that places
+your friend on a seat sends them to that seat's port.
 
 ## Porthole
 
@@ -58,23 +59,28 @@ them reach every port on it, so step 2 matters.
 
 ## Admit them as a guest
 
-The friend's first connect waits in the console under **Waiting for approval**. Admit it with a
-[PIN](/docs/pairing#pair-with-a-pin) read out over voice chat, not a bare **Approve**. Pick
-**Controller only** and **Until they disconnect**, so nothing is left to clean up after the evening
-([Temporary access](/docs/access-levels#temporary-access)). **Expire now** or **Unpair** ends a
-running session at once.
+Pair the friend with a PIN read out over voice chat. Through Porthole or Tailscale their device
+reaches the host as a local one, so its row under **Waiting for approval** offers only **Approve**.
+
+1. In the console, open **Devices** and click **Pair a device**. Pick **Controller only** and
+   **Until they disconnect**, so nothing is left to clean up after the evening
+   ([Temporary access](/docs/access-levels#temporary-access)), then click **Show PIN**.
+2. The friend picks your host and types the PIN instead of requesting access
+   ([Pair with a PIN](/docs/pairing#pair-with-a-pin)).
+
+**Expire now** or **Unpair** ends a running session at once.
 
 ## Port forwarding
 
 Prefer [Porthole](#porthole) or [Tailscale](#tailscale): both keep the host unreachable from the
 internet, and this doesn't.
 
-Forward UDP `9777` to the host. **Never forward `47990`, `47992` or `9778`**: the
-management API, the web console and browser streaming.
+Forward UDP `9777` to the host, and `9779`–`9782` with seats on. **Never forward `47990`, `47992`
+or `9778`**: the management API, the web console and browser streaming.
 
 Send your friend a [link](/docs/presets-and-links), not a bare address, so their first connect
-checks the host's identity. Copy the **Deep link** from **Host** → **Connect a device** and swap
-in your public address:
+checks the host's identity. A device that was only given the address can't ask for access. Copy
+the **Deep link** from **Host** and swap in your public address:
 
 ```
 punktfunk://connect/<id>?host=203.0.113.5&fp=<64 hex>
@@ -98,10 +104,8 @@ stream captures Discord's playback. In **Host** → **Audio**:
   Mumble then play on your speakers and stay out of the stream.
 - **Voice chat apps**: add your browser (`firefox`) if you use Discord in a browser tab.
 
-The same settings in `host.env` are `PUNKTFUNK_AUDIO_OUTPUT_MODE=host_and_client`,
-`PUNKTFUNK_AUDIO_VOICE_CHAT=host` and `PUNKTFUNK_AUDIO_VOICE_APPS=firefox`. On Windows this needs
-Steam installed: the host builds its silent audio output from Steam's streaming drivers. To keep
-one friend from hearing the game at all, mute their session on the **Home** page.
+On Windows this needs Steam installed. To keep one friend from hearing the game at all, mute their
+session on the **Home** page.
 
 ## What not to use
 

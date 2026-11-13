@@ -22,6 +22,8 @@ punktfunk-core = { path = "../../core/punktfunk-core", default-features = false 
 # C++ in — fatal on Windows ARM64, where Granite has no SIMD path.
 pf-client-core = { path = "../pf-client-core", default-features = false, features = ["desktop"] }
 punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "serde"] }
+# The in-stream notices and hints.
+pf-l10n = { path = "../../../l10n", features = ["client", "desktop"] }
 # `--probe-decode` reports the driver's own video-format answers through pf-vkdecode's
 # query rather than a second copy of it — a probe that keeps its own copy is a probe
 # that eventually disagrees with the code it exists to explain (VIDEO_BASE's doc says

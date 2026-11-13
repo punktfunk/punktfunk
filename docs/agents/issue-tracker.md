@@ -62,7 +62,7 @@ only once they say to. This applies to subagents too — a subagent may not file
 
 ## Mirrored user reports
 
-unom improve (`improve.unom.io`, repo `unom/improve`, `src/server/bridge/`) gives every bug posted
+improve unom (`improve.unom.io`, repo `unom/improve`, `src/server/bridge/`) gives every bug posted
 there, and every post in the Discord `bug-reports` forum, an issue labelled `needs-triage` and
 `source:website` or `source:discord`. The issue holds the report's text and links its post and
 thread. An idea has no issue until a maintainer opens one from its post.
@@ -71,7 +71,7 @@ thread. An idea has no issue until a maintainer opens one from its post.
 - Closing the issue sets the post to Fixed and tells the Discord thread; reopening it reopens
   both. A comment made within ten minutes before closing becomes the post's public note and is
   quoted in the thread, so write it for the reporter.
-- A status set on unom improve closes or reopens the issue the same way.
+- A status set on improve unom closes or reopens the issue the same way.
 
 ## Pull requests as a triage surface
 

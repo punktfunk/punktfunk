@@ -11,9 +11,11 @@ use punktfunk_core::client::NativeClient;
 use punktfunk_core::config::GamepadPref;
 use punktfunk_core::quic::{RichInput, HID_RAW_FEATURE, HID_RAW_OUTPUT, HID_REPORT_MAX};
 use sdl3::sys::hidapi as hid;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 /// A queued host write waits at most this long behind a read.
 const READ_TIMEOUT_MS: i32 = 4;
@@ -77,6 +79,42 @@ pub(crate) fn raw_model(pref: GamepadPref, declared: GamepadPref, pid: u16) -> O
     }
 }
 
+/// The feature commands a host may send a 2015 pad, after the report id 0: settings, haptic
+/// pulses, the jingles, power-off and the IMU reset. Mirrors the host's `sc_forwards_to_pad`
+/// (`pf-inject` `steam_proto.rs`), which keeps every other command on its virtual pad.
+const CLASSIC_HOST_COMMANDS: [u8; 6] = [0x87, 0x8F, 0x9F, 0xB6, 0xC1, 0xCE];
+
+/// Feature commands the host never sends a Triton: lizard mode off and on, and the factory
+/// settings. Mirrors `pf_driver_proto::triton::forwards_to_pad`. The repo names no other
+/// command that rewrites the pad, so nothing else is held back.
+const TRITON_HELD_BACK: [u8; 3] = [0x81, 0x85, 0x8E];
+
+/// Why a report from the host must not reach the pad, or `None` to write it. A host that
+/// follows the rules above never sends what this refuses. The Apple and Android captures refuse
+/// the same (`clients/shared/pad-write-vectors.json`).
+fn refused(model: Model, kind: u8, data: &[u8]) -> Option<&'static str> {
+    match (model, kind) {
+        (Model::Triton { .. }, HID_RAW_FEATURE) => {
+            // Id first, or a bare command (`0x80` and above), as the host reads it.
+            let cmd = match data {
+                [first, ..] if *first >= 0x80 => first,
+                [_, cmd, ..] => cmd,
+                _ => return None,
+            };
+            TRITON_HELD_BACK
+                .contains(cmd)
+                .then_some("lizard mode and factory settings stay on the host")
+        }
+        (Model::Triton { .. }, _) => None,
+        (Model::Classic | Model::ClassicBle, HID_RAW_FEATURE) => match data {
+            [0, cmd, ..] if CLASSIC_HOST_COMMANDS.contains(cmd) => None,
+            [0, _, ..] => Some("command is not one the host forwards"),
+            _ => Some("not a feature frame with report id 0"),
+        },
+        (Model::Classic | Model::ClassicBle, _) => Some("a 2015 pad takes feature reports only"),
+    }
+}
+
 enum Cmd {
     Write(u8, Vec<u8>),
 }
@@ -84,6 +122,8 @@ enum Cmd {
 /// The reader thread owns the handle; dropping this hangs up and joins it.
 pub(crate) struct Sc2Capture {
     tx: Sender<Cmd>,
+    /// Raised by `Drop` so an identity read in progress ends before the join.
+    stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -107,16 +147,26 @@ impl Sc2Capture {
             dev.send_feature(&NORMALIZE_JOYSTICKS);
         }
         let (tx, rx) = std::sync::mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_t = stop.clone();
         let thread = std::thread::Builder::new()
             .name("pf-sc2-raw".into())
             .spawn(move || {
-                send_identity(&dev, &client, pad, serial.unwrap_or_default(), model);
+                send_identity(
+                    &dev,
+                    &client,
+                    pad,
+                    serial.unwrap_or_default(),
+                    model,
+                    &stop_t,
+                );
                 run(dev, &rx, &client, pad, model)
             })
             .map_err(|e| tracing::warn!(error = %e, "spawn steam controller reader"))
             .ok()?;
         Some(Sc2Capture {
             tx,
+            stop,
             thread: Some(thread),
         })
     }
@@ -129,7 +179,9 @@ impl Sc2Capture {
 
 impl Drop for Sc2Capture {
     fn drop(&mut self) {
-        // Replacing the sender disconnects the reader's channel; it exits and closes the node.
+        // The flag ends an identity read; the hung-up channel ends the report loop. Either
+        // way the reader closes the node.
+        self.stop.store(true, Ordering::Relaxed);
         self.tx = std::sync::mpsc::channel().0;
         if let Some(t) = self.thread.take() {
             let _ = t.join();
@@ -180,8 +232,12 @@ impl Dev {
 
     /// SET one feature query, then GET until the reply echoes its command: a Puck stalls the
     /// GET until its pad answers over the radio, so the newer pad gets a second. The 2015 pad
-    /// gets 200 ms: its three queries must end inside the host's one-second wait.
-    fn exchange(&self, request: &[u8], model: Model) -> Option<Vec<u8>> {
+    /// gets 200 ms: its three queries must end inside the host's one-second wait. A raised
+    /// `stop` ends the wait.
+    fn exchange(&self, request: &[u8], model: Model, stop: &AtomicBool) -> Option<Vec<u8>> {
+        if stop.load(Ordering::Relaxed) {
+            return None;
+        }
         let (sent, tries) = match model {
             Model::Triton { .. } => {
                 let mut frame = [0u8; 64];
@@ -189,28 +245,24 @@ impl Dev {
                 (self.send_feature(&frame), 50)
             }
             Model::Classic => (self.send_classic_feature(request), 10),
-            Model::ClassicBle => return self.exchange_ble(request),
+            Model::ClassicBle => return self.exchange_ble(request, stop),
         };
         if sent < 0 {
             return None;
         }
-        for _ in 0..tries {
-            std::thread::sleep(std::time::Duration::from_millis(20));
+        poll_until(tries, Duration::from_millis(20), stop, || {
             let mut buf = [0u8; 65];
             buf[0] = request[0];
             // SAFETY: `self.0` is open and used only on this thread; `buf` is writable.
             let n = unsafe { hid::SDL_hid_get_feature_report(self.0, buf.as_mut_ptr(), buf.len()) };
-            if n > 1 && buf[1] == request[1] {
-                return Some(buf[..n as usize].to_vec());
-            }
-        }
-        None
+            (n > 1 && buf[1] == request[1]).then(|| buf[..n as usize].to_vec())
+        })
     }
 
     /// [`Self::exchange`] for a 2015 pad on Bluetooth: the reply comes one segment per GET.
     /// Windows and macOS hand the report id back twice, so a segment starts one byte in there
     /// (SDL `GetFeatureReport`).
-    fn exchange_ble(&self, request: &[u8]) -> Option<Vec<u8>> {
+    fn exchange_ble(&self, request: &[u8], stop: &AtomicBool) -> Option<Vec<u8>> {
         if self.send_ble_feature(request) < 0 {
             return None;
         }
@@ -218,6 +270,9 @@ impl Dev {
         let mut read = Vec::new();
         let mut reply = [0u8; 73];
         for _ in 0..12 {
+            if stop.load(Ordering::Relaxed) {
+                return None;
+            }
             let mut buf = [0u8; sc1_ble::SEGMENT + 1];
             buf[0] = 0x03;
             // SAFETY: `self.0` is open and used only on this thread; `buf` is writable.
@@ -287,9 +342,36 @@ impl Drop for Dev {
     }
 }
 
+/// Run `get` once per `period`, up to `tries` times, until it answers. `None` when it never
+/// does, or once `stop` is raised.
+fn poll_until<T>(
+    tries: u32,
+    period: Duration,
+    stop: &AtomicBool,
+    mut get: impl FnMut() -> Option<T>,
+) -> Option<T> {
+    for _ in 0..tries {
+        std::thread::sleep(period);
+        if stop.load(Ordering::Relaxed) {
+            return None;
+        }
+        if let Some(reply) = get() {
+            return Some(reply);
+        }
+    }
+    None
+}
+
 /// Read the pad's replies to core's feature queries and send them with its serial, so the host
-/// builds its virtual pad as this one.
-fn send_identity(dev: &Dev, client: &NativeClient, pad: u8, serial: String, model: Model) {
+/// builds its virtual pad as this one. A raised `stop` ends the read and sends nothing.
+fn send_identity(
+    dev: &Dev,
+    client: &NativeClient,
+    pad: u8,
+    serial: String,
+    model: Model,
+    stop: &AtomicBool,
+) {
     use punktfunk_core::client::sc2;
     let requests: Vec<&[u8]> = match model {
         Model::Triton { puck } => sc2::identity_requests(puck).collect(),
@@ -297,8 +379,11 @@ fn send_identity(dev: &Dev, client: &NativeClient, pad: u8, serial: String, mode
     };
     let answered: Vec<(&[u8], Vec<u8>)> = requests
         .into_iter()
-        .filter_map(|req| dev.exchange(req, model).map(|reply| (req, reply)))
+        .filter_map(|req| dev.exchange(req, model, stop).map(|reply| (req, reply)))
         .collect();
+    if stop.load(Ordering::Relaxed) {
+        return;
+    }
     let replies = punktfunk_core::quic::pack_identity_replies(
         answered.iter().map(|(req, reply)| (*req, reply.as_slice())),
     );
@@ -333,6 +418,11 @@ fn run(dev: Dev, rx: &Receiver<Cmd>, client: &NativeClient, pad: u8, model: Mode
         loop {
             match rx.try_recv() {
                 Ok(Cmd::Write(kind, data)) => {
+                    if let Some(reason) = refused(model, kind, &data) {
+                        let head = data.get(..2);
+                        tracing::debug!(pad, kind, ?head, reason, "steam controller write refused");
+                        continue;
+                    }
                     let sent = match (model, kind) {
                         (Model::Classic, HID_RAW_FEATURE) => dev.send_classic_feature(&data),
                         (Model::ClassicBle, HID_RAW_FEATURE) => dev.send_ble_feature(&data),
@@ -380,6 +470,40 @@ fn run(dev: Dev, rx: &Receiver<Cmd>, client: &NativeClient, pad: u8, model: Mode
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A raised stop ends a 50-try wait at once instead of after its full second.
+    #[test]
+    fn a_raised_stop_ends_the_wait() {
+        let stop = AtomicBool::new(false);
+        let mut calls = 0;
+        let reply = poll_until(50, Duration::ZERO, &stop, || {
+            calls += 1;
+            if calls == 2 {
+                stop.store(true, Ordering::Relaxed);
+            }
+            None::<u8>
+        });
+        assert_eq!(reply, None);
+        assert_eq!(calls, 2);
+
+        let mut calls = 0;
+        let reply = poll_until(50, Duration::ZERO, &stop, || {
+            calls += 1;
+            Some(7)
+        });
+        assert_eq!((reply, calls), (None, 0), "a stopped wait never asks");
+    }
+
+    #[test]
+    fn a_wait_returns_the_first_answer() {
+        let stop = AtomicBool::new(false);
+        let mut calls = 0;
+        let reply = poll_until(50, Duration::ZERO, &stop, || {
+            calls += 1;
+            (calls == 3).then_some(calls)
+        });
+        assert_eq!(reply, Some(3));
+    }
 
     #[test]
     fn detects_every_sc2_identity() {
@@ -434,5 +558,56 @@ mod tests {
             "a pad the player declared as something else stays typed"
         );
         assert_eq!(raw_model(P::Xbox360, P::SteamController, 0x028E), None);
+    }
+
+    /// `clients/shared/pad-write-vectors.json`, which `Sc2Capture.swift` and `Sc2Capture.kt`
+    /// replay too: every command byte against the two lists, then the framing rows.
+    #[test]
+    fn host_writes_match_the_shared_vectors() {
+        let v: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../clients/shared/pad-write-vectors.json"
+        ))
+        .expect("vector file parses");
+        let bytes = |a: &serde_json::Value| -> Vec<u8> {
+            let a = a.as_array().expect("a byte array");
+            a.iter()
+                .map(|b| b.as_u64().expect("a byte") as u8)
+                .collect()
+        };
+        let forwarded = bytes(&v["classic_forwarded"]);
+        let held_back = bytes(&v["triton_held_back"]);
+        let classic = [Model::Classic, Model::ClassicBle];
+        let triton = [Model::Triton { puck: false }, Model::Triton { puck: true }];
+        for cmd in 0..=u8::MAX {
+            for model in classic {
+                let r = refused(model, HID_RAW_FEATURE, &[0, cmd, 0]);
+                assert_eq!(
+                    r.is_some(),
+                    !forwarded.contains(&cmd),
+                    "{model:?} 0x{cmd:02x}"
+                );
+            }
+            for model in triton {
+                let r = refused(model, HID_RAW_FEATURE, &[1, cmd, 0]);
+                assert_eq!(
+                    r.is_some(),
+                    held_back.contains(&cmd),
+                    "{model:?} 0x{cmd:02x}"
+                );
+            }
+        }
+        for row in v["frames"].as_array().expect("frames") {
+            let models: &[Model] = match row["model"].as_str() {
+                Some("classic") => &classic,
+                Some("triton") => &triton,
+                other => panic!("model {other:?}"),
+            };
+            let kind = row["kind"].as_u64().expect("kind") as u8;
+            let data = bytes(&row["data"]);
+            let want = row["refused"].as_bool().expect("refused");
+            for &model in models {
+                assert_eq!(refused(model, kind, &data).is_some(), want, "{row}");
+            }
+        }
     }
 }

@@ -1,8 +1,12 @@
 package io.unom.punktfunk.kit.library
 
 import android.util.Log
+import io.unom.punktfunk.kit.HostText
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Say
 import io.unom.punktfunk.kit.SessionAccess
+import io.unom.punktfunk.kit.say
 import io.unom.punktfunk.kit.security.ClientIdentity
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
@@ -24,7 +28,9 @@ import java.security.PrivateKey
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
+import java.text.NumberFormat
 import java.util.Base64
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
@@ -120,6 +126,8 @@ data class GameEntry(
     val stats: GameStats? = null,
     /** A title a plugin installs. Null is installed, as every other title is. */
     val install: TitleInstall? = null,
+    /** What the host sets for this game's stream; null from an older host or when it sets none. */
+    val overrides: GameOverrides? = null,
 ) {
     val isCustom: Boolean get() = store == "custom"
 
@@ -141,7 +149,7 @@ data class GameEntry(
         const val DESKTOP_ID = "\u0000desktop"
 
         /** The tile itself. [title] reads "Resume …" when the host already has something up. */
-        fun desktop(title: String = "Desktop") = GameEntry(
+        fun desktop(title: String) = GameEntry(
             id = DESKTOP_ID,
             store = "",
             title = title,
@@ -163,18 +171,17 @@ data class GameEntry(
 
     /**
      * Display name for the store badge — the same table the other clients use
-     * (`pf-console-ui::library::store_label`). Before this the UI said "Steam" for every non-custom
-     * entry, which a Lutris or GOG title made a lie.
+     * (`pf-console-ui::library::store_label`). A store's own name is shown as it is.
      */
-    val storeLabel: String get() = when (store) {
-        "steam" -> "Steam"
-        "custom" -> "Custom"
-        "heroic" -> "Heroic"
-        "lutris" -> "Lutris"
-        "epic" -> "Epic"
-        "gog" -> "GOG"
-        "xbox" -> "Xbox"
-        else -> "Game"
+    val storeLabel: Say get() = when (store) {
+        "steam" -> Say.Text("Steam")
+        "custom" -> say(R.string.lib_store_custom)
+        "heroic" -> Say.Text("Heroic")
+        "lutris" -> Say.Text("Lutris")
+        "epic" -> Say.Text("Epic")
+        "gog" -> Say.Text("GOG")
+        "xbox" -> Say.Text("Xbox")
+        else -> say(R.string.lib_store_other)
     }
 }
 
@@ -190,9 +197,10 @@ fun List<GameEntry>.launchersFirst(): List<GameEntry> {
 
 /** Fetch outcome — three states so the UI can guide setup (the common case is "not paired yet"). */
 sealed class LibraryResult {
-    data class Ok(val games: List<GameEntry>) : LibraryResult()
-    data class Unauthorized(val message: String) : LibraryResult()
-    data class Error(val message: String) : LibraryResult()
+    /** [profile]: the one the catalog was fetched as, which its cache entry is filed under; null the box's. */
+    data class Ok(val games: List<GameEntry>, val profile: String? = null) : LibraryResult()
+    data class Unauthorized(val message: Say) : LibraryResult()
+    data class Error(val message: Say) : LibraryResult()
 
     /**
      * Is this the "can't reach it" failure — the only one worth waiting out?
@@ -233,24 +241,23 @@ enum class InstallAction {
     Install, Pause, Resume, Remove;
 
     /** The menu row: `Install · 26 GB (212 GB free)`, `Remove download · 26 GB`. */
-    fun label(install: TitleInstall?): String {
-        val size = install?.sizeBytes?.let(::humanBytes)
+    fun label(install: TitleInstall?): Say {
+        val size = install?.sizeBytes?.let { humanBytes(it) }
         return when (this) {
             Install -> {
-                val free = install?.freeBytes?.let(::humanBytes)
+                val free = install?.freeBytes?.let { humanBytes(it) }
                 when {
-                    size != null && free != null -> "Install · $size ($free free)"
-                    size != null -> "Install · $size"
-                    else -> "Install"
+                    size != null && free != null -> say(R.string.lib_install_size_free, size, free)
+                    size != null -> say(R.string.lib_install_size, size)
+                    else -> say(R.string.lib_install)
                 }
             }
-            Pause -> "Pause download"
-            Resume -> "Resume download"
-            Remove -> if (size != null) "Remove download · $size" else "Remove download"
+            Pause -> say(R.string.lib_download_pause)
+            Resume -> say(R.string.lib_download_resume)
+            Remove ->
+                if (size != null) say(R.string.lib_download_remove_size, size) else say(R.string.lib_download_remove)
         }
     }
-
-    internal val verb: String get() = name.lowercase()
 
     companion object {
         /** The one row, if any. Null [grants] (an older host) allows starting a download only. */
@@ -273,20 +280,26 @@ enum class InstallAction {
 
 /** A tile's mark for a title's files; an installed title has none. Same words as the Rust tiles. */
 data class TileBadge(
-    /** `download`, `pause` or `alert`. */
+    /** `download`, `pause` or `alert`; `host` marks the host's stream settings. */
     val icon: String,
     /** `42 %`, `26 GB`, `Not installed`, `Queued`. */
-    val text: String,
+    val text: Say,
 ) {
     companion object {
         fun forTitle(install: TitleInstall?, download: Download?): TileBadge? {
-            val pct = { d: Download -> d.fraction?.let { "${(it * 100).toInt()} %" } ?: "Queued" }
+            val pct = { d: Download ->
+                d.fraction?.let { say(R.string.lib_badge_percent, (it * 100).toInt()) }
+                    ?: say(R.string.lib_badge_queued)
+            }
             return when {
                 download != null && download.live -> TileBadge("download", pct(download))
                 download?.state == "paused" -> TileBadge("pause", pct(download))
-                download?.state == "failed" -> TileBadge("alert", "Not installed")
+                download?.state == "failed" -> TileBadge("alert", say(R.string.lib_badge_not_installed))
                 install?.missing == true ->
-                    TileBadge("download", install.sizeBytes?.let(::humanBytes) ?: "Not installed")
+                    TileBadge(
+                        "download",
+                        install.sizeBytes?.let { humanBytes(it) } ?: say(R.string.lib_badge_not_installed),
+                    )
                 else -> null
             }
         }
@@ -298,31 +311,39 @@ sealed class InstallOutcome {
     data object Done : InstallOutcome()
 
     /** `403`/`404`/`409` with the host's own sentence. */
-    data class Refused(val message: String) : InstallOutcome()
+    data class Refused(val said: Say) : InstallOutcome()
 
     /** A host without the route. */
     data object Unsupported : InstallOutcome()
-    data class Failed(val why: String) : InstallOutcome()
+    data class Failed(val why: Say) : InstallOutcome()
 
     /** The player-facing line. */
-    fun notice(action: InstallAction, title: String): String = when (this) {
+    fun notice(action: InstallAction, title: String): Say = when (this) {
         Done -> when (action) {
-            InstallAction.Install, InstallAction.Resume -> "Downloading $title."
-            InstallAction.Pause -> "Paused $title's download."
-            InstallAction.Remove -> "Removed $title. Saves stay on the host."
+            InstallAction.Install, InstallAction.Resume -> say(R.string.lib_install_started, title)
+            InstallAction.Pause -> say(R.string.lib_download_paused_done, title)
+            InstallAction.Remove -> say(R.string.lib_removed, title)
         }
-        is Refused -> message
-        Unsupported -> "This host needs an update to manage games from here."
-        is Failed -> "Couldn't ${action.verb} $title — $why"
+        is Refused -> said
+        Unsupported -> say(R.string.lib_install_unsupported)
+        is Failed -> say(
+            when (action) {
+                InstallAction.Install -> R.string.lib_install_failed
+                InstallAction.Resume -> R.string.lib_resume_failed
+                InstallAction.Pause -> R.string.lib_pause_failed
+                InstallAction.Remove -> R.string.lib_remove_failed
+            },
+            title, why,
+        )
     }
 
     companion object {
         /** An answer: the host's sentence when it sent one, else the route is missing. */
-        fun fromReply(code: Int, message: String?): InstallOutcome = when {
+        fun fromReply(code: Int, said: Say?): InstallOutcome = when {
             code in 200..299 -> Done
-            !message.isNullOrBlank() -> Refused(message)
+            said != null -> Refused(said)
             code == 401 || code == 404 || code == 405 -> Unsupported
-            else -> Failed("the host refused it ($code)")
+            else -> Failed(say(R.string.error_mgmt_refused, code))
         }
     }
 }
@@ -349,51 +370,64 @@ data class Download(
     val fraction: Float?
         get() = totalBytes?.takeIf { it > 0 }?.let { (doneBytes.toFloat() / it).coerceIn(0f, 1f) }
 
-    /** `12.3 GB of 26 GB · 48 MB/s · about 4 min left`, `Installing…`. */
-    fun line(): String {
+    /**
+     * The segments of `12.3 GB of 26 GB · 48 MB/s · about 4 min left`, or `Installing…`: the
+     * screen joins them with " · ".
+     */
+    fun line(): List<Say> {
         when (state) {
-            "queued" -> return "Waiting for its turn to download…"
-            "installing" -> return phase ?: "Installing…"
+            "queued" -> return listOf(say(R.string.lib_download_queued))
+            "installing" -> return listOf(phase?.let { Say.Text(it) } ?: say(R.string.lib_download_installing))
         }
         val total = totalBytes?.takeIf { it > 0 }
         val parts = mutableListOf(
-            if (total != null) "${humanBytes(doneBytes)} of ${humanBytes(total)}"
-            else "${humanBytes(doneBytes)} so far",
+            if (total != null) say(R.string.lib_download_progress, humanBytes(doneBytes), humanBytes(total))
+            else say(R.string.lib_download_so_far, humanBytes(doneBytes)),
         )
         if (state == "downloading") {
-            rateBps?.let { parts.add("${humanBytes(it)}/s") }
+            rateBps?.let { parts.add(say(R.string.lib_download_rate, humanBytes(it))) }
             etaS?.let {
                 parts.add(
                     when {
-                        it < 60 -> "less than a minute left"
-                        it < 3600 -> "about ${(it + 30) / 60} min left"
-                        else -> "about ${it / 3600} h ${(it % 3600) / 60} min left"
+                        it < 60 -> say(R.string.lib_download_eta_soon)
+                        it < 3600 -> say(R.string.lib_download_eta_minutes, (it + 30) / 60)
+                        else -> say(R.string.lib_download_eta_hours, it / 3600, (it % 3600) / 60)
                     },
                 )
             }
         }
-        return parts.joinToString(" · ")
+        return parts
     }
 
     /** Why a launch that waited on it didn't start the title; null while it may still. */
-    fun stopped(title: String): String? = when (state) {
-        "failed" -> error?.let { "$title didn't download — $it" } ?: "$title didn't download."
-        "cancelled" -> "$title's download was cancelled."
-        "paused" -> "$title's download was paused. Start it again to resume."
+    fun stopped(title: String): Say? = when (state) {
+        "failed" ->
+            error?.let { say(R.string.lib_download_failed_why, title, it) }
+                ?: say(R.string.lib_download_failed, title)
+        "cancelled" -> say(R.string.lib_download_cancelled, title)
+        "paused" -> say(R.string.lib_download_paused, title)
         else -> null
     }
 }
 
-/** Decimal units, as stores count: `12.3 GB`, `48 MB`, `512 kB`. */
-fun humanBytes(n: Long): String {
+/**
+ * Decimal units, as stores count: `12.3 GB`, `48 MB`, `512 kB`. The figure is written for
+ * [locale]: no grouping, one decimal below 100.
+ */
+fun humanBytes(n: Long, locale: Locale = Locale.getDefault()): Say {
     val (value, unit) = when {
-        n >= 1_000_000_000L -> n / 1e9 to "GB"
-        n >= 1_000_000L -> n / 1e6 to "MB"
-        else -> n / 1e3 to "kB"
+        n >= 1_000_000_000L -> n / 1e9 to R.string.common_size_gb
+        n >= 1_000_000L -> n / 1e6 to R.string.common_size_mb
+        else -> n / 1e3 to R.string.common_size_kb
     }
     val rounded = Math.round(value * 10) / 10.0
-    return if (value >= 100 || rounded % 1.0 == 0.0) "${Math.round(value)} $unit"
-    else "${String.format(java.util.Locale.ROOT, "%.1f", rounded)} $unit"
+    val whole = value >= 100 || rounded % 1.0 == 0.0
+    val figure = NumberFormat.getNumberInstance(locale).apply {
+        isGroupingUsed = false
+        minimumFractionDigits = if (whole) 0 else 1
+        maximumFractionDigits = if (whole) 0 else 1
+    }
+    return say(unit, if (whole) figure.format(Math.round(value)) else figure.format(rounded))
 }
 
 /**
@@ -447,18 +481,18 @@ sealed class GameEnd {
     data object Unsupported : GameEnd()
     /** 403: this device's access to the host expired. */
     data object Expired : GameEnd()
-    data class Failed(val why: String) : GameEnd()
+    data class Failed(val why: Say) : GameEnd()
 
     /** The game is gone, so a stream that was playing it can end. */
     val gameGone: Boolean get() = this == Ended || this == NotRunning
 
     /** The player-facing line. The Rust, Swift and web clients use the same words. */
-    fun notice(title: String): String = when (this) {
-        Ended -> "Ended $title."
-        NotRunning -> "$title isn't running any more."
-        Unsupported -> "This host needs an update to end games from here."
-        Expired -> "This device's access to the host has expired."
-        is Failed -> "Couldn't end $title \u2014 $why"
+    fun notice(title: String): Say = when (this) {
+        Ended -> say(R.string.lib_end_game_done, title)
+        NotRunning -> say(R.string.lib_end_game_not_running, title)
+        Unsupported -> say(R.string.lib_end_game_unsupported)
+        Expired -> say(R.string.lib_end_game_expired)
+        is Failed -> say(R.string.lib_end_game_failed, title, why)
     }
 
     companion object {
@@ -467,7 +501,7 @@ sealed class GameEnd {
             409 -> NotRunning
             401, 404 -> Unsupported
             403 -> Expired
-            else -> Failed("the host refused it ($code)")
+            else -> Failed(say(R.string.error_mgmt_refused, code))
         }
     }
 }
@@ -494,17 +528,21 @@ object LibraryClient {
 
     /**
      * The whole catalog, a page at a time, so no answer grows with the library. [get] takes the
-     * cursor of the page before and answers one page's status and body. Any page failing fails
-     * the walk: half a catalog is not one.
+     * cursor of the page before and answers one page's status and body. Only rows [keep] takes
+     * are listed. Any page failing fails the walk: half a catalog is not one.
      */
-    internal fun walkPages(base: String, get: (cursor: String?) -> Pair<Int, String>): Walk {
+    internal fun walkPages(
+        base: String,
+        keep: (JSONObject) -> Boolean = { true },
+        get: (cursor: String?) -> Pair<Int, String>,
+    ): Walk {
         val games = ArrayList<GameEntry>()
         var cursor: String? = null
         repeat(MAX_PAGES) {
             val (code, body) = get(cursor)
             if (code != 200) return Walk.Refused(code)
             val page = JSONObject(body)
-            games += parseItems(page.getJSONArray("items"), base)
+            games += parseItems(page.getJSONArray("items"), base, keep)
             val next = str(page, "next_cursor")
             // A cursor that does not move would ask for the same page forever.
             if (next == null || next == cursor) return Walk.Done(games)
@@ -514,12 +552,42 @@ object LibraryClient {
     }
 
     /**
-     * The host's catalog, walked by `GET /api/v1/library/page` over [mtlsHttpClient]'s lanes:
-     * [streamPort] first, then [mgmtBase] over HTTPS. A host older than the paged route refuses
-     * it, so `GET /api/v1/library` answers whole instead. [fpHex] is the pinned host-cert
-     * SHA-256 (64 hex, from the paired [io.unom.punktfunk.kit.security.KnownHost]); a blank value
-     * means the host was never paired. A refusal maps through [refused]. BLOCKING — call from a
-     * background dispatcher.
+     * The catalog as [profile] plays it (`as=`), else the box's. [get] answers one path's status
+     * and body. A host older than the paged route refuses it, so `GET /api/v1/library` answers
+     * whole instead. A profile the host no longer holds (404 `profile_unknown`) is asked once more
+     * as the box, and that answer stands, as the box's. `clients/shared/library-profile-vectors.json`
+     * pins this here, in Rust and in Swift. A refusal maps through [refused].
+     */
+    internal fun catalog(profile: String?, base: String, get: (path: String) -> Pair<Int, String>): LibraryResult {
+        var gone = false
+        fun walk(profile: String?): LibraryResult {
+            val ask = { path: String ->
+                val scoped = if (profile == null) path else
+                    path + (if ('?' in path) "&as=" else "?as=") + java.net.URLEncoder.encode(profile, "UTF-8")
+                get(scoped).also { (code, body) ->
+                    gone = profile != null && code == 404 &&
+                        runCatching { JSONObject(body).optString("code") }.getOrNull() == "profile_unknown"
+                }
+            }
+            return when (val walked = walkPages(base) { cursor -> ask(pagePath(cursor)) }) {
+                is Walk.Done -> LibraryResult.Ok(walked.games.launchersFirst(), profile)
+                is Walk.Refused -> if (walked.code in setOf(401, 403, 404) && !gone) {
+                    val (code, body) = ask("/api/v1/library")
+                    if (code == 200) LibraryResult.Ok(parse(body, base), profile) else refused(code)
+                } else {
+                    refused(walked.code)
+                }
+            }
+        }
+        val first = walk(profile)
+        return if (gone) walk(null) else first
+    }
+
+    /**
+     * [catalog] over [mtlsHttpClient]'s lanes: [streamPort] first, then [mgmtBase] over HTTPS.
+     * [fpHex] is the pinned host-cert SHA-256 (64 hex, from the paired
+     * [io.unom.punktfunk.kit.security.KnownHost]); a blank value means the host was never paired.
+     * BLOCKING — call from a background dispatcher.
      */
     fun fetch(
         address: String,
@@ -528,17 +596,16 @@ object LibraryClient {
         keyPem: String,
         fpHex: String,
         streamPort: Int = 0,
+        profile: String?,
     ): LibraryResult {
         if (fpHex.isBlank()) {
-            return LibraryResult.Unauthorized(
-                "connect to this host once first — pairing is what lets it show its games",
-            )
+            return LibraryResult.Unauthorized(say(R.string.android_lib_error_unpaired_first))
         }
         val client = try {
             mtlsHttpClient(certPem, keyPem, address, fpHex, streamPort)
         } catch (e: Exception) {
             Log.w(TAG, "mTLS client for $address", e)
-            return LibraryResult.Error("couldn't set up a secure connection to the host")
+            return LibraryResult.Error(say(R.string.android_lib_error_tls))
         }
         val base = mgmtBase(address, mgmtPort)
         val get = { path: String ->
@@ -546,18 +613,10 @@ object LibraryClient {
                 .use { it.code to it.body.string() }
         }
         return try {
-            when (val walked = walkPages(base) { cursor -> get(pagePath(cursor)) }) {
-                is Walk.Done -> LibraryResult.Ok(walked.games.launchersFirst())
-                is Walk.Refused -> if (walked.code in setOf(401, 403, 404)) {
-                    val (code, body) = get("/api/v1/library")
-                    if (code == 200) LibraryResult.Ok(parse(body, base)) else refused(code)
-                } else {
-                    refused(walked.code)
-                }
-            }
+            catalog(profile, base, get)
         } catch (e: Exception) {
             Log.w(TAG, "library fetch from $base", e)
-            LibraryResult.Error("couldn't reach the host — check that it's on and on this network")
+            LibraryResult.Error(say(R.string.android_lib_error_unreachable))
         }
     }
 
@@ -620,7 +679,7 @@ object LibraryClient {
         appId: String,
         streamPort: Int = 0,
     ): GameEnd {
-        if (fpHex.isBlank() || appId.isBlank()) return GameEnd.Failed("this host isn't paired")
+        if (fpHex.isBlank() || appId.isBlank()) return GameEnd.Failed(say(R.string.android_lib_error_host_unpaired))
         val body = JSONObject().put("app_id", appId).put("streaming", true)
         return when (
             val reply = mgmtCall(id, address, mgmtPort, fpHex, streamPort = streamPort) { base ->
@@ -647,9 +706,10 @@ object LibraryClient {
         action: InstallAction,
         streamPort: Int = 0,
     ): InstallOutcome {
-        if (fpHex.isBlank() || appId.isBlank()) return InstallOutcome.Failed("this host isn't paired")
-        val path = "/api/v1/library/install/" +
-            java.net.URLEncoder.encode(appId, "UTF-8").replace("+", "%20").replace("%3A", ":")
+        if (fpHex.isBlank() || appId.isBlank()) {
+            return InstallOutcome.Failed(say(R.string.android_lib_error_host_unpaired))
+        }
+        val path = "/api/v1/library/install/" + pathSegment(appId)
         val empty = ByteArray(0).toRequestBody(null)
         return when (
             val reply = mgmtCall(id, address, mgmtPort, fpHex, streamPort = streamPort) { base ->
@@ -665,12 +725,16 @@ object LibraryClient {
         }
     }
 
+    /** Title [id] as one path segment: `:` stays, a space is `%20`, `/` and `?` are escaped. */
+    internal fun pathSegment(id: String): String =
+        java.net.URLEncoder.encode(id, "UTF-8").replace("+", "%20").replace("%3A", ":")
+
     /** A non-200 answer. 401 and 403 both mean "not paired", as on desktop and Apple. */
     internal fun refused(code: Int): LibraryResult =
         if (code == 401 || code == 403) {
-            LibraryResult.Unauthorized("the host doesn't recognize this device — pair with it first")
+            LibraryResult.Unauthorized(say(R.string.error_mgmt_not_paired))
         } else {
-            LibraryResult.Error("the host refused it ($code)")
+            LibraryResult.Error(say(R.string.error_mgmt_refused, code))
         }
 
     /** Tries per wake: a cold box takes 20–60 s to serve, and 12 × 5 s covers that. */
@@ -681,7 +745,8 @@ object LibraryClient {
     internal const val WAKE_RESEND_EVERY = 2
 
     /**
-     * [fetch] across a host's boot window, for both Android shells (the desktop's `spawn_fetch`).
+     * [fetch] across a host's boot window, for both Android shells (the desktop's `spawn_fetch`),
+     * as [profile] plays the library.
      *
      * With [autoWake] on and a MAC to send to, a magic packet goes out first, [onWaking] runs
      * once, and the fetch is retried [WAKE_ATTEMPTS] times while it stays transient, resending
@@ -696,12 +761,13 @@ object LibraryClient {
         fpHex: String,
         macs: List<String>,
         autoWake: Boolean,
+        profile: String?,
         streamPort: Int = 0,
         isCancelled: () -> Boolean = { false },
         onWaking: () -> Unit = {},
     ): LibraryResult? = acrossWake(
         waking = autoWake && macs.isNotEmpty(),
-        fetch = { fetch(address, mgmtPort, certPem, keyPem, fpHex, streamPort) },
+        fetch = { fetch(address, mgmtPort, certPem, keyPem, fpHex, streamPort, profile) },
         wake = { NativeBridge.nativeWakeOnLan(macs.joinToString(","), address) },
         isCancelled = isCancelled,
         onWaking = onWaking,
@@ -780,11 +846,12 @@ object LibraryClient {
     private fun parse(json: String, base: String): List<GameEntry> =
         parseItems(JSONArray(json), base).launchersFirst()
 
-    /** The titles of one answer, in the host's order. */
-    private fun parseItems(arr: JSONArray, base: String): List<GameEntry> {
+    /** The titles of one answer that [keep] takes, in the host's order. */
+    private fun parseItems(arr: JSONArray, base: String, keep: (JSONObject) -> Boolean = { true }): List<GameEntry> {
         val out = ArrayList<GameEntry>(arr.length())
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
+            if (!keep(o)) continue
             val art = o.optJSONObject("art") ?: JSONObject()
             out.add(
                 GameEntry(
@@ -812,6 +879,7 @@ object LibraryClient {
                             freeBytes = if (i.has("free_bytes")) i.optLong("free_bytes") else null,
                         )
                     },
+                    overrides = GameOverrides.from(o.optJSONObject("overrides")),
                 ),
             )
         }
@@ -827,30 +895,27 @@ object LibraryClient {
         if (s != null && s.startsWith("/")) base + s else s
 }
 
-/** The sentence a person sees, after a dash, when a management call got no answer. */
-const val MGMT_UNREACHABLE = "the request didn't reach the host"
-
 /** What one management-API call came to. */
 sealed interface MgmtReply {
     /** Why it is not a success, in the user register: the host's own sentence, else its status. */
-    val why: String
+    val why: Say
 
-    /** The host answered. [apiError] is the `ApiError` envelope's `error`, when it sent one. */
-    data class Answer(val code: Int, val body: String, val apiError: String?) : MgmtReply {
+    /**
+     * The host answered. [apiError] is the sentence of the `ApiError` envelope, when it sent
+     * one: its message by code ([HostText]), else its English.
+     */
+    data class Answer(val code: Int, val body: String, val apiError: Say?) : MgmtReply {
         val ok: Boolean get() = code in 200..299
-        override val why: String get() = apiError ?: "the host refused it ($code)"
+        override val why: Say get() = apiError ?: say(R.string.error_mgmt_refused, code)
 
         companion object {
-            fun of(code: Int, body: String) = Answer(
-                code, body,
-                runCatching { JSONObject(body).optString("error") }.getOrNull()?.takeIf { it.isNotBlank() },
-            )
+            fun of(code: Int, body: String) = Answer(code, body, HostText.apiError(body))
         }
     }
 
     /** No answer: the connection, the TLS pin or the request itself failed. The cause is logged. */
     data object Unreachable : MgmtReply {
-        override val why: String get() = MGMT_UNREACHABLE
+        override val why: Say get() = say(R.string.android_mgmt_unreachable)
     }
 }
 

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: enricobuehler <enrico.buehler@unom.io>
 Date: Sat, 15 Aug 2026 20:15:12 +0200
-Subject: [PATCH 10/33] wlserver: give the seat's stub keyboard the compiled
+Subject: [PATCH 10/38] wlserver: give the seat's stub keyboard the compiled
  keymap
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -31,10 +31,10 @@ Set the keymap on the stub too.
  2 files changed, 11 insertions(+), 1 deletion(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index 4a9c25d..a478ab0 100644
+index de190dc3..23c9d9c1 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -189,7 +189,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -197,7 +197,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr5 — …and the PipeWire buffer use-after-free is fixed (no new capability)
  #   +pfhdr6 — …and GAMESCOPE_NO_FOCUS windows are never focus candidates (no new capability)
  #   +pfhdr7 — …and PipeWire teardown cannot SIGSEGV a lingering compositor (no new capability)
@@ -45,10 +45,10 @@ index 4a9c25d..a478ab0 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/wlserver.cpp b/src/wlserver.cpp
-index 3d7d123..f495d4b 100644
+index dbb2c4d5..6d9f9806 100644
 --- a/src/wlserver.cpp
 +++ b/src/wlserver.cpp
-@@ -2146,6 +2146,15 @@ static void wlserver_update_keymap()
+@@ -2297,6 +2297,15 @@ static void wlserver_update_keymap()
  		wlserver_set_keyboard_keymap( &wlserver.keyboard_group->keyboard, keymap );
  		for ( struct wlserver_keyboard *pKeyboard : s_Keyboards )
  			wlserver_set_keyboard_keymap( pKeyboard->wlr, keymap );

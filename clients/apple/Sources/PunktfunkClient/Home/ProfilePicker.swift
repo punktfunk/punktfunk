@@ -37,16 +37,8 @@ enum ProfileFetch {
             }
         }
         guard let seconds else { return await ask() }
-        return await withTaskGroup(of: ProfileAnswer.self) { group in
-            group.addTask(operation: ask)
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                return .failed
-            }
-            let first = await group.next() ?? .failed
-            group.cancelAll()
-            return first
-        }
+        // The transport does not stop on a cancel, so the cap must not wait for it.
+        return await Deadline.first(within: seconds, fallback: .failed, ask)
     }
 }
 
@@ -85,7 +77,7 @@ struct SeatWaitView: View {
             if let detail = wait.detail {
                 Text(detail).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
-            Button("Cancel") { dismiss() }
+            Button(L10n.commonCancel) { dismiss() }
         }
         .padding(32)
         #if os(macOS)
@@ -144,18 +136,18 @@ struct ProfilePickerView: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            Text("Who's playing on \(ask.hostName)?")
+            Text(L10n.profileTitle(host: ask.hostName))
                 .font(.title2.bold())
                 .multilineTextAlignment(.center)
             switch ask.content {
             case .failed:
-                Text("Couldn't load the profiles.").foregroundStyle(.secondary)
+                Text(L10n.profileLoadFailed).foregroundStyle(.secondary)
             case .choose(let rows, let saved, let gone):
                 if let gone {
-                    Text("\(gone) is gone from this host.").foregroundStyle(.secondary)
+                    Text(L10n.profileGone(name: gone)).foregroundStyle(.secondary)
                 }
                 if rows.isEmpty {
-                    Text("No profiles on this host.").foregroundStyle(.secondary)
+                    Text(L10n.profileNone).foregroundStyle(.secondary)
                 } else {
                     ScrollView {
                         LazyVGrid(
@@ -179,9 +171,9 @@ struct ProfilePickerView: View {
         #endif
     }
 
-    private var cancelTitle: String {
-        if case .choose(let rows, _, _) = ask.content, !rows.isEmpty { return "Cancel" }
-        return "Close"
+    private var cancelTitle: LocalizedStringResource {
+        if case .choose(let rows, _, _) = ask.content, !rows.isEmpty { return L10n.commonCancel }
+        return L10n.commonClose
     }
 
     private var tile: CGFloat {
@@ -214,7 +206,7 @@ struct ProfilePickerView: View {
                         Image(systemName: "lock.fill")
                             .imageScale(.small)
                             .foregroundStyle(.secondary)
-                            .accessibilityLabel("Locked")
+                            .accessibilityLabel(L10n.profileLocked)
                     }
                     Text(row.displayName).font(.headline).lineLimit(1)
                 }

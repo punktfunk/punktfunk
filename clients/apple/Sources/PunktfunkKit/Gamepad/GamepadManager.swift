@@ -415,6 +415,18 @@ public final class GamepadManager: ObservableObject {
         #endif
     }
 
+    /// The menu pad's kind for the console's Controllers card — a 2015 pad or an SC2 — nil off
+    /// iOS and while no pad delivers. GameController never lists this device, so the card and
+    /// the legend's glyph family come from here alone.
+    public var sc2MenuKind: PunktfunkConnection.GamepadType? {
+        #if os(iOS) || os(visionOS)
+        guard sc2MenuAttached, let pad = sc2Menu else { return nil }
+        return pad.isClassic ? .steamController : .steamController2
+        #else
+        return nil
+        #endif
+    }
+
     /// A streaming `Sc2Capture` is taking the pad (`true`) or handing it back. Two centrals
     /// subscribed to one peripheral would double-feed it, so the menu pad stands down for the
     /// stream and re-acquires after it. Only iOS has a menu pad to move.

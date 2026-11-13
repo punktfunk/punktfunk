@@ -9,7 +9,28 @@ import { readManifest } from "./sandbox.js";
 
 const SCRIPT_EXTENSIONS = new Set([".ts", ".js", ".mjs", ".mts", ".cjs"]);
 
-/** Enumerate the operator's units: loose scripts plus installed plugin packages. */
+/**
+ * On a person's own account, the plugin packages their own lane installed: the host's
+ * `plugin-run/person-plugins.json`, which the runner reads and never writes. A missing or
+ * unreadable list names none. `undefined` on every other host.
+ */
+const personPlugins = (options: RunnerOptions): Set<string> | undefined => {
+	if (!(options.personOnly ?? process.env.PUNKTFUNK_PERSON_PLUGINS === "1")) return undefined;
+	const config = options.configDir ?? configDir();
+	try {
+		const list: unknown = JSON.parse(
+			fs.readFileSync(path.join(config, "plugin-run", "person-plugins.json"), "utf8"),
+		);
+		return new Set(Array.isArray(list) ? list.filter((n) => typeof n === "string") : []);
+	} catch {
+		return new Set();
+	}
+};
+
+/**
+ * Enumerate the operator's units: loose scripts plus installed plugin packages. On a person's own
+ * account ([`personPlugins`]) only the plugins their lane installed, and no loose script.
+ */
 export const discoverUnits = (
 	options: RunnerOptions = {},
 	log: LogSink = options.log ?? defaultLog,
@@ -17,8 +38,9 @@ export const discoverUnits = (
 	const units: Unit[] = [];
 	const scriptsDir = options.scriptsDir ?? path.join(configDir(), "scripts");
 	const pluginsDir = options.pluginsDir ?? path.join(configDir(), "plugins");
+	const theirs = personPlugins(options);
 	try {
-		for (const entry of fs.readdirSync(scriptsDir).sort()) {
+		for (const entry of theirs ? [] : fs.readdirSync(scriptsDir).sort()) {
 			const file = path.join(scriptsDir, entry);
 			if (!SCRIPT_EXTENSIONS.has(path.extname(entry))) continue;
 			if (!fs.statSync(file).isFile()) continue;
@@ -50,6 +72,10 @@ export const discoverUnits = (
 	// Read a plugin package's manifest (`module`/`main` entry) and add it as a unit.
 	const addPlugin = (dir: string, name: string): void => {
 		if (topLevel && !topLevel.has(name)) return; // a dependency, not an installed plugin
+		if (theirs && !theirs.has(name)) {
+			log(`[runner] not starting ${name}: its person didn't install it`, "warn");
+			return;
+		}
 		try {
 			const manifest = JSON.parse(
 				fs.readFileSync(path.join(dir, "package.json"), "utf8"),

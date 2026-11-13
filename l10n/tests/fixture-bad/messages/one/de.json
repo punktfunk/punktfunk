@@ -1,0 +1,9 @@
+{
+  "one_args": "{nom} ist da",
+  "one_ghost": "Geist",
+  "one_pads": [{
+    "declarations": ["local n = count: plural"],
+    "selectors": ["n"],
+    "match": { "n=one": "{count} Pad", "n=few": "{count} Pads", "n=*": "{count} Pads" }
+  }]
+}

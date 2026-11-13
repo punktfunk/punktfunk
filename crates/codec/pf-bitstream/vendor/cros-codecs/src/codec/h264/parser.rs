@@ -930,7 +930,10 @@ impl Sps {
         let mut max_dpb_frames = std::cmp::max(max_dpb_frames, self.max_num_ref_frames as usize);
 
         if self.vui_parameters_present_flag && self.vui_parameters.bitstream_restriction_flag {
-            max_dpb_frames = std::cmp::max(1, self.vui_parameters.max_dec_frame_buffering as usize);
+            // E.2.1 requires max_dec_frame_buffering >= max_num_ref_frames; a stream that
+            // states less would fill the DPB with references and wedge, so keep the floor.
+            max_dpb_frames = std::cmp::max(1, self.vui_parameters.max_dec_frame_buffering as usize)
+                .max(self.max_num_ref_frames as usize);
         }
 
         max_dpb_frames
@@ -2297,6 +2300,12 @@ impl Parser {
             };
 
             match pic_num_mod.modification_of_pic_nums_idc {
+                0..=2 if ref_list_mods.len() > usize::from(num_ref_idx_active_minus1) => {
+                    // 7.4.3.1: at most num_ref_idx_lX_active_minus1 + 1 operations. The
+                    // list would otherwise grow by a 12-byte entry per two input bits.
+                    return Err("Broken Data: too many ref_pic_list_modification operations".into());
+                }
+
                 0 | 1 => {
                     pic_num_mod.abs_diff_pic_num_minus1 = r.read_ue()?;
                 }
@@ -3128,5 +3137,35 @@ mod tests {
         assert!(matches!(nalu.header.type_, NaluType::Sps));
         let err = Parser::default().parse_sps(&nalu).unwrap_err();
         assert!(err.starts_with("Invalid picture size"), "{err}");
+    }
+
+    /// 7.4.3.1 allows `num_ref_idx_lX_active_minus1 + 1` operations. The list used to
+    /// grow by a 12-byte entry per two input bits until the NAL ran out.
+    #[test]
+    fn more_list_modifications_than_active_references_is_a_parse_error() {
+        use crate::bitstream_utils::BitReader;
+
+        // `11` is one operation (idc 0, abs_diff_pic_num_minus1 0); `00100` is idc 3.
+        let parse = |data: &[u8], active_minus1: u8| {
+            let mut mods = Vec::new();
+            let result = Parser::parse_ref_pic_list_modification(
+                &mut BitReader::new(data, true),
+                active_minus1,
+                &mut mods,
+            );
+            (result, mods.len())
+        };
+
+        // Two operations and the terminator fill two active references exactly.
+        assert_eq!(parse(&[0b1111_0010, 0b0000_0000], 1), (Ok(()), 3));
+
+        // A third does not fit.
+        let (result, _) = parse(&[0b1111_1100, 0b1000_0000], 1);
+        assert!(result.unwrap_err().contains("too many"));
+
+        // Nothing but operations: stopped at the bound, not at the end of the data.
+        let (result, len) = parse(&[0xff; 4096], 31);
+        assert!(result.unwrap_err().contains("too many"));
+        assert_eq!(len, 32);
     }
 }

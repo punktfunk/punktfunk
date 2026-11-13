@@ -2,7 +2,8 @@
 //!
 //! The request lanes take a per-plugin token — the shared runner token carries no identity
 //! and gets 403 — and only ever touch the caller's own rows. The overview and the decision
-//! are admin-only, enforced by the lane allowlist rather than a check here. Every store
+//! are the operator's, and on a seat host also its person's, enforced by the lane allowlists
+//! rather than a check here. Every store
 //! mutation emits `plugins.changed` so the console re-reads.
 
 use super::shared::*;
@@ -106,6 +107,17 @@ fn valid_form(form: &str) -> bool {
 
 const FORM_INVALID: &str =
     "the form name must be 1 to 300 characters, none of them control characters";
+
+/// A sentence for the person: the code of its host message `apierr_<code>`, and its English.
+type Said = (&'static str, &'static str);
+
+/// [`store_err`] on the console's lane: one sentence for the person, the cause to the log.
+fn console_store_err(e: std::io::Error, (code, text): Said) -> Response {
+    match e.kind() {
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput => store_err(e, text),
+        _ => api_error_logged(StatusCode::INTERNAL_SERVER_ERROR, code, text, &e),
+    }
+}
 
 fn store_err(e: std::io::Error, what: &str) -> Response {
     match e.kind() {
@@ -313,7 +325,7 @@ pub(crate) async fn get_plugin_access_requests(
 pub(crate) async fn get_plugin_access(State(st): State<Arc<MgmtState>>) -> Response {
     match st.access.snapshot() {
         Ok(snaps) => Json(snaps).into_response(),
-        Err(e) => store_err(e, "read plugin access"),
+        Err(e) => console_store_err(e, ("plugin_access_not_read", "Couldn't read plugin access")),
     }
 }
 
@@ -322,7 +334,10 @@ pub(crate) async fn get_plugin_access(State(st): State<Arc<MgmtState>>) -> Respo
 /// `allow` turns a pending request into a grant (the platform ACL lands first, so a failed
 /// grant stores nothing), or with `write` set grants a path the operator handed over, on
 /// behalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.
-/// A folder that takes longer answers 202 and lists its walk until the record lands.
+/// A folder that takes longer answers 202 and lists its walk until the record lands. On a seat
+/// host the grant is for its own runner: a folder the seat's account can't list is refused, and
+/// on Windows that account places the folder's access. On a person's own account only that person
+/// decides, and an emulator or core install is refused, as it is to a Windows seat's person.
 #[utoipa::path(
     post,
     path = "/plugin-access/{plugin}/decide",
@@ -336,12 +351,13 @@ pub(crate) async fn get_plugin_access(State(st): State<Arc<MgmtState>>) -> Respo
         (status = BAD_REQUEST, description = "Invalid path or a limit reached", body = ApiError),
         (status = NOT_FOUND, description = "No pending request for that path", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = FORBIDDEN, description = "Not reachable on the plugin or device lane", body = ApiError),
+        (status = FORBIDDEN, description = "Not reachable on the plugin or device lane, or an install on a person's own account", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "The decision could not be recorded", body = ApiError),
     )
 )]
 pub(crate) async fn decide_plugin_access(
     State(st): State<Arc<MgmtState>>,
+    Extension(lane): Extension<super::auth::AuthLane>,
     Path(plugin): Path<String>,
     ApiJson(req): ApiJson<DecideRequest>,
 ) -> Response {
@@ -356,7 +372,7 @@ pub(crate) async fn decide_plugin_access(
     // A store call may change a folder's ACL, which walks its whole tree on Windows.
     let store = |f: Box<dyn FnOnce(&MgmtState) -> std::io::Result<_> + Send>| {
         let st = Arc::clone(&st);
-        blocking("plugin access", move || f(&st))
+        blocking("plugin_access", move || f(&st))
     };
     let work = match (decision, req.write) {
         (Decision::Allow, Some(write)) => {
@@ -379,18 +395,32 @@ pub(crate) async fn decide_plugin_access(
             }))
         }
         (Decision::Allow, None) => {
+            // On a person's own account installs stay the box's: only a folder is theirs to grant.
+            // A Windows seat host installs as SYSTEM, so its person gets the same answer.
+            let installs = st.access.pending_emulator(&plugin, &req.path).is_some()
+                || !st.access.pending_cores(&plugin, &req.path).is_empty();
+            let windows_person = cfg!(windows)
+                && pf_paths::seat::role().is_seat_host()
+                && lane == super::auth::AuthLane::Person;
+            if installs && (pf_paths::seat::own_account() || windows_person) {
+                let (code, why) = super::own_account::EMULATORS_YET;
+                return api_error_coded(StatusCode::FORBIDDEN, code, why);
+            }
             // An emulator request: the install lands first, so the grant has a folder and a
             // failed download leaves the row for another try.
             if let Some(emulator) = st.access.pending_emulator(&plugin, &req.path) {
                 let target = emulator.clone();
-                match blocking("emulator manager", move || {
+                match blocking("emulator_manager", move || {
                     crate::emulators::install(&target)
                 })
                 .await
                 {
                     Ok(Ok(_)) => emit(EventKind::EmulatorsChanged { id: emulator }),
                     Ok(Err(e)) => {
-                        return super::emulators::hermir_err(&e, "The emulator didn't install");
+                        return super::emulators::hermir_err(
+                            &e,
+                            ("emulator_not_installed", "The emulator didn't install"),
+                        );
                     }
                     Err(resp) => return resp,
                 }
@@ -399,7 +429,7 @@ pub(crate) async fn decide_plugin_access(
             let cores = st.access.pending_cores(&plugin, &req.path);
             if !cores.is_empty() {
                 let batch = cores.clone();
-                let done = blocking("emulator manager", move || {
+                let done = blocking("emulator_manager", move || {
                     batch
                         .iter()
                         .map(|c| crate::emulators::install_core(c).map(|_| ()))
@@ -411,7 +441,7 @@ pub(crate) async fn decide_plugin_access(
                         id: "retroarch".into(),
                     }),
                     Ok(Err(e)) => {
-                        return super::emulators::hermir_err(&e, "The core didn't install");
+                        return super::emulators::hermir_plain(&e, "The core didn't install");
                     }
                     Err(resp) => return resp,
                 }
@@ -428,12 +458,16 @@ pub(crate) async fn decide_plugin_access(
             }))
         }
     };
-    settle(&st, plugin, "record the decision", work).await
+    let said = (
+        "plugin_access_decision_not_recorded",
+        "Couldn't record the decision",
+    );
+    settle(&st, plugin, said, work).await
 }
 
 /// Answer with `work`'s outcome, or with a 202 listing the walk once [`DECISION_WAIT`] is up.
 /// `work` runs to its end either way, and what it changed reaches the runner and the console.
-async fn settle<F>(st: &Arc<MgmtState>, plugin: String, what: &'static str, work: F) -> Response
+async fn settle<F>(st: &Arc<MgmtState>, plugin: String, said: Said, work: F) -> Response
 where
     F: std::future::Future<
             Output = Result<std::io::Result<Mutation<PluginAccessSnapshot>>, Response>,
@@ -461,12 +495,9 @@ where
     };
     match outcome {
         Ok(Ok(Ok(m))) => Json(m.value).into_response(),
-        Ok(Ok(Err(e))) => store_err(e, what),
+        Ok(Ok(Err(e))) => console_store_err(e, said),
         Ok(Err(resp)) => resp,
-        Err(_) => api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "The plugin access worker stopped responding.",
-        ),
+        Err(_) => worker_stopped("plugin_access"),
     }
 }
 
@@ -501,11 +532,15 @@ pub(crate) async fn release_plugin_access(
     // A grant only forms held goes with them, and its ACL with it: off the async workers.
     let work = {
         let (st, plugin) = (Arc::clone(&st), plugin.clone());
-        blocking("plugin access", move || {
+        blocking("plugin_access", move || {
             let changed = st.access.release(&plugin, &req.form, &req.keep)?.changed;
             let value = st.access.snapshot_for(&plugin)?;
             Ok(Mutation { value, changed })
         })
     };
-    settle(&st, plugin, "record the release", work).await
+    let said = (
+        "plugin_access_release_not_recorded",
+        "Couldn't record the release",
+    );
+    settle(&st, plugin, said, work).await
 }

@@ -36,6 +36,8 @@ public final class ConsoleBridge {
         case padTest = 18
         case libraryDownloads = 19
         case profiles = 20
+        case hidden = 21
+        case hide = 22
     }
 
     /// A discrete menu event, as the shell numbers them.
@@ -85,7 +87,8 @@ public final class ConsoleBridge {
         case setClipboard = "SetClipboard", unpairHost = "UnpairHost", savePreset = "SavePreset"
         case deletePreset = "DeletePreset", padTest = "PadTest", loadLicenses = "LoadLicenses"
         case promptAnswer = "PromptAnswer", padAction = "PadAction", hostAction = "HostAction"
-        case endGame = "EndGame", install = "Install"
+        case setScreen = "SetScreen", endGame = "EndGame", install = "Install"
+        case setHidden = "SetHidden", fetchHidden = "FetchHidden"
     }
 
     /// Where the session the console asked for stands. `profileLocked` is a failure the host
@@ -105,10 +108,9 @@ public final class ConsoleBridge {
         self.handle = handle
     }
 
-    deinit {
-        // `free` belongs to this thread, and a @MainActor class is only ever released on it.
-        MainActor.assumeIsolated { punktfunk_console_free(handle) }
-    }
+    /// `free` belongs to the main thread. The deinit runs there even when another thread drops
+    /// the last reference.
+    isolated deinit { punktfunk_console_free(handle) }
 
     /// Draw into `texture` and submit. `false` = nothing drawn (idle, or the texture was
     /// refused): present nothing this tick.
@@ -194,6 +196,15 @@ public final class ConsoleBridge {
         guard let raw = punktfunk_console_drain_cmds(handle) else { return "[]" }
         defer { punktfunk_console_string_free(raw) }
         return String(cString: raw)
+    }
+
+    /// Words the text Rust writes with no console built (the palette names, the PyroWave
+    /// warning) in the OS languages. The app calls it once at start, before any of it is read.
+    public nonisolated static func setLanguages() {
+        guard let json = try? JSONEncoder().encode(Locale.preferredLanguages),
+            let tags = String(data: json, encoding: .utf8)
+        else { return }
+        punktfunk_console_set_languages(tags)
     }
 
     /// The console's background palettes in cycle order: the `ui_palette` choices.

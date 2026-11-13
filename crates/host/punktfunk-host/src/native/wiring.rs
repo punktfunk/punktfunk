@@ -11,7 +11,10 @@ use crate::native::bitrate::EncoderCeiling;
 /// is not what the client was last told, so a client without `StreamConfig` gets a second
 /// `Reconfigured`.
 pub(crate) struct Delivered {
+    /// The display's mode, as captured: what the client asked for, not what is encoded.
     pub(crate) mode: punktfunk_core::Mode,
+    /// The size the encoder takes the picture to: a view, a mirror's fit, or `mode`'s own.
+    pub(crate) encoded: (u32, u32),
     pub(crate) format: punktfunk_core::quic::VideoFormat,
     pub(crate) epoch: u8,
     pub(crate) corrects: bool,
@@ -20,6 +23,9 @@ pub(crate) struct Delivered {
 /// The stream thread's answer to a codec ask: the codec it now encodes, or `None` when the
 /// rebuild failed and the old pipeline streams on.
 pub(crate) type FormatOutcome = Option<crate::encode::Codec>;
+
+/// An accepted mode ask: the display's mode and the view it is encoded at (`None` = the mode).
+pub(crate) type ModeAsk = (punktfunk_core::Mode, Option<(u32, u32)>);
 
 /// What the screens past the first tell the client, on the control stream.
 pub(crate) enum ScreenTell {
@@ -94,8 +100,8 @@ pub(crate) struct SessionShared {
     /// Both ends' ports, from the handshake: the pacer's floor and hard ceiling, and the
     /// bound on every probe.
     pub(crate) ports: crate::send_pacing::Ports,
-    /// Queues a resend of `(frame, shards)` beside the frames on the send thread; `false`
-    /// when its queue is full. `None` until the send thread exists.
+    /// Queues a resend of `(frame, shards)` ahead of the frames on the send thread; `false`
+    /// once the thread is gone. `None` until the send thread exists.
     pub(crate) resend: Arc<std::sync::Mutex<Option<ResendFn>>>,
     /// The newest frame the client confirmed it decoded and the sixteen before it,
     /// `last << 16 | mask`; [`NONE_ACKED`] until the first.
@@ -118,10 +124,35 @@ pub(crate) struct SessionShared {
     pub(crate) offload_switch: Arc<AtomicBool>,
     /// Screens past the first: their keyframe asks and the first screen's share of the video.
     pub(crate) screens: Arc<ScreenWire>,
+    /// The display this session joined ([`joined_display`]): the control task refuses a
+    /// switch while [`joined_held`]. The stream loop writes it with each capture it adopts.
+    pub(crate) joined_display: Arc<AtomicU64>,
 }
 
 /// [`SessionShared::acked`] before the client confirmed a frame.
 pub(crate) const NONE_ACKED: u64 = u64::MAX;
+
+/// [`SessionShared::joined_display`] of a joiner whose display generation is not known yet.
+pub(crate) const JOINED_UNSEEN: u64 = u64::MAX;
+
+/// [`SessionShared::joined_display`] of a session on display `generation`: `0` when it streams
+/// its own, which a mode switch may change.
+pub(crate) fn joined_display(joined: bool, generation: Option<u64>) -> u64 {
+    if joined {
+        generation.unwrap_or(JOINED_UNSEEN)
+    } else {
+        0
+    }
+}
+
+/// A display this session joined is not its to change: another session holds it, its
+/// generation is not known, or the host is not Linux, where alone a joiner builds its own.
+pub(crate) fn joined_held(joined: u64) -> bool {
+    joined != 0
+        && (joined == JOINED_UNSEEN
+            || !cfg!(target_os = "linux")
+            || crate::vdisplay::registry::shared(joined))
+}
 
 /// `ShardPayloadAck`s held for the wire-MTU watcher: one change is in flight at a time, and
 /// only a grow drains them, so more are a client's noise and drop.
@@ -135,7 +166,7 @@ pub(crate) type ArrivalPoke = Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + 
 
 /// The control task's halves.
 pub(crate) struct ControlEnds {
-    pub(crate) reconfig_tx: std::sync::mpsc::Sender<punktfunk_core::Mode>,
+    pub(crate) reconfig_tx: std::sync::mpsc::Sender<ModeAsk>,
     /// A codec ask the control task vetted; [`FormatOutcome`] comes back on `format_result_rx`.
     pub(crate) format_tx: std::sync::mpsc::Sender<crate::encode::Codec>,
     pub(crate) format_result_rx: tokio::sync::mpsc::UnboundedReceiver<FormatOutcome>,
@@ -161,7 +192,7 @@ pub(crate) struct ControlEnds {
 
 /// The stream thread's halves.
 pub(crate) struct StreamEnds {
-    pub(crate) reconfig: std::sync::mpsc::Receiver<punktfunk_core::Mode>,
+    pub(crate) reconfig: std::sync::mpsc::Receiver<ModeAsk>,
     pub(crate) format_rx: std::sync::mpsc::Receiver<crate::encode::Codec>,
     pub(crate) format_result_tx: tokio::sync::mpsc::UnboundedSender<FormatOutcome>,
     pub(crate) keyframe: std::sync::mpsc::Receiver<()>,
@@ -297,6 +328,7 @@ impl SessionWiring {
                 )),
                 cursor_client_draws: Arc::new(AtomicBool::new(true)),
                 screens: Arc::new(ScreenWire::new()),
+                joined_display: Arc::new(AtomicU64::new(0)),
             },
         }
     }

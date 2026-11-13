@@ -28,6 +28,10 @@ use std::sync::RwLock;
 /// while nobody has the store page open.
 const CATALOG_TTL_SECS: u64 = 6 * 60 * 60;
 
+/// Five minutes. A failed refresh holds off the next one, so a source that is down does not
+/// block every page load for its timeouts.
+const RETRY_AFTER_FAILURE_SECS: u64 = 5 * 60;
+
 /// Same directory the SDK and runner use.
 pub(crate) fn plugins_dir() -> PathBuf {
     pf_paths::config_dir().join("plugins")
@@ -258,6 +262,8 @@ pub(crate) struct SourceState {
     pub stale: bool,
     /// Last failure, shown against the source in the console.
     pub error: Option<String>,
+    /// Unix seconds of the last failed refresh.
+    failed_at: Option<u64>,
     pub etag: Option<String>,
 }
 
@@ -269,15 +275,22 @@ impl SourceState {
             fetched_at: None,
             stale: false,
             error: None,
+            failed_at: None,
             etag: None,
         }
     }
 
+    /// No fetch is due: the index is inside its TTL, or the last attempt failed a moment ago.
     fn is_fresh(&self) -> bool {
-        self.index.is_some()
+        let now = crate::clock::unix_secs_u64();
+        let index_fresh = self.index.is_some()
             && self
                 .fetched_at
-                .is_some_and(|t| crate::clock::unix_secs_u64().saturating_sub(t) < CATALOG_TTL_SECS)
+                .is_some_and(|t| now.saturating_sub(t) < CATALOG_TTL_SECS);
+        index_fresh
+            || self
+                .failed_at
+                .is_some_and(|t| now.abs_diff(t) < RETRY_AFTER_FAILURE_SECS)
     }
 }
 
@@ -317,8 +330,8 @@ fn sync_sources() {
     }
 }
 
-/// **Blocking**. Refreshes past-TTL sources (or all when `force`). Freshness
-/// is our fetch clock, never the document's `generated`.
+/// **Blocking**. Refreshes past-TTL sources (or all when `force`), except one whose last
+/// attempt failed minutes ago. Freshness is our fetch clock, never the document's `generated`.
 pub(crate) fn catalogs(force: bool) -> Vec<SourceState> {
     sync_sources();
     let dir = catalog::cache_dir();
@@ -371,6 +384,7 @@ pub(crate) fn catalogs(force: bool) -> Vec<SourceState> {
                 tracing::warn!(source = %source.name, "plugin catalog refresh failed: {why}");
                 slot.stale = true;
                 slot.error = Some(why);
+                slot.failed_at = Some(now);
             }
         }
     }
@@ -492,6 +506,17 @@ mod tests {
             vec!["@punktfunk/plugin-rom-manager"],
             "only the top-level install counts"
         );
+    }
+
+    #[test]
+    fn a_failed_refresh_holds_off_the_next_one_for_minutes() {
+        let now = crate::clock::unix_secs_u64();
+        let mut s = SourceState::empty(Source::official());
+        assert!(!s.is_fresh(), "a source never fetched is due");
+        s.failed_at = Some(now - 60);
+        assert!(s.is_fresh(), "a minute after a failure it waits");
+        s.failed_at = Some(now - RETRY_AFTER_FAILURE_SECS - 1);
+        assert!(!s.is_fresh(), "past the hold-off it retries");
     }
 
     #[test]

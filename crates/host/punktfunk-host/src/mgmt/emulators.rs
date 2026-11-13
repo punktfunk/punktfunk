@@ -94,9 +94,19 @@ pub(crate) struct RemoveEmulatorRequest {
     pub purge: bool,
 }
 
-/// A hermir failure as an API error, by what went wrong rather than where.
-pub(crate) fn hermir_err(e: &hermir::Error, what: &str) -> Response {
-    let status = match e {
+/// A hermir failure as an API error, by what went wrong rather than where. `what` is the sentence
+/// for a person, the English of the host message `apierr_<code>`; the error goes to the log.
+pub(crate) fn hermir_err(e: &hermir::Error, (code, what): (&str, &str)) -> Response {
+    api_error_logged(hermir_status(e), code, what, e)
+}
+
+/// [`hermir_err`] for a sentence with no host message: the error rides along.
+pub(crate) fn hermir_plain(e: &hermir::Error, what: &str) -> Response {
+    api_error(hermir_status(e), &format!("{what} — {e}"))
+}
+
+fn hermir_status(e: &hermir::Error) -> StatusCode {
+    match e {
         hermir::Error::NotInCatalog(_) => StatusCode::NOT_FOUND,
         hermir::Error::Policy { .. } | hermir::Error::UnsupportedOs { .. } => {
             StatusCode::BAD_REQUEST
@@ -104,8 +114,7 @@ pub(crate) fn hermir_err(e: &hermir::Error, what: &str) -> Response {
         hermir::Error::Network { .. } | hermir::Error::Verify { .. } => StatusCode::BAD_GATEWAY,
         hermir::Error::Locked(_) => StatusCode::CONFLICT,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    api_error(status, &format!("{what} — {e}"))
+    }
 }
 
 fn statuses() -> hermir::Result<Vec<EmulatorStatus>> {
@@ -166,9 +175,12 @@ fn statuses() -> hermir::Result<Vec<EmulatorStatus>> {
     )
 )]
 pub(crate) async fn get_emulators() -> Response {
-    match blocking("emulator manager", statuses).await {
+    match blocking("emulator_manager", statuses).await {
         Ok(Ok(rows)) => Json(rows).into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The emulators couldn't be listed"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            ("emulators_not_listed", "The emulators couldn't be listed"),
+        ),
         Err(r) => r,
     }
 }
@@ -196,7 +208,7 @@ pub(crate) async fn get_emulators() -> Response {
 )]
 pub(crate) async fn install_emulator(Path(id): Path<String>) -> Response {
     let target = id.clone();
-    match blocking("emulator manager", move || {
+    match blocking("emulator_manager", move || {
         crate::emulators::install(&target)
     })
     .await
@@ -212,7 +224,10 @@ pub(crate) async fn install_emulator(Path(id): Path<String>) -> Response {
             })
             .into_response()
         }
-        Ok(Err(e)) => hermir_err(&e, "The emulator didn't install"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            ("emulator_not_installed", "The emulator didn't install"),
+        ),
         Err(r) => r,
     }
 }
@@ -223,7 +238,8 @@ pub(crate) async fn install_emulator(Path(id): Path<String>) -> Response {
 /// welcome box) the way clicking through would, gets the platform's firmware — copied into
 /// its firmware folder, or installed by the emulator itself — and has this session's pads
 /// bound in seat order, which the host undoes when the game exits. Idempotent; each step says
-/// what it did, and a platform still missing its firmware says so.
+/// what it did, and a platform still missing its firmware says so. A Windows seat host takes it
+/// from the operator alone.
 #[utoipa::path(
     post,
     path = "/emulators/{id}/prepare",
@@ -234,7 +250,7 @@ pub(crate) async fn install_emulator(Path(id): Path<String>) -> Response {
     responses(
         (status = OK, description = "What each copy's preparation did", body = [PreparedCopy]),
         (status = BAD_REQUEST, description = "A malformed platform, or a firmware folder that isn't one", body = ApiError),
-        (status = FORBIDDEN, description = "The firmware folder is outside the calling plugin's state directory", body = ApiError),
+        (status = FORBIDDEN, description = "The firmware folder is outside the calling plugin's state directory, or a Windows seat host's plugin asks", body = ApiError),
         (status = NOT_FOUND, description = "Not in the catalog", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "The catalog or the firmware folder could not be read", body = ApiError),
@@ -246,6 +262,9 @@ pub(crate) async fn prepare_emulator(
     who: Option<Extension<PluginIdentity>>,
     ApiJson(req): ApiJson<PrepareEmulatorRequest>,
 ) -> Response {
+    if let Some(refused) = seat_write_refusal(lane, crate::plugins::system_seat_host()) {
+        return refused;
+    }
     if let Some(p) = req.platform.as_deref()
         && !valid_platform(p)
     {
@@ -267,7 +286,7 @@ pub(crate) async fn prepare_emulator(
     let platform = req.platform;
     // No session here: pads not up yet are taken as the default Xbox 360.
     let pad = punktfunk_core::config::GamepadPref::Xbox360;
-    let prepared = blocking("emulator manager", move || {
+    let prepared = blocking("emulator_manager", move || {
         crate::emulators::prepare(&id, platform.as_deref(), dir.as_deref(), pad, None)
     })
     .await;
@@ -291,9 +310,22 @@ pub(crate) async fn prepare_emulator(
                 .collect::<Vec<_>>(),
         )
         .into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The emulator wasn't prepared"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            ("emulator_not_prepared", "The emulator wasn't prepared"),
+        ),
         Err(r) => r,
     }
+}
+
+/// The emulator file routes a Windows seat host (`seat`) takes from the operator alone, the save
+/// list included: it is SYSTEM, and a plugin's state or game folder is the seat account's to
+/// point anywhere. Its emulators are the box's copies.
+fn seat_write_refusal(lane: AuthLane, seat: bool) -> Option<Response> {
+    (seat && !lane.is_operator()).then(|| {
+        let (code, why) = super::own_account::EMULATORS_YET;
+        api_error_coded(StatusCode::FORBIDDEN, code, why)
+    })
 }
 
 /// A platform id or alias: `ps2`, `ngc`, `Sony - PlayStation 2`.
@@ -418,7 +450,7 @@ pub(crate) async fn remove_emulator(
     ApiJson(req): ApiJson<RemoveEmulatorRequest>,
 ) -> Response {
     let target = id.clone();
-    match blocking("emulator manager", move || {
+    match blocking("emulator_manager", move || {
         crate::emulators::remove(&target, req.purge)
     })
     .await
@@ -427,7 +459,7 @@ pub(crate) async fn remove_emulator(
             emit(EventKind::EmulatorsChanged { id });
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(Err(e)) => hermir_err(&e, "The emulator wasn't removed"),
+        Ok(Err(e)) => hermir_err(&e, ("emulator_not_removed", "The emulator wasn't removed")),
         Err(r) => r,
     }
 }
@@ -454,9 +486,15 @@ pub(crate) struct EmulatorRegistry(hermir::Registry);
     )
 )]
 pub(crate) async fn get_emulator_registry() -> Response {
-    match blocking("emulator manager", crate::emulators::registry).await {
+    match blocking("emulator_manager", crate::emulators::registry).await {
         Ok(Ok(r)) => Json(EmulatorRegistry(r)).into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The registry couldn't be read"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            (
+                "emulator_registry_not_read",
+                "The registry couldn't be read",
+            ),
+        ),
         Err(r) => r,
     }
 }
@@ -580,14 +618,20 @@ pub(crate) async fn get_emulator_firmware(
         Ok(seat) => seat,
         Err(r) => return r,
     };
-    let checked = blocking("emulator manager", move || match &seat {
+    let checked = blocking("emulator_manager", move || match &seat {
         None => Some(crate::emulators::firmware_status(None, &id, &q.platform)),
         Some(seat) => crate::emulators::exchange::firmware_status(seat, &id, &q.platform),
     })
     .await;
     match checked {
         Ok(Some(Ok(status))) => Json(status.map(firmware_view)).into_response(),
-        Ok(Some(Err(e))) => hermir_err(&e, "The firmware couldn't be checked"),
+        Ok(Some(Err(e))) => hermir_err(
+            &e,
+            (
+                "emulator_firmware_not_checked",
+                "The firmware couldn't be checked",
+            ),
+        ),
         Ok(None) => api_error(
             StatusCode::NOT_FOUND,
             "That seat hasn't checked this platform's firmware yet",
@@ -785,7 +829,8 @@ fn plugin_states() -> std::path::PathBuf {
 ///
 /// The save units of the platform on the best copy of the emulator: name, kind, size and a
 /// stamp that changes with the save. A plugin needs the operator's save grant. With `profile`,
-/// that seat's units; a Linux seat's are what its host exported at its last launch or exit.
+/// that seat's units; a Linux seat's are what its host exported at its last launch or exit. A
+/// Windows seat host lists them for the operator alone.
 #[utoipa::path(
     get,
     path = "/emulators/{id}/saves",
@@ -800,7 +845,7 @@ fn plugin_states() -> std::path::PathBuf {
     responses(
         (status = OK, description = "The save units", body = [SaveUnitView]),
         (status = BAD_REQUEST, description = "A malformed platform, or no copy on this host", body = ApiError),
-        (status = FORBIDDEN, description = "No save grant, or a game folder outside the plugin's reach", body = ApiError),
+        (status = FORBIDDEN, description = "No save grant, a game folder outside the plugin's reach, or a Windows seat host's plugin asks", body = ApiError),
         (status = NOT_FOUND, description = "Not in the catalog, or a profile with no seat", body = ApiError),
         (status = CONFLICT, description = "`profile` on a seat host", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
@@ -813,6 +858,9 @@ pub(crate) async fn get_emulator_saves(
     who: Option<Extension<PluginIdentity>>,
     Query(q): Query<PlatformQuery>,
 ) -> Response {
+    if let Some(refused) = seat_write_refusal(lane, crate::plugins::system_seat_host()) {
+        return refused;
+    }
     let plugin = who.map(|Extension(w)| w.0);
     if let Err((status, why)) = may_move_saves(&st, lane, plugin.as_deref()) {
         return api_error(status, why);
@@ -828,7 +876,7 @@ pub(crate) async fn get_emulator_saves(
         Ok(seat) => seat,
         Err(r) => return r,
     };
-    match blocking("emulator manager", move || match &seat {
+    match blocking("emulator_manager", move || match &seat {
         None => crate::emulators::units(None, &id, &q.platform, game.as_deref()),
         Some(seat) => crate::emulators::exchange::units(seat, &id, &q.platform, game.as_deref()),
     })
@@ -849,7 +897,10 @@ pub(crate) async fn get_emulator_saves(
                 .collect::<Vec<_>>(),
         )
         .into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The saves couldn't be listed"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            ("emulator_saves_not_listed", "The saves couldn't be listed"),
+        ),
         Err(r) => r,
     }
 }
@@ -859,7 +910,7 @@ pub(crate) async fn get_emulator_saves(
 /// Writes each named unit into `dir`: the save file, or a tar of a save folder with nothing in
 /// its headers that differs between machines. A plugin's `dir` is inside its own state folder.
 /// With `profile`, that seat's units; a Linux seat's files are its host's last export, and a
-/// unit it didn't export is left out.
+/// unit it didn't export is left out. A Windows seat host takes it from the operator alone.
 #[utoipa::path(
     post,
     path = "/emulators/{id}/saves/export",
@@ -872,7 +923,7 @@ pub(crate) async fn get_emulator_saves(
     responses(
         (status = OK, description = "The files written", body = [ExportedUnitView]),
         (status = BAD_REQUEST, description = "A malformed platform or unit, or no copy on this host", body = ApiError),
-        (status = FORBIDDEN, description = "No save grant, or a folder outside the plugin's reach", body = ApiError),
+        (status = FORBIDDEN, description = "No save grant, a folder outside the plugin's reach, or a Windows seat host's plugin asks", body = ApiError),
         (status = NOT_FOUND, description = "Not in the catalog, or a profile with no seat", body = ApiError),
         (status = CONFLICT, description = "`profile` on a seat host", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
@@ -886,6 +937,9 @@ pub(crate) async fn export_emulator_saves(
     Query(q): Query<SeatQuery>,
     ApiJson(req): ApiJson<ExportUnitsRequest>,
 ) -> Response {
+    if let Some(refused) = seat_write_refusal(lane, crate::plugins::system_seat_host()) {
+        return refused;
+    }
     let plugin = who.map(|Extension(w)| w.0);
     if let Err((status, why)) = may_move_saves(&st, lane, plugin.as_deref()) {
         return api_error(status, why);
@@ -914,7 +968,7 @@ pub(crate) async fn export_emulator_saves(
     let units: Vec<(hermir::SaveKind, String)> =
         req.units.into_iter().map(|u| (u.kind, u.name)).collect();
     let dir = req.dir;
-    let exported = blocking("emulator manager", move || {
+    let exported = blocking("emulator_manager", move || {
         let (platform, game) = (&req.platform, game.as_deref());
         match &seat {
             None => crate::emulators::export_units(None, &id, platform, game, &units, &out),
@@ -946,7 +1000,13 @@ pub(crate) async fn export_emulator_saves(
                 .collect::<Vec<_>>(),
         )
         .into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The saves weren't copied out"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            (
+                "emulator_saves_not_exported",
+                "The saves weren't copied out",
+            ),
+        ),
         Err(r) => r,
     }
 }
@@ -957,7 +1017,7 @@ pub(crate) async fn export_emulator_saves(
 /// name; what was there is kept in hermir's save backups. A unit with no place yet is a step
 /// that says so. A plugin's files are inside its own state folder. With `profile`, into that
 /// seat's copies; a Linux seat's host puts each back before its next game starts, and the step
-/// says so.
+/// says so. A Windows seat host takes it from the operator alone.
 #[utoipa::path(
     post,
     path = "/emulators/{id}/saves/import",
@@ -970,7 +1030,7 @@ pub(crate) async fn export_emulator_saves(
     responses(
         (status = OK, description = "One step per unit", body = [EmulatorStep]),
         (status = BAD_REQUEST, description = "A malformed platform or unit, a missing file, or no copy on this host", body = ApiError),
-        (status = FORBIDDEN, description = "No save grant, or a file outside the plugin's reach", body = ApiError),
+        (status = FORBIDDEN, description = "No save grant, a file outside the plugin's reach, or a Windows seat host's plugin asks", body = ApiError),
         (status = NOT_FOUND, description = "Not in the catalog, or a profile with no seat", body = ApiError),
         (status = CONFLICT, description = "`profile` on a seat host", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
@@ -984,6 +1044,9 @@ pub(crate) async fn import_emulator_saves(
     Query(q): Query<SeatQuery>,
     ApiJson(req): ApiJson<ImportUnitsRequest>,
 ) -> Response {
+    if let Some(refused) = seat_write_refusal(lane, crate::plugins::system_seat_host()) {
+        return refused;
+    }
     let plugin = who.map(|Extension(w)| w.0);
     if let Err((status, why)) = may_move_saves(&st, lane, plugin.as_deref()) {
         return api_error(status, why);
@@ -1019,7 +1082,7 @@ pub(crate) async fn import_emulator_saves(
     }
     let others = req.others;
     let platform = req.platform;
-    let imported = blocking("emulator manager", move || {
+    let imported = blocking("emulator_manager", move || {
         rows.into_iter()
             .map(|(name, file, kinds)| {
                 let game = game.as_deref();
@@ -1044,7 +1107,10 @@ pub(crate) async fn import_emulator_saves(
     .await;
     match imported {
         Ok(Ok(steps)) => Json(steps).into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The saves weren't put back"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            ("emulator_saves_not_imported", "The saves weren't put back"),
+        ),
         Err(r) => r,
     }
 }
@@ -1053,7 +1119,7 @@ pub(crate) async fn import_emulator_saves(
 ///
 /// Hands the files to the best copy of the emulator the way it takes them: a folder it scans,
 /// its own installer, or a registration file. One step per file. An emulator with no way says
-/// why.
+/// why. A Windows seat host takes it from the operator alone.
 #[utoipa::path(
     post,
     path = "/emulators/{id}/content",
@@ -1064,7 +1130,7 @@ pub(crate) async fn import_emulator_saves(
     responses(
         (status = OK, description = "One step per file", body = [EmulatorStep]),
         (status = BAD_REQUEST, description = "A malformed platform or kind, no way to install it, or no copy on this host", body = ApiError),
-        (status = FORBIDDEN, description = "A file outside the plugin's reach", body = ApiError),
+        (status = FORBIDDEN, description = "A file outside the plugin's reach, or a Windows seat host's plugin asks", body = ApiError),
         (status = NOT_FOUND, description = "Not in the catalog", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
@@ -1075,6 +1141,9 @@ pub(crate) async fn install_emulator_content(
     who: Option<Extension<PluginIdentity>>,
     ApiJson(req): ApiJson<ContentRequest>,
 ) -> Response {
+    if let Some(refused) = seat_write_refusal(lane, crate::plugins::system_seat_host()) {
+        return refused;
+    }
     if !valid_platform(&req.platform) {
         return api_error(StatusCode::BAD_REQUEST, "That isn't a platform id");
     }
@@ -1100,7 +1169,7 @@ pub(crate) async fn install_emulator_content(
             Err((status, why)) => return api_error(status, why),
         }
     }
-    let installed = blocking("emulator manager", move || {
+    let installed = blocking("emulator_manager", move || {
         crate::emulators::install_content(&id, &req.platform, &req.kind, &files)
     })
     .await;
@@ -1118,17 +1187,23 @@ pub(crate) async fn install_emulator_content(
                 .collect::<Vec<_>>(),
         )
         .into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The add-ons weren't installed"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            (
+                "emulator_addons_not_installed",
+                "The add-ons weren't installed",
+            ),
+        ),
         Err(r) => r,
     }
 }
 
 /// Adopt a copy of an emulator
 ///
-/// Points the host at the operator's own copy, one no rule finds (a portable build unpacked
-/// anywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane
-/// only. A seat host on a person's own account adopts none: a prepare runs the copy as that
-/// person, unasked.
+/// Points the host at a copy of the caller's own, one no rule finds (a portable build unpacked
+/// anywhere), so it is listed and launched like any other; `forget` drops it again. The
+/// operator's lane, and a seat's person on their seat host. On a person's own account only that
+/// person adopts one: anyone else's copy would run as them.
 #[utoipa::path(
     post,
     path = "/emulators/{id}/adopt",
@@ -1142,22 +1217,24 @@ pub(crate) async fn install_emulator_content(
         (status = NOT_FOUND, description = "Not in the catalog", body = ApiError),
         (status = CONFLICT, description = "Another install holds the prefix", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = FORBIDDEN, description = "A seat host on a person's own account, which adopts no copy", body = ApiError),
+        (status = FORBIDDEN, description = "A seat host on a person's own account, from any lane but that person's", body = ApiError),
     )
 )]
 pub(crate) async fn adopt_emulator(
     Path(id): Path<String>,
+    Extension(lane): Extension<AuthLane>,
     ApiJson(req): ApiJson<AdoptRequest>,
 ) -> Response {
-    if pf_paths::seat::own_account() && !req.forget {
-        return api_error(
+    if pf_paths::seat::own_account() && !req.forget && lane != AuthLane::Person {
+        return api_error_coded(
             StatusCode::FORBIDDEN,
+            "emulator_adopt_own_account",
             "An emulator copy can't be added by hand on a profile that uses an existing account, \
              because it would run as that person.",
         );
     }
     let target = id.clone();
-    let adopted = blocking("emulator manager", move || {
+    let adopted = blocking("emulator_manager", move || {
         crate::emulators::adopt(&target, std::path::Path::new(&req.exe), !req.forget)
     })
     .await;
@@ -1173,7 +1250,7 @@ pub(crate) async fn adopt_emulator(
             }))
             .into_response()
         }
-        Ok(Err(e)) => hermir_err(&e, "The copy wasn't adopted"),
+        Ok(Err(e)) => hermir_err(&e, ("emulator_copy_not_adopted", "The copy wasn't adopted")),
         Err(r) => r,
     }
 }
@@ -1181,6 +1258,17 @@ pub(crate) async fn adopt_emulator(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Windows seat host's plugin hands it no emulator file, and the refusal says why; the
+    /// operator and every other host stay as they were.
+    #[test]
+    fn a_windows_seat_host_takes_emulator_writes_from_the_operator_alone() {
+        let refused = seat_write_refusal(AuthLane::Plugin, true).expect("the plugin is refused");
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        assert!(seat_write_refusal(AuthLane::Person, true).is_some());
+        assert!(seat_write_refusal(AuthLane::Admin, true).is_none());
+        assert!(seat_write_refusal(AuthLane::Plugin, false).is_none());
+    }
 
     #[test]
     fn a_plugin_hands_over_firmware_only_from_its_own_state_folder() {

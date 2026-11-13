@@ -38,6 +38,8 @@ fn run_with_home(args: &[&str], keys: &[u8], until: &str, home: Option<&str>) ->
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env_remove("NO_COLOR");
+    // The screens follow the terminal's locale; `C` keeps them in the English asserted here.
+    cmd.env("LC_ALL", "C");
     if let Some(home) = home {
         cmd.env("HOME", home);
         cmd.env_remove("XDG_CONFIG_HOME");
@@ -161,10 +163,10 @@ fn a_failed_step_renders_the_failure_and_points_at_the_docs() {
     let text = plain(&run(
         &["--demo", "debian-fresh", "--fail", "installing"],
         b"\r\r\r",
-        "that step failed",
+        "That step failed",
     ));
     assert!(
-        text.contains("that step failed"),
+        text.contains("That step failed"),
         "no failure text:\n{text}"
     );
     assert!(

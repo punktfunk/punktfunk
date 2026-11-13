@@ -435,6 +435,19 @@ object DsDevice {
      */
     fun ds5AudioHapticsReport(model: Model): ByteArray = newDs5(model)
 
+    /**
+     * Point the speaker pair at the speaker: power-on routes it to the headphone jack, so
+     * `pad_speaker` is silent until this lands. Mirrors `Ds5Feedback::speaker_enable_packet`
+     * (volume `0x64`, path `0x20`, preamp `+6 dB`); bits 0/1 stay clear so the coils stay live.
+     */
+    fun ds5SpeakerRouteReport(model: Model): ByteArray = newDs5(model).also {
+        it[1] = 0xA0.toByte() // flag0: speaker volume valid (bit5), audio-control valid (bit7)
+        it[2] = 0x80.toByte() // flag1: audio-control-2 valid
+        it[6] = 0x64 // speaker volume
+        it[8] = 0x20 // output path: speaker, headphone copy kept
+        it[38] = 0x02 // speaker preamp gain
+    }
+
     fun ds5RumbleReport(model: Model, low: Int, high: Int): ByteArray = newDs5(model).also {
         it[1] = (DS5_FLAG0_COMPAT_VIBRATION or DS5_FLAG0_HAPTICS_SELECT).toByte()
         it[39] = DS5_FLAG2_VIBRATION2.toByte()

@@ -15,7 +15,8 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::too_many_arguments)]
 
-use super::vk_csc::{bind_rgb, csc_layout, CursorPlane};
+use super::vk_csc::{bind_rgb, csc_layout, csc_push, CursorPlane, LinearSrc, WordsCache};
+use super::vk_reframe::Reframe;
 use super::vk_ring::{Action, Observation, Ring};
 use super::vk_util::{
     color_range, find_mem_preferring, import_failure_feeds_latch, imported_acquire_barrier,
@@ -159,6 +160,9 @@ const AV1_BASE_Q_IDX: u8 = 128;
 struct IntraRefreshCaps {
     /// `maxIntraRefreshCycleDuration`, in frames.
     max_cycle: u32,
+    /// The cycle `PUNKTFUNK_IR_PERIOD_FRAMES` pins, read once so a frame does not scan the
+    /// environment ([`crate::rfi::pinned_cycle`]).
+    pinned: Option<u32>,
 }
 
 /// The two per-frame structs of a wave frame, built unconditionally so a record path can
@@ -218,6 +222,7 @@ fn intra_refresh_caps(
     }
     Ok(IntraRefreshCaps {
         max_cycle: caps.max_intra_refresh_cycle_duration,
+        pinned: crate::rfi::pinned_cycle(),
     })
 }
 
@@ -721,14 +726,19 @@ pub(crate) struct VulkanEncodeCaps {
     pub eight_bit: bool,
     /// HEVC Main10 / AV1 Main at 10 bits (the HDR session profile).
     pub ten_bit: bool,
+    /// The pairs the device's EFC converts; `None` without an EFC.
+    pub efc: Option<crate::vcn_firmware::EfcPairs>,
+    /// The device's VCN firmware; `None` off amdgpu.
+    pub vcn: Option<crate::vcn_firmware::VcnFirmware>,
 }
 
-/// Probe [`VulkanEncodeCaps`] for `codec`. Uncached — [`crate::vulkan_encode_caps`] owns the
-/// per-(GPU, codec) cache. Depth answers come from `vkGetPhysicalDeviceVideoCapabilitiesKHR`
-/// against a profile at that depth, the same query session open makes.
-pub(crate) fn probe_encode_caps(codec: Codec) -> VulkanEncodeCaps {
+/// Probe [`VulkanEncodeCaps`] for `codec`, uncached: the resolution keeps the answer. Depth
+/// answers come from `vkGetPhysicalDeviceVideoCapabilitiesKHR` against a profile at that depth,
+/// the same query session open makes. `None` when the probe could not ask (the instance did not
+/// come up, or no device list); no loader, no driver and no encode queue are answers.
+pub(crate) fn probe_encode_caps(codec: Codec) -> Option<VulkanEncodeCaps> {
     if !matches!(codec, Codec::H265 | Codec::Av1) {
-        return VulkanEncodeCaps::default();
+        return Some(VulkanEncodeCaps::default());
     }
     let av1 = codec == Codec::Av1;
     let codec_op = codec_op_for(av1);
@@ -738,29 +748,40 @@ pub(crate) fn probe_encode_caps(codec: Codec) -> VulkanEncodeCaps {
     // `find_encode_device` / `depth_supported` get that live instance and the device it returned.
     unsafe {
         let Ok(entry) = ash::Entry::load() else {
-            return VulkanEncodeCaps::default();
+            return Some(VulkanEncodeCaps::default());
         };
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
-        let Ok(instance) = entry.create_instance(
+        let instance = match entry.create_instance(
             &vk::InstanceCreateInfo::default().application_info(&app),
             None,
-        ) else {
-            return VulkanEncodeCaps::default();
+        ) {
+            Ok(instance) => instance,
+            // The loader found no driver: this box has no Vulkan.
+            Err(vk::Result::ERROR_INCOMPATIBLE_DRIVER) => {
+                return Some(VulkanEncodeCaps::default());
+            }
+            Err(_) => return None,
         };
         let found = match instance.enumerate_physical_devices() {
-            Ok(devices) => find_encode_device(&instance, &devices, codec_op).map(|(pd, _)| pd),
+            Ok(devices) => {
+                Some(find_encode_device(&instance, &devices, codec_op).map(|(pd, _)| pd))
+            }
             Err(_) => None,
         };
         let caps = match found {
-            Some(pd) => {
+            Some(Some(pd)) => {
                 let vq_inst = ash::khr::video_queue::Instance::new(&entry, &instance);
-                VulkanEncodeCaps {
+                let eight_bit = depth_supported(&vq_inst, pd, codec_op, av1, false);
+                Some(VulkanEncodeCaps {
                     supported: true,
-                    eight_bit: depth_supported(&vq_inst, pd, codec_op, av1, false),
+                    eight_bit,
                     ten_bit: depth_supported(&vq_inst, pd, codec_op, av1, true),
-                }
+                    efc: build::probe_efc_pairs(&instance, &vq_inst, pd, codec_op, av1, !eight_bit),
+                    vcn: build::vcn_firmware_of(&instance, pd),
+                })
             }
-            None => VulkanEncodeCaps::default(),
+            Some(None) => Some(VulkanEncodeCaps::default()),
+            None => None,
         };
         instance.destroy_instance(None);
         caps
@@ -966,6 +987,21 @@ fn trusted_refs(slot_wire: &[i64]) -> Vec<(usize, i64)> {
         .collect()
 }
 
+/// The slot a P-frame's picture overwrites: round robin from `enc_count`, past the reference
+/// and the two [`crate::rfi::Kept`] pictures a late loss anchors on.
+fn setup_slot(
+    enc_count: u64,
+    ref_slot: usize,
+    slot_wire: &[i64],
+    kept: &crate::rfi::Kept,
+) -> usize {
+    let n = slot_wire.len();
+    (0..n)
+        .map(|k| (enc_count as usize + k) % n)
+        .find(|&s| s != ref_slot && !(slot_wire[s] >= 0 && kept.holds(slot_wire[s])))
+        .expect("a DPB larger than the reference and the two kept pictures")
+}
+
 /// S0 (past-reference) half of an HEVC short-term RPS that retains every resident DPB picture,
 /// not just the active reference. HEVC 8.3.2: any DPB picture absent from the current RPS is
 /// marked unused and reclaimed — an RPS naming only the active ref lets the decoder evict the
@@ -1126,6 +1162,10 @@ pub struct VulkanVideoEncoder {
     prev_slot: usize,
     /// The newest frame the client confirmed, while the host holds confirmed references.
     reference_floor: Option<crate::Acked>,
+    /// What the client confirmed it decoded clean, whatever the link.
+    confirmed: Option<crate::Acked>,
+    /// The two pictures [`setup_slot`] never overwrites: a late loss's anchor.
+    kept: crate::rfi::Kept,
 
     csc_pipe: vk::Pipeline,
     csc_layout: vk::PipelineLayout,
@@ -1133,6 +1173,8 @@ pub struct VulkanVideoEncoder {
     csc_pool: vk::DescriptorPool,
     sampler: vk::Sampler,
     import_cache: ImportCache,
+    /// LINEAR sources this device reads as words, beside `import_cache`'s images.
+    words: WordsCache,
 
     frames: Vec<Frame>,
     /// Which slot records next and which slots the GPU still owes.
@@ -1174,7 +1216,7 @@ pub struct VulkanVideoEncoder {
     /// CSC. Fixed per session (picture format is baked into the video session).
     rgb: Option<RgbDirect>,
     /// The host's crop and scale ahead of the CSC ([`Encoder::set_input_crop`]). CSC sessions only.
-    reframe: Option<reframe_stage::Reframe>,
+    reframe: Option<Reframe>,
     /// Row-based intra refresh is enabled on the session and its device. `None` = unavailable.
     intra_refresh: Option<IntraRefreshCaps>,
     /// Wave in flight, if any. Set at frame-build, read by the record paths for that same
@@ -1789,6 +1831,10 @@ impl VulkanVideoEncoder {
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(2 * nframes as u32),
+            // Binding 4: a LINEAR source's words.
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(nframes as u32),
         ];
         let csc_pool = device.create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
@@ -1797,6 +1843,11 @@ impl VulkanVideoEncoder {
             None,
         )?;
         guard.csc_pool = csc_pool;
+        guard.words = WordsCache::new(
+            &device,
+            &mem_props,
+            instance.get_physical_device_properties(pd).vendor_id,
+        )?;
 
         let bs_size = align_up(3 * w as u64 * h as u64 + (1 << 16), min_bs_align);
         let limits = instance.get_physical_device_properties(pd).limits;
@@ -1864,6 +1915,7 @@ impl VulkanVideoEncoder {
         let session_mem = std::mem::take(&mut guard.session_mem);
         let dpb_views = std::mem::take(&mut guard.dpb_views);
         let frames = std::mem::take(&mut guard.frames);
+        let words = std::mem::take(&mut guard.words);
         std::mem::forget(guard);
 
         Ok(Self {
@@ -1891,6 +1943,8 @@ impl VulkanVideoEncoder {
             dpb_views,
             slot_wire: vec![-1; DPB_SLOTS as usize],
             reference_floor: None,
+            confirmed: None,
+            kept: crate::rfi::Kept::default(),
             slot_poc: vec![-1; DPB_SLOTS as usize],
             prev_slot: 0,
             csc_pipe,
@@ -1899,6 +1953,7 @@ impl VulkanVideoEncoder {
             csc_pool,
             sampler,
             import_cache: ImportCache::default(),
+            words,
             ring: Ring::new(frames.len()),
             frames,
             bs_size,
@@ -2230,17 +2285,13 @@ impl VulkanVideoEncoder {
     }
 
     /// How this session recovers. It places each stripe and owns the dirty state, so a loss
-    /// mid-wave restarts the sweep and an anchor or a confirmed reference abandons it.
+    /// mid-wave restarts the sweep and an anchor or a confirmed reference abandons it. It reads
+    /// only what the open latched, so it runs every frame without touching the environment.
     fn recovery_policy(&self) -> RecoveryPolicy {
         RecoveryPolicy {
             // RADV's stripe unit is the 64-px CTB row for HEVC and AV1.
             cycle: self.intra_refresh.map(|ir| {
-                crate::rfi::wave_cycle(
-                    self.height.div_ceil(64),
-                    self.fps,
-                    ir.max_cycle,
-                    crate::rfi::pinned_cycle(),
-                )
+                crate::rfi::wave_cycle(self.height.div_ceil(64), self.fps, ir.max_cycle, ir.pinned)
             }),
             mid_wave: MidWave::Restart,
             abandons: true,
@@ -2594,6 +2645,10 @@ impl Encoder for VulkanVideoEncoder {
         self.reference_floor = acked;
     }
 
+    fn note_confirmed(&mut self, acked: Option<crate::Acked>) {
+        self.confirmed = acked;
+    }
+
     /// Withdraw anchor trust from every resident reference. Blank `slot_wire` only;
     /// `slot_poc` must keep naming every physically-resident DPB picture ([`build_h265_rps_s0`]).
     /// Leave `pending_loss` armed: a stale arm re-resolves at frame-build and forces IDR.
@@ -2669,6 +2724,8 @@ impl Encoder for VulkanVideoEncoder {
         // Only safe point outside teardown to drop the import cache (device idle).
         // SAFETY: device idle (waits above); each entry is owned by the cache, destroyed once.
         unsafe { self.import_cache.clear(&self.device) };
+        // SAFETY: as above: the device is idle and the cache owns each import.
+        unsafe { self.words.clear(&self.device) };
         self.ring.step(Observation::Idle);
         self.pending.clear();
         for f in &mut self.frames {
@@ -2739,7 +2796,7 @@ impl Encoder for VulkanVideoEncoder {
         }
         // SAFETY: fresh handles on this encoder's live device, released in `Drop` or above.
         self.reframe = Some(unsafe {
-            reframe_stage::Reframe::new(
+            Reframe::new(
                 &self.device,
                 &self.mem_props,
                 rect,
@@ -2782,6 +2839,7 @@ struct VkTeardown {
     device: Option<ash::Device>,
     vq_dev: Option<ash::khr::video_queue::Device>,
     import_cache: ImportCache,
+    words: WordsCache,
     frames: Vec<Frame>,
     compute_pool: vk::CommandPool,
     cmd_pool: vk::CommandPool,
@@ -2807,6 +2865,7 @@ impl VkTeardown {
             device: None,
             vq_dev: None,
             import_cache: ImportCache::default(),
+            words: WordsCache::default(),
             frames: Vec::new(),
             compute_pool: vk::CommandPool::null(),
             cmd_pool: vk::CommandPool::null(),
@@ -2834,6 +2893,7 @@ impl Drop for VkTeardown {
             if let Some(device) = self.device.take() {
                 let _ = device.device_wait_idle();
                 self.import_cache.clear(&device);
+                self.words.destroy(&device);
                 for f in std::mem::take(&mut self.frames) {
                     device.destroy_semaphore(f.csc_sem, None);
                     device.destroy_fence(f.fence, None);
@@ -2904,6 +2964,7 @@ impl Drop for VulkanVideoEncoder {
             device: Some(self.device.clone()),
             vq_dev: Some(self.vq_dev.clone()),
             import_cache: std::mem::take(&mut self.import_cache),
+            words: std::mem::take(&mut self.words),
             frames: std::mem::take(&mut self.frames),
             compute_pool: self.compute_pool,
             cmd_pool: self.cmd_pool,
@@ -2921,10 +2982,6 @@ impl Drop for VulkanVideoEncoder {
         });
     }
 }
-
-// The host's crop and scale ahead of the CSC.
-#[path = "vk_reframe.rs"]
-mod reframe_stage;
 
 // The per-frame record. `#[path]` child sees this file's private items.
 #[path = "vk_record.rs"]

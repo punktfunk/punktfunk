@@ -50,17 +50,29 @@ enum Layer {
     #[default]
     Letters,
     Symbols,
+    /// A PIN's number pad: digits, delete and Done, nothing else.
+    Pad,
 }
 
-/// The layer's keys, row by row. Both lead with the digits and put the layer key first in the
-/// bottom row, so a swap leaves the plate on it. Letters, Shift and the symbols type every
-/// printable ASCII character; the letters' last column is hostname punctuation.
+/// The layer's keys, row by row. Letters and symbols lead with the digits and put the layer key
+/// first in the bottom row, so a swap leaves the plate on it; together with Shift they type every
+/// printable ASCII character, and the letters' last column is hostname punctuation. The pad is a
+/// phone's: three rows of three digits, then delete, 0 and Done.
 fn key_rows(layer: Layer) -> &'static [Vec<Key>] {
     use std::sync::OnceLock;
     static LETTERS: OnceLock<Vec<Vec<Key>>> = OnceLock::new();
     static SYMBOLS: OnceLock<Vec<Vec<Key>>> = OnceLock::new();
+    static PAD: OnceLock<Vec<Vec<Key>>> = OnceLock::new();
     let chars = |s: &str| s.chars().map(Key::Char).collect::<Vec<_>>();
     match layer {
+        Layer::Pad => PAD.get_or_init(|| {
+            vec![
+                chars("123"),
+                chars("456"),
+                chars("789"),
+                vec![Key::Backspace, Key::Char('0'), Key::Done],
+            ]
+        }),
         Layer::Letters => LETTERS.get_or_init(|| {
             vec![
                 chars("1234567890"),
@@ -111,9 +123,16 @@ fn type_into(text: &mut String, ch: char, admits: impl Fn(&str, char) -> bool) -
 }
 
 /// SDL text (a hardware keyboard, or Steam's under gamescope) into an open field, one
-/// character at a time through `admits`.
+/// character at a time through `admits`. A full-width form the field refuses (`１` in a
+/// PIN) is typed as its ASCII twin: a CJK input method writes those by default.
 pub(crate) fn type_text(text: &mut String, typed: &str, admits: impl Fn(&str, char) -> bool) {
     for ch in typed.chars() {
+        let ch = match ch {
+            '\u{FF01}'..='\u{FF5E}' if !admits(text, ch) => {
+                char::from_u32(ch as u32 - 0xFEE0).unwrap_or(ch)
+            }
+            _ => ch,
+        };
         type_into(text, ch, &admits);
     }
 }
@@ -132,9 +151,10 @@ pub(crate) fn field_key(key: crate::input::Key, text: &mut String) -> Option<Ent
     }
 }
 
-/// Controller keyboard: a letters and a symbols grid in a bottom tray. D-pad moves, A types,
-/// X backspaces, B/Y/Done confirms. Edits apply live; closing is done. Focus is the console's
-/// plate: it glides in from the field's row, key to key, and back out on close.
+/// Controller keyboard: a letters and a symbols grid, or a PIN's number pad, in a bottom tray.
+/// D-pad moves and stops at the edges, A types, X backspaces, B/Y/Done confirms. Edits apply
+/// live; closing is done. Focus is the console's plate: it glides in from the field's row, key to
+/// key, and back out on close.
 pub struct Keyboard {
     row: usize,
     col: usize,
@@ -177,6 +197,15 @@ impl Keyboard {
         }
     }
 
+    /// The number pad of a PIN field, its plate on 1.
+    pub(crate) fn pad() -> Keyboard {
+        Keyboard {
+            row: 0,
+            layer: Layer::Pad,
+            ..Keyboard::new()
+        }
+    }
+
     /// Press types the key under it and moves the cursor there. A miss between
     /// keys is swallowed: the tray is modal and must not reach the list behind.
     pub fn pointer(&mut self, p: Pointer) -> (KeyMsg, Option<MenuPulse>) {
@@ -215,6 +244,7 @@ impl Keyboard {
                 self.layer = match self.layer {
                     Layer::Letters => Layer::Symbols,
                     Layer::Symbols => Layer::Letters,
+                    Layer::Pad => Layer::Pad,
                 };
                 let rows = key_rows(self.layer);
                 self.row = self.row.min(rows.len() - 1);
@@ -352,9 +382,20 @@ impl Keyboard {
         })
     }
 
-    /// Tray height in design units (pre-`k`), for layout above it.
-    pub fn tray_height() -> f64 {
-        5.0 * 42.0 + 4.0 * 7.0 + 2.0 * 14.0
+    /// Tray height in design units (pre-`k`), for layout above it: its rows of 42 with gaps of 7,
+    /// inside 14 of padding.
+    pub fn tray_height(&self) -> f64 {
+        let rows = key_rows(self.layer).len() as f64;
+        rows * 42.0 + (rows - 1.0) * 7.0 + 2.0 * 14.0
+    }
+
+    /// Tray width in design units, before the screen narrows it. The pad's keys are as wide as
+    /// the letters' Done, so its label fits.
+    fn tray_width(&self) -> f64 {
+        match self.layer {
+            Layer::Pad => 344.0,
+            Layer::Letters | Layer::Symbols => 560.0,
+        }
     }
 
     /// Draw the tray with its bottom at `bottom`, centred, slid by `seat` (0..1).
@@ -373,8 +414,8 @@ impl Keyboard {
     ) {
         let rows = key_rows(self.layer);
         self.keys.clear();
-        let tray_w = (560.0 * k).min(w - 32.0 * k);
-        let tray_h = Self::tray_height() * k;
+        let tray_w = (self.tray_width() * k).min(w - 32.0 * k);
+        let tray_h = self.tray_height() * k;
         let x0 = (w - tray_w) / 2.0;
         let seated = Rect::from_xywh(
             x0 as f32,
@@ -460,7 +501,7 @@ fn draw_key(
         Key::Layer => {
             let label = match layer {
                 Layer::Letters => "#+=",
-                Layer::Symbols => "ABC",
+                Layer::Symbols | Layer::Pad => "ABC",
             };
             let size = 15.0 * k;
             let tw = f64::from(fonts.measure(label, W::SemiBold, size));
@@ -493,7 +534,7 @@ fn draw_key(
         Key::Backspace => draw_backspace_icon(canvas, cx, cy, k, ink),
         Key::Done => {
             let size = 15.0 * k;
-            let label = "Done";
+            let label = pf_l10n::common::common_done();
             let tw = fonts.measure(label, W::SemiBold, size) as f64;
             let check_w = 14.0 * k;
             let total = check_w + 6.0 * k + tw;
@@ -821,6 +862,45 @@ mod tests {
         assert_eq!(all.len(), 95);
     }
 
+    /// The pad holds each digit once, delete and Done, and no key that does nothing. It opens
+    /// on 1, a column keeps its place up and down, and an edge stops the plate as the letters'
+    /// does. Its tray is a row shorter than the letters'.
+    #[test]
+    fn the_pad_types_a_pin_and_nothing_else() {
+        let rows = key_rows(Layer::Pad);
+        let keys: Vec<Key> = rows.iter().flatten().copied().collect();
+        let digits: String = keys
+            .iter()
+            .filter_map(|k| match k {
+                Key::Char(c) => Some(*c),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(digits, "1234567890");
+        assert!(keys.contains(&Key::Backspace) && keys.contains(&Key::Done));
+        assert_eq!(keys.len(), 12, "nothing else");
+        assert!(rows.iter().all(|r| r.len() == 3), "a 3×4 grid");
+
+        let mut k = Keyboard::pad();
+        assert_eq!(k.menu(MenuEvent::Confirm).0, KeyMsg::Type('1'));
+        for _ in 0..3 {
+            k.menu(MenuEvent::Move(MenuDir::Down));
+        }
+        assert_eq!(k.menu(MenuEvent::Confirm).0, KeyMsg::Backspace, "under 7");
+        k.menu(MenuEvent::Move(MenuDir::Right));
+        assert_eq!(k.menu(MenuEvent::Confirm).0, KeyMsg::Type('0'));
+        k.menu(MenuEvent::Move(MenuDir::Right));
+        assert_eq!(k.menu(MenuEvent::Confirm).0, KeyMsg::Done);
+        for dir in [MenuDir::Down, MenuDir::Right] {
+            let pulse = k.menu(MenuEvent::Move(dir)).1;
+            assert!(matches!(pulse, Some(MenuPulse::Boundary)), "{dir:?}");
+        }
+        assert_eq!((k.row, k.col), (3, 2));
+        let k = Keyboard::pad();
+        assert_eq!(k.tray_height(), 4.0 * 42.0 + 3.0 * 7.0 + 2.0 * 14.0);
+        assert!(k.tray_height() < Keyboard::new().tray_height());
+    }
+
     #[test]
     fn keyboard_edges_refuse() {
         let mut k = kb();
@@ -839,5 +919,16 @@ mod tests {
         assert!(permits(Charset::Hostname, '-'));
         assert!(!permits(Charset::Hostname, ' '));
         assert!(permits(Charset::Free, ' '));
+    }
+
+    #[test]
+    fn full_width_digits_reach_a_digit_field_as_ascii() {
+        let mut pin = String::new();
+        type_text(&mut pin, "１２a３", |_, c| permits(Charset::Digits, c));
+        assert_eq!(pin, "123");
+        // A field that takes the full-width form keeps it as typed.
+        let mut name = String::new();
+        type_text(&mut name, "ＰＣ１", |_, c| permits(Charset::Free, c));
+        assert_eq!(name, "ＰＣ１");
     }
 }

@@ -6,6 +6,7 @@ use crate::store::Store;
 use adw::prelude::*;
 use gtk::glib;
 use pf_client_core::library_layout::{sections, stored_sections, Section};
+use pf_l10n::client;
 use std::rc::Rc;
 
 fn drawn(s: Section) -> bool {
@@ -18,7 +19,7 @@ pub fn popover(store: &Rc<Store>) -> gtk::Popover {
         .css_classes(["boxed-list"])
         .build();
     let restore = gtk::Button::builder()
-        .label("Restore Defaults")
+        .label(client::lib_sections_restore())
         .css_classes(["flat"])
         .build();
     let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -29,7 +30,7 @@ pub fn popover(store: &Rc<Store>) -> gtk::Popover {
     body.set_size_request(320, -1);
     body.append(
         &gtk::Label::builder()
-            .label("Library Sections")
+            .label(client::player_library_sections())
             .css_classes(["heading"])
             .xalign(0.0)
             .build(),
@@ -79,8 +80,12 @@ fn fill(list: &gtk::ListBox, store: &Rc<Store>) {
         };
         let up = i.checked_sub(1).map(|j| shown[j].0);
         let down = shown.get(i + 1).map(|(s, _)| *s);
-        row.add_prefix(&mover("chevron-up", "Move up", up));
-        row.add_prefix(&mover("chevron-down", "Move down", down));
+        row.add_prefix(&mover("chevron-up", client::lib_sections_move_up(), up));
+        row.add_prefix(&mover(
+            "chevron-down",
+            client::lib_sections_move_down(),
+            down,
+        ));
         {
             let store = store.clone();
             row.connect_active_notify(move |r| {

@@ -601,7 +601,13 @@ impl UsbDevice {
                         // to interface
                         // see https://www.beyondlogic.org/usbnutshell/usb6.shtml
                         // only low 8 bits are valid
-                        let intf = &self.interfaces[setup_packet.index as usize & 0xFF];
+                        let Some(intf) = self.interfaces.get(setup_packet.index as usize & 0xFF)
+                        else {
+                            return Err(unsupported(
+                                "control request to a missing interface",
+                                setup_packet,
+                            ));
+                        };
                         let mut handler = intf.handler.lock().unwrap();
                         handler.handle_urb(intf, ep, transfer_buffer_length, setup_packet, out_data)
                     }
@@ -612,7 +618,7 @@ impl UsbDevice {
                         let mut handler = lock.lock().unwrap();
                         handler.handle_urb(transfer_buffer_length, setup_packet, out_data)
                     }
-                    _ => unimplemented!("control in"),
+                    _ => Err(unsupported("control in", setup_packet)),
                 }
             }
             (Some(Control), Out) => {
@@ -637,7 +643,13 @@ impl UsbDevice {
                         // to interface
                         // see https://www.beyondlogic.org/usbnutshell/usb6.shtml
                         // only low 8 bits are valid
-                        let intf = &self.interfaces[setup_packet.index as usize & 0xFF];
+                        let Some(intf) = self.interfaces.get(setup_packet.index as usize & 0xFF)
+                        else {
+                            return Err(unsupported(
+                                "control request to a missing interface",
+                                setup_packet,
+                            ));
+                        };
                         let mut handler = intf.handler.lock().unwrap();
                         handler.handle_urb(intf, ep, transfer_buffer_length, setup_packet, out_data)
                     }
@@ -648,19 +660,30 @@ impl UsbDevice {
                         let mut handler = lock.lock().unwrap();
                         handler.handle_urb(transfer_buffer_length, setup_packet, out_data)
                     }
-                    _ => unimplemented!("control out"),
+                    _ => Err(unsupported("control out", setup_packet)),
                 }
             }
             (Some(_), _) => {
                 // Interrupt / bulk OUT. `handler` paces and dispatches IN itself (punktfunk
                 // modification), so a poll never holds up the connection.
-                let intf = intf.unwrap();
+                let Some(intf) = intf else {
+                    return Err(unsupported("transfer without an interface", setup_packet));
+                };
                 let mut handler = intf.handler.lock().unwrap();
                 handler.handle_urb(intf, ep, transfer_buffer_length, setup_packet, out_data)
             }
-            _ => unimplemented!("transfer to {:?}", ep),
+            _ => Err(unsupported("transfer", setup_packet)),
         }
     }
+}
+
+/// A request the simulation does not serve. The caller answers it with the failed RET_SUBMIT
+/// a stalled endpoint sends (punktfunk modification: upstream panicked, ending the connection).
+fn unsupported(what: &str, setup: SetupPacket) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!("unsupported {what}: {setup:x?}"),
+    )
 }
 
 /// Serialize one standard endpoint descriptor. `extra` is appended inside the descriptor and grows

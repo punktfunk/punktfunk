@@ -4,7 +4,7 @@
 //!
 //! Admin bearer: both routes, everything permitted. Paired streaming cert: both routes; a
 //! power invoke re-reads `effective(fp, now)` and demands `GRANT_POWER`, `display.next`
-//! demands the caller's own live session. Plugin token: neither.
+//! demands the caller's own live session and `GRANT_DISPLAY`. Plugin token: neither.
 //!
 //! Invoke is a trigger: the id selects a fixed host-side behavior, the body is empty, and no
 //! request field reaches the privileged path. Power on accept: `202` → typed `HostPower`
@@ -90,6 +90,10 @@ pub(crate) struct ActionInfo {
     pub available: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unavailable_reason: Option<String>,
+    /// The id of `unavailable_reason`: the host message `apierr_<code>`. Absent when the reason
+    /// is the system's own words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_code: Option<String>,
     /// Whether THIS caller may invoke it. Admin: always. Cert: the live `GRANT_POWER` bit for
     /// power, its own live session for `display.next`.
     pub permitted: bool,
@@ -119,38 +123,46 @@ fn power_permitted(st: &MgmtState, lane: AuthLane, fp: Option<&str>) -> bool {
                 .and_then(|n| n.effective(fp, crate::clock::unix_secs()))
                 .is_some_and(|mask| mask & punktfunk_core::quic::GRANT_POWER != 0)
         }),
-        AuthLane::Plugin | AuthLane::Public => false,
+        AuthLane::Plugin | AuthLane::Person | AuthLane::PersonVouched | AuthLane::Public => false,
     }
 }
 
-/// Admin always; a paired cert iff it owns a live session, not a join onto another's display.
-/// No grant bit: choosing what you watch is not power over the machine.
-fn display_permitted(lane: AuthLane, fp: Option<&str>) -> bool {
+/// Whether a paired cert streams a session of its own, not a join onto another's display.
+fn streams_own_session(fp: Option<&str>) -> bool {
+    fp.is_some_and(crate::session_status::owns_live_session)
+}
+
+/// Admin always; a paired cert iff it streams its own session and its live mask carries
+/// [`punktfunk_core::quic::GRANT_DISPLAY`]. The action writes the host's streamed monitor,
+/// which is the operator's answer for every device without that grant.
+fn display_permitted(st: &MgmtState, lane: AuthLane, fp: Option<&str>) -> bool {
     match lane {
         AuthLane::Admin => true,
-        AuthLane::Cert => fp.is_some_and(crate::session_status::owns_live_session),
-        AuthLane::Plugin | AuthLane::Public => false,
+        AuthLane::Cert => {
+            streams_own_session(fp)
+                && super::downloads::granted(st, fp, punktfunk_core::quic::GRANT_DISPLAY)
+        }
+        AuthLane::Plugin | AuthLane::Person | AuthLane::PersonVouched | AuthLane::Public => false,
     }
 }
 
 /// Platform probe per verb. Blocking (logind D-Bus, compositor IPC): call it off the worker.
 fn probe(verb: Verb) -> Availability {
-    let no = |reason: &str| Availability {
-        available: false,
-        reason: Some(reason.into()),
-    };
     match verb {
         Verb::Power(v) if crate::power::supported() => crate::power::probe(v),
-        Verb::Power(_) => no("not supported on this host platform"),
+        Verb::Power(_) => Availability::refused(POWER_UNSUPPORTED.0, POWER_UNSUPPORTED.1),
         Verb::DisplayNext => match next_monitor_target() {
-            Ok(_) => Availability {
-                available: true,
-                reason: None,
-            },
-            Err(reason) => no(reason),
+            Ok(_) => Availability::yes(),
+            Err((code, reason)) => Availability::refused(code, reason),
         },
     }
 }
+
+/// What a power action answers on a host with no power backend.
+const POWER_UNSUPPORTED: (&str, &str) = (
+    "host_power_unsupported",
+    "Host power actions are not supported on this host platform",
+);
 
 /// The enabled, unmanaged head after `current` in `(x, y, connector)` order, wrapping; the
 /// first one when `current` is not among them. `None` below two: nothing to switch to.
@@ -168,6 +180,9 @@ fn next_monitor(heads: &[PhysicalMonitor], current: &str) -> Option<String> {
     Some(heads[next].connector.clone())
 }
 
+/// A sentence for the person: the code of its host message `apierr_<code>`, and its English.
+type Said = (&'static str, &'static str);
+
 /// `(current, next)` for `display.next`, or the user-facing reason it is unavailable.
 ///
 /// The env pin outranks the stored one, so a policy write would not take effect under it.
@@ -176,31 +191,50 @@ fn plan_display_next(
     env_pin: Option<&str>,
     stored_pin: Option<String>,
     heads: impl FnOnce() -> anyhow::Result<Vec<PhysicalMonitor>>,
-) -> Result<(String, String), &'static str> {
+) -> Result<(String, String), Said> {
     if env_pin.is_some() {
-        return Err("The host's settings file fixes which monitor is streamed.");
+        return Err((
+            "display_next_fixed_by_settings",
+            "The host's settings file fixes which monitor is streamed.",
+        ));
     }
-    let current =
-        stored_pin.ok_or("The host streams a virtual display, not one of its monitors.")?;
-    let heads = heads().map_err(|_| "Couldn't read the host's monitors.")?;
-    let next = next_monitor(&heads, &current).ok_or("The host has no other monitor to stream.")?;
+    let current = stored_pin.ok_or((
+        "display_next_virtual",
+        "The host streams a virtual display, not one of its monitors.",
+    ))?;
+    let heads = heads().map_err(|_| {
+        (
+            "display_next_monitors_unread",
+            "Couldn't read the host's monitors.",
+        )
+    })?;
+    let next = next_monitor(&heads, &current).ok_or((
+        "display_next_no_other_monitor",
+        "The host has no other monitor to stream.",
+    ))?;
     Ok((current, next))
 }
 
 /// [`plan_display_next`] on this host. Blocking: one monitor-list IPC when a pin is stored.
-fn next_monitor_target() -> Result<(String, String), &'static str> {
+fn next_monitor_target() -> Result<(String, String), Said> {
     if !cfg!(any(target_os = "linux", target_os = "windows")) {
         return Err(NO_MIRROR);
     }
     plan_display_next(
         pf_host_config::config().capture_monitor.as_deref(),
-        crate::vdisplay::policy::prefs().get().capture_monitor,
+        crate::vdisplay::policy::prefs()
+            .get()
+            .screen_for(None, false)
+            .and_then(crate::vdisplay::policy::DisplayTarget::into_monitor),
         host_monitors,
     )
 }
 
 /// What `display.next` answers on a host with no mirror backend.
-const NO_MIRROR: &str = "Switching the streamed monitor needs a Linux or Windows host.";
+const NO_MIRROR: Said = (
+    "display_next_unsupported",
+    "Switching the streamed monitor needs a Linux or Windows host.",
+);
 
 /// The heads `display.next` cycles through.
 fn host_monitors() -> anyhow::Result<Vec<crate::vdisplay::monitors::PhysicalMonitor>> {
@@ -218,8 +252,8 @@ fn host_monitors() -> anyhow::Result<Vec<crate::vdisplay::monitors::PhysicalMoni
 ///
 /// Per-caller view: platform availability plus whether this caller may invoke each one.
 /// Admin: everything permitted. Paired cert: power per the device's live Host-power grant,
-/// `display.next` while the device owns a live session. Unknown ids still render with the
-/// server-supplied title.
+/// `display.next` while the device streams a session of its own and may choose its screen.
+/// Unknown ids still render with the server-supplied title.
 #[utoipa::path(
     get,
     path = "/actions",
@@ -237,9 +271,9 @@ pub(crate) async fn list_actions(
 ) -> Result<Json<ActionList>, Response> {
     let fp = device.as_ref().map(|e| e.0 .0.as_str());
     let power = power_permitted(&st, lane, fp);
-    let display = display_permitted(lane, fp);
+    let display = display_permitted(&st, lane, fp);
     // D-Bus and compositor round trips — off the async worker, all of them in one hop.
-    let probed = blocking("action check", || BUILTINS.map(|b| probe(b.verb))).await?;
+    let probed = blocking("action_check", || BUILTINS.map(|b| probe(b.verb))).await?;
     let actions = BUILTINS
         .iter()
         .zip(probed)
@@ -250,6 +284,7 @@ pub(crate) async fn list_actions(
             danger: b.danger,
             available: avail.available,
             unavailable_reason: avail.reason,
+            unavailable_code: avail.code.map(str::to_string),
             permitted: match b.verb {
                 Verb::Power(_) => power,
                 Verb::DisplayNext => display,
@@ -292,7 +327,7 @@ fn log_denial_once(fp: &str, action: &str, device: &str) {
 /// device's session is live or a seat host doesn't answer, the admin console never is. One
 /// power action at a time.
 /// `display.next` answers `200` with the monitor now streamed and ends nothing; a paired
-/// cert needs a live session of its own.
+/// cert needs a live session of its own and the Choose-its-screen grant.
 #[utoipa::path(
     post,
     path = "/actions/{id}",
@@ -302,7 +337,7 @@ fn log_denial_once(fp: &str, action: &str, device: &str) {
     responses(
         (status = OK, description = "Done (`display.next`): the monitor streamed from now on", body = ActionOutcome),
         (status = ACCEPTED, description = "Accepted — sessions are being ended and the action follows in about a second"),
-        (status = FORBIDDEN, description = "This caller's access does not include this action (no Host power grant, or no live session of its own for `display.next`)", body = ApiError),
+        (status = FORBIDDEN, description = "This caller's access does not include this action (no Host power grant; for `display.next`, no live session of its own or no Choose-its-screen grant)", body = ApiError),
         (status = NOT_FOUND, description = "Unknown action id", body = ApiError),
         (status = CONFLICT, description = "Refused: an action is already in flight, another device's session is live or a seat host doesn't answer (cert lane), or the platform said no (a foreign sleep inhibitor, a second local user, a single monitor, …)", body = ApiError),
         (status = NOT_IMPLEMENTED, description = "This host platform has no executor for it (macOS host)", body = ApiError),
@@ -334,22 +369,21 @@ pub(crate) async fn invoke_action(
     });
     let verb = match builtin.verb {
         Verb::Power(verb) => verb,
-        Verb::DisplayNext => return invoke_display_next(builtin.id, lane, fp, device).await,
+        Verb::DisplayNext => return invoke_display_next(&st, builtin.id, lane, fp, device).await,
     };
     if !power_permitted(&st, lane, fp) {
         let device_name = device.as_ref().map(|d| d.name.as_str()).unwrap_or("");
         log_denial_once(fp.unwrap_or(""), builtin.id, device_name);
-        return api_error(
+        return api_error_coded(
             StatusCode::FORBIDDEN,
-            "this device's access does not include host power — ask the host's operator to \
+            "device_not_allowed_host_power",
+            "This device's access does not include host power — ask the host's operator to \
              enable the Host power grant",
         );
     }
     if !crate::power::supported() {
-        return api_error(
-            StatusCode::NOT_IMPLEMENTED,
-            "host power actions are not supported on this host platform",
-        );
+        let (code, text) = POWER_UNSUPPORTED;
+        return api_error_coded(StatusCode::NOT_IMPLEMENTED, code, text);
     }
     // Another device's LIVE session blocks a cert-lane invoke; your own does not. Admin is
     // never blocked. A GameStream stream is always another device: its cert is never native.
@@ -358,7 +392,7 @@ pub(crate) async fn invoke_action(
         let fp_hex = fp.unwrap_or("").to_string();
         let others_native = crate::session_status::other_client_live(&fp_hex);
         let gamestream = st.app.streaming.load(Ordering::SeqCst);
-        let on_seat = match blocking("seat check", move || {
+        let on_seat = match blocking("seat_check", move || {
             crate::seats::other_client_on_a_seat(&fp_hex)
         })
         .await
@@ -367,27 +401,30 @@ pub(crate) async fn invoke_action(
             Err(resp) => return resp,
         };
         if others_native || gamestream || on_seat {
-            return api_error(
+            return api_error_coded(
                 StatusCode::CONFLICT,
+                "host_power_busy_other_device",
                 "Another device is streaming from this host, or a seat that isn't answering might \
                  be. Try again in a moment.",
             );
         }
     }
-    let avail = match blocking("power check", move || crate::power::probe(verb)).await {
+    let avail = match blocking("power_check", move || crate::power::probe(verb)).await {
         Ok(avail) => avail,
         Err(resp) => return resp,
     };
     if !avail.available {
-        return api_error(
-            StatusCode::CONFLICT,
-            avail.reason.as_deref().unwrap_or("the platform said no"),
-        );
+        let reason = avail.reason.as_deref().unwrap_or("the platform said no");
+        return match avail.code {
+            Some(code) => api_error_coded(StatusCode::CONFLICT, code, reason),
+            None => api_error(StatusCode::CONFLICT, reason),
+        };
     }
     if IN_FLIGHT.swap(true, Ordering::SeqCst) {
-        return api_error(
+        return api_error_coded(
             StatusCode::CONFLICT,
-            "a host action is already in flight — the host is on its way down",
+            "host_action_in_flight",
+            "A host action is already in flight — the host is on its way down",
         );
     }
     let invoker = device
@@ -452,34 +489,46 @@ pub(crate) async fn invoke_action(
 /// radio uses, which persists it and re-aims absolute input. Ends nothing, so none of the
 /// power tail (live-device `409`, [`IN_FLIGHT`], session close) applies.
 async fn invoke_display_next(
+    st: &MgmtState,
     id: &'static str,
     lane: AuthLane,
     fp: Option<&str>,
     device: Option<crate::events::DeviceRef>,
 ) -> Response {
-    if !display_permitted(lane, fp) {
-        return api_error(
+    let streaming = lane == AuthLane::Admin || (lane == AuthLane::Cert && streams_own_session(fp));
+    if !streaming {
+        return api_error_coded(
             StatusCode::FORBIDDEN,
+            "display_next_not_streaming",
             "Only the device that is streaming can switch the monitor.",
         );
     }
-    if !cfg!(any(target_os = "linux", target_os = "windows")) {
-        return api_error(StatusCode::NOT_IMPLEMENTED, NO_MIRROR);
+    if !display_permitted(st, lane, fp) {
+        return super::display::screen_choice_refused();
     }
-    let switched = blocking("monitor switch", || {
-        let (from, to) = next_monitor_target().map_err(|r| (StatusCode::CONFLICT, r.into()))?;
-        super::display::write_with(|p| p.capture_monitor = Some(to.clone())).map_err(|e| {
+    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+        let (code, text) = NO_MIRROR;
+        return api_error_coded(StatusCode::NOT_IMPLEMENTED, code, text);
+    }
+    let switched = blocking("monitor_switch", || {
+        let (from, to) = next_monitor_target().map_err(|r| (StatusCode::CONFLICT, r))?;
+        let next = crate::vdisplay::policy::DisplayTarget::Monitor(to.clone());
+        super::display::write_with(|p| p.screen = Some(next)).map_err(|e| {
+            tracing::warn!(error = %format!("{e:#}"), "streamed monitor not saved");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Couldn't save the streamed monitor — {e:#}"),
+                (
+                    "display_next_not_saved",
+                    "Couldn't save the streamed monitor",
+                ),
             )
         })?;
-        Ok::<_, (StatusCode, String)>((from, to))
+        Ok::<_, (StatusCode, Said)>((from, to))
     })
     .await;
     let (from, to) = match switched {
         Ok(Ok(pair)) => pair,
-        Ok(Err((status, message))) => return api_error(status, &message),
+        Ok(Err((status, (code, text)))) => return api_error_coded(status, code, text),
         Err(resp) => return resp,
     };
     let invoker = device

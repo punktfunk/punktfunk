@@ -319,15 +319,19 @@ impl AscBudget {
         }
         let cap = if bootstrapping { 1 } else { 2 };
         if !downrated && self.inflight >= cap {
-            let pending: Vec<i64> = latches.rev().take(self.inflight as usize).collect();
-            let stale = pending.len() < self.inflight as usize
-                || pending
-                    .last()
-                    .is_some_and(|&oldest| now_ns - oldest > STALE_REOPEN_NS);
+            // The newest `inflight` presents, newest first: the last one seen is the oldest.
+            let want = self.inflight as usize;
+            let (mut seen, mut ahead, mut oldest) = (0usize, 0usize, None);
+            for latch in latches.rev().take(want) {
+                seen += 1;
+                ahead += usize::from(latch > now_ns);
+                oldest = Some(latch);
+            }
+            let stale = seen < want || oldest.is_some_and(|o| now_ns - o > STALE_REOPEN_NS);
             if stale {
                 c.forced += 1;
                 self.inflight = 0;
-            } else if pending.iter().filter(|&&l| l > now_ns).count() >= cap as usize {
+            } else if ahead >= cap as usize {
                 return None;
             }
         }

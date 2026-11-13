@@ -28,16 +28,21 @@ private func loadStoredHost(_ id: UUID) -> StoredHost? {
 /// trust policy, WoL and the approval sheet all apply, and its guards (unknown host, ambiguous or
 /// unknown preset, already-streaming) hold. One router, not a second connect path.
 struct ConnectToHostIntent: AppIntent {
-    static let title: LocalizedStringResource = "Connect to Host"
-    static let description = IntentDescription("Start a Punktfunk streaming session with a host.")
+    static let title: LocalizedStringResource = LocalizedStringResource("apple_intent_connect_title", defaultValue: "Connect to Host")
+    static let description = IntentDescription(
+        LocalizedStringResource("apple_intent_connect_desc", defaultValue: "Start a Punktfunk streaming session with a host."))
     static let openAppWhenRun = true
 
-    @Parameter(title: "Host") var host: HostEntity
-    @Parameter(title: "Game ID", description: "Optional store id like steam:570")
+    @Parameter(title: LocalizedStringResource("apple_intent_param_host", defaultValue: "Host")) var host: HostEntity
+    @Parameter(
+        title: LocalizedStringResource("apple_intent_param_game_id", defaultValue: "Game ID"),
+        description: LocalizedStringResource("apple_intent_param_game_id_desc", defaultValue: "Optional store id like steam:570"))
     var launchID: String?
     @Parameter(
-        title: "Preset",
-        description: "Which settings preset to use — leave empty for the host's default")
+        title: LocalizedStringResource("apple_intent_param_preset", defaultValue: "Preset"),
+        description: LocalizedStringResource(
+            "apple_intent_param_preset_desc",
+            defaultValue: "Which settings preset to use — leave empty for the host's default"))
     var profile: ProfileEntity?
 
     func perform() async throws -> some IntentResult {
@@ -53,12 +58,14 @@ struct ConnectToHostIntent: AppIntent {
 /// the current mode owns: the console's shelf when the console is up, the touch/desktop library
 /// otherwise. A session starts only when a title is picked there.
 struct OpenLibraryIntent: AppIntent {
-    static let title: LocalizedStringResource = "Open Game Library"
+    static let title: LocalizedStringResource = LocalizedStringResource("apple_intent_open_library_title", defaultValue: "Open Game Library")
     static let description = IntentDescription(
-        "Open a host's game library in Punktfunk, without starting a stream.")
+        LocalizedStringResource(
+            "apple_intent_open_library_desc",
+            defaultValue: "Open a host's game library in Punktfunk, without starting a stream."))
     static let openAppWhenRun = true
 
-    @Parameter(title: "Host") var host: HostEntity
+    @Parameter(title: LocalizedStringResource("apple_intent_param_host", defaultValue: "Host")) var host: HostEntity
 
     func perform() async throws -> some IntentResult {
         let url = DeepLink.browse(host: host.id).url
@@ -70,10 +77,11 @@ struct OpenLibraryIntent: AppIntent {
 /// Wake a sleeping host (magic packet). No `openAppWhenRun` — usable in automations ("when I get
 /// home, wake the tower") without foregrounding the app.
 struct WakeHostIntent: AppIntent {
-    static let title: LocalizedStringResource = "Wake Host"
-    static let description = IntentDescription("Send a Wake-on-LAN magic packet to a host.")
+    static let title: LocalizedStringResource = LocalizedStringResource("apple_intent_wake_title", defaultValue: "Wake Host")
+    static let description = IntentDescription(
+        LocalizedStringResource("apple_intent_wake_desc", defaultValue: "Send a Wake-on-LAN magic packet to a host."))
 
-    @Parameter(title: "Host") var host: HostEntity
+    @Parameter(title: LocalizedStringResource("apple_intent_param_host", defaultValue: "Host")) var host: HostEntity
 
     func perform() async throws -> some IntentResult {
         guard let stored = loadStoredHost(host.id), WakePolicy.canWake(stored.wakeMacs) else {
@@ -92,9 +100,7 @@ enum IntentError: Error, CustomLocalizedStringResourceConvertible {
     var localizedStringResource: LocalizedStringResource {
         switch self {
         case .noWakeAddress:
-            // One string LITERAL — LocalizedStringResource is ExpressibleByStringLiteral, but a
-            // `"…" + "…"` concatenation is a runtime String it can't convert.
-            return "That host has no saved Wake-on-LAN address yet. Connect to it once so Punktfunk can learn it."
+            return L10n.appleIntentErrorNoWake
         }
     }
 }
@@ -102,8 +108,10 @@ enum IntentError: Error, CustomLocalizedStringResourceConvertible {
 #if os(iOS)
 /// Zero-setup Siri / Spotlight phrases. Parameterized phrases resolve a `HostEntity` by name; stays
 /// well under the 10-shortcut cap. Phrases stay host-parameterized — App Shortcut phrases can't
-/// embed a second arbitrary `AppEntity`, so the preset is picked in the Shortcuts editor. No
-/// phrase regression.
+/// embed a second arbitrary `AppEntity`, so the preset is picked in the Shortcuts editor.
+///
+/// A phrase must be a string literal. `AppShortcuts.xcstrings`, which `pf-l10n` writes from the
+/// `apple_shortcut_*_phrase` messages, is keyed by these exact English phrases.
 struct PunktfunkShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
@@ -112,26 +120,26 @@ struct PunktfunkShortcuts: AppShortcutsProvider {
                 "Connect to \(\.$host) in \(.applicationName)",
                 "Stream \(\.$host) with \(.applicationName)",
             ],
-            shortTitle: "Connect", systemImageName: "play.tv.fill")
+            shortTitle: LocalizedStringResource("apple_shortcut_connect_short", defaultValue: "Connect"), systemImageName: "play.tv.fill")
         AppShortcut(
             intent: OpenLibraryIntent(),
             phrases: [
                 "Open \(\.$host) library in \(.applicationName)",
                 "Show \(\.$host) games in \(.applicationName)",
             ],
-            shortTitle: "Game Library", systemImageName: "square.grid.2x2.fill")
+            shortTitle: LocalizedStringResource("apple_shortcut_library_short", defaultValue: "Game Library"), systemImageName: "square.grid.2x2.fill")
         AppShortcut(
             intent: WakeHostIntent(),
             phrases: [
                 "Wake \(\.$host) with \(.applicationName)",
             ],
-            shortTitle: "Wake Host", systemImageName: "power")
+            shortTitle: LocalizedStringResource("apple_shortcut_wake_short", defaultValue: "Wake Host"), systemImageName: "power")
         AppShortcut(
             intent: EndStreamIntent(),
             phrases: [
                 "End the \(.applicationName) stream",
             ],
-            shortTitle: "End Stream", systemImageName: "stop.fill")
+            shortTitle: LocalizedStringResource("apple_shortcut_end_short", defaultValue: "End Stream"), systemImageName: "stop.fill")
     }
 }
 #endif

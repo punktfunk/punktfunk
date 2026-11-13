@@ -327,6 +327,13 @@ impl Drive<'_> {
                             mask,
                         }));
                 }
+                Ctl::NoteConfirmed(acked) => {
+                    self.enc
+                        .note_confirmed(acked.map(|(last, mask)| pf_encode_win::Acked {
+                            last: i64::from(last),
+                            mask,
+                        }));
+                }
                 Ctl::ReconfigureBitrate(kbps) => {
                     if self.enc.reconfigure_bitrate(u64::from(kbps) * 1000) {
                         // A backend that tracks its own clamp reports it; the rest took the ask.
@@ -681,9 +688,9 @@ impl Drive<'_> {
     }
 
     /// Heap bytes, slot record, `latest`, event — in that order. `false` when no placement
-    /// came free within [`SLOT_WAIT`]. The record carries the frame's corrected present, submit
-    /// and publish QPC, which is how the host splits its age; the age line here stays on the
-    /// compositor's own stamp.
+    /// came free within [`SLOT_WAIT`], or at once for a chunk larger than the whole heap. The
+    /// record carries the frame's corrected present, submit and publish QPC, which is how the
+    /// host splits its age; the age line here stays on the compositor's own stamp.
     fn publish(&mut self, chunk: &AuChunk, owed: &Owed) -> bool {
         let section = &self.session.section;
         let len = chunk.data.len() as u32;
@@ -693,7 +700,7 @@ impl Drive<'_> {
             if let Some(placed) = self.ring.take(len, &states) {
                 break placed;
             }
-            if Instant::now() > deadline || self.stopped() {
+            if len > section.heap().1 || Instant::now() > deadline || self.stopped() {
                 return false;
             }
             std::thread::sleep(Duration::from_millis(1));

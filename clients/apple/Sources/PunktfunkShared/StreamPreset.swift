@@ -105,6 +105,9 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
     public var videoFit: String?
     /// `"this"` or `"all"`.
     public var screens: String?
+    /// The host screen a connect with this preset asks for: `only`, `main`, `second` or
+    /// `monitor:<connector>`. nil is the pick on the host's card; no global holds it.
+    public var hostScreen: String?
     public var codec: String?
     public var hdrEnabled: Bool?
     public var compositor: Int?
@@ -127,6 +130,8 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
     /// The whole ring blob (design/touch-client-overlay.md D10): a preset inherits the default
     /// ring entirely or owns its own ring and shortcuts.
     public var overlayActions: String?
+    /// The whole shortcuts blob, like the ring's.
+    public var shortcuts: String?
     public var inhibitShortcuts: Bool?
     public var gamepadType: Int?
     public var gamepadForwarding: Bool?
@@ -168,6 +173,7 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
         case renderScale = "render_scale"
         case videoFit = "video_fit"
         case screens
+        case hostScreen = "host_screen"
         case codec
         case hdrEnabled = "hdr_enabled"
         case compositor
@@ -180,6 +186,7 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
         case mouseMode = "mouse_mode"
         case invertScroll = "invert_scroll"
         case overlayActions = "overlay_actions"
+        case shortcuts
         case inhibitShortcuts = "inhibit_shortcuts"
         case gamepadType = "gamepad"
         case gamepadForwarding = "gamepad_forwarding"
@@ -211,6 +218,7 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
         renderScale = dbl(.renderScale)
         videoFit = str(.videoFit)
         screens = str(.screens)
+        hostScreen = str(.hostScreen)
         codec = str(.codec)
         hdrEnabled = bool(.hdrEnabled)
         compositor = int(.compositor)
@@ -223,6 +231,7 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
         mouseMode = str(.mouseMode)
         invertScroll = bool(.invertScroll)
         overlayActions = str(.overlayActions)
+        shortcuts = str(.shortcuts)
         inhibitShortcuts = bool(.inhibitShortcuts)
         gamepadType = int(.gamepadType)
         gamepadForwarding = bool(.gamepadForwarding)
@@ -256,6 +265,7 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
         try c.encodeIfPresent(renderScale, forKey: AnyKey(Key.renderScale.rawValue))
         try c.encodeIfPresent(videoFit, forKey: AnyKey(Key.videoFit.rawValue))
         try c.encodeIfPresent(screens, forKey: AnyKey(Key.screens.rawValue))
+        try c.encodeIfPresent(hostScreen, forKey: AnyKey(Key.hostScreen.rawValue))
         try c.encodeIfPresent(codec, forKey: AnyKey(Key.codec.rawValue))
         try c.encodeIfPresent(hdrEnabled, forKey: AnyKey(Key.hdrEnabled.rawValue))
         try c.encodeIfPresent(compositor, forKey: AnyKey(Key.compositor.rawValue))
@@ -268,6 +278,7 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
         try c.encodeIfPresent(mouseMode, forKey: AnyKey(Key.mouseMode.rawValue))
         try c.encodeIfPresent(invertScroll, forKey: AnyKey(Key.invertScroll.rawValue))
         try c.encodeIfPresent(overlayActions, forKey: AnyKey(Key.overlayActions.rawValue))
+        try c.encodeIfPresent(shortcuts, forKey: AnyKey(Key.shortcuts.rawValue))
         try c.encodeIfPresent(inhibitShortcuts, forKey: AnyKey(Key.inhibitShortcuts.rawValue))
         try c.encodeIfPresent(gamepadType, forKey: AnyKey(Key.gamepadType.rawValue))
         try c.encodeIfPresent(
@@ -318,6 +329,7 @@ public enum OverlayField {
         case "render_scale": overlay.renderScale = nil
         case "video_fit": overlay.videoFit = nil
         case "screens": overlay.screens = nil
+        case "host_screen": overlay.hostScreen = nil
         case "codec": overlay.codec = nil
         case "hdr_enabled": overlay.hdrEnabled = nil
         case "compositor": overlay.compositor = nil
@@ -330,6 +342,7 @@ public enum OverlayField {
         case "mouse_mode": overlay.mouseMode = nil
         case "invert_scroll": overlay.invertScroll = nil
         case "overlay_actions": overlay.overlayActions = nil
+        case "shortcuts": overlay.shortcuts = nil
         case "inhibit_shortcuts": overlay.inhibitShortcuts = nil
         case "gamepad": overlay.gamepadType = nil
         case "gamepad_forwarding": overlay.gamepadForwarding = nil
@@ -363,6 +376,7 @@ public enum OverlayField {
         case "render_scale": return o.renderScale != nil
         case "video_fit": return o.videoFit != nil
         case "screens": return o.screens != nil
+        case "host_screen": return o.hostScreen != nil
         case "codec": return o.codec != nil
         case "hdr_enabled": return o.hdrEnabled != nil
         case "compositor": return o.compositor != nil
@@ -375,6 +389,7 @@ public enum OverlayField {
         case "mouse_mode": return o.mouseMode != nil
         case "invert_scroll": return o.invertScroll != nil
         case "overlay_actions": return o.overlayActions != nil
+        case "shortcuts": return o.shortcuts != nil
         case "inhibit_shortcuts": return o.inhibitShortcuts != nil
         case "gamepad": return o.gamepadType != nil
         case "gamepad_forwarding": return o.gamepadForwarding != nil
@@ -427,6 +442,21 @@ public struct StreamPreset: Codable, Equatable, Identifiable, Sendable {
         self.name = name
         self.accent = accent
         self.overrides = overrides
+    }
+
+    /// The Second screen starter: the role pinned and nothing else, named after the role, or
+    /// "Second screen 2" and on while `taken` says a name is in use. The caller adds it.
+    public static func secondScreen(taken: (String) -> Bool) -> StreamPreset {
+        let base = String(localized: L10n.screenRoleSecond)
+        var name = base
+        var n = 1
+        while taken(name) {
+            n += 1
+            name = "\(base) \(n)"
+        }
+        var overrides = SettingsOverlay()
+        overrides.hostScreen = "second"
+        return StreamPreset(name: name, overrides: overrides)
     }
 
     private enum Key: String, CaseIterable {

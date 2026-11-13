@@ -5,17 +5,31 @@
 use super::ConnectRequest;
 use crate::discovery::{self, DiscoveredHost};
 use crate::trust::{KnownHost, Settings};
+use pf_client_core::display_targets::{BoundPreset, Targets};
 use pf_client_core::host_order::{self, Arrangeable};
 use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::profiles::ProfilePick;
+use pf_l10n::client;
 use std::collections::HashMap;
 
-/// A preset as a card needs it: what to call it and the colour its chip carries.
+/// A preset as a card needs it: what to call it, the colour its chip carries, and the host
+/// screen it pins.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Preset {
     pub id: String,
     pub name: String,
     pub accent: Option<String>,
+    pub host_screen: Option<String>,
+}
+
+impl Preset {
+    /// This preset as core's Screen rows read it, when it pins the host screen.
+    pub fn bound(&self) -> Option<BoundPreset<'_>> {
+        Some(BoundPreset {
+            name: &self.name,
+            host_screen: self.host_screen.as_deref()?,
+        })
+    }
 }
 
 /// This device's session with a host.
@@ -70,13 +84,13 @@ impl Status {
 
     pub fn sentence(&self) -> String {
         match self {
-            Status::Connecting => "Connecting\u{2026}".into(),
-            Status::Streaming => "Streaming".into(),
-            Status::Playing(title) => format!("Playing {title}"),
-            Status::Online => "Online".into(),
-            Status::NotPaired => "Not paired \u{b7} click to pair".into(),
-            Status::OfflineWakes => "Offline \u{b7} wakes on click".into(),
-            Status::Offline => "Offline".into(),
+            Status::Connecting => client::hostcard_status_connecting().into(),
+            Status::Streaming => client::hostcard_status_streaming().into(),
+            Status::Playing(title) => client::hostcard_status_playing(title),
+            Status::Online => client::hostcard_status_online().into(),
+            Status::NotPaired => client::hostcard_status_not_paired().into(),
+            Status::OfflineWakes => client::hostcard_status_offline_wakes().into(),
+            Status::Offline => client::hostcard_status_offline().into(),
         }
     }
 
@@ -121,6 +135,8 @@ pub struct CardModel {
     pub status: Status,
     /// What a plain click connects with: a pinned card's preset, else the host's binding.
     pub chip: Option<Preset>,
+    /// "Streams LG TV" or "Second screen"; nothing for the only screen.
+    pub screen: Option<String>,
     pub kind: CardKind,
     pub request: ConnectRequest,
     pub last_used: Option<u64>,
@@ -165,6 +181,8 @@ pub struct Live<'a> {
     pub sessions: &'a HashMap<String, Phase>,
     /// What a host has up, by fingerprint; empty when nothing is.
     pub playing: &'a dyn Fn(&str) -> String,
+    /// The host's Screen answer, by fingerprint.
+    pub screen: &'a dyn Fn(&str) -> Option<Targets>,
 }
 
 impl Live<'_> {
@@ -174,7 +192,8 @@ impl Live<'_> {
 }
 
 /// The saved cards in the device's order, split into its bands. A host's pinned cards follow
-/// it and read its live state; a pin whose preset is gone does not render.
+/// it and read its live state; a pin whose preset is gone does not render. A card's screen
+/// line is the host's, or its preset's where that decides (`Targets::card_line_under`).
 pub fn saved_bands(
     hosts: &[KnownHost],
     presets: &[Preset],
@@ -184,10 +203,10 @@ pub fn saved_bands(
     let mut cards = Vec::new();
     for k in hosts {
         let online = live.online(k);
-        let playing = if k.fp_hex.is_empty() {
-            String::new()
+        let (playing, targets) = if k.fp_hex.is_empty() {
+            (String::new(), None)
         } else {
-            (live.playing)(&k.fp_hex)
+            ((live.playing)(&k.fp_hex), (live.screen)(&k.fp_hex))
         };
         let is_default = k.id.is_some() && settings.default_host.as_deref() == k.id.as_deref();
         let card = |pinned: Option<&Preset>, phase: Option<Phase>| {
@@ -200,6 +219,8 @@ pub fn saved_bands(
                 ..ConnectRequest::default()
             };
             request.preset = pinned.map(|p| p.id.clone());
+            let chip = pinned.or(bound);
+            let preset = chip.and_then(Preset::bound);
             CardModel {
                 key: match pinned {
                     Some(p) => format!("{}\u{0}{}", k.card_key(), p.id),
@@ -209,7 +230,8 @@ pub fn saved_bands(
                 address: format!("{}:{}", k.addr, k.port),
                 os: k.os.clone(),
                 status: Status::of(k, online, phase, &playing, settings.auto_wake),
-                chip: pinned.or(bound).cloned(),
+                chip: chip.cloned(),
+                screen: targets.as_ref().and_then(|t| t.card_line_under(preset)),
                 kind: CardKind::Saved {
                     id: k.id.clone(),
                     paired: k.paired,
@@ -284,6 +306,7 @@ pub fn discovered_cards<'a>(
                 address: format!("{}:{}", a.addr, a.port),
                 os: a.os.clone(),
                 chip: None,
+                screen: None,
                 kind: CardKind::Discovered {
                     pair_optional: request.pair_optional,
                 },
@@ -353,6 +376,7 @@ mod tests {
                     String::new()
                 }
             },
+            screen: &|_| None,
         };
         saved_bands(hosts, presets, s, &live)
     }
@@ -363,6 +387,7 @@ mod tests {
             id: "g".into(),
             name: "Game".into(),
             accent: None,
+            host_screen: None,
         };
         let mut desk = host("Desk", "10.0.0.2", "ab");
         desk.pinned_presets = vec!["g".into(), "gone".into()];
@@ -450,6 +475,7 @@ mod tests {
             probed: &HashMap::new(),
             sessions: &sessions,
             playing: &|_| String::new(),
+            screen: &|_| None,
         };
         let status = |name: &str| {
             saved_bands(&hosts, &[], &Settings::default(), &live)
@@ -461,5 +487,38 @@ mod tests {
         assert_eq!(status("Desk"), Some(Status::Streaming));
         assert_eq!(status("Den"), Some(Status::Connecting));
         assert_eq!(status("Lab"), Some(Status::Offline));
+    }
+
+    /// Every card of a host names its screen; a card whose preset pins one the host can give
+    /// names the preset's.
+    #[test]
+    fn a_card_names_its_screen_or_its_presets() {
+        let mut desk = host("Desk", "10.0.0.2", "ab");
+        desk.pinned_presets = vec!["g".into(), "c".into()];
+        let preset = |id: &str, name: &str, host_screen: Option<&str>| Preset {
+            id: id.into(),
+            name: name.into(),
+            accent: None,
+            host_screen: host_screen.map(String::from),
+        };
+        let presets = [
+            preset("g", "Game", None),
+            preset("c", "Couch", Some("main")),
+        ];
+        let roles: Targets = serde_json::from_str(
+            r#"{"targets": [{"id": "own"}],
+               "role": {"yours": "second", "host_default": "only", "offered": ["only", "main", "second"]}}"#,
+        )
+        .unwrap();
+        let live = Live {
+            probed: &HashMap::new(),
+            sessions: &HashMap::new(),
+            playing: &|_| String::new(),
+            screen: &|fp| (fp == "ab").then(|| roles.clone()),
+        };
+        let out = saved_bands(&[desk], &presets, &Settings::default(), &live);
+        let lines: Vec<_> = out[0].cards.iter().map(|c| c.screen.as_deref()).collect();
+        let (second, main) = (client::screen_role_second(), client::screen_role_main());
+        assert_eq!(lines, [Some(second), Some(second), Some(main)]);
     }
 }

@@ -26,9 +26,16 @@ pub(crate) const HOLD_TO_LEAVE: f64 = 1.0;
 /// An axis has to move this far to count as the last input.
 const AXIS_NOTICE: f32 = 0.25;
 
+/// What moved last: a button, or an axis and where it went.
+#[derive(Clone, PartialEq, Debug)]
+enum LastInput {
+    Pressed(String),
+    Axis(String, f32),
+}
+
 pub(crate) struct InputTestScreen {
     state: PadTestState,
-    last: Option<String>,
+    last: Option<LastInput>,
     /// When B went down, while it stays down.
     b_since: Option<f64>,
     /// The driving pad's family, set by the shell each frame.
@@ -53,11 +60,11 @@ impl InputTestScreen {
     /// The host's latest reading, at shell time `t`.
     pub(crate) fn set_state(&mut self, state: PadTestState, t: f64) {
         if let Some(b) = state.held.iter().find(|b| !self.state.held.contains(b)) {
-            self.last = Some(format!("{b} pressed"));
+            self.last = Some(LastInput::Pressed(b.clone()));
         }
         for (name, v) in &state.axes {
             if (v - self.state.axis(name)).abs() >= AXIS_NOTICE {
-                self.last = Some(format!("{name} {v:+.2}"));
+                self.last = Some(LastInput::Axis(name.clone(), *v));
             }
         }
         let b_down = state.held.iter().any(|b| b == "B");
@@ -89,7 +96,10 @@ impl ScreenView for InputTestScreen {
     }
 
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
-        vec![Hint::new(HintKey::Back, "Hold to finish")]
+        vec![Hint::new(
+            HintKey::Back,
+            pf_l10n::console::console_pad_test_hold_hint(),
+        )]
     }
 
     fn render(
@@ -101,15 +111,15 @@ impl ScreenView for InputTestScreen {
         fonts: &Fonts,
         ctx: &mut Ctx,
     ) {
+        use pf_l10n::console as c;
         let ui = ctx.ui;
-        let below = blurb(
-            canvas,
-            ui,
-            fonts,
-            "Every button and stick on the controller shows here. Hold B to finish.",
-            rect,
-            k,
+        // B is the back button the test ends on.
+        let blurb_text = format!(
+            "{} {}",
+            c::console_pad_test_blurb(),
+            c::console_pad_test_finish_hold("B")
         );
+        let below = blurb(canvas, ui, fonts, &blurb_text, rect, k);
         let art = art_for(self.pref);
         if !self
             .drawing
@@ -129,8 +139,11 @@ impl ScreenView for InputTestScreen {
         let top = f64::from(below.top) + gap;
         draw_pad(canvas, ui, fonts, drawing, &self.state, x, top, scale, k);
         let last = match &self.last {
-            Some(input) => format!("Last input \u{2014} {input}"),
-            None => "Press a button or move a stick".into(),
+            Some(LastInput::Pressed(b)) => c::console_pad_test_last_pressed(b),
+            Some(LastInput::Axis(name, v)) => {
+                pf_l10n::client::pad_test_last_input(format!("{name} {v:+.2}"))
+            }
+            None => c::console_pad_test_prompt().into(),
         };
         let size = 15.0 * k;
         let tw = f64::from(fonts.measure(&last, W::Regular, size));
@@ -148,7 +161,7 @@ impl ScreenView for InputTestScreen {
     }
 
     fn title(&self) -> String {
-        "Controller test".into()
+        pf_l10n::console::console_pad_test_title().into()
     }
 
     /// The whole screen is the test: no tap falls through to the backdrop.
@@ -389,11 +402,12 @@ mod tests {
     fn the_last_input_is_what_moved() {
         let mut s = InputTestScreen::new();
         s.set_state(state(&["A"], &[]), 0.0);
-        assert_eq!(s.last.as_deref(), Some("A pressed"));
+        let pressed = Some(LastInput::Pressed("A".into()));
+        assert_eq!(s.last, pressed);
         s.set_state(state(&["A"], &[("LX", 0.1)]), 0.1);
-        assert_eq!(s.last.as_deref(), Some("A pressed"), "noise");
+        assert_eq!(s.last, pressed, "noise");
         s.set_state(state(&[], &[("LX", 0.8)]), 0.2);
-        assert_eq!(s.last.as_deref(), Some("LX +0.80"));
+        assert_eq!(s.last, Some(LastInput::Axis("LX".into(), 0.8)));
     }
 
     /// B held a second finishes; a tap does not, and letting go restarts the count.

@@ -8,11 +8,12 @@
 //! has the job; the console polls `GET /host` for `door` and `door_switch_failed`, and reads
 //! `door_unavailable` before it asks.
 
+use crate::mgmt::shared::ApiError;
 use crate::update::detect::InstallKind;
 use axum::http::StatusCode;
 
 /// A refusal: the status and its sentence for the operator.
-pub(crate) type Refusal = (StatusCode, String);
+pub(crate) type Refusal = (StatusCode, ApiError);
 
 /// What a request to switch the door found.
 #[derive(Debug, PartialEq, Eq)]
@@ -25,7 +26,12 @@ pub(crate) enum Outcome {
 }
 
 #[cfg(not(target_os = "linux"))]
-const LINUX_ONLY: &str = "Reachable without logging in is a Linux setting.";
+fn linux_only() -> ApiError {
+    ApiError::coded(
+        "door_linux_only",
+        "Reachable without logging in is a Linux setting.",
+    )
+}
 
 /// Turns the door on (`on`) or off. Blocking: it runs `id` and `systemctl`.
 pub(crate) fn change(on: bool) -> Result<Outcome, Refusal> {
@@ -36,26 +42,26 @@ pub(crate) fn change(on: bool) -> Result<Outcome, Refusal> {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = on;
-        Err((StatusCode::CONFLICT, LINUX_ONLY.into()))
+        Err((StatusCode::CONFLICT, linux_only()))
     }
 }
 
 /// Why turning the door on would be refused right now, as the operator's next move. `None` when
 /// it would start, and on the door itself. Blocking: it runs `id`.
-pub(crate) fn unavailable() -> Option<String> {
+pub(crate) fn unavailable() -> Option<ApiError> {
     #[cfg(target_os = "linux")]
     {
         linux::unavailable()
     }
     #[cfg(not(target_os = "linux"))]
     {
-        Some(LINUX_ONLY.into())
+        Some(linux_only())
     }
 }
 
 /// Whether the switch this host last started ran and failed: `door-helper` refused, or stopped
-/// halfway and put the box back. The helper's reason is in the host's log. Blocking: it runs
-/// `systemctl`.
+/// halfway and put the box back. A door the failed off restarted reads that off from systemd.
+/// The helper's reason is in the host's log. Blocking: it runs `systemctl`.
 pub(crate) fn switch_failed() -> bool {
     #[cfg(target_os = "linux")]
     {
@@ -69,29 +75,42 @@ pub(crate) fn switch_failed() -> bool {
 
 /// What to do on an install whose door files are missing. Each channel gets them its own way.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
-fn missing(kind: InstallKind) -> String {
+fn missing(kind: InstallKind) -> ApiError {
     let package = |command: &str| {
-        format!("This install is missing the punktfunk-seats package. Install it: {command}")
+        ApiError::coded(
+            "door_missing_package",
+            format!("This install is missing the punktfunk-seats package. Install it: {command}"),
+        )
+        .param("command", command)
     };
     match kind {
         InstallKind::Apt => package("sudo apt install punktfunk-seats"),
         InstallKind::Dnf => package("sudo dnf install punktfunk-seats"),
         InstallKind::Pacman => package("sudo pacman -S punktfunk-seats"),
-        InstallKind::RpmOstree => "This install is missing the punktfunk-seats package. Update \
-                                   Punktfunk, then restart: sudo /usr/share/punktfunk/update-punktfunk.sh"
-            .into(),
-        InstallKind::Sysext => {
-            "This image doesn't include it yet. Update Punktfunk: sudo punktfunk-sysext update".into()
-        }
-        InstallKind::Nix => "Turn it on in your NixOS configuration with \
-                             services.punktfunk.seats.enable = true, then rebuild."
-            .into(),
-        InstallKind::SteamosSource => "This Deck hasn't set it up yet. Run bash \
-                                       ~/punktfunk/scripts/steamdeck/update.sh in Konsole and \
-                                       enter your password."
-            .into(),
+        InstallKind::RpmOstree => ApiError::coded(
+            "door_missing_package_rpm_ostree",
+            "This install is missing the punktfunk-seats package. Update Punktfunk, then \
+             restart: sudo /usr/share/punktfunk/update-punktfunk.sh",
+        ),
+        InstallKind::Sysext => ApiError::coded(
+            "door_missing_sysext",
+            "This image doesn't include it yet. Update Punktfunk: sudo punktfunk-sysext update",
+        ),
+        InstallKind::Nix => ApiError::coded(
+            "door_missing_nix",
+            "Turn it on in your NixOS configuration with services.punktfunk.seats.enable = \
+             true, then rebuild.",
+        ),
+        InstallKind::SteamosSource => ApiError::coded(
+            "door_missing_steamos",
+            "This Deck hasn't set it up yet. Run bash ~/punktfunk/scripts/steamdeck/update.sh \
+             in Konsole and enter your password.",
+        ),
         InstallKind::Source | InstallKind::Flatpak | InstallKind::WindowsInstaller => {
-            "This build doesn't include it. Install Punktfunk from a package to use it.".into()
+            ApiError::coded(
+                "door_missing_build",
+                "This build doesn't include it. Install Punktfunk from a package to use it.",
+            )
         }
     }
 }
@@ -104,6 +123,27 @@ fn copy_is_stale(recorded: Option<&str>, running: &str) -> bool {
     recorded
         .map(str::trim)
         .is_some_and(|v| !v.is_empty() && v != running)
+}
+
+/// `systemctl show -p Result -p InactiveExitTimestampMonotonic` of the off unit, then the on unit:
+/// the off ran after the last on and didn't succeed. A unit's stamp is 0 before its first run.
+/// The unprivileged door keeps no record of its own: systemd holds one until the next run.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
+fn off_failed_last(shown: &str) -> bool {
+    let mut units = shown.split("\n\n").map(|block| {
+        let field = |key: &str| {
+            block
+                .lines()
+                .find_map(|l| l.strip_prefix(key)?.strip_prefix('='))
+                .unwrap_or_default()
+        };
+        let began: u64 = field("InactiveExitTimestampMonotonic").parse().unwrap_or(0);
+        (field("Result").to_string(), began)
+    });
+    let (Some((result, off)), Some((_, on))) = (units.next(), units.next()) else {
+        return false;
+    };
+    off > on && !result.is_empty() && result != "success"
 }
 
 /// The unit that switches the door for `user`.
@@ -144,12 +184,13 @@ mod linux {
     }
 
     /// The switch unit this host last started, and its invocation before then: a newer one is
-    /// that start's run.
+    /// that start's run. An off stops the door that holds this, so a restarted door has none.
     static STARTED: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
 
     pub(super) fn switch_failed() -> bool {
-        let Some((unit, before)) = STARTED.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
-            return false;
+        let started = STARTED.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some((unit, before)) = started else {
+            return pf_paths::seat::role().is_door() && restarted_by_failed_off();
         };
         let Some(shown) = capture(Command::new("systemctl").args([
             "show",
@@ -162,6 +203,25 @@ mod linux {
             return false;
         };
         ran_and_failed(&shown, &before)
+    }
+
+    /// The owner's off unit ran after their last on and failed: `door-helper` stopped the door,
+    /// couldn't hand the files home, and started this door again.
+    fn restarted_by_failed_off() -> bool {
+        let Ok(owner) = owner_account() else {
+            return false;
+        };
+        let (off, on) = (unit(false, &owner), unit(true, &owner));
+        capture(Command::new("systemctl").args([
+            "show",
+            "-p",
+            "Result",
+            "-p",
+            "InactiveExitTimestampMonotonic",
+            &off,
+            &on,
+        ]))
+        .is_some_and(|shown| off_failed_last(&shown))
     }
 
     /// `systemctl show -p InvocationID -p Result`'s `before`'s successor, ended without success.
@@ -182,7 +242,7 @@ mod linux {
         Some(shown.trim().strip_prefix("InvocationID=")?.to_string())
     }
 
-    pub(super) fn unavailable() -> Option<String> {
+    pub(super) fn unavailable() -> Option<ApiError> {
         if pf_paths::seat::role().is_door() {
             return None;
         }
@@ -207,10 +267,12 @@ mod linux {
         if on && copy_is_stale(recorded.as_deref(), crate::version::get()) {
             return Some((
                 StatusCode::CONFLICT,
-                "This Deck's seats are on an older build than its host. Run bash \
-                 ~/punktfunk/scripts/steamdeck/update.sh in Konsole and enter your password, \
-                 then turn this on."
-                    .into(),
+                ApiError::coded(
+                    "door_deck_stale",
+                    "This Deck's seats are on an older build than its host. Run bash \
+                     ~/punktfunk/scripts/steamdeck/update.sh in Konsole and enter your password, \
+                     then turn this on.",
+                ),
             ));
         }
         // The helper's own rule, so the console says so before it asks.
@@ -218,26 +280,40 @@ mod linux {
             return Some(match refused.code.as_str() {
                 "account_invalid" => (
                     StatusCode::CONFLICT,
-                    "This account's name can't be switched automatically.".into(),
+                    ApiError::coded(
+                        "door_account_name",
+                        "This account's name can't be switched automatically.",
+                    ),
                 ),
                 "not_in_update_group" => (
                     StatusCode::FORBIDDEN,
-                    format!(
-                        "Add {user} to the punktfunk-update group first: sudo usermod -aG punktfunk-update {user}"
-                    ),
+                    ApiError::coded(
+                        "door_not_in_update_group",
+                        format!(
+                            "Add {user} to the punktfunk-update group first: sudo usermod -aG punktfunk-update {user}"
+                        ),
+                    )
+                    .param("user", user),
                 ),
                 _ => (
                     StatusCode::CONFLICT,
-                    "This account can't be switched automatically.".into(),
+                    ApiError::coded(
+                        "door_account_not_switchable",
+                        "This account can't be switched automatically.",
+                    ),
                 ),
             });
         }
         if on && !in_update_group(Command::new("id").arg("-nG")) {
             return Some((
                 StatusCode::FORBIDDEN,
-                format!(
-                    "Restart the computer to finish adding {user} to the punktfunk-update group. The host started before it."
-                ),
+                ApiError::coded(
+                    "door_update_group_restart",
+                    format!(
+                        "Restart the computer to finish adding {user} to the punktfunk-update group. The host started before it."
+                    ),
+                )
+                .param("user", user),
             ));
         }
         None
@@ -250,7 +326,10 @@ mod linux {
             .ok_or_else(|| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "Couldn't tell which account this host runs as.".into(),
+                    ApiError::coded(
+                        "door_own_user_unknown",
+                        "Couldn't tell which account this host runs as.",
+                    ),
                 )
             })
     }
@@ -258,10 +337,15 @@ mod linux {
     /// The owner's account as `door-helper` recorded it, the one account it switches off for.
     /// Read from root's record, so a supervisor that isn't answering doesn't keep the door on.
     fn owner_account() -> Result<String, Refusal> {
-        pf_seats::linux::recorded_owner().ok_or((
-            StatusCode::CONFLICT,
-            "This host has no owner to hand its files back to.".into(),
-        ))
+        pf_seats::linux::recorded_owner().ok_or_else(|| {
+            (
+                StatusCode::CONFLICT,
+                ApiError::coded(
+                    "door_no_owner_account",
+                    "This host has no owner to hand its files back to.",
+                ),
+            )
+        })
     }
 
     /// `punktfunk-update` among this process's groups. polkit judges the process, whose groups
@@ -288,7 +372,10 @@ mod linux {
                 tracing::warn!(%unit, error = %e, "door switch did not launch");
                 (
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "Couldn't start the switch. Check that systemd is running.".to_string(),
+                    ApiError::coded(
+                        "door_switch_not_started",
+                        "Couldn't start the switch. Check that systemd is running.",
+                    ),
                 )
             })?;
         if out.status.success() {
@@ -303,13 +390,18 @@ mod linux {
         Err(if denied {
             (
                 StatusCode::FORBIDDEN,
-                "This account isn't allowed to switch it. Add it to the punktfunk-update group, then try again."
-                    .to_string(),
+                ApiError::coded(
+                    "door_switch_not_allowed",
+                    "This account isn't allowed to switch it. Add it to the punktfunk-update group, then try again.",
+                ),
             )
         } else {
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                "Couldn't start the switch. Check the host log.".to_string(),
+                ApiError::coded(
+                    "door_switch_failed",
+                    "Couldn't start the switch. Check the host log.",
+                ),
             )
         })
     }
@@ -388,7 +480,7 @@ mod tests {
             (InstallKind::SteamosSource, "scripts/steamdeck/update.sh"),
             (InstallKind::Source, "from a package"),
         ] {
-            let sentence = missing(kind);
+            let sentence = missing(kind).error;
             assert!(sentence.contains(fix), "{kind:?}: {sentence}");
             assert!(!sentence.contains("  "), "{kind:?}: {sentence}");
         }
@@ -422,11 +514,38 @@ mod tests {
         assert!(ran_and_failed(&shown("b2", "exit-code"), ""), "a first run");
     }
 
+    /// A door the off restarted reads that off's run: failed after the owner's last on is a
+    /// failed switch; one before that on, a success, or no run at all is not.
+    #[test]
+    fn an_off_that_failed_after_the_last_on_is_a_failed_switch() {
+        let shown = |off: (&str, u64), on: (&str, u64)| {
+            format!(
+                "Result={}\nInactiveExitTimestampMonotonic={}\n\nResult={}\nInactiveExitTimestampMonotonic={}\n",
+                off.0, off.1, on.0, on.1
+            )
+        };
+        assert!(off_failed_last(&shown(
+            ("exit-code", 900),
+            ("success", 500)
+        )));
+        assert!(off_failed_last(&shown(("timeout", 900), ("success", 0))));
+        assert!(
+            !off_failed_last(&shown(("exit-code", 500), ("success", 900))),
+            "an on since"
+        );
+        assert!(!off_failed_last(&shown(("success", 900), ("success", 500))));
+        assert!(
+            !off_failed_last(&shown(("success", 0), ("success", 0))),
+            "never ran"
+        );
+        assert!(!off_failed_last("Result=exit-code\n"), "one unit only");
+    }
+
     #[cfg(not(target_os = "linux"))]
     #[test]
     fn off_linux_the_switch_is_a_plain_conflict() {
         let (status, _) = change(true).unwrap_err();
         assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(unavailable().as_deref(), Some(LINUX_ONLY));
+        assert_eq!(unavailable(), Some(linux_only()));
     }
 }

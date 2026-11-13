@@ -76,6 +76,8 @@ pub struct MutterDisplay {
     /// the host-persisted scale (Mutter mints a fresh EDID serial, so
     /// `monitors.xml` never rematches).
     client_fp: Option<[u8; 32]>,
+    /// The session's topology ([`VirtualDisplay::set_topology`]).
+    topology: Option<crate::policy::Topology>,
     /// Identity slot the last `create` resolved. Reported via
     /// [`last_identity_slot`](VirtualDisplay::last_identity_slot) for
     /// group arrangement and `/display/state`.
@@ -93,6 +95,7 @@ impl MutterDisplay {
             first_in_group: true,
             hw_cursor: false,
             client_fp: None,
+            topology: None,
             last_slot: None,
             join_live: false,
             join_name: None,
@@ -129,6 +132,14 @@ impl VirtualDisplay for MutterDisplay {
         self.client_fp = fingerprint;
         let default = crate::policy::Identity::Shared;
         self.last_slot = crate::identity::peek_slot(fingerprint, (0, 0), default);
+    }
+
+    fn set_topology(&mut self, topology: Option<crate::policy::Topology>) {
+        self.topology = topology;
+    }
+
+    fn topology(&self) -> Option<crate::policy::Topology> {
+        Some(crate::create_topology(self.topology, self.client_fp))
     }
 
     fn accepts_kept(&self, identity_slot: Option<u32>, _output_name: Option<&str>) -> bool {
@@ -209,6 +220,7 @@ impl VirtualDisplay for MutterDisplay {
         let first_in_group = self.first_in_group;
         let hw_cursor = self.hw_cursor;
         let client_fp = self.client_fp;
+        let topology = self.topology;
         let join_name = crate::backend::JoinName::default();
         self.join_name = Some(join_name.clone());
         thread::Builder::new()
@@ -225,6 +237,7 @@ impl VirtualDisplay for MutterDisplay {
                     scale_key,
                     remembered_scale,
                     client_fp,
+                    topology,
                     join_name,
                 )
             })
@@ -310,6 +323,8 @@ fn session_thread(
     remembered_scale: Option<f64>,
     // Whose display this is, for the per-device topology (§6.1). `None` is the host policy.
     client_fp: Option<[u8; 32]>,
+    // The session's topology; `None` reads `client_fp`'s.
+    topology: Option<crate::policy::Topology>,
     // Filled with the connector once identified, so a `join` session can record it.
     join_name: crate::backend::JoinName,
 ) {
@@ -338,7 +353,7 @@ fn session_thread(
         // Extend: no config change. Primary: virtual primary, physicals
         // kept. Exclusive: virtual sole output. `Auto` is resolved upstream.
         use crate::policy::Topology;
-        let topo = crate::effective_topology(client_fp);
+        let topo = crate::create_topology(topology, client_fp);
         let topo_policy = matches!(topo, Topology::Primary | Topology::Exclusive);
         // Only the first display of the group applies topology. A later
         // sibling extends: Mutter connectors are un-nameable, so a config

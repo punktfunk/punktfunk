@@ -23,6 +23,9 @@
 //                                  BOTH set ⇒ HTTPS. Unset ⇒ plain HTTP (local dev only).
 //   PORT / HOST                    standard Nitro bind (3000 / 0.0.0.0).
 //   PUNKTFUNK_UI_PLUGIN_PORT       the plugin-UI origin's port (default: console port + 1).
+//   PUNKTFUNK_ENV_FILES            env files the console reads itself (env-files.mjs). First
+//                                  import, so every setting below may come from one.
+import "./env-files.mjs";
 import "#nitro-internal-pollyfills";
 import wsAdapter from "crossws/adapters/bun";
 import { useNitroApp } from "nitropack/runtime";
@@ -62,15 +65,11 @@ const PEER_IP_HEADER = "x-pf-peer-ip";
 //
 //   different ORIGIN — scheme+host+PORT — so SOP applies: plugin JS cannot read the console's DOM,
 //                      and its cross-origin `fetch` of `/api/**` is unreadable (we emit no CORS) and
-//                      unable to mutate (the Sec-Fetch-Site guard sees `same-site`, not
-//                      `same-origin`).
-//   same SITE        — because a cookie's scope ignores the port, and SameSite is computed on the
-//                      site, not the origin. So the `SameSite=Lax` session cookie still flows to the
-//                      plugin origin, and plugin pages keep loading their assets while logged in.
-//
-// That combination is why this works and why the obvious alternative does not: dropping
-// `allow-same-origin` gives the frame an OPAQUE origin, which makes its subresource requests
-// cross-site, which stops the Lax cookie, which 302s every plugin asset to /login — a blank frame.
+//                      unable to mutate (the Sec-Fetch-Site guard sees `cross-site`).
+//   one per PAGE     — every answer there carries CSP `sandbox` without `allow-same-origin`, so each
+//                      plugin page is an opaque origin and cannot read another plugin's. Its requests
+//                      carry no session cookie that counts: the page path is the credential
+//                      (server/util/pluginPage.ts).
 //
 // The console listener refuses `/plugin-ui/**` and the plugin listener refuses everything else
 // (server/middleware/auth.ts). Both halves matter: without the first the old path still works;

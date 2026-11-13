@@ -2,9 +2,9 @@
 //!
 //! The disc preview is the same keycap the in-stream ring draws. The name is
 //! typed on the keyboard tray (Steam's on a Deck); the key is picked on a
-//! keyboard-shaped tray of every name `key_vk` knows. A new shortcut takes the
-//! first empty ring slot. Writes go through the same load-then-save the
-//! settings screen uses, so another writer's edits are never reverted.
+//! keyboard-shaped tray of every name `key_vk` knows ([`KeyTray`], which the Shortcuts
+//! page also draws). A new shortcut takes the first empty ring slot. Writes go through the
+//! ring editor's [`Scope`], so a preset's ring edits the preset.
 //!
 //! Pad form: design/touch-client-overlay.md.
 
@@ -21,8 +21,11 @@ use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use pf_client_core::overlay_actions::{
     chord_chip, key_legend, Chord, OverlayConfig, Shortcut, CHORD_MODIFIERS, KEY_GRID,
 };
+use pf_l10n::client as c;
+use pf_l10n::console as con;
 use skia_safe::{Canvas, Color4f, RRect, Rect};
 
+use super::preset::Scope;
 use super::ring_editor::ring_platform;
 
 const ROW_NAME: usize = 0;
@@ -57,37 +60,43 @@ impl Draft {
 
 fn rows(d: &Draft, typing: bool, picking: bool) -> Vec<RowSpec> {
     let mut v = Vec::with_capacity(ROW_REMOVE + 1);
-    let mut name = RowSpec::field("Name", d.label.clone(), "Optional — e.g. Task Manager");
-    name.header = Some("Shortcut");
+    let mut name = RowSpec::field(
+        c::ring_shortcut_name(),
+        d.label.clone(),
+        c::ring_shortcut_name_placeholder(),
+    );
+    name.header = Some(con::console_shortcut_section());
     name.caret = typing;
     v.push(name);
     let mut key = RowSpec::field(
-        "Key",
+        c::ring_shortcut_key(),
         d.chord.key.as_deref().map(key_legend).unwrap_or_default(),
-        "Choose…",
+        con::console_shortcut_key_choose(),
     );
     key.caret = picking;
     v.push(key);
     for (i, m) in CHORD_MODIFIERS.iter().enumerate() {
-        let mut row = RowSpec::field(
-            key_legend(m),
-            if d.chord.mods[i] { "On" } else { "Off" }.into(),
-            "",
-        );
-        row.header = if i == 0 { Some("Hold with") } else { None };
+        let on = if d.chord.mods[i] {
+            con::console_shortcut_modifier_on()
+        } else {
+            con::console_shortcut_modifier_off()
+        };
+        let mut row = RowSpec::field(key_legend(m), on.into(), "");
+        row.header = (i == 0).then(c::ring_shortcut_modifiers);
         row.adjustable = true;
         v.push(row);
     }
     v.push(RowSpec::action(
         if d.id.is_some() {
-            "Save"
+            pf_l10n::common::common_save()
         } else {
-            "Add to the dial"
+            pf_l10n::common::common_add()
         },
-        d.chord.key.is_some(),
+        // A modifier alone is a combination: Win opens the Start menu.
+        !d.chord.keys().is_empty(),
     ));
     if d.id.is_some() {
-        v.push(RowSpec::action("Remove shortcut", true));
+        v.push(RowSpec::action(c::ring_shortcut_remove(), true));
     }
     v
 }
@@ -114,13 +123,16 @@ fn nearest_col(row: &[Rect], x: f32) -> usize {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum TrayMsg {
+pub(super) enum TrayMsg {
     None,
     Pick(&'static str),
     Close,
 }
 
-struct KeyTray {
+/// A tray of keys rising from the bottom: the keyboard's, or a pad's buttons
+/// ([`super::shortcuts`]). Each key is a stored name and the legend it shows.
+pub(super) struct KeyTray {
+    grid: Vec<Vec<(&'static str, String)>>,
     row: usize,
     col: usize,
     /// 0 hidden → 1 seated; shares the keyboard tray's spring.
@@ -137,37 +149,45 @@ impl KeyTray {
     /// Letter-key width in design units; word keys grow to the legend.
     const UNIT: f64 = 34.0;
 
-    fn new() -> KeyTray {
+    pub(super) fn new(grid: &[&[&'static str]], legend: impl Fn(&str) -> String) -> KeyTray {
+        let grid: Vec<Vec<_>> = (grid.iter())
+            .map(|row| row.iter().map(|n| (*n, legend(n))).collect())
+            .collect();
         KeyTray {
+            keys: grid
+                .iter()
+                .map(|r| vec![Rect::new_empty(); r.len()])
+                .collect(),
+            grid,
             row: 0,
             col: 0,
             tray: Spring::rest(0.0),
             flash: 0.0,
-            keys: KEY_GRID
-                .iter()
-                .map(|r| vec![Rect::new_empty(); r.len()])
-                .collect(),
         }
     }
 
-    /// Focus `key` if it is on the grid; otherwise Esc at (0, 0).
-    fn seat_on(&mut self, key: Option<&str>) {
+    /// Every key `key_vk` knows that is not a modifier.
+    pub(super) fn keys() -> KeyTray {
+        KeyTray::new(&KEY_GRID, key_legend)
+    }
+
+    /// Focus `key` if it is on the grid; otherwise the first key.
+    pub(super) fn seat_on(&mut self, key: Option<&str>) {
         let at = key.and_then(|name| {
-            KEY_GRID
-                .iter()
-                .enumerate()
-                .find_map(|(r, row)| row.iter().position(|k| *k == name).map(|c| (r, c)))
+            (self.grid.iter().enumerate())
+                .find_map(|(r, row)| row.iter().position(|(k, _)| *k == name).map(|c| (r, c)))
         });
         (self.row, self.col) = at.unwrap_or((0, 0));
     }
 
-    fn tray_height() -> f64 {
-        let rows = KEY_GRID.len() as f64;
+    /// Design units, the padding included.
+    pub(super) fn height(&self) -> f64 {
+        let rows = self.grid.len() as f64;
         rows * Self::KEY_H + (rows - 1.0) * Self::GAP + 2.0 * Self::PAD
     }
 
     /// Step the tray spring. Returns 0 while hidden so the caller can skip drawing.
-    fn seat(&mut self, shown: bool, dt: f64) -> f64 {
+    pub(super) fn seat(&mut self, shown: bool, dt: f64) -> f64 {
         let target = if shown { 1.0 } else { 0.0 };
         self.tray.step(target, TRAY_K, TRAY_C, dt);
         self.tray.settle(target, 0.001, 0.01);
@@ -175,12 +195,12 @@ impl KeyTray {
         self.tray.pos.clamp(0.0, 1.2)
     }
 
-    fn covers(&self, p: Pointer) -> bool {
+    pub(super) fn covers(&self, p: Pointer) -> bool {
         self.keys.iter().flatten().any(|r| p.hits(*r))
     }
 
     /// A press on a key picks it. Misses are swallowed — the tray is modal.
-    fn pointer(&mut self, p: Pointer) -> (TrayMsg, Option<MenuPulse>) {
+    pub(super) fn pointer(&mut self, p: Pointer) -> (TrayMsg, Option<MenuPulse>) {
         if !p.press() {
             return (TrayMsg::None, None);
         }
@@ -194,19 +214,19 @@ impl KeyTray {
         };
         (self.row, self.col) = (r, c);
         self.flash = 1.0;
-        (TrayMsg::Pick(KEY_GRID[r][c]), Some(MenuPulse::Confirm))
+        (TrayMsg::Pick(self.grid[r][c].0), Some(MenuPulse::Confirm))
     }
 
-    fn menu(&mut self, ev: MenuEvent) -> (TrayMsg, Option<MenuPulse>) {
+    pub(super) fn menu(&mut self, ev: MenuEvent) -> (TrayMsg, Option<MenuPulse>) {
         match ev {
             MenuEvent::Move(dir) => {
                 let (r, c) = (self.row, self.col);
                 let x = self.keys[r][c].center_x();
                 let next = match dir {
                     MenuDir::Left if c > 0 => (r, c - 1),
-                    MenuDir::Right if c + 1 < KEY_GRID[r].len() => (r, c + 1),
+                    MenuDir::Right if c + 1 < self.grid[r].len() => (r, c + 1),
                     MenuDir::Up if r > 0 => (r - 1, nearest_col(&self.keys[r - 1], x)),
-                    MenuDir::Down if r + 1 < KEY_GRID.len() => {
+                    MenuDir::Down if r + 1 < self.grid.len() => {
                         (r + 1, nearest_col(&self.keys[r + 1], x))
                     }
                     _ => return (TrayMsg::None, Some(MenuPulse::Boundary)),
@@ -217,7 +237,7 @@ impl KeyTray {
             MenuEvent::Confirm => {
                 self.flash = 1.0;
                 (
-                    TrayMsg::Pick(KEY_GRID[self.row][self.col]),
+                    TrayMsg::Pick(self.grid[self.row][self.col].0),
                     Some(MenuPulse::Confirm),
                 )
             }
@@ -226,8 +246,9 @@ impl KeyTray {
         }
     }
 
+    /// `chosen` keys are lit.
     #[allow(clippy::too_many_arguments)]
-    fn render(
+    pub(super) fn render(
         &mut self,
         canvas: &Canvas,
         ui: &Frame,
@@ -236,11 +257,11 @@ impl KeyTray {
         bottom: f64,
         seat: f64,
         k: f64,
-        chosen: Option<&str>,
+        chosen: &[&str],
     ) {
         let kf = k as f32;
         let tray_w = (640.0 * k).min(w - 32.0 * k);
-        let tray_h = Self::tray_height() * k;
+        let tray_h = self.height() * k;
         let x0 = (w - tray_w) / 2.0;
         let y0 = bottom - tray_h * seat;
         let rect = Rect::from_xywh(x0 as f32, y0 as f32, tray_w as f32, tray_h as f32);
@@ -255,20 +276,19 @@ impl KeyTray {
         );
         let (gap, key_h, unit) = (Self::GAP * k, Self::KEY_H * k, Self::UNIT * k);
         let size = 13.0 * k;
-        for (r, row) in KEY_GRID.iter().enumerate() {
-            let legends: Vec<String> = row.iter().map(|n| key_legend(n)).collect();
-            let widths: Vec<f64> = legends
+        for (r, row) in self.grid.iter().enumerate() {
+            let widths: Vec<f64> = row
                 .iter()
-                .map(|l| (f64::from(fonts.measure(l, W::Medium, size)) + 16.0 * k).max(unit))
+                .map(|(_, l)| (f64::from(fonts.measure(l, W::Medium, size)) + 16.0 * k).max(unit))
                 .collect();
             let total: f64 = widths.iter().sum::<f64>() + gap * (row.len() as f64 - 1.0);
             let y = y0 + Self::PAD * k + r as f64 * (key_h + gap);
             let mut x = x0 + (tray_w - total) / 2.0;
-            for (c, (name, kw)) in row.iter().zip(&widths).enumerate() {
+            for (c, ((name, legend), kw)) in row.iter().zip(&widths).enumerate() {
                 let kr = Rect::from_xywh(x as f32, y as f32, *kw as f32, key_h as f32);
                 self.keys[r][c] = kr;
                 let focused = r == self.row && c == self.col;
-                let is_chosen = chosen == Some(*name);
+                let is_chosen = chosen.contains(name);
                 let face = if focused {
                     let mut b = ui.accent(1.0);
                     if self.flash > 0.02 {
@@ -293,10 +313,10 @@ impl KeyTray {
                 }
                 // Accent fill: legend ink is `on_accent`, not field `fg`.
                 let ink = if focused { ui.on_accent() } else { ui.fg(1.0) };
-                let tw = f64::from(fonts.measure(&legends[c], W::Medium, size));
+                let tw = f64::from(fonts.measure(legend, W::Medium, size));
                 fonts.draw(
                     canvas,
-                    &legends[c],
+                    legend,
                     x + (kw - tw) / 2.0,
                     y + key_h / 2.0 + size * 0.36,
                     W::Medium,
@@ -311,6 +331,7 @@ impl KeyTray {
 
 pub(crate) struct ShortcutEditorScreen {
     draft: Draft,
+    scope: Scope,
     list: MenuList,
     /// The name's keyboard.
     keyboard: TextEntry,
@@ -320,22 +341,37 @@ pub(crate) struct ShortcutEditorScreen {
 }
 
 impl ShortcutEditorScreen {
-    pub(crate) fn new(_ctx: &Ctx, existing: Option<&Shortcut>) -> ShortcutEditorScreen {
+    pub(crate) fn new(
+        _ctx: &Ctx,
+        existing: Option<&Shortcut>,
+        scope: Scope,
+    ) -> ShortcutEditorScreen {
         let draft = Draft::of(existing);
         let mut list = MenuList::new();
-        list.jump_to(if draft.chord.key.is_none() {
+        list.jump_to(if draft.chord.keys().is_empty() {
             ROW_KEY
         } else {
             ROW_NAME
         });
         ShortcutEditorScreen {
             draft,
+            scope,
             list,
             keyboard: TextEntry::default(),
-            keys: KeyTray::new(),
+            keys: KeyTray::keys(),
             editing_name: false,
             picking_key: false,
         }
+    }
+
+    /// Edits the ring blob of the editor's scope through `f`.
+    fn write(&self, ctx: &mut Ctx, fx: &mut Outbox, f: impl FnOnce(&mut OverlayConfig)) {
+        let platform = ring_platform(ctx.device.platform);
+        self.scope.write("overlay_actions", ctx, fx, |s| {
+            let mut cfg = OverlayConfig::parse(&s.overlay_actions, platform);
+            f(&mut cfg);
+            s.overlay_actions = cfg.to_json();
+        });
     }
 
     /// The field list, while neither tray covers it.
@@ -349,22 +385,14 @@ impl ShortcutEditorScreen {
     }
 
     fn save(&mut self, ctx: &mut Ctx, fx: &mut Outbox) {
-        if self.draft.chord.key.is_none() {
-            fx.toast = Some("Pick a key first".into());
+        if self.draft.chord.keys().is_empty() {
+            fx.toast = Some(c::ring_shortcut_pick_key_first().into());
             self.list.jump_to(ROW_KEY);
             self.open_keys();
             return;
         }
-        ctx.write(|c| {
-            let mut cfg = OverlayConfig::parse(
-                &c.settings.overlay_actions,
-                ring_platform(c.device.platform),
-            );
-            apply_draft(&mut cfg, &self.draft);
-            c.settings.overlay_actions = cfg.to_json();
-            true
-        });
-        fx.toast = Some("Saved".into());
+        self.write(ctx, fx, |cfg| apply_draft(cfg, &self.draft));
+        fx.toast = Some(con::console_shortcut_saved().into());
         fx.pop();
     }
 
@@ -372,16 +400,8 @@ impl ShortcutEditorScreen {
         let Some(id) = self.draft.id.clone() else {
             return;
         };
-        ctx.write(|c| {
-            let mut cfg = OverlayConfig::parse(
-                &c.settings.overlay_actions,
-                ring_platform(c.device.platform),
-            );
-            remove_shortcut(&mut cfg, &id);
-            c.settings.overlay_actions = cfg.to_json();
-            true
-        });
-        fx.toast = Some("Removed".into());
+        self.write(ctx, fx, |cfg| remove_shortcut(cfg, &id));
+        fx.toast = Some(con::console_shortcut_removed().into());
         fx.pop();
     }
 
@@ -433,9 +453,9 @@ impl ShortcutEditorScreen {
 impl ScreenView for ShortcutEditorScreen {
     fn title(&self) -> String {
         if self.draft.id.is_some() {
-            "Shortcut".into()
+            c::ring_shortcut_title().into()
         } else {
-            "New shortcut".into()
+            c::ring_shortcut_new_title().into()
         }
     }
 
@@ -446,7 +466,7 @@ impl ScreenView for ShortcutEditorScreen {
     fn edit_field(&self) -> Option<crate::screens::EditField> {
         let name = self.draft.label.as_str();
         self.editing_name
-            .then(|| crate::screens::EditField::new("Name", name, false))
+            .then(|| crate::screens::EditField::new(c::ring_shortcut_name(), name, false))
             .flatten()
     }
 
@@ -531,27 +551,37 @@ impl ScreenView for ShortcutEditorScreen {
     }
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+        use pf_l10n::common as m;
         if self.editing_name {
-            return self.keyboard.hints(ctx.device, "Done");
+            return self.keyboard.hints(ctx.device, m::common_done());
         }
         if self.picking_key {
             return vec![
-                Hint::new(HintKey::Confirm, "Choose"),
-                Hint::new(HintKey::Back, "Close"),
+                Hint::new(HintKey::Confirm, m::common_choose()),
+                Hint::new(HintKey::Back, m::common_close()),
             ];
         }
         let mut hints = Vec::with_capacity(3);
         match self.list.cursor {
-            ROW_NAME => hints.push(Hint::new(HintKey::Confirm, "Edit name")),
-            ROW_KEY => hints.push(Hint::new(HintKey::Confirm, "Choose key")),
+            ROW_NAME => hints.push(Hint::new(
+                HintKey::Confirm,
+                con::console_shortcut_hint_edit_name(),
+            )),
+            ROW_KEY => hints.push(Hint::new(
+                HintKey::Confirm,
+                con::console_shortcut_hint_choose_key(),
+            )),
             r if (ROW_MODS..ROW_SAVE).contains(&r) => {
-                hints.push(Hint::new(HintKey::Adjust, "Off / On"));
-                hints.push(Hint::new(HintKey::Confirm, "Toggle"));
+                hints.push(Hint::new(
+                    HintKey::Adjust,
+                    con::console_shortcut_hint_adjust(),
+                ));
+                hints.push(Hint::new(HintKey::Confirm, con::console_hint_toggle()));
             }
-            ROW_SAVE => hints.push(Hint::new(HintKey::Confirm, "Save")),
-            _ => hints.push(Hint::new(HintKey::Confirm, "Remove")),
+            ROW_SAVE => hints.push(Hint::new(HintKey::Confirm, m::common_save())),
+            _ => hints.push(Hint::new(HintKey::Confirm, m::common_remove())),
         }
-        hints.push(Hint::new(HintKey::Back, "Back"));
+        hints.push(Hint::new(HintKey::Back, m::common_back()));
         hints
     }
 
@@ -571,7 +601,7 @@ impl ScreenView for ShortcutEditorScreen {
             canvas,
             ui,
             fonts,
-            "Hold the modifiers marked on, then press the key. The dial draws it as a keycap.",
+            c::ring_shortcut_modifiers_hint(),
             rect,
             k,
         );
@@ -586,7 +616,7 @@ impl ScreenView for ShortcutEditorScreen {
         fonts.draw(
             canvas,
             if chip.is_empty() {
-                "No key yet"
+                c::ring_shortcut_no_key()
             } else {
                 chip.as_str()
             },
@@ -598,7 +628,7 @@ impl ScreenView for ShortcutEditorScreen {
         );
         fonts.draw(
             canvas,
-            "How the dial will draw it",
+            c::ring_shortcut_preview(),
             legend_x,
             f64::from(top) + 46.0 * k,
             W::Regular,
@@ -609,7 +639,7 @@ impl ScreenView for ShortcutEditorScreen {
         // Shrink the list by whichever tray is seated so the edited row stays in view.
         self.keyboard.seat(self.editing_name, ctx.device, dt);
         let seat_keys = self.keys.seat(self.picking_key, dt);
-        let tray_h = self.keyboard.reserve(k) + (KeyTray::tray_height() + 12.0) * k * seat_keys;
+        let tray_h = self.keyboard.reserve(k) + (self.keys.height() + 12.0) * k * seat_keys;
         let list_rect = Rect::from_ltrb(
             rect.left,
             top + 2.0 * r + 22.0 * kf,
@@ -638,7 +668,7 @@ impl ScreenView for ShortcutEditorScreen {
                 f64::from(rect.bottom),
                 seat_keys,
                 k,
-                self.draft.chord.key.as_deref(),
+                &Vec::from_iter(self.draft.chord.key.as_deref()),
             );
         }
     }
@@ -693,11 +723,18 @@ mod tests {
         assert_eq!(r[ROW_NAME].header, Some("Shortcut"));
         assert_eq!(r[ROW_KEY].value.as_deref(), Some("Choose…"));
         assert!(r[ROW_KEY].value_dim && r[ROW_KEY].caret);
-        assert_eq!(r[ROW_MODS].header, Some("Hold with"));
+        assert_eq!(r[ROW_MODS].header, Some(c::ring_shortcut_modifiers()));
         assert!(r[ROW_MODS..ROW_SAVE]
             .iter()
             .all(|m| m.adjustable && m.value.as_deref() == Some("Off")));
         assert!(!r[ROW_SAVE].enabled, "no key, nothing to add");
+        d.chord.mods[3] = true;
+        assert!(
+            rows(&d, false, false)[ROW_SAVE].enabled,
+            "Win alone is a combination"
+        );
+        assert_eq!(chord_chip(&d.chord.keys()), "Win");
+        d.chord.mods[3] = false;
         d.chord.key = Some("escape".into());
         d.chord.mods[1] = true;
         d.id = Some("s1".into());
@@ -710,13 +747,13 @@ mod tests {
         );
         assert_eq!(r[ROW_MODS + 1].value.as_deref(), Some("On"));
         assert!(r[ROW_SAVE].enabled);
-        assert_eq!(r[ROW_REMOVE].label, "Remove shortcut");
+        assert_eq!(r[ROW_REMOVE].label, "Remove key combination");
         assert_eq!(d.row_count(), ROW_REMOVE + 1);
     }
 
     #[test]
     fn the_key_tray_walks_like_a_keyboard() {
-        let mut t = KeyTray::new();
+        let mut t = KeyTray::keys();
         t.seat_on(Some("a"));
         assert_eq!((t.row, t.col), (3, 1));
         assert_eq!(t.menu(MenuEvent::Move(MenuDir::Right)).0, TrayMsg::None);

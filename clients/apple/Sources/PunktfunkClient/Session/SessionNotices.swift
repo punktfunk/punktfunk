@@ -5,6 +5,12 @@
 import Foundation
 import PunktfunkKit
 
+/// A shortcut to a danger action waiting for its second press, and the dial's question for it.
+struct ShortcutArm {
+    let id: String
+    let text: String
+}
+
 /// A notice shown for a while, then cleared.
 struct Flash<Value> {
     private(set) var value: Value?
@@ -56,8 +62,11 @@ struct SessionNotices {
     var touchFallback = Flash<Bool>()
     /// "Access ends in 5 m", around the T−5 m / T−1 m marks the host also warns at.
     var accessWarning = Flash<String>()
-    /// The host's line for a launch that did not give the player their game.
+    /// The host's line for a launch that did not give the player their game, or the start
+    /// notice about the screen: a shared one, or a preset's the host did not give.
     var launch = Flash<String>()
+    /// A shortcut armed a danger action; a second press within the flash fires it.
+    var shortcutArm = Flash<ShortcutArm>()
     /// The last launch line shown, so one verdict is raised once.
     var launchShown: String?
 
@@ -83,5 +92,6 @@ struct SessionNotices {
         touchFallback.clear()
         accessWarning.clear()
         launch.clear()
+        shortcutArm.clear()
     }
 }

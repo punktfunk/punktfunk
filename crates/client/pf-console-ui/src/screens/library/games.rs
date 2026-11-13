@@ -35,8 +35,9 @@ const RECENT_MAX: usize = 12;
 const HEADING_H: f64 = 30.0;
 const BAND_AIR: f64 = 22.0;
 const CHIP_H: f64 = 38.0;
-/// The host pill and Customize.
+/// The host pill and Customize; the hidden titles' chip follows them where it shows.
 const CHIPS: usize = 2;
+const HIDDEN_CHIP: usize = CHIPS;
 /// The host pill's label, its face's radius and its side padding.
 const PILL_TEXT: f64 = 15.0;
 const PILL_FACE: f64 = 11.0;
@@ -50,7 +51,7 @@ pub(super) enum Zone {
     Grid,
     /// Pill `i` of the sort/view row.
     Bar(usize),
-    /// The host pill (0) or Customize (1).
+    /// The host pill (0), Customize (1) or the hidden titles ([`HIDDEN_CHIP`]).
     Chip(usize),
     Band {
         band: usize,
@@ -265,7 +266,9 @@ impl LibraryScreen {
         let ready = matches!(self.phase, LibraryPhase::Ready);
         let field = ready && self.len() > 0;
         let mut out = Vec::new();
-        if field && !self.embedded && (self.sectioned() || self.entrance_armed) {
+        // A hidden shelf is the field alone: there is nothing to sort a handful by.
+        let bar = !self.embedded && self.hidden.is_none();
+        if field && bar && (self.sectioned() || self.entrance_armed) {
             out.push(Line::Bar);
         }
         if self.sectioned() {
@@ -296,11 +299,30 @@ impl LibraryScreen {
         let (bands, before) = self.bands(ctx);
         let lines = self.lines(&bands, before);
         let focus = self.focus_lines(lines.clone());
-        let chips = CHIPS;
+        let chips = self.chip_count(ctx);
+        // A band that moved keeps focus; one that emptied hands it to the line in its place.
+        match (self.seated, self.zone, self.band_seat) {
+            (true, Zone::Band { band, item }, Some((was, section, at))) if band == was => {
+                match bands.iter().position(|b| b.section == section) {
+                    Some(band) => self.zone = Zone::Band { band, item },
+                    None => {
+                        if let Some(&line) = focus.get(at).or(focus.last()) {
+                            self.enter(line, true, &bands, chips);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
         self.zone = if self.seated {
             self.clamp_zone(&focus, &bands, chips)
         } else {
             seat(&focus)
+        };
+        self.band_seat = match self.zone {
+            Zone::Band { band, .. } => (focus.iter().position(|l| *l == Line::Band(band)))
+                .map(|at| (band, bands[band].section, at)),
+            _ => None,
         };
         if matches!(self.phase, LibraryPhase::Ready) {
             self.seated = true;
@@ -351,7 +373,7 @@ impl LibraryScreen {
         }
         let (bands, lines) = self.place_zone(ctx);
         let lines = self.focus_lines(lines);
-        let chips = CHIPS;
+        let chips = self.chip_count(ctx);
         let Some(at) = lines.iter().position(|&l| l == line_of(self.zone)) else {
             // Nothing to stand on: Up still reaches the tabs, Back still leaves.
             return Some(match ev {
@@ -488,9 +510,23 @@ impl LibraryScreen {
         [at(Pill::Sort(self.sort)), at(Pill::View(self.view_mode))]
     }
 
+    /// The chips this shelf shows: the host pill, Customize, and the hidden titles where this
+    /// device may hide them ([`hides_for`]).
+    fn chip_count(&self, ctx: &Ctx) -> usize {
+        CHIPS + usize::from(hides_for(ctx, &self.host).is_some())
+    }
+
     /// The host pill opens Host and profile, where the shell swaps this shelf for the host
-    /// picked there ([`Outbox::shelf`]); the other chip opens Customize.
+    /// picked there ([`Outbox::shelf`]); Customize opens its screen, and the hidden chip the
+    /// titles this shelf's profile hides, asked of the host as it opens.
     fn chip_confirm(&mut self, ctx: &Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if self.zone == Zone::Chip(HIDDEN_CHIP) {
+            let row = hides_for(ctx, &self.host)?;
+            let hidden = LibraryScreen::hidden(&self.host, &row.id, &row.display_name);
+            fx.cmds.extend(hidden.fetch_hidden());
+            fx.push(Screen::Library(hidden));
+            return Some(MenuPulse::Confirm);
+        }
         if self.zone != Zone::Chip(0) {
             fx.push(Screen::Customize(CustomizeScreen::new()));
             return Some(MenuPulse::Confirm);
@@ -599,14 +635,21 @@ impl LibraryScreen {
         match self.zone {
             Zone::Grid | Zone::Bar(_) | Zone::State => None,
             Zone::Chip(0) => Some(self.pill(ctx.hosts, ctx.profiles).0),
-            Zone::Chip(_) => Some("Customize".into()),
+            Zone::Chip(HIDDEN_CHIP) => {
+                hides_for(ctx, &self.host).map(|p| pf_l10n::client::lib_hidden_for(&p.display_name))
+            }
+            Zone::Chip(_) => Some(pf_l10n::client::lib_customize().into()),
             Zone::Band { band, item } => {
                 let (bands, _) = self.bands(ctx);
                 Some(match bands.get(band)?.items.get(item)? {
                     Item::Desktop(h) if h.running.is_empty() => {
-                        format!("{} \u{b7} Desktop", h.name)
+                        format!("{} \u{b7} {}", h.name, pf_l10n::client::lib_desktop())
                     }
-                    Item::Desktop(h) => format!("{} \u{b7} Resume {}", h.name, h.running),
+                    Item::Desktop(h) => format!(
+                        "{} \u{b7} {}",
+                        h.name,
+                        pf_l10n::client::lib_resume_title(&h.running)
+                    ),
                     Item::Game(i) => self.games[*i].title.clone(),
                     Item::Collection(c) => self.collections[*c].label.clone(),
                 })
@@ -627,20 +670,22 @@ impl LibraryScreen {
 
     /// The legend off the field; `None` on it.
     pub(super) fn zone_hints(&self, ctx: &Ctx) -> Option<Vec<Hint>> {
+        use pf_l10n::{client as m, common as c};
         let (bands, _) = self.bands(ctx);
         let ok = match self.zone {
             Zone::Grid => return None,
-            Zone::Bar(_) => "Select",
-            Zone::State => self.state_action()?,
-            Zone::Chip(0) => "Change",
-            Zone::Chip(_) => "Customize",
+            Zone::Bar(_) => c::common_select(),
+            Zone::State => self.state_action()?.label(),
+            Zone::Chip(0) => c::common_change(),
+            Zone::Chip(HIDDEN_CHIP) => c::common_open(),
+            Zone::Chip(_) => m::lib_customize(),
             Zone::Band { band, item } => match bands.get(band)?.items.get(item)? {
-                Item::Desktop(h) if h.running.is_empty() => "Stream",
-                Item::Desktop(_) => "Resume",
-                Item::Game(i) if self.games[*i].running => "Resume",
-                Item::Game(i) if self.games[*i].launcher => "Open",
-                Item::Game(_) => "Play",
-                Item::Collection(_) => "Open",
+                Item::Desktop(h) if h.running.is_empty() => m::lib_desktop_action(),
+                Item::Desktop(_) => m::lib_resume(),
+                Item::Game(i) if self.games[*i].running => m::lib_resume(),
+                Item::Game(i) if self.games[*i].launcher => c::common_open(),
+                Item::Game(_) => c::common_play(),
+                Item::Collection(_) => c::common_open(),
             },
         };
         let mut hints = vec![Hint::new(HintKey::Confirm, ok)];
@@ -651,9 +696,12 @@ impl LibraryScreen {
             z => z == Zone::Chip(0),
         };
         if options {
-            hints.push(Hint::new(HintKey::Secondary, "Options"));
+            hints.push(Hint::new(
+                HintKey::Secondary,
+                pf_l10n::console::console_lib_options(),
+            ));
         }
-        hints.push(Hint::new(HintKey::Back, "Back"));
+        hints.push(Hint::new(HintKey::Back, c::common_back()));
         Some(hints)
     }
 
@@ -666,14 +714,16 @@ impl LibraryScreen {
         (HEADING_H + BAND_AIR) * k + row_h(band, ch, k)
     }
 
-    /// The chips line, as a child of the screen's scroll: the host pill, then Customize, in
-    /// a row that scrolls sideways. `draw_field` keeps the focused chip in view.
+    /// The chips line, as a child of the screen's scroll: the host pill, then Customize, then
+    /// the hidden titles' chip (`hidden`, its words) where it shows, in a row that scrolls
+    /// sideways. `draw_field` keeps the focused chip in view.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn chips_el<'a>(
         &'a self,
         ui: &'a Frame,
         hosts: &'a [HostRow],
         book: &ProfileBook,
+        hidden: Option<String>,
         fonts: &'a Fonts,
         width: f64,
         k: f64,
@@ -696,17 +746,30 @@ impl LibraryScreen {
         .id(chip_id(0))
         .focusable((h / 2.0) as f32)
         .place(place(0.0, pill_w));
-        let custom_w = button_w(fonts, "Customize", k);
+        let custom = pf_l10n::client::lib_customize();
+        let custom_w = button_w(fonts, custom, k);
         let mut x = pill_w + 10.0 * k;
         let customize = El::paint(move |canvas, r| {
             hits.borrow_mut().push((Zone::Chip(1), r));
-            button(canvas, ui, fonts, "Customize", r, k);
+            button(canvas, ui, fonts, custom, r, k);
         })
         .id(chip_id(1))
         .focusable((h / 2.0) as f32)
         .place(place(x, custom_w));
         x += custom_w + 10.0 * k;
-        let row = El::column().child(pill).child(customize);
+        let mut row = El::column().child(pill).child(customize);
+        if let Some(hidden) = hidden {
+            let w = button_w(fonts, &hidden, k);
+            let chip = El::paint(move |canvas, r| {
+                hits.borrow_mut().push((Zone::Chip(HIDDEN_CHIP), r));
+                button(canvas, ui, fonts, &hidden, r, k);
+            })
+            .id(chip_id(HIDDEN_CHIP))
+            .focusable((h / 2.0) as f32)
+            .place(place(x, w));
+            row = row.child(chip);
+            x += w + 10.0 * k;
+        }
         let line_h = Self::chips_h(k) as f32;
         let span = (x - 10.0 * k).max(width) as f32 + 2.0 * air;
         El::column().size(width as f32, line_h).child(
@@ -828,6 +891,17 @@ impl LibraryScreen {
         };
         card.paint(canvas, ui, fonts, slot, ch, k, 1.0);
     }
+}
+
+/// The row of the profile `host`'s shelf plays as, when the box lets this device hide its
+/// titles ([`pf_client_core::hide::offer`]) and the host answers the hide.
+pub(crate) fn hides_for<'a>(
+    ctx: &Ctx<'a>,
+    host: &HostRow,
+) -> Option<&'a pf_client_core::profiles::ListedProfile> {
+    let pick = host.remembered().map(|p| p.id.as_str());
+    let listed = ctx.profiles.listed(&host.fp_hex);
+    pf_client_core::hide::offer(listed, pick).filter(|_| ctx.device.hides)
 }
 
 /// The host pill: who plays (where that is a choice), the label, then a chevron that says
@@ -990,25 +1064,35 @@ impl ScreenView for CustomizeScreen {
     }
 
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+        use pf_l10n::console as m;
         if self.held {
             return vec![
-                Hint::new(HintKey::Confirm, "Set down"),
-                Hint::new(HintKey::Back, "Set down"),
+                Hint::new(HintKey::Confirm, m::console_lib_sections_set_down()),
+                Hint::new(HintKey::Back, m::console_lib_sections_set_down()),
             ];
         }
         vec![
-            Hint::new(HintKey::Confirm, "Move"),
-            Hint::new(HintKey::Adjust, "Hide / Show"),
-            Hint::new(HintKey::Back, "Done"),
+            Hint::new(HintKey::Confirm, m::console_lib_sections_move()),
+            Hint::new(HintKey::Adjust, m::console_lib_sections_toggle()),
+            Hint::new(HintKey::Back, pf_l10n::common::common_done()),
         ]
     }
 
+    /// A spoken list: the section, whether it shows, and whether it is held.
     fn announcement(&self, ctx: &Ctx) -> Option<String> {
+        use pf_l10n::console as m;
         let rows = crate::library::sections(&ctx.settings.library_sections);
         let (s, on) = rows.get(self.list.cursor)?;
-        let state = if *on { "shown" } else { "hidden" };
+        let state = match on {
+            true => m::console_lib_section_shown_a11y(),
+            false => m::console_lib_section_hidden_a11y(),
+        };
         Some(match self.held {
-            true => format!("{}, {state}, moving", s.label()),
+            true => format!(
+                "{}, {state}, {}",
+                s.label(),
+                m::console_lib_section_moving_a11y()
+            ),
             false => format!("{}, {state}", s.label()),
         })
     }
@@ -1037,11 +1121,11 @@ impl ScreenView for CustomizeScreen {
     }
 
     fn foot(&self, _ctx: &Ctx) -> Option<std::borrow::Cow<'static, str>> {
-        Some("The Games tab shows these in this order. An empty section stays hidden.".into())
+        Some(pf_l10n::console::console_lib_sections_foot().into())
     }
 
     fn title(&self) -> String {
-        "Customize".into()
+        pf_l10n::client::player_library_sections().into()
     }
 
     fn press(&mut self) {

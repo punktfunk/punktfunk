@@ -1,16 +1,22 @@
 use super::*;
 use crate::model::HostRow;
+use pf_client_core::menu_nav::MenuDir;
 use pf_client_core::trust::Settings;
 use punktfunk_core::quic::v2::msg::UNLOCK_PASSWORD;
 
 const TYPED: &str = " Tr0ub4dor&3 ";
 
 fn prompt() -> UnlockScreen {
+    form(false)
+}
+
+/// The prompt for Kid on Den, for its PIN when `pin`.
+fn form(pin: bool) -> UnlockScreen {
     let intent = ConnectIntent {
         profile: Some("kid".into()),
         ..ConnectIntent::to_host(&HostRow::fixture("aa11", "Den"), None)
     };
-    UnlockScreen::new(intent, "Kid".into(), "Den".into(), None)
+    UnlockScreen::new(intent, ("Kid".into(), "Den".into()), pin, None)
 }
 
 /// Runs `f` with a desktop context over an empty store.
@@ -156,8 +162,8 @@ fn the_hosts_sentence_is_the_error_line() {
     let intent = prompt().intent;
     let s = UnlockScreen::new(
         intent,
-        "Kid".into(),
-        "Den".into(),
+        ("Kid".into(), "Den".into()),
+        false,
         Some("Wrong password.".into()),
     );
     assert_eq!(s.error.as_deref(), Some("Wrong password."));
@@ -179,7 +185,7 @@ fn focus_walks_the_rows() {
     assert_eq!(at(&mut s, Down), SIGN_IN);
     assert_eq!(
         with_ctx(|ctx| s.announcement(ctx)).as_deref(),
-        Some("Sign In")
+        Some(pf_l10n::client::unlock_sign_in())
     );
 }
 
@@ -205,4 +211,69 @@ fn a_password_types_on_the_tray_beside_a_system_keyboard() {
     assert!(fx.connect.is_none());
     let legend: Vec<String> = s.hints(&ctx).into_iter().map(|h| h.label).collect();
     assert_eq!(legend, ["Type", "Delete", "Done"]);
+}
+
+/// The PIN form takes digits alone, full-width ones too, eight at most, and shows and says
+/// none of them; Done sends them as the wire carries them, and the field is empty after.
+#[test]
+fn the_pin_form_takes_digits_and_sends_them() {
+    let mut s = form(true);
+    press(&mut s, MenuEvent::Confirm);
+    let field = s.edit_field().unwrap();
+    assert!(field.secure && field.digits && field.text.is_empty());
+    assert_eq!(
+        (field.label.as_str(), s.title()),
+        ("PIN", "Sign in as Kid".into())
+    );
+    s.text_input("2a4\u{FF16}8 13579");
+    assert_eq!(s.password.as_str(), "24\u{FF16}81357");
+    assert_eq!(
+        s.rows()[PASSWORD].value.as_deref(),
+        Some("\u{2022}".repeat(8).as_str())
+    );
+    for line in shown(&s) {
+        assert!(!line.contains("24") && !line.contains("1357"), "{line:?}");
+    }
+    let said = with_ctx(|ctx| s.announcement(ctx));
+    assert_eq!(said.as_deref(), Some("PIN, entered"));
+    let fx = press(&mut s, MenuEvent::Secondary);
+    let u = fx.unlock.expect("an unlock");
+    assert_eq!(
+        (u.kind, u.secret.as_slice()),
+        (UNLOCK_PASSWORD, &b"24681357"[..])
+    );
+    assert!(s.password.is_empty() && fx.connect.is_some());
+}
+
+/// A PIN short of four digits stays in the field with the line that says why.
+#[test]
+fn a_short_pin_never_dials() {
+    let mut s = form(true);
+    press(&mut s, MenuEvent::Confirm);
+    s.text_input("246");
+    let fx = press(&mut s, MenuEvent::Secondary);
+    assert!(fx.connect.is_none() && fx.unlock.is_none());
+    assert_eq!(s.error(), Some("A PIN is 4 to 8 digits."));
+    assert_eq!(s.password.as_str(), "246");
+}
+
+/// A PIN types on a number pad, 1 first, and a password on the letters, q first. Moving through
+/// the pad keeps the screen reader on the field, which never reads what was typed.
+#[test]
+fn the_pin_tray_is_a_number_pad() {
+    for (pin, first) in [(true, "1"), (false, "q")] {
+        let mut s = form(pin);
+        press(&mut s, MenuEvent::Confirm);
+        press(&mut s, MenuEvent::Confirm);
+        assert_eq!(s.password.as_str(), first, "pin {pin}");
+    }
+    let mut s = form(true);
+    press(&mut s, MenuEvent::Confirm);
+    for ev in [MenuDir::Down, MenuDir::Right, MenuDir::Down].map(MenuEvent::Move) {
+        press(&mut s, ev);
+    }
+    press(&mut s, MenuEvent::Confirm);
+    assert_eq!(s.password.as_str(), "8");
+    let said = with_ctx(|ctx| s.announcement(ctx));
+    assert_eq!(said.as_deref(), Some("PIN, entered"));
 }

@@ -130,13 +130,14 @@ impl NativeClient {
     /// starts a stream. An older host admits a session instead; that admission is the
     /// approval, and the session is closed before it streams.
     ///
-    /// `pin` is the advertised fingerprint; `None` trusts on first use. Setting `cancel`
-    /// withdraws the request.
+    /// `pin` is the fingerprint the host must show: its advert's, or a link's. A host with
+    /// none pairs by PIN, which proves the host; a request proves only this device. Setting
+    /// `cancel` withdraws the request.
     pub fn request_access(
         host: &str,
         port: u16,
         identity: (&str, &str),
-        pin: Option<[u8; 32]>,
+        pin: [u8; 32],
         name: &str,
         timeout: Duration,
         cancel: Option<Arc<AtomicBool>>,
@@ -147,7 +148,7 @@ impl NativeClient {
             .map_err(PunktfunkError::Io)?;
         rt.block_on(async move {
             let remote = dial_addr(host, port).await?;
-            let (ep, observed) = endpoint::client_pinned_with_identity(pin, Some(identity));
+            let (ep, observed) = endpoint::client_pinned_with_identity(Some(pin), Some(identity));
             let ep = ep.map_err(|e| PunktfunkError::Io(std::io::Error::other(e.to_string())))?;
             let knock = async {
                 let conn = ep
@@ -156,7 +157,7 @@ impl NativeClient {
                     .await
                     .map_err(|e| {
                         let seen = *observed.lock().unwrap();
-                        if pin.is_some() && seen.is_some() && seen != pin {
+                        if seen.is_some_and(|seen| seen != pin) {
                             PunktfunkError::Crypto
                         } else if endpoint::refused_alpn(&e) {
                             PunktfunkError::Rejected(
@@ -261,6 +262,8 @@ async fn knock_once(conn: &quinn::Connection, name: &str) -> Result<()> {
         profile: None,
         access_only: true,
         screens: Vec::new(),
+        view: None,
+        screen_wish: None,
     };
     v2io::send(&mut send, &hello).await?;
     let mut waiting = false;

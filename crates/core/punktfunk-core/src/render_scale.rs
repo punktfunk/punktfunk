@@ -1,7 +1,9 @@
 //! Client render-scale: ask the host for `chosen resolution × scale` as a
-//! [`Mode`](crate::Mode). The host scales nothing on a virtual display; the
-//! presenter downscales (`> 1`) or upscales (`< 1`) after decode. A mirrored
-//! head larger than the client is the exception: [`fit_inside`] sizes the encoder.
+//! [`Mode`](crate::Mode). Above 1x the client also names its [`view`], the chosen
+//! resolution, and the host scales the picture down to it before encoding; a host
+//! that does not read the view sends the mode, and the presenter downscales. Below
+//! 1x the presenter upscales. A mirrored head larger than the client is fitted by
+//! the host too: [`fit_inside`] sizes the encoder.
 //!
 //! Multiply, keep the aspect ratio, even-floor (host `validate_dimensions`
 //! rejects odd sizes), clamp to the codec per-axis ceiling so a connect cannot
@@ -66,6 +68,14 @@ pub fn apply(base_w: u32, base_h: u32, scale: f64, max_dim: u32) -> (u32, u32) {
         h /= over;
     }
     (even_floor(w, 320), even_floor(h, 200))
+}
+
+/// The size the picture is shown at, for the host to encode instead of the mode [`apply`]
+/// asks for: the base at 1x. `None` at or below 1x, or when the codec clamp leaves the mode
+/// no larger than the view.
+pub fn view(base_w: u32, base_h: u32, scale: f64, max_dim: u32) -> Option<(u32, u32)> {
+    let view = apply(base_w, base_h, 1.0, max_dim);
+    (sanitize(scale) > 1.0 && view != apply(base_w, base_h, scale, max_dim)).then_some(view)
 }
 
 /// Shrink `w`×`h` to fit inside `max_w`×`max_h`: keep aspect, even-floor, never
@@ -145,6 +155,20 @@ mod tests {
             let cap = max_dimension(case["codec"].as_str().unwrap());
             let got = apply(w, h, num(&case["scale"]), cap);
             assert_eq!(got, pair("want"), "{}", case["name"]);
+        }
+        for row in file["view"].as_array().expect("view") {
+            let base = row["base"].as_array().unwrap();
+            let max = row["max"].as_u64().unwrap() as u32;
+            let got = view(
+                base[0].as_u64().unwrap() as u32,
+                base[1].as_u64().unwrap() as u32,
+                num(&row["scale"]),
+                max,
+            );
+            let want = row["want"]
+                .as_array()
+                .map(|a| (a[0].as_u64().unwrap() as u32, a[1].as_u64().unwrap() as u32));
+            assert_eq!(got, want, "{row}");
         }
     }
 

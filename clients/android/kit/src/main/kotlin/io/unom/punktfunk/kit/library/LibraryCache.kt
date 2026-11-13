@@ -20,8 +20,8 @@ import java.security.MessageDigest
 //
 // Cache directory (`context.cacheDir`), not files: every byte is re-derivable from the host, so
 // Android is welcome to evict it under storage pressure. Unlike art, a catalog is small (a few
-// hundred KB for a big library), so there is no size budget here — one file per host, replaced
-// wholesale.
+// hundred KB for a big library), so there is no size budget here — one file per host and per
+// profile it was fetched as, replaced wholesale.
 //
 // Takes a plain [File] directory rather than a Context so it can be unit-tested against a temp
 // dir, exactly like the Apple original.
@@ -32,14 +32,15 @@ data class CachedLibrary(val games: List<GameEntry>, val fetchedAt: Long)
 class LibraryCache(private val directory: File) {
 
     /**
-     * This host's last-known catalog, or null if there is no usable one.
+     * This host's last-known catalog as [profile] plays it (null: the box's), or null if there is
+     * no usable one. A shelf never shows another profile's titles.
      *
      * A catalog written by an older build whose [GameEntry] had different fields decodes to null
      * rather than throwing: a miss costs one fetch, which is what would have happened anyway.
      * Never surfaced as an error.
      */
-    fun load(hostKey: String): CachedLibrary? = try {
-        val file = pathFor(hostKey)
+    fun load(hostKey: String, profile: String?): CachedLibrary? = try {
+        val file = pathFor(hostKey, profile)
         if (!file.isFile) {
             null
         } else {
@@ -56,21 +57,21 @@ class LibraryCache(private val directory: File) {
     }
 
     /**
-     * Remember this host's catalog. Best-effort: a cache that can't write is a slower app, not a
-     * broken one, so every failure here is swallowed.
+     * Remember this host's catalog as fetched for [profile] at [fetchedAt]. Best-effort: a cache
+     * that can't write is a slower app, not a broken one, so every failure here is swallowed.
      */
-    fun store(hostKey: String, games: List<GameEntry>) {
+    fun store(hostKey: String, profile: String?, games: List<GameEntry>, fetchedAt: Long = System.currentTimeMillis()) {
         // An empty catalog is not worth remembering: it is indistinguishable from "never fetched"
         // when read back, and caching it would pin a blank library over a host that has titles.
         if (games.isEmpty()) return
         try {
             val root = JSONObject()
-                .put("fetchedAt", System.currentTimeMillis())
+                .put("fetchedAt", fetchedAt)
                 .put("games", JSONArray().apply { games.forEach { put(encode(it)) } })
-            directory.mkdirs()
             // Write-then-rename: an app killed mid-write must not leave a half-file that the next
             // launch reads as a corrupt catalog.
-            val target = pathFor(hostKey)
+            val target = pathFor(hostKey, profile)
+            target.parentFile?.mkdirs()
             val tmp = File(target.parentFile, "${target.name}.tmp")
             tmp.writeText(root.toString())
             if (!tmp.renameTo(target)) {
@@ -82,22 +83,38 @@ class LibraryCache(private val directory: File) {
     }
 
     /**
-     * Drop a host's catalog — part of forgetting the host, so a removed host leaves no list of
-     * what somebody plays behind on the device.
+     * The catalog cached for [profile] once title [id] left it ([back] null) or came back as
+     * [back], keeping its age: the Rust `library_cache::note_hidden`. No cache, nothing written;
+     * the last title gone, no cache.
      */
-    fun forget(hostKey: String) {
-        runCatching { pathFor(hostKey).delete() }
+    fun noteHidden(hostKey: String, profile: String?, id: String, back: GameEntry?) {
+        val cached = load(hostKey, profile) ?: return
+        val games = cached.games.filter { it.id != id } + listOfNotNull(back)
+        if (games.isEmpty()) runCatching { pathFor(hostKey, profile).delete() }
+        else store(hostKey, profile, games, cached.fetchedAt)
     }
 
     /**
-     * Hashed rather than used verbatim: a host key is user-controlled text (a name, an address)
-     * and must never be able to reach out of this directory (`../`) or exceed a filename length
-     * limit.
+     * Drop a host's catalogs, every profile's — part of forgetting the host, so a removed host
+     * leaves no list of what somebody plays behind on the device.
      */
-    private fun pathFor(hostKey: String): File {
-        val digest = MessageDigest.getInstance("SHA-256").digest(hostKey.toByteArray())
-        return File(directory, digest.joinToString("") { "%02x".format(it) } + ".json")
+    fun forget(hostKey: String) {
+        runCatching { pathFor(hostKey, null).delete() }
+        runCatching { File(directory, hashed(hostKey)).deleteRecursively() }
     }
+
+    /**
+     * `<host>.json` for the box, the name a catalog had before profiles, else
+     * `<host>/<profile>.json`. Hashed rather than used verbatim: a host key is user-controlled
+     * text (a name, an address) and must never be able to reach out of this directory (`../`)
+     * or exceed a filename length limit.
+     */
+    internal fun pathFor(hostKey: String, profile: String?): File =
+        if (profile == null) File(directory, hashed(hostKey) + ".json")
+        else File(File(directory, hashed(hostKey)), hashed(profile) + ".json")
+
+    private fun hashed(text: String): String =
+        MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
 
     /**
      * The wire shape, so a cached file and a host response decode through the same [GameEntry].
@@ -122,6 +139,7 @@ class LibraryCache(private val directory: File) {
             g.releaseYear?.let { put("release_year", it) }
             if (g.genres.isNotEmpty()) put("genres", JSONArray(g.genres))
             g.stats?.let { put("stats", it.toJson()) }
+            g.overrides?.let { put("overrides", it.toJson()) }
         }
 
     private fun decode(o: JSONObject): GameEntry {
@@ -144,6 +162,7 @@ class LibraryCache(private val directory: File) {
                 ?.let { a -> List(a.length()) { a.optString(it) }.filter { it.isNotBlank() } }
                 ?: emptyList(),
             stats = GameStats.from(o.optJSONObject("stats")),
+            overrides = GameOverrides.from(o.optJSONObject("overrides")),
         )
     }
 

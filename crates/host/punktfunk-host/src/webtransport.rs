@@ -223,7 +223,7 @@ pub(crate) async fn serve(
                 .with_bind_address_v6(v6, wtransport::config::Ipv6DualStackConfig::Allow),
             v4 => ServerConfig::builder().with_bind_address(v4),
         }
-        .with_identity(identity)
+        .with_custom_transport(identity, plane_transport())
         // A browser tab that is throttled in the background must not look like a dead peer.
         .keep_alive_interval(Some(Duration::from_secs(3)))
         .build();
@@ -350,6 +350,20 @@ fn wanted_origins(
         Some(d) => d.browser.then_some(d.browser_origins),
         None => own.webtransport.then(|| own.webtransport_origins.clone()),
     }
+}
+
+/// Unidirectional streams a browser may open: HTTP/3 needs three, and the page opens none.
+const UNI_STREAMS: u32 = 16;
+
+/// The plane's QUIC limits, the native plane's: what one browser, admitted or not, can make the
+/// host hold unread.
+fn plane_transport() -> wtransport::config::QuicTransportConfig {
+    use punktfunk_core::quic::endpoint::{HOST_MAX_BIDI_STREAMS, HOST_RECEIVE_WINDOW};
+    let mut t = wtransport::config::QuicTransportConfig::default();
+    t.max_concurrent_uni_streams(UNI_STREAMS.into())
+        .max_concurrent_bidi_streams(HOST_MAX_BIDI_STREAMS.into())
+        .receive_window(HOST_RECEIVE_WINDOW.into());
+    t
 }
 
 /// Sessions one peer address may hold before admission.
@@ -498,15 +512,20 @@ pub fn is_confined(require_pairing: bool, origins: &[String]) -> bool {
 }
 
 /// One browser session: check the origin, then hand the connection to [`session::run`], which
-/// takes the session slot. `unadmitted` is held until then. A debug build keeps Phase 1's `/echo`
-/// for the measurement pages.
+/// takes the session slot. `unadmitted` is held until then; the session request and its answer
+/// share one [`session::HANDSHAKE_TIMEOUT`]. A debug build keeps Phase 1's `/echo` for the
+/// measurement pages.
 async fn session(
     incoming: wtransport::endpoint::IncomingSession,
     serving: &Arc<Serving>,
     sem: Arc<tokio::sync::Semaphore>,
     unadmitted: UnadmittedSlot,
 ) -> Result<()> {
-    let request = incoming.await.context("await session request")?;
+    let deadline = tokio::time::Instant::now() + session::HANDSHAKE_TIMEOUT;
+    let request = tokio::time::timeout_at(deadline, incoming)
+        .await
+        .context("session request: handshake timeout")?
+        .context("await session request")?;
     // The peer picks `:path` and nothing upstream value-checks it, so control characters would
     // reach the log ring verbatim and let an unauthenticated peer forge log lines.
     let path: String = request
@@ -530,14 +549,17 @@ async fn session(
             .map(String::as_str),
     );
     if !origin_allowed(origin.as_deref(), &serving.plane.origins) {
-        request.forbidden().await;
+        let _ = tokio::time::timeout_at(deadline, request.forbidden()).await;
         tracing::warn!(
             origin = origin.as_deref().unwrap_or("<none>"),
             "WebTransport session refused: origin not in PUNKTFUNK_WEBTRANSPORT_ORIGINS"
         );
         return Ok(());
     }
-    let connection = request.accept().await.context("accept session")?;
+    let connection = tokio::time::timeout_at(deadline, request.accept())
+        .await
+        .context("accept session: handshake timeout")?
+        .context("accept session")?;
     tracing::info!(
         path = %path,
         origin = origin.as_deref().unwrap_or("<none>"),
@@ -584,15 +606,18 @@ async fn session(
                 .downcast_ref::<session::Refusal>()
                 .map_or(punktfunk_core::reject::SETUP_FAILED_CLOSE_CODE, |r| r.code);
             let detail = format!("{e:#}");
-            // A browser renders this text, so prefer the user sentence; the chain is
-            // the fallback only because there is nothing better to show yet.
-            let said = crate::native::setup_failed_sentence(&e).unwrap_or(detail.clone());
-            let mut cut = said.len().min(256);
-            while !said.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            refuse(&connection, code, &said[..cut]).await;
-            connection.close(wtransport::VarInt::from_u32(code), &said.as_bytes()[..cut]);
+            // A browser renders this text: the user sentence, or none and the refusal's own
+            // message. The chain stays in the log.
+            let said = crate::native::setup_failed_sentence(&e).unwrap_or_else(|| {
+                let id = punktfunk_core::reject::RejectReason::from_close_code(code)
+                    .map(|r| r.message_id())
+                    .unwrap_or_default();
+                crate::native::Said::new(&id, "")
+            });
+            let refused = said.refused(code);
+            let reason = refused.reason.clone();
+            refuse(&connection, refused).await;
+            connection.close(wtransport::VarInt::from_u32(code), reason.as_bytes());
             tracing::warn!(%peer, code, error = %detail, "browser session ended with error");
         }
     }
@@ -606,12 +631,17 @@ const OLDER_PAGE: &str =
 /// Say why on a fresh unidirectional stream, then give the browser a moment to read it. The
 /// close that follows carries no retransmit, so the wait is what makes the message arrive. The
 /// stream carries the `Refused` frame alone.
-pub(crate) async fn refuse(connection: &wtransport::Connection, code: u32, reason: &str) {
+pub(crate) async fn refuse(
+    connection: &wtransport::Connection,
+    mut refused: punktfunk_core::quic::Refused,
+) {
     use punktfunk_core::quic::v2::msg::V2Message;
-    let refused = punktfunk_core::quic::Refused {
-        code,
-        reason: reason.to_string(),
-    };
+    let max = punktfunk_core::quic::REFUSED_REASON_MAX;
+    let mut cut = refused.reason.len().min(max);
+    while !refused.reason.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    refused.reason.truncate(cut);
     say_then_wait(connection, &refused.encode_v2()).await;
 }
 
@@ -620,6 +650,7 @@ async fn refuse_older_page(connection: &wtransport::Connection, code: u32, reaso
     let refused = punktfunk_core::quic::Refused {
         code,
         reason: reason.to_string(),
+        ..Default::default()
     };
     say_then_wait(
         connection,
@@ -779,6 +810,56 @@ mod tests {
             .collect::<Option<_>>()
             .expect("under the total cap");
         assert!(pool.take(other).is_none(), "the plane is full");
+    }
+
+    /// A browser's session comes up under the plane's limits, and what it writes to streams the
+    /// host never reads stops at the connection window. Eight streams would hold 10 MB without it.
+    #[tokio::test]
+    async fn a_browser_cannot_fill_past_the_plane_s_window() {
+        let window = punktfunk_core::quic::endpoint::HOST_RECEIVE_WINDOW as usize;
+        let identity = Identity::self_signed(["localhost"]).unwrap();
+        let cert = identity.certificate_chain().as_slice()[0].hash();
+        let loopback: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let server = Endpoint::server(
+            ServerConfig::builder()
+                .with_bind_address(loopback)
+                .with_custom_transport(identity, plane_transport())
+                .build(),
+        )
+        .unwrap();
+        let url = format!("https://127.0.0.1:{}/", server.local_addr().unwrap().port());
+        tokio::spawn(async move {
+            let _held = server.accept().await.await.unwrap().accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let page = Endpoint::client(
+            wtransport::ClientConfig::builder()
+                .with_bind_address(loopback)
+                .with_server_certificate_hashes([cert])
+                .build(),
+        )
+        .unwrap()
+        .connect(url)
+        .await
+        .unwrap();
+
+        let stuck = Duration::from_millis(50);
+        let chunk = vec![0u8; 64 * 1024];
+        let mut sent = 0;
+        let mut streams = Vec::new();
+        for _ in 0..8 {
+            // A full window holds back the next stream's own header too.
+            let open = async { page.open_bi().await.unwrap().await.unwrap() };
+            let Ok((mut tx, rx)) = tokio::time::timeout(stuck, open).await else {
+                break;
+            };
+            while let Ok(Ok(n)) = tokio::time::timeout(stuck, tx.write(&chunk)).await {
+                sent += n;
+            }
+            streams.push((tx, rx));
+        }
+        assert!(sent > window / 2, "the streams took data: {sent}");
+        assert!(sent <= window, "{sent} bytes unread on one connection");
     }
 
     /// `--open` and an empty origin list are each an operator's choice; together they are a

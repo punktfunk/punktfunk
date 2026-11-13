@@ -507,7 +507,9 @@ impl PkgBackend for Steamos {
             Step::run("systemctl --user disable --now punktfunk-rebuild-check 2>/dev/null || true"),
             Step::note(
                 Level::Warn,
-                format!("the on-device build has no uninstall script — the build container, the files under your home and the root-owned tuning come off by hand: {DOCS}/uninstall#steamos--steam-deck-host-on-device-build"),
+                pf_l10n::tools::setup_steamos_no_uninstall(format!(
+                    "{DOCS}/uninstall#steamos--steam-deck-host-on-device-build"
+                )),
             ),
         ]
     }
@@ -543,7 +545,7 @@ fn steamos_build(build: &str, choices: &Choices) -> Vec<Step> {
     // frozen for its whole run.
     let mut steps = vec![Step::note(
         Level::Warn,
-        "the build runs on this device — it asks for your sudo password first, then takes about 20 minutes on a first run (about a minute on a re-run) and prints nothing until it finishes",
+        pf_l10n::tools::setup_steamos_build_slow(),
     )];
     let mut line = build.to_string();
     if choices.gamestream {

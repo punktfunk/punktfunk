@@ -60,8 +60,9 @@ fn restart_probe() -> Availability {
         .and_then(host_unit)
     {
         Some(_) => Availability::yes(),
-        None => Availability::no(
-            "the host is not running as its user service, so nothing would start it again",
+        None => Availability::refused(
+            "host_restart_no_user_service",
+            "The host is not running as its user service, so nothing would start it again",
         ),
     }
 }
@@ -95,18 +96,20 @@ fn restart_act() -> Result<(), String> {
 }
 
 /// Discovery publishes `reason` as `unavailable_reason` when `available` is
-/// false, so the client does not offer an action that would fail.
+/// false, so the client does not offer an action that would fail. `code` names the reason's
+/// host message `apierr_<code>`; a reason without one is the system's own words.
 pub struct Availability {
     pub available: bool,
     pub reason: Option<String>,
+    pub code: Option<&'static str>,
 }
 
 impl Availability {
-    #[cfg_attr(target_os = "macos", allow(dead_code, reason = "no power on macOS"))]
-    fn yes() -> Availability {
+    pub(crate) fn yes() -> Availability {
         Availability {
             available: true,
             reason: None,
+            code: None,
         }
     }
 
@@ -114,6 +117,15 @@ impl Availability {
         Availability {
             available: false,
             reason: Some(reason.into()),
+            code: None,
+        }
+    }
+
+    /// Unavailable for the sentence `reason`, the English of `apierr_<code>`.
+    pub(crate) fn refused(code: &'static str, reason: &str) -> Availability {
+        Availability {
+            code: Some(code),
+            ..Availability::no(reason)
         }
     }
 }
@@ -122,7 +134,10 @@ impl Availability {
 /// would take every other seat down, so the box's own host is the one executor.
 pub fn probe(verb: PowerVerb) -> Availability {
     if pf_paths::seat::role().is_seat_host() && verb != PowerVerb::Restart {
-        return Availability::no("A seat can't sleep or shut down the host.");
+        return Availability::refused(
+            "host_power_seat",
+            "A seat can't sleep or shut down the host.",
+        );
     }
     os_probe(verb)
 }
@@ -179,11 +194,15 @@ fn os_probe(verb: PowerVerb) -> Availability {
     };
     match logind_call::<String, ()>(method, ()) {
         Ok(ans) if ans == "yes" => Availability::yes(),
-        Ok(ans) if ans == "challenge" => Availability::no(
-            "the host would need interactive authorization — is the host user in group \
+        Ok(ans) if ans == "challenge" => Availability::refused(
+            "host_power_needs_authorization",
+            "The host would need interactive authorization — is the host user in group \
              'punktfunk' (and no second local user logged in)?",
         ),
-        Ok(ans) if ans == "na" => Availability::no("this machine does not support it"),
+        Ok(ans) if ans == "na" => Availability::refused(
+            "host_power_not_supported_here",
+            "This machine does not support it",
+        ),
         Ok(ans) => Availability::no(format!("logind answered {ans:?}")),
         Err(e) => Availability::no(format!("no logind: {e}")),
     }
@@ -213,15 +232,19 @@ fn os_probe(verb: PowerVerb) -> Availability {
             if unsafe { windows::Win32::System::Power::IsPwrSuspendAllowed() } {
                 Availability::yes()
             } else {
-                Availability::no("this machine does not support sleep")
+                Availability::refused(
+                    "host_power_sleep_not_supported",
+                    "This machine does not support sleep",
+                )
             }
         }
         PowerVerb::Reboot | PowerVerb::Shutdown => Availability::yes(),
         PowerVerb::Restart if std::env::var_os("PUNKTFUNK_SERVICE_CHILD").is_some() => {
             Availability::yes()
         }
-        PowerVerb::Restart => Availability::no(
-            "the host is not running under the Punktfunk service, so nothing would start it again",
+        PowerVerb::Restart => Availability::refused(
+            "host_restart_no_service",
+            "The host is not running under the Punktfunk service, so nothing would start it again",
         ),
     }
 }
@@ -281,7 +304,10 @@ pub fn act(verb: PowerVerb) -> Result<(), String> {
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn os_probe(_verb: PowerVerb) -> Availability {
-    Availability::no("not supported on this host platform")
+    Availability::refused(
+        "host_power_unsupported",
+        "Host power actions are not supported on this host platform",
+    )
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]

@@ -136,13 +136,11 @@ pub fn send_bundle(
     match send_to_host(addr, mgmt_port, stream_port, identity, pin, &header) {
         Ok(id) => {
             tracing::info!(host = %host_name, id, "client logs uploaded");
-            Ok(format!(
-                "Logs sent to {host_name} — download them from its web console's Logs page"
-            ))
+            Ok(pf_l10n::client::hostcard_logs_sent_body(host_name))
         }
         Err(e) => {
             tracing::warn!(host = %host_name, error = %e, "client log upload failed");
-            Err(format!("Couldn't send logs — {e}"))
+            Err(pf_l10n::client::hostcard_logs_failed(e))
         }
     }
 }

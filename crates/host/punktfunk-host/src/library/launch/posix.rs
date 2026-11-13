@@ -64,7 +64,7 @@ pub(super) fn launcher_ui_installed(value: &str) -> bool {
 /// Cheap "will this launch" bit for handshake routing. An `exec` entry resolves against the
 /// installed manifest, which is on disk and needs no running plugin.
 pub fn launch_is_resolvable(id: &str) -> bool {
-    let Some(entry) = all_games().into_iter().find(|g| g.id == id) else {
+    let Some(entry) = find_game_for(&View::here(), id) else {
         return false;
     };
     let Some(spec) = entry.launch.as_ref() else {

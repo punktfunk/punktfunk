@@ -296,10 +296,15 @@ impl SessionLink {
     /// Close with a typed code and its reason. A browser is never shown a close reason, so it
     /// gets the same code and text on a stream first.
     pub(crate) async fn refuse(&self, code: u32, reason: &str) {
+        self.refuse_said(code, &super::Said::new("", reason)).await;
+    }
+
+    /// [`Self::refuse`] with words a browser also reads by their message id.
+    pub(crate) async fn refuse_said(&self, code: u32, said: &super::Said) {
         if let SessionLink::Web(c, ..) = self {
-            crate::webtransport::refuse(c, code, reason).await;
+            crate::webtransport::refuse(c, said.refused(code)).await;
         }
-        self.close(code, reason.as_bytes());
+        self.close(code, said.text.as_bytes());
     }
 
     /// Resolves when the peer is gone.

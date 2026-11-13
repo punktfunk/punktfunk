@@ -3,6 +3,7 @@
 // came from the plugin, and a path the plugin filled in itself is not the operator's word. A save
 // that drops a path lets the form go of it; the host keeps what another form or the operator holds.
 import {
+	type GrantRefusal,
 	type HandedPath,
 	keepAfterDrop,
 	newlyHanded,
@@ -12,7 +13,7 @@ import { callPlugin } from "./pluginProxy";
 
 export interface GrantOutcome {
 	granted: string[];
-	refused: { path: string; error: string }[];
+	refused: GrantRefusal[];
 }
 
 const accessPost = (id: string, route: string, body: unknown) =>
@@ -44,10 +45,14 @@ export async function grantHandedPaths(
 			} else {
 				const body = (await res.json().catch(() => null)) as {
 					error?: string;
+					code?: string;
+					params?: Record<string, string> | null;
 				} | null;
 				out.refused.push({
 					path: p.path,
 					error: body?.error ?? `the host answered ${res.status}`,
+					code: body?.code,
+					params: body?.params,
 				});
 			}
 		} catch {

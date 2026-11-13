@@ -9,7 +9,7 @@
 //! Pin: `manifest_tests` below, and `library::launch::exec` for the launch half.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// One argv template the host may run for this plugin.
@@ -205,8 +205,13 @@ pub(super) fn expand_env_prefix(p: &str) -> PathBuf {
 }
 
 /// The homes a manifest's `~` names. The Windows host is a service whose own profile is
-/// `systemprofile`, where no launcher is ever installed, so there it is every real user profile.
+/// `systemprofile`, where no launcher is ever installed, so there it is every real user profile;
+/// on a Windows seat host, the seat account's alone.
 fn plugin_homes() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    if pf_paths::seat::role().is_seat_host() {
+        return seat_home().into_iter().collect();
+    }
     #[cfg(windows)]
     {
         // `C:` joined with `Users` is drive-relative, so the separator is spelled out.
@@ -231,6 +236,18 @@ fn plugin_homes() -> Vec<PathBuf> {
     }
     #[cfg(not(windows))]
     home_dir().into_iter().collect()
+}
+
+/// The profile folder of the account signed in to this seat host's session, which stays the
+/// same for the host's life.
+#[cfg(windows)]
+fn seat_home() -> Option<PathBuf> {
+    static HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    if let Some(home) = HOME.get() {
+        return Some(home.clone());
+    }
+    let home = crate::windows::interactive::session_user_var("USERPROFILE")?;
+    Some(HOME.get_or_init(|| PathBuf::from(home)).clone())
 }
 
 pub(crate) fn home_dir() -> Option<PathBuf> {
@@ -284,36 +301,98 @@ pub(crate) fn granted_roots_in(id: &str, config_dir: PathBuf) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Extra roots the operator granted a plugin, by id: `<library dir>/plugin-run/plugin-grants.json`
-/// via [`crate::plugins::access::AccessStore`]. A Windows seat host reads the box's.
+/// Extra roots granted a plugin, by id: `plugin-run/plugin-grants.json` under [`home_of`] `id`,
+/// via [`crate::plugins::access::AccessStore`].
 ///
-/// Written by `punktfunk-host plugins grant` or an operator's `allow` decision, never by a
-/// plugin — the file is the operator's answer to "this package may also reach here", so
-/// nothing in the plugin lane may edit it.
+/// Written by `punktfunk-host plugins grant` or an `allow` decision, never by a plugin — the
+/// file is the answer to "this package may also reach here", so nothing in the plugin lane may
+/// edit it.
 pub fn granted_roots(id: &str) -> Vec<PathBuf> {
-    granted_roots_in(id, pf_paths::seat::library_dir())
+    granted_roots_in(id, home_of(id))
 }
 
-/// Every installed plugin's manifest, keyed by the id it declares.
+/// Whether `id` is a plugin of this seat's own runner, installed in its own `plugins/`
+/// ([`runner_plugins`]): its manifest and grants are the seat's, never the box's copy of a
+/// plugin of that id.
+pub fn seat_owns(id: &str) -> bool {
+    seat_runs_its_own() && runner_plugins().contains_key(id)
+}
+
+/// Whether this is a seat host reading the box's library: its runner runs as the seat's account,
+/// and what its plugins publish is the seat's.
+pub fn seat_runs_its_own() -> bool {
+    pf_paths::seat::role().is_seat_host() && pf_paths::seat::box_library_dir().is_some()
+}
+
+/// Where plugin `id`'s manifest and grants live: this seat's own config dir for [`seat_owns`],
+/// else the library dir, which is the box's copy on a seat and this host's own elsewhere.
+pub fn home_of(id: &str) -> PathBuf {
+    if seat_owns(id) {
+        pf_paths::config_dir()
+    } else {
+        pf_paths::seat::library_dir()
+    }
+}
+
+/// The plugins this host's runner starts, each manifest keyed by the id it declares. A seat's are
+/// its own, never the box's. On a person's own account only those their own lane installed
+/// ([`person_plugins`]).
 ///
 /// Installed means what the runner discovers: the dependencies of `<config>/plugins/package.json`,
 /// not every package under `node_modules`, where a plugin's own libraries live too. Without that
 /// file the tree is scanned. An id is one lowercase path component, and an id two packages claim
-/// is refused for both. Read fresh: installs and updates land between launches. A seat host reads
-/// the box's plugins dir, which its `exec` entries came from.
-pub fn installed() -> BTreeMap<String, PluginManifest> {
-    installed_in(&pf_paths::seat::library_dir().join("plugins"))
-}
-
-/// The plugins this account's runner starts. A seat's are its own, not the box's [`installed`].
+/// is refused for both. Read fresh: installs and updates land between launches.
 pub fn runner_plugins() -> BTreeMap<String, PluginManifest> {
-    installed_in(&pf_paths::config_dir().join("plugins"))
+    let config = pf_paths::config_dir();
+    let theirs = pf_paths::seat::own_account().then(|| person_plugins(&config));
+    installed_in(&config.join("plugins"), theirs.as_ref())
 }
 
-fn installed_in(plugins: &Path) -> BTreeMap<String, PluginManifest> {
+/// What the person's own lane installed, under a config dir.
+const PERSON_PLUGINS: &str = "person-plugins.json";
+
+/// On a person's own account, the plugin packages their own lane installed, in
+/// `plugin-run/person-plugins.json`. Their runner starts these alone (`PUNKTFUNK_PERSON_PLUGINS`)
+/// and can't write the list. A missing or unreadable list names none.
+pub(crate) fn person_plugins(config: &Path) -> BTreeSet<String> {
+    std::fs::read(config.join(super::RUNNER_DATA_DIR).join(PERSON_PLUGINS))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// Puts package `pkg` on [`person_plugins`] (`theirs`) or takes it off. The store's jobs call
+/// this on a person's own account, where the store answers their lane alone.
+pub(crate) fn mark_person(config: &Path, pkg: &str, theirs: bool) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    let mut marks = person_plugins(config);
+    let changed = match theirs {
+        true => marks.insert(pkg.to_string()),
+        false => marks.remove(pkg),
+    };
+    if !changed {
+        return Ok(());
+    }
+    let dir = config.join(super::RUNNER_DATA_DIR);
+    pf_paths::create_private_dir(&dir).with_context(|| format!("create {}", dir.display()))?;
+    let path = dir.join(PERSON_PLUGINS);
+    pf_paths::replace_file(&path, &serde_json::to_vec(&marks)?)
+        .with_context(|| format!("replace {}", path.display()))
+}
+
+/// The plugins installed under `plugins`, of the top-level packages `only` names when given.
+fn installed_in(
+    plugins: &Path,
+    only: Option<&BTreeSet<String>>,
+) -> BTreeMap<String, PluginManifest> {
     let modules = plugins.join("node_modules");
     let dirs = match top_level_packages(plugins) {
-        Some(names) => names.iter().map(|n| modules.join(n)).collect(),
+        Some(names) => names
+            .iter()
+            .filter(|n| only.is_none_or(|only| only.contains(*n)))
+            .map(|n| modules.join(n))
+            .collect(),
+        None if only.is_some() => Vec::new(),
         None => package_dirs(&modules),
     };
     let mut out = BTreeMap::new();
@@ -371,9 +450,9 @@ fn top_level_packages(plugins: &Path) -> Option<Vec<String>> {
     Some(root.dependencies.into_keys().filter(plain).collect())
 }
 
-/// The manifest declaring `id`, if one is installed.
+/// The manifest declaring `id`, if one is installed where it lives ([`home_of`]).
 pub fn for_provider(id: &str) -> Option<PluginManifest> {
-    installed().remove(id)
+    installed_in(&home_of(id).join("plugins"), None).remove(id)
 }
 
 /// The provider id package `pkg` declares in `plugins`, read before an uninstall takes its
@@ -479,12 +558,48 @@ mod manifest_tests {
         std::fs::write(plugins.join("package.json"), deps.to_string()).unwrap();
         // A library is not a plugin, a claimed-twice id is nobody's, a path is not an id.
         assert_eq!(
-            installed_in(plugins).into_keys().collect::<Vec<_>>(),
+            installed_in(plugins, None).into_keys().collect::<Vec<_>>(),
             vec!["steam"]
         );
         // Without the root package.json the tree is scanned, as the runner does.
         std::fs::remove_file(plugins.join("package.json")).unwrap();
-        assert!(installed_in(plugins).contains_key("kit-library"));
+        assert!(installed_in(plugins, None).contains_key("kit-library"));
+    }
+
+    /// On a person's own account only a package their lane marked counts, and only while it is
+    /// a top-level install; the marks live where the runner reads and never writes.
+    #[test]
+    fn a_person_s_runner_counts_only_what_they_installed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path();
+        let plugins = config.join("plugins");
+        let modules = plugins.join("node_modules");
+        package(&modules, "@punktfunk/plugin-steam", "steam");
+        package(&modules, "@punktfunk/plugin-planted", "planted");
+        let deps = serde_json::json!({ "dependencies": {
+            "@punktfunk/plugin-steam": "1", "@punktfunk/plugin-planted": "1",
+        }});
+        std::fs::write(plugins.join("package.json"), deps.to_string()).unwrap();
+        let ids = |config: &Path| {
+            let marks = person_plugins(config);
+            installed_in(&plugins, Some(&marks))
+                .into_keys()
+                .collect::<Vec<_>>()
+        };
+        assert!(ids(config).is_empty(), "nothing is theirs yet");
+        mark_person(config, "@punktfunk/plugin-steam", true).unwrap();
+        assert_eq!(ids(config), ["steam"]);
+        let list = config.join("plugin-run").join(PERSON_PLUGINS);
+        assert_eq!(
+            std::fs::read_to_string(&list).unwrap(),
+            r#"["@punktfunk/plugin-steam"]"#
+        );
+        mark_person(config, "@punktfunk/plugin-steam", false).unwrap();
+        assert!(ids(config).is_empty());
+        // A mark of a package that isn't a top-level install counts for nothing.
+        mark_person(config, "@punktfunk/plugin-kit", true).unwrap();
+        std::fs::remove_file(plugins.join("package.json")).unwrap();
+        assert!(ids(config).is_empty());
     }
 
     /// The id comes from the dir the uninstall removes from, under every spelling of the name.

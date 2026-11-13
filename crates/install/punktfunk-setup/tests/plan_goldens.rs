@@ -15,7 +15,7 @@ use std::path::Path;
 use common::golden;
 use punktfunk_setup::choices::{Action, Choices, Pins};
 use punktfunk_setup::exec::{Executor, Opts};
-use punktfunk_setup::facts::{Channel, Facts, Family, Firewall, Nvidia, OsRelease};
+use punktfunk_setup::facts::{Channel, Facts, Family, Firewall, Nvidia, OsRelease, Punt};
 use punktfunk_setup::plan::{self, Phase, Plan, PlanPhase, Step, StepAction};
 use punktfunk_setup::report;
 use punktfunk_setup::seam::{BasePaths, FakeRunner};
@@ -72,6 +72,7 @@ fn fresh(id: &str, family: Family) -> Facts {
         web_bind: None,
         mgmt_bind: None,
         ip: Some("192.168.1.10".into()),
+        host_name: Some("pf-box".into()),
         user: "pf".into(),
     }
 }
@@ -273,6 +274,29 @@ fn trap_a_deck_switch_moves_the_branch_before_the_build() {
     }
 }
 
+/// Every title and note of a plan is a message: in `en-XA`, which brackets each one, none is
+/// left as an English literal. The box has no firewall, so the notes include a result line.
+#[test]
+fn plan_titles_and_notes_read_the_messages() {
+    let facts = Facts {
+        sunshine_active: true,
+        ..fresh("arch", Family::Pacman)
+    };
+    let plan = pf_l10n::with_language("en-XA", || plan_for(&facts, &pins()));
+    let bracketed = |text: &str| text.starts_with('[') && text.ends_with("~]");
+    for phase in &plan.phases {
+        assert!(bracketed(&phase.title), "title {:?}", phase.title);
+        for step in &phase.steps {
+            if let StepAction::Note(_, text) = &step.action {
+                assert!(bracketed(text), "note {text:?} in {:?}", phase.title);
+            }
+        }
+    }
+    assert!(plan
+        .steps()
+        .any(|s| matches!(s.action, StepAction::Note(..))));
+}
+
 #[test]
 fn uninstalls() {
     let un = Pins {
@@ -451,7 +475,7 @@ fn a_couch_box_gets_the_client_as_a_flatpak() {
 #[test]
 fn an_unsupported_distro_still_installs_a_client() {
     let mut facts = fresh("voidlinux", Family::Flatpak);
-    facts.host_punt = Some("no package repo for 'Void Linux' yet".into());
+    facts.host_punt = Some(Punt::Unsupported("Void Linux".into()));
     let client = Pins {
         client: true,
         ..pins()

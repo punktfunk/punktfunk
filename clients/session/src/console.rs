@@ -18,18 +18,19 @@
 use crate::session_main::{
     arg_flag, arg_value, fullscreen_mode, parse_host_port, session_params, stats_tier, window_pos,
 };
-use pf_client_core::gamepad::is_steam_deck;
+use pf_client_core::gamepad::{is_steam_deck, PadReading};
 use pf_client_core::orchestrate::{
     self, emit, exit, SessionLine, WakeOutcome, WAKE_RESEND_SECS, WAKE_TIMEOUT_SECS,
 };
-use pf_client_core::{discovery, library, profiles, start, trust, wol};
+use pf_client_core::{discovery, hide, library, profiles, start, trust, wol};
 use pf_console_ui::{
-    ConsoleCmd, ConsoleEntry, ConsoleHandles, ConsoleOptions, ConsoleShared, HostRow, LibraryGame,
-    LibraryPhase, LibraryShared, PairPhase, PairStatus, ProfilesAnswer, RequestKey, SkiaOverlay,
-    SpeedPhase, WakeStatus,
+    ConsoleCmd, ConsoleEntry, ConsoleHandles, ConsoleOptions, ConsoleShared, HiddenAnswer,
+    HideAnswer, HostRow, LibraryGame, LibraryPhase, LibraryShared, PadTestState, PairPhase,
+    PairStatus, ProfilesAnswer, RequestKey, SkiaOverlay, SpeedPhase, WakeStatus,
 };
 use pf_presenter::overlay::OverlayAction;
 use pf_presenter::ActionOutcome;
+use punktfunk_core::input::gamepad as wire;
 use std::collections::{HashMap, VecDeque};
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -199,7 +200,7 @@ impl Launcher {
                     port,
                     pin,
                     self.identity.clone(),
-                    launch,
+                    (launch, profile.as_deref()),
                     gamepad,
                     native,
                     hdr,
@@ -264,12 +265,12 @@ pub fn run(target: Option<&str>) -> u8 {
     }
     // The desktop's reduce-motion switch, followed while it answers. A desktop that says
     // nothing starts no thread and keeps the console's own row.
-    if let Some(reduce) = pf_client_core::os_prefs::reduce_motion() {
+    let mut reduce_motion = pf_client_core::os_prefs::reduce_motion_reader();
+    if let Some(reduce) = reduce_motion() {
         pf_console_ui::os_theme::set_os_reduce_motion(Some(reduce));
-        std::thread::spawn(|| loop {
+        std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(5));
-            let reduce = pf_client_core::os_prefs::reduce_motion();
-            pf_console_ui::os_theme::set_os_reduce_motion(reduce);
+            pf_console_ui::os_theme::set_os_reduce_motion(reduce_motion());
         });
     }
     let identity = match trust::load_or_create_identity() {
@@ -287,7 +288,8 @@ pub fn run(target: Option<&str>) -> u8 {
         label: window_label,
         seed,
     } = console_entry(target, &known, fake, trust::Settings::load);
-    let opts = ConsoleOptions::desktop(trust::device_name(), is_steam_deck());
+    let mut opts = ConsoleOptions::desktop(trust::device_name(), is_steam_deck());
+    opts.device_code = trust::device_code(&identity);
     let (overlay, handles) = match SkiaOverlay::console(opts, entry) {
         Ok(v) => v,
         Err(e) => {
@@ -335,6 +337,7 @@ pub fn run(target: Option<&str>) -> u8 {
         touch_mode: settings_at_start.touch_mode(),
         mouse_mode: settings_at_start.mouse_mode(),
         invert_scroll: settings_at_start.invert_scroll,
+        shortcuts: crate::session_main::shortcuts_blob(&settings_at_start),
         inhibit_shortcuts: settings_at_start.inhibit_shortcuts,
         present_priority: settings_at_start.present_priority(),
         vsync: settings_at_start.vsync,
@@ -447,6 +450,7 @@ fn seed_row(k: Option<&trust::KnownHost>, addr: &str, port: u16) -> HostRow {
         running: String::new(),
         game_presets: Default::default(),
         profile: k.and_then(|h| h.profile.clone()),
+        screens: None,
     }
 }
 
@@ -499,6 +503,7 @@ impl Service {
                     rescan: None,
                     stores: Stores::default(),
                     learn_due: true,
+                    hidden: Arc::default(),
                 }
                 .run(stop_w)
             })
@@ -542,6 +547,9 @@ struct ServiceState {
     stores: Stores,
     /// The adverts or the saved hosts moved since each saved host last learned from its advert.
     learn_due: bool,
+    /// The titles the last hidden list held: a title shown again joins the cached catalog as
+    /// that list had it.
+    hidden: Arc<Mutex<Vec<library::GameEntry>>>,
 }
 
 /// The saved hosts and the preset catalog as last read. Each is read again only when its file
@@ -693,6 +701,17 @@ impl ServiceState {
                 action_id,
                 label,
             } => self.host_action(addr, mgmt, fp_hex, host_name, action_id, label),
+            ConsoleCmd::SetScreen {
+                addr,
+                mgmt,
+                fp_hex,
+                screen,
+                topology,
+                label,
+            } => {
+                let pick = pf_client_core::display_targets::Pick { screen, topology };
+                self.set_screen(addr, mgmt, fp_hex, pick, label)
+            }
             ConsoleCmd::EndGame {
                 addr,
                 mgmt,
@@ -712,6 +731,13 @@ impl ServiceState {
             } => {
                 self.change_install(addr, mgmt, fp_hex, app_id, title, action);
             }
+            cmd @ ConsoleCmd::SetHidden { .. } => self.set_hidden(cmd),
+            ConsoleCmd::FetchHidden {
+                addr,
+                mgmt,
+                fp_hex,
+                profile,
+            } => self.fetch_hidden(addr, mgmt, fp_hex, profile),
             ConsoleCmd::Pair {
                 addr,
                 port,
@@ -738,8 +764,12 @@ impl ServiceState {
                     port,
                     req,
                     trust::access_error_message,
-                    move |a, p, id| {
-                        trust::request_access_to_host(a, p, id, pin, &device_name, None)
+                    // The console offers a request only for a host that advertised a fingerprint.
+                    move |a, p, id| match pin {
+                        Some(pin) => {
+                            trust::request_access_to_host(a, p, id, pin, &device_name, None)
+                        }
+                        None => Err(punktfunk_core::PunktfunkError::InvalidArg("fingerprint")),
                     },
                 )
             }
@@ -776,8 +806,13 @@ impl ServiceState {
             // Grants and rumble tests from the controllers screen, Android-only: the settings row
             // that opens that screen is not on the desktop's list.
             ConsoleCmd::PadAction { .. } => {}
-            // The Controllers tab offers no input test on the desktop.
-            ConsoleCmd::PadTest { .. } => {}
+            // While on, the menu pads feed the test instead of moving the menu.
+            ConsoleCmd::PadTest { on } => {
+                let console = self.console.clone();
+                pf_client_core::gamepad::set_pad_test(on.then(|| {
+                    Box::new(move |r: PadReading| console.set_pad_test(pad_test_state(r))) as _
+                }));
+            }
             // Only a host that raised a prompt hears its answer; the desktop raises none.
             ConsoleCmd::PromptAnswer { .. } => {}
             // The console reads the catalog straight from this file, so a save is the whole job.
@@ -802,7 +837,7 @@ impl ServiceState {
                 const NOTICES: &str = include_str!("../../linux/THIRD-PARTY-NOTICES.txt");
                 self.console
                     .set_licenses(vec![pf_console_ui::LicenseSection {
-                        heading: "Third-party software".into(),
+                        heading: pf_l10n::client::about_third_party_heading().into(),
                         text: NOTICES.into(),
                     }]);
             }
@@ -826,17 +861,22 @@ impl ServiceState {
         // of the placeholder at `addr:port`. Empty with auto-wake off or no MAC on record: the
         // fetch then asks once instead of retrying across a boot.
         let known = trust::KnownHosts::load();
-        let macs = known
-            .resolve(Some(&fp_hex), &addr, port)
+        let host = known.resolve(Some(&fp_hex), &addr, port);
+        let macs = host
             .filter(|_| trust::Settings::load().auto_wake)
             .map(|h| h.mac.clone())
             .unwrap_or_default();
+        // The console plays as a remembered pick only, so its shelf is that profile's.
+        let profile = host
+            .and_then(|h| h.profile.as_ref())
+            .filter(|p| p.remember)
+            .map(|p| p.id.clone());
         spawn_fetch(
             self.library.clone(),
             addr,
             (port, mgmt),
             self.identity.clone(),
-            fp_hex,
+            (fp_hex, profile),
             macs,
             req,
         );
@@ -1031,6 +1071,33 @@ impl ServiceState {
             .ok();
     }
 
+    /// Write a Screen row's pick on a worker, as [`Self::host_action`] does. Only a refusal
+    /// says anything: the pick itself shows on the card once the rows come back.
+    fn set_screen(
+        &self,
+        addr: String,
+        mgmt: u16,
+        fp_hex: String,
+        pick: pf_client_core::display_targets::Pick,
+        label: String,
+    ) {
+        let identity = self.identity.clone();
+        let console = self.console.clone();
+        std::thread::Builder::new()
+            .name("punktfunk-screen".into())
+            .spawn(move || {
+                let port = stream_port(&fp_hex);
+                let set = pf_client_core::display_targets::set_pick(
+                    &addr, mgmt, port, &identity, &fp_hex, &pick,
+                );
+                if let Err(e) = set {
+                    tracing::warn!(?pick, error = %e, "screen pick refused");
+                    console.set_notice(pf_l10n::client::hostcard_action_failed(&label, e));
+                }
+            })
+            .ok();
+    }
+
     fn end_game(
         &self,
         addr: String,
@@ -1099,6 +1166,99 @@ impl ServiceState {
             .ok()
     }
 
+    /// Hide or show a title for the profile this device is the person of, off the service
+    /// thread. What the host took, the cached catalog follows at once: a shown title as the
+    /// last hidden list had it. The shell moves the title and shows the line.
+    fn set_hidden(&self, cmd: ConsoleCmd) {
+        let ConsoleCmd::SetHidden {
+            addr,
+            mgmt,
+            fp_hex,
+            profile,
+            name,
+            app_id,
+            title,
+            hidden,
+        } = cmd
+        else {
+            return;
+        };
+        let (console, identity, seen) = (
+            self.console.clone(),
+            self.identity.clone(),
+            self.hidden.clone(),
+        );
+        let pin = trust::parse_hex32(&fp_hex);
+        std::thread::Builder::new()
+            .name("punktfunk-hide".into())
+            .spawn(move || {
+                let api = library::HostApi::new(&addr, mgmt, stream_port(&fp_hex), &identity, pin);
+                let outcome = hide::set_hidden(&api, &profile, &app_id, hidden);
+                tracing::info!(app = %app_id, hidden, ?outcome, "title visibility for a profile");
+                let done = outcome == hide::Outcome::Done;
+                if done {
+                    let seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+                    let back = seen.iter().find(|g| g.id == app_id).filter(|_| !hidden);
+                    pf_client_core::library_cache::note_hidden(
+                        &fp_hex,
+                        Some(&profile),
+                        &app_id,
+                        back,
+                    );
+                }
+                let notice = outcome.notice(hidden, &title, &name);
+                console.set_hide_answer(HideAnswer {
+                    fp_hex,
+                    profile,
+                    app_id,
+                    hidden,
+                    done,
+                    notice,
+                });
+            })
+            .ok();
+    }
+
+    /// What a profile hides, for the shell's hidden shelf, then their posters as a shelf's come.
+    fn fetch_hidden(&self, addr: String, mgmt: u16, fp_hex: String, profile: String) {
+        let (console, identity, seen) = (
+            self.console.clone(),
+            self.identity.clone(),
+            self.hidden.clone(),
+        );
+        let shared = self.library.clone();
+        let pin = trust::parse_hex32(&fp_hex);
+        std::thread::Builder::new()
+            .name("punktfunk-hidden".into())
+            .spawn(move || {
+                let api = library::HostApi::new(&addr, mgmt, stream_port(&fp_hex), &identity, pin);
+                let games = match hide::fetch_hidden_from(&api, &profile) {
+                    Ok(games) => games,
+                    Err(e) => {
+                        tracing::info!(%addr, error = %e, "hidden titles did not load");
+                        let why = HiddenAnswer::Failed(e.to_string());
+                        return console.set_hidden_list(&fp_hex, &profile, why);
+                    }
+                };
+                *seen.lock().unwrap_or_else(|e| e.into_inner()) = games.clone();
+                let listed = HiddenAnswer::Listed(to_model(&games));
+                console.set_hidden_list(&fp_hex, &profile, listed);
+                let base = library::base_url(&addr, mgmt);
+                let jobs: VecDeque<(String, Vec<String>)> = (games.iter())
+                    .map(|g| (g.id.clone(), g.art.poster_candidates(&base)))
+                    .filter(|(_, candidates)| !candidates.is_empty())
+                    .collect();
+                if jobs.is_empty() {
+                    return;
+                }
+                let rx = library::spawn_art_fetch(api, jobs);
+                while let Ok((id, bytes)) = rx.recv_blocking() {
+                    shared.push_art(id, bytes);
+                }
+            })
+            .ok();
+    }
+
     /// Run one pairing (`ask`: the PIN ceremony or a request access) on its own thread and
     /// report it under `req` as Busy, then Paired or Failed. A later pairing makes this
     /// answer stale.
@@ -1151,8 +1311,8 @@ impl ServiceState {
                         match paired.saved {
                             Ok(()) => say(PairPhase::Paired { key: paired.fp_hex }),
                             // Not "Paired": the pin is gone by the next launch.
-                            Err(e) => say(PairPhase::Failed(format!(
-                                "Paired, but couldn't save — {e:#}"
+                            Err(e) => say(PairPhase::Failed(pf_l10n::client::pair_saved_failed(
+                                format!("{e:#}"),
                             ))),
                         }
                     }
@@ -1349,16 +1509,23 @@ impl ServiceState {
             })
             .unzip();
         let probed = self.probed.clone();
-        let inflight = self.probe_inflight.clone();
+        // Dropped with the closure: the thread ending, panicking or never starting all free the pass.
+        struct Idle(Arc<AtomicBool>);
+        impl Drop for Idle {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+        let idle = Idle(self.probe_inflight.clone());
         std::thread::Builder::new()
             .name("punktfunk-probe".into())
             .spawn(move || {
+                let _idle = idle;
                 let results = trust::probe_known(&hosts, Duration::from_millis(900));
                 let mut map = probed.lock().unwrap();
                 for (key, ok) in keys.into_iter().zip(results) {
                     map.insert(key, ok);
                 }
-                inflight.store(false, Ordering::SeqCst);
             })
             .ok();
     }
@@ -1392,17 +1559,19 @@ impl ServiceState {
     /// change they just made is not on disk.
     fn save_failed(&self, e: &impl std::fmt::Display) {
         tracing::warn!(error = %format!("{e:#}"), "saving known hosts");
-        self.console.set_notice(format!("Couldn't save — {e:#}"));
+        self.console
+            .set_notice(pf_l10n::client::error_save_failed(format!("{e:#}")));
     }
 
-    /// Keep every paired, reachable host's advertised actions and running title fresh (the
-    /// shared TTL'd caches in `pf_client_core`). Idempotent and cheap — each only reaches the
-    /// network when its own entry has lapsed, and the running one lapses far sooner: what a
-    /// host has UP is what changes between two visits to the carousel.
+    /// Keep every paired, reachable host's advertised actions, screens and running title fresh
+    /// (the shared TTL'd caches in `pf_client_core`). Idempotent and cheap — each only reaches
+    /// the network when its own entry has lapsed, and the running and screen ones lapse far
+    /// sooner: what a host has UP is what changes between two visits to the carousel.
     fn refresh_host_state(&self, rows: &[HostRow]) {
         for r in rows {
             if r.paired && r.online && r.pin.is_none() {
                 pf_client_core::host_actions::refresh(&r.addr, r.mgmt_port, r.port, &r.fp_hex);
+                pf_client_core::display_targets::refresh(&r.addr, r.mgmt_port, r.port, &r.fp_hex);
                 library::refresh_running(&r.addr, r.mgmt_port, r.port, &r.fp_hex);
             }
         }
@@ -1455,6 +1624,7 @@ fn build_rows(
         // Only the speed test reads this: a preset that PINS bitrate is the layer its
         // host streams at, so the console must not offer to write the global instead.
         bitrate_kbps: p.overrides.bitrate_kbps,
+        host_screen: p.overrides.host_screen.clone(),
     };
     let mut rows: Vec<HostRow> = known
         .hosts
@@ -1519,6 +1689,8 @@ fn build_rows(
                 // compares, and a deleted preset falls back at resolve, not here.
                 game_presets: h.game_presets.clone(),
                 profile: h.profile.clone(),
+                // What this host last said this device may stream, from the same kind of cache.
+                screens: pf_client_core::display_targets::cached(&h.fp_hex),
             };
             // A pinned card shares the primary tile's live state; its own key lets
             // cursor-follow and the wake path address the card itself.
@@ -1571,6 +1743,7 @@ fn build_rows(
                 running: String::new(),
                 game_presets: Default::default(),
                 profile: None,
+                screens: None,
             }
         })
         .collect();
@@ -1661,7 +1834,8 @@ fn stream_port(fp_hex: &str) -> u16 {
 
 /// Fetch the library off the service thread, then stream poster art into the shared
 /// model as results land (the renderer drains `push_art` per frame). `(port, mgmt)`: the
-/// stream port the management tunnel tries first, then the HTTPS port.
+/// stream port the management tunnel tries first, then the HTTPS port. `profile`: the
+/// library as that profile plays it.
 ///
 /// Three things happen before the host is ever asked, and the order is the point:
 /// 1. the CACHED catalog goes up immediately, marked stale — a library is the screen a player
@@ -1678,7 +1852,7 @@ fn spawn_fetch(
     addr: String,
     (port, mgmt): (u16, u16),
     identity: (String, String),
-    fp_hex: String,
+    (fp_hex, profile): (String, Option<String>),
     macs: Vec<String>,
     req: RequestKey,
 ) -> Worker {
@@ -1698,9 +1872,9 @@ fn spawn_fetch(
             }
             // Whatever we already know about this host, on screen before a single packet goes
             // out. Keyed on the pinned fingerprint, so a box that came back on a new DHCP lease
-            // is still recognised as the same host with the same library.
+            // is still recognised as the same host, and on the profile the shelf is for.
             let mut cached_games = None;
-            if let Some(cached) = pf_client_core::library_cache::load(&fp_hex) {
+            if let Some(cached) = pf_client_core::library_cache::load(&fp_hex, profile.as_deref()) {
                 if !cached.games.is_empty() && mine() {
                     shared.set_games_cached(&req, to_model(&cached.games));
                     cached_games = Some(cached.games);
@@ -1720,11 +1894,11 @@ fn spawn_fetch(
             let started = Instant::now();
             let mut last_packet = started;
             let mut last_err = None;
-            let mut fetched = None;
+            let (mut fetched, mut served) = (None, None);
             loop {
-                match library::fetch_games(&addr, mgmt, port, &identity, pin) {
-                    Ok(games) => {
-                        fetched = Some(games);
+                match library::fetch_games(&addr, mgmt, port, &identity, pin, profile.as_deref()) {
+                    Ok((games, fetched_as)) => {
+                        (fetched, served) = (Some(games), fetched_as);
                         break;
                     }
                     Err(e) => {
@@ -1767,7 +1941,7 @@ fn spawn_fetch(
                         }
                         None => {
                             shared.set_phase(&req, LibraryPhase::Error {
-                                title: "Couldn't load the library".into(),
+                                title: pf_l10n::client::lib_load_failed().into(),
                                 body: e.to_string(),
                                 can_retry: true,
                             });
@@ -1789,7 +1963,7 @@ fn spawn_fetch(
             if live {
                 shared.set_games(&req, to_model(&games));
                 // Remembered AFTER it is on screen: the disk write is not on the path to a shelf.
-                pf_client_core::library_cache::store(&fp_hex, &games);
+                pf_client_core::library_cache::store(&fp_hex, served, &games);
                 // What the host has up right now, so a title the player can return to says so.
                 // Deliberately after the catalog — a slow `/status` must not hold the titles
                 // back — and never fatal: an older host answers nothing and every badge stays off.
@@ -1839,8 +2013,54 @@ fn to_model(games: &[library::GameEntry]) -> Vec<LibraryGame> {
             running: false,
             endable: false,
             install: g.install.clone().map(Into::into),
+            overrides: g.overrides.clone(),
         })
         .collect()
+}
+
+/// The input test's names for a pad reading: Xbox positions, the drawn pads' paddle names,
+/// and a trigger past half travel as held.
+fn pad_test_state(r: PadReading) -> PadTestState {
+    const NAMES: [(u32, &str); 21] = [
+        (wire::BTN_A, "A"),
+        (wire::BTN_B, "B"),
+        (wire::BTN_X, "X"),
+        (wire::BTN_Y, "Y"),
+        (wire::BTN_LB, "LB"),
+        (wire::BTN_RB, "RB"),
+        (wire::BTN_BACK, "Back"),
+        (wire::BTN_START, "Start"),
+        (wire::BTN_GUIDE, "Guide"),
+        (wire::BTN_LS_CLICK, "LS"),
+        (wire::BTN_RS_CLICK, "RS"),
+        (wire::BTN_DPAD_UP, "Up"),
+        (wire::BTN_DPAD_DOWN, "Down"),
+        (wire::BTN_DPAD_LEFT, "Left"),
+        (wire::BTN_DPAD_RIGHT, "Right"),
+        (wire::BTN_TOUCHPAD, "Touchpad"),
+        (wire::BTN_MISC1, "Misc"),
+        (wire::BTN_PADDLE1, "R4"),
+        (wire::BTN_PADDLE2, "L4"),
+        (wire::BTN_PADDLE3, "R5"),
+        (wire::BTN_PADDLE4, "L5"),
+    ];
+    const AXES: [&str; 6] = ["LX", "LY", "RX", "RY", "LT", "RT"];
+    let mut held: Vec<String> = NAMES
+        .iter()
+        .filter(|(bit, _)| r.buttons & bit != 0)
+        .map(|(_, name)| (*name).to_string())
+        .collect();
+    for (name, v) in [("LT", r.axes[4]), ("RT", r.axes[5])] {
+        if v > 0.5 {
+            held.push(name.to_string());
+        }
+    }
+    let axes = AXES
+        .iter()
+        .zip(r.axes)
+        .map(|(n, v)| ((*n).to_string(), v))
+        .collect();
+    PadTestState { held, axes }
 }
 
 /// Dev hook: entries from a JSON file; portrait paths starting with `/` load from disk.

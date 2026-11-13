@@ -1,0 +1,42 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Connect to ${host} in ${applicationName}" : {
+      "comment" : "Siri phrase. host: a saved host; application_name: the app's name.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verbinde dich in ${applicationName} mit ${host}"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect to ${host} in ${applicationName}"
+          }
+        }
+      }
+    },
+    "End the ${applicationName} stream" : {
+      "comment" : "Siri phrase. application_name: the app's name.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "End the ${applicationName} stream"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End the ${applicationName} stream"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

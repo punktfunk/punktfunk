@@ -235,14 +235,15 @@ jobs:
       # CARGO_HOME layout (/usr/local/cargo), so the registry/git downloads dedupe with
       # the rest of the fleet in the central cache. target/ is deliberately NOT cached
       # anymore — sccache covers recompilation without shipping multi-GB tars per run.
+      # A pull request saves into `-ci-`, never the pool the signed tag build restores (ci.yml).
       - name: Cache (cargo registry)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             /usr/local/cargo/registry
             /usr/local/cargo/git
-          key: cargo-home-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-home-
+          key: cargo-home-${{ github.event_name == 'pull_request' && 'ci-' || '' }}${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-home-${{ github.event_name == 'pull_request' && 'ci-' || '' }}
 
       - name: Cache (gradle)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -253,9 +254,10 @@ jobs:
           # gradle-wrapper.properties is in the key on purpose: `~/.gradle/wrapper` caches the
           # Gradle DISTRIBUTION, so a wrapper bump with no .gradle.kts change would otherwise
           # restore a key that can never hold the new one. Namespace shared with
-          # android-screenshots.yml — same content, one copy in the central store.
-          key: gradle-${{ hashFiles('clients/android/**/*.gradle.kts', 'clients/android/**/gradle.lockfile', 'clients/android/gradle/verification-metadata.xml', 'clients/android/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: gradle-
+          # android-screenshots.yml — same content, one copy in the central store. A pull
+          # request saves into `gradle-ci-`, never the pool the signed tag build restores.
+          key: gradle-${{ github.event_name == 'pull_request' && 'ci-' || '' }}${{ hashFiles('clients/android/**/*.gradle.kts', 'clients/android/**/gradle.lockfile', 'clients/android/gradle/verification-metadata.xml', 'clients/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ github.event_name == 'pull_request' && 'ci-' || '' }}
 
       # Clippy for the ANDROID target. Like the kit tests below, this was running NOWHERE: ci.yml
       # lints `--workspace` on the host, where `clients/android/native` and every

@@ -8,6 +8,9 @@
 // Decoder-input capture behind `PUNKTFUNK_DUMP_VIDEO`, written by the session pump.
 #[cfg(desktop)]
 pub mod au_dump;
+// The AV1 receiver rule and concealer: what the session pump keeps off the decoder after a loss.
+#[cfg(desktop)]
+pub mod av1_intake;
 // The ladder. Every item is re-exported at the root, so `pf_client_core::video::X` is `X` here.
 #[cfg(desktop)]
 mod video;
@@ -74,6 +77,9 @@ mod video_v4l2_hevc;
 // Native Vulkan Video (H.264/H.265/AV1) on the presenter's device. Auto's top rung on both desktop OSes; pin `PUNKTFUNK_DECODER=native-vulkan`. Evidence: `video`.
 #[cfg(desktop)]
 mod video_vk_native;
+// The priority hook for the Vulkan Video decode-done thread; the embedder installs it before a session starts.
+#[cfg(desktop)]
+pub use pf_vkdecode::decoder::waiter::set_waiter_boost;
 // D3D11 decode-device: shareable-texture hand-off ring, device creation, `display_hdr_volume`. `video_d3d11_native` and `clients/session` build on it.
 #[cfg(all(feature = "d3d11va", windows))]
 pub mod video_d3d11;

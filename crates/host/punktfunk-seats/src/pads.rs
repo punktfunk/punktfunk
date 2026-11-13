@@ -16,6 +16,7 @@ use anyhow::Context as _;
 use pf_inject::pad_broker::{self, BrokeredPad, PadKind, Request, Status};
 use pf_inject::usbip;
 use pf_inject::usbip_relay::Hello;
+use pf_seats::linux::fence::vouch::{self, Vouch};
 use pf_seats::linux::{socket, LinuxBackend};
 use pf_seats::SeatService;
 use rustix::net::Shutdown;
@@ -28,7 +29,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const SOCKET_PATH: &str = pf_paths::seat::PADS_SOCKET;
 /// Relayed pads one seat may hold at once: its players' controllers, with room for a swap.
@@ -50,6 +51,14 @@ static PENDING: LazyLock<Mutex<HashMap<String, usize>>> = LazyLock::new(Mutex::d
 const PENDING_PER_UID: usize = 4;
 /// Unread connections from every uid together, each a thread of the unit's own task limit.
 const PENDING_TOTAL: usize = 16;
+/// Pads a seat may make back to back: every pad and USB device it may hold, since a player's
+/// pads arrive together.
+const MADE_BURST: u32 = (MAX_PER_SEAT + vhci::MAX_PER_SEAT) as u32;
+/// Past [`MADE_BURST`], one pad a second: a player plugs pads in by hand, and a loop making
+/// and dropping them costs root a scope, a vhci attach and udev runs each time.
+const MADE_GAP: Duration = Duration::from_secs(1);
+/// When each account's next pad is due ([`admit_made`]).
+static MADE: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Mutex::default);
 
 /// One of a key's slots in `held`, an account's or a peer uid's, given back on drop.
 struct Slot {
@@ -58,7 +67,23 @@ struct Slot {
 }
 
 impl Slot {
+    /// A slot for a pad made now: within `cap` and its account's pace ([`admit_made`]).
     fn take(held: &'static Mutex<HashMap<String, usize>>, key: &str, cap: usize) -> Option<Slot> {
+        let admitted = admit_made(
+            &mut held.lock().unwrap_or_else(|e| e.into_inner()),
+            &mut MADE.lock().unwrap_or_else(|e| e.into_inner()),
+            key,
+            cap,
+            Instant::now(),
+        );
+        admitted.then(|| Slot {
+            held,
+            key: key.to_owned(),
+        })
+    }
+
+    /// A slot for a pad a restart kept: within `cap`, never paced.
+    fn kept(held: &'static Mutex<HashMap<String, usize>>, key: &str, cap: usize) -> Option<Slot> {
         admit(
             &mut held.lock().unwrap_or_else(|e| e.into_inner()),
             key,
@@ -94,6 +119,25 @@ impl Drop for Slot {
 /// Counts one more unread connection from `uid`; `false` at its cap or the total.
 fn admit_pending(pending: &mut HashMap<String, usize>, uid: &str) -> bool {
     pending.values().sum::<usize>() < PENDING_TOTAL && admit(pending, uid, PENDING_PER_UID)
+}
+
+/// Counts one more pad `account` makes at `now`; `false` at `cap`, or when it made
+/// [`MADE_BURST`] and the next is not yet due, [`MADE_GAP`] after the one before. `due` holds
+/// each account's next due time; a refusal leaves it as it was.
+fn admit_made(
+    held: &mut HashMap<String, usize>,
+    due: &mut HashMap<String, Instant>,
+    account: &str,
+    cap: usize,
+    now: Instant,
+) -> bool {
+    let next = due.get(account).map_or(now, |&at| at.max(now));
+    let full = held.get(account).is_some_and(|&count| count >= cap);
+    if full || next > now + MADE_GAP * (MADE_BURST - 1) {
+        return false;
+    }
+    due.insert(account.to_owned(), next + MADE_GAP);
+    admit(held, account, cap)
 }
 
 /// Counts one more for `account`; `false` at `cap`.
@@ -161,26 +205,19 @@ pub fn revoke(account: &str) {
     }
 }
 
-/// Relays again every pad systemd kept across a supervisor restart, and watches again every
-/// served USB socket. A USB device an older supervisor attached for a seat that served it
-/// itself is detached. The other kept fds are the caller's. First thing at start: until then
-/// the kept fds would leak into a child.
+/// Relays again every pad systemd kept across a supervisor restart, a uinput pad recorded for
+/// the fence again ([`vouch_kept`]), and watches again every served USB socket, each holding its
+/// seat's slot again so the caps hold. The other kept fds are the caller's. First thing at
+/// start: until then the kept fds would leak into a child.
 pub fn resume() -> Vec<(String, OwnedFd)> {
     let _ = std::fs::remove_dir_all(RELAYED);
     let pad_broker::Kept {
         pads,
         usb: sockets,
-        unserved,
         other,
     } = pad_broker::kept();
-    for (port, recorded, sock) in unserved {
-        tracing::warn!(port, "seat USB device the seat served itself, detached");
-        vhci::drop_unserved(port, recorded);
-        pad_broker::forget_usb(port, recorded);
-        drop(sock);
-    }
     for kept in pads {
-        let Some(slot) = Slot::take(&HELD, &kept.account, MAX_PER_SEAT) else {
+        let Some(slot) = Slot::kept(&HELD, &kept.account, MAX_PER_SEAT) else {
             pad_broker::forget(&kept.name);
             continue;
         };
@@ -190,10 +227,12 @@ pub fn resume() -> Vec<(String, OwnedFd)> {
             index = kept.index,
             "seat pad kept across a restart"
         );
+        let vouch = vouch_kept(&kept);
         let spawned = std::thread::Builder::new()
             .name("seat-pad".into())
             .spawn(move || {
                 let _slot = slot;
+                let _vouch = vouch;
                 run_relay(
                     &kept.name,
                     &kept.account,
@@ -209,9 +248,13 @@ pub fn resume() -> Vec<(String, OwnedFd)> {
     }
     for (port, recorded, sock) in sockets {
         tracing::info!(port, "seat USB device kept across a restart");
+        // A socket no row names is shut down by `watch_usb` and holds no slot.
+        let slot = vhci::account_at(port)
+            .and_then(|account| Slot::kept(&SERVED, &account, vhci::MAX_PER_SEAT));
         let spawned = std::thread::Builder::new()
             .name("seat-usb".into())
             .spawn(move || {
+                let _slot = slot;
                 watch_usb(port, recorded, sock);
                 tracing::info!(port, "seat USB device gone");
             });
@@ -368,7 +411,7 @@ fn handle(service: &SeatService<LinuxBackend>, stream: UnixStream, uid: u32, pen
     };
     let _ = stream.set_read_timeout(Some(REQUEST_TIMEOUT));
     let _ = stream.set_write_timeout(Some(REQUEST_TIMEOUT));
-    let (request, fd) = match pad_broker::read_request(&stream) {
+    let request = match pad_broker::read_request(&stream) {
         Ok(read) => read,
         Err(error) => {
             tracing::debug!(error = %format!("{error:#}"), account, "pads socket request");
@@ -378,7 +421,8 @@ fn handle(service: &SeatService<LinuxBackend>, stream: UnixStream, uid: u32, pen
     match request {
         Request::Create { kind, index } => {
             drop(pending);
-            create(stream, &account, kind, index);
+            let seat = ps_seat(&service.ledger(), &account);
+            create(stream, &account, kind, index, seat);
         }
         Request::Serve {
             kind,
@@ -394,6 +438,7 @@ fn handle(service: &SeatService<LinuxBackend>, stream: UnixStream, uid: u32, pen
                         kind,
                         index,
                         slot,
+                        seat: ps_seat(&service.ledger(), &account),
                         identity,
                     };
                     serve_usb(stream, &account, &hello);
@@ -403,17 +448,17 @@ fn handle(service: &SeatService<LinuxBackend>, stream: UnixStream, uid: u32, pen
                 }
             }
         }
-        // A seat host from before served USB pads hands over a device it serves itself, with
-        // descriptors it chose. Its socket closes unattached; the host falls back to uhid.
-        Request::Attach { .. } | Request::Detach { .. } => {
-            drop(fd);
-            tracing::warn!(
-                account,
-                "seat host predates served USB pads: its own USB device was refused"
-            );
-            answer(&stream, &account, Status::Refused);
-        }
     }
+}
+
+/// The seat `account`'s PlayStation pads carry in their MAC, as its own host marks them
+/// ([`pad_broker::own_ps_seat`]): the owner's row keeps the box's.
+fn ps_seat(ledger: &pf_seats::Ledger, account: &str) -> u16 {
+    ledger
+        .seats
+        .iter()
+        .find(|seat| seat.account == account && !seat.owner)
+        .map_or(0, |seat| pad_broker::ps_seat(seat.id.as_str()))
 }
 
 fn answer(stream: &UnixStream, account: &str, status: Status) {
@@ -422,19 +467,20 @@ fn answer(stream: &UnixStream, account: &str, status: Status) {
     }
 }
 
-/// A uinput or uhid pad, relayed until the seat hangs up.
-fn create(stream: UnixStream, account: &str, kind: PadKind, index: u8) {
+/// A uinput or uhid pad, recorded for the fence and relayed until the seat hangs up. A
+/// PlayStation pad's MAC carries `seat`.
+fn create(stream: UnixStream, account: &str, kind: PadKind, index: u8, seat: u16) {
     let Some(_slot) = Slot::take(&HELD, account, MAX_PER_SEAT) else {
         tracing::warn!(
             account,
             cap = MAX_PER_SEAT,
-            "seat asked for one pad too many"
+            "seat asked for one pad too many, or too fast"
         );
         answer(&stream, account, Status::Capacity);
         return;
     };
-    let pad = match pad_broker::build(kind, index, account) {
-        Ok(pad) => pad,
+    let (pad, _vouch) = match build_vouched(kind, index, account, seat) {
+        Ok(built) => built,
         Err(error) => {
             tracing::warn!(error = %format!("{error:#}"), account, pad = kind.label(),
                 "seat pad not made");
@@ -462,6 +508,43 @@ fn create(stream: UnixStream, account: &str, kind: PadKind, index: u8) {
     run_relay(&name, account, kind, index, pad, ours);
 }
 
+/// `kind` built for `account`, with the record that vouches for it to the udev fence: a uhid
+/// pad's written under its stamp's token before the pad exists, a uinput pad's once the kernel
+/// names it. Drop the record after the pad. A PlayStation pad's MAC carries `seat`.
+fn build_vouched(
+    kind: PadKind,
+    index: u8,
+    account: &str,
+    seat: u16,
+) -> anyhow::Result<(BrokeredPad, Vouch)> {
+    let mut vouch =
+        Vouch::new(Path::new(vouch::DIR), account, !kind.is_uinput()).context("record the pad")?;
+    let pad = pad_broker::build(kind, index, vouch.mark(), seat)?;
+    if let Some(name) = pad.sysname() {
+        vouch.made(&name?).context("record the pad")?;
+    }
+    Ok((pad, vouch))
+}
+
+/// A kept uinput pad's record, written again from its own fd: the supervisor that made it may
+/// have written none. A uhid pad keeps the record it was made with.
+fn vouch_kept(kept: &pad_broker::KeptPad) -> Option<Vouch> {
+    let name = kept.pad.sysname()?;
+    let vouched = name.and_then(|name| {
+        let mut vouch = Vouch::new(Path::new(vouch::DIR), &kept.account, false)?;
+        vouch.made(&name)?;
+        Ok(vouch)
+    });
+    match vouched {
+        Ok(vouch) => Some(vouch),
+        Err(error) => {
+            tracing::warn!(error = %format!("{error:#}"), account = kept.account,
+                "kept seat pad not recorded: the fence refuses it");
+            None
+        }
+    }
+}
+
 /// A seat's USB device, served by a pad server of its own: the device, its descriptors and
 /// every control transfer come from pf-inject's tables, and the seat gets only the relay.
 /// Held until the kernel's connection ends.
@@ -471,7 +554,7 @@ fn serve_usb(stream: UnixStream, account: &str, hello: &Hello) {
         tracing::warn!(
             account,
             cap = vhci::MAX_PER_SEAT,
-            "seat asked for one USB device too many"
+            "seat asked for one USB device too many, or too fast"
         );
         answer(&stream, account, Status::Capacity);
         return;
@@ -594,6 +677,33 @@ mod tests {
             !held.contains_key("pf-seat-1"),
             "a seat with no pads is forgotten"
         );
+    }
+
+    /// A seat makes every pad it may hold at once, then one a second; another seat has its own
+    /// pace, and a refusal at the cap costs no turn.
+    #[test]
+    fn a_seat_makes_its_pads_at_once_then_one_a_second() {
+        let (mut held, mut due) = (HashMap::new(), HashMap::new());
+        let t0 = Instant::now();
+        let mut make = |account: &str, at: Duration| {
+            admit_made(&mut held, &mut due, account, usize::MAX, t0 + at)
+        };
+        for _ in 0..MADE_BURST {
+            assert!(make("pf-seat-1", Duration::ZERO));
+        }
+        assert!(!make("pf-seat-1", Duration::ZERO), "one past the burst");
+        assert!(make("pf-seat-2", Duration::ZERO), "another seat");
+        assert!(!make("pf-seat-1", MADE_GAP / 2));
+        assert!(make("pf-seat-1", MADE_GAP));
+        assert!(!make("pf-seat-1", MADE_GAP));
+
+        let (mut held, mut due) = (HashMap::new(), HashMap::new());
+        assert!(admit_made(&mut held, &mut due, "pf-seat-1", 1, t0));
+        for _ in 0..MADE_BURST * 2 {
+            assert!(!admit_made(&mut held, &mut due, "pf-seat-1", 1, t0));
+        }
+        release(&mut held, "pf-seat-1");
+        assert!(admit_made(&mut held, &mut due, "pf-seat-1", 1, t0));
     }
 
     /// Unread connections: four per uid, sixteen in all, and a slot back once one is read.

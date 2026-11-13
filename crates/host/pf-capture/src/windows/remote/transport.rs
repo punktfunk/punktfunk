@@ -81,4 +81,7 @@ pub(crate) trait AuMemory: Send {
     unsafe fn share(&self) -> SectionView<'static>;
     /// Wait at most `timeout_ms` for a publish signal. The header is the truth.
     fn wait(&self, timeout_ms: u32);
+    /// A handle that raises the publish signal from any thread, so [`Self::wait`] returns.
+    /// It keeps the signal alive past this mapping.
+    fn signal(&self) -> Box<dyn Fn() + Send + Sync>;
 }

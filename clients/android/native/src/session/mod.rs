@@ -13,16 +13,21 @@ mod clipboard;
 mod connect;
 mod cursor;
 mod input;
+mod launch;
 mod planes;
 mod probe;
+mod slot;
 
 use punktfunk_core::client::NativeClient;
 use punktfunk_core::fp::{hex, parse_hex32};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
+use std::time::Duration;
+
+use slot::PlaneSlot;
 
 /// Run a JNI body, catching any panic at the FFI boundary and returning `default` instead.
 ///
@@ -56,7 +61,7 @@ pub(crate) struct SessionHandle {
     /// `nativeVideoStatsLines`. Session-lifetime (not per `VideoThread`) so the decoder label
     /// survives surface teardown and recreate.
     pub stats: Arc<crate::stats::VideoStats>,
-    video: Mutex<Option<VideoThread>>,
+    video: PlaneSlot<VideoThread>,
     /// Set by the first `nativeStartVideo`. A later one (a recreated surface) builds a decoder
     /// mid-stream, which must wait for a keyframe and ask for one.
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
@@ -65,16 +70,16 @@ pub(crate) struct SessionHandle {
     /// something must still pop the frame queue, or the standing-queue detector jumps to live and
     /// asks the host for a keyframe every `FLUSH_COOLDOWN` for the whole background stay. Reuses
     /// [`VideoThread`] because it is the same contract — a flag and a join.
-    drain: Mutex<Option<VideoThread>>,
+    drain: PlaneSlot<VideoThread>,
     #[cfg(target_os = "android")]
-    audio: Mutex<Option<crate::audio::AudioPlayback>>,
+    audio: PlaneSlot<crate::audio::AudioPlayback>,
     #[cfg(target_os = "android")]
-    mic: Mutex<Option<crate::mic::MicCapture>>,
+    mic: PlaneSlot<crate::mic::MicCapture>,
     /// Tier-A DualSense pad audio (the 0xD1 plane), started by `nativeStartPadAudio` once Kotlin
     /// has claimed the pad's audio interface and handed its descriptor over. Session-lifetime and
     /// `Option` because a session may have no wired DualSense at all, which is the common case.
     #[cfg(target_os = "android")]
-    pub(crate) pad_audio: Mutex<Option<crate::pad_audio::PadAudio>>,
+    pub(crate) pad_audio: PlaneSlot<crate::pad_audio::PadAudio>,
     /// In-stream mic mute, set via `nativeSetMicMuted` and read per 10 ms frame by the mic's
     /// encode loop ([`crate::mic`]). Session-lifetime rather than per-[`crate::mic::MicCapture`]
     /// for the same reason the stats gate is: the mic stops and restarts across a surface
@@ -217,11 +222,16 @@ pub(crate) fn unpack_surface_size(packed: u64) -> Option<(i32, i32)> {
 /// the full frame.
 pub(crate) fn pack_src_crop(left: f32, top: f32, right: f32, bottom: f32) -> u64 {
     let ok = |v: f32| (0.0..=1.0).contains(&v);
-    if !(ok(left) && ok(top) && ok(right) && ok(bottom)) || right <= left || bottom <= top {
+    if !(ok(left) && ok(top) && ok(right) && ok(bottom)) {
         return 0;
     }
     let q = |v: f32| u64::from((v * 65535.0).round() as u16);
-    (q(left) << 48) | (q(top) << 32) | (q(right) << 16) | q(bottom)
+    let (l, t, r, b) = (q(left), q(top), q(right), q(bottom));
+    // Judged as packed: a sliver narrower than one step would unpack as an empty rect.
+    if r <= l || b <= t {
+        return 0;
+    }
+    (l << 48) | (t << 32) | (r << 16) | b
 }
 
 /// The inverse of [`pack_src_crop`]: `[left, top, right, bottom]`, the full frame for `0`.
@@ -234,101 +244,157 @@ pub(crate) fn unpack_src_crop(packed: u64) -> [f32; 4] {
     [f(48), f(32), f(16), f(0)]
 }
 
+/// How long a stop waits for a video thread. Stops run on the UI thread, and a vendor codec
+/// call that hangs never returns; Android kills an app whose UI thread blocks for 5 s.
+const VIDEO_STOP_WAIT: Duration = Duration::from_secs(2);
+
+/// A video worker thread. Dropping it raises `shutdown` and joins the thread, or leaves it to
+/// finish alone once [`VIDEO_STOP_WAIT`] has passed.
 struct VideoThread {
     shutdown: Arc<AtomicBool>,
+    /// Disconnects when the thread's body returns.
+    done: mpsc::Receiver<()>,
     join: Option<JoinHandle<()>>,
 }
 
-impl SessionHandle {
-    /// Stop and join the decode thread once, recovering a poisoned slot during teardown.
-    fn stop_video(&self) {
-        if let Some(mut vt) = lock_recover(&self.video).take() {
-            vt.shutdown.store(true, Ordering::SeqCst);
-            if let Some(j) = vt.join.take() {
-                let _ = j.join();
-            }
-        }
-    }
-
-    /// Run the keep-alive AU drain, replacing any already running. Pops video AUs and discards
-    /// them so the queue never stands: no jump-to-live, no keyframe cadence, and the host keeps
-    /// pacing against a client that is still reading.
-    pub(crate) fn start_drain(&self) {
-        self.stop_drain();
-        let client = self.client.clone();
+impl VideoThread {
+    /// Runs `body` on a thread named `name`, handing it the shutdown flag.
+    fn spawn(
+        name: &str,
+        body: impl FnOnce(Arc<AtomicBool>) + Send + 'static,
+    ) -> std::io::Result<VideoThread> {
         let shutdown = Arc::new(AtomicBool::new(false));
         let sd = shutdown.clone();
-        let spawned = std::thread::Builder::new()
-            .name("pf-video-drain".into())
+        let (done_tx, done) = mpsc::channel::<()>();
+        let join = std::thread::Builder::new()
+            .name(name.into())
             .spawn(move || {
-                while !sd.load(Ordering::Relaxed) {
-                    // `NoFrame` is the 5 ms timeout — re-check the flag and poll again. Anything
-                    // else is a closed session, and there is nothing left to drain.
-                    match client.next_frame(std::time::Duration::from_millis(5)) {
-                        Ok(_) => {}
-                        Err(punktfunk_core::PunktfunkError::NoFrame) => {}
-                        Err(_) => break,
-                    }
-                }
+                let _done = done_tx;
+                body(sd);
+            })?;
+        Ok(VideoThread {
+            shutdown,
+            done,
+            join: Some(join),
+        })
+    }
+}
+
+impl Drop for VideoThread {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        let Some(j) = self.join.take() else {
+            return;
+        };
+        if self.done.recv_timeout(VIDEO_STOP_WAIT) == Err(mpsc::RecvTimeoutError::Timeout) {
+            log::warn!(
+                "video thread left running past the stop wait thread={} wait_ms={}",
+                j.thread().name().unwrap_or("?"),
+                VIDEO_STOP_WAIT.as_millis()
+            );
+            return;
+        }
+        let _ = j.join();
+    }
+}
+
+/// Pops video AUs and drops them until `shutdown` is set or the session closes, so the queue
+/// never stands: no jump-to-live, no keyframe cadence, and the host keeps pacing against a
+/// client that is still reading. `pop` waits for its own timeout, which is the loop's only wait.
+pub(crate) fn drain_frames<T>(
+    shutdown: &AtomicBool,
+    mut pop: impl FnMut() -> Result<T, punktfunk_core::PunktfunkError>,
+) {
+    while !shutdown.load(Ordering::Relaxed) {
+        // `NoFrame` is the timeout: re-check the flag and poll again. Anything else is a closed
+        // session, and there is nothing left to drain.
+        match pop() {
+            Ok(_) | Err(punktfunk_core::PunktfunkError::NoFrame) => {}
+            Err(_) => break,
+        }
+    }
+}
+
+impl SessionHandle {
+    /// Run the keep-alive AU drain ([`drain_frames`]), replacing any already running.
+    pub(crate) fn start_drain(&self) {
+        let client = self.client.clone();
+        self.drain.replace(|| {
+            let spawned = VideoThread::spawn("pf-video-drain", move |sd| {
+                drain_frames(&sd, || client.next_frame(Duration::from_millis(5)));
             });
-        match spawned {
-            Ok(join) => {
-                *lock_recover(&self.drain) = Some(VideoThread {
-                    shutdown,
-                    join: Some(join),
-                });
+            match spawned {
+                Ok(thread) => Some(thread),
+                Err(e) => {
+                    log::error!("video drain thread spawn failed: {e}");
+                    None
+                }
             }
-            Err(e) => log::error!("video drain thread spawn failed: {e}"),
-        }
-    }
-
-    /// Stop and join the keep-alive drain once. No-op when none runs.
-    pub(crate) fn stop_drain(&self) {
-        if let Some(mut dt) = lock_recover(&self.drain).take() {
-            dt.shutdown.store(true, Ordering::SeqCst);
-            if let Some(j) = dt.join.take() {
-                let _ = j.join();
-            }
-        }
-    }
-
-    /// Drop audio playback once; its destructor joins decode and closes AAudio.
-    #[cfg(target_os = "android")]
-    fn stop_audio(&self) {
-        let _ = lock_recover(&self.audio).take();
-    }
-
-    /// Drop mic capture once; its destructor joins encode and closes AAudio.
-    #[cfg(target_os = "android")]
-    fn stop_mic(&self) {
-        let _ = lock_recover(&self.mic).take();
+        });
     }
 
     /// Drop pad audio once and join its renderer before Kotlin closes the USB connection.
     #[cfg(target_os = "android")]
     pub(crate) fn stop_pad_audio(&self) {
-        let _ = lock_recover(&self.pad_audio).take();
+        self.pad_audio.stop();
     }
 }
 
 impl Drop for SessionHandle {
     fn drop(&mut self) {
-        self.stop_video();
-        self.stop_drain();
+        self.video.stop();
+        self.drain.stop();
         #[cfg(target_os = "android")]
-        self.stop_audio();
+        self.audio.stop();
         #[cfg(target_os = "android")]
-        self.stop_mic();
+        self.mic.stop();
         #[cfg(target_os = "android")]
         self.stop_pad_audio();
+        // A video thread left stuck in a codec call still holds the client; close regardless.
+        self.client.close();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        pack_src_crop, pack_surface_size, unpack_src_crop, unpack_surface_size, HandleTable,
+        drain_frames, pack_src_crop, pack_surface_size, unpack_src_crop, unpack_surface_size,
+        HandleTable,
     };
+    use punktfunk_core::PunktfunkError;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// The drain takes frames and timeouts alike, ends on a closed session at once, and never
+    /// pops once stopped.
+    #[test]
+    fn drain_pops_until_closed_or_stopped() {
+        let stop = AtomicBool::new(false);
+        let mut script = vec![
+            Ok(1),
+            Err(PunktfunkError::NoFrame),
+            Ok(2),
+            Err(PunktfunkError::Closed),
+            Ok(3),
+        ]
+        .into_iter();
+        let mut pops = 0;
+        drain_frames(&stop, || {
+            pops += 1;
+            script.next().unwrap()
+        });
+        assert_eq!(pops, 4, "the pop after Closed is never made");
+
+        let mut pops = 0;
+        drain_frames(&stop, || {
+            pops += 1;
+            stop.store(true, Ordering::Relaxed);
+            Ok(())
+        });
+        assert_eq!(pops, 1, "the flag ends the loop after the pop that saw it");
+        drain_frames(&stop, || -> Result<(), PunktfunkError> {
+            panic!("a stopped drain pops nothing")
+        });
+    }
 
     /// A key resolves in its own table only until removed, and `0` never resolves.
     #[test]
@@ -377,6 +443,7 @@ mod tests {
         assert!((t - 0.102).abs() < 1e-4 && (b - 0.898).abs() < 1e-4);
         assert_eq!(unpack_src_crop(0), [0.0, 0.0, 1.0, 1.0]);
         assert_eq!(pack_src_crop(0.5, 0.0, 0.5, 1.0), 0);
+        assert_eq!(pack_src_crop(0.5, 0.0, 0.500_001, 1.0), 0);
         assert_eq!(pack_src_crop(-0.1, 0.0, 1.0, 1.0), 0);
         assert_eq!(pack_src_crop(0.0, 0.0, 1.0, f32::NAN), 0);
     }

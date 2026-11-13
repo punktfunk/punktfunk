@@ -7,6 +7,7 @@ use super::{saved, Screen, Svc};
 use crate::trust::KnownHosts;
 use pf_client_core::presets::PresetsFile;
 use pf_fluent::Token;
+use pf_l10n::{client, common, desktop};
 use windows_reactor::*;
 
 /// Speed-test lifecycle, root state: the probe worker completes it via `Svc::set_speed`, and
@@ -109,21 +110,21 @@ fn speed_page(props: &SpeedProps) -> View {
     let target = ctx.shared.target.lock().unwrap().clone();
     let back_btn = {
         let ss = set_screen.clone();
-        icon_button("arrow-left", "Close")
+        icon_button("arrow-left", common::common_close())
             .on_click(move || ss.call(Screen::Hosts))
             .horizontal_alignment(HorizontalAlignment::Center)
     };
     let headline = if target.host.name.is_empty() {
-        "Network speed test".to_string()
+        client::speedtest_title().to_string()
     } else {
-        format!("Network speed test \u{00B7} {}", target.host.name)
+        desktop::desktop_speedtest_title_host(&target.host.name)
     };
 
     match &props.state {
         SpeedState::Running => busy_page(
             pal,
             &headline,
-            "Measuring the path over the real data plane \u{2014} a 2 s probe burst\u{2026}",
+            client::speedtest_measuring_body(),
             vec![back_btn.into()],
         ),
         SpeedState::Failed(msg) => {
@@ -133,7 +134,7 @@ fn speed_page(props: &SpeedProps) -> View {
                     .font_weight(FontWeight::SEMI_BOLD)
                     .horizontal_alignment(HorizontalAlignment::Center),
                 InfoBar::new()
-                    .title("Speed test failed")
+                    .title(client::speedtest_failed_title(&target.host.name))
                     .is_open(true)
                     .message(msg.clone())
                     .severity(InfoBarSeverity::Error)
@@ -204,31 +205,28 @@ fn speed_page(props: &SpeedProps) -> View {
             let mut buttons: Vec<View> = Vec::new();
             match &preset {
                 None => buttons.push(
-                    icon_button("check", format!("Use {recommended_mbps:.0} Mb/s"))
-                        .style(ButtonStyle::Accent)
-                        .on_click(write_global.clone())
-                        .into(),
-                ),
-                Some(p) if p.overrides.bitrate_kbps.is_some() => buttons.push(
                     icon_button(
                         "check",
-                        format!(
-                            "Set {recommended_mbps:.0} Mb/s in \u{201c}{}\u{201d}",
-                            p.name
-                        ),
+                        client::speedtest_use_rate(format!("{recommended_mbps:.0} Mbit/s")),
                     )
                     .style(ButtonStyle::Accent)
-                    .on_click(write_preset(p.id.clone()))
+                    .on_click(write_global.clone())
                     .into(),
+                ),
+                Some(p) if p.overrides.bitrate_kbps.is_some() => buttons.push(
+                    icon_button("check", client::speedtest_apply_to_preset(&p.name))
+                        .style(ButtonStyle::Accent)
+                        .on_click(write_preset(p.id.clone()))
+                        .into(),
                 ),
                 Some(p) => {
                     buttons.push(
-                        icon_button("check", "Set as default")
+                        icon_button("check", client::speedtest_set_default())
                             .on_click(write_global.clone())
                             .into(),
                     );
                     buttons.push(
-                        icon_button("check", format!("Set in \u{201c}{}\u{201d}", p.name))
+                        icon_button("check", client::speedtest_set_in_preset(&p.name))
                             .style(ButtonStyle::Accent)
                             .on_click(write_preset(p.id.clone()))
                             .into(),
@@ -237,7 +235,7 @@ fn speed_page(props: &SpeedProps) -> View {
             }
             buttons.push({
                 let ss = set_screen.clone();
-                icon_button("x", "Close")
+                icon_button("x", common::common_close())
                     .on_click(move || ss.call(Screen::Hosts))
                     .into()
             });
@@ -258,18 +256,19 @@ fn speed_page(props: &SpeedProps) -> View {
                         .font_weight(FontWeight::BOLD)
                         .horizontal_alignment(HorizontalAlignment::Center),
                     text(match clean {
-                        Some((rate, loss, jitter)) => format!(
-                            "at {rate:.0} Mbit/s \u{00B7} {loss:.1} % loss \u{00B7} {jitter:.1} ms jitter"
+                        Some((rate, loss, jitter)) => client::speedtest_clean_round_body(
+                            format!("{rate:.0} Mbit/s"),
+                            format!("{loss:.1}"),
+                            format!("{jitter:.1}"),
                         ),
-                        None => "measured".to_string(),
+                        None => desktop::desktop_speedtest_measured().to_string(),
                     })
-                        .font_size(12.0)
-                        .foreground(pal.get(Token::SecondaryText))
-                        .horizontal_alignment(HorizontalAlignment::Center),
-                    text(format!(
-                    "Recommended bitrate: {recommended_mbps:.0} Mb/s (\u{2248}70 % of measured, \
-                     leaving headroom for FEC and loss)"
-                ))
+                    .font_size(12.0)
+                    .foreground(pal.get(Token::SecondaryText))
+                    .horizontal_alignment(HorizontalAlignment::Center),
+                    text(client::speedtest_recommended_body(format!(
+                        "{recommended_mbps:.0} Mbit/s"
+                    )))
                     .font_size(12.0)
                     .foreground(pal.get(Token::SecondaryText))
                     .horizontal_alignment(HorizontalAlignment::Center),

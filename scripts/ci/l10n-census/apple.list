@@ -1,0 +1,142 @@
+clients/apple/PunktfunkWidgets/HostsWidget.swift	Living Room
+clients/apple/PunktfunkWidgets/LibraryWidget.swift	Choose Host
+clients/apple/PunktfunkWidgets/LibraryWidget.swift	Leave empty to follow your most recent host.
+clients/apple/PunktfunkWidgets/LibraryWidget.swift	Pick whose game library this widget opens.
+clients/apple/PunktfunkWidgets/SessionLiveActivity.swift	Hades II
+clients/apple/Sources/PunktfunkClient/Home/DemoMode.swift	Demo Host
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Connect to Host
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Connect to {} in {}
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	End Stream
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	End the {} stream
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Game ID
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Game Library
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Open Game Library
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Open a host's game library in Punktfunk, without starting a stream.
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Open {} library in {}
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Optional store id like steam:570
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Send a Wake-on-LAN magic packet to a host.
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Show {} games in {}
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Start a Punktfunk streaming session with a host.
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Stream {} with {}
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Wake Host
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Wake Host
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Wake {} with {}
+clients/apple/Sources/PunktfunkClient/Intents/SessionShortcuts.swift	Which settings preset to use — leave empty for the host's default
+clients/apple/Sources/PunktfunkClient/PunktfunkClientApp.swift	Curved screen
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Bedroom Mini
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	DualSense HID · Bluetooth
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	DualSense Wireless Controller
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Editing Rig
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Host cards
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Host page
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Library states
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Library tiles
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Living Room PC
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Living Room PC
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Office NUC
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Office NUC
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Press Menu to disconnect
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Speed test
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Streaming from Battlestation
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Studio PC
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	Xbox Wireless Controller
+clients/apple/Sources/PunktfunkClient/Screenshots/ScreenshotScenes.swift	⌘⎋ releases the mouse
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Bedroom Mini
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Bound preset
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Caption, most played
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Caption, recent
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Couldn't load the library — the host didn't answer
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Couldn't reach 192.168.1.20. It may be asleep, or streaming to
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Couldn't reach the host
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Custom, platform
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Default host
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Den Steam Deck
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Desktop tile
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Desktops row
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Desktops row, playing
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Discovered, pairing required
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Everything at once
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Hollow Knight
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Hollow Knight
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Keyboard cursor
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Live, one title up
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Living Room Gaming PC (behind the TV)
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Living Room PC
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Long title
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	No art
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	No paired host
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Not paired
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Not paired
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Office NUC
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Offline, MAC known
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Offline, MAC known
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Paired, playing, power granted
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Pinned preset card
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Remembered, offline
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Remembered, waking
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Resume Hollow Knight
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Resume tile
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Shut Down
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Starfall Vale
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Starfall Vale: Definitive Edition
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Studio PC
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Studio PC
+clients/apple/Sources/PunktfunkClient/Screenshots/ShotGallery.swift	Studio PC
+clients/apple/Sources/PunktfunkClient/Session/DisplaySleepGuard.swift	Punktfunk streaming session
+clients/apple/Sources/PunktfunkClient/Session/DisplaySleepGuard.swift	Punktfunk streaming session
+clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Adaptive triggers
+clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Adaptive triggers need a DualSense.
+clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Apply to
+clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Connect a controller and pick it under
+clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Heavy motor (left)
+clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Light motor (right)
+clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Lightbar & player LED
+clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	No controller
+clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Not an extended gamepad
+clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Pick an effect, then pull L2/R2 to feel the resistance.
+clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Player LED
+clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Settings → Controllers → Use controller.
+clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Test Controller
+clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Toggle a motor to feel it. The host maps a game's low/high-frequency
+clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	Test Controller…
+clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	⌘Space, ⌘Tab, Mission Control, …
+clients/apple/Sources/PunktfunkKit/Connection/ClientTLS.swift	Couldn't build the client identity: {}
+clients/apple/Sources/PunktfunkKit/Connection/ClientTLS.swift	Couldn't load the client certificate
+clients/apple/Sources/PunktfunkKit/Connection/ClientTLS.swift	Couldn't load the client key: {}
+clients/apple/Sources/PunktfunkKit/Connection/ClientTLS.swift	SecIdentityCreateWithCertificate (OSStatus {})
+clients/apple/Sources/PunktfunkKit/Connection/HostDiscovery.swift	Punktfunk host
+clients/apple/Sources/PunktfunkKit/Connection/MgmtTransport.swift	User-Agent: punktfunk-apple Accept: */*
+clients/apple/Sources/PunktfunkKit/Connection/ProfileUnlock.swift	Face ID
+clients/apple/Sources/PunktfunkKit/Connection/ProfileUnlock.swift	Optic ID
+clients/apple/Sources/PunktfunkKit/Connection/ProfileUnlock.swift	Touch ID
+clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Controller connected
+clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Left click
+clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Left stick
+clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Middle click
+clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Move, click, type or use a controller — the host draws it back here.
+clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Nothing yet
+clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Right click
+clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Right stick
+clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Scroll down
+clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Scroll down
+clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Scroll up
+clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Scroll up
+clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Streamed from the demo host running inside this app.
+clients/apple/Sources/PunktfunkKit/Gamepad/GamepadManager.swift	Steam Controller
+clients/apple/Sources/PunktfunkKit/Gamepad/PadType.swift	HORIPAD for Steam
+clients/apple/Sources/PunktfunkKit/Gamepad/PadType.swift	Steam Controller
+clients/apple/Sources/PunktfunkKit/Gamepad/PadType.swift	Steam Controller 2
+clients/apple/Sources/PunktfunkKit/Gamepad/PadType.swift	Steam Controller 2 Puck
+clients/apple/Sources/PunktfunkKit/Gamepad/PadType.swift	Xbox Elite Series 2
+clients/apple/Sources/PunktfunkKit/Gamepad/RumbleRenderer.swift	DualSense HID · {}
+clients/apple/Sources/PunktfunkKit/Gamepad/RumbleRenderer.swift	Lost the direct connection to this DualSense; using the system path.
+clients/apple/Sources/PunktfunkKit/Gamepad/RumbleRenderer.swift	The system haptics service is refusing connections — no app can rumble a
+clients/apple/Sources/PunktfunkKit/Gamepad/RumbleRenderer.swift	This controller exposes no rumble engine to apps on this OS.
+clients/apple/Sources/PunktfunkKit/Gamepad/RumbleRenderer.swift	This device has no haptic actuator.
+clients/apple/Sources/PunktfunkKit/Gamepad/RumbleRenderer.swift	controller right now. Rebooting the device usually clears it.
+clients/apple/Sources/PunktfunkKit/Gamepad/Sc2UsbLink.swift	— not permitted (Input Monitoring)
+clients/apple/Sources/PunktfunkKit/Support/ClientLog.swift	{}; {}) — client log bundle
+clients/apple/Sources/PunktfunkKit/Support/ClientLog.swift	… {} older lines evicted from the ring …
+clients/apple/Sources/PunktfunkShared/ProfileEntity.swift	Settings Preset
+clients/apple/Sources/PunktfunkShared/SessionIntents.swift	End Punktfunk Stream
+clients/apple/Sources/PunktfunkShared/SessionIntents.swift	Ends the active Punktfunk streaming session.

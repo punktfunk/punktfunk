@@ -8,7 +8,6 @@ pub(crate) mod add_host;
 pub(crate) mod bind_preset;
 pub(crate) mod card_menu;
 pub(crate) mod collections;
-pub(crate) mod controls;
 pub(crate) mod grants;
 pub(crate) mod home;
 pub(crate) mod input_test;
@@ -27,6 +26,7 @@ pub(crate) mod ring_editor;
 pub(crate) mod search;
 pub(crate) mod settings;
 pub(crate) mod shortcut_editor;
+pub(crate) mod shortcuts;
 pub(crate) mod unlock;
 
 use crate::glyphs::Hint;
@@ -70,6 +70,8 @@ pub struct Device {
     /// Host has a fallback UI ([`crate::shell::ConsoleOptions::fallback_ui`]); gates the
     /// console-off row.
     pub fallback_ui: bool,
+    /// The host hides titles for this device ([`crate::shell::ConsoleOptions::hides`]).
+    pub hides: bool,
     /// This device decodes PyroWave ([`crate::shell::ConsoleOptions::pyrowave_ok`]).
     /// False marks the codec row's PyroWave value unsupported.
     pub pyrowave_ok: bool,
@@ -78,6 +80,9 @@ pub struct Device {
     pub av1_ok: bool,
     /// Name the host stores this client under when pairing.
     pub name: String,
+    /// This device's code ([`crate::shell::ConsoleOptions::device_code`]), shown while a
+    /// request waits for approval.
+    pub code: Option<String>,
     /// The About row's version ([`crate::shell::ConsoleOptions::version`]).
     pub version: String,
 }
@@ -101,6 +106,22 @@ pub struct Ctx<'a> {
     pub ui: &'a crate::theme::Frame,
 }
 
+impl Device {
+    /// Apple with no handheld screen, no TV and no room around it.
+    pub(crate) fn is_mac(&self) -> bool {
+        self.platform == crate::platform::Platform::Apple
+            && self.screen.is_none()
+            && !self.tv
+            && !self.spatial
+    }
+
+    /// Whether the app may close itself: the platform's answer, and a Mac's, which the one
+    /// Apple platform cannot give for the iPhone, the TV and the Vision Pro.
+    pub(crate) fn can_quit(&self) -> bool {
+        self.platform.can_quit() || self.is_mac()
+    }
+}
+
 #[cfg(test)]
 impl Device {
     /// A desktop that decodes everything, named `test`.
@@ -113,9 +134,11 @@ impl Device {
             tv: false,
             spatial: false,
             fallback_ui: false,
+            hides: true,
             pyrowave_ok: true,
             av1_ok: true,
             name: "test".into(),
+            code: None,
             version: crate::VERSION.into(),
         }
     }
@@ -209,6 +232,14 @@ impl TextEntry {
         }
     }
 
+    /// [`Self::secret`] for a PIN: the tray is a number pad.
+    pub(crate) fn secret_digits() -> TextEntry {
+        TextEntry {
+            keyboard: Keyboard::pad(),
+            ..TextEntry::secret()
+        }
+    }
+
     /// The device's own keyboard types into this field.
     fn system(&self, device: &Device) -> bool {
         device.system_keyboard && !self.secret
@@ -252,13 +283,14 @@ impl TextEntry {
     /// The height the tray takes from the bottom of the screen: the keys, and the open
     /// field's slot over them, each with its gap.
     pub(crate) fn reserve(&self, k: f64) -> f64 {
-        (Keyboard::tray_height() + 12.0 + ROW_H + 12.0) * k * self.seat
+        (self.keyboard.tray_height() + 12.0 + ROW_H + 12.0) * k * self.seat
     }
 
     /// The open field's slot for [`crate::widgets::MenuList::lift`]: its top, riding the
     /// tray just over the keys, and how far the tray is up. `None` while it is down.
     pub(crate) fn lift(&self, rect: Rect, k: f64) -> Option<(f32, f64)> {
-        let top = f64::from(rect.bottom) - (Keyboard::tray_height() + 12.0 + ROW_H) * k * self.seat;
+        let tray = self.keyboard.tray_height();
+        let top = f64::from(rect.bottom) - (tray + 12.0 + ROW_H) * k * self.seat;
         (self.seat > 0.0).then_some((top as f32, self.seat.min(1.0)))
     }
 
@@ -283,18 +315,21 @@ impl TextEntry {
         use crate::glyphs::HintKey;
         if !self.system(device) {
             return vec![
-                Hint::new(HintKey::Confirm, "Type"),
-                Hint::new(HintKey::Tertiary, "Delete"),
-                Hint::new(HintKey::Back, "Done"),
+                Hint::new(HintKey::Confirm, pf_l10n::console::console_entry_type()),
+                Hint::new(HintKey::Tertiary, pf_l10n::common::common_delete()),
+                Hint::new(HintKey::Back, pf_l10n::common::common_done()),
             ];
         }
         let mut hints = vec![
             Hint::new(HintKey::Confirm, done),
-            Hint::new(HintKey::Back, "Done"),
+            Hint::new(HintKey::Back, pf_l10n::common::common_done()),
         ];
         // The one desktop session whose own keyboard types is a Steam Deck's.
         if device.platform == crate::platform::Platform::Desktop {
-            hints.insert(0, Hint::new(HintKey::Key("STEAM + X"), "Keyboard"));
+            hints.insert(
+                0,
+                Hint::new(HintKey::Key("STEAM + X"), pf_l10n::client::ring_keyboard()),
+            );
         }
         hints
     }
@@ -498,14 +533,18 @@ pub(crate) enum Screen {
     PadMenu(pad_menu::PadMenuScreen),
     /// A question the app asks through the console ([`prompt::Prompt`]).
     Prompt(prompt::PromptScreen),
-    /// The stream controls. Raised by the About section.
-    Controls(controls::ControlsScreen),
+    /// The in-stream shortcuts. Raised by the Shortcuts settings row.
+    Shortcuts(shortcuts::ShortcutsScreen),
+    /// One shortcut: its action, buttons or keys, press or hold. Raised by a Shortcuts row.
+    ShortcutRow(Box<shortcuts::ShortcutRowScreen>),
     /// Open-source licences. Raised by the About section.
     Licenses(licenses::LicensesScreen),
     /// A title search over one host's shelf. Raised by the shelf's Search pill.
     Search(search::SearchScreen),
     /// A preset's menu: edit, rename, pin, delete. Raised by its Presets row.
     PresetMenu(preset::PresetMenu),
+    /// Where a new preset starts: empty, or a starter. Raised by New preset.
+    PresetStarter(preset::PresetStarter),
     /// A preset's name, new or renamed.
     PresetName(preset::PresetName),
     /// A preset's settings over the global ones.
@@ -602,10 +641,12 @@ impl Screen {
             Screen::Grants(s) => s,
             Screen::PadMenu(s) => s,
             Screen::Prompt(s) => s,
-            Screen::Controls(s) => s,
+            Screen::Shortcuts(s) => s,
+            Screen::ShortcutRow(s) => &**s,
             Screen::Licenses(s) => s,
             Screen::Search(s) => s,
             Screen::PresetMenu(s) => s,
+            Screen::PresetStarter(s) => s,
             Screen::PresetName(s) => s,
             Screen::PresetEdit(s) => s,
             Screen::InputTest(s) => s,
@@ -632,10 +673,12 @@ impl Screen {
             Screen::Grants(s) => s,
             Screen::PadMenu(s) => s,
             Screen::Prompt(s) => s,
-            Screen::Controls(s) => s,
+            Screen::Shortcuts(s) => s,
+            Screen::ShortcutRow(s) => &mut **s,
             Screen::Licenses(s) => s,
             Screen::Search(s) => s,
             Screen::PresetMenu(s) => s,
+            Screen::PresetStarter(s) => s,
             Screen::PresetName(s) => s,
             Screen::PresetEdit(s) => s,
             Screen::InputTest(s) => s,
@@ -749,5 +792,46 @@ mod tests {
         assert!(keys(true, Platform::Apple) == [HintKey::Confirm, HintKey::Back]);
         assert!(!keys(false, Platform::Desktop).contains(&steam));
         assert!(keys(false, Platform::Apple).contains(&HintKey::Tertiary));
+    }
+
+    /// The one Apple platform quits on a Mac and nowhere else it runs: an iPhone or iPad
+    /// (it has a screen), an Apple TV and a Vision Pro close from the system, not the app.
+    #[test]
+    fn only_a_mac_among_the_apple_devices_can_quit() {
+        let apple = Device {
+            platform: Platform::Apple,
+            ..Device::test()
+        };
+        let handheld = Some(crate::shell::DeviceScreen {
+            full: (2868, 1320),
+            safe: (2868, 1320),
+        });
+        assert!(apple.can_quit(), "Mac");
+        for (name, device) in [
+            (
+                "iOS",
+                Device {
+                    screen: handheld,
+                    ..apple.clone()
+                },
+            ),
+            (
+                "tvOS",
+                Device {
+                    tv: true,
+                    ..apple.clone()
+                },
+            ),
+            (
+                "visionOS",
+                Device {
+                    spatial: true,
+                    ..apple.clone()
+                },
+            ),
+        ] {
+            assert!(!device.can_quit(), "{name}");
+        }
+        assert!(Device::test().can_quit(), "desktop");
     }
 }

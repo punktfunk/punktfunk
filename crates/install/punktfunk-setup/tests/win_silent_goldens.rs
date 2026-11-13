@@ -55,8 +55,8 @@ fn transcript(
         web_password: None,
         subst: Subst::default(),
     };
-    let outcome =
-        silent::run(&exec, facts, artifact, uninstall, args, &Env::default()).map_err(|f| f.0);
+    let env = Env::of(&[("COMPUTERNAME", "PUNKT-PC")]);
+    let outcome = silent::run(&exec, facts, artifact, uninstall, args, &env).map_err(|f| f.0);
     let text = buf.borrow().clone();
     (outcome, text)
 }
@@ -84,7 +84,7 @@ fn golden_silent_public_warns_and_never_touches_the_profile() {
     );
     assert_eq!(outcome, Ok(()));
     golden("win-silent-public", &text);
-    assert!(text.contains("!! network 'Netzwerk 2' is set to Public"));
+    assert!(text.contains("!! Network 'Netzwerk 2' is set to Public"));
     assert!(!text.contains("would set network"));
     assert!(!text.contains("--allow-public-network=on"));
 }

@@ -1,13 +1,11 @@
-// The app's "Stream" menu (macOS menu bar + iPad hardware-keyboard shortcuts). These live at
-// the Scene level so they keep working when the HUD overlay is hidden. The shortcuts are the
-// CROSS-CLIENT set every punktfunk client reserves — Ctrl+Alt+Shift+Q (release the captured
-// mouse) / +D (disconnect) / +S (stats), plus +A (mute the microphone), the Apple clients'
-// addition to it — and the menu is their discoverable surface on macOS
-// (the Linux client has its GTK Shortcuts window, Windows its start-of-stream banner). While
-// input is CAPTURED these key equivalents never reach the menu (the stream view swallows
-// keys); InputCapture's monitor detects the same combos there and performs the same actions —
-// the menu covers the released state and discoverability. The stats item cycles the focused
-// window's session tier (off → compact → normal → detailed → off).
+// The app's "Stream" menu: the menu bar on macOS, the app menu on iPad and Vision Pro. It lives
+// at the Scene level so it keeps working while the HUD is hidden. The stats item cycles the
+// focused window's session tier (off → compact → normal → detailed → off).
+//
+// InputCapture's shortcut engine runs the keyboard shortcuts in both capture states, from the
+// player's own bindings. On macOS its key monitor sees each key before any menu, and the key
+// equivalents here name the default chords. On iPadOS and visionOS GCKeyboard is the key path and
+// a menu key equivalent is a second dispatch of the same press, so the items there carry none.
 //
 // tvOS has no menu bar / hardware-keyboard command surface (disconnect there is the Siri
 // Remote's Menu button, handled by ContentView's `.onExitCommand`), so this whole file is
@@ -15,6 +13,7 @@
 
 #if !os(tvOS)
 import PunktfunkKit
+import PunktfunkShared
 import SwiftUI
 
 /// The live session's menu-reachable actions, published by ContentView via
@@ -51,59 +50,65 @@ extension FocusedValues {
 struct StreamCommands: Commands {
     @FocusedValue(\.sessionFocus) private var session
 
+    /// The ⌃⌥⇧ key equivalent of an item: macOS only (see the file header).
+    private func chord(_ key: KeyEquivalent) -> KeyboardShortcut? {
+        #if os(macOS)
+        KeyboardShortcut(key, modifiers: [.control, .option, .shift])
+        #else
+        nil
+        #endif
+    }
+
     var body: some Commands {
-        CommandMenu("Stream") {
+        CommandMenu(L10n.appleMenuStream) {
             // From the focused session's own tier: a preset that starts a session on Detailed
             // cycles to Off from here, whatever the global default is.
-            Button("Cycle Statistics") { session?.cycleStats() }
-            .keyboardShortcut("s", modifiers: [.control, .option, .shift])
+            Button(L10n.appleMenuCycleStatistics) { session?.cycleStats() }
+            .keyboardShortcut(chord("s"))
             .disabled(session?.isStreaming != true)
             // Reaches the key window's stream view via NotificationCenter — capture is view
-            // state the Scene can't touch directly. (Captured, the combo is handled by
-            // InputCapture's monitor before menus see it; this item is the released-state
-            // path and the shortcut's menu-bar documentation.)
-            Button("Release Mouse") {
+            // state the Scene can't touch directly.
+            Button(L10n.appleMenuReleaseMouse) {
                 NotificationCenter.default.post(name: .punktfunkReleaseCapture, object: nil)
             }
-            .keyboardShortcut("q", modifiers: [.control, .option, .shift])
+            .keyboardShortcut(chord("q"))
             .disabled(session?.isStreaming != true)
             // Mic mute: local and instant, it gates capture on this device and never asks the host.
             // Per session, so it starts off every time. Greyed when the session sends no microphone
-            // (mic off in Settings, or a preset that turns it off). Captured, InputCapture's chord
-            // path handles the combo first; this item is the released-state path and documents it.
-            Button(session?.micMuted == true ? "Unmute Microphone" : "Mute Microphone") {
+            // (mic off in Settings, or a preset that turns it off).
+            Button(session?.micMuted == true ? L10n.appleMenuUnmuteMicrophone : L10n.appleMenuMuteMicrophone) {
                 session?.toggleMicMute()
             }
-            .keyboardShortcut("a", modifiers: [.control, .option, .shift])
+            .keyboardShortcut(chord("a"))
             .disabled(session?.isStreaming != true || session?.micAvailable != true)
             // Mid-session clipboard flip (design/clipboard-and-file-transfer.md §5.3). Greyed
-            // when the host doesn't advertise the cap (older host / operator policy off). Captured,
-            // InputCapture's chord path handles the combo first; this item is the released path.
-            Button(session?.clipboardOn == true ? "Stop Sharing Clipboard" : "Share Clipboard") {
+            // when the host doesn't advertise the cap (older host / operator policy off).
+            Button(session?.clipboardOn == true ? L10n.appleMenuStopSharingClipboard
+                : L10n.appleMenuShareClipboard) {
                 session?.toggleClipboard()
             }
-            .keyboardShortcut("c", modifiers: [.control, .option, .shift])
+            .keyboardShortcut(chord("c"))
             .disabled(session?.isStreaming != true || session?.clipboardAvailable != true)
             #if os(macOS)
             // The quick-action ring (design/touch-client-overlay.md §2). A Mac has no two-finger
             // twist, so this menu item and its ⌃⌥⇧O — the desktop clients' own chord for the ring
-            // — are how it opens; a pad opens it with Select+A. Captured, InputCapture's monitor
-            // catches the combo and toggles the same ring.
-            Button("Quick Actions") { session?.toggleQuickActions() }
-            .keyboardShortcut("o", modifiers: [.control, .option, .shift])
+            // — are how it opens; a pad opens it with Select+A. InputCapture's monitor catches the
+            // combo first and toggles the same ring.
+            Button(L10n.appleMenuQuickActions) { session?.toggleQuickActions() }
+            .keyboardShortcut(chord("o"))
             .disabled(session?.isStreaming != true)
             // Toggle the window's fullscreen. ⌃⌘F is the macOS-standard fullscreen combo; here it's
             // explicit so it's discoverable. A captured stream view swallows keys, so with Capture
             // system shortcuts off InputCapture's monitor posts the same notification; with it on,
             // ⌃⌘F goes to the host.
-            Button("Toggle Fullscreen") {
+            Button(L10n.appleMenuToggleFullscreen) {
                 NotificationCenter.default.post(name: .punktfunkToggleFullscreen, object: nil)
             }
             .keyboardShortcut("f", modifiers: [.control, .command])
             #endif
             Divider()
-            Button("Disconnect") { session?.disconnect() }
-                .keyboardShortcut("d", modifiers: [.control, .option, .shift])
+            Button(L10n.appleMenuDisconnect) { session?.disconnect() }
+                .keyboardShortcut(chord("d"))
                 .disabled(session?.isStreaming != true)
         }
     }

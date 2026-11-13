@@ -7,10 +7,11 @@
 //! serves. Linux adds users with their own logind session, one systemd unit per seat and the
 //! Unix socket the `punktfunk-seats` daemon serves.
 
-// `linux::pam` alone allows it: the libpam calls.
+// Allowed in `linux::pam` (libpam), `linux::login` (the login helper's signals and privilege
+// drop), `linux::handover`'s `SO_PEERPIDFD` read and `linux::loopback`'s `bpf(2)` call.
 #![cfg_attr(not(windows), deny(unsafe_code))]
 
-mod attempts;
+pub mod attempts;
 pub mod backend;
 pub mod backoff;
 #[cfg(any(windows, test))]
@@ -22,6 +23,7 @@ pub mod ipc;
 /// The Linux half. Its tests run wherever Unix does; only the daemon needs Linux.
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub mod linux;
+pub mod locks;
 pub mod logging;
 pub mod model;
 pub mod persistence;
@@ -29,6 +31,9 @@ pub mod pin;
 /// The Windows supervisor's pure half, declared here so its tests run on every target.
 #[path = "windows/step.rs"]
 mod seat_step;
+/// Seats on and off on Windows as a pure plan, declared here so its tests run on every target.
+#[path = "windows/switch.rs"]
+mod seat_switch;
 mod secret;
 pub mod service;
 pub mod steam;

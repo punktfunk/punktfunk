@@ -132,8 +132,12 @@ pub struct AuHeader {
     /// rate nothing encodes. Occupies the old `_reserved` at offset 96; `0` is a driver
     /// that predates the stamp, and the host keeps the rate it asked for.
     pub applied_bitrate_kbps: u32,
+    /// `1`: the driver honours [`SetEncodeRequest::framing`](super::SetEncodeRequest::framing),
+    /// stamped before the `SET_ENCODE` reply. Carved from `_reserved`, which the host zeroes:
+    /// `0` is a v9 driver, which opened the surface at its own size whatever was asked.
+    pub frames_input: u32,
     /// Pads the header to [`AU_HEADER_SIZE`]; zero.
-    pub _reserved: [u8; 28],
+    pub _reserved: [u8; 24],
 }
 
 /// One slot: where an access unit (or one chunk of one) sits in the heap, and what the host
@@ -334,7 +338,8 @@ const _: () = {
     assert!(offset_of!(AuHeader, driver_status) == 88);
     assert!(offset_of!(AuHeader, driver_status_detail) == 92);
     assert!(offset_of!(AuHeader, applied_bitrate_kbps) == 96);
-    assert!(offset_of!(AuHeader, _reserved) == 100);
+    assert!(offset_of!(AuHeader, frames_input) == 100);
+    assert!(offset_of!(AuHeader, _reserved) == 104);
 
     assert!(size_of::<AuSlot>() == AU_SLOT_SIZE);
     assert!(offset_of!(AuSlot, offset) == 0);
@@ -393,7 +398,8 @@ mod tests {
         assert_eq!(offset_of!(AuHeader, driver_status_detail), 92);
         // Carved out of `_reserved`, which the host still zeroes: an older driver leaves it 0.
         assert_eq!(offset_of!(AuHeader, applied_bitrate_kbps), 96);
-        assert_eq!(offset_of!(AuHeader, _reserved), 100);
+        assert_eq!(offset_of!(AuHeader, frames_input), 100);
+        assert_eq!(offset_of!(AuHeader, _reserved), 104);
 
         assert_eq!(size_of::<AuSlot>(), 48);
         assert_eq!(offset_of!(AuSlot, offset), 0);

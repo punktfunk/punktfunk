@@ -60,7 +60,7 @@ let
   hostSettingsFile = pkgs.writeText "punktfunk-host.env" (renderEnv cfg.host.settings);
 
   # The owner's row runs the owner's host from seat-session, not from the user unit, so it takes
-  # the same settings and the `gamestream` flag as a file: seat-session sources it for the owner
+  # the same settings and the `gamestream` flag as a file: seat-session reads it for the owner
   # alone (PUNKTFUNK_OWNER_ENV), so a seat of its own never sees them.
   ownerSettingsFile = pkgs.writeText "punktfunk-owner.env" (
     renderEnv (cfg.host.settings // lib.optionalAttrs cfg.host.gamestream { PUNKTFUNK_GAMESTREAM = true; })
@@ -498,6 +498,24 @@ in
         "uhid"
         "vhci-hcd"
       ];
+      # A connected Steam Frame wireless adapter stays out of power save, which drops the headset
+      # link. The dispatcher gives its scripts no PATH, so the hook gets the tools it names.
+      networking.networkmanager.dispatcherScripts = mkIf config.networking.networkmanager.enable [
+        {
+          source = pkgs.writeShellScript "90-punktfunk-frame-adapter" ''
+            export PATH=${
+              lib.makeBinPath [
+                pkgs.coreutils
+                pkgs.gawk
+                pkgs.iw
+                pkgs.networkmanager
+                pkgs.util-linux
+              ]
+            }
+            exec ${pkgs.runtimeShell} ${cfg.host.package}/lib/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter "$@"
+          '';
+        }
+      ];
 
       # `input` group membership for the virtual-gamepad nodes (mirrors the RPM's usermod hint).
       #
@@ -571,6 +589,8 @@ in
         capabilities = "cap_sys_nice=ep";
         owner = "root";
         group = "root";
+        # Readable: the host opens the wrapper to pin its inode, then execs that fd.
+        permissions = "u+rx,g+rx,o+rx";
       };
 
       # CPU-side thread priority for the host's data-plane threads (capture/encode/send and the
@@ -747,6 +767,8 @@ in
         # Each plugin runs inside its own `bwrap` sandbox, built by the runner.
         path = [ pkgs.bubblewrap ];
       };
+      # A seat on a person's own account: its host starts this as that person.
+      systemd.user.services."punktfunk-scripting-seat@".path = [ pkgs.bubblewrap ];
     })
 
     # --- seat supervisor -----------------------------------------------------------------------
@@ -783,6 +805,11 @@ in
       # packaging/linux/punktfunk-seats-user.conf: a lingering owner's units wait for the contract.
       systemd.services."user@".after = [ "punktfunk-seats.service" ];
 
+      # The login helper's PAM service: the box's own `login` stack. The wallet lines name
+      # modules by bare name, which NixOS doesn't resolve, so they are skipped here; a `login`
+      # with the wallet enabled brings it.
+      security.pam.services.punktfunk-seat.text = builtins.readFile ../linux/punktfunk-seat.pam;
+
       systemd.services."punktfunk-seat@" = {
         path = seatPath;
         # seat-session starts this host; the packaged default is /usr/bin/punktfunk-host.
@@ -812,15 +839,10 @@ in
         "${cfg.web.package}/bin/punktfunk-web-server"
       ];
       # The door's console binds where `web.bind` says, as the user's does. The packaged list
-      # starts with the door's host.env copy, which would beat it: the empty entry clears the
-      # list and the rest is the packaged order.
+      # holds the door's host.env copy, which would beat it: the empty entry clears the list.
+      # The console reads the door's own files itself (the unit's PUNKTFUNK_ENV_FILES).
       systemd.services.punktfunk-web-door.environment.PUNKTFUNK_UI_BIND = cfg.web.bind;
-      systemd.services.punktfunk-web-door.serviceConfig.EnvironmentFile = [
-        ""
-        "-/var/lib/punktfunk/mgmt-token"
-        "-/var/lib/punktfunk/web-password"
-        "-/var/lib/punktfunk/mgmt-endpoint"
-      ];
+      systemd.services.punktfunk-web-door.serviceConfig.EnvironmentFile = [ "" ];
       # NixOS ignores a packaged unit's [Install] and can't write its unit directory, so the
       # helper's `systemctl enable` has no effect. The units are wanted here, and their own
       # condition keeps them off without the owner record.
@@ -842,8 +864,12 @@ in
       systemd.services."punktfunk-door-off@".path = seatPath;
 
       # Members of this group may start the helper templates; the helper refuses anyone else. The
-      # polkit rule is the package's own file, which other distros read from /usr/share.
+      # polkit rule is the package's own file, which other distros read from /usr/share. Turning
+      # seats on is the opt-in the other distros ask for with `usermod`, so `host.users` join it.
       users.groups.punktfunk-update = { };
+      users.users = genAttrs cfg.host.users (_: {
+        extraGroups = [ "punktfunk-update" ];
+      });
       # The door user's own group, in place of `punktfunk`, which owns the usbip attach nodes.
       users.groups.punktfunk-door = { };
       security.polkit.enable = mkDefault true;

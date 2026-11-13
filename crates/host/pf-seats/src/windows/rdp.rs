@@ -24,7 +24,9 @@ pub(super) fn require_live(host_path: &Path, pin: [u8; 32]) -> WinResult<()> {
 
 fn require_same(live: Option<[u8; 32]>, pin: [u8; 32]) -> WinResult<()> {
     match live {
-        Some(live) if live != pin => Err(backend_error("rdp_pin_changed", PIN_CHANGED)),
+        Some(live) if live != pin => {
+            Err(backend_error("rdp_pin_changed", PIN_CHANGED).said("rdp_pin_changed"))
+        }
         _ => Ok(()),
     }
 }
@@ -34,11 +36,12 @@ pub(super) fn parse_pin(text: &str) -> Option<[u8; 32]> {
     hex::decode(text.trim()).ok()?.try_into().ok()
 }
 
-/// Record `pin`, refusing to replace a different stored pin unless `replace` is set.
+/// Record `pin`, refusing to replace a different stored pin unless `replace` is set. With
+/// `replace` the stored file is never read, so one that no longer parses is replaced too.
 pub fn store_pin(root: &SecretRoot, pin: [u8; 32], replace: bool) -> WinResult<()> {
-    if let Some(existing) = load_pin_optional(root)?
+    if !replace
+        && let Some(existing) = load_pin_optional(root)?
         && existing != pin
-        && !replace
     {
         return Err(backend_error(
             "rdp_pin_changed",
@@ -91,7 +94,23 @@ pub(super) fn load_pin_optional(root: &SecretRoot) -> WinResult<Option<[u8; 32]>
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_pin, require_same};
+    use super::{load_pin_optional, parse_pin, require_same, store_pin, PIN_FILE};
+    use crate::persistence::SecretRoot;
+
+    /// Turning seats on replaces a pin file that no longer parses; the plain `trust` refuses it.
+    #[test]
+    fn a_replace_overwrites_an_unreadable_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = SecretRoot::open(dir.path()).unwrap();
+        root.write_atomic(PIN_FILE, b"\xEF\xBB\xBFNOT-A-PIN\n")
+            .unwrap();
+        assert_eq!(
+            store_pin(&root, [7; 32], false).unwrap_err().code,
+            "rdp_pin_invalid"
+        );
+        store_pin(&root, [7; 32], true).unwrap();
+        assert_eq!(load_pin_optional(&root).unwrap(), Some([7; 32]));
+    }
 
     /// Only a leaf that was read and differs refuses; the keeper's own check covers the rest.
     #[test]

@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 /// Overlay tier and corner. Live in the core so every client formats with the same enums.
 pub use punktfunk_core::hud::{HudCorner, StatsVerbosity};
 
+/// An option's label in a `(stored value, label)` table, read when the menu is drawn.
+pub type Label = fn() -> &'static str;
+
 /// How a touchscreen drives the host (Android `TouchMode`, Apple `TouchInputMode`).
 /// Stored stringly in [`Settings::touch_mode`]; parsed with [`TouchMode::from_name`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -55,11 +58,12 @@ impl TouchMode {
     }
 
     pub fn label(self) -> &'static str {
+        use pf_l10n::client as m;
         match self {
-            TouchMode::Trackpad => "Trackpad",
-            TouchMode::Pointer => "Direct pointer",
-            TouchMode::Touch => "Touch passthrough",
-            TouchMode::Off => "Off",
+            TouchMode::Trackpad => m::player_touch_mode_trackpad(),
+            TouchMode::Pointer => m::player_touch_mode_pointer(),
+            TouchMode::Touch => m::player_touch_mode_touch(),
+            TouchMode::Off => m::player_touch_mode_off(),
         }
     }
 }
@@ -95,8 +99,8 @@ impl MouseMode {
 
     pub fn label(self) -> &'static str {
         match self {
-            MouseMode::Capture => "Capture (games)",
-            MouseMode::Desktop => "Desktop (absolute)",
+            MouseMode::Capture => pf_l10n::client::player_mouse_mode_capture(),
+            MouseMode::Desktop => pf_l10n::client::player_mouse_mode_desktop(),
         }
     }
 }
@@ -161,6 +165,11 @@ pub struct Settings {
     /// on each of this computer's monitors, asked for again as monitors come and go.
     #[serde(default = "default_screens")]
     pub screens: String,
+    /// A preset's [`SettingsOverlay::host_screen`](crate::presets::SettingsOverlay::host_screen),
+    /// asked of the host as the Hello's screen wish. Empty, as no settings row writes it, is
+    /// the pick on the host's card.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_screen: String,
     pub gamepad: String,
     /// Forward this device's controllers. Default on.
     ///
@@ -182,9 +191,8 @@ pub struct Settings {
     /// [`Settings::system_buttons_forward`].
     #[serde(default = "default_auto")]
     pub system_buttons: String,
-    /// Hold-Select ≥ ~350 ms sends the host the guide button (down for the hold).
-    /// `"auto"` / `"on"` / `"off"`; auto = on only where raw guide cannot reach the
-    /// host cleanly (Gaming Mode). A Select tap is delayed up to the threshold.
+    /// Legacy `"auto"` / `"on"` / `"off"`: only decides whether the default shortcuts
+    /// ([`crate::shortcuts::defaults`]) carry Hold Select → Guide. Nothing else reads it.
     #[serde(default = "default_auto")]
     pub guide_gesture: String,
     /// Host compositor backend to request (advisory; the host falls back if unavailable).
@@ -325,7 +333,7 @@ pub struct Settings {
     /// `"platform"`, or `"store"`. Presentation only; unknown → default shelf.
     #[serde(default)]
     pub library_sort: String,
-    /// Library arrangement: `"shelf"` (default, and unknown values) or `"grid"`.
+    /// Library arrangement: `"grid"` (default, and unknown values) or `"shelf"`.
     #[serde(default)]
     pub library_view: String,
     /// The Games tab's sections, in order: ids comma-separated, a leading `-` on a section
@@ -354,6 +362,10 @@ pub struct Settings {
     /// Empty = platform default. One opaque field: each cross-client setting is ~six edits.
     #[serde(default)]
     pub overlay_actions: String,
+    /// In-stream shortcuts JSON ([`crate::shortcuts::Shortcuts::parse`]). Empty = this
+    /// client's defaults ([`crate::shortcuts::resolve`]), which read `guide_gesture`.
+    #[serde(default)]
+    pub shortcuts: String,
     /// Playback endpoint (PipeWire `node.name` / WASAPI `IMMDevice` id); empty = OS default.
     /// Maps to `PUNKTFUNK_AUDIO_SINK`. A gone pick falls back to default.
     #[serde(default)]
@@ -382,10 +394,33 @@ pub struct Settings {
     /// connect already matches. `0` = never stored → 1280×720.
     pub last_window_w: u32,
     pub last_window_h: u32,
+    /// Per physical controller, by `PadInfo::key`: what one player set for the pad in their
+    /// hands. Only pads off their defaults are stored.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pads: BTreeMap<String, PadPrefs>,
     /// Keys this build does not model, carried through load→save so an older writer
     /// does not drop a newer client's fields. Empty map serializes to nothing.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+/// One controller's own settings. Every field is `None` at its default, so a pad that never
+/// left the defaults has no entry.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PadPrefs {
+    /// DualSense speaker volume, 0..=100 %; `None` = [`PAD_SPEAKER_VOLUME_DEFAULT`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_volume: Option<u8>,
+}
+
+/// The speaker plays what the game sends until the player turns it down.
+pub const PAD_SPEAKER_VOLUME_DEFAULT: u8 = 100;
+
+impl PadPrefs {
+    fn is_default(&self) -> bool {
+        *self == PadPrefs::default()
+    }
 }
 
 fn default_codec() -> String {
@@ -398,11 +433,12 @@ pub const FULLSCREEN_ALWAYS_KEY: &str = "fullscreen_always";
 pub const GAMEPAD_UI_KEY: &str = "gamepad_ui_enabled";
 pub const GAMEPAD_UI_MODE_KEY: &str = "gamepad_ui_mode";
 
-/// Bitrate's hint under PyroWave, where the row offers Automatic or Fixed and the quality row
-/// stands in for the rate. Fixed stores any non-zero rate; the host pins it at the quality.
-pub const PYROWAVE_BITRATE_HINT: &str =
-    "Automatic lowers PyroWave quality while the network falls short; Fixed always streams at \
-     your quality.";
+/// [`Settings::extra`] records rather than settings, which [`Settings::reset_to_defaults`] keeps:
+/// the GTK window's size, the library shelf it last showed, and each host's favorites.
+pub const SHELL_WINDOW_KEY: &str = "shell_window";
+pub const LIBRARY_SHELF_KEY: &str = "library_shelf";
+pub const FAVORITES_PREFIX: &str = "favorites.";
+
 /// The rate Fixed stores under PyroWave, kbps. The host pins the session at the quality, so
 /// only "not zero" counts. If the host picks another codec the session is Automatic
 /// ([`punktfunk_core::quic::session_bitrate_kbps`]).
@@ -472,10 +508,10 @@ impl Settings {
     /// The mode a connect asks for: a `0` size or refresh takes `native`'s (a refresh under 30
     /// reads 30), then render scale.
     pub fn stream_mode(&self, native: punktfunk_core::Mode) -> punktfunk_core::Mode {
-        let pick = |set: u32, native: u32| if set == 0 { native } else { set };
+        let (w, h) = self.stream_base(native);
         let (width, height) = punktfunk_core::render_scale::apply(
-            pick(self.width, native.width),
-            pick(self.height, native.height),
+            w,
+            h,
             self.render_scale,
             punktfunk_core::render_scale::max_dimension(&self.codec),
         );
@@ -486,6 +522,26 @@ impl Settings {
         }
     }
 
+    /// The size [`Self::stream_mode`] shows the picture at, when render scale makes the mode
+    /// larger ([`punktfunk_core::render_scale::view`]).
+    pub fn stream_view(&self, native: punktfunk_core::Mode) -> Option<(u32, u32)> {
+        let (w, h) = self.stream_base(native);
+        punktfunk_core::render_scale::view(
+            w,
+            h,
+            self.render_scale,
+            punktfunk_core::render_scale::max_dimension(&self.codec),
+        )
+    }
+
+    /// The chosen size before render scale; a `0` axis takes `native`'s.
+    fn stream_base(&self, native: punktfunk_core::Mode) -> (u32, u32) {
+        (
+            pick(self.width, native.width),
+            pick(self.height, native.height),
+        )
+    }
+
     /// [`Self::pyrowave_bpp`] in the hundredths the dial carries, held inside
     /// `[BPP_FLOOR, BPP_MAX]`.
     pub fn pyrowave_bpp_x100(&self) -> u16 {
@@ -494,7 +550,8 @@ impl Settings {
     }
 
     /// The PyroWave quality row's caption, `3840×2160 at 120 Hz: 1.3 Gbit/s`, and the warning
-    /// when `link` is short of that rate. The mode is [`Self::stream_mode`] over `native`; 4:4:4
+    /// when `link` is short of that rate. It prices the picture the host encodes: the
+    /// [`Self::stream_view`] a connect names, else [`Self::stream_mode`], over `native`. 4:4:4
     /// and 10 bits follow the switches that ask for them.
     pub fn pyrowave_quality_lines(
         &self,
@@ -502,25 +559,76 @@ impl Settings {
         link: punktfunk_core::transport::LinkFacts,
     ) -> (String, Option<String>) {
         let mode = self.stream_mode(native);
+        let (width, height) = self
+            .stream_view(native)
+            .unwrap_or((mode.width, mode.height));
+        let picture = punktfunk_core::Mode {
+            width,
+            height,
+            ..mode
+        };
         let ten_bit = self.hdr_enabled || self.ten_bit_sdr;
         let kbps = punktfunk_core::pyrowave::kbps_for(
-            &mode,
+            &picture,
             self.enable_444,
             if ten_bit { 10 } else { 8 },
             f64::from(self.pyrowave_bpp_x100()) / 100.0,
         );
-        let caption = format!(
-            "{}\u{d7}{} at {} Hz: {}",
-            mode.width,
-            mode.height,
-            mode.refresh_hz,
-            punktfunk_core::pyrowave::rate_label(kbps)
+        let caption = pf_l10n::client::player_pyrowave_bpp_rate(
+            width,
+            height,
+            picture.refresh_hz,
+            rate_label(kbps),
         );
-        (caption, punktfunk_core::pyrowave::link_warning(kbps, link))
+        (caption, link_warning(kbps, link))
     }
 }
 
+/// `set`, or `native` where it is `0`.
+fn pick(set: u32, native: u32) -> u32 {
+    if set == 0 {
+        native
+    } else {
+        set
+    }
+}
+
+/// `kbps` as a player reads it: `940 Mbit/s`, `1.3 Gbit/s`.
+fn rate_label(kbps: u32) -> String {
+    use punktfunk_core::pyrowave::Rate;
+    match punktfunk_core::pyrowave::rate(kbps) {
+        Rate::Mbit(n) => pf_l10n::common::common_mbits(n),
+        Rate::Gbit(n) => pf_l10n::common::common_gbits(n),
+    }
+}
+
+/// What to tell a player whose PyroWave quality needs `kbps` over `link`; `None` when it fits.
+fn link_warning(kbps: u32, link: punktfunk_core::transport::LinkFacts) -> Option<String> {
+    use pf_l10n::client as m;
+    use punktfunk_core::pyrowave::LinkShortfall;
+    Some(
+        match punktfunk_core::pyrowave::link_shortfall(kbps, link)? {
+            LinkShortfall::Wifi => m::player_pyrowave_bpp_wifi_warning().into(),
+            LinkShortfall::Port(mbps) => m::player_pyrowave_bpp_port_warning(
+                rate_label(kbps),
+                rate_label(mbps.saturating_mul(1000)),
+            ),
+            LinkShortfall::Gbe => m::player_pyrowave_bpp_gbe_warning(rate_label(kbps)),
+        },
+    )
+}
+
 impl Settings {
+    /// The host's HDR and pad for the launched game replace this device's, before the HDR
+    /// gate and the pad probe read them. `lines` and `hz` wait for the panel
+    /// ([`punktfunk_core::game_overrides::fit`]).
+    pub fn apply_game_overrides(&mut self, o: &punktfunk_core::game_overrides::GameOverrides) {
+        self.hdr_enabled = o.hdr.unwrap_or(self.hdr_enabled);
+        if let Some(pad) = &o.gamepad {
+            self.gamepad.clone_from(pad);
+        }
+    }
+
     /// Overlay tier, resolving pre-tier stores: `show_stats = false` → Off, else Normal.
     pub fn stats_verbosity(&self) -> StatsVerbosity {
         self.stats_verbosity.unwrap_or(if self.show_stats {
@@ -558,6 +666,24 @@ impl Settings {
         self.extra.get(GAMEPAD_UI_MODE_KEY).and_then(|v| v.as_str()) == Some("always")
     }
 
+    /// The speaker volume for the pad with `key`, 0..=100 %.
+    pub fn pad_speaker_volume(&self, key: &str) -> u8 {
+        self.pads
+            .get(key)
+            .and_then(|p| p.speaker_volume)
+            .unwrap_or(PAD_SPEAKER_VOLUME_DEFAULT)
+            .min(100)
+    }
+
+    /// Store `percent` for the pad with `key`; the default drops the pad's entry.
+    pub fn set_pad_speaker_volume(&mut self, key: &str, percent: u8) {
+        let prefs = self.pads.entry(key.to_string()).or_default();
+        prefs.speaker_volume = Some(percent.min(100)).filter(|&v| v != PAD_SPEAKER_VOLUME_DEFAULT);
+        if prefs.is_default() {
+            self.pads.remove(key);
+        }
+    }
+
     pub fn set_gamepad_ui_enabled(&mut self, on: bool) {
         self.extra
             .insert(GAMEPAD_UI_KEY.into(), serde_json::Value::Bool(on));
@@ -567,6 +693,24 @@ impl Settings {
         let mode = if always { "always" } else { "connected" };
         self.extra
             .insert(GAMEPAD_UI_MODE_KEY.into(), serde_json::Value::from(mode));
+    }
+
+    /// Every setting back to a fresh install's value, `extra` settings included. Keeps what is
+    /// not a setting: the default host, the window sizes and the `extra` records. Pairing,
+    /// trust and presets live in other files.
+    pub fn reset_to_defaults(&mut self) {
+        let record = |k: &str| {
+            k.starts_with(FAVORITES_PREFIX) || k == SHELL_WINDOW_KEY || k == LIBRARY_SHELF_KEY
+        };
+        let mut extra = std::mem::take(&mut self.extra);
+        extra.retain(|k, _| record(k));
+        *self = Settings {
+            default_host: self.default_host.take(),
+            last_window_w: self.last_window_w,
+            last_window_h: self.last_window_h,
+            extra,
+            ..Settings::default()
+        };
     }
 
     fn extra_bool(&self, key: &str, default: bool) -> bool {
@@ -614,16 +758,6 @@ impl Settings {
         }
     }
 
-    /// Whether the hold-Select guide gesture is armed.
-    /// Auto = on only under Gaming Mode, the sole controller route once raw presses stay local.
-    pub fn guide_gesture_enabled(&self, game_mode: bool) -> bool {
-        match self.guide_gesture.as_str() {
-            "on" => true,
-            "off" => false,
-            _ => game_mode,
-        }
-    }
-
     /// The `codec` setting as a `quic::CODEC_*` preference bit (`0` = auto).
     #[cfg(not(target_family = "wasm"))]
     pub fn preferred_codec(&self) -> u8 {
@@ -650,6 +784,7 @@ impl Default for Settings {
             render_scale: 1.0,
             video_fit: default_video_fit(),
             screens: default_screens(),
+            host_screen: String::new(),
             gamepad: "auto".into(),
             gamepad_forwarding: true,
             forward_pad: String::new(),
@@ -694,6 +829,7 @@ impl Default for Settings {
             auto_wake: true,
             invert_scroll: false,
             overlay_actions: String::new(),
+            shortcuts: String::new(),
             speaker_device: String::new(),
             mic_device: String::new(),
             pad_rumble: true,
@@ -702,6 +838,7 @@ impl Default for Settings {
             match_window: false,
             last_window_w: 0,
             last_window_h: 0,
+            pads: BTreeMap::new(),
             extra: BTreeMap::new(),
         }
     }
@@ -877,6 +1014,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
+    /// An update over a settings file that does not parse keeps that file as `.bad`.
+    #[test]
+    fn an_update_keeps_an_unparsable_settings_file_beside_the_new_one() {
+        let _guard = crate::trust::store_health_lock();
+        let path = crate::presets::tests::scratch_dir("settings-unparsable").join("settings.json");
+        std::fs::write(&path, br#"{"width":1280,"#).unwrap();
+        let s = Settings::update_at(&path, |s| {
+            s.last_window_w = 1280;
+            true
+        });
+        assert_eq!(s.last_window_w, 1280);
+        let kept = std::fs::read(path.with_extension("json.bad")).unwrap();
+        assert_eq!(kept, br#"{"width":1280,"#);
+        let stored: Settings = load_json_or_default(&path);
+        assert_eq!(stored.last_window_w, 1280);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     /// A pre-touch-mode store loads as `trackpad`; names round-trip through the enum.
     #[test]
     fn settings_touch_mode_defaults_trackpad() {
@@ -1001,6 +1156,63 @@ mod tests {
         assert_eq!(s.gamepad_ui(), GamepadUi::WithController);
     }
 
+    /// A reset reads back as a fresh install, `extra` settings included, and keeps the default
+    /// host, the window sizes and the per-host records. Pairing lives in another file.
+    #[test]
+    fn a_reset_restores_defaults_and_keeps_host_records() {
+        let _guard = crate::trust::store_health_lock();
+        let path = crate::presets::tests::scratch_dir("settings-reset").join("settings.json");
+        let mut changed = Settings {
+            width: 2560,
+            height: 1440,
+            codec: "av1".into(),
+            hdr_enabled: false,
+            show_advanced: true,
+            default_host: Some("desk".into()),
+            last_window_w: 1600,
+            last_window_h: 900,
+            ..Settings::default()
+        };
+        changed.set_fullscreen_always(true);
+        changed.set_gamepad_ui_enabled(false);
+        changed.set_gamepad_ui_always(true);
+        for (key, value) in [
+            ("host_sort", "name".into()),
+            ("frob_mode", "fancy".into()),
+            ("favorites.ab12", serde_json::json!(["game-1"])),
+            (SHELL_WINDOW_KEY, serde_json::json!([1200, 800, 0])),
+            (LIBRARY_SHELF_KEY, "ab12".into()),
+        ] {
+            changed.extra.insert(key.into(), value);
+        }
+        changed.save_at(&path);
+
+        let reset = Settings::update_at(&path, |s| {
+            s.reset_to_defaults();
+            true
+        });
+        let kept = |k: &str| reset.extra.get(k).cloned();
+        assert_eq!(kept("favorites.ab12"), Some(serde_json::json!(["game-1"])));
+        assert_eq!(
+            kept(SHELL_WINDOW_KEY),
+            Some(serde_json::json!([1200, 800, 0]))
+        );
+        assert_eq!(kept(LIBRARY_SHELF_KEY), Some("ab12".into()));
+        let fresh = Settings {
+            default_host: Some("desk".into()),
+            last_window_w: 1600,
+            last_window_h: 900,
+            extra: reset.extra.clone(),
+            ..Settings::default()
+        };
+        assert_eq!(reset, fresh, "every setting is back to its default");
+        assert_eq!(reset.extra.len(), 3, "the extra settings are gone");
+        assert!(!reset.fullscreen_always());
+        assert_eq!(reset.gamepad_ui(), GamepadUi::WithController);
+        assert_eq!(load_json_or_default::<Settings>(&path), reset, "and saved");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     /// Unknown keys survive load→save. An empty flatten map adds nothing, so files
     /// without extras do not churn.
     #[test]
@@ -1019,6 +1231,46 @@ mod tests {
         let plain = serde_json::to_string(&Settings::default()).unwrap();
         assert!(!plain.contains("extra"), "{plain}");
         assert!(!plain.contains("frob"), "{plain}");
+    }
+
+    /// A pad nobody touched plays at full; a set volume reads back, and setting full again
+    /// leaves no entry behind.
+    #[test]
+    fn pad_speaker_volume_defaults_sets_and_drops_at_full() {
+        let key = "054c:0ce6:DualSense Wireless Controller";
+        let mut s = Settings::default();
+        assert_eq!(s.pad_speaker_volume(key), 100);
+        s.set_pad_speaker_volume(key, 60);
+        assert_eq!(s.pad_speaker_volume(key), 60);
+        assert_eq!(s.pad_speaker_volume("other"), 100, "per pad");
+        s.set_pad_speaker_volume(key, 100);
+        assert_eq!(s.pad_speaker_volume(key), 100);
+        assert!(s.pads.is_empty(), "{:?}", s.pads);
+    }
+
+    /// The per-pad map survives load, save and load, beside a key this build does not model.
+    #[test]
+    fn pad_prefs_round_trip_with_unknown_keys() {
+        let key = "054c:0ce6:DualSense Wireless Controller";
+        let mut s: Settings = serde_json::from_str(r#"{"frob_mode":"fancy"}"#).unwrap();
+        s.set_pad_speaker_volume(key, 40);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.pad_speaker_volume(key), 40);
+        assert_eq!(
+            back.extra.get("frob_mode").and_then(|v| v.as_str()),
+            Some("fancy")
+        );
+        assert_eq!(back, s);
+    }
+
+    /// A reset puts every controller back to its defaults.
+    #[test]
+    fn a_reset_clears_the_per_pad_settings() {
+        let mut s = Settings::default();
+        s.set_pad_speaker_volume("054c:0ce6:pad", 30);
+        s.reset_to_defaults();
+        assert!(s.pads.is_empty(), "{:?}", s.pads);
+        assert_eq!(s.pad_speaker_volume("054c:0ce6:pad"), 100);
     }
 
     /// A retired key (`library_enabled`) must not fail the load, and must survive the
@@ -1080,10 +1332,8 @@ mod tests {
         assert!(serde_json::to_string(&s).unwrap().contains("\"detailed\""));
     }
 
-    /// One-off beats binding; `""` forces defaults; unknown one-off falls back to
-    /// defaults, not the host's preset.
     /// An older store reads the default quality, the dial carries it in hundredths held inside
-    /// the bounds, and the caption prices the mode a connect would ask at it.
+    /// the bounds, and the caption prices the picture a connect would have the host encode.
     #[test]
     fn pyrowave_quality_reads_as_the_rate_it_needs() {
         use punktfunk_core::transport::{LinkFacts, IFACE_KIND_ETHERNET};
@@ -1124,6 +1374,15 @@ mod tests {
             half.pyrowave_quality_lines(native, wire).0,
             "960\u{d7}540 at 60 Hz: 50 Mbit/s"
         );
+        // Above 1x a host that scales encodes the view, not the 3840×2160 mode.
+        let double = Settings {
+            render_scale: 2.0,
+            ..half.clone()
+        };
+        assert_eq!(
+            double.pyrowave_quality_lines(native, wire).0,
+            "1920\u{d7}1080 at 60 Hz: 199 Mbit/s"
+        );
         let (_, warning) = sdr.pyrowave_quality_lines(native, LinkFacts::default());
         assert_eq!(
             warning.as_deref(),
@@ -1131,6 +1390,8 @@ mod tests {
         );
     }
 
+    /// One-off beats binding; `""` forces defaults; unknown one-off falls back to
+    /// defaults, not the host's preset.
     #[test]
     fn preset_resolution_precedence() {
         use crate::presets::{PresetsFile, StreamPreset};
@@ -1243,5 +1504,28 @@ mod tests {
             resolve_preset(&catalog, None, Some("deleted00000"), None),
             None
         );
+    }
+
+    /// A field the host set replaces the device's; one it left unset keeps it.
+    #[test]
+    fn game_overrides_replace_hdr_and_the_pad_only_where_set() {
+        use punktfunk_core::game_overrides::GameOverrides;
+        let mut s = Settings {
+            hdr_enabled: true,
+            gamepad: "xboxone".into(),
+            ..Default::default()
+        };
+        s.apply_game_overrides(&GameOverrides {
+            hdr: Some(false),
+            ..Default::default()
+        });
+        assert!(!s.hdr_enabled);
+        assert_eq!(s.gamepad, "xboxone", "no pad set, the device's stays");
+        s.apply_game_overrides(&GameOverrides {
+            gamepad: Some("dualsense".into()),
+            ..Default::default()
+        });
+        assert!(!s.hdr_enabled, "no HDR set, the last value stays");
+        assert_eq!(s.gamepad, "dualsense");
     }
 }

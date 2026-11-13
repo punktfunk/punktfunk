@@ -222,7 +222,8 @@ pub fn run(opts: Options) -> Result<()> {
                 ?compositor,
                 "spike source: platform virtual display"
             );
-            let mut vd = crate::vdisplay::open(compositor).context("open virtual display")?;
+            let mut vd = crate::vdisplay::open_for(compositor, None, None)
+                .context("open virtual display")?;
             vd.set_hdr(hdr);
             let vout = vd
                 .create(punktfunk_core::Mode {
@@ -243,12 +244,15 @@ pub fn run(opts: Options) -> Result<()> {
                     output: want,
                     codec: Some(opts.codec),
                     encoder: resolved.clone(),
-                    capture: crate::session_plan::CaptureBackend::resolve(),
+                    capture: crate::session_plan::CaptureBackend::resolve(
+                        crate::vdisplay::mirrors_pinned(),
+                    ),
                     kwin: compositor == crate::vdisplay::Compositor::Kwin,
                     gamescope: compositor == crate::vdisplay::Compositor::Gamescope,
                     stream_hz: opts.fps,
                     screen: 0,
                     gamescope_cursor: false,
+                    mirrored: crate::vdisplay::mirrors_pinned(),
                 },
             )
             .context("capture virtual output")?
@@ -697,8 +701,10 @@ mod plat {
         bit_depth: u8,
         hdr: bool,
     ) -> Result<Option<Box<dyn Encoder>>> {
+        // A spike opens the host-wide screen, as a device with no row of its own does.
+        let mirrored = crate::vdisplay::mirrors_pinned();
         let driver_encode = opts.source == Source::Virtual
-            && crate::session_plan::CaptureBackend::resolve().encodes_remotely();
+            && crate::session_plan::CaptureBackend::resolve(mirrored).encodes_remotely();
         if !driver_encode {
             return Ok(None);
         }
@@ -711,11 +717,12 @@ mod plat {
             false, // IDD composites the pointer
             false, // no mid-stream cursor-forward flip in a spike
             1,     // no client decoder to slice for
-        );
+        )
+        .mirroring(mirrored);
         capture::open_driver_encoder(
             &plan,
             capturer,
-            size,
+            punktfunk_core::video_fit::Reframe::full(size),
             opts.fps,
             opts.bitrate_bps,
             bit_depth,

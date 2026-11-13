@@ -22,6 +22,7 @@
 #[cfg(any(target_os = "linux", windows))]
 mod cli {
     use pf_client_core::deeplink::{self, DeepLink, HostResolution};
+    use pf_client_core::display_targets::{self, BoundPreset, Pick, RowKind, Targets};
     use pf_client_core::orchestrate::{
         self, ConnectOutcome, ConnectPlan, PlanOutcome, SessionEvent, WakeOutcome, WakeTick,
         WAKE_TIMEOUT_SECS,
@@ -29,7 +30,7 @@ mod cli {
     use pf_client_core::presets::PresetsFile;
     use pf_client_core::profiles::{self, ListedProfile};
     use pf_client_core::trust::{self, AddOutcome, HostEdit, KnownHost, KnownHosts, Settings};
-    use pf_client_core::{library, start, wol};
+    use pf_client_core::{host_actions, library, start, wol};
     use punktfunk_core::client::health::{self, CleanRound, FindingId, HealthReport, LegShape};
     use punktfunk_core::client::ProbeOutcome;
     use std::time::Duration;
@@ -53,7 +54,7 @@ mod cli {
 punktfunk — the Punktfunk client, headless
 
   punktfunk discover [--json] [--timeout SECS]
-  punktfunk pair <host[:port]> [--pin -] [--name LABEL]
+  punktfunk pair <host[:port]> [--pin -] [--name LABEL] [--json]
   punktfunk hosts list [--probe] [--json]
   punktfunk hosts add <host[:port]> [--name LABEL] [--fp HEX]
   punktfunk hosts forget <host-ref>
@@ -61,6 +62,8 @@ punktfunk — the Punktfunk client, headless
   punktfunk wake <host-ref> [--wait]
   punktfunk library [<host-ref>] [--json]
   punktfunk end-game [<host-ref>] --game ID
+  punktfunk actions [<host-ref>] [--json] [--run ID]
+  punktfunk screen [<host-ref>] [--json] [--pick ID]
   punktfunk launch [<host-ref>] [--game ID] [--preset REF] [--as PROFILE]
                                 [--request-access] [--exec] [--fullscreen]
   punktfunk profiles <host-ref> [--json] [--pick PROFILE | --clear]
@@ -69,6 +72,7 @@ punktfunk — the Punktfunk client, headless
   punktfunk speed-test <host-ref>
   punktfunk network-check <host-ref> [--json]
   punktfunk presets list [--json]
+  punktfunk device-code [--json]
   punktfunk reset
 
 A <host-ref> is a saved host's id, its name, or an address — the same reference a
@@ -102,19 +106,25 @@ address with `punktfunk hosts add` and it shows in `hosts list --probe`."
             }
             "pair" => {
                 "\
-punktfunk pair <host[:port]> — enrol this device with a host (PIN ceremony)
+punktfunk pair <host[:port]> [--json] — enrol this device with a host (PIN ceremony)
 
   --pin -       read the PIN from stdin (one line). Without it the command asks,
                 and refuses (exit 6) when there is no terminal to ask on
   --request-access
                 no PIN: wait (up to ~185 s) for somebody to approve this device
-                in the host's console or web UI. Pins the fingerprint saved for
-                the host (`hosts add --fp`) if there is one. Never streams
+                in the host's console or web UI. Needs the host's fingerprint:
+                --fp, or the one saved for it (`hosts add --fp`). Never streams
   --fp HEX      with --request-access: the fingerprint the host must show.
                 Without it the one saved for this address is used — the newest
-                when the address names two hosts, as a dual-boot box does
+                when the address names two hosts, as a dual-boot box does. With
+                neither the command refuses (exit 5): pair with the PIN
   --name LABEL  the label the host files this device under
                 (default: this machine's name)
+  --json        stdout is one object: {\"ok\":true,\"addr\",\"port\",\"fp\"}, or
+                {\"ok\":false,\"kind\",\"reject\"}. kind is rejected, crypto (a
+                wrong PIN), timeout, unreachable or failed; reject is the host's
+                refusal token (`not-armed`, `denied`, …) or null. The stderr
+                lines and the exit code do not change
 
 Pairing verifies the host end-to-end and pins its fingerprint in the saved-hosts
 store, so every later connect — here, in the desktop client or the console — is
@@ -195,6 +205,39 @@ outcome on stdout.
 Exit 0 when it ended, 5 when the host had nothing of it running, 3 when this
 device's access expired, 2 when the host couldn't be asked or is too old,
 6 when the host isn't paired."
+            }
+            "actions" => {
+                "\
+punktfunk actions [<host-ref>] [--json] [--run ID] — the host's own actions
+
+Lists what the host lets this device run — sleep, restart, shut down, … — as
+id TAB label TAB available (or the host's reason it can't now). --json emits
+{\"actions\":[{\"id\",\"label\",\"danger\",\"available\",\"unavailable_reason\"}]}.
+Only actions this device's access grants are listed; an unreachable host lists
+none. Needs a paired host (exit 6 otherwise).
+
+  --run ID   run one, by id (`power.sleep`, `power.reboot`, …). The host ends
+             every stream and acts about a second later. Prints the outcome on
+             stdout; exit 0 when the host accepted it, 2 when it didn't."
+            }
+            "screen" => {
+                "\
+punktfunk screen [<host-ref>] [--json] [--pick ID] — this device's host screen
+
+Lists the host card's Screen section as id TAB label TAB detail TAB why it is
+greyed or what it does, with `*` on what a connect gets now: the roles `only`,
+`main` and `second`, then the host's monitors by connector. When the host, or
+the preset bound to it, decides the screen, only that row is listed and the
+reason follows on a line of its own. --json emits {\"rows\":[{\"kind\",\"id\",
+\"label\",\"detail\",\"header\",\"checked\",\"pickable\",\"in_use_by\",\"off\"}],
+\"note\",\"preset\",\"may_choose\"}; note is null, locked, host_decides or preset.
+An unreachable host lists none. Needs a paired host (exit 6 otherwise).
+
+  --pick ID  use that row from the next session on, then list the rows again.
+             Exit 5 when there is no such row; 2 when it is already picked,
+             can't be picked now, or the host refused it or didn't answer, with
+             the reason on stdout. Picking needs Choose its screen in this
+             device's access."
             }
             "launch" => {
                 "\
@@ -298,6 +341,18 @@ Presets are created and edited in the desktop client; a connect uses one via
 `punktfunk profiles` with no host is the old spelling; its --json keeps the
 `profiles` key."
             }
+            "device-code" => {
+                "\
+punktfunk device-code [--json] — the code that names this device to a host
+
+Prints sixteen hex digits in four groups, the start of this device's
+fingerprint. While `pair --request-access` waits, the host's console shows
+the same code beside the request: approve only when the two match.
+
+  --json   stdout is one object: {\"code\":\"4F2A 91C3 07BE D512\"}
+
+A first run makes this device's identity, as a request would."
+            }
             "reset" => {
                 "\
 punktfunk reset — forget every saved host and reset stream settings
@@ -363,6 +418,7 @@ from the config directory for a true factory reset."
                 | "--timeout"
                 | "--as"
                 | "--pick"
+                | "--run"
         )
     }
 
@@ -492,6 +548,8 @@ from the config directory for a true factory reset."
             "wake" => wake(&rest),
             "library" => library_cmd(&rest),
             "end-game" => end_game_cmd(&rest),
+            "actions" => actions_cmd(&rest),
+            "screen" => screen_cmd(&rest),
             "launch" => launch(&rest),
             "open" => open(&rest),
             "reachable" => reachable(&rest),
@@ -503,6 +561,7 @@ from the config directory for a true factory reset."
                 None | Some("list") if !has(&rest, "--pick") => presets(&rest, true),
                 _ => profiles_cmd(&rest),
             },
+            "device-code" => device_code(&rest),
             "reset" => reset(),
             "-h" | "--help" | "help" => match positional(&rest, 0) {
                 None => {
@@ -526,6 +585,9 @@ from the config directory for a true factory reset."
             }
             other => {
                 eprintln!("unknown command \"{other}\"\n\n{USAGE}");
+                if has(&rest, "--json") {
+                    println!("{}", unknown_command_json());
+                }
                 UNRESOLVED
             }
         }
@@ -680,13 +742,14 @@ from the config directory for a true factory reset."
         report_paired(
             &addr,
             port,
-            paired.map_err(|e| trust::pair_error_message(&e)),
+            paired.map_err(|e| PairFailure::new(&e, trust::pair_error_message(&e))),
+            has(args, "--json"),
         )
     }
 
     /// The pin `pair --request-access` holds the host to: `--fp` when given, else the one
     /// saved at this address, by [`KnownHosts::find_by_addr`] — the newest when the address
-    /// names two hosts, as a dual-boot box does. `None`: the first certificate shown is trusted.
+    /// names two hosts, as a dual-boot box does. `None`: nothing to hold the host to, so no request.
     fn access_pin(known: &KnownHosts, fp: Option<&str>, addr: &str, port: u16) -> Option<[u8; 32]> {
         match fp {
             Some(fp) => trust::parse_hex32(fp),
@@ -696,8 +759,8 @@ from the config directory for a true factory reset."
         }
     }
 
-    /// `pair --request-access`: wait for the host's operator, pinned by [`access_pin`]. A
-    /// `--fp` with no usable value refuses: it never degrades to trusting the first certificate.
+    /// `pair --request-access`: wait for the host's operator, pinned by [`access_pin`]. With no
+    /// usable `--fp` and no saved fingerprint it refuses: it never trusts the first certificate.
     fn request_access(args: &[String], addr: &str, port: u16) -> u8 {
         let fp = value(args, "--fp");
         if lacks_value(args, "--fp")
@@ -708,6 +771,13 @@ from the config directory for a true factory reset."
             eprintln!("--fp takes the host's 64-hex-digit fingerprint");
             return UNRESOLVED;
         }
+        let Some(pin) = access_pin(&KnownHosts::load(), fp.as_deref(), addr, port) else {
+            eprintln!(
+                "no fingerprint for {addr}: pass --fp HEX from the host's console, or pair \
+                 with its PIN — punktfunk pair {addr}"
+            );
+            return UNRESOLVED;
+        };
         let identity = match trust::load_or_create_identity() {
             Ok(i) => i,
             Err(e) => {
@@ -716,28 +786,79 @@ from the config directory for a true factory reset."
             }
         };
         let name = value(args, "--name").unwrap_or_else(trust::device_name);
-        let pin = access_pin(&KnownHosts::load(), fp.as_deref(), addr, port);
         eprintln!("waiting for {addr} to approve this device…");
+        // The host's console shows the same code beside this request.
+        if let Some(code) = trust::device_code(&identity) {
+            eprintln!("device code: {code}");
+        }
         let paired = trust::request_access_to_host(addr, port, &identity, pin, &name, None)
             .map(|fp| trust::save_paired(addr, addr, port, fp, &[]));
         report_paired(
             addr,
             port,
-            paired.map_err(|e| trust::access_error_message(&e)),
+            paired.map_err(|e| PairFailure::new(&e, trust::access_error_message(&e))),
+            has(args, "--json"),
         )
     }
 
-    fn report_paired(addr: &str, port: u16, paired: Result<trust::Paired, String>) -> u8 {
+    /// Why a pairing did not happen: the sentence for a person, what kind of failure it was, and
+    /// the host's refusal token when the host turned the device away.
+    struct PairFailure {
+        msg: String,
+        kind: &'static str,
+        reject: Option<&'static str>,
+    }
+
+    impl PairFailure {
+        fn new(err: &punktfunk_core::PunktfunkError, msg: String) -> Self {
+            use punktfunk_core::PunktfunkError as E;
+            let (kind, reject) = match err {
+                E::Rejected(reason, _) => ("rejected", Some(reason.as_str())),
+                E::Crypto => ("crypto", None),
+                E::Timeout => ("timeout", None),
+                E::Io(_) => ("unreachable", None),
+                _ => ("failed", None),
+            };
+            Self { msg, kind, reject }
+        }
+    }
+
+    /// The `--json` answer of `pair`, printed in place of the `paired` line. The stderr lines
+    /// and the exit code are the same with or without it.
+    fn pair_json(addr: &str, port: u16, paired: &Result<trust::Paired, PairFailure>) -> String {
+        match paired {
+            Ok(p) => serde_json::json!({"ok": true, "addr": addr, "port": port, "fp": p.fp_hex}),
+            Err(f) => serde_json::json!({"ok": false, "kind": f.kind, "reject": f.reject}),
+        }
+        .to_string()
+    }
+
+    /// What an unknown verb prints on stdout under `--json`, beside the usage text on stderr.
+    fn unknown_command_json() -> String {
+        serde_json::json!({"ok": false, "error": "unknown-command"}).to_string()
+    }
+
+    fn report_paired(
+        addr: &str,
+        port: u16,
+        paired: Result<trust::Paired, PairFailure>,
+        json: bool,
+    ) -> u8 {
+        if json {
+            println!("{}", pair_json(addr, port, &paired));
+        }
         match paired {
             Ok(paired) => {
                 if let Err(e) = paired.saved {
                     eprintln!("couldn't save the host: {e:#}");
                 }
-                println!("paired {addr}:{port} fp={}", paired.fp_hex);
+                if !json {
+                    println!("paired {addr}:{port} fp={}", paired.fp_hex);
+                }
                 OK
             }
-            Err(msg) => {
-                eprintln!("{msg}");
+            Err(failure) => {
+                eprintln!("{}", failure.msg);
                 TRUST_REJECTED
             }
         }
@@ -1007,8 +1128,9 @@ from the config directory for a true factory reset."
             host.port,
             &identity,
             pin,
+            host.profile.as_ref().map(|p| p.id.as_str()),
         ) {
-            Ok(games) => {
+            Ok((games, _)) => {
                 if has(args, "--json") {
                     let rows: Vec<serde_json::Value> = games
                         .iter()
@@ -1075,6 +1197,237 @@ from the config directory for a true factory reset."
         }
     }
 
+    /// `actions [<host-ref>] [--json] [--run ID]` — the host's actions this device may run
+    /// (sleep, restart, …), or `--run` one. The list is empty on any miss, as in every host menu.
+    fn actions_cmd(args: &[String]) -> u8 {
+        let usage = "punktfunk actions [<host-ref>] [--json] [--run ID]";
+        let (known, i) = match resolve_or_default(args, usage) {
+            Ok(v) => v,
+            Err(code) => return code,
+        };
+        let host = &known.hosts[i];
+        let Some(pin) = trust::parse_hex32(&host.fp_hex) else {
+            eprintln!(
+                "{} isn't paired yet — punktfunk pair {}",
+                host.name, host.addr
+            );
+            return NEEDS_INTERACTION;
+        };
+        let identity = match trust::load_or_create_identity() {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("client identity: {e:#}");
+                return CONNECT_FAILED;
+            }
+        };
+        let (addr, mgmt) = (host.addr.as_str(), host.effective_mgmt_port());
+        if let Some(id) = value(args, "--run") {
+            // The id becomes a URL path segment.
+            let id_ok = !id.is_empty()
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || ".:_-".contains(c));
+            if !id_ok {
+                eprintln!("no action called \"{id}\"");
+                return UNRESOLVED;
+            }
+            let label = host_actions::known_label(&id).unwrap_or(id.as_str());
+            let said = host_actions::run(
+                &host.name,
+                addr,
+                mgmt,
+                host.port,
+                &identity,
+                &host.fp_hex,
+                &id,
+                label,
+            );
+            let code = if said.is_ok() { OK } else { CONNECT_FAILED };
+            println!("{}", said.unwrap_or_else(|e| e));
+            return code;
+        }
+        let rows: Vec<_> = host_actions::fetch_actions(addr, mgmt, host.port, &identity, Some(pin))
+            .into_iter()
+            .filter(host_actions::ActionInfo::offerable)
+            .collect();
+        if has(args, "--json") {
+            let rows: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "id": a.id,
+                        "label": a.label(),
+                        "danger": a.danger,
+                        "available": a.available,
+                        "unavailable_reason": a.unavailable_reason,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::json!({ "actions": rows }));
+        } else {
+            for a in &rows {
+                let state = match (a.available, a.unavailable_reason.as_deref()) {
+                    (true, _) => "available",
+                    (false, why) => why.unwrap_or("unavailable"),
+                };
+                println!("{}\t{}\t{state}", a.id, a.label());
+            }
+        }
+        OK
+    }
+
+    /// `screen [<host-ref>] [--json] [--pick ID]` — the host card's Screen section, under the
+    /// host's preset when that pins the screen, or `--pick` one row. A host that doesn't
+    /// answer lists none, as in every host menu.
+    fn screen_cmd(args: &[String]) -> u8 {
+        let usage = "punktfunk screen [<host-ref>] [--json] [--pick ID]";
+        let (known, i) = match resolve_or_default(args, usage) {
+            Ok(v) => v,
+            Err(code) => return code,
+        };
+        let host = &known.hosts[i];
+        let Some(pin) = trust::parse_hex32(&host.fp_hex) else {
+            eprintln!(
+                "{} isn't paired yet — punktfunk pair {}",
+                host.name, host.addr
+            );
+            return NEEDS_INTERACTION;
+        };
+        if lacks_value(args, "--pick") {
+            eprintln!("usage: {usage}");
+            return UNRESOLVED;
+        }
+        let identity = match trust::load_or_create_identity() {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("client identity: {e:#}");
+                return CONNECT_FAILED;
+            }
+        };
+        let catalog = PresetsFile::load();
+        let bound = host.preset_id.as_deref().and_then(|id| {
+            let p = catalog.find_by_id(id)?;
+            Some(BoundPreset {
+                name: &p.name,
+                host_screen: p.overrides.host_screen.as_deref()?,
+            })
+        });
+        let (addr, mgmt) = (host.addr.as_str(), host.effective_mgmt_port());
+        let fetched = display_targets::fetch_targets(addr, mgmt, host.port, &identity, Some(pin));
+        let answered = fetched.is_some();
+        let mut t = fetched.unwrap_or_default();
+        if let Some(id) = value(args, "--pick") {
+            if !answered {
+                println!("Couldn't ask {} for its screens", host.name);
+                return CONNECT_FAILED;
+            }
+            let (pick, label) = match screen_pick(&t, bound, &id) {
+                Ok(v) => v,
+                Err((code, said)) => {
+                    println!("{said}");
+                    return code;
+                }
+            };
+            let fp = &host.fp_hex;
+            if let Err(e) = display_targets::set_pick(addr, mgmt, host.port, &identity, fp, &pick) {
+                println!("{label} failed — {e}");
+                return CONNECT_FAILED;
+            }
+            // `set_pick` read the host's rows back; a miss lists none rather than the old check.
+            t = display_targets::cached(fp).unwrap_or_default();
+        }
+        if has(args, "--json") {
+            println!("{}", screen_json(&t, bound));
+        } else {
+            for line in screen_lines(&t, bound) {
+                println!("{line}");
+            }
+        }
+        OK
+    }
+
+    /// What `--pick ID` writes, with the row's label; else the exit code and the sentence that
+    /// refuses it. A row the host or a preset greys says that note, a busy monitor its reason.
+    fn screen_pick(
+        t: &Targets,
+        preset: Option<BoundPreset>,
+        id: &str,
+    ) -> Result<(Pick, String), (u8, String)> {
+        let note = t.note_under(preset);
+        let Some(row) = t.rows_under(preset).into_iter().find(|r| r.id == id) else {
+            return Err(match note {
+                Some(note) => (CONNECT_FAILED, note),
+                None => (UNRESOLVED, format!("no screen called \"{id}\"")),
+            });
+        };
+        let label = row.label;
+        match (row.pick, note, row.reason) {
+            (Some(pick), ..) => Ok((pick, label)),
+            (None, Some(note), _) => Err((CONNECT_FAILED, note)),
+            (None, None, Some(why)) => {
+                let said = format!("{label} can't be picked now — {why}");
+                Err((CONNECT_FAILED, said))
+            }
+            (None, None, None) => Err((CONNECT_FAILED, format!("{label} is already picked"))),
+        }
+    }
+
+    /// `screen --json`: each row as data for a plugin to word, a busy monitor's reason as
+    /// `in_use_by` or `off`, and why nothing can be picked as `note`, the preset named in
+    /// `preset` when it decides.
+    fn screen_json(t: &Targets, preset: Option<BoundPreset>) -> serde_json::Value {
+        let rows: Vec<serde_json::Value> = t
+            .rows_under(preset)
+            .iter()
+            .map(|r| {
+                let kind = match r.kind {
+                    RowKind::Role(_) => "role",
+                    RowKind::Monitor => "monitor",
+                    RowKind::Own => "own",
+                };
+                let target = (kind != "role")
+                    .then(|| t.targets.iter().find(|x| x.id == r.id))
+                    .flatten();
+                serde_json::json!({
+                    "kind": kind,
+                    "id": r.id,
+                    "label": matches!(r.kind, RowKind::Monitor).then_some(&r.label),
+                    "detail": r.detail,
+                    "header": r.header.is_some(),
+                    "checked": r.checked,
+                    "pickable": r.pickable,
+                    "in_use_by": target.and_then(|x| x.in_use_by.as_deref()),
+                    "off": target.is_some_and(|x| x.in_use_by.is_none() && !x.enabled),
+                })
+            })
+            .collect();
+        // `Targets::note` and `note_under` in code form, in their order.
+        let note = if t.locked {
+            Some("locked")
+        } else if !t.may_choose {
+            Some("host_decides")
+        } else {
+            t.note_under(preset).map(|_| "preset")
+        };
+        serde_json::json!({
+            "rows": rows,
+            "note": note,
+            "preset": preset.filter(|_| note == Some("preset")).map(|p| p.name),
+            "may_choose": t.may_choose,
+        })
+    }
+
+    /// `screen` as text: id, label, detail, then why the row is greyed or what it does, tab
+    /// separated, `*` on what a connect gets now. The note why nothing can be picked comes last.
+    fn screen_lines(t: &Targets, preset: Option<BoundPreset>) -> Vec<String> {
+        let rows = t.rows_under(preset).into_iter().map(|r| {
+            let why = r.reason.or(r.hint.map(String::from)).unwrap_or_default();
+            let mark = if r.checked { "\t*" } else { "" };
+            format!("{}\t{}\t{}\t{why}{mark}", r.id, r.label, r.detail)
+        });
+        rows.chain(t.note_under(preset)).collect()
+    }
+
     /// `launch <host-ref> [--game ID] [--preset REF] [--exec]` — start a stream, wake included.
     /// `--exec` becomes the session process instead of supervising it: under a gamescope wrapper
     /// the launched process must BE the streaming one for focus and lifecycle to work.
@@ -1112,7 +1465,7 @@ from the config directory for a true factory reset."
         }
         // An id or a name; the session looks a name up in the host's list.
         if let Some(wanted) = value(args, "--as") {
-            plan.profile = Some(wanted);
+            plan.play_as(Some(wanted));
         }
         run_plan(plan, exec, request_access)
     }
@@ -1721,6 +2074,28 @@ from the config directory for a true factory reset."
 
     /// `reset` — forget this device's saved hosts and stream settings. The identity (and so the
     /// hosts' record of this device) is deliberately NOT touched: re-pairing is the user's call.
+    /// `device-code`: the code a waiting request shows, which the host's console shows beside
+    /// it. A first run makes the identity, so the code is the one the request will carry.
+    fn device_code(args: &[String]) -> u8 {
+        let identity = match trust::load_or_create_identity() {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!("client identity: {e:#}");
+                return CONNECT_FAILED;
+            }
+        };
+        let Some(code) = trust::device_code(&identity) else {
+            eprintln!("client identity: the certificate does not parse");
+            return CONNECT_FAILED;
+        };
+        if has(args, "--json") {
+            println!("{}", serde_json::json!({ "code": code }));
+        } else {
+            println!("{code}");
+        }
+        OK
+    }
+
     fn reset() -> u8 {
         if !is_tty() {
             eprintln!("refusing to reset without a terminal to confirm on");
@@ -1829,7 +2204,7 @@ from the config directory for a true factory reset."
             assert_eq!(pin(Some(&windows)), trust::parse_hex32(&windows));
             assert_eq!(pin(Some(&linux)), trust::parse_hex32(&linux));
             assert_eq!(pin(None), trust::parse_hex32(&linux));
-            // Nothing saved there: the first certificate shown is trusted.
+            // Nothing saved there: no pin, and the request refuses.
             assert_eq!(access_pin(&known, None, "192.168.1.20", 9777), None);
         }
 
@@ -1892,6 +2267,8 @@ from the config directory for a true factory reset."
                 "default-host",
                 "wake",
                 "library",
+                "actions",
+                "screen",
                 "launch",
                 "open",
                 "reachable",
@@ -2200,6 +2577,38 @@ from the config directory for a true factory reset."
             );
         }
 
+        /// `pair --json` names the kind of failure and the host's refusal by its token, never by
+        /// prose; a failure the host did not send carries `null`.
+        #[test]
+        fn pair_json_carries_the_kind_and_the_reject_token() {
+            use punktfunk_core::reject::RejectReason;
+            use punktfunk_core::PunktfunkError;
+            let json = |err: PunktfunkError| {
+                let failure = PairFailure::new(&err, String::new());
+                serde_json::from_str::<serde_json::Value>(&pair_json(
+                    "10.0.0.5",
+                    9777,
+                    &Err(failure),
+                ))
+                .expect("one JSON object")
+            };
+            let refused = json(PunktfunkError::Rejected(
+                RejectReason::PairingNotArmed,
+                String::new(),
+            ));
+            assert_eq!(
+                refused,
+                serde_json::json!({"ok": false, "kind": "rejected", "reject": "not-armed"})
+            );
+            let wrong_pin = json(PunktfunkError::Crypto);
+            assert_eq!(
+                wrong_pin,
+                serde_json::json!({"ok": false, "kind": "crypto", "reject": null})
+            );
+            let silent = json(PunktfunkError::Timeout);
+            assert_eq!(silent["kind"], "timeout");
+        }
+
         /// A host without a ramp reports no clean round and no slow round: both `null`.
         #[test]
         fn network_json_without_a_clean_round_has_nulls() {
@@ -2208,6 +2617,131 @@ from the config directory for a true factory reset."
             assert_eq!(v["slow"], serde_json::Value::Null);
             assert_eq!(v["legs"], serde_json::json!([]));
             assert_eq!(v["wall"], false);
+        }
+
+        /// A desk host's answer: two roles offered, this device on the second screen, and three
+        /// monitors, one free, one streamed by another device, one off.
+        fn desk(extra: serde_json::Value) -> Targets {
+            let mut v = serde_json::json!({
+                "host_default": "own",
+                "targets": [
+                    {"id": "own", "label": "Own screen"},
+                    {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1",
+                     "mode": "3840x2160@60"},
+                    {"id": "DP-1", "label": "Dell", "in_use_by": "Deck", "enabled": false},
+                    {"id": "DP-2", "label": "DP-2", "enabled": false},
+                ],
+                "role": {"yours": "second", "host_default": "only", "offered": ["only", "second"]},
+            });
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_value(v).unwrap()
+        }
+
+        const COUCH: Option<BoundPreset> = Some(BoundPreset {
+            name: "Couch",
+            host_screen: "only",
+        });
+
+        /// The plugin words every row itself: roles by id, a monitor by the host's label, the
+        /// first monitor heading its group, and why one is greyed as data.
+        #[test]
+        fn screen_json_carries_rows_as_data() {
+            let v = screen_json(&desk(serde_json::json!({})), None);
+            let rows = v["rows"].as_array().unwrap();
+            let ids: Vec<&str> = rows.iter().map(|r| r["id"].as_str().unwrap()).collect();
+            assert_eq!(ids, ["only", "second", "HDMI-A-1", "DP-1", "DP-2"]);
+            assert_eq!(
+                rows[1],
+                serde_json::json!({
+                    "kind": "role", "id": "second", "label": null, "detail": "",
+                    "header": false, "checked": true, "pickable": true,
+                    "in_use_by": null, "off": false,
+                })
+            );
+            assert_eq!(rows[2]["label"], "LG TV");
+            assert_eq!(rows[2]["detail"], "HDMI-A-1 \u{b7} 3840x2160@60");
+            assert_eq!(rows[2]["header"], true);
+            assert_eq!(rows[3]["in_use_by"], "Deck");
+            assert_eq!(
+                rows[3]["off"], false,
+                "a taken head says who, not that it is off"
+            );
+            assert_eq!(rows[4]["off"], true);
+            assert_eq!(rows[4]["pickable"], false);
+            assert_eq!(v["note"], serde_json::Value::Null);
+            assert_eq!(v["preset"], serde_json::Value::Null);
+            assert_eq!(v["may_choose"], true);
+        }
+
+        /// `note` names who decides as a code, in the order the card says it.
+        #[test]
+        fn screen_json_names_who_decides() {
+            let locked = desk(serde_json::json!({"locked": true, "may_choose": false}));
+            assert_eq!(screen_json(&locked, COUCH)["note"], "locked");
+            let held = desk(serde_json::json!({"may_choose": false}));
+            let v = screen_json(&held, COUCH);
+            assert_eq!(v["note"], "host_decides");
+            assert_eq!(v["preset"], serde_json::Value::Null);
+            assert_eq!(v["may_choose"], false);
+            let v = screen_json(&desk(serde_json::json!({})), COUCH);
+            assert_eq!(v["note"], "preset");
+            assert_eq!(v["preset"], "Couch");
+            assert_eq!(v["rows"].as_array().unwrap().len(), 1);
+            assert_eq!(v["rows"][0]["id"], "only");
+            assert_eq!(v["rows"][0]["pickable"], false);
+        }
+
+        /// A pickable row writes its pair; the checked one, a busy monitor, a missing row and a
+        /// host that decides are refused with a sentence.
+        #[test]
+        fn screen_pick_refuses_what_cannot_change() {
+            let t = desk(serde_json::json!({}));
+            let (pick, label) = screen_pick(&t, None, "only").unwrap();
+            assert_eq!(label, "Only screen");
+            assert_eq!(pick.topology.as_deref(), Some("exclusive"));
+            let (pick, _) = screen_pick(&t, None, "HDMI-A-1").unwrap();
+            assert_eq!(
+                pick.screen,
+                display_targets::DisplayTarget::Monitor("HDMI-A-1".into())
+            );
+            assert_eq!(
+                screen_pick(&t, None, "second").unwrap_err(),
+                (CONNECT_FAILED, "Second screen is already picked".into())
+            );
+            assert_eq!(
+                screen_pick(&t, None, "DP-1").unwrap_err(),
+                (
+                    CONNECT_FAILED,
+                    "Dell can't be picked now \u{2014} Streamed by Deck".into()
+                )
+            );
+            assert_eq!(screen_pick(&t, None, "main").unwrap_err().0, UNRESOLVED);
+            let decided = "Set by the preset Couch".to_string();
+            assert_eq!(
+                screen_pick(&t, COUCH, "second").unwrap_err(),
+                (CONNECT_FAILED, decided)
+            );
+            let held = desk(serde_json::json!({"may_choose": false}));
+            let note = "This host decides the screen for this device.".to_string();
+            assert_eq!(
+                screen_pick(&held, None, "only").unwrap_err(),
+                (CONNECT_FAILED, note)
+            );
+        }
+
+        /// The text form marks the checked row and ends on the note.
+        #[test]
+        fn screen_lines_end_on_the_note() {
+            let held = desk(serde_json::json!({"may_choose": false}));
+            assert_eq!(
+                screen_lines(&held, None),
+                [
+                    "second\tSecond screen\t\tOne more screen beside the host's monitors.\t*",
+                    "This host decides the screen for this device.",
+                ]
+            );
         }
     }
 }

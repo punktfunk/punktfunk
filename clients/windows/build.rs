@@ -1,4 +1,4 @@
-//! Embed the Windows version-info + icon resources into `punktfunk-client.exe` and
+//! Embed the Windows version-info + icon resources into `punktfunk-client-windows.exe` and
 //! `punktfunk-console.exe`; both bins share the one resource. The icon drives Explorer /
 //! Alt-Tab / the unpackaged taskbar, and `app::run` stamps it onto the WinUI window's title bar
 //! via `WM_SETICON` (the MSIX taskbar/Start icons come from the package assets instead).

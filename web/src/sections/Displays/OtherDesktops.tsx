@@ -12,6 +12,7 @@ import { isFullSeat, seatClient } from "@/api/seat";
 import { ProfileAvatar } from "@/components/profile-avatar";
 import { ROW, ROW_GAP, staggerProps } from "@/components/stagger";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
+import { seatDetail } from "@/lib/host-messages";
 import { m } from "@/paraglide/messages";
 
 export const OtherDesktops: FC = () => {
@@ -50,11 +51,11 @@ const seatState = (p: ProfileAdmin): string => {
 		case "occupied":
 			return m.profiles_occupied_by({ device: seat.occupant ?? "—" });
 		case "starting":
-			return seat.detail || m.profiles_state_starting();
+			return seatDetail(seat) || m.profiles_state_starting();
 		case "ready":
 			return m.profiles_state_ready();
 		case "unavailable":
-			return seat.detail || m.profiles_state_unavailable();
+			return seatDetail(seat) || m.profiles_state_unavailable();
 		default:
 			return m.profiles_state_stopped();
 	}

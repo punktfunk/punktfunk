@@ -53,10 +53,9 @@ pub use self::planes::AudioPacket;
 pub use self::probe::ProbeOutcome;
 pub use crate::reanchor::{FLUSH_COOLDOWN, NO_VIDEO_RETRY};
 
-pub use crate::audio::{
-    audio_mute_label, audio_mute_notice, mic_mute_label, mic_mute_notice, AUDIO_MUTE_HOST,
-    AUDIO_MUTE_LOCAL, LOCAL_MUTE_NOTICE,
-};
+#[cfg(feature = "l10n")]
+pub use crate::audio::{audio_mute_label, audio_mute_notice, mic_mute_label};
+pub use crate::audio::{mic_mute_notice, AUDIO_MUTE_HOST, AUDIO_MUTE_LOCAL, LOCAL_MUTE_NOTICE};
 
 /// Set or clear one bit of a mute mask. Read-modify-write on the atomic: the embedder and
 /// the control task own different bits and never wait on each other.
@@ -153,9 +152,10 @@ pub struct MicUplinkStats {
     pub dropped_stale: u64,
 }
 
-/// Sparse requests (mode, keyframe, ~1.3 loss reports/s). 32 is hours of headroom;
-/// full means the control task is wedged — callers treat that as a closed session.
-const CTRL_QUEUE: usize = 32;
+/// Requests (mode, keyframe, ~1.3 loss reports/s) plus key and text edges. 1024 holds one
+/// Android IME edit: up to 256 Backspace and 256 Delete taps, two edges each. Full means the
+/// control task is wedged — callers treat that as a closed session.
+const CTRL_QUEUE: usize = 1024;
 
 /// Client-wall unix seconds from a relative remaining; `0` stays `0` (permanent).
 /// Anchor on the client clock: the wire is relative, so host/client skew must not
@@ -268,7 +268,7 @@ pub struct NativeClient {
     pad_touch_tx: tokio::sync::mpsc::UnboundedSender<pad_touch::Contact>,
     /// Per wire pad: what of a Steam Controller 2's raw reports reaches the host.
     sc2: Mutex<[sc2::Filter; sc2::PADS]>,
-    /// Bounded ([`CTRL_QUEUE`]). Sparse; full means the control task is wedged — treat as closed.
+    /// Bounded ([`CTRL_QUEUE`]). Full means the control task is wedged — treat as closed.
     ctrl_tx: tokio::sync::mpsc::Sender<CtrlRequest>,
     /// Unbounded like `input_tx`; sparse, at most one paste's bytes each.
     clip_cmd_tx: tokio::sync::mpsc::UnboundedSender<ClipCommand>,
@@ -285,6 +285,10 @@ pub struct NativeClient {
     pub mgmt_port: u16,
     /// The profile the host resolved this session to; `None` from a host without profiles.
     profile: Option<String>,
+    /// The screen the host says this session streams; `None` from a host that does not say.
+    screen: Option<crate::quic::v2::hello::ScreenEcho>,
+    /// The role the host says this session got; `None` from a host that does not say.
+    role: Option<crate::quic::v2::hello::RoleEcho>,
     /// `displayed + clock_offset − pts` (ns). `0` = nothing presented yet. Presenter writes;
     /// audio reads to land with the picture ([`crate::audio::AvSync`]). Lives next to
     /// `clock_offset` because neither plane owns the other.
@@ -566,6 +570,10 @@ pub struct ConnectParams {
     pub port: u16,
     /// Asked-for size; the host answers in [`NativeClient::mode`].
     pub mode: Mode,
+    /// The size this client shows the picture at, when smaller than `mode`
+    /// ([`crate::render_scale::view`]): the host scales the picture to it before encoding.
+    /// `None` encodes `mode`.
+    pub view: Option<(u32, u32)>,
     pub compositor: CompositorPref,
     pub gamepad: GamepadPref,
     /// Encoder rate in kbps; `0` = host default, and the only value that arms ABR.
@@ -630,8 +638,12 @@ pub struct ConnectParams {
     /// The profile to play as: a host profile id. `None` lets the host choose
     /// ([`NativeClient::profile`] says which it did).
     pub profile: Option<String>,
+    /// The screen this dial's preset asks for. `None` leaves it to the host card's pick;
+    /// [`NativeClient::role`] says what the session got.
+    pub screen_wish: Option<crate::quic::v2::hello::ScreenWish>,
     /// Every screen this embedder shows, screen 0 first with `mode`'s size; empty for one.
-    /// Screens past the first arrive on [`NativeClient::next_screen_frame`].
+    /// Screens past the first arrive on [`NativeClient::next_screen_frame`], each at its `view`
+    /// when it names one. Screen 0's view is [`Self::view`].
     pub screens: Vec<crate::quic::v2::msg::Screen>,
     /// This embedder can show more than one picture, so screens are offered even with `screens`
     /// empty and [`NativeClient::request_screens`] can ask for them later.
@@ -673,6 +685,7 @@ impl ConnectParams {
             host: host.into(),
             port,
             mode,
+            view: None,
             compositor: CompositorPref::Auto,
             gamepad: GamepadPref::Auto,
             bitrate_kbps: 0,
@@ -699,6 +712,7 @@ impl ConnectParams {
             preset: None,
             probe_only: false,
             profile: None,
+            screen_wish: None,
             screens: Vec::new(),
             shows_screens: false,
             studio_range: false,
@@ -847,6 +861,8 @@ impl NativeClient {
             host_caps2: welcome.host_caps2,
             mgmt_port: welcome.mgmt_port,
             profile: negotiated.profile,
+            screen: negotiated.screen,
+            role: negotiated.role,
             worker: Some(worker),
             video_e2e_ns: Arc::new(AtomicU64::new(0)),
             audio_av_offset_ms: Arc::new(AtomicI64::new(0)),
@@ -932,10 +948,21 @@ impl NativeClient {
     }
 
     /// Queue a live mode switch (no reconnect). Accepted: next frames open with an IDR and
-    /// [`NativeClient::mode`] updates. Rejected: session unchanged.
+    /// [`NativeClient::mode`] updates. Rejected: session unchanged and
+    /// [`NativeClient::mode_refusals`] moves. At the live size the host keeps the view it scales
+    /// to, so a rate change alone leaves its scale in place.
     pub fn request_mode(&self, mode: Mode) -> Result<()> {
         self.ctrl_tx
-            .try_send(CtrlRequest::Mode(mode))
+            .try_send(CtrlRequest::Mode(mode, None))
+            .map_err(|_| PunktfunkError::Closed)
+    }
+
+    /// [`Self::request_mode`] shown at `view` ([`ConnectParams::view`]). `None` asks for the
+    /// mode itself: it goes as the mode's own size, which clears a view the host keeps.
+    pub fn request_mode_view(&self, mode: Mode, view: Option<(u32, u32)>) -> Result<()> {
+        let view = view.unwrap_or((mode.width, mode.height));
+        self.ctrl_tx
+            .try_send(CtrlRequest::Mode(mode, Some(view)))
             .map_err(|_| PunktfunkError::Closed)
     }
 
@@ -974,6 +1001,12 @@ impl NativeClient {
         self.shared.codec_refused.load(Ordering::Relaxed)
     }
 
+    /// Mode switches the host refused this session, counted: a change since an ask means no
+    /// frame at the asked size is coming.
+    pub fn mode_refusals(&self) -> u32 {
+        self.shared.mode_refusals.load(Ordering::Relaxed)
+    }
+
     /// Who draws the pointer: `true` = client (host forwards shape/state, excludes it from
     /// video), `false` = host composites. Latest-wins; no-op without
     /// [`HOST_CAP_CURSOR`](crate::quic::HOST_CAP_CURSOR).
@@ -997,7 +1030,7 @@ impl NativeClient {
     /// default route. Re-picks the socket's source address and sends the host a copy of the
     /// last feedback, so it follows a roam within a round trip instead of a keep-alive.
     pub fn path_changed(&self) {
-        if let Some(reconnect) = self.shared.reconnect.get() {
+        if let Some(reconnect) = &*self.shared.reconnect.lock().unwrap() {
             reconnect();
         }
         let fb = self.shared.feedback.lock().unwrap().again();
@@ -1300,8 +1333,9 @@ impl NativeClient {
     }
 
     /// Close the overlay window with everything the connector knows filled in: mode, codec,
-    /// colour, chroma asked and granted, audio format, counters, the link line and the
-    /// weak-network warning. The caller adds the decoder, display HDR and its own extras.
+    /// colour, chroma asked and granted, the monitor a mirror streams, the screen role and why,
+    /// audio format, counters and, with `l10n`, the link line and the weak-network warning. The
+    /// caller adds the decoder, display HDR and its own extras.
     pub fn hud_snapshot(&self) -> crate::hud::StatsSnapshot {
         // Whole AUs the all-intra drain dropped before the decoder: it fell behind.
         let behind = self.shared.frames.take_skipped();
@@ -1320,12 +1354,26 @@ impl NativeClient {
         }
         s.chroma_444 = f.chroma_format == crate::quic::CHROMA_IDC_444;
         s.asked_444 = self.asked_444;
+        if let Some(crate::quic::v2::hello::ScreenEcho::Monitor(c)) = &self.screen {
+            s.screen = Some(c.clone());
+        }
+        s.role = self.role.and_then(|r| r.role);
+        s.role_reason = self.role.map(|r| r.reason);
         s.auto_rate = self.wants_decode;
         let a = self.audio_format();
         s.audio_lossless = a.is_pcm();
         s.audio_rate_hz = a.rate_hz;
         s.audio_bits = a.bits;
         s.audio_channels = a.channels;
+        // The link's own lines, worded only where the overlay can be drawn.
+        #[cfg(any(test, feature = "l10n"))]
+        self.push_link_extras(&mut s);
+        s
+    }
+
+    /// The link line, and the quality floor while Automatic holds PyroWave at it.
+    #[cfg(any(test, feature = "l10n"))]
+    fn push_link_extras(&self, s: &mut crate::hud::StatsSnapshot) {
         s.extras.push(crate::hud::Extra {
             role: crate::hud::Role::Muted,
             ..crate::hud::Extra::detail(self.link_line())
@@ -1339,10 +1387,10 @@ impl NativeClient {
                 role: crate::hud::Role::Warn,
             });
         }
-        s
     }
 
     /// The link every frame is paced at and why, as the overlay shows it.
+    #[cfg(any(test, feature = "l10n"))]
     pub fn link_line(&self) -> String {
         let host = self.shared.host_link.lock().unwrap().facts();
         // The buffer is named while the socket drops packets and it is under what a 4K
@@ -1629,8 +1677,9 @@ impl NativeClient {
     }
 
     /// Show these screens from now on, screen 0 first: the host adds, drops and resizes the
-    /// others and answers with a new [`Self::screen_layout`]. Screen 0's size still moves by
-    /// [`Self::request_mode`]. A host or dial without screens ignores it.
+    /// others, each framed for its `view`, and answers with a new [`Self::screen_layout`].
+    /// Screen 0's size and view still move by [`Self::request_mode_view`]. A host or dial
+    /// without screens ignores it.
     pub fn request_screens(&self, screens: Vec<crate::quic::v2::msg::Screen>) -> Result<()> {
         self.ctrl_tx
             .try_send(CtrlRequest::Screens(screens))
@@ -1878,6 +1927,19 @@ impl NativeClient {
         self.profile.as_deref()
     }
 
+    /// The screen this session streams: its own, the host monitor it mirrors, or a screen another
+    /// device opened. `None` from a host that does not say. As the session started: a pick
+    /// applies at the next connect, and a shared screen may be this device's alone later.
+    pub fn screen(&self) -> Option<&crate::quic::v2::hello::ScreenEcho> {
+        self.screen.as_ref()
+    }
+
+    /// The role this session got among the host's screens, and why it is not the one asked.
+    /// `None` from a host that does not say. As the session started.
+    pub fn role(&self) -> Option<crate::quic::v2::hello::RoleEcho> {
+        self.role
+    }
+
     /// Live grants ([`crate::quic::GRANT_GAMEPAD`] family). Welcome seed, latest
     /// [`crate::quic::AccessUpdate`] wins. Old host → [`crate::quic::GRANT_ALL`]. Courtesy:
     /// the host enforces. Load per use; never cache across
@@ -2116,6 +2178,12 @@ impl NativeClient {
     /// linger. A plain drop closes with code 0 and the host waits for reconnect.
     pub fn disconnect_quit(&self) {
         self.shared.quit.store(true, Ordering::SeqCst);
+        self.shared.shutdown.store(true, Ordering::SeqCst);
+    }
+
+    /// Close as a drop does (code 0, the host waits for a reconnect), while other threads may
+    /// still hold the client.
+    pub fn close(&self) {
         self.shared.shutdown.store(true, Ordering::SeqCst);
     }
 }
@@ -2371,7 +2439,7 @@ mod client_caps_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "l10n"))]
 mod mute_tests {
     use super::*;
 

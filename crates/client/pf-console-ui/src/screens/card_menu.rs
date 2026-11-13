@@ -20,6 +20,7 @@ use crate::store::SettingsStore;
 use crate::theme::{Fonts, Frame, W};
 use crate::widgets::{blurb, ListMsg, MenuList, RowSpec, TabStrip, TAB_STRIP_H};
 use pf_client_core::console::OverlayAction;
+use pf_client_core::display_targets::{RowKind, ScreenRow};
 use pf_client_core::library::InstallAction;
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use pf_client_core::start;
@@ -56,6 +57,9 @@ enum Action {
     Files(InstallAction),
     /// Mark or unmark the title on this device.
     Favorite,
+    /// Take the title off the shelf of the profile this device plays as, where the box lets
+    /// it (`pf_client_core::hide::offer`).
+    Hide,
     /// The poster's card: cover, facts, and its verbs.
     TitleDetails,
     /// [`Screen::BindPreset`] for the host, or for a library title.
@@ -71,6 +75,12 @@ enum Action {
     MakeDefault,
     /// Indexed into [`HostRow::actions`]: this build renders labels it has never heard of.
     Host(usize),
+    /// Row `i` of the host's Screen section under the card's preset (`Targets::rows_under`),
+    /// streamed from the next connect.
+    Screen(usize),
+    /// Why the host or the card's preset decides the screen (`Targets::note_under`), under the
+    /// pick it leaves.
+    ScreenNote,
     SendLogs,
     Forget,
     /// Connect once with preset `i`; `None` is the host's own binding.
@@ -82,6 +92,32 @@ enum Mode {
     Menu,
     Details,
     ConnectWith,
+}
+
+/// A tab of a host's details.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Section {
+    Presets,
+    Screen,
+    Connection,
+    Pairing,
+    Power,
+    Logs,
+    Remove,
+}
+
+impl Section {
+    fn name(self) -> &'static str {
+        match self {
+            Section::Presets => pf_l10n::client::hostcard_section_presets(),
+            Section::Screen => pf_l10n::client::hostcard_section_screen(),
+            Section::Connection => pf_l10n::client::hostcard_section_connection(),
+            Section::Pairing => pf_l10n::client::hostcard_section_pairing(),
+            Section::Power => pf_l10n::client::hostcard_section_power(),
+            Section::Logs => pf_l10n::client::hostcard_section_logs(),
+            Section::Remove => pf_l10n::console::console_section_remove(),
+        }
+    }
 }
 
 /// What the menu was raised on.
@@ -164,8 +200,8 @@ impl CardMenu {
     }
 
     /// The details' sections in order, the empty ones dropped.
-    fn sections(&self, store: &dyn SettingsStore) -> Vec<&'static str> {
-        let mut out: Vec<&'static str> = Vec::new();
+    fn sections(&self, store: &dyn SettingsStore) -> Vec<Section> {
+        let mut out: Vec<Section> = Vec::new();
         for a in self.details(self.host(), store) {
             if !out.contains(&Self::section(a)) {
                 out.push(Self::section(a));
@@ -216,6 +252,7 @@ impl CardMenu {
         let mut rows = self.all_actions(store, book);
         let handheld = device.platform == Platform::Android && !device.tv;
         rows.retain(|a| match a {
+            Action::Hide => device.hides,
             Action::CopyLink => !device.tv,
             Action::Clipboard => !device.tv || device.platform == Platform::Android,
             Action::HomeScreen | Action::LauncherFile => handheld,
@@ -234,12 +271,9 @@ impl CardMenu {
             // No Play row: the poster's OK launches it. The Mac's four rows, the title's files,
             // and End game while the host runs a launch of this device's.
             (Subject::Game { game, .. }, Mode::Menu) => {
-                let mut rows = vec![
-                    Action::PlayWith,
-                    Action::Favorite,
-                    Action::TitleDetails,
-                    Action::CopyLink,
-                ];
+                let mut rows = vec![Action::PlayWith, Action::Favorite];
+                rows.extend(self.hide_name(book).map(|_| Action::Hide));
+                rows.extend([Action::TitleDetails, Action::CopyLink]);
                 rows.extend(
                     game.install
                         .as_ref()
@@ -250,14 +284,14 @@ impl CardMenu {
                 return rows;
             }
             (Subject::Game { game, .. }, _) => {
-                let mut rows = vec![
-                    Action::Play,
-                    Action::Favorite,
+                let mut rows = vec![Action::Play, Action::Favorite];
+                rows.extend(self.hide_name(book).map(|_| Action::Hide));
+                rows.extend([
                     Action::BindPreset,
                     Action::CopyLink,
                     Action::HomeScreen,
                     Action::LauncherFile,
-                ];
+                ]);
                 rows.extend(
                     game.install
                         .as_ref()
@@ -313,6 +347,11 @@ impl CardMenu {
         a.extend((0..host.actions.len()).map(Action::Host));
         a.push(Action::BindPreset);
         a.extend((0..store.presets().len()).map(Action::Pin));
+        if let Some(s) = host.screens.as_ref().filter(|_| host.paired) {
+            let preset = host.screen_preset();
+            a.extend((0..s.rows_under(preset).len()).map(Action::Screen));
+            a.extend(s.note_under(preset).map(|_| Action::ScreenNote));
+        }
         if host.paired && host.online {
             a.push(Action::SpeedTest);
         }
@@ -334,16 +373,17 @@ impl CardMenu {
     }
 
     /// The section, and so the tab, a details row sits in.
-    fn section(a: Action) -> &'static str {
+    fn section(a: Action) -> Section {
         match a {
-            Action::BindPreset | Action::Pin(_) => "Presets",
+            Action::BindPreset | Action::Pin(_) => Section::Presets,
+            Action::Screen(_) | Action::ScreenNote => Section::Screen,
             Action::SpeedTest | Action::Clipboard | Action::Edit | Action::MakeDefault => {
-                "Connection"
+                Section::Connection
             }
-            Action::Pair | Action::Unpair => "Pairing",
-            Action::Wake | Action::Host(_) => "Power",
-            Action::SendLogs => "Logs",
-            _ => "Remove",
+            Action::Pair | Action::Unpair => Section::Pairing,
+            Action::Wake | Action::Host(_) => Section::Power,
+            Action::SendLogs => Section::Logs,
+            _ => Section::Remove,
         }
     }
 
@@ -351,6 +391,7 @@ impl CardMenu {
         match a {
             Action::ConnectWith | Action::PlayWith | Action::Play | Action::Preset(_) => "play",
             Action::Favorite => "check",
+            Action::Hide => "eye-off",
             Action::TitleDetails => "info",
             Action::Browse => "gamepad-2",
             Action::SwitchProfile => "refresh-cw",
@@ -373,6 +414,9 @@ impl CardMenu {
                 Some("power.reboot") => "rotate-cw",
                 _ => "power",
             },
+            Action::Screen(i) if self.screen(i).is_some_and(|r| r.checked) => "check",
+            Action::Screen(_) => "monitor",
+            Action::ScreenNote => "lock",
             Action::SendLogs => "scroll-text",
             Action::Forget => "trash-2",
             Action::EndGame => "x",
@@ -380,6 +424,17 @@ impl CardMenu {
             Action::Files(InstallAction::Pause) => "pause",
             Action::Files(InstallAction::Remove) => "trash-2",
         }
+    }
+
+    /// The name of the profile a title here hides for: the one its shelf plays as, where the
+    /// box lets this device hide its titles. Never for the desktop tile, which is the host.
+    fn hide_name(&self, book: &ProfileBook) -> Option<String> {
+        let Subject::Game { host, game, .. } = &self.subject else {
+            return None;
+        };
+        let pick = host.remembered().map(|p| p.id.as_str());
+        let row = pf_client_core::hide::offer(book.listed(&host.fp_hex), pick)?;
+        (game.id != crate::library::DESKTOP_ID).then(|| row.display_name.clone())
     }
 
     /// The title is marked on this device.
@@ -392,6 +447,20 @@ impl CardMenu {
         }
     }
 
+    /// Row `i` of the host's Screen section, read from the host row the menu opened on, under
+    /// the preset its card connects with.
+    fn screen(&self, i: usize) -> Option<ScreenRow> {
+        let h = self.host();
+        let rows = h.screens.as_ref()?.rows_under(h.screen_preset());
+        rows.into_iter().nth(i)
+    }
+
+    /// Why the host, or the card's preset, decides the screen, when one does.
+    fn screen_note(&self) -> Option<String> {
+        let h = self.host();
+        h.screens.as_ref()?.note_under(h.screen_preset())
+    }
+
     /// `default` (`Settings::default_host`) names this row. A derived default reads as unset.
     fn is_default(&self, default: Option<&str>) -> bool {
         let id = self.host().id.as_deref();
@@ -401,95 +470,103 @@ impl CardMenu {
     fn label(&self, a: Action, ctx: &Ctx) -> String {
         let presets = || ctx.store.presets();
         match a {
-            Action::ConnectWith => "Connect with\u{2026}".into(),
-            Action::Browse => "Browse games".into(),
-            Action::SwitchProfile => "Switch profile\u{2026}".into(),
-            Action::Wake => "Wake host".into(),
-            Action::CopyLink => "Copy link".into(),
-            Action::HomeScreen => "Add to home screen".into(),
-            Action::LauncherFile => "Save launcher file\u{2026}".into(),
-            Action::Details => "Host details\u{2026}".into(),
-            Action::Unpin => "Unpin card".into(),
-            Action::Pair if self.host().paired => "Pair again\u{2026}".into(),
-            Action::Pair => "Pair\u{2026}".into(),
-            Action::Unpair if self.armed == Some(Action::Unpair) => {
-                "Unpair \u{2014} press again".into()
+            Action::ConnectWith => pf_l10n::console::console_card_connect_with().into(),
+            Action::Browse => pf_l10n::console::console_card_browse_games().into(),
+            Action::SwitchProfile => pf_l10n::client::hostcard_switch_profile().into(),
+            Action::Wake => pf_l10n::client::hostcard_wake().into(),
+            Action::CopyLink => pf_l10n::client::hostcard_copy_link().into(),
+            Action::HomeScreen => pf_l10n::client::link_home_screen().into(),
+            Action::LauncherFile => pf_l10n::client::link_launcher_file().into(),
+            Action::Details => pf_l10n::client::hostcard_details().into(),
+            Action::Unpin => pf_l10n::client::hostcard_unpin_card().into(),
+            Action::Pair if self.host().paired => {
+                pf_l10n::console::console_card_pair_again().into()
             }
-            Action::Unpair => "Unpair".into(),
-            Action::AddHost => "Add host".into(),
-            Action::PlayWith => "Play with preset\u{2026}".into(),
+            Action::Pair => pf_l10n::console::console_card_pair().into(),
+            Action::Unpair if self.armed == Some(Action::Unpair) => {
+                pf_l10n::console::console_card_unpair_armed().into()
+            }
+            Action::Unpair => pf_l10n::console::console_card_unpair().into(),
+            Action::AddHost => pf_l10n::console::console_card_add_host().into(),
+            Action::PlayWith => pf_l10n::client::lib_play_with_preset().into(),
             Action::Play => match &self.subject {
-                Subject::Game { game, .. } if game.running => "Resume".into(),
-                _ => "Play".into(),
+                Subject::Game { game, .. } if game.running => pf_l10n::client::lib_resume().into(),
+                _ => pf_l10n::common::common_play().into(),
             },
             Action::EndGame if self.armed == Some(Action::EndGame) => {
-                "End game \u{2014} press again".into()
+                pf_l10n::client::lib_end_game_armed().into()
             }
-            Action::EndGame => "End game".into(),
+            Action::EndGame => pf_l10n::client::lib_end_game().into(),
             Action::Files(InstallAction::Remove) if self.armed == Some(a) => {
-                "Remove download \u{2014} press again".into()
+                pf_l10n::client::lib_download_remove_armed().into()
             }
             Action::Files(f) => match &self.subject {
                 Subject::Game { game, .. } => f.label(game.install.as_ref().map(|i| &i.install)),
                 Subject::Host(_) => String::new(),
             },
-            Action::Favorite if self.is_favorite(ctx.settings) => "Remove from Favorites".into(),
-            Action::Favorite => "Add to Favorites".into(),
-            Action::TitleDetails => "Details\u{2026}".into(),
+            Action::Favorite if self.is_favorite(ctx.settings) => {
+                pf_l10n::client::lib_favorite_remove().into()
+            }
+            Action::Favorite => pf_l10n::client::lib_favorite_add().into(),
+            Action::Hide => {
+                pf_l10n::client::lib_hide_for(self.hide_name(ctx.profiles).unwrap_or_default())
+            }
+            Action::TitleDetails => pf_l10n::client::lib_title_details().into(),
             Action::BindPreset => match self.subject {
-                Subject::Game { .. } => "Settings preset\u{2026}".into(),
-                Subject::Host(_) => "Default preset\u{2026}".into(),
+                Subject::Game { .. } => pf_l10n::client::lib_title_preset().into(),
+                Subject::Host(_) => pf_l10n::console::console_card_default_preset().into(),
             },
             Action::Pin(i) => {
                 let Some((id, name)) = presets().get(i).cloned() else {
                     return String::new();
                 };
-                let on = self.pinned(ctx.store).contains(&id);
-                format!(
-                    "\u{201c}{name}\u{201d} card: {}",
-                    if on { "On" } else { "Off" }
-                )
+                match self.pinned(ctx.store).contains(&id) {
+                    true => pf_l10n::console::console_card_pin_on(name),
+                    false => pf_l10n::console::console_card_pin_off(name),
+                }
             }
             // The session binary runs the whole check; the other shells measure speed.
             Action::SpeedTest => match ctx.device.platform {
-                crate::platform::Platform::Desktop => "Check network\u{2026}".into(),
-                _ => "Test network speed\u{2026}".into(),
-            },
-            Action::Clipboard => format!(
-                "Shared clipboard: {}",
-                if self.host().clipboard_sync {
-                    "On"
-                } else {
-                    "Off"
+                crate::platform::Platform::Desktop => {
+                    pf_l10n::console::console_card_check_network().into()
                 }
-            ),
-            Action::Edit => "Edit name and address\u{2026}".into(),
+                _ => pf_l10n::client::hostcard_speed_test().into(),
+            },
+            Action::Clipboard if self.host().clipboard_sync => {
+                pf_l10n::console::console_card_clipboard_on().into()
+            }
+            Action::Clipboard => pf_l10n::console::console_card_clipboard_off().into(),
+            Action::Edit => pf_l10n::client::hostcard_edit().into(),
             // Geist carries no U+2713, so a check mark here draws as a missing glyph.
             Action::MakeDefault if self.is_default(ctx.settings.default_host.as_deref()) => {
-                "Default host: On".into()
+                pf_l10n::console::console_card_default_host_on().into()
             }
-            Action::MakeDefault => "Default host: Off".into(),
+            Action::MakeDefault => pf_l10n::console::console_card_default_host_off().into(),
             Action::Host(i) => match self.host().actions.get(i) {
                 Some(act) if self.armed == Some(a) => {
-                    format!("{} \u{2014} press again", act.label)
+                    pf_l10n::console::console_card_action_armed(&act.label)
                 }
                 Some(act) => act.label.clone(),
                 None => String::new(),
             },
-            Action::SendLogs => "Send logs to host".into(),
+            Action::Screen(i) => self.screen(i).map(|r| r.label).unwrap_or_default(),
+            Action::ScreenNote => self.screen_note().unwrap_or_default(),
+            Action::SendLogs => pf_l10n::client::hostcard_send_logs().into(),
             Action::Forget if self.armed == Some(Action::Forget) => {
-                "Remove host \u{2014} press again".into()
+                pf_l10n::console::console_card_remove_armed().into()
             }
-            Action::Forget => "Remove host".into(),
-            Action::Preset(None) => "Default settings".into(),
+            Action::Forget => pf_l10n::client::hostcard_remove().into(),
+            Action::Preset(None) => pf_l10n::client::hostcard_default_settings().into(),
             Action::Preset(Some(i)) => presets().get(i).map(|p| p.1.clone()).unwrap_or_default(),
         }
     }
 
-    /// Host-reported verbs can be unavailable. The row stays; activating it says why.
+    /// Host-reported verbs and screens can be unavailable. The row stays; activating it says why.
     fn enabled(&self, a: Action) -> bool {
         match a {
             Action::Host(i) => self.host().actions.get(i).is_none_or(|act| act.available),
+            Action::Screen(i) => self.screen(i).is_none_or(|r| r.pickable),
+            Action::ScreenNote => false,
             _ => true,
         }
     }
@@ -574,13 +651,35 @@ impl CardMenu {
                     true
                 });
                 fx.toast = Some(if on {
-                    format!("{} is a favorite", game.title)
+                    pf_l10n::client::lib_favorite_added(&game.title)
                 } else {
-                    format!("{} is no longer a favorite", game.title)
+                    pf_l10n::client::lib_favorite_removed(&game.title)
                 });
                 if self.mode == Mode::Menu {
                     fx.pop();
                 }
+            }
+            // The title leaves the shelf when the host says it took it; its answer is the toast.
+            Action::Hide => {
+                let (Subject::Game { host, game, .. }, Some(name)) =
+                    (&self.subject, self.hide_name(ctx.profiles))
+                else {
+                    return;
+                };
+                let Some(profile) = host.remembered() else {
+                    return;
+                };
+                fx.cmds.push(ConsoleCmd::SetHidden {
+                    addr: host.addr.clone(),
+                    mgmt: host.mgmt_port,
+                    fp_hex: host.fp_hex.clone(),
+                    profile: profile.id.clone(),
+                    name,
+                    app_id: game.id.clone(),
+                    title: game.title.clone(),
+                    hidden: true,
+                });
+                fx.pop();
             }
             Action::SwitchProfile => {
                 let host = self.host();
@@ -609,7 +708,7 @@ impl CardMenu {
                     addr: host.addr.clone(),
                     port: host.port,
                 });
-                fx.toast = Some(format!("Added {}", host.name));
+                fx.toast = Some(pf_l10n::console::console_card_added(&host.name));
                 fx.pop();
             }
             // Toggles what the row showed, not what the rebase reads.
@@ -623,9 +722,9 @@ impl CardMenu {
                 });
                 let opens = start::StartIn::parse(&ctx.settings.start_in) != start::StartIn::Hosts;
                 fx.toast = Some(match (on, opens) {
-                    (true, true) => format!("{name} opens on launch"),
-                    (true, false) => format!("{name} is the default host"),
-                    (false, _) => format!("{name} is no longer the default host"),
+                    (true, true) => pf_l10n::console::console_card_opens_on_launch(&name),
+                    (true, false) => pf_l10n::console::console_card_is_default_body(&name),
+                    (false, _) => pf_l10n::console::console_card_not_default_body(&name),
                 });
             }
             Action::SendLogs => {
@@ -636,7 +735,7 @@ impl CardMenu {
                     fp_hex: host.fp_hex.clone(),
                     host_name: host.name.clone(),
                 });
-                fx.toast = Some(format!("Sending logs to {}\u{2026}", host.name));
+                fx.toast = Some(pf_l10n::client::hostcard_sending_logs(&host.name));
                 fx.pop();
             }
             Action::SpeedTest => {
@@ -655,9 +754,9 @@ impl CardMenu {
                 match self.link(store) {
                     Some(url) => {
                         fx.copy = Some(url);
-                        fx.toast = Some("Link copied".into());
+                        fx.toast = Some(pf_l10n::client::hostcard_link_copied().into());
                     }
-                    None => fx.toast = Some("This host isn't saved any more".into()),
+                    None => fx.toast = Some(pf_l10n::console::console_card_not_saved_body().into()),
                 }
                 fx.pop();
             }
@@ -671,7 +770,7 @@ impl CardMenu {
                             _ => OverlayAction::SaveLauncherFile { url, title },
                         });
                     }
-                    None => fx.toast = Some("This host isn't saved any more".into()),
+                    None => fx.toast = Some(pf_l10n::console::console_card_not_saved_body().into()),
                 }
                 fx.pop();
             }
@@ -706,9 +805,9 @@ impl CardMenu {
                 if let Some((id, name)) = store.presets().get(i).cloned() {
                     let pin = !self.pinned(store).contains(&id);
                     fx.toast = Some(if pin {
-                        format!("Pinned \u{201c}{name}\u{201d} as a card")
+                        pf_l10n::console::console_card_pinned_body(&name)
                     } else {
-                        format!("Unpinned \u{201c}{name}\u{201d}")
+                        pf_l10n::console::console_card_unpinned(&name)
                     });
                     fx.cmds.push(ConsoleCmd::SetPin {
                         key,
@@ -721,9 +820,9 @@ impl CardMenu {
                 let host = self.host();
                 let on = !host.clipboard_sync;
                 fx.toast = Some(if on {
-                    format!("Clipboard shared with {}", host.name)
+                    pf_l10n::console::console_card_clipboard_shared_body(&host.name)
                 } else {
-                    format!("Clipboard no longer shared with {}", host.name)
+                    pf_l10n::console::console_card_clipboard_unshared_body(&host.name)
                 });
                 fx.cmds.push(ConsoleCmd::SetClipboard { key, on });
                 fx.pop();
@@ -733,9 +832,8 @@ impl CardMenu {
             }
             Action::Unpair => {
                 fx.cmds.push(ConsoleCmd::UnpairHost { key });
-                fx.toast = Some(format!(
-                    "Unpaired {}. The next connect asks for a PIN.",
-                    self.host().name
+                fx.toast = Some(pf_l10n::console::console_card_unpaired_body(
+                    &self.host().name,
                 ));
                 fx.pop();
             }
@@ -754,7 +852,7 @@ impl CardMenu {
                     app_id: game.id.clone(),
                     title: game.title.clone(),
                 });
-                fx.toast = Some(format!("Ending {}\u{2026}", game.title));
+                fx.toast = Some(pf_l10n::client::lib_end_game_ending(&game.title));
                 fx.pop();
             }
             // Removing loses the download: arm, then fire.
@@ -775,10 +873,10 @@ impl CardMenu {
                 });
                 fx.toast = Some(match f {
                     InstallAction::Install | InstallAction::Resume => {
-                        format!("Starting {}'s download\u{2026}", game.title)
+                        pf_l10n::client::lib_install_starting(&game.title)
                     }
-                    InstallAction::Pause => format!("Pausing {}'s download\u{2026}", game.title),
-                    InstallAction::Remove => format!("Removing {}\u{2026}", game.title),
+                    InstallAction::Pause => pf_l10n::client::lib_download_pausing(&game.title),
+                    InstallAction::Remove => pf_l10n::client::lib_removing(&game.title),
                 });
                 fx.pop();
             }
@@ -787,7 +885,7 @@ impl CardMenu {
             }
             Action::Forget => {
                 fx.cmds.push(ConsoleCmd::ForgetHost { key });
-                fx.toast = Some(format!("Removed {}", self.host().name));
+                fx.toast = Some(pf_l10n::console::console_card_removed(&self.host().name));
                 fx.pop();
             }
             Action::Host(i) => {
@@ -799,7 +897,7 @@ impl CardMenu {
                 if !act.available {
                     let why = act.unavailable_reason.clone();
                     fx.toast = Some(if why.is_empty() {
-                        format!("{} isn't available right now", act.label)
+                        pf_l10n::client::hostcard_action_unavailable_body(&act.label)
                     } else {
                         why
                     });
@@ -819,11 +917,39 @@ impl CardMenu {
                     action_id: act.id.clone(),
                     label: act.label.clone(),
                 });
-                fx.toast = Some(format!(
-                    "{} \u{2014} asking {}\u{2026}",
-                    act.label, host.name
+                fx.toast = Some(pf_l10n::client::hostcard_action_asking(
+                    &act.label, &host.name,
                 ));
                 fx.pop();
+            }
+            // A greyed row says why rather than write a pick the host would not take; the
+            // checked row has nothing to write.
+            Action::Screen(i) => {
+                let host = self.host();
+                let Some(row) = self.screen(i) else {
+                    return; // row list changed under the cursor
+                };
+                let Some(pick) = row.pick else {
+                    let note = self.screen_note().filter(|_| !row.pickable);
+                    fx.toast = row.reason.or(note);
+                    return;
+                };
+                fx.toast = Some(match row.kind {
+                    RowKind::Monitor => pf_l10n::client::screen_streams(&row.label),
+                    _ => row.label.clone(),
+                });
+                fx.cmds.push(ConsoleCmd::SetScreen {
+                    addr: host.addr.clone(),
+                    mgmt: host.mgmt_port,
+                    fp_hex: host.fp_hex.clone(),
+                    screen: pick.screen,
+                    topology: pick.topology,
+                    label: row.label,
+                });
+                fx.pop();
+            }
+            Action::ScreenNote => {
+                fx.toast = self.screen_note();
             }
             Action::Unpin => {
                 if let Some(p) = &self.host().pin {
@@ -832,25 +958,50 @@ impl CardMenu {
                         preset_id: p.id.clone(),
                         pin: false,
                     });
-                    fx.toast = Some(format!("Unpinned {}", p.name));
+                    fx.toast = Some(pf_l10n::console::console_card_unpinned(&p.name));
                 }
                 fx.pop();
             }
         }
     }
 
+    /// Row `a` as drawn. The address sits on the row that edits it; the pick on the row that
+    /// changes it. A Screen row shows a monitor's mode as its value and why it is greyed, else
+    /// the role's hint, under it.
+    fn row(&self, a: Action, ctx: &Ctx) -> RowSpec {
+        let row = RowSpec::action(self.label(a, ctx), self.enabled(a)).with_icon(self.icon(a));
+        match (a, &self.subject) {
+            (Action::Edit, Subject::Host(h)) => RowSpec {
+                value: Some(format!("{}:{}", h.addr, h.port)),
+                ..row
+            },
+            (Action::SwitchProfile, Subject::Host(h)) => RowSpec {
+                value: h.profile.as_ref().map(|p| p.display_name.clone()),
+                ..row
+            },
+            (Action::Screen(i), _) => match self.screen(i) {
+                Some(s) => RowSpec {
+                    value: Some(s.detail).filter(|d| !d.is_empty()),
+                    note: s.reason.or(s.hint.map(String::from)),
+                    header: s.header,
+                    ..row
+                },
+                None => row,
+            },
+            _ => row,
+        }
+    }
+
     fn blurb(&self) -> String {
         match (&self.subject, self.mode) {
-            (_, Mode::ConnectWith) => "This connect only; the card keeps its own preset.".into(),
+            (_, Mode::ConnectWith) => pf_l10n::console::console_card_connect_with_body().into(),
             (Subject::Host(h), _) if h.pin.is_some() => {
-                "A shortcut to one preset on this host. Unpinning it changes nothing about the \
-                 host or the preset."
-                    .into()
+                pf_l10n::console::console_card_pinned_card_body().into()
             }
-            (Subject::Host(h), _) if !h.saved => "Found on this network.".into(),
+            (Subject::Host(h), _) if !h.saved => pf_l10n::console::console_card_found_body().into(),
             (Subject::Host(_), _) => String::new(),
             (Subject::Game { .. }, Mode::Details) => String::new(),
-            (Subject::Game { host, .. }, _) => format!("On {}.", host.name),
+            (Subject::Game { host, .. }, _) => pf_l10n::client::lib_title_on_host(&host.name),
         }
     }
 }
@@ -875,9 +1026,9 @@ impl ScreenView for CardMenu {
         };
         match (self.mode, &self.subject) {
             (Mode::Details, Subject::Game { .. }) | (Mode::Menu, _) => name,
-            (Mode::Details, _) => format!("{name} \u{b7} Details"),
-            (Mode::ConnectWith, Subject::Game { .. }) => format!("Play {name} with"),
-            (Mode::ConnectWith, _) => format!("Connect to {name} with"),
+            (Mode::Details, _) => pf_l10n::console::console_card_details_title(name),
+            (Mode::ConnectWith, Subject::Game { .. }) => pf_l10n::client::lib_play_with_title(name),
+            (Mode::ConnectWith, _) => pf_l10n::console::console_card_connect_with_title(name),
         }
     }
 
@@ -937,8 +1088,8 @@ impl ScreenView for CardMenu {
 
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         vec![
-            Hint::new(HintKey::Confirm, "Choose"),
-            Hint::new(HintKey::Back, "Close"),
+            Hint::new(HintKey::Confirm, pf_l10n::console::console_hint_choose()),
+            Hint::new(HintKey::Back, pf_l10n::common::common_close()),
         ]
     }
 
@@ -970,25 +1121,7 @@ impl ScreenView for CardMenu {
         let strip_top = list_rect.top;
         list_rect.top += strip_h as f32;
         let actions = self.actions(ctx.store, ctx.profiles, ctx.device);
-        let rows: Vec<RowSpec> = actions
-            .iter()
-            .map(|&a| {
-                let row =
-                    RowSpec::action(self.label(a, ctx), self.enabled(a)).with_icon(self.icon(a));
-                // The address sits on the row that edits it; the pick on the row that changes it.
-                match (a, &self.subject) {
-                    (Action::Edit, Subject::Host(h)) => RowSpec {
-                        value: Some(format!("{}:{}", h.addr, h.port)),
-                        ..row
-                    },
-                    (Action::SwitchProfile, Subject::Host(h)) => RowSpec {
-                        value: h.profile.as_ref().map(|p| p.display_name.clone()),
-                        ..row
-                    },
-                    _ => row,
-                }
-            })
-            .collect();
+        let rows: Vec<RowSpec> = actions.iter().map(|&a| self.row(a, ctx)).collect();
         let active = !self.strip_focus;
         self.list
             .render(canvas, ui, list_rect, &rows, fonts, k, dt, active);
@@ -997,8 +1130,9 @@ impl ScreenView for CardMenu {
             let bottom = strip_top + strip_h as f32;
             let r = Rect::from_ltrb(rect.left, strip_top, rect.right, bottom);
             let (tab, focused) = (self.tab, self.strip_focus);
+            let names: Vec<&str> = sections.iter().map(|s| s.name()).collect();
             self.strip
-                .render(canvas, ui, r, &sections, tab, focused, fonts, k, dt);
+                .render(canvas, ui, r, &names, tab, focused, fonts, k, dt);
         }
     }
 
@@ -1085,6 +1219,7 @@ mod tests {
     use crate::model::PresetChip;
     use crate::screens::settings::tests::fake_home;
     use crate::screens::Nav;
+    use pf_client_core::display_targets::{DisplayTarget, Role, RoleInfo, Target, Targets};
 
     fn with_ctx<R>(f: impl FnOnce(&mut Ctx) -> R) -> R {
         fake_home();
@@ -1162,6 +1297,70 @@ mod tests {
         }
     }
 
+    /// An older host, without roles: its own screen, the TV this device picked, a head another
+    /// device streams and one that is off.
+    fn screened(locked: bool) -> HostRow {
+        let head = |id: &str, label: &str| Target {
+            id: id.into(),
+            label: label.into(),
+            connector: Some(id.into()),
+            mode: Some("3840x2160@60".into()),
+            ..Target::default()
+        };
+        HostRow {
+            screens: Some(Targets {
+                locked,
+                host_default: DisplayTarget::Own,
+                yours: Some(DisplayTarget::Monitor("HDMI-A-1".into())),
+                targets: vec![
+                    Target {
+                        id: "own".into(),
+                        label: "Own screen".into(),
+                        ..Target::default()
+                    },
+                    head("HDMI-A-1", "LG TV"),
+                    Target {
+                        in_use_by: Some("Ben's Apple TV".into()),
+                        ..head("DP-1", "DELL U2723QE")
+                    },
+                    Target {
+                        enabled: false,
+                        ..head("DP-2", "Samsung Odyssey")
+                    },
+                ],
+                ..Targets::default()
+            }),
+            ..host()
+        }
+    }
+
+    /// [`screened`] on a host that offers the three roles, this device a second screen.
+    fn roled(may_choose: bool) -> HostRow {
+        let mut h = screened(false);
+        let t = h.screens.as_mut().unwrap();
+        t.yours = Some(DisplayTarget::Own);
+        t.may_choose = may_choose;
+        t.role = Some(RoleInfo {
+            yours: Some(Role::Second),
+            host_default: Role::Only,
+            offered: Role::ALL.to_vec(),
+        });
+        h
+    }
+
+    /// `h`'s Screen tab, and its rows.
+    fn screen_tab(h: &HostRow) -> (CardMenu, Vec<Action>) {
+        let d = details(h);
+        let sections = d.sections(crate::store::file_store());
+        let tab = sections.iter().position(|s| *s == Section::Screen);
+        let s = CardMenu {
+            tab: tab.expect("a Screen tab"),
+            ..d
+        };
+        let rows = rows(&s);
+        (s, rows)
+    }
+
     fn pinned() -> HostRow {
         HostRow {
             key: "aa\u{0}prof-1".into(),
@@ -1170,6 +1369,7 @@ mod tests {
                 name: "4K".into(),
                 accent: None,
                 bitrate_kbps: None,
+                host_screen: None,
             }),
             ..host()
         }
@@ -1190,6 +1390,7 @@ mod tests {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         }
     }
 
@@ -1361,7 +1562,7 @@ mod tests {
             ..host()
         };
         for tab in tabs(&h) {
-            let sections: Vec<&str> = tab.iter().map(|a| CardMenu::section(*a)).collect();
+            let sections: Vec<Section> = tab.iter().map(|a| CardMenu::section(*a)).collect();
             assert!(
                 sections.windows(2).all(|w| w[0] == w[1]),
                 "one per tab: {sections:?}"
@@ -1421,14 +1622,14 @@ mod tests {
     #[test]
     fn power_leads_the_details_when_the_host_offers_it() {
         let first = |h: &HostRow| details(h).sections(crate::store::file_store())[0];
-        assert_eq!(first(&powered()), "Power");
-        assert_eq!(first(&host()), "Presets");
+        assert_eq!(first(&powered()), Section::Power);
+        assert_eq!(first(&host()), Section::Presets);
         let asleep = HostRow {
             online: false,
             can_wake: true,
             ..host()
         };
-        assert_eq!(first(&asleep), "Power");
+        assert_eq!(first(&asleep), Section::Power);
     }
 
     #[test]
@@ -1728,6 +1929,98 @@ mod tests {
         assert_ne!(marked, again, "a second press undoes the first");
     }
 
+    /// Hide for the shelf's profile follows Favorite only where the profile's row says this
+    /// device is its person, and pressing it asks the host, then closes the menu.
+    #[test]
+    fn hide_is_offered_only_where_the_box_lets_this_device() {
+        use crate::model::ProfilesAnswer;
+        use pf_client_core::profiles::{ListedProfile, ProfilePick};
+        fake_home();
+        let book = |person| {
+            let kid = ListedProfile {
+                id: "kid".into(),
+                display_name: "Kid".into(),
+                person,
+                ..Default::default()
+            };
+            let mut book = ProfileBook::new(true);
+            book.learn("aa", &ProfilesAnswer::Listed(vec![kid]));
+            book
+        };
+        let picked = HostRow {
+            profile: Some(ProfilePick {
+                id: "kid".into(),
+                display_name: "Kid".into(),
+                remember: true,
+                ..Default::default()
+            }),
+            ..host()
+        };
+        let offered = |host: &HostRow, game: &LibraryGame, book: &ProfileBook, d: &Device| {
+            let menu = CardMenu::for_game(host, game, None);
+            menu.actions(crate::store::file_store(), book, d)
+                .contains(&Action::Hide)
+        };
+        let (yes, device) = (book(true), Device::test());
+        let rows = rows_on(&CardMenu::for_game(&picked, &game(), None), &device);
+        assert!(!rows.contains(&Action::Hide), "no book, no row");
+        let rows = CardMenu::for_game(&picked, &game(), None).actions(
+            crate::store::file_store(),
+            &yes,
+            &device,
+        );
+        assert_eq!(
+            rows[..3],
+            [Action::PlayWith, Action::Favorite, Action::Hide]
+        );
+        assert!(
+            !offered(&picked, &game(), &book(false), &device),
+            "not its person"
+        );
+        assert!(!offered(&host(), &game(), &yes, &device), "no saved pick");
+        let shell = Device {
+            hides: false,
+            ..Device::test()
+        };
+        assert!(
+            !offered(&picked, &game(), &yes, &shell),
+            "an embedder without the call"
+        );
+        let desk = LibraryGame {
+            id: crate::library::DESKTOP_ID.into(),
+            ..game()
+        };
+        assert!(
+            !offered(&picked, &desk, &yes, &device),
+            "the desktop tile is the host"
+        );
+
+        let mut settings = crate::store::file_store().load();
+        let library = crate::library::LibraryShared::default();
+        let mut ctx = Ctx {
+            profiles: &yes,
+            ..Ctx::test(&mut settings, &library)
+        };
+        let mut s = CardMenu::for_game(&picked, &game(), None);
+        assert_eq!(s.label(Action::Hide, &ctx), "Hide for Kid");
+        let mut fx = Outbox::default();
+        s.run(Action::Hide, &mut ctx, &mut fx);
+        assert!(matches!(fx.nav, Some(Nav::Pop)));
+        match fx.cmds.as_slice() {
+            [ConsoleCmd::SetHidden {
+                profile,
+                name,
+                app_id,
+                hidden: true,
+                ..
+            }] => assert_eq!(
+                (profile.as_str(), name.as_str(), app_id.as_str()),
+                ("kid", "Kid", "steam:367520")
+            ),
+            other => panic!("one SetHidden, got {other:?}"),
+        }
+    }
+
     /// The label reads back the explicit pointer; pressing the row again clears it.
     #[test]
     fn make_default_sets_then_clears_the_pointer() {
@@ -1791,6 +2084,7 @@ mod tests {
         assert!(!offers(true, Platform::WebOS));
         assert!(!offers(true, Platform::Apple));
         assert!(!offers(true, Platform::Ps5));
+        assert!(!offers(true, Platform::Switch));
     }
 
     /// An Android handheld's title card offers a home-screen shortcut and a launcher file; a
@@ -1865,6 +2159,227 @@ mod tests {
         );
     }
 
+    /// The Screen tab sits between Presets and Connection. An older host's rows come in its
+    /// order; the pick carries the check; a taken or switched-off head is greyed and says why.
+    #[test]
+    fn the_screen_tab_lists_the_hosts_screens_and_marks_the_pick() {
+        let sections = details(&screened(false)).sections(crate::store::file_store());
+        let at = |want| sections.iter().position(|s| *s == want).unwrap();
+        assert_eq!(at(Section::Screen), at(Section::Presets) + 1);
+        assert_eq!(at(Section::Connection), at(Section::Screen) + 1);
+
+        let (s, rows) = screen_tab(&screened(false));
+        assert_eq!(
+            rows,
+            (0..4).map(Action::Screen).collect::<Vec<_>>(),
+            "one row per screen, in order"
+        );
+        let names: Vec<String> = rows.iter().map(|a| label(&s, *a)).collect();
+        assert_eq!(
+            names,
+            ["Own screen", "LG TV", "DELL U2723QE", "Samsung Odyssey"]
+        );
+        let icons: Vec<&str> = rows.iter().map(|a| s.icon(*a)).collect();
+        assert_eq!(icons, ["monitor", "check", "monitor", "monitor"]);
+        let enabled: Vec<bool> = rows.iter().map(|a| s.enabled(*a)).collect();
+        assert_eq!(enabled, [true, true, false, false]);
+
+        for (i, why) in [(2, "Streamed by Ben's Apple TV"), (3, "Off")] {
+            let mut s = screen_tab(&screened(false)).0;
+            let mut fx = Outbox::default();
+            run_action(&mut s, Action::Screen(i), &mut fx);
+            assert!(fx.cmds.is_empty(), "no write the host would not open");
+            assert_eq!(fx.toast.as_deref(), Some(why));
+        }
+
+        let mut follows = screened(false);
+        follows.screens.as_mut().unwrap().yours = None;
+        let (s, _) = screen_tab(&follows);
+        assert_eq!(
+            s.icon(Action::Screen(0)),
+            "check",
+            "no row of its own: the host's default"
+        );
+        assert_eq!(s.icon(Action::Screen(1)), "monitor");
+    }
+
+    /// A host with roles reads as one pick: the roles with their hints, then the monitors
+    /// under one heading. Its own-screen row is the roles'.
+    #[test]
+    fn a_role_host_lists_the_roles_then_the_monitors() {
+        let (s, rows) = screen_tab(&roled(true));
+        assert_eq!(rows, (0..6).map(Action::Screen).collect::<Vec<_>>());
+        let names: Vec<String> = rows.iter().map(|a| label(&s, *a)).collect();
+        assert_eq!(
+            names,
+            [
+                "Only screen",
+                "Main screen",
+                "Second screen",
+                "LG TV",
+                "DELL U2723QE",
+                "Samsung Odyssey"
+            ]
+        );
+        let icons: Vec<&str> = rows.iter().map(|a| s.icon(*a)).collect();
+        assert_eq!(
+            icons,
+            ["monitor", "monitor", "check", "monitor", "monitor", "monitor"]
+        );
+        let specs: Vec<RowSpec> = with_ctx(|ctx| rows.iter().map(|a| s.row(*a, ctx)).collect());
+        let headers: Vec<Option<&str>> = specs.iter().map(|r| r.header).collect();
+        assert_eq!(
+            headers,
+            [None, None, None, Some("Show a monitor"), None, None]
+        );
+        assert_eq!(
+            specs[0].note.as_deref(),
+            Some("The host's monitors turn off while you stream.")
+        );
+        let tv = "HDMI-A-1 \u{b7} 3840x2160@60";
+        assert_eq!(specs[3].value.as_deref(), Some(tv));
+        assert_eq!(specs[4].note.as_deref(), Some("Streamed by Ben's Apple TV"));
+    }
+
+    /// A pick is one write of this device's row, and the menu closes on it. A role writes its
+    /// topology beside the own screen; the checked row writes nothing.
+    #[test]
+    fn picking_a_screen_writes_it_once() {
+        let mut follows = screened(false);
+        follows.screens.as_mut().unwrap().yours = None;
+        let own = DisplayTarget::Own;
+        let tv = DisplayTarget::Monitor("HDMI-A-1".into());
+        for (h, i, screen, topology, name, toast) in [
+            (&follows, 1, tv, None, "LG TV", "Streams LG TV"),
+            (
+                &screened(false),
+                0,
+                own.clone(),
+                None,
+                "Own screen",
+                "Own screen",
+            ),
+            (
+                &roled(true),
+                0,
+                own,
+                Some("exclusive"),
+                "Only screen",
+                "Only screen",
+            ),
+        ] {
+            let mut s = screen_tab(h).0;
+            let mut fx = Outbox::default();
+            run_action(&mut s, Action::Screen(i), &mut fx);
+            assert_eq!(
+                fx.cmds,
+                vec![ConsoleCmd::SetScreen {
+                    addr: "10.0.0.5".into(),
+                    mgmt: 9778,
+                    fp_hex: "aa".into(),
+                    screen,
+                    topology: topology.map(String::from),
+                    label: name.into(),
+                }]
+            );
+            assert_eq!(fx.toast.as_deref(), Some(toast));
+            assert!(matches!(fx.nav, Some(Nav::Pop)));
+        }
+        for (h, checked) in [(&follows, 0), (&roled(true), 2)] {
+            let mut s = screen_tab(h).0;
+            let mut fx = Outbox::default();
+            run_action(&mut s, Action::Screen(checked), &mut fx);
+            assert!(fx.cmds.is_empty() && fx.toast.is_none() && fx.nav.is_none());
+        }
+    }
+
+    /// A locked host, or one that keeps the choice, shows the pick greyed and why under it;
+    /// nothing in the tab writes.
+    #[test]
+    fn a_host_that_decides_shows_its_pick_and_why() {
+        for (h, pick, why) in [
+            (
+                screened(true),
+                "LG TV",
+                "The host's settings file fixes which screen is streamed.",
+            ),
+            (
+                roled(false),
+                "Second screen",
+                "This host decides the screen for this device.",
+            ),
+        ] {
+            let (mut s, rows) = screen_tab(&h);
+            assert_eq!(rows, vec![Action::Screen(0), Action::ScreenNote]);
+            assert_eq!(label(&s, Action::Screen(0)), pick);
+            assert_eq!(s.icon(Action::Screen(0)), "check");
+            assert_eq!(label(&s, Action::ScreenNote), why);
+            assert!(!s.enabled(Action::Screen(0)) && !s.enabled(Action::ScreenNote));
+            for a in rows {
+                let mut fx = Outbox::default();
+                run_action(&mut s, a, &mut fx);
+                assert!(fx.cmds.is_empty());
+                assert_eq!(fx.toast.as_deref(), Some(why));
+            }
+        }
+    }
+
+    /// Under a default preset that pins the screen, the tab shows the preset's pick greyed with
+    /// whose it is, and the card's line names it. One the host can't give leaves the card's rows.
+    #[test]
+    fn a_preset_that_pins_the_screen_decides_the_tab() {
+        let bound = |host_screen: &str| HostRow {
+            bound_preset: Some(PresetChip {
+                id: "couch".into(),
+                name: "Couch".into(),
+                accent: None,
+                bitrate_kbps: None,
+                host_screen: Some(host_screen.into()),
+            }),
+            ..roled(true)
+        };
+        let (mut s, rows) = screen_tab(&bound("main"));
+        assert_eq!(rows, vec![Action::Screen(0), Action::ScreenNote]);
+        assert_eq!(label(&s, Action::Screen(0)), "Main screen");
+        assert_eq!(s.icon(Action::Screen(0)), "check");
+        assert_eq!(label(&s, Action::ScreenNote), "Set by the preset Couch");
+        assert!(!s.enabled(Action::Screen(0)));
+        let mut fx = Outbox::default();
+        run_action(&mut s, Action::Screen(0), &mut fx);
+        assert!(fx.cmds.is_empty(), "the card's own pick stays as it is");
+        assert_eq!(fx.toast.as_deref(), Some("Set by the preset Couch"));
+        let h = bound("main");
+        assert_eq!(
+            h.screens
+                .as_ref()
+                .unwrap()
+                .card_line_under(h.screen_preset()),
+            Some("Main screen".into())
+        );
+
+        let (_, taken) = screen_tab(&bound("monitor:DP-1"));
+        assert_eq!(
+            taken,
+            screen_tab(&roled(true)).1,
+            "a taken monitor is no wish now"
+        );
+    }
+
+    /// No answer from the host, or no pairing to ask with, is no Screen tab.
+    #[test]
+    fn no_screens_no_screen_tab() {
+        let has_tab = |h: &HostRow| {
+            details(h)
+                .sections(crate::store::file_store())
+                .contains(&Section::Screen)
+        };
+        assert!(!has_tab(&host()));
+        assert!(!has_tab(&HostRow {
+            paired: false,
+            ..screened(false)
+        }));
+    }
+
     /// A paired host's Pairing tab offers Unpair beside Pair again; it arms, then sends one
     /// UnpairHost. An unpaired host has nothing to forget.
     #[test]
@@ -1872,7 +2387,7 @@ mod tests {
         let pairing = |h: &HostRow| -> Vec<Action> {
             let d = details(h);
             let sections = d.sections(crate::store::file_store());
-            let tab = sections.iter().position(|s| *s == "Pairing");
+            let tab = sections.iter().position(|s| *s == Section::Pairing);
             rows(&CardMenu {
                 tab: tab.expect("a Pairing tab"),
                 ..d

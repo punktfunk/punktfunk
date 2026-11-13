@@ -5,7 +5,16 @@
 use super::DecodedVkFrame;
 use ash::vk;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
+
+static WAITER_BOOST: OnceLock<fn()> = OnceLock::new();
+
+/// Install the call every [`DoneWaiter`] thread makes first, to raise its own priority: the
+/// consumer wakes on it. First caller wins; later calls are ignored. Set it before the first
+/// [`DoneWaiter::spawn`].
+pub fn set_waiter_boost(boost: fn()) {
+    let _ = WAITER_BOOST.set(boost);
+}
 
 /// Bounds one wait: a wedged decode must not pin the thread, and `Drop` joins it.
 const WAIT_NS: u64 = 50_000_000;
@@ -46,8 +55,9 @@ pub struct DoneWaiter {
 }
 
 impl DoneWaiter {
-    /// `wake` runs on the waiter thread after each armed decode completes, or after
-    /// 50 ms. `None` when the thread cannot start; the consumer then polls as before.
+    /// The thread runs the [`set_waiter_boost`] hook, then `wake` after each armed decode
+    /// completes, or after 50 ms. `None` when the thread cannot start; the consumer then
+    /// polls as before.
     pub fn spawn(device: ash::Device, wake: Arc<dyn Fn() + Send + Sync>) -> Option<Self> {
         let (jobs, rx) = mpsc::channel::<(vk::Semaphore, u64)>();
         let watch = Arc::new((Mutex::new(Watch::default()), Condvar::new()));
@@ -56,6 +66,9 @@ impl DoneWaiter {
         let join = std::thread::Builder::new()
             .name("pf-decode-done".into())
             .spawn(move || {
+                if let Some(boost) = WAITER_BOOST.get() {
+                    boost();
+                }
                 while let Ok(job) = rx.recv() {
                     if stop_t.load(Ordering::Acquire) {
                         break;
@@ -149,5 +162,57 @@ mod tests {
         assert!(watch.start((s, 2)));
         assert_eq!(watch.busy, Some(s));
         assert!(watch.queued.is_empty());
+    }
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// Stands in for `vkWaitSemaphores`, so the waiter runs on a device that is not there.
+    extern "system" fn fake_wait(
+        _: vk::Device,
+        _: *const vk::SemaphoreWaitInfo<'_>,
+        _: u64,
+    ) -> vk::Result {
+        // No unwrap here: a panic in an extern fn aborts. A poisoned log fails the assert below.
+        if let Ok(mut log) = LOG.lock() {
+            log.push("wait".into());
+        }
+        vk::Result::SUCCESS
+    }
+
+    #[test]
+    fn the_waiter_thread_boosts_before_its_first_wait() {
+        set_waiter_boost(|| {
+            let thread = std::thread::current();
+            let line = format!("boost {}", thread.name().unwrap_or_default());
+            LOG.lock().unwrap().push(line);
+        });
+        let load = |name: &std::ffi::CStr| match name.to_bytes() {
+            b"vkWaitSemaphores" => fake_wait as *const std::ffi::c_void,
+            _ => std::ptr::null(),
+        };
+        let device = ash::Device::from_parts_1_3(
+            vk::Device::null(),
+            ash::DeviceFnV1_0::load(load),
+            ash::DeviceFnV1_1::load(load),
+            ash::DeviceFnV1_2::load(load),
+            ash::DeviceFnV1_3::load(load),
+        );
+        let (woke, woken) = mpsc::channel();
+        let wake = Arc::new(move || {
+            LOG.lock().unwrap().push("wake".into());
+            let _ = woke.send(());
+        });
+        let waiter = DoneWaiter::spawn(device, wake).expect("the thread starts");
+        let job = (vk::Semaphore::from_raw(7), 1);
+        waiter.watch.0.lock().unwrap().queued.push(job);
+        waiter.jobs.as_ref().unwrap().send(job).unwrap();
+        woken
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the wake runs");
+        drop(waiter);
+        assert_eq!(
+            *LOG.lock().unwrap(),
+            ["boost pf-decode-done", "wait", "wake"]
+        );
     }
 }

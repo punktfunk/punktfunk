@@ -4,7 +4,7 @@ use crate::screens::Screen;
 use crate::theme::{contrast, over};
 use art::{
     art_cache_size, decode_poster, decode_poster_off_thread, placeholder_face, ART_CACHE_H,
-    ART_CACHE_W,
+    ART_CACHE_W, DECODE_QUEUE,
 };
 use skia_safe::{Color4f, Point};
 
@@ -65,6 +65,7 @@ fn live_shelf() -> (LibraryScreen, LibraryShared) {
                 running: false,
                 endable: false,
                 install: None,
+                overrides: None,
             })
             .collect(),
     );
@@ -116,6 +117,11 @@ fn a_search_keeps_only_the_matching_titles() {
     assert_eq!(titles.len(), 4, "{titles:?}");
     assert!(titles.iter().all(|t| t.to_lowercase().contains('a')));
     assert!(!s.no_match());
+
+    // A full-width query finds what its ASCII twin finds.
+    let (mut s, _library) = live_shelf();
+    s.set_query("Ａ");
+    assert_eq!(s.len(), 4);
 
     let (mut s, _library) = live_shelf();
     s.set_query("xyz");
@@ -637,6 +643,7 @@ fn waiting_shelf() -> LibraryScreen {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         })
         .collect();
     s.recollate();
@@ -991,8 +998,116 @@ fn games(spec: &[(&str, Option<&str>)]) -> Vec<LibraryGame> {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         })
         .collect()
+}
+
+/// A title hidden in place is no new list: the next title takes its cell, no entrance replays,
+/// and one shown again leaves focus where it is.
+#[test]
+fn a_hidden_title_hands_focus_to_its_neighbour() {
+    let (mut s, library) = live_shelf();
+    let mut settings = pf_client_core::trust::Settings {
+        library_view: LibraryView::Grid.id().to_string(),
+        ..Default::default()
+    };
+    s.grid_cols_last = Some(3);
+    press(&mut s, &library, &mut settings, down());
+    press(&mut s, &library, &mut settings, right());
+    assert_eq!(s.focused().map(|g| g.title.as_str()), Some("Alpha"));
+    let entrance = s.entrance_armed;
+    let host = library.req().host;
+    let alpha = library.drop_title(&host, "g1").expect("on the shelf");
+    s.sync(&library);
+    s.place_zone(&Ctx::test(&mut settings, &library));
+    assert_eq!((s.zone, s.cursor), (Zone::Grid, 1));
+    assert_eq!(s.focused().map(|g| g.title.as_str()), Some("Nimbus"));
+    assert_eq!(
+        s.entrance_armed, entrance,
+        "the shelf does not arrive again"
+    );
+
+    library.put_title(&host, alpha);
+    s.sync(&library);
+    assert_eq!(s.focused().map(|g| g.title.as_str()), Some("Nimbus"));
+}
+
+/// A band its last title leaves hands focus to the line that takes its place, not the top.
+#[test]
+fn an_emptied_band_hands_focus_down_not_up() {
+    let (mut s, library) = live_shelf();
+    let mut settings = pf_client_core::trust::Settings {
+        library_view: LibraryView::Grid.id().to_string(),
+        ..Default::default()
+    };
+    crate::library::toggle_favorite(&mut settings, &s.host.fp_hex, "g2");
+    s.grid_cols_last = Some(3);
+    press(&mut s, &library, &mut settings, down());
+    let Zone::Band { band, .. } = s.zone else {
+        panic!("Down from Desktops reaches Favorites: {:?}", s.zone);
+    };
+    let (bands, _) = s.bands(&Ctx::test(&mut settings, &library));
+    assert_eq!(bands[band].section, crate::library::Section::Favorites);
+    // A frame places the moved focus, as one always does before the host answers.
+    s.place_zone(&Ctx::test(&mut settings, &library));
+
+    library.drop_title(&library.req().host, "g2");
+    s.sync(&library);
+    s.place_zone(&Ctx::test(&mut settings, &library));
+    assert_eq!(s.zone, Zone::Grid, "the grid took the band's place");
+}
+
+/// A hidden shelf lists the host's answer; OK asks once to show the focused title, and once
+/// the host takes it the next one slides into its place.
+#[test]
+fn a_hidden_shelf_shows_a_title_again() {
+    crate::screens::settings::tests::fake_home();
+    let library = LibraryShared::default();
+    let mut s = LibraryScreen::hidden(&host(), "kid", "Kid");
+    s.sync(&library);
+    assert!(matches!(
+        s.fetch_hidden(),
+        Some(ConsoleCmd::FetchHidden { ref profile, .. }) if profile == "kid"
+    ));
+    let list = games(&[("Alpha", None), ("Bravo", None), ("Charlie", None)]);
+    s.set_hidden_list(crate::model::HiddenAnswer::Listed(list));
+    let mut settings = shelf_settings();
+    press(&mut s, &library, &mut settings, right());
+    assert_eq!(s.focused().map(|g| g.title.as_str()), Some("Bravo"));
+    let hints = s.hints(&Ctx::test(&mut settings, &library));
+    assert_eq!(hints[0].label, "Show for Kid");
+
+    let (_, fx) = press(&mut s, &library, &mut settings, MenuEvent::Confirm);
+    match fx.cmds.as_slice() {
+        [ConsoleCmd::SetHidden {
+            profile,
+            app_id,
+            hidden: false,
+            ..
+        }] => assert_eq!((profile.as_str(), app_id.as_str()), ("kid", "g1")),
+        other => panic!("one show, got {other:?}"),
+    }
+    let (pulse, fx) = press(&mut s, &library, &mut settings, MenuEvent::Confirm);
+    assert!(fx.cmds.is_empty(), "asked once until the host answers");
+    assert!(matches!(pulse, Some(MenuPulse::Boundary)));
+
+    let back = s.drop_hidden("g1").expect("listed");
+    assert_eq!(back.title, "Bravo");
+    assert_eq!(s.focused().map(|g| g.title.as_str()), Some("Charlie"));
+    let (_, fx) = press(&mut s, &library, &mut settings, MenuEvent::Secondary);
+    assert!(
+        matches!(fx.cmds.as_slice(), [ConsoleCmd::SetHidden { app_id, .. }] if app_id == "g2"),
+        "Y, as the legend says, shows the focused title too"
+    );
+    s.drop_hidden("g0");
+    s.drop_hidden("g2");
+    assert!(matches!(s.phase, LibraryPhase::Empty));
+    assert_eq!(
+        s.state_action(),
+        None,
+        "nothing to stream from an empty hidden shelf"
+    );
 }
 
 /// Covers already held do not push the decode-ahead further down the library.
@@ -1150,6 +1265,27 @@ fn screens_on_one_host_share_a_cover() {
     assert!(!second.decoder.pending("g0"));
 }
 
+/// The decoder takes [`DECODE_QUEUE`] covers and then none until some finish, so a scroll's
+/// covers wait behind a bounded queue and not behind every cover it passed.
+#[test]
+fn the_decoder_queue_is_bounded() {
+    let mut decoder = art::ArtDecoder::default();
+    let bytes: std::sync::Arc<[u8]> = poster_png(0).into();
+    assert_eq!(decoder.room(), DECODE_QUEUE);
+    for i in 0..DECODE_QUEUE {
+        decoder.want(format!("g{i}"), bytes.clone(), 1.0);
+    }
+    assert_eq!(decoder.room(), 0, "full");
+    decoder.want("over".into(), bytes, 1.0);
+    assert_eq!(decoder.room(), 0, "never negative");
+    assert_eq!(decoder.finished().len(), DECODE_QUEUE + 1);
+    assert_eq!(
+        decoder.room(),
+        DECODE_QUEUE,
+        "finished covers free their places"
+    );
+}
+
 /// A 2:3 poster, PNG-encoded: a two-hue gradient with a pale disc, colour from `seed`.
 fn poster_png(seed: usize) -> Vec<u8> {
     let hues = [
@@ -1259,6 +1395,7 @@ fn dump_library() {
                 running: i == 1,
                 endable: false,
                 install: None,
+                overrides: None,
             })
             .collect();
         for (i, hours) in [(2, 2), (3, 30), (5, 80)] {

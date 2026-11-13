@@ -42,6 +42,19 @@ final class ResizeIndicatorTests: XCTestCase {
         XCTAssertFalse(r.active)
     }
 
+    /// A host that reads the view sends a frame at it, any other host one at the mode: either
+    /// clears, an old-size frame does not.
+    func testFrameAtTheViewOrTheModeClears() {
+        for frame: (UInt32, UInt32) in [(1_600, 900), (3_200, 1_800)] {
+            var r = ResizeIndicator()
+            r.steering(width: 3_200, height: 1_800, view: (1_600, 900), now: 0)
+            r.decoded(width: 1_920, height: 1_080)
+            XCTAssertTrue(r.active)
+            r.decoded(width: frame.0, height: frame.1)
+            XCTAssertFalse(r.active, "\(frame)")
+        }
+    }
+
     func testSteadyDragDoesNotResetTimeout() {
         var r = ResizeIndicator(timeout: 2.5)
         r.steering(width: 2560, height: 1440, now: 0)

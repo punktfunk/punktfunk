@@ -36,23 +36,23 @@ describe("describePolicy (en)", () => {
 	test.each([
 		[
 			"default",
-			"Each device gets its own screen next to your monitors, kept 10 s after it disconnects. A second device gets its own screen.",
+			"Each device gets its own screen next to your monitors. The screen stays 10 s after the device disconnects. A second device gets its own screen.",
 		],
 		[
 			"gaming-rig",
-			"Each device gets the main screen, kept until you release it. A second device takes over.",
+			"Each device gets the main screen. The screen stays until you release it. A second device takes over.",
 		],
 		[
 			"shared-desktop",
-			"Each device gets its own screen next to your monitors, removed when it disconnects. A second device gets its own screen.",
+			"Each device gets its own screen next to your monitors. The screen is removed when the device disconnects. A second device gets its own screen.",
 		],
 		[
 			"hotdesk",
-			"Each device gets the main screen, kept 10 s after it disconnects. A second device is told the host is busy.",
+			"Each device gets the main screen. The screen stays 10 s after the device disconnects. A second device is told the host is busy.",
 		],
 		[
 			"workstation",
-			"Each device gets the only screen — your monitors turn off, kept 10 s after it disconnects. A second device shares the screen.",
+			"Each device gets the only screen — your monitors turn off. The screen stays 10 s after the device disconnects. A second device shares the screen.",
 		],
 	])("%s", (id, expected) => {
 		expect(describePolicy(PRESETS[id])).toBe(expected);
@@ -93,6 +93,25 @@ describe("describePolicy (en)", () => {
 			"Living-room TV gets",
 		);
 	});
+
+	// The device sheet's rows, by role and as a copy of a monitor.
+	test.each([
+		[
+			"exclusive",
+			null,
+			"Tablet gets the only screen — your monitors turn off.",
+		],
+		["primary", null, "Tablet gets the main screen."],
+		["extend", null, "Tablet gets its own screen next to your monitors."],
+		["extend", "DP-1", "Tablet sees DP-1."],
+	] as const)(
+		"a device with %s, mirroring %s",
+		(topology, mirror, expected) => {
+			expect(
+				describePolicy(policy({ topology }), { deviceName: "Tablet", mirror }),
+			).toStartWith(expected);
+		},
+	);
 });
 
 describe("describePolicy (de)", () => {
@@ -104,7 +123,7 @@ describe("describePolicy (de)", () => {
 		try {
 			const sentence = describePolicy(PRESETS["gaming-rig"], { live: true });
 			expect(sentence).toBe(
-				"Jedes Gerät bekommt den Hauptbildschirm, der bleibt, bis du ihn freigibst. Ein zweites Gerät übernimmt. Gilt ab der nächsten Verbindung.",
+				"Jedes Gerät bekommt den Hauptbildschirm. Der Bildschirm bleibt, bis du ihn freigibst. Ein zweites Gerät übernimmt. Gilt ab der nächsten Verbindung.",
 			);
 			// A missed clause shows up as English inside a German sentence.
 			expect(sentence).not.toContain("device");

@@ -84,8 +84,7 @@ impl PadProto for Ds4WinProto {
     type State = DsState;
     const LABEL: &'static str = "DualShock 4/Windows";
     const DEVICE: &'static str = "DualShock 4";
-    const CREATE_HINT: &'static str =
-        " (install/repair: punktfunk-host.exe driver install --gamepad)";
+    const CREATE_HINT: &'static str = " (install/repair: run the Punktfunk installer again)";
 
     fn open(&mut self, idx: u8) -> Result<Ds4WinPad> {
         let p = Ds4WinPad::open(idx)?;

@@ -20,15 +20,16 @@ pub(super) struct SessionFacts {
     /// Session totals; this loop notes every encoder rate it adopts.
     pub(super) counters: Arc<crate::session_status::SessionCounters>,
     pub(super) conn: super::super::link::SessionLink,
-    /// The client's ask. Encoders fit to it; the display may deliver another size.
+    /// The client's ask at bring-up. A mirror's encoder fits to it; the display may deliver
+    /// another size.
     pub(super) negotiated: punktfunk_core::Mode,
     pub(super) bitrate_auto: bool,
     pub(super) audio_reserved_kbps: u32,
     pub(super) shard_payload: u16,
-    /// PyroWave: parity rides each frame's head ([`EncDerive::head_only_hz`]), and an
+    /// PyroWave: parity rides each frame's head ([`EncDerive::pyrowave_hz`]), and an
     /// explicit-rate stream paces at the link.
     ///
-    /// [`EncDerive::head_only_hz`]: crate::native::bitrate::EncDerive::head_only_hz
+    /// [`EncDerive::pyrowave_hz`]: crate::native::bitrate::EncDerive::pyrowave_hz
     pub(super) pyrowave: bool,
     pub(super) streamed_wire: bool,
     pub(super) perf: bool,
@@ -52,6 +53,9 @@ pub(super) struct Shared {
     pub(super) driver_dropped: Arc<AtomicU64>,
     pub(super) screen_wire: Arc<crate::native::wiring::ScreenWire>,
     pub(super) send_spread_us: Arc<AtomicU32>,
+    /// When the first screen's latest keyframe left: the send thread writes it, the keyframe
+    /// gate times an IDR's flight from it.
+    pub(super) keyframe_left: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     pub(super) wire_rekeys: Arc<AtomicU32>,
     pub(super) live_mode: Arc<AtomicU64>,
     pub(super) force_idr: Arc<AtomicBool>,
@@ -69,6 +73,8 @@ pub(super) struct Shared {
     pub(super) cadence_behind_score: Arc<AtomicU32>,
     pub(super) client_packets_received: Arc<AtomicU32>,
     pub(super) cursor_client_draws: Arc<AtomicBool>,
+    /// [`crate::native::wiring::SessionShared::joined_display`].
+    pub(super) joined_display: Arc<AtomicU64>,
 }
 
 /// The loop's ends of the control task's and the input thread's channels.
@@ -83,7 +89,7 @@ pub(super) struct LoopEnds {
     pub(super) inj_shared_tx: std::sync::mpsc::Sender<punktfunk_core::input::InputEvent>,
     #[cfg(target_os = "linux")]
     pub(super) inj_session_tx: Option<std::sync::mpsc::Sender<punktfunk_core::input::InputEvent>>,
-    pub(super) reconfig: std::sync::mpsc::Receiver<punktfunk_core::Mode>,
+    pub(super) reconfig: std::sync::mpsc::Receiver<crate::native::wiring::ModeAsk>,
     pub(super) keyframe: std::sync::mpsc::Receiver<()>,
     pub(super) rfi: std::sync::mpsc::Receiver<(u32, u32)>,
     pub(super) bitrate_rx: std::sync::mpsc::Receiver<u32>,

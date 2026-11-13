@@ -277,7 +277,12 @@ async fn serve<R: AsyncReadExt + Unpin>(
                 ..
             } => {
                 trace!("Got USBIP_CMD_SUBMIT");
-                let device = current_import_device.unwrap();
+                let Some(device) = current_import_device else {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "USBIP_CMD_SUBMIT before OP_REQ_IMPORT",
+                    ));
+                };
 
                 let out = header.direction == 0;
                 let real_ep = if out { header.ep } else { header.ep | 0x80 };
@@ -531,6 +536,22 @@ mod concurrency_tests {
         .to_bytes()
     }
 
+    /// An 8-byte control IN with the given SETUP packet.
+    fn control_in(seqnum: u32, setup: [u8; 8]) -> Vec<u8> {
+        UsbIpCommand::UsbIpCmdSubmit {
+            header: header(USBIP_CMD_SUBMIT, seqnum, 1, 0),
+            transfer_flags: 0,
+            transfer_buffer_length: 8,
+            start_frame: 0,
+            number_of_packets: 0,
+            interval: 0,
+            setup,
+            data: Vec::new(),
+            iso_packet_descriptor: Vec::new(),
+        }
+        .to_bytes()
+    }
+
     /// `(command, seqnum, status, payload)` of the next reply.
     async fn reply(host: &mut tokio::io::DuplexStream) -> (u32, u32, i32, Vec<u8>) {
         let mut head = [0u8; 48];
@@ -545,6 +566,44 @@ mod concurrency_tests {
         let mut payload = vec![0u8; len as usize];
         host.read_exact(&mut payload).await.unwrap();
         (command, seqnum, status, payload)
+    }
+
+    /// A standard request the simulation does not implement (`lsusb -v` reads device status), a
+    /// request to a missing interface and a submit before the import each get the failed reply
+    /// or end only their own connection; the next request on the same connection is still served.
+    #[tokio::test]
+    async fn an_unserved_control_request_fails_and_the_connection_lives() {
+        let handler_box: Box<dyn UsbInterfaceHandler + Send> = Box::new(Probe);
+        let dev = UsbDevice::new(0).with_interface(
+            0x03,
+            0x00,
+            0x00,
+            None,
+            vec![],
+            Arc::new(Mutex::new(handler_box)),
+        );
+        let server = Arc::new(UsbIpServer::new_simulated(vec![dev]));
+        let (mut host, mut sim) = tokio::io::duplex(4096);
+        let ended = tokio::spawn(async move { handler(&mut sim, server).await });
+
+        let mut busid = [0u8; 32];
+        busid[..5].copy_from_slice(b"0-0-0");
+        let import = UsbIpCommand::OpReqImport { status: 0, busid };
+        host.write_all(&import.to_bytes()).await.unwrap();
+        host.read_exact(&mut [0u8; 320]).await.unwrap();
+
+        // GET_STATUS to the device, then a vendor request to interface 9 of 1.
+        host.write_all(&control_in(1, [0x80, 0x00, 0, 0, 0, 0, 0x02, 0]))
+            .await
+            .unwrap();
+        assert_eq!(reply(&mut host).await, (3, 1, 1, vec![]));
+        host.write_all(&control_in(2, [0xC1, 0x01, 0, 0, 0x09, 0, 0x08, 0]))
+            .await
+            .unwrap();
+        assert_eq!(reply(&mut host).await, (3, 2, 1, vec![]));
+        host.write_all(&submit(3, 0)).await.unwrap();
+        assert_eq!(reply(&mut host).await, (3, 3, 0, vec![0xC0]));
+        assert!(!ended.is_finished());
     }
 
     #[tokio::test(start_paused = true)]

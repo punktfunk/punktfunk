@@ -203,13 +203,15 @@ final class ScreenWindows {
     private func ask(first: NSScreen?) {
         guard let first else { return }
         let mode = connection.currentMode()
+        let settings = connection.settings
         let planned = NSScreen.sessionScreens(
-            first: first, mode: (mode.width, mode.height, mode.refreshHz))
+            first: first, mode: (mode.width, mode.height, mode.refreshHz),
+            scale: (settings.renderScale, RenderScale.maxDimension(codec: settings.codec)))
         displays = Dictionary(uniqueKeysWithValues: planned.map { ($0.record.index, $0.display) })
         windows.keys.forEach(close)
         failed = [:]
         generation = connection.screenLayout().generation
-        connection.requestScreens(planned.map(\.record))
+        connection.requestScreens(planned.map(\.record), views: planned.map(\.view))
     }
 
     /// Open a window for each screen the host's newest layout adds; close the ones it dropped.

@@ -20,6 +20,21 @@ final class MetalPresenterTests: XCTestCase {
             "stage-2 Metal shaders failed to compile (presenter init returned nil)")
     }
 
+    /// The launch warm-up builds the shared pipelines off the main thread; `make()` then uses them.
+    func testWarmBuildsThePipelinesOffTheMainThread() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else {
+            throw XCTSkip("no Metal device available in this environment")
+        }
+        let warmed = expectation(description: "warmed")
+        DispatchQueue.global(qos: .utility).async {
+            XCTAssertFalse(Thread.isMainThread)
+            MetalVideoPresenter.warm()
+            warmed.fulfill()
+        }
+        wait(for: [warmed], timeout: 60)
+        XCTAssertNotNil(MetalVideoPresenter.make(), "the warmed pipelines build a presenter")
+    }
+
     /// Linear always takes half-float; the env lever picks the PQ drawable over the device rule.
     func testHDRDrawableFormat() {
         XCTAssertEqual(hdrDrawableFormat(linear: true, env: "10", halfFloatPQ: false), .rgba16Float)
@@ -150,6 +165,28 @@ final class MetalPresenterTests: XCTestCase {
             "a 10-bit SDR frame reconciles the layer to the 10-bit drawable")
     }
 
+    /// The PyroWave twin: 16-bit planes without PQ are a 10-bit SDR stream, and take the 10-bit
+    /// drawable; 8-bit planes keep the plain one.
+    func testRenderPlanarTenBitSDRWidensTheDrawable() throws {
+        guard let presenter = MetalVideoPresenter.make(),
+              let device = MTLCreateSystemDefaultDevice()
+        else { throw XCTSkip("no Metal device available in this environment") }
+        func planes(_ format: MTLPixelFormat) throws -> WaveletPlanes {
+            func plane(_ side: Int) throws -> MTLTexture {
+                let d = MTLTextureDescriptor.texture2DDescriptor(
+                    pixelFormat: format, width: side, height: side, mipmapped: false)
+                return try XCTUnwrap(device.makeTexture(descriptor: d))
+            }
+            return WaveletPlanes(
+                y: try plane(64), cb: try plane(32), cr: try plane(32),
+                csc: CscUniform(r0: .zero, r1: .zero, r2: .zero), pq: false)
+        }
+        _ = presenter.renderPlanar(try planes(.r16Unorm))
+        XCTAssertEqual(presenter.layer.pixelFormat, .bgr10a2Unorm)
+        _ = presenter.renderPlanar(try planes(.r8Unorm))
+        XCTAssertEqual(presenter.layer.pixelFormat, .bgra8Unorm)
+    }
+
     /// `render` with a freshly-allocated NV12 buffer must present without crashing or hanging — the
     /// main-thread present path is the highest-risk part of the stage-2 rewrite. (A headless CI with no
     /// display can still allocate a drawable from a CAMetalLayer; if it can't, render returns false,
@@ -165,7 +202,7 @@ final class MetalPresenterTests: XCTestCase {
             kCFAllocatorDefault, 256, 256, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
             attrs as CFDictionary, &pb)
         guard status == kCVReturnSuccess, let pixelBuffer = pb else {
-            throw XCTSkip("could not allocate a test pixel buffer")
+            throw XCTSkip("couldn't allocate a test pixel buffer")
         }
         // Just asserting it returns (true or false) without trapping — the layer may have no drawable
         // source headless, so a false return is acceptable.

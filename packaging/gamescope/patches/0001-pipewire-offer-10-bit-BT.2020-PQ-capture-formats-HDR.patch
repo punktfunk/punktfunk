@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Tue, 28 Jul 2026 13:53:41 +0200
-Subject: [PATCH 01/33] pipewire: offer 10-bit BT.2020 PQ capture formats (HDR
+Subject: [PATCH 01/38] pipewire: offer 10-bit BT.2020 PQ capture formats (HDR
  streams)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -37,7 +37,7 @@ involved anywhere in the LUT set.
  2 files changed, 115 insertions(+), 29 deletions(-)
 
 diff --git a/src/pipewire.cpp b/src/pipewire.cpp
-index 76b3ea8..c84b19c 100644
+index 76b3ea8c..c84b19c2 100644
 --- a/src/pipewire.cpp
 +++ b/src/pipewire.cpp
 @@ -18,6 +18,40 @@
@@ -227,10 +227,10 @@ index 76b3ea8..c84b19c 100644
  	std::vector<const struct spa_pod *> format_params = build_format_params(&builder);
  
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 2ff296b..5bc6d0f 100644
+index c168398b..745fe5d9 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -2882,9 +2882,23 @@ static void paint_pipewire()
+@@ -3007,9 +3007,23 @@ static void paint_pipewire()
  	if ( !s_pPipewireBuffer || !s_pPipewireBuffer->texture )
  		return;
  
@@ -255,7 +255,7 @@ index 2ff296b..5bc6d0f 100644
  	frameInfo.allowVRR             = false;
  	frameInfo.bFadingOut           = false;
  
-@@ -2900,8 +2914,9 @@ static void paint_pipewire()
+@@ -3025,8 +3039,9 @@ static void paint_pipewire()
  	// Apply screenshot-style color management.
  	for ( uint32_t nInputEOTF = 0; nInputEOTF < EOTF_Count; nInputEOTF++ )
  	{

@@ -27,6 +27,8 @@ pub struct SessionParams {
     pub host: String,
     pub port: u16,
     pub mode: Mode,
+    /// The size the picture is shown at when `mode` is larger ([`ConnectParams::view`]).
+    pub view: Option<(u32, u32)>,
     pub compositor: CompositorPref,
     pub gamepad: GamepadPref,
     pub bitrate_kbps: u32,
@@ -72,6 +74,9 @@ pub struct SessionParams {
     /// Ask the host to keep its default playback device (not a silent endpoint).
     /// Request-only — an older host ignores it.
     pub keep_host_audio: bool,
+    /// The role or monitor a preset asks for this connect only; `None` takes the host card's
+    /// pick. The host may not grant it, and the first window says why.
+    pub screen_wish: Option<punktfunk_core::quic::v2::hello::ScreenWish>,
     /// How the presenter fills the window; rides the Hello so a host framing the picture for
     /// another device reframes it for this one.
     pub video_fit: punktfunk_core::video_fit::VideoFit,
@@ -114,6 +119,8 @@ pub struct SessionParams {
     /// That preset's stable id: the dial names it to the host, which shows it and hands it to
     /// hooks and plugins. `None` with `preset` from an older spec just names nothing.
     pub preset_id: Option<String>,
+    /// The host set this game's stream; the stats line says so ([`Self::hud_preset`]).
+    pub host_overrides: bool,
     /// Overlay tier this launch resolved to. Presentation-only: the controller never
     /// reads it. It rides so a browse-mode presenter (one window, many sessions) can
     /// adopt a per-launch choice; the in-stream cycle chord still wins for that stream.
@@ -132,6 +139,9 @@ pub struct SessionParams {
     /// Quick-action ring blob this launch resolved; empty = the platform default. Per launch
     /// like the tier, so a browse-mode presenter shows a ring edited between streams.
     pub overlay_actions: String,
+    /// Shortcuts blob of this launch; empty = the client's defaults. Per launch like the
+    /// ring: a running stream keeps its bindings.
+    pub shortcuts: String,
     /// The window's settings as this launch resolved them, presentation-only like the tier.
     /// A browse-mode presenter adopts them at each launch; the console outlives every stream.
     pub touch_mode: crate::trust::TouchMode,
@@ -197,18 +207,31 @@ impl SessionParams {
     /// One fill for a resolved spec and a [`Dial`]. Probes stay off the plan.
     ///
     /// The mode is [`Settings::stream_mode`](crate::trust::Settings::stream_mode) over the
-    /// probed one. `exclude_codecs` stays 0. `want_444` is the switch; caps carry 4:4:4 only
-    /// when `hevc_444_hardware` is set too. HDR caps need the setting and
-    /// [`Probes::hdr_enabled`]. The panel volume follows the probe alone.
+    /// probed one, then the host's game overrides [`fit`](punktfunk_core::game_overrides::fit)
+    /// to that panel and the codec. The view is
+    /// [`Settings::stream_view`](crate::trust::Settings::stream_view), kept only while the
+    /// mode is still larger. Their HDR and pad are already in `settings`
+    /// ([`ResolvedSpec::new`](crate::orchestrate::ResolvedSpec::new)). `exclude_codecs` stays
+    /// 0. `want_444` is the switch; caps carry 4:4:4 only when `hevc_444_hardware` is set
+    /// too. HDR caps need the setting and [`Probes::hdr_enabled`]. The panel volume follows
+    /// the probe alone. `host_screen` becomes the screen wish; a spelling it can't read is none.
     pub fn from_plan(
         settings: &crate::trust::Settings,
         clipboard: bool,
         preset: Option<String>,
         preset_id: Option<String>,
+        overrides: Option<&punktfunk_core::game_overrides::GameOverrides>,
         dial: Dial,
         probes: Probes,
     ) -> Self {
-        let mode = settings.stream_mode(probes.mode);
+        let mut mode = settings.stream_mode(probes.mode);
+        if let Some(o) = overrides {
+            let max = punktfunk_core::render_scale::max_dimension(&settings.codec);
+            mode = punktfunk_core::game_overrides::fit(mode, probes.mode, o, max);
+        }
+        let view = settings.stream_view(probes.mode).filter(|&(w, h)| {
+            mode.width >= w && mode.height >= h && (mode.width, mode.height) != (w, h)
+        });
         let caps_444 = settings.enable_444 && probes.hevc_444_hardware;
         // The CPU rung is 8-bit: without a hardware 10-bit path the host would
         // build a stream this client tears down.
@@ -227,6 +250,7 @@ impl SessionParams {
             host: dial.host,
             port: dial.port,
             mode,
+            view,
             compositor: CompositorPref::from_name(&settings.compositor)
                 .unwrap_or(CompositorPref::Auto),
             gamepad: probes.gamepad,
@@ -250,6 +274,7 @@ impl SessionParams {
             pad_speaker: settings.pad_speaker.clone(),
             clipboard,
             keep_host_audio: settings.keep_host_audio,
+            screen_wish: punktfunk_core::quic::v2::hello::ScreenWish::parse(&settings.host_screen),
             video_fit: punktfunk_core::video_fit::VideoFit::from_name(&settings.video_fit),
             cursor_forward: settings.mouse_mode() == crate::trust::MouseMode::Desktop,
             decoder: settings.decoder.clone(),
@@ -265,6 +290,7 @@ impl SessionParams {
             force_software: probes.force_software,
             preset,
             preset_id,
+            host_overrides: overrides.is_some_and(|o| !o.is_empty()),
             stats_verbosity: probes.stats_verbosity,
             advanced_stats: settings.advanced_stats,
             // The desktop overlay's own corner is top left.
@@ -273,6 +299,7 @@ impl SessionParams {
             exit_hint: settings.exit_hint,
             keep_awake: settings.keep_awake,
             overlay_actions: settings.overlay_actions.clone(),
+            shortcuts: settings.shortcuts.clone(),
             touch_mode: settings.touch_mode(),
             mouse_mode: settings.mouse_mode(),
             invert_scroll: settings.invert_scroll,
@@ -288,6 +315,18 @@ impl SessionParams {
             shows_screens: settings.all_screens(),
             prompts_unlock: false,
             unlock: Arc::default(),
+        }
+    }
+
+    /// What the stats line names: the preset, then that the host set this game's stream.
+    /// Display only; the dial names `preset` alone.
+    pub fn hud_preset(&self) -> Option<String> {
+        let host = self
+            .host_overrides
+            .then(pf_l10n::client::overlay_host_override);
+        match (self.preset.as_deref(), host) {
+            (Some(p), Some(h)) => Some(format!("{p} \u{b7} {h}")),
+            (p, h) => p.or(h).map(str::to_string),
         }
     }
 
@@ -441,6 +480,7 @@ pub struct SessionHandle {
 
 pub fn start(params: SessionParams) -> SessionHandle {
     punktfunk_core::client::set_thread_boost(crate::audio_rt::boost_core_thread);
+    crate::video::set_waiter_boost(|| crate::audio_rt::boost_and_log("pf-decode-done"));
     let (ev_tx, ev_rx) = async_channel::unbounded();
     // Tiny frame queue, newest wins: force_send displaces the oldest when the UI lags.
     let (frame_tx, frame_rx) = async_channel::bounded(2);
@@ -711,6 +751,7 @@ fn dial(
         // it this parks the pump for the whole budget (185 s on a request-access
         // connect the host holds pending) and cancel cannot be answered until return.
         cancel: Some(stop.clone()),
+        screen_wish: params.screen_wish.clone(),
         screens: params.screens.clone(),
         shows_screens: params.shows_screens,
         prompts_unlock: params.prompts_unlock,
@@ -725,6 +766,7 @@ fn dial(
                 let _ = ev_tx.try_send(SessionEvent::AwaitingApproval);
             })
         }),
+        view: params.view,
         ..ConnectParams::new(
             &params.host,
             params.port,
@@ -741,11 +783,8 @@ fn dial(
         };
         let not_ready = params.not_ready(refused, 0);
         let msg = match e {
-            PunktfunkError::Crypto => {
-                "Host identity rejected — wrong fingerprint, or the host requires pairing"
-                    .to_string()
-            }
-            PunktfunkError::Timeout => "Connection timed out".to_string(),
+            PunktfunkError::Crypto => pf_l10n::client::dial_identity_rejected().to_string(),
+            PunktfunkError::Timeout => pf_l10n::client::dial_timed_out().to_string(),
             // Host said why it turned us away — show that verbatim: "denied on the
             // host" and "timed out" call for different next steps.
             PunktfunkError::Rejected(reason, said) => {
@@ -753,7 +792,7 @@ fn dial(
             }
             other => {
                 tracing::warn!(error = %other, "connect failed");
-                "The host didn't answer".to_string()
+                pf_l10n::client::dial_no_answer().to_string()
             }
         };
         if not_ready {
@@ -1093,8 +1132,9 @@ pub fn start_screen(
     }
 }
 
-/// Pull, decode and hand on one further screen's frames. A decoder opens at the first frame
-/// and at each new format; a lost picture asks the host for a keyframe on that screen alone.
+/// Pull, decode and hand on one further screen's frames, on a boosted thread like the
+/// primary pump's. A decoder opens at the first frame and at each new format; a lost
+/// picture asks the host for a keyframe on that screen alone.
 fn screen_pump(
     connector: &NativeClient,
     screen: u8,
@@ -1103,6 +1143,7 @@ fn screen_pump(
     frame_tx: &async_channel::Sender<DecodedFrame>,
     stop: &AtomicBool,
 ) {
+    crate::audio_rt::boost_and_log("screen-decode");
     let mut decoder: Option<Decoder> = None;
     let mut current = None;
     // A window opened mid-stream starts at a keyframe that names the format.
@@ -1162,7 +1203,8 @@ fn screen_pump(
 }
 
 /// The session thread: dial, open the decoder and the plane threads, run [`Pump`] until
-/// the session ends, then send exactly one terminal event.
+/// the session ends, then send exactly one terminal event. A stop raised during the redial
+/// pause ends the session without dialing.
 fn pump(
     params: SessionParams,
     ev_tx: async_channel::Sender<SessionEvent>,
@@ -1185,6 +1227,10 @@ fn pump(
     let until = Instant::now() + pause;
     while Instant::now() < until && !stop.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(20));
+    }
+    if stop.load(Ordering::SeqCst) {
+        end_session(&stop, &mic, None, &ev_tx, SessionEvent::Ended(None));
+        return;
     }
     let connector = match dial(&params, &stop, &plan, &ev_tx) {
         Ok(c) => c,
@@ -1254,9 +1300,17 @@ fn pump(
         // This is what the host sent. `PUNKTFUNK_AU_FAULT` injects one level down, so
         // a faulted run's fixture is the clean bitstream and will not replay the damage.
         au_dump: crate::au_dump::AuDump::from_env(connector.codec),
-        notices: WindowNotices::default(),
+        notices: WindowNotices {
+            start_unsaid: start_line(
+                connector.screen() == Some(&punktfunk_core::quic::v2::hello::ScreenEcho::Shared),
+                params.screen_wish.as_ref(),
+                connector.role(),
+            ),
+            ..Default::default()
+        },
         window_start: Instant::now(),
         total_frames: 0,
+        picture: None,
         dec_path: "",
         codec_fallback: None,
         codec_ask: None,
@@ -1267,6 +1321,7 @@ fn pump(
         access,
         planes,
         decoder,
+        av1: av1_intake(connector.video_format().codec),
         #[cfg(target_os = "linux")]
         fd_wake: None,
         lent_au_memory: None,
@@ -1283,6 +1338,11 @@ fn pump(
     p.lend_au_memory();
     let end = p.run();
     p.finish(end);
+}
+
+/// The AV1 receiver rule for a session decoding `codec`.
+fn av1_intake(codec: u8) -> Option<crate::video::av1_intake::Av1Intake> {
+    (codec == punktfunk_core::quic::CODEC_AV1).then(Default::default)
 }
 
 /// What the pump does after one AU.
@@ -1309,6 +1369,8 @@ struct Pump {
     notices: WindowNotices,
     window_start: Instant,
     total_frames: u64,
+    /// The last picture's size: the host may encode smaller than its mode.
+    picture: Option<(u32, u32)>,
     /// What actually decoded the last frame — VAAPI can demote mid-session.
     dec_path: &'static str,
     /// Set when the ladder ran out of rungs. `Some` is the only way the pump ends
@@ -1327,6 +1389,8 @@ struct Pump {
     access: crate::access::SessionAccess,
     planes: PlaneThreads,
     decoder: Decoder,
+    /// The AV1 receiver rule; `None` on other codecs.
+    av1: Option<crate::video::av1_intake::Av1Intake>,
     /// The sync_file waiter's inbox (`run`); a VAAPI decode's fence goes there at submit.
     #[cfg(target_os = "linux")]
     fd_wake: Option<std::sync::mpsc::Sender<std::os::fd::OwnedFd>>,
@@ -1361,6 +1425,7 @@ impl Pump {
             let spawned = std::thread::Builder::new()
                 .name("pf-decode-done".into())
                 .spawn(move || {
+                    crate::audio_rt::boost_and_log("pf-decode-done");
                     use std::os::fd::AsFd as _;
                     while let Ok(fd) = rx.recv() {
                         let _ = pf_dmabuf::fence::wait_sync_file(fd.as_fd(), 50);
@@ -1400,7 +1465,7 @@ impl Pump {
                 Err(PunktfunkError::Closed) => return self.on_closed(),
                 Err(e) => {
                     tracing::warn!(error = %e, "session pump failed");
-                    return Some("The stream stopped unexpectedly".to_string());
+                    return Some(pf_l10n::client::ended_unexpected().to_string());
                 }
             }
 
@@ -1469,6 +1534,7 @@ impl Pump {
     fn on_frame(&mut self, frame: Frame) -> Pass {
         if let Some(format) = frame.new_format {
             self.codec_ask = None;
+            self.av1 = av1_intake(format.codec);
             if let Err(e) = self
                 .decoder
                 .reformat(format.codec, stream_format_of(&format))
@@ -1490,10 +1556,12 @@ impl Pump {
         };
         // A straggler a reference codec rewinds on, or a partial a newer frame beat, is
         // dropped before decode; a gap arms the freeze and core asks for the range.
-        if !self
-            .connector
-            .recovery_on_frame(&frame, self.decoder.decode_order())
-        {
+        let arrival = self.connector.recovery_on_au(
+            frame.frame_index,
+            frame.complete,
+            self.decoder.decode_order(),
+        );
+        if !arrival.admit {
             return Pass::Skip;
         }
         if let Some(d) = self.au_dump.as_mut() {
@@ -1502,7 +1570,20 @@ impl Pump {
             }
         }
         let mut frame = frame;
-        let data = std::mem::take(&mut frame.data);
+        let mut data = std::mem::take(&mut frame.data);
+        if let Some(av1) = self.av1.as_mut() {
+            use crate::video::av1_intake::Intake;
+            match av1.note(frame.frame_index, arrival.gap, frame.flags, &data) {
+                Intake::Feed => {}
+                Intake::Rewritten(out) => data = out.into(),
+                Intake::Withhold(ask) => {
+                    if ask {
+                        let _ = self.connector.request_keyframe();
+                    }
+                    return Pass::Skip;
+                }
+            }
+        }
         let decoded = self.decoder.decode_au(data, frame.flags, frame.complete);
         self.lend_au_memory();
         match decoded {
@@ -1605,8 +1686,8 @@ impl Pump {
         Pass::Drain
     }
 
-    /// A decoded picture: settle the freeze gate, then hand the previous frame in flight
-    /// on before this one is handed on or queued.
+    /// A decoded picture: settle the freeze gate, note its size, then hand the previous frame
+    /// in flight on before this one is handed on or queued.
     fn on_decoded(&mut self, image: DecodedImage, frame: &Frame, received_ns: u64) {
         let evidence = image.anchor_evidence();
         if evidence == punktfunk_core::reanchor::AnchorEvidence::ReferencesDamaged
@@ -1635,10 +1716,11 @@ impl Pump {
         let present = !shown.hold;
         self.total_frames += 1;
         self.dec_path = image.path_label();
+        let (width, height) = image.dimensions();
         if self.total_frames == 1 {
-            let (width, height) = image.dimensions();
             tracing::info!(width, height, path = self.dec_path, "first frame decoded");
         }
+        self.picture = Some((width, height));
         // Hardware rungs return at submission. A picture is handed on when its
         // own fence completes, so the presenter never waits on a decode; the
         // next AU is submitted meanwhile, so the decoder always has a picture
@@ -1690,22 +1772,27 @@ impl Pump {
         match self.connector.end_reason() {
             End::GameExited => None,
             End::Local | End::HostEnded => None,
-            End::HostError => Some("The host ended the session with an error".to_string()),
-            End::Lost => Some("Connection lost".to_string()),
+            End::HostError => Some(pf_l10n::client::ended_host_error().to_string()),
+            End::Lost => Some(pf_l10n::client::ended_lost().to_string()),
             // No verdict (older core, or the close raced the read): keep this
             // arm's historic wording rather than inventing a new one.
-            End::None => Some("Host ended the session".to_string()),
+            End::None => Some(pf_l10n::client::ended_closed().to_string()),
         }
     }
 
-    /// Close the 1-second window: the notices it owes, then the decode facts.
+    /// Close the 1-second window: the notices it owes, then the decode facts. A notice names
+    /// the size this device decodes, not the host's mode.
     fn tick_window(&mut self) {
         let c = &self.connector;
+        let m = c.mode();
+        let decoded = self
+            .picture
+            .map_or(m, |(width, height)| Mode { width, height, ..m });
         for notice in self.notices.tick(
             c.frames_behind(),
             self.total_frames,
             c.unsustainable_pin_kbps(),
-            c.mode(),
+            decoded,
             c.launch_outcome(),
         ) {
             let _ = self.ev_tx.try_send(SessionEvent::Notice(notice));
@@ -1798,6 +1885,22 @@ struct WindowNotices {
     overrun_noticed: bool,
     /// The last launch verdict turned into a notice: each verdict is said once.
     launch_told: Option<punktfunk_core::quic::LaunchOutcome>,
+    /// What the first window owes about the screen ([`start_line`]), until it says it.
+    start_unsaid: Option<String>,
+}
+
+/// The one line a session owes about its screen at start: that it is another device's, else
+/// why it is not the one asked ([`crate::host_text::screen_wish_line`]). One, because the
+/// presenter shows one notice at a time; the shared screen explains a lost wish too.
+fn start_line(
+    shared: bool,
+    wish: Option<&punktfunk_core::quic::v2::hello::ScreenWish>,
+    echo: Option<punktfunk_core::quic::v2::hello::RoleEcho>,
+) -> Option<String> {
+    if shared {
+        return Some(pf_l10n::client::notice_shared_screen().into());
+    }
+    crate::host_text::screen_wish_line(wish, echo?.reason)
 }
 
 impl WindowNotices {
@@ -1813,13 +1916,10 @@ impl WindowNotices {
         launch: Option<punktfunk_core::quic::LaunchOutcome>,
     ) -> Vec<String> {
         let mut notices = Vec::new();
+        notices.extend(self.start_unsaid.take());
         if pin_kbps != 0 && !self.pin_noticed {
             self.pin_noticed = true;
-            notices.push(format!(
-                "This device can't keep up with the pinned {} Mbps. Set the bitrate to \
-                 Automatic or lower it.",
-                pin_kbps / 1000
-            ));
+            notices.push(pf_l10n::client::notice_pin_unsustainable(pin_kbps / 1000));
         }
         let (behind, decoded) = (behind - self.behind_seen, decoded - self.decoded_seen);
         self.behind_seen += behind;
@@ -1832,22 +1932,36 @@ impl WindowNotices {
         // Five seconds running is the device, not a hitch. Said once.
         if self.overrun_secs == 5 && !self.overrun_noticed {
             self.overrun_noticed = true;
-            notices.push(format!(
-                "This device can't keep up with this stream at {}×{}. Lower the \
-                 resolution or the refresh rate.",
-                mode.width, mode.height
+            notices.push(pf_l10n::client::notice_falling_behind(
+                mode.width,
+                mode.height,
             ));
         }
         if let Some(outcome) = launch {
             if self.launch_told.as_ref() != Some(&outcome) {
-                if let Some(n) = outcome.notice() {
-                    notices.push(n.to_string());
-                }
+                notices.extend(launch_notice(&outcome));
                 self.launch_told = Some(outcome);
             }
         }
         notices
     }
+}
+
+/// The line a launch verdict owes the player: the host's message in this app's language when it
+/// names one this build has, else its English. `None` when the player got their game.
+fn launch_notice(outcome: &punktfunk_core::quic::LaunchOutcome) -> Option<String> {
+    if !outcome.kind.needs_telling()
+        || (outcome.message.is_empty() && outcome.message_id.is_empty())
+    {
+        return None;
+    }
+    let params: Vec<(&str, &str)> = outcome
+        .message_params
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    let said = crate::host_text::word(&outcome.message_id, &params, &outcome.message);
+    (!said.is_empty()).then_some(said)
 }
 
 /// The terminal event when `e` says the negotiated codec ran out of decode rungs;
@@ -1869,9 +1983,7 @@ fn decode_end(e: &anyhow::Error, negotiated: u8, advertised: u8) -> SessionEvent
     exhausted(e, negotiated, advertised).unwrap_or_else(|| {
         let codec = crate::video::wire_codec_name(negotiated);
         tracing::error!(codec, error = %format!("{e:#}"), "video decoder did not start");
-        SessionEvent::Ended(Some(format!(
-            "Couldn't start decoding the {codec} video on this device"
-        )))
+        SessionEvent::Ended(Some(pf_l10n::client::ended_decode_failed(codec)))
     })
 }
 
@@ -1899,15 +2011,13 @@ fn codec_fallback_event(
                 // cannot disagree.
                 exclude_codecs: advertised & !caps,
                 retry_caps: caps,
-                msg: format!("{codec} decoding failed on this device — reconnecting"),
+                msg: pf_l10n::client::notice_codec_fallback(codec),
             }
         }
         // Nothing left to advertise: reconnecting would negotiate the same dead end.
         LastRungVerdict::Dead => {
             tracing::error!(codec, detail, "video decode ran out of rungs and of codecs");
-            SessionEvent::Ended(Some(format!(
-                "{codec} can't be decoded on this device, and no other codec is available"
-            )))
+            SessionEvent::Ended(Some(pf_l10n::client::ended_no_codec(codec)))
         }
     }
 }
@@ -2386,14 +2496,14 @@ mod tests {
         }
     }
 
-    /// The pin notice names the pin in Mbps and goes out once per session.
+    /// The pin notice names the pin in Mbit/s and goes out once per session.
     #[test]
     fn the_pin_notice_is_said_once() {
         let mut w = WindowNotices::default();
         assert!(w.tick(0, 60, 0, mode_1080p(), None).is_empty());
         let said = w.tick(0, 120, 50_000, mode_1080p(), None);
         assert_eq!(said.len(), 1);
-        assert!(said[0].contains("50 Mbps"), "{}", said[0]);
+        assert!(said[0].contains("50 Mbit/s"), "{}", said[0]);
         assert!(w.tick(0, 180, 50_000, mode_1080p(), None).is_empty());
     }
 
@@ -2419,6 +2529,127 @@ mod tests {
         }
     }
 
+    /// A session on another device's screen says so in its first window, once.
+    #[test]
+    fn a_shared_screen_is_said_once_at_start() {
+        let mut w = WindowNotices {
+            start_unsaid: start_line(true, None, None),
+            ..Default::default()
+        };
+        assert_eq!(
+            w.tick(0, 60, 0, mode_1080p(), None),
+            ["You're sharing this screen. Its size was set by the first device to connect."]
+        );
+        assert!(w.tick(0, 120, 0, mode_1080p(), None).is_empty());
+    }
+
+    /// A preset's wish the host did not grant is said at start; a granted one, a session with
+    /// no echo, and a shared screen's say nothing of it.
+    #[test]
+    fn a_lost_screen_wish_is_said_at_start() {
+        use punktfunk_core::quic::v2::hello::{Role, RoleEcho, RoleReason, ScreenWish};
+        let echo = |reason| {
+            Some(RoleEcho {
+                role: Some(Role::Main),
+                reason,
+            })
+        };
+        let second = Some(&ScreenWish::Second);
+        assert_eq!(
+            start_line(false, second, echo(RoleReason::NotAllowed)).as_deref(),
+            Some("Second screen wasn't applied: this host decides the screen for this device.")
+        );
+        assert_eq!(start_line(false, second, echo(RoleReason::AsAsked)), None);
+        assert_eq!(start_line(false, second, None), None, "an older host");
+        assert_eq!(
+            start_line(true, second, echo(RoleReason::NotAllowed)),
+            start_line(true, None, None),
+            "the shared screen is the one line"
+        );
+    }
+
+    /// The preset's `host_screen` is the dial's wish; a spelling the wire can't carry is none.
+    #[test]
+    fn the_host_screen_setting_is_the_dials_wish() {
+        use punktfunk_core::quic::v2::hello::ScreenWish;
+        let params = |host_screen: &str| {
+            let settings = crate::trust::Settings {
+                host_screen: host_screen.into(),
+                ..Default::default()
+            };
+            let dial = Dial {
+                host: "10.0.0.9".into(),
+                port: 9777,
+                pin: [9; 32],
+                launch: None,
+                profile: None,
+                connect_timeout: Duration::from_secs(5),
+            };
+            let probes = Probes {
+                mode: mode_1080p(),
+                vulkan: None,
+                display_hdr: None,
+                hdr_enabled: false,
+                identity: ("cert".into(), "key".into()),
+                gamepad: GamepadPref::Auto,
+                force_software: Arc::default(),
+                stats_verbosity: crate::trust::StatsVerbosity::Off,
+                hevc_444_hardware: false,
+            };
+            SessionParams::from_plan(&settings, false, None, None, None, dial, probes).screen_wish
+        };
+        assert_eq!(params("second"), Some(ScreenWish::Second));
+        assert_eq!(
+            params("monitor:HDMI-A-1"),
+            Some(ScreenWish::Monitor("HDMI-A-1".into()))
+        );
+        assert_eq!(params(""), None);
+        assert_eq!(params("tablet"), None);
+    }
+
+    /// A stop raised before the dial ends the session as ended, without a connection
+    /// attempt that would come back as a timeout.
+    #[test]
+    fn a_stop_before_the_dial_ends_without_dialing() {
+        let dial = Dial {
+            host: "127.0.0.1".into(),
+            port: 9,
+            pin: [9; 32],
+            launch: None,
+            profile: None,
+            connect_timeout: Duration::from_secs(5),
+        };
+        let probes = Probes {
+            mode: mode_1080p(),
+            vulkan: None,
+            display_hdr: None,
+            hdr_enabled: false,
+            identity: ("cert".into(), "key".into()),
+            gamepad: GamepadPref::Auto,
+            force_software: Arc::default(),
+            stats_verbosity: crate::trust::StatsVerbosity::Off,
+            hevc_444_hardware: false,
+        };
+        let params = SessionParams::from_plan(
+            &crate::trust::Settings::default(),
+            false,
+            None,
+            None,
+            None,
+            dial,
+            probes,
+        );
+        let (ev_tx, ev_rx) = async_channel::unbounded();
+        let (frame_tx, _frames) = async_channel::bounded(2);
+        let stop = Arc::new(AtomicBool::new(true));
+        pump(params, ev_tx, frame_tx, stop, MicControl::default());
+        assert!(matches!(ev_rx.try_recv(), Ok(SessionEvent::Ended(None))));
+        assert!(
+            ev_rx.try_recv().is_err(),
+            "and nothing after the one terminal event"
+        );
+    }
+
     /// Each launch verdict is said once; one that needs no words says nothing.
     #[test]
     fn each_launch_verdict_is_said_once() {
@@ -2437,6 +2668,32 @@ mod tests {
             w.tick(0, 0, 0, mode_1080p(), Some(refused)),
             ["Nothing to run."]
         );
+    }
+
+    /// A verdict that names its message reads in the app's language; one from a newer host, or
+    /// from an old one, reads as the host's English.
+    #[test]
+    fn a_launch_verdict_is_worded_by_its_message() {
+        use punktfunk_core::quic::{LaunchOutcome, LaunchOutcomeKind};
+        let failed = |id: &str| {
+            LaunchOutcome::new(LaunchOutcomeKind::Failed, "The host's English.")
+                .worded(id, &[("title", "Quail"), ("seconds", "4")])
+        };
+        let known = failed("launch_closed_at_once");
+        assert_eq!(
+            launch_notice(&known).as_deref(),
+            Some("Couldn't start Quail \u{2014} it closed again after 4 s.")
+        );
+        pf_l10n::with_language("en-XA", || {
+            let said = launch_notice(&known).unwrap();
+            assert!(said.starts_with('[') && said.contains("Quail"), "{said}");
+        });
+        assert_eq!(
+            launch_notice(&failed("launch_from_a_newer_host")).as_deref(),
+            Some("The host's English.")
+        );
+        let spawned = LaunchOutcome::new(LaunchOutcomeKind::Spawned, "Started.");
+        assert_eq!(launch_notice(&spawned), None);
     }
 
     /// HEVC reconnect as the terminal event both refusal sites produce. Pins that

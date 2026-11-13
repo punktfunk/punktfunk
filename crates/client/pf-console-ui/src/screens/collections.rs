@@ -151,11 +151,7 @@ pub(crate) fn paint_tile(
     // Bottom rail, full inner width — same place the host tile puts name and address.
     let max_w = f64::from(rect.width()) - 2.0 * pad;
     let sub_base = f64::from(rect.bottom) - pad;
-    let count = if c.count == 1 {
-        "1 title".to_string()
-    } else {
-        format!("{} titles", c.count)
-    };
+    let count = pf_l10n::client::lib_collection_titles(c.count as u64);
     fonts.draw_clipped(
         canvas,
         &count,
@@ -179,15 +175,18 @@ pub(crate) fn paint_tile(
     // Platform vs store, so two "Steam" buckets stay distinct. Top-right, the
     // corner the deck leaves clear.
     let kind = match &c.key {
-        GroupKey::Store(_) => "STORE",
-        GroupKey::Platform(_) | GroupKey::Launchers => "PLATFORM",
+        GroupKey::Store(_) => pf_l10n::client::lib_collection_kind_store(),
+        GroupKey::Platform(_) | GroupKey::Other | GroupKey::Launchers => {
+            pf_l10n::client::lib_collection_kind_platform()
+        }
     };
     let kind_w = f64::from(fonts.measure(kind, W::SemiBold, 11.0 * k));
     // Never left of the deck's reserved corner: a narrow tile would otherwise
-    // walk the caption back into the covers.
-    let kind_x = (f64::from(rect.right) - pad - kind_w).max(l + (FAN_W + 10.0) * fk);
+    // walk the caption back into the covers. Past the room right of it, it is cut.
+    let corner = l + (FAN_W + 10.0) * fk;
+    let kind_x = (f64::from(rect.right) - pad - kind_w).max(corner);
     let kind_y = t + 12.0 * k;
-    fonts.draw(
+    fonts.draw_clipped(
         canvas,
         kind,
         kind_x,
@@ -195,6 +194,7 @@ pub(crate) fn paint_tile(
         W::SemiBold,
         11.0 * k,
         ui.fg(0.45),
+        f64::from(rect.right) - pad - corner,
     );
 }
 
@@ -275,16 +275,15 @@ fn draw_monogram(
     let mono = initials(label);
     // Sized off the card, not `k`: deck cards are smaller than a shelf poster.
     let size = f64::from(front.height()) * 0.30;
-    let font = fonts.font(W::Bold, size);
-    let tw = font.measure_str(&mono, None).0;
-    canvas.draw_str(
+    let tw = fonts.measure(&mono, W::Bold, size);
+    fonts.draw(
+        canvas,
         &mono,
-        Point::new(
-            front.center_x() - tw / 2.0,
-            front.center_y() + (size * 0.36) as f32,
-        ),
-        &font,
-        &fill(ui.fg(0.85)),
+        f64::from(front.center_x() - tw / 2.0),
+        f64::from(front.center_y()) + size * 0.36,
+        W::Bold,
+        size,
+        ui.fg(0.85),
     );
 }
 
@@ -308,6 +307,7 @@ mod tests {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         }
     }
 

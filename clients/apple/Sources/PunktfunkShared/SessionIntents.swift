@@ -15,8 +15,12 @@ import Foundation
 /// into `disconnect(deliberate: true)` (the user explicitly ended it → quit-close the host).
 @available(iOS 17.0, *)
 public struct EndStreamIntent: LiveActivityIntent {
-    public static let title: LocalizedStringResource = "End Punktfunk Stream"
-    public static let description = IntentDescription("Ends the active Punktfunk streaming session.")
+    public static let title: LocalizedStringResource = LocalizedStringResource(
+        "apple_intent_end_stream_title", defaultValue: "End Punktfunk Stream")
+    public static let description = IntentDescription(
+        LocalizedStringResource(
+            "apple_intent_end_stream_desc",
+            defaultValue: "Ends the active Punktfunk streaming session."))
 
     public init() {}
 

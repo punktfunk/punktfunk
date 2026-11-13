@@ -54,6 +54,18 @@ object NativeBridge {
     ): ByteArray?
 
     /**
+     * The 187 bytes a locked profile's unlock key signs (SHA-256 digest): [challenge], [profileId]
+     * (1 to 64 of `[A-Za-z0-9_-]`) zero-padded to 64 bytes, then this device's and the pinned box's
+     * certificate SHA-256. The three arrays are 32 bytes each. Null for anything else.
+     */
+    external fun nativeLockedProfileUnlockMessage(
+        challenge: ByteArray,
+        profileId: String,
+        deviceFp: ByteArray,
+        boxFp: ByteArray,
+    ): ByteArray?
+
+    /**
      * True while the dial [nativeConnect] is blocked on has been parked by the host for its
      * operator's approval. The dial then waits for the verdict; show the approval wait.
      */
@@ -61,6 +73,14 @@ object NativeBridge {
 
     /** 64-hex SHA-256 of the cert the host presented on [handle]; valid after a successful connect. */
     external fun nativeHostFingerprint(handle: Long): String
+
+    /** The session on [handle] started on a screen another device opened and sized. */
+    external fun nativeSharesScreen(handle: Long): Boolean
+
+    /** Why the session on [handle] did not get the screen it asked for, as the host's echo says:
+     *  `0` as asked (also with no echo), `1` not allowed, `2` monitors held, `3` unavailable,
+     *  `4` no monitors. */
+    external fun nativeScreenRoleReason(handle: Long): Int
 
     /**
      * Has the underlying QUIC session ended? `true` once the connection closed — a host suspend /
@@ -106,6 +126,13 @@ object NativeBridge {
      * enforces. Poll ~1 Hz alongside [nativeSessionEnded]. Cheap; safe on the UI thread.
      */
     external fun nativeAccessState(handle: Long): IntArray?
+
+    /**
+     * The host's sentence when it did not start this session's game (refused it, or it closed
+     * again at once), as `{"id", "message", "params"}` for [HostText.launch]; "" otherwise. The
+     * latest verdict wins, so poll it. Cheap; safe on the UI thread.
+     */
+    external fun nativeLaunchRefusal(handle: Long): String
 
     /**
      * Run the SPAKE2 PIN ceremony, presenting [certPem]/[keyPem]. Returns the host's verified
@@ -198,11 +225,22 @@ object NativeBridge {
 
     /**
      * Ask the host to switch the live session to [width]×[height] at [refreshHz] with no reconnect.
-     * Non-blocking: on acceptance the stream continues at the new mode from a keyframe that carries
-     * its own parameter sets; a rejection leaves the session unchanged. `false` when the request
-     * could not be queued (a `0` handle, a closed session, or a non-positive dimension).
+     * [viewWidth]×[viewHeight] is the size the picture is shown at when the mode is larger (render
+     * scale above 1x): a host that reads it encodes that instead. `0`×`0` names none, which
+     * clears a view the host keeps; `-1`×`-1` keeps it, for a rate pick. Non-blocking: on
+     * acceptance the stream continues at the new mode from a keyframe that carries its own
+     * parameter sets; a rejection leaves the session unchanged.
+     * `false` when the request could not be queued (a `0` handle, a closed session, or a
+     * non-positive dimension).
      */
-    external fun nativeRequestMode(handle: Long, width: Int, height: Int, refreshHz: Int): Boolean
+    external fun nativeRequestMode(
+        handle: Long,
+        width: Int,
+        height: Int,
+        refreshHz: Int,
+        viewWidth: Int,
+        viewHeight: Int,
+    ): Boolean
 
     /** Tear down a session handle returned by [nativeConnect]. No-op on `0`. */
     external fun nativeClose(handle: Long)
@@ -445,8 +483,17 @@ object NativeBridge {
      */
     external fun nativeVideoDecodedSize(handle: Long): IntArray?
 
-    /** Stop + join the decode thread without closing the session. No-op on `0`. */
+    /**
+     * Stop the decode thread without closing the session, waiting at most 2 s for it. No-op on
+     * `0`.
+     */
     external fun nativeStopVideo(handle: Long)
+
+    /**
+     * Whether a call into the device's video decoder has gone unanswered for 5 s: the device's
+     * decoder service hung, and only a restart of the device brings it back. `false` on `0`.
+     */
+    external fun nativeVideoDecoderStuck(handle: Long): Boolean
 
     /**
      * The background keep-alive's video drain: pop access units and discard them while no decode
@@ -607,6 +654,12 @@ object NativeBridge {
         haptics: Boolean,
         speaker: Boolean,
     ): Boolean
+
+    /**
+     * Set wire pad [pad]'s speaker volume, [percent] 0..100 (100 = unscaled). Takes effect on the
+     * next decoded frame, so it may be called before [nativeStartPadAudio] and while it runs.
+     */
+    external fun nativeSetPadSpeakerVolume(pad: Int, percent: Int)
 
     /**
      * Stop tier-A pad audio and join its render thread, and hand the pad back to wire rumble.
@@ -957,6 +1010,13 @@ object NativeBridge {
     external fun nativeConsoleAvailable(): Boolean
 
     /**
+     * Word the Rust side's text in the first of [tags] that Punktfunk ships: a JSON array of
+     * BCP-47 tags, most preferred first. `nativeConsoleCreate` does this from its `languages`; the app
+     * calls this at process start, for the text read with no console.
+     */
+    external fun nativeSetLanguages(tags: String)
+
+    /**
      * Build the console: [optionsJson] = `{device_name, gpu_cache_bytes, settings: <trust::Settings>,
      * presets: [[id, name]], known_hosts: <KnownHosts>, entry: {} | {"library": <HostRow>}}`.
      * Returns a handle (its render thread parked until a surface arrives), or `0` on a bad options
@@ -1023,6 +1083,12 @@ object NativeBridge {
     external fun nativeConsoleSessionPhase(handle: Long, phase: Int, message: String)
 
     /**
+     * Whether the console's launch hold is up: the session it launched waits for its `ShowStream`
+     * action. False for a launch the shell raised no hold for, such as a link's.
+     */
+    external fun nativeConsoleHoldsLaunch(handle: Long): Boolean
+
+    /**
      * The password the console's prompt holds for the `Launch` it just raised, moved out of the
      * console: null when it holds none. [stays] gets its "Stay signed in" switch at index 0. The
      * console's copy is wiped as this returns; the caller wipes the array once its dial returns.
@@ -1072,8 +1138,23 @@ object NativeBridge {
      */
     external fun nativeConsoleSetProfiles(handle: Long, fpHex: String, json: String)
 
+    /**
+     * The answer to `FetchHidden` for [profile] on the host pinned to [fpHex]:
+     * `{"Listed": [LibraryGame]}` or `{"Failed": "why"}`. Posters follow as a shelf's do.
+     */
+    external fun nativeConsoleSetHiddenList(handle: Long, fpHex: String, profile: String, json: String)
+
+    /** What a `SetHidden` came to: `{fp_hex, profile, app_id, hidden, done, notice}`. */
+    external fun nativeConsoleSetHideAnswer(handle: Long, json: String)
+
     /** A one-shot toast from a service worker. */
     external fun nativeConsoleNotice(handle: Long, text: String)
+
+    /** The host's sentence for the held launch it did not start: the hold says it and stops waiting. */
+    external fun nativeConsoleLaunchRefused(handle: Long, text: String)
+
+    /** This device's code, once its identity has loaded: shown while a request waits for approval. */
+    external fun nativeConsoleSetDeviceCode(handle: Long, code: String)
 
     /** `[{"heading", "text"}]`: what this app bundles, for the console's Licences screen. */
     external fun nativeConsoleSetLicenses(handle: Long, json: String)

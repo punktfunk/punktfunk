@@ -40,6 +40,7 @@ on:
       - 'scripts/ci/gitea-release.sh'
       - 'scripts/ci/pf-version.sh'
       - '.gitea/workflows/decky.yml'
+      - 'l10n/**'
     tags: ['v*']
   workflow_dispatch:
 
@@ -112,8 +113,9 @@ jobs:
           # node:22-bookworm ships python3 (a package.sh dep) but not zip; install both anyway
           # so an image change can't silently break the build.
           apt-get update && apt-get install -y --no-install-recommends zip python3 >/dev/null
-          # Stage the canonical plugin tree (dist/, main.py, bin/, assets/, controller_config/,
-          # LICENSE, …) with the same script local/sideload builds use — see the header comment.
+          # Stage the canonical plugin tree (dist/, main.py, py_modules/, bin/, assets/,
+          # controller_config/, LICENSE, …) with the same script local/sideload builds use — see
+          # the header comment.
           # Runs AFTER the version stamp, so the staged package.json carries $VERSION.
           bash clients/decky/scripts/package.sh
           DEST="clients/decky/out/$PLUGIN"
@@ -132,8 +134,12 @@ jobs:
             rm -f "$out/punktfunk.zip"
             ( cd clients/decky/out && zip -r "$out/punktfunk.zip" "$PLUGIN" )
             # Backstop against packaging drift: the runtime-loaded pieces MUST be in the zip.
+            # A missing backend module is a dead backend, and the self-update runs through it.
             for f in main.py dist/index.js bin/punktfunkrun.sh assets/grid.png \
-                     controller_config/punktfunk.vdf update.json; do
+                     controller_config/punktfunk.vdf update.json \
+                     py_modules/pf_decky/__init__.py py_modules/pf_decky/art.py \
+                     py_modules/pf_decky/client.py py_modules/pf_decky/session.py \
+                     py_modules/pf_decky/steam_input.py py_modules/pf_decky/update.py; do
               unzip -l "$out/punktfunk.zip" "$PLUGIN/$f" >/dev/null || { echo "MISSING $f" >&2; exit 1; }
             done
             # Decky verifies the download against this hash and aborts on a mismatch.

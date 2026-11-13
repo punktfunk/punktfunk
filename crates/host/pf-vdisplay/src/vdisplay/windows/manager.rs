@@ -201,6 +201,8 @@ struct Ask {
     slot: u32,
     mode: Mode,
     client_fp: Option<[u8; 32]>,
+    /// The session's topology; `None` reads `client_fp`'s ([`topology_action`]).
+    topology: Option<crate::policy::Topology>,
     client_hdr: Option<pf_frame::HdrMeta>,
     hw_cursor: bool,
     quit: Option<Arc<AtomicBool>>,
@@ -816,22 +818,26 @@ fn display_changes(before: &[ManagedInfo], after: &[ManagedInfo]) -> Vec<crate::
     released.into_iter().chain(created).collect()
 }
 
-/// Device-level watchdog pinger, running while any slot lives (any IOCTL
-/// bumps the watchdog, so one thread serves N monitors). Same stop+join
-/// shape as the exclusive-topology re-assert watchdog.
+/// A background thread and its stop flag: the device-level watchdog pinger, running while any
+/// slot lives (any IOCTL bumps the watchdog, so one thread serves N monitors), and the
+/// exclusive-topology re-assert watchdog.
 struct Pinger {
     stop: Arc<AtomicBool>,
     thread: JoinHandle<()>,
 }
 
 impl Pinger {
-    /// Signal, wake and join. The pinger parks between pings, so the join returns within a
-    /// scheduler slice, not after the rest of a watchdog/3 interval; the exclusive watch's
-    /// join is bounded by its 250 ms slices. Neither blocks on the turn, so a transition
-    /// stopping them cannot deadlock.
-    fn stop(self) {
+    /// Ask the thread to end and wake it from its park. Does not wait for it.
+    fn signal(&self) {
         self.stop.store(true, Ordering::Relaxed);
         self.thread.thread().unpark();
+    }
+
+    /// [`signal`](Self::signal), then join. Only for a thread that never blocks outside a
+    /// short slice: the exclusive watch's wait is cut into 250 ms slices, and it never blocks
+    /// on the turn, so a transition stopping it cannot deadlock.
+    fn stop(self) {
+        self.signal();
         let _ = self.thread.join();
     }
 }
@@ -1116,11 +1122,14 @@ impl VirtualDisplayManager {
     /// before any driver access. The returned [`MonitorLease`] releases only its matching
     /// generation. A device that dies under the ADD or whose seat adapter left is retired once
     /// that transition commits, then reopened outside any and climbed once more. `hdr` is the
-    /// session's verdict, which only a seat needs this early.
+    /// session's verdict, which only a seat needs this early. `topology` is the session's, which
+    /// a group's first monitor applies.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn acquire(
         &'static self,
         mode: Mode,
         client_fp: Option<[u8; 32]>,
+        topology: Option<crate::policy::Topology>,
         client_hdr: Option<pf_frame::HdrMeta>,
         hdr: bool,
         hw_cursor: bool,
@@ -1134,6 +1143,7 @@ impl VirtualDisplayManager {
             slot,
             mode,
             client_fp,
+            topology,
             client_hdr,
             hw_cursor,
             quit,
@@ -1369,7 +1379,7 @@ impl VirtualDisplayManager {
     ) -> Result<Monitor> {
         r.first = t.slots.is_empty();
         if r.first {
-            t.group.topology = topology_action(ask.client_fp);
+            t.group.topology = topology_action(ask.topology, ask.client_fp);
         }
         wake_console_display()?;
         let slot_plan = process_slot_plan().map_err(anyhow::Error::new)?;
@@ -1618,8 +1628,8 @@ impl VirtualDisplayManager {
         }
     }
 
-    /// [`VirtualOutput`] for `mon` in `slot`: preferred mode, capture target,
-    /// generation-stamped lease. `quit` is read by the lease `Drop` (see
+    /// [`VirtualOutput`] for `mon` in `slot`: preferred mode, capture target, the monitor's
+    /// generation, and a lease stamped with it. `quit` is read by the lease `Drop` (see
     /// [`Self::release`]). A session's own monitor is `Owned`: the manager owns its lifecycle
     /// and the registry delegates through `vd.create`. A joiner's is `External`, and its lease
     /// gives back a joined hold.
@@ -1634,6 +1644,7 @@ impl VirtualDisplayManager {
             node_id: 0,
             preferred_mode: Some((mon.mode.width, mon.mode.height, mon.mode.refresh_hz)),
             win_capture: mon.target(),
+            pool_gen: Some(mon.generation),
             keepalive: Box::new(MonitorLease {
                 mgr: self,
                 slot,
@@ -1647,7 +1658,8 @@ impl VirtualDisplayManager {
     }
 
     /// Start the device-level watchdog pinger if it is not running. One thread
-    /// serves every slot — any IOCTL bumps the watchdog.
+    /// serves every slot — any IOCTL bumps the watchdog. A signalled pinger still inside an
+    /// IOCTL ends when the call returns; a new one runs beside it.
     fn ensure_pinger(&'static self) {
         let mut guard = self.pinger.lock().unwrap();
         if guard.is_some() {
@@ -1680,7 +1692,9 @@ impl VirtualDisplayManager {
                             }
                             Err(e) if is_device_gone(&e) => {
                                 gone_streak += 1;
-                                if gone_streak >= 2 {
+                                // A signalled pinger retires nothing: the handle in the slot
+                                // may be a newer session's.
+                                if gone_streak >= 2 && !stop_t.load(Ordering::Relaxed) {
                                     // Device is gone. Retire so the next session
                                     // reopens; the monitors are already dead
                                     // driver-side.
@@ -2230,7 +2244,7 @@ impl VirtualDisplayManager {
         }
     }
 
-    /// Put the desktop back the way the group found it: stop the pinger and the exclusivity
+    /// Put the desktop back the way the group found it: signal the pinger, stop the exclusivity
     /// watchdog, re-enable the monitors we PnP-disabled, restore the saved topology, clear the
     /// crash journal, wake the panels, release the EDID lock.
     ///
@@ -2238,9 +2252,10 @@ impl VirtualDisplayManager {
     /// empties the slot and returns, and without this the desktop stays isolated with the pinger
     /// running, the monitors disabled and the EDID pinned, and nothing left to undo it.
     fn restore_group(&self, inner: &mut MgrInner) {
-        // Last slot: stop the pinger first, then restore first-in/last-out.
+        // Signalled, not joined: its IOCTL can sit in a wedged WUDFHost that never returns, and
+        // the restore must not wait behind it with the turn held. Dropping `p` detaches it.
         if let Some(p) = self.pinger.lock().unwrap().take() {
-            p.stop();
+            p.signal();
         }
         // Watchdog must be gone before restore — it would read the restored
         // topology as "lost exclusivity" and re-fight it.
@@ -2921,17 +2936,32 @@ pub(crate) fn force_release(slot: Option<u64>) -> usize {
     VDM.get().map(|m| m.force_release(slot)).unwrap_or(0)
 }
 
+/// Another session holds the monitor of `generation`, as the last commit left it.
+pub(crate) fn shared(generation: u64) -> bool {
+    VDM.get()
+        .is_some_and(|m| m.view.lock().unwrap().shared(generation))
+}
+
+/// The device on each virtual monitor of a group that keeps the host's monitors off, as the
+/// last commit left them.
+pub(crate) fn dark_devices() -> Vec<Option<[u8; 32]>> {
+    VDM.get()
+        .map(|m| m.view.lock().unwrap().dark())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::ccd::fake::{CcdCall, FakeCcd};
     use super::driver::fake::FakeDriver;
     use super::{
         isolate_txn, lifecycle, needs_resize, topology_churn, topology_reassert_gen, CcdTargetKey,
-        ControlDevice, Cycle, IsolateOutcome, MgrInner, Mode, Monitor, MonitorKey, Outcome,
+        ControlDevice, Cycle, IsolateOutcome, MgrInner, Mode, Monitor, MonitorKey, Outcome, Pinger,
         ReassertBreaker, Slot, VirtualDisplayManager, LUID, REASSERT_BREAKER_ROUNDS,
         REASSERT_WINDOW,
     };
     use pf_win_display::snapshot::{DisplaySnapshot, TargetInventory};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc, Mutex};
     use std::time::{Duration, Instant};
 
@@ -3007,6 +3037,26 @@ mod tests {
         assert!(needs_resize(mode, mode, m(2560, 1440, 60)));
     }
 
+    /// A pinger parked in an IOCTL that never returns: `signal` comes back at once and sets
+    /// the flag, where `stop` would join forever. The thread ends once the call does.
+    #[test]
+    fn signalling_a_pinger_does_not_wait_for_its_ioctl() {
+        let (unblock, in_ioctl) = mpsc::channel::<()>();
+        let thread = std::thread::spawn(move || {
+            let _ = in_ioctl.recv();
+        });
+        let stop = Arc::new(AtomicBool::new(false));
+        let pinger = Pinger {
+            stop: stop.clone(),
+            thread,
+        };
+        pinger.signal();
+        assert!(stop.load(Ordering::Relaxed));
+        assert!(!pinger.thread.is_finished(), "still inside its call");
+        drop(unblock);
+        pinger.stop();
+    }
+
     /// The topology and re-assert generations are process globals: their tests take turns.
     static GENERATIONS: Mutex<()> = Mutex::new(());
 
@@ -3071,7 +3121,7 @@ mod tests {
         }
         let hold = ccd.hold_next_isolate();
         let acquire = std::thread::spawn(move || {
-            mgr.acquire(m(1920, 1080, 60), None, None, false, false, None)
+            mgr.acquire(m(1920, 1080, 60), None, None, None, false, false, None)
                 .map(|_| ())
         });
         hold.entered
@@ -3167,6 +3217,28 @@ mod tests {
             .collect();
         assert_eq!(rows, [(0, "active", 1)]);
         // Its release would tear the display down under the host's linger policy.
+        std::mem::forget(joiner);
+    }
+
+    /// A joiner's output carries its owner's generation, and the monitor is shared until one
+    /// of the two lets go.
+    #[test]
+    fn a_joined_monitor_is_shared_until_a_holder_leaves() {
+        let mgr = fake_manager(&FakeCcd::new());
+        {
+            let mut t = mgr.transition();
+            *t = exclusive_group(&[0]);
+            t.slots.get_mut(&0).unwrap().mon.gdi_name = Some(r"\\.\DISPLAY9".into());
+        }
+        let shared = || mgr.view.lock().unwrap().shared(1);
+        assert!(!shared(), "the owner alone");
+        let joiner = mgr
+            .join(m(1920, 1080, 60), None)
+            .expect("slot 0 is joinable");
+        assert_eq!(joiner.pool_gen, Some(1));
+        assert!(shared(), "owner and joiner");
+        mgr.release(0, 1, false, false, Duration::ZERO);
+        assert!(!shared(), "the joiner alone");
         std::mem::forget(joiner);
     }
 

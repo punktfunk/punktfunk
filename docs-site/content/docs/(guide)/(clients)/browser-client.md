@@ -57,7 +57,8 @@ The container finds hosts that announce themselves on your network. Settings, un
 2. Pick your host. For one the page did not find, click **Add a host** and type its address.
 3. Choose **Request access**, then approve the browser in the console under **Devices → Waiting
    for approval** ([Pairing](/docs/pairing#approve-it-from-the-console-no-pin)). Or click **Pair a
-   device** in the console and type its PIN into the page.
+   device** in the console and type its PIN into the page. A host you added by its address is
+   offered the PIN only.
 
 Two kinds of request have no **Approve** in the console. Click **Arm PIN** on the row instead, and
 type that PIN into the page:
@@ -73,11 +74,11 @@ every time.
 
 ## 4. Stream
 
-- Pick a title from the library, or **Stream the desktop**. **Resume** continues the title the host
+- Pick a title from the library, or **Stream desktop**. **Resume** continues the title the host
   is running.
 - **Menu** in the bar at the top, Ctrl+Alt+Shift+O, or Back+A on a controller opens the quick menu.
   **End stream** closes the title; **Disconnect, keep the game running** leaves it up. The other
-  keys are every client's ([Input](/docs/input#getting-your-input-back)).
+  keys are every client's ([Input](/docs/shortcuts#getting-your-input-back)).
 - The gear opens **Settings**: stream size, frame rate, the mouse, the statistics overlay. The
   bitrate follows the connection unless you turn **Automatic bitrate** off.
 
@@ -154,7 +155,7 @@ UDP. The machine that runs the page has to be reachable over HTTPS from the netw
 Streaming over this path is a preview, and a browser that pairs over it asks
 [through the web client](#3-open-it-and-pair).
 
-## Console mode
+## Controller interface
 
 The controller button in the top bar switches the page to Punktfunk Console, the interface every
 client draws for a TV and a gamepad: hosts, pairing, the library and settings, all by D-pad.

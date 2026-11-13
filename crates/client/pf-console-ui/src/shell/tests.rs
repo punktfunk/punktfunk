@@ -32,6 +32,7 @@ mod shots;
 
 mod launch_hold;
 mod profile_gate;
+mod pseudo;
 mod unlock_gate;
 
 /// Pins `motion_spring` (vectors v2). v1 `motion` still exists for other clients; this
@@ -282,7 +283,8 @@ fn navigation_lap() {
 }
 
 /// Back climbs one layer a press: Settings' rows, its sections, the tab, then the exit
-/// question, whose Back stays. An Apple host cannot exit, so its tab's Back does nothing.
+/// question, whose Back stays. An Apple TV cannot exit, so its tab's Back does nothing; a Mac
+/// asks and quits.
 #[test]
 fn back_climbs_from_settings_rows_to_the_exit_question() {
     let (mut s, _console, _library) = shell(vec![Screen::Home(HomeScreen::new())]);
@@ -308,16 +310,33 @@ fn back_climbs_from_settings_rows_to_the_exit_question() {
         "the question's back stays"
     );
 
-    let mut opts = test_options();
-    opts.platform = Platform::Apple;
-    let (console, library) = (ConsoleShared::default(), LibraryShared::default());
-    let home = vec![Screen::Home(HomeScreen::new())];
-    let mut s = Shell::new(console, library, ConsoleBus::default(), opts, home).unwrap();
-    s.sync();
+    let apple = |tv| {
+        let mut opts = test_options();
+        opts.platform = Platform::Apple;
+        opts.tv = tv;
+        let (console, library) = (ConsoleShared::default(), LibraryShared::default());
+        let home = vec![Screen::Home(HomeScreen::new())];
+        let mut s = Shell::new(console, library, ConsoleBus::default(), opts, home).unwrap();
+        s.sync();
+        s
+    };
+    let mut tv = apple(true);
     for _ in 0..3 {
-        s.handle_menu(MenuEvent::Back);
+        tv.handle_menu(MenuEvent::Back);
     }
-    assert!(s.at_root() && s.stack.len() == 1 && s.take_action().is_none());
+    assert!(tv.at_root() && tv.stack.len() == 1 && tv.take_action().is_none());
+
+    let mut mac = apple(false);
+    for _ in 0..2 {
+        mac.handle_menu(MenuEvent::Back);
+    }
+    finish_motion(&mut mac);
+    assert!(
+        matches!(mac.stack.as_slice(), [_, Screen::Prompt(_)]),
+        "a Mac asks"
+    );
+    mac.handle_menu(MenuEvent::Confirm);
+    assert!(matches!(mac.take_action(), Some(OverlayAction::Quit)));
 }
 
 /// A tab root that places nothing to focus parks focus on its tab, where Down stays;
@@ -514,6 +533,7 @@ fn down_from_a_card_lands_on_its_games_and_launches_there() {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         }],
     );
     frame(&mut s);
@@ -555,6 +575,7 @@ fn a_fetch_clears_the_previous_hosts_list() {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         }],
     );
     s.sync();
@@ -663,6 +684,7 @@ fn a_pinned_cards_library_launches_with_its_preset() {
             name: "HDR".into(),
             accent: None,
             bitrate_kbps: None,
+            host_screen: None,
         }),
         ..rows[0].clone()
     };
@@ -700,6 +722,7 @@ fn a_pinned_cards_library_launches_with_its_preset() {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         }],
     );
     // Down past the Desktops band, which arrives focused and launches nothing.
@@ -741,6 +764,7 @@ fn a_primary_tiles_library_leaves_the_preset_to_the_binding() {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         }],
     );
     s.handle_menu(MenuEvent::Confirm);
@@ -962,29 +986,69 @@ fn the_licences_page_through_a_hosts_notices() {
     assert!(matches!(s.stack.last(), Some(Screen::Home(_))));
 }
 
-/// The stream controls draw without a host, and a pad leaves them with B.
+/// The shortcuts page draws without a host, and a pad leaves it with B.
 #[test]
-fn the_stream_controls_draw_and_a_pad_leaves_them() {
+fn the_shortcuts_page_draws_and_a_pad_leaves_it() {
     let fonts = crate::theme::build_fonts().unwrap();
     let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
     let mut settings = pf_client_core::trust::Settings::default();
     let lib = crate::library::LibraryShared::default();
-    let controls = crate::screens::controls::ControlsScreen::new(&crate::screens::Ctx::test(
-        &mut settings,
-        &lib,
-    ));
+    let ctx = crate::screens::Ctx::test(&mut settings, &lib);
+    let page = crate::screens::shortcuts::ShortcutsScreen::new(&ctx, Default::default());
     let (mut s, _console, _library) = shell(vec![
         Screen::Home(HomeScreen::new()),
-        Screen::Controls(controls),
+        Screen::Shortcuts(page),
     ]);
     s.render(surface.canvas(), 1280, 800, &fonts, None, None, &[]);
-    let Some(Screen::Controls(c)) = s.stack.last() else {
-        panic!("the controls are on top");
+    let Some(Screen::Shortcuts(p)) = s.stack.last() else {
+        panic!("the page is on top");
     };
-    assert_eq!(c.title(), "Stream controls");
+    assert_eq!(p.title(), "Shortcuts");
     s.handle_menu(MenuEvent::Back);
     finish_motion(&mut s);
     assert!(matches!(s.stack.last(), Some(Screen::Home(_))));
+}
+
+/// A recording shortcut takes the host's test mode as the input test does; the chord held
+/// when the first button lifts is saved, and the test mode ends with the recording.
+#[test]
+fn a_recording_shortcut_takes_the_pad_and_saves_its_chord() {
+    use crate::model::{ConsoleCmd, PadTestState};
+    use pf_client_core::shortcuts::{button_bit, Shortcuts, Trigger};
+    let fonts = crate::theme::build_fonts().unwrap();
+    let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
+    let mut settings = pf_client_core::trust::Settings::default();
+    let lib = crate::library::LibraryShared::default();
+    let ctx = crate::screens::Ctx::test(&mut settings, &lib);
+    let client = crate::screens::shortcuts::client(ctx.device.platform);
+    let mut row =
+        crate::screens::shortcuts::ShortcutRowScreen::edit(&ctx, Default::default(), client, 0);
+    row.start_recording();
+    let (mut s, console, _library) = shell(vec![
+        Screen::Home(HomeScreen::new()),
+        Screen::ShortcutRow(Box::new(row)),
+    ]);
+    let mut frame = |s: &mut Shell| s.render(surface.canvas(), 1280, 800, &fonts, None, None, &[]);
+    frame(&mut s);
+    assert!(s.bus.drain().contains(&ConsoleCmd::PadTest { on: true }));
+    for held in [&[][..], &["Y"], &["Y", "B"], &["B"]] {
+        console.set_pad_test(PadTestState {
+            held: held.iter().map(|h| h.to_string()).collect(),
+            axes: Vec::new(),
+        });
+        frame(&mut s);
+    }
+    let saved = Shortcuts::parse(&s.settings.shortcuts);
+    let yb = ["y", "b"].map(|n| button_bit(n).unwrap()).to_vec();
+    assert_eq!(
+        saved.bindings[0].trigger,
+        Trigger::Pad {
+            buttons: yb,
+            hold: false
+        }
+    );
+    frame(&mut s);
+    assert!(s.bus.drain().contains(&ConsoleCmd::PadTest { on: false }));
 }
 
 /// The host's test mode follows the test screen: on while it is on top, drawn from the
@@ -1110,6 +1174,40 @@ fn a_hardware_space_types_one_space() {
     s.text_input("knight");
     let typed = s.edit_field().map(|f| f.text);
     assert_eq!(typed.as_deref(), Some("hollow knight"));
+}
+
+/// An input method's text in progress reaches the field's frame but not its value. The commit
+/// replaces it, an empty edit ends it, and the keys it takes meanwhile never edit the field.
+#[test]
+fn text_in_progress_stays_out_of_the_value() {
+    use crate::input::Key;
+    let fonts = crate::theme::build_fonts().unwrap();
+    let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
+    let host = hosts().remove(0);
+    let search = crate::screens::search::SearchScreen::new(&host, &Default::default());
+    let (mut s, _console, _library) = shell(vec![
+        Screen::Home(HomeScreen::new()),
+        Screen::Search(search),
+    ]);
+    let typed = |s: &Shell| s.edit_field().map(|f| f.text).unwrap_or_default();
+    s.text_input("ff");
+    s.preedit("にほん");
+    assert_eq!(typed(&s), "ff");
+    s.render(surface.canvas(), 1280, 800, &fonts, None, None, &[]);
+    assert_eq!(s.ui.preedit, "にほん", "the field draws it");
+    assert!(s.ui.caret.get().is_some(), "and says where its caret is");
+    for key in [Key::Backspace, Key::Left, Key::Return, Key::Escape] {
+        assert!(s.key(key, false, false), "{key:?} is the input method's");
+    }
+    assert!(s.editing());
+    assert_eq!(typed(&s), "ff");
+    s.text_input("日本");
+    assert_eq!(typed(&s), "ff日本");
+    assert!(s.preedit.is_empty(), "the commit replaced it");
+    s.preedit("ご");
+    s.preedit("");
+    s.key(Key::Backspace, false, false);
+    assert_eq!(typed(&s), "ff日", "an empty edit ended it");
 }
 
 #[test]
@@ -1595,6 +1693,7 @@ fn mixed_library(library: &LibraryShared) {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         }
     };
     library.set_games(
@@ -2078,6 +2177,7 @@ fn apply_is_offered_only_when_the_default_is_the_layer_that_wins() {
             name: "Work".into(),
             accent: None,
             bitrate_kbps,
+            host_screen: None,
         })
     };
     for (bound, want) in [
@@ -2229,12 +2329,12 @@ fn the_announcement_names_the_trailing_actions() {
     }
     assert_eq!(
         s.focus_announcement().as_deref(),
-        Some("Add Host, Register a host by address")
+        Some("Add host, By address")
     );
     s.handle_menu(MenuEvent::Move(MenuDir::Right));
     assert_eq!(
         s.focus_announcement().as_deref(),
-        Some("Rescan, Look for hosts on this network again")
+        Some("Scan again, Find hosts on this network")
     );
 }
 
@@ -2404,6 +2504,7 @@ fn dump_phone_home() {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         })
         .collect();
     library.set_games(&library.req(), games);
@@ -2549,6 +2650,7 @@ fn dump_device_marks() {
         detail: format!("{id} · gamepad · dpad"),
         forwarded: true,
         rumble: true,
+        audio: false,
     };
     let pads = vec![
         pad(

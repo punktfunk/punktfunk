@@ -72,35 +72,39 @@ impl Shell {
             .map(str::to_string);
         // Connect, wake and the speed test share one full-screen shape. A connect can
         // follow a wake (`sync`) so they share the backdrop and never blink between them.
+        let cancel = || Hint::new(HintKey::Back, pf_l10n::common::common_cancel());
         let takeover: Option<(f64, bool, String, String, Vec<Hint>)> =
             if let Some(c) = self.connect.card_mut() {
                 c.appear = approach(c.appear, 1.0, dt, 0.07);
                 if let Some(line) = &c.starting {
-                    Some((
-                        c.appear,
-                        true,
-                        line.clone(),
-                        String::new(),
-                        vec![Hint::new(HintKey::Back, "Cancel")],
-                    ))
+                    Some((c.appear, true, line.clone(), String::new(), vec![cancel()]))
                 } else if c.request_access {
+                    let mut body = match &c.title {
+                        Some(host) => pf_l10n::client::dial_approve_no_pin(host),
+                        None => pf_l10n::console::console_dial_approve_no_pin_unnamed().into(),
+                    };
+                    // A second line: the host's console shows the same code.
+                    if let Some(code) = &self.device.code {
+                        body.push('\n');
+                        body.push_str(&pf_l10n::client::pair_device_code(code));
+                    }
                     Some((
                         c.appear,
                         true,
-                        "Waiting for approval…".to_string(),
-                        format!(
-                            "Approve this device in {}'s console or web UI — no PIN needed.",
-                            c.title
-                        ),
-                        vec![Hint::new(HintKey::Back, "Cancel")],
+                        pf_l10n::client::pair_waiting_for_approval().into(),
+                        body,
+                        vec![cancel()],
                     ))
                 } else {
                     Some((
                         c.appear,
                         true,
-                        format!("Connecting to {}…", c.title),
-                        "Starting the stream in this window.".to_string(),
-                        vec![Hint::new(HintKey::Back, "Cancel")],
+                        match &c.title {
+                            Some(host) => pf_l10n::client::dial_connecting_to(host),
+                            None => pf_l10n::client::dial_connecting().into(),
+                        },
+                        pf_l10n::client::dial_connecting_detail().into(),
+                        vec![cancel()],
                     ))
                 }
             } else if let Connect::SeatWait(sw) = &mut self.connect {
@@ -110,7 +114,7 @@ impl Shell {
                     true,
                     pf_client_core::profiles::waking_line(&sw.name),
                     sw.detail.clone().unwrap_or_default(),
-                    vec![Hint::new(HintKey::Back, "Cancel")],
+                    vec![cancel()],
                 ))
             } else if let Some(wk) = &self.wake {
                 // Service-driven: already settled, no fade-in.
@@ -118,52 +122,49 @@ impl Shell {
                     Some((
                         1.0,
                         false,
-                        format!("{} didn't wake", wk.name),
-                        "Check its power settings, or wake it manually and try again.".to_string(),
+                        pf_l10n::client::dial_wake_parked(&wk.name),
+                        pf_l10n::client::dial_wake_parked_hint().into(),
                         vec![
-                            Hint::new(HintKey::Confirm, "Try Again"),
-                            Hint::new(HintKey::Back, "Cancel"),
+                            Hint::new(HintKey::Confirm, pf_l10n::common::common_retry()),
+                            cancel(),
                         ],
                     ))
                 } else {
                     Some((
                         1.0,
                         true,
-                        format!("Waking {}…", wk.name),
-                        format!("Waiting for it to come online · {} s", wk.seconds),
-                        // Wake-only offers "Stop Waiting"; wake-then-connect is "Cancel".
-                        vec![Hint::new(
-                            HintKey::Back,
-                            if wk.then_connect {
-                                "Cancel"
-                            } else {
-                                "Stop Waiting"
-                            },
-                        )],
+                        pf_l10n::client::dial_waking(&wk.name),
+                        pf_l10n::client::dial_waking_progress(wk.seconds),
+                        // Wake-only offers "Stop waiting"; wake-then-connect is "Cancel".
+                        vec![if wk.then_connect {
+                            cancel()
+                        } else {
+                            Hint::new(HintKey::Back, pf_l10n::client::dial_stop_waiting())
+                        }],
                     ))
                 }
             } else if let Some(sp) = &self.speed {
                 // Service-driven like the wake card: already settled, no fade-in.
-                let close = Hint::new(HintKey::Back, "Close");
+                let close = Hint::new(HintKey::Back, pf_l10n::common::common_close());
                 Some(match &sp.phase {
                     SpeedPhase::Connecting => (
                         1.0,
                         true,
-                        format!("Testing {}\u{2026}", sp.name),
-                        "Connecting.".to_string(),
-                        vec![Hint::new(HintKey::Back, "Cancel")],
+                        pf_l10n::console::console_speedtest_testing(&sp.name),
+                        pf_l10n::client::speedtest_connecting().into(),
+                        vec![cancel()],
                     ),
                     SpeedPhase::Measuring | SpeedPhase::Progress { .. } => (
                         1.0,
                         false,
-                        format!("Testing {}\u{2026}", sp.name),
-                        "Measuring the link \u{2014} this takes a few seconds.".to_string(),
-                        vec![Hint::new(HintKey::Back, "Cancel")],
+                        pf_l10n::console::console_speedtest_testing(&sp.name),
+                        pf_l10n::client::speedtest_measuring_body().into(),
+                        vec![cancel()],
                     ),
                     SpeedPhase::Failed(why) => (
                         1.0,
                         false,
-                        format!("Couldn't measure {}", sp.name),
+                        pf_l10n::client::speedtest_failed_title(&sp.name),
                         why.clone(),
                         vec![close],
                     ),
@@ -179,16 +180,16 @@ impl Shell {
                         let mut hints = Vec::new();
                         match &pinned_by {
                             // Read-only: the default is not the layer this host streams at.
-                            Some(name) => lines.push(format!(
-                                "\u{201c}{name}\u{201d} sets this host's bitrate \u{2014} \
-                                 change it there to use this."
-                            )),
+                            Some(name) => lines
+                                .push(pf_l10n::console::console_speedtest_preset_sets_body(name)),
                             None => {
-                                lines.push(format!(
-                                    "{} recommended, leaving headroom for FEC and loss.",
-                                    mbps(*recommended_kbps)
+                                lines.push(pf_l10n::client::speedtest_recommended_body(mbps(
+                                    *recommended_kbps,
+                                )));
+                                hints.push(Hint::new(
+                                    HintKey::Confirm,
+                                    pf_l10n::client::speedtest_set_default(),
                                 ));
-                                hints.push(Hint::new(HintKey::Confirm, "Set as the default"));
                             }
                         }
                         hints.push(close);
@@ -377,11 +378,10 @@ impl Shell {
         let (done, rec) = measured(&sp.phase);
         // Measured, the figure is the headline: the caption names the host and the loss.
         let caption = match &sp.phase {
-            SpeedPhase::Done { clean: Some(c), .. } => format!(
-                "{} \u{b7} {:.1} % loss at {}",
-                sp.name,
-                c.loss_pct,
-                mbps(c.rate_kbps)
+            SpeedPhase::Done { clean: Some(c), .. } => pf_l10n::console::console_speedtest_caption(
+                &sp.name,
+                format!("{:.1}", c.loss_pct),
+                mbps(c.rate_kbps),
             ),
             SpeedPhase::Done { .. } => sp.name.clone(),
             _ => title.to_string(),
@@ -516,8 +516,8 @@ impl Shell {
         .rects
     }
 
-    /// The launch hold: the title's poster on the takeover field, its name and store
-    /// beneath, a spinner for the wait. `appear` lifts the poster group in; the field
+    /// The launch hold: the title's poster on the takeover field, its name, store and what
+    /// the host set for it beneath, a spinner for the wait. `appear` lifts the poster group in; the field
     /// itself is already on screen from the connect, so it never blinks.
     #[allow(clippy::too_many_arguments)]
     fn draw_launch_hold(
@@ -545,6 +545,7 @@ impl Shell {
         let a = l.appear as f32;
         let rows: Vec<(&String, f64, f32)> = [
             (&l.facts, 15.0, 0.62),
+            (&l.host_line, 14.0, 0.62),
             (&l.developer, 14.0, 0.45),
             (&l.genres, 14.0, 0.45),
         ]
@@ -696,7 +697,11 @@ impl Shell {
                 );
                 canvas.draw_rrect(RRect::new_rect_xy(done, r, r), &fill(ui.fg(0.85 * a)));
                 let line = if d.state == "downloading" {
-                    format!("Downloading \u{b7} {}", d.line())
+                    format!(
+                        "{} \u{b7} {}",
+                        pf_l10n::client::lib_hold_downloading(),
+                        d.line()
+                    )
                 } else {
                     d.line()
                 };
@@ -712,7 +717,7 @@ impl Shell {
                 );
                 fonts.leading(
                     canvas,
-                    "Leaving won't stop the download.",
+                    pf_l10n::client::lib_hold_leaving(),
                     W::Regular,
                     11.5 * k,
                     ui.fg(0.4 * a),
@@ -726,11 +731,11 @@ impl Shell {
                 fonts.leading(
                     canvas,
                     if l.window_wait {
-                        "Waiting for the game's window\u{2026}"
+                        pf_l10n::client::lib_hold_waiting_window()
                     } else if l.connected {
-                        "Starting the game\u{2026}"
+                        pf_l10n::client::lib_hold_starting()
                     } else {
-                        "Connecting\u{2026}"
+                        pf_l10n::client::lib_hold_connecting()
                     },
                     W::Regular,
                     12.5 * k,
@@ -744,11 +749,11 @@ impl Shell {
         // Before the dial lands B cancels it, exactly as it does on the connect card;
         // after, the only thing left to ask for is the picture.
         let hint = if l.failed.is_some() {
-            Hint::new(HintKey::Confirm, "Show the desktop anyway")
+            Hint::new(HintKey::Confirm, pf_l10n::client::lib_hold_show_desktop())
         } else if l.connected {
-            Hint::new(HintKey::Confirm, "Show stream")
+            Hint::new(HintKey::Confirm, pf_l10n::client::lib_hold_show_stream())
         } else {
-            Hint::new(HintKey::Back, "Cancel")
+            Hint::new(HintKey::Back, pf_l10n::common::common_cancel())
         };
         self.draw_takeover_hints(canvas, w, h, k, fonts, &[hint]);
     }
@@ -827,18 +832,20 @@ fn speed_headline(
     clean: Option<&crate::model::CleanRound>,
 ) -> String {
     let carries = if wall {
-        format!("Link carries {}.", mbps(ceiling_kbps))
+        pf_l10n::client::speedtest_link_carries_body(mbps(ceiling_kbps))
     } else {
-        format!("Link carries at least {}.", mbps(ceiling_kbps))
+        pf_l10n::client::speedtest_link_carries_at_least_body(mbps(ceiling_kbps))
     };
     match clean {
-        Some(c) => format!(
-            "{carries} At {}: {:.1} % loss, {:.1} ms jitter",
-            mbps(c.rate_kbps),
-            c.loss_pct,
-            f64::from(c.jitter_us) / 1000.0
-        ),
-        None => format!("{} measured", mbps(ceiling_kbps)),
+        Some(c) => {
+            let round = pf_l10n::client::speedtest_clean_round_body(
+                mbps(c.rate_kbps),
+                format!("{:.1}", c.loss_pct),
+                format!("{:.1}", f64::from(c.jitter_us) / 1000.0),
+            );
+            format!("{carries} {round}")
+        }
+        None => pf_l10n::client::speedtest_measured(mbps(ceiling_kbps)),
     }
 }
 
@@ -859,12 +866,13 @@ fn measured(phase: &SpeedPhase) -> (Option<u32>, Option<u32>) {
     }
 }
 
-/// A rate as people read it: tenths under 10 Mb/s, whole megabits above, gigabits past 1000.
+/// A rate as people read it: tenths under 10 Mbit/s, whole megabits above, gigabits past
+/// 1000. A readout: the same figures in every language.
 fn mbps(kbps: u32) -> String {
     match kbps {
-        0..10_000 => format!("{:.1} Mb/s", f64::from(kbps) / 1_000.0),
-        10_000..1_000_000 => format!("{} Mb/s", kbps / 1_000),
-        _ => format!("{:.1} Gb/s", f64::from(kbps) / 1_000_000.0),
+        0..10_000 => format!("{:.1} Mbit/s", f64::from(kbps) / 1_000.0),
+        10_000..1_000_000 => format!("{} Mbit/s", kbps / 1_000),
+        _ => format!("{:.1} Gbit/s", f64::from(kbps) / 1_000_000.0),
     }
 }
 
@@ -1072,7 +1080,7 @@ fn speed_chart(
             let mut rule = crate::theme::stroke(crate::theme::ONLINE_GREEN, 1.5 * kf);
             rule.set_path_effect(skia_safe::PathEffect::dash(&[6.0 * kf, 4.0 * kf], 0.0));
             canvas.draw_line((r.left, y), (r.right, y), &rule);
-            let label = format!("Recommended {}", mbps(rec));
+            let label = pf_l10n::client::speedtest_chart_recommended(mbps(rec));
             let lw = f64::from(fonts.measure(&label, W::SemiBold, 12.0 * k));
             let (x, base) = (f64::from(r.right) - lw, f64::from(y) - 6.0 * k);
             let green = crate::theme::ONLINE_GREEN;
@@ -1127,9 +1135,9 @@ mod tests {
     /// peak, starting from the origin.
     #[test]
     fn the_speed_chart_scales_to_round_numbers() {
-        assert_eq!(mbps(8_500), "8.5 Mb/s");
-        assert_eq!(mbps(876_000), "876 Mb/s");
-        assert_eq!(mbps(1_250_000), "1.2 Gb/s");
+        assert_eq!(mbps(8_500), "8.5 Mbit/s");
+        assert_eq!(mbps(876_000), "876 Mbit/s");
+        assert_eq!(mbps(1_250_000), "1.2 Gbit/s");
         let trace = [(0.5, 300_000), (1.0, 850_000), (2.4, 870_000)];
         let (x_max, y_max) = chart_scale(&trace, 870_000);
         assert_eq!((x_max, y_max), (3.0, 1_000_000));
@@ -1140,7 +1148,7 @@ mod tests {
         assert_eq!(pts[0], Point::new(0.0, 100.0));
         assert!(
             (pts[2].y - 15.0).abs() < 0.01,
-            "850 of 1000 Mb/s: {}",
+            "850 of 1000 Mbit/s: {}",
             pts[2].y
         );
     }

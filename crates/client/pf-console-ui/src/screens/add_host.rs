@@ -59,9 +59,9 @@ impl AddHostScreen {
 
     fn commit_label(&self) -> &'static str {
         if self.edits.is_some() {
-            "Save changes"
+            pf_l10n::common::common_save()
         } else {
-            "Add host"
+            pf_l10n::client::hosts_add_confirm()
         }
     }
 
@@ -126,10 +126,10 @@ impl AddHostScreen {
                     addr,
                     port,
                 });
-                fx.toast = Some(format!("Saved {label}"));
+                fx.toast = Some(pf_l10n::console::console_hosts_saved(label));
             }
             None => {
-                fx.toast = Some(format!("Added {addr}"));
+                fx.toast = Some(pf_l10n::console::console_hosts_added(&addr));
                 fx.cmds.push(ConsoleCmd::SaveHost { name, addr, port });
             }
         }
@@ -144,13 +144,23 @@ impl AddHostScreen {
         };
         vec![
             field_row(
-                "Name",
+                pf_l10n::client::hosts_field_name(),
                 &self.name,
-                "Optional — e.g. Living Room",
+                pf_l10n::client::hosts_field_name_placeholder(),
                 Field::Name,
             ),
-            field_row("Address", &self.address, "IP or hostname", Field::Address),
-            field_row("Port", &self.port, "9777", Field::Port),
+            field_row(
+                pf_l10n::client::hosts_field_address(),
+                &self.address,
+                pf_l10n::client::hosts_field_address_placeholder(),
+                Field::Address,
+            ),
+            field_row(
+                pf_l10n::client::hosts_field_port(),
+                &self.port,
+                "9777",
+                Field::Port,
+            ),
             RowSpec::action(self.commit_label(), self.can_add()),
         ]
     }
@@ -159,9 +169,9 @@ impl AddHostScreen {
 impl ScreenView for AddHostScreen {
     fn title(&self) -> String {
         if self.edits.is_some() {
-            "Edit Host".into()
+            pf_l10n::client::hosts_edit_title().into()
         } else {
-            "Add Host".into()
+            pf_l10n::client::hosts_add_title().into()
         }
     }
 
@@ -190,9 +200,9 @@ impl ScreenView for AddHostScreen {
 
     fn edit_field(&self) -> Option<crate::screens::EditField> {
         let (label, text) = match self.editing? {
-            Field::Name => ("Name", &self.name),
-            Field::Address => ("Address", &self.address),
-            Field::Port => ("Port", &self.port),
+            Field::Name => (pf_l10n::client::hosts_field_name(), &self.name),
+            Field::Address => (pf_l10n::client::hosts_field_address(), &self.address),
+            Field::Port => (pf_l10n::client::hosts_field_port(), &self.port),
         };
         crate::screens::EditField::new(label, text, self.editing == Some(Field::Port))
     }
@@ -241,11 +251,13 @@ impl ScreenView for AddHostScreen {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing.is_some() {
-            return self.keyboard.hints(ctx.device, "Done");
+            return self
+                .keyboard
+                .hints(ctx.device, pf_l10n::common::common_done());
         }
         vec![
-            Hint::new(HintKey::Confirm, "Select"),
-            Hint::new(HintKey::Back, "Cancel"),
+            Hint::new(HintKey::Confirm, pf_l10n::common::common_select()),
+            Hint::new(HintKey::Back, pf_l10n::common::common_cancel()),
         ]
     }
 
@@ -263,7 +275,7 @@ impl ScreenView for AddHostScreen {
             canvas,
             ui,
             fonts,
-            "Hosts on this network appear automatically — add one by address for everything else.",
+            pf_l10n::client::hosts_add_hint(),
             rect,
             k,
         );

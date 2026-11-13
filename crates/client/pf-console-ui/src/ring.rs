@@ -20,6 +20,8 @@ use pf_client_core::overlay_actions::{
     chord_chip, key_vk, pad_type_label, OverlayConfig, RingPlatform, SlotId,
 };
 use pf_client_core::ring::{RingCommand, RingFacts, RingInput};
+use pf_l10n::client as c;
+use pf_l10n::console as con;
 use punktfunk_core::config::GamepadPref;
 use punktfunk_core::input::gamepad as wire;
 use punktfunk_core::input::PadMouseMode;
@@ -56,6 +58,8 @@ struct Spec {
     /// Leave the ring open so the new state is visible.
     toggle: bool,
     state: String,
+    /// The microphone is muted: its icon is struck through.
+    muted: bool,
     /// A device mark drawn in place of the slot's Lucide icon.
     glyph: Option<crate::icons::Icon>,
 }
@@ -104,10 +108,23 @@ pub(crate) enum EditEvent {
 /// describe a host this screen has not bound.
 fn preview_host_label(id: &str) -> &str {
     match id {
-        "power.sleep" => "Sleep host",
-        "power.reboot" => "Restart host",
-        "power.shutdown" => "Shut down host",
+        "power.sleep" => pf_l10n::host::host_power_sleep(),
+        "power.reboot" => pf_l10n::host::host_power_reboot(),
+        "power.shutdown" => pf_l10n::host::host_power_shutdown(),
         other => other,
+    }
+}
+
+/// What an armed slot says until the second press. A host action this client has no words
+/// for goes by the host's own `label`. Only End stream, End game and host actions arm.
+fn confirm_text(slot: &SlotId, label: &str) -> String {
+    match slot {
+        SlotId::EndStream => c::ring_end_stream_confirm().into(),
+        SlotId::EndGame => c::ring_end_game_confirm().into(),
+        SlotId::Host(id) if id == "power.sleep" => c::ring_host_sleep_confirm().into(),
+        SlotId::Host(id) if id == "power.reboot" => c::ring_host_reboot_confirm().into(),
+        SlotId::Host(id) if id == "power.shutdown" => c::ring_host_shutdown_confirm().into(),
+        _ => c::ring_host_action_confirm(label),
     }
 }
 
@@ -424,101 +441,159 @@ impl Ring {
             armed: false,
             toggle: false,
             state: String::new(),
+            muted: false,
             glyph: None,
         };
         let f = &self.facts;
         match slot {
             SlotId::EndStream => Spec {
                 armed: true,
-                ..plain("end_stream", "End stream", "End")
+                ..plain(
+                    "end_stream",
+                    c::ring_end_stream(),
+                    c::ring_end_stream_short(),
+                )
             },
             SlotId::EndGame => Spec {
                 armed: true,
                 enabled: f.streamed_game.is_some(),
-                reason: "No game this device launched is running here".into(),
-                ..plain("end_game", "End game", "Quit")
+                reason: c::ring_end_game_unavailable().into(),
+                ..plain("end_game", c::ring_end_game(), c::ring_end_game_short())
             },
             SlotId::DisconnectLinger => plain(
                 "disconnect_linger",
-                "Disconnect, keep the game running",
-                "Leave",
+                c::ring_disconnect_linger(),
+                c::ring_disconnect_linger_short(),
             ),
             SlotId::TouchMode => Spec {
                 toggle: true,
                 state: match f.touch_mode.as_str() {
-                    "pointer" => "Direct pointer",
-                    "touch" => "Touch passthrough",
-                    "off" => "Off",
-                    _ => "Trackpad",
+                    "pointer" => c::player_touch_mode_pointer(),
+                    "touch" => c::player_touch_mode_touch(),
+                    "off" => c::player_touch_mode_off(),
+                    _ => c::player_touch_mode_trackpad(),
                 }
                 .into(),
                 ..plain(
                     "touch_mode",
-                    "Touch mode",
+                    c::ring_touch_mode(),
                     match f.touch_mode.as_str() {
-                        "pointer" => "Point",
-                        "touch" => "Pass",
-                        "off" => "Off",
-                        _ => "Track",
+                        "pointer" => con::console_ring_touch_short_pointer(),
+                        "touch" => con::console_ring_touch_short_touch(),
+                        "off" => con::console_ring_touch_short_off(),
+                        _ => con::console_ring_touch_short_trackpad(),
                     },
                 )
             },
-            SlotId::Keyboard => plain("keyboard", "Keyboard", "Keys"),
+            SlotId::Keyboard => plain("keyboard", c::ring_keyboard(), c::ring_keyboard_short()),
             SlotId::Stats => Spec {
                 toggle: true,
+                // The embedder's own words for the tier.
                 state: f.stats_tier.clone(),
-                ..plain("stats", "Statistics", "Stats")
+                ..plain("stats", c::ring_stats(), c::ring_stats_short())
             },
             SlotId::Mic => Spec {
                 enabled: f.mic_available,
-                reason: "No microphone is running this session".into(),
+                reason: c::ring_mic_unavailable().into(),
                 toggle: true,
-                state: if f.mic_muted { "Muted" } else { "On" }.into(),
+                state: if f.mic_muted {
+                    c::ring_mic_muted()
+                } else {
+                    c::ring_mic_on()
+                }
+                .into(),
+                muted: f.mic_muted,
                 ..plain(
                     "mic",
-                    "Microphone",
-                    if f.mic_muted { "Mic ✕" } else { "Mic" },
+                    c::ring_mic(),
+                    if f.mic_muted {
+                        con::console_ring_mic_short_muted()
+                    } else {
+                        c::ring_mic_short()
+                    },
                 )
             },
             SlotId::Pad => Spec {
                 enabled: false,
-                reason: "The virtual controller is for phones and tablets".into(),
-                ..plain("pad", "Virtual controller", "Pad")
+                reason: c::ring_pad_touch_only().into(),
+                ..plain("pad", c::ring_pad(), c::ring_pad_short())
             },
             SlotId::SendText => Spec {
                 enabled: false,
-                reason: "Not on this client yet — use the keyboard".into(),
-                ..plain("send_text", "Send text", "Text")
+                reason: c::ring_send_text_unavailable().into(),
+                ..plain("send_text", c::ring_send_text(), c::ring_send_text_short())
             },
             SlotId::SwapScreens => Spec {
                 enabled: false,
-                reason: "This device has one screen".into(),
-                ..plain("swap_screens", "Swap screens", "Swap")
+                reason: c::ring_swap_screens_unavailable().into(),
+                ..plain(
+                    "swap_screens",
+                    c::ring_swap_screens(),
+                    c::ring_swap_screens_short(),
+                )
             },
-            SlotId::Guide => plain("guide", "Guide button", "Guide"),
-            SlotId::Qam => plain("qam", "Quick access menu", "QAM"),
+            SlotId::ReleaseInput => Spec {
+                enabled: f.pointer_capture,
+                reason: c::ring_no_pointer_capture().into(),
+                ..plain(
+                    "release_input",
+                    c::ring_release_input(),
+                    c::ring_release_input_short(),
+                )
+            },
+            SlotId::MouseMode => Spec {
+                enabled: f.pointer_capture,
+                reason: c::ring_no_pointer_capture().into(),
+                ..plain(
+                    "mouse_mode",
+                    c::ring_mouse_mode(),
+                    c::ring_mouse_mode_short(),
+                )
+            },
+            SlotId::Fullscreen => Spec {
+                enabled: f.windowed,
+                reason: c::ring_no_window().into(),
+                ..plain(
+                    "fullscreen",
+                    c::ring_fullscreen(),
+                    c::ring_fullscreen_short(),
+                )
+            },
+            SlotId::Minimize => Spec {
+                enabled: f.windowed,
+                reason: c::ring_no_window().into(),
+                ..plain("minimize", c::ring_minimize(), c::ring_minimize_short())
+            },
+            // Only the Apple client starts and stops clipboard sharing mid-stream.
+            SlotId::Clipboard => Spec {
+                enabled: false,
+                reason: c::ring_clipboard_unavailable().into(),
+                ..plain("clipboard", c::ring_clipboard(), c::ring_clipboard_short())
+            },
+            SlotId::Guide => plain("guide", c::ring_guide(), c::ring_guide_short()),
+            SlotId::Qam => plain("qam", c::ring_qam(), c::ring_qam_short()),
             SlotId::PadMouse => Spec {
                 enabled: f.pointer_granted && f.pad_mouse_target != 0,
                 reason: if f.pointer_granted {
-                    "No controller is connected"
+                    c::ring_no_controller()
                 } else {
-                    "This host only allows controller input"
+                    c::ring_controller_only()
                 }
                 .into(),
                 toggle: true,
                 state: match f.pad_mouse {
-                    PadMouseMode::Off => "Off",
-                    PadMouseMode::Touchpad => "Touchpad",
-                    PadMouseMode::Full => "Full",
+                    PadMouseMode::Off => c::ring_pad_mouse_off(),
+                    PadMouseMode::Touchpad => c::ring_pad_mouse_touchpad(),
+                    PadMouseMode::Full => c::ring_pad_mouse_full(),
                 }
                 .into(),
                 ..plain(
                     "pad_mouse",
-                    "Controller mouse",
+                    c::ring_pad_mouse(),
                     match f.pad_mouse {
-                        PadMouseMode::Off => "Mouse",
-                        PadMouseMode::Touchpad => "Touchpad",
-                        PadMouseMode::Full => "Mouse ✓",
+                        PadMouseMode::Off => c::ring_pad_mouse_short(),
+                        PadMouseMode::Touchpad => con::console_ring_pad_mouse_short_touchpad(),
+                        PadMouseMode::Full => con::console_ring_pad_mouse_short_full(),
                     },
                 )
             },
@@ -526,13 +601,13 @@ impl Ring {
                 let (name, short) = pad_type_label(f.pad_type);
                 Spec {
                     enabled: f.pad_mouse_target != 0,
-                    reason: "No controller is connected".into(),
+                    reason: c::ring_no_controller().into(),
                     toggle: true,
                     state: name.into(),
                     // Automatic keeps the plain gamepad; a picked type shows its silhouette.
                     glyph: (f.pad_type != GamepadPref::Auto)
                         .then(|| crate::glyphs::pad_icon(f.pad_type)),
-                    ..plain("pad_type", "Controller type", short)
+                    ..plain("pad_type", c::ring_pad_type(), short)
                 }
             }
             SlotId::StreamMute => Spec {
@@ -540,21 +615,25 @@ impl Ring {
                 // The state describes the mute: `Off` while audible, else the shared
                 // sentence naming whose mute it is.
                 state: punktfunk_core::audio::audio_mute_label(f.audio_mute)
-                    .unwrap_or("Off")
+                    .unwrap_or(c::ring_stream_mute_off())
                     .into(),
                 ..plain(
                     "stream_mute",
-                    "Mute this stream",
+                    c::ring_stream_mute(),
                     if f.audio_mute & punktfunk_core::audio::AUDIO_MUTE_LOCAL != 0 {
-                        "Mute ✕"
+                        con::console_ring_stream_mute_short_muted()
                     } else {
-                        "Mute"
+                        c::ring_stream_mute_short()
                     },
                 )
             },
             SlotId::Host(id) if self.editing.is_some() => Spec {
                 armed: true,
-                ..plain(&format!("host:{id}"), preview_host_label(id), "Power")
+                ..plain(
+                    &format!("host:{id}"),
+                    preview_host_label(id),
+                    c::ring_host_short(),
+                )
             },
             SlotId::Host(id) => {
                 let act = self.actions().into_iter().find(|a| &a.id == id);
@@ -563,12 +642,12 @@ impl Ring {
                     reason: act
                         .as_ref()
                         .and_then(|a| a.unavailable_reason.clone())
-                        .unwrap_or_else(|| "This host doesn't offer it".into()),
+                        .unwrap_or_else(|| c::ring_host_not_offered().into()),
                     armed: act.as_ref().is_none_or(|a| a.danger),
                     ..plain(
                         &format!("host:{id}"),
                         act.as_ref().map_or(id.as_str(), |a| a.label()),
-                        "Power",
+                        c::ring_host_short(),
                     )
                 }
             }
@@ -578,7 +657,7 @@ impl Ring {
                 let chip = chord_chip(&keys);
                 Spec {
                     enabled: !keys.is_empty() && keys.iter().all(|k| key_vk(k).is_some()),
-                    reason: "A key in this chord is unknown".into(),
+                    reason: c::ring_chord_unknown().into(),
                     ..plain(
                         &format!("shortcut:{id}"),
                         s.filter(|s| !s.label.is_empty())
@@ -602,7 +681,7 @@ impl Ring {
         }
         if s.armed && self.armed.as_deref() != Some(&s.id) {
             self.armed = Some(s.id.clone());
-            self.say(format!("{}? Press again", s.label));
+            self.say(confirm_text(slot, &s.label));
             return;
         }
         self.armed = None;
@@ -634,7 +713,24 @@ impl Ring {
             SlotId::PadMouse => self.pending.push_back(RingCommand::CyclePadMouse),
             SlotId::PadType => self.pending.push_back(RingCommand::CyclePadType),
             SlotId::StreamMute => self.pending.push_back(RingCommand::ToggleStreamMute),
-            SlotId::Pad | SlotId::SendText | SlotId::SwapScreens => {}
+            SlotId::Pad | SlotId::SendText | SlotId::SwapScreens | SlotId::Clipboard => {}
+            // These change the window or the capture under the ring, so it closes first.
+            SlotId::ReleaseInput => {
+                self.close();
+                self.pending.push_back(RingCommand::ToggleCapture);
+            }
+            SlotId::MouseMode => {
+                self.close();
+                self.pending.push_back(RingCommand::ToggleMouseMode);
+            }
+            SlotId::Fullscreen => {
+                self.close();
+                self.pending.push_back(RingCommand::ToggleFullscreen);
+            }
+            SlotId::Minimize => {
+                self.close();
+                self.pending.push_back(RingCommand::Minimize);
+            }
             // The host's own overlay is about to take the screen: close first, like End stream.
             SlotId::Guide | SlotId::Qam => {
                 let bit = if *slot == SlotId::Guide {
@@ -691,6 +787,14 @@ impl Ring {
             SheetRow::Slot(SlotId::Mic),
             SheetRow::Slot(SlotId::StreamMute),
         ]);
+        if self.facts.pointer_capture {
+            rows.push(SheetRow::Slot(SlotId::ReleaseInput));
+            rows.push(SheetRow::Slot(SlotId::MouseMode));
+        }
+        if self.facts.windowed {
+            rows.push(SheetRow::Slot(SlotId::Fullscreen));
+            rows.push(SheetRow::Slot(SlotId::Minimize));
+        }
         rows.extend(
             self.actions()
                 .into_iter()
@@ -710,7 +814,7 @@ impl Ring {
         let (w, h, _) = self.facts.mode;
         let (nw, nh, _) = self.facts.native_mode;
         if (w, h) == (nw, nh) {
-            format!("Native ({w}×{h})")
+            c::ring_sheet_native(w, h)
         } else {
             RES_PRESETS
                 .iter()
@@ -721,17 +825,23 @@ impl Ring {
 
     fn sheet_row_spec(&self, row: &SheetRow) -> RowSpec {
         match row {
-            SheetRow::Resolution => RowSpec::field("Resolution", self.res_label(), ""),
-            SheetRow::Refresh => RowSpec::field("Refresh", format!("{} Hz", self.facts.mode.2), ""),
+            SheetRow::Resolution => {
+                RowSpec::field(c::ring_sheet_resolution(), self.res_label(), "")
+            }
+            SheetRow::Refresh => RowSpec::field(
+                c::ring_sheet_refresh(),
+                pf_l10n::common::common_hz(self.facts.mode.2),
+                "",
+            ),
             SheetRow::ScrollInvert => {
                 let value = if !self.facts.pointer_granted {
-                    "Pointer input is not allowed"
+                    c::ring_pointer_not_allowed()
                 } else if self.facts.invert_scroll {
-                    "On"
+                    c::ring_scroll_invert_on()
                 } else {
-                    "Off"
+                    c::ring_scroll_invert_off()
                 };
-                let mut row = RowSpec::field("Invert scroll direction", value.into(), "");
+                let mut row = RowSpec::field(c::ring_sheet_invert_scroll(), value.into(), "");
                 row.enabled = self.facts.pointer_granted;
                 row
             }
@@ -740,7 +850,7 @@ impl Ring {
                 let value = if !s.enabled {
                     s.reason.clone()
                 } else if self.armed.as_deref() == Some(&s.id) {
-                    "press again".into()
+                    c::ring_press_again().into()
                 } else {
                     s.state.clone()
                 };
@@ -1258,13 +1368,14 @@ impl Ring {
             // Editor: centre is not a slot, so dimmed and inert.
             let more = Spec {
                 id: "more".into(),
-                label: "More".into(),
-                short: "More".into(),
+                label: c::ring_more().into(),
+                short: c::ring_more().into(),
                 enabled: !editing,
                 reason: String::new(),
                 armed: false,
                 toggle: false,
                 state: String::new(),
+                muted: false,
                 glyph: None,
             };
             canvas.draw_circle(
@@ -1294,18 +1405,19 @@ impl Ring {
         } else {
             self.geom[6] = Rect::new_empty();
         }
+        // "A" names the confirm button as the editor's hint does, in every pad style.
         let label = self.hint.clone().or_else(|| match self.highlight {
-            _ if lifted.is_some() => Some("Move to a slot and press A to swap".into()),
-            Some(6) => Some("More".into()),
+            _ if lifted.is_some() => Some(con::console_ring_edit_swap("A")),
+            Some(6) => Some(c::ring_more().into()),
             Some(k) => Some(
                 self.cfg.ring[k]
                     .as_ref()
                     .map(|s| self.spec(s).label)
                     .unwrap_or_else(|| {
                         if editing {
-                            "Empty — press A to choose".into()
+                            con::console_ring_slot_empty_edit("A")
                         } else {
-                            "Empty".into()
+                            c::ring_slot_empty().into()
                         }
                     }),
             ),
@@ -1394,8 +1506,8 @@ impl Ring {
 /// Shared slot icon (`overlay_actions::slot_icon` via [`crate::icons`]) so GTK/Windows
 /// editors cannot disagree. Mic swaps to its struck form while muted. `None` for a
 /// shortcut (the chord is the face) and any host action beyond the three powers.
-fn slot_icon(id: &str, state: &str) -> Option<crate::icons::Icon> {
-    crate::icons::by_name(pf_client_core::overlay_actions::slot_icon(id, state)?)
+fn slot_icon(id: &str, muted: bool) -> Option<crate::icons::Icon> {
+    crate::icons::by_name(pf_client_core::overlay_actions::slot_icon(id, muted)?)
 }
 
 /// Glow past the edge and a crisp ring, both at `amount`. Caller eases so the mark
@@ -1476,7 +1588,7 @@ fn draw_disc(
         );
         return;
     }
-    if let Some(icon) = slot_icon(&spec.id, &spec.state) {
+    if let Some(icon) = slot_icon(&spec.id, spec.muted) {
         crate::icons::draw_icon(canvas, icon, x, y, r * 1.05, scale, color);
         return;
     }
@@ -1582,6 +1694,7 @@ pub(crate) fn draw_keycap_disc(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pf_client_core::overlay_actions::GroupId;
 
     fn facts() -> RingFacts {
         RingFacts {
@@ -1705,8 +1818,19 @@ mod tests {
     /// client spending one of its six discs to silence itself.
     #[test]
     fn the_sheet_offers_every_action_this_platform_can_fire() {
+        let desktop = RingFacts {
+            windowed: true,
+            pointer_capture: true,
+            ..facts()
+        };
+        for f in [facts(), desktop] {
+            sheet_offers_every_fireable_action(&f);
+        }
+    }
+
+    fn sheet_offers_every_fireable_action(f: &RingFacts) {
         let mut r = Ring::new();
-        r.set_facts(&facts());
+        r.set_facts(f);
         let on_sheet: Vec<String> = r
             .sheet_rows()
             .iter()
@@ -1718,7 +1842,10 @@ mod tests {
         for group in pf_client_core::overlay_actions::catalogue(&r.cfg, RingPlatform::Desktop) {
             // Host actions and shortcuts are appended from what this host offers, and the
             // empty slot is the editor's eraser — none of the three is a fixed row.
-            if matches!(group.title, "Host" | "Shortcuts" | "Empty") {
+            if matches!(
+                group.id,
+                GroupId::Host | GroupId::Shortcuts | GroupId::Empty
+            ) {
                 continue;
             }
             for entry in group.entries {
@@ -1736,6 +1863,59 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Release input and Mouse mode need a captured pointer, Fullscreen and Minimize a window;
+    /// each closes the ring and asks once. Clipboard sharing stays dimmed.
+    #[test]
+    fn the_window_and_capture_slots_follow_their_facts() {
+        let slots = [
+            (SlotId::ReleaseInput, RingCommand::ToggleCapture),
+            (SlotId::MouseMode, RingCommand::ToggleMouseMode),
+            (SlotId::Fullscreen, RingCommand::ToggleFullscreen),
+            (SlotId::Minimize, RingCommand::Minimize),
+        ];
+        let mut r = Ring::new();
+        r.set_facts(&facts());
+        for (slot, _) in &slots {
+            r.fire(slot);
+            assert_eq!(r.take_command(), None, "{slot:?} is dimmed on a TV");
+        }
+        assert_eq!(r.hint.as_deref(), Some("This device has no window"));
+        r.set_facts(&RingFacts {
+            windowed: true,
+            pointer_capture: true,
+            ..facts()
+        });
+        for (slot, cmd) in slots {
+            r.input(RingInput::Toggle { x: 1.0, y: 1.0 });
+            r.fire(&slot);
+            assert_eq!(r.take_command(), Some(cmd));
+            assert!(!r.open(), "{slot:?} closes the ring");
+        }
+        r.fire(&SlotId::Clipboard);
+        assert_eq!(r.take_command(), None);
+        assert_eq!(r.hint.as_deref(), Some("Not on this device yet"));
+    }
+
+    /// A key combination may be a modifier alone: the Windows key opens the Start menu.
+    #[test]
+    fn a_modifier_alone_is_a_key_combination_the_ring_sends() {
+        let mut r = Ring::new();
+        r.set_facts(&RingFacts {
+            overlay_actions:
+                r#"{"v":2,"ring":["shortcut:s1"],"shortcuts":[{"id":"s1","keys":["win"]}]}"#.into(),
+            ..facts()
+        });
+        let slot = SlotId::Shortcut("s1".into());
+        let s = r.spec(&slot);
+        assert!(s.enabled);
+        assert_eq!((s.label.as_str(), s.short.as_str()), ("Win", "Win"));
+        r.fire(&slot);
+        assert_eq!(
+            r.take_command(),
+            Some(RingCommand::Shortcut(vec!["win".into()]))
+        );
     }
 
     /// The sheet lists End game only while a game this device launched is on the stream;
@@ -1776,6 +1956,7 @@ mod tests {
         r.fire(&SlotId::EndStream);
         assert_eq!(r.take_command(), None, "the first press only arms");
         assert_eq!(r.armed.as_deref(), Some("end_stream"));
+        assert_eq!(r.hint.as_deref(), Some("End stream? Press again"));
         r.fire(&SlotId::EndStream);
         assert_eq!(r.take_command(), Some(RingCommand::EndStream));
         assert!(!r.open());
@@ -2091,11 +2272,11 @@ mod tests {
             "host:power.reboot",
             "host:power.shutdown",
         ] {
-            assert!(slot_icon(id, "").is_some(), "{id} has no icon");
+            assert!(slot_icon(id, false).is_some(), "{id} has no icon");
         }
-        assert!(slot_icon("mic", "Muted").is_some());
-        assert!(slot_icon("host:custom.eject", "").is_none());
-        assert!(slot_icon("shortcut:s1", "").is_none());
+        assert!(slot_icon("mic", true).is_some());
+        assert!(slot_icon("host:custom.eject", false).is_none());
+        assert!(slot_icon("shortcut:s1", false).is_none());
     }
 
     #[test]

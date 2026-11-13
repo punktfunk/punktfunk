@@ -162,13 +162,13 @@ fn base_catalog() -> Vec<AppEntry> {
 /// collide with the small Desktop / apps.json ids.
 const LIBRARY_ID_BASE: u32 = 0x4000_0000;
 
-/// Layer [`crate::library::all_games`] onto `apps`. Moonlight caches appids, so
-/// each title's `<ID>` is a stable hash of its library id, then linear-probed
-/// off any id already in `apps`.
+/// Layer [`crate::library::all_games`] onto `apps`, each title that [`streams_as_app`].
+/// Moonlight caches appids, so each title's `<ID>` is a stable hash of its library id, then
+/// linear-probed off any id already in `apps`.
 fn append_library(apps: &mut Vec<AppEntry>) {
     let mut used: std::collections::HashSet<u32> = apps.iter().map(|a| a.id).collect();
     for g in crate::library::all_games() {
-        if g.launch.is_none() {
+        if !streams_as_app(&g) {
             continue;
         }
         let mut id = stable_app_id(&g.id);
@@ -187,6 +187,12 @@ fn append_library(apps: &mut Vec<AppEntry>) {
             prep: Vec::new(),
         });
     }
+}
+
+/// A library title is a Moonlight app when it launches, except the host's Game Mode tile:
+/// app 2, "Steam", is that already.
+fn streams_as_app(g: &crate::library::GameEntry) -> bool {
+    g.launch.is_some() && g.id != crate::library::GAME_MODE_ID
 }
 
 /// FNV-1a-32 of `library_id`, folded into [`LIBRARY_ID_BASE`]. Moonlight caches
@@ -312,6 +318,18 @@ mod tests {
         uniq.sort_unstable();
         uniq.dedup();
         assert_eq!(ids.len(), uniq.len(), "duplicate GameStream ids in catalog");
+    }
+
+    /// The host's Game Mode tile stays off `/applist`; a title that launches does not.
+    #[test]
+    fn the_game_mode_tile_is_no_moonlight_app() {
+        let tile = crate::library::game_mode_entry(true, false).expect("offered");
+        assert!(!streams_as_app(&tile));
+        let game = crate::library::GameEntry {
+            id: "steam:570".into(),
+            ..tile
+        };
+        assert!(streams_as_app(&game));
     }
 
     /// 600x800: Moonlight titles 628x888 and 200x266 art as its own placeholder.

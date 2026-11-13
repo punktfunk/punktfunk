@@ -36,9 +36,11 @@ for f in punktfunk-seats.service punktfunk-seat@.service; do
   install -Dm0644 "packaging/linux/$f" "$STAGE/usr/lib/systemd/system/$f"
 done
 install -Dm0644 packaging/linux/punktfunk-seats-user.conf "$STAGE/usr/lib/systemd/system/user@.service.d/50-punktfunk-seats.conf"
+install -Dm0644 packaging/linux/punktfunk-seat.pam "$STAGE/usr/lib/pam.d/punktfunk-seat"
 install -Dm0644 packaging/linux/punktfunk-seats.tmpfiles "$STAGE/usr/lib/tmpfiles.d/punktfunk-seats.conf"
 install -Dm0644 packaging/linux/65-punktfunk-seats.rules "$STAGE/usr/lib/udev/rules.d/65-punktfunk-seats.rules"
 install -Dm0755 packaging/linux/door-helper "$LIBEXEC/door-helper"
+install -Dm0755 packaging/linux/door-remove.sh "$LIBEXEC/door-remove"
 for f in punktfunk-door.service punktfunk-web-door.service punktfunk-door-on@.service punktfunk-door-off@.service; do
   install -Dm0644 "packaging/linux/$f" "$STAGE/usr/lib/systemd/system/$f"
 done
@@ -116,9 +118,9 @@ EOF
 cat > "$STAGE/DEBIAN/prerm" <<'EOF'
 #!/bin/sh
 set -e
-if [ "$1" = "remove" ] && [ -d /run/systemd/system ]; then
-    # door-helper enables the door's units, so removal disables them.
-    systemctl disable --now punktfunk-web-door.service punktfunk-door.service punktfunk-seats.service || true
+# A removal, not an upgrade: the door goes off for its owner, or its units are disabled.
+if [ "$1" = "remove" ]; then
+    /usr/libexec/punktfunk/door-remove || true
 fi
 exit 0
 EOF

@@ -3,7 +3,8 @@
 //! `hooks.json` is operator-privileged (`/api/v1/hooks`). Commands get event JSON and
 //! `PF_EVENT_*` env; Windows SYSTEM hosts run them as their WTS session user, and `elevated`
 //! ones on that user's administrator token once an administrator opted in ([`elevated_refusal`]).
-//! A seat on a person's own account runs none ([`own_account_refusal`]).
+//! A seat on a person's own account runs only what that person wrote on their own lane
+//! ([`HooksStore::set`]), and the console sets none there ([`own_account_refusal`]).
 //! Webhooks use verified TLS, do not follow redirects or attach host credentials,
 //! and may carry an HMAC signature.
 //!
@@ -199,17 +200,27 @@ pub(crate) fn elevated_on() -> bool {
 /// Why an `elevated` command won't run on this host, as the operator's next move. `None` when it
 /// may. The console can't turn it on: its password must not become administrator rights.
 pub(crate) fn elevated_refusal() -> Option<&'static str> {
-    if !cfg!(windows) {
-        return Some("Commands run as administrator on Windows hosts only.");
-    }
-    (!elevated_on()).then_some(
-        "Running commands as administrator is off on this host. Turn it on once from an \
-         administrator PowerShell: punktfunk-host hooks elevated on",
-    )
+    elevated_refused().map(|(_, why)| why)
 }
 
-/// Why this host takes no hooks, as the console says it. `None` where it does. A seat on a
-/// person's own account takes none: the console's password must not run commands as them.
+/// [`elevated_refusal`] with the code of its host message `apierr_<code>`.
+pub(crate) fn elevated_refused() -> Option<(&'static str, &'static str)> {
+    if !cfg!(windows) {
+        return Some((
+            "hooks_elevated_windows_only",
+            "Commands run as administrator on Windows hosts only.",
+        ));
+    }
+    (!elevated_on()).then_some((
+        "hooks_elevated_off",
+        "Running commands as administrator is off on this host. Turn it on once from an \
+         administrator PowerShell: punktfunk-host hooks elevated on",
+    ))
+}
+
+/// Why this host takes no hooks from a lane other than its person's, as the console says it.
+/// `None` where it does. A seat on a person's own account takes them from that person alone: the
+/// console's password must not run commands as them.
 pub(crate) fn own_account_refusal() -> Option<&'static str> {
     pf_paths::seat::own_account().then_some(
         "Hooks can't run on a profile that uses an existing account, because they would run as \
@@ -276,9 +287,20 @@ pub struct HooksStore {
 }
 
 struct StoreState {
-    cfg: Option<HooksConfig>,
+    cfg: Option<Stored>,
     /// mtime + length of the revision `cfg` was parsed from. `None` = the file did not exist.
     file_id: Option<(std::time::SystemTime, u64)>,
+}
+
+/// `hooks.json` as stored: the hooks, and whether this seat host's person wrote them.
+#[derive(Serialize, Deserialize)]
+struct Stored {
+    #[serde(flatten)]
+    cfg: HooksConfig,
+    /// Set by [`HooksStore::set`] from the lane, never from a body. On a person's own account
+    /// a document without it runs nothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    person: bool,
 }
 
 impl HooksStore {
@@ -299,15 +321,15 @@ impl HooksStore {
 
     /// Same lenient contract as [`Self::load_from`]: missing, invalid, or planted by a
     /// non-admin before the first elevated run ⇒ no hooks. Hooks run commands.
-    fn read_disk(path: &PathBuf) -> (Option<HooksConfig>, Option<(std::time::SystemTime, u64)>) {
+    fn read_disk(path: &PathBuf) -> (Option<Stored>, Option<(std::time::SystemTime, u64)>) {
         let file_id = Self::file_identity(path);
         if crate::planted::quarantine_planted_secret(path) {
             return (None, file_id);
         }
         let cfg = match std::fs::read(path) {
-            Ok(bytes) => match serde_json::from_slice::<HooksConfig>(&bytes) {
+            Ok(bytes) => match serde_json::from_slice::<Stored>(&bytes) {
                 Ok(c) => {
-                    if let Err(e) = c.validate() {
+                    if let Err(e) = c.cfg.validate() {
                         tracing::warn!(path = %path.display(),
                             "hooks.json invalid — hooks disabled until fixed: {e}");
                         None
@@ -329,24 +351,34 @@ impl HooksStore {
     /// Empty when unconfigured. Reloads `hooks.json` if identity moved — hand edits apply
     /// on the next event (`docs/automation.md`).
     pub fn get(&self) -> HooksConfig {
+        self.get_marked().0
+    }
+
+    /// [`Self::get`], and whether this seat host's person wrote it ([`Self::set`]).
+    pub fn get_marked(&self) -> (HooksConfig, bool) {
         let mut st = self.cur.lock().unwrap();
         let now_id = Self::file_identity(&self.path);
         if now_id != st.file_id {
             let (cfg, file_id) = Self::read_disk(&self.path);
-            tracing::info!(path = %self.path.display(), hooks = cfg.as_ref().map_or(0, |c| c.hooks.len()),
+            tracing::info!(path = %self.path.display(), hooks = cfg.as_ref().map_or(0, |c| c.cfg.hooks.len()),
                 "hooks.json changed on disk — reloaded");
             st.cfg = cfg;
             st.file_id = file_id;
         }
-        st.cfg.clone().unwrap_or_default()
+        st.cfg
+            .as_ref()
+            .map_or_else(Default::default, |s| (s.cfg.clone(), s.person))
     }
 
     /// Persist then adopt (caller validates first). Memory updates only if the write succeeds.
-    pub fn set(&self, cfg: HooksConfig) -> Result<()> {
-        pf_paths::replace_secret_file(&self.path, &serde_json::to_vec_pretty(&cfg)?)?;
+    /// `person`: written on this seat host's person lane, the one mark that runs it on a
+    /// person's own account.
+    pub fn set(&self, cfg: HooksConfig, person: bool) -> Result<()> {
+        let stored = Stored { cfg, person };
+        pf_paths::replace_secret_file(&self.path, &serde_json::to_vec_pretty(&stored)?)?;
         let mut st = self.cur.lock().unwrap();
         st.file_id = Self::file_identity(&self.path);
-        st.cfg = Some(cfg);
+        st.cfg = Some(stored);
         Ok(())
     }
 }
@@ -411,19 +443,29 @@ fn note_client_mismatch(h: &HookEntry, ev: &crate::events::EventKind, kind: &str
     }
 }
 
-/// Fires every hook `ev` matches, and the env-var mirrors. A seat's event fires none: it is on
-/// this bus for the plugins, and hooks run on this host's own. A host that takes no hooks
-/// ([`own_account_refusal`]) fires none either.
+/// The hooks this host runs: every stored one, but on a person's own account only a document
+/// that person wrote on their own lane.
+fn runnable() -> HooksConfig {
+    let (cfg, person) = store().get_marked();
+    if pf_paths::seat::own_account() && !person {
+        return HooksConfig::default();
+    }
+    cfg
+}
+
+/// Fires every [`runnable`] hook `ev` matches, and the env-var mirrors. A seat's event fires
+/// none: it is on this bus for the plugins, and hooks run on this host's own. A person's own
+/// account fires no mirror: nobody wrote it on their lane.
 fn dispatch(
     ev: &crate::events::HostEvent,
     sem: &std::sync::Arc<tokio::sync::Semaphore>,
     debounce: &mut HashMap<u64, Instant>,
 ) {
-    if ev.seat.is_some() || own_account_refusal().is_some() {
+    if ev.seat.is_some() {
         return;
     }
     let kind = ev.kind.name();
-    let cfg = store().get();
+    let cfg = runnable();
     for h in &cfg.hooks {
         // The launch stage runs a hold itself ([`hold`]); firing it here too would run it twice.
         if h.hold || !crate::events::kind_matches(&h.on, kind) {
@@ -463,20 +505,15 @@ fn dispatch(
         "client.disconnected" => pf_host_config::config().on_disconnect_cmd.clone(),
         _ => None,
     };
-    if let Some(cmd) = mirror {
+    if let Some(cmd) = mirror.filter(|_| !pf_paths::seat::own_account()) {
         fire_exec(cmd, ev, DEFAULT_TIMEOUT_S, false, sem);
     }
 }
 
-/// The hooks that hold `ev`'s stage: `hold` set, kind and filter matching. None on a host that
-/// takes no hooks ([`own_account_refusal`]).
+/// The [`runnable`] hooks that hold `ev`'s stage: `hold` set, kind and filter matching.
 pub(crate) fn holding(ev: &crate::events::HostEvent) -> Vec<HookEntry> {
-    if own_account_refusal().is_some() {
-        return Vec::new();
-    }
     let kind = ev.kind.name();
-    store()
-        .get()
+    runnable()
         .hooks
         .into_iter()
         .filter(|h| h.hold && crate::events::kind_matches(&h.on, kind))
@@ -549,11 +586,17 @@ fn fire_exec(
     let kind = ev.kind.name();
     let timeout = Duration::from_secs(u64::from(timeout_s));
     tracing::info!(cmd = %label, kind, "hook: running command");
-    // Off-thread: streaming planes never wait on operator code. Permit frees on thread exit.
-    std::thread::spawn(move || {
-        run_hook_process(&cmd, &json, &env, timeout, elevated);
-        drop(permit);
-    });
+    // Off-thread: streaming planes never wait on operator code. Permit frees on thread exit,
+    // or with the closure when the OS refuses the thread.
+    let spawned = std::thread::Builder::new()
+        .name("punktfunk-hook".into())
+        .spawn(move || {
+            run_hook_process(&cmd, &json, &env, timeout, elevated);
+            drop(permit);
+        });
+    if let Err(e) = spawned {
+        tracing::error!(cmd = %label, error = %e, "hook command did not launch");
+    }
 }
 
 /// Event as `PF_EVENT_*` env: scalar JSON leaves, path joined with `_` and uppercased
@@ -968,10 +1011,15 @@ fn fire_webhook(
     let json = serde_json::to_string(ev).unwrap_or_else(|_| "{}".to_string());
     let kind = ev.kind.name();
     tracing::info!(url = %origin, kind, "hook: posting webhook");
-    std::thread::spawn(move || {
-        post_webhook(&url, &json, secret_file.as_deref(), WEBHOOK_TIMEOUT);
-        drop(permit);
-    });
+    let spawned = std::thread::Builder::new()
+        .name("punktfunk-webhook".into())
+        .spawn(move || {
+            post_webhook(&url, &json, secret_file.as_deref(), WEBHOOK_TIMEOUT);
+            drop(permit);
+        });
+    if let Err(e) = spawned {
+        tracing::error!(url = %origin, error = %e, "webhook did not send");
+    }
 }
 
 /// True if the host is loopback, link-local (incl. `169.254.169.254`), unspecified, or
@@ -1109,8 +1157,34 @@ pub struct PrepGuard {
 
 /// Run prep steps synchronously, in order — the exception to fire-and-forget, because
 /// prep must land before launch. Failed/refused `do` logs and continues; its `undo`
-/// stays disarmed. Returns the guard that runs armed `undo`s at drop.
+/// stays disarmed. Returns the guard that runs armed `undo`s at drop. A seat on a person's
+/// own account runs only a step one of that person's own titles carries
+/// ([`crate::library::person_prep`]): every other is the operator's command.
 pub fn run_prep(cmds: &[PrepCmd], env: &[(String, String)]) -> PrepGuard {
+    let own = pf_paths::seat::own_account();
+    let written = if own {
+        crate::library::person_prep()
+    } else {
+        Vec::new()
+    };
+    run_prep_on(cmds, env, own.then_some(&written[..]))
+}
+
+/// [`run_prep`] where `person_wrote`, when given, is every step that may run.
+fn run_prep_on(
+    cmds: &[PrepCmd],
+    env: &[(String, String)],
+    person_wrote: Option<&[PrepCmd]>,
+) -> PrepGuard {
+    let (cmds, left): (Vec<&PrepCmd>, Vec<&PrepCmd>) = cmds
+        .iter()
+        .partition(|c| person_wrote.is_none_or(|w| w.contains(c)));
+    if !left.is_empty() {
+        tracing::info!(
+            steps = left.len(),
+            "prep steps not run: this person didn't write them"
+        );
+    }
     let timeout = Duration::from_secs(u64::from(DEFAULT_TIMEOUT_S));
     let mut undo = Vec::new();
     for c in cmds {
@@ -1148,17 +1222,22 @@ impl Drop for PrepGuard {
         let timeout = Duration::from_secs(u64::from(DEFAULT_TIMEOUT_S));
         // Detached: drop may be async or a panic-unwind; teardown must not block.
         // One thread keeps reverse-of-`do` order.
-        std::thread::spawn(move || {
-            for (cmd, elevated) in undo.iter().rev() {
-                let label = cmd_label(cmd);
-                if let Err(e) = exec_path_check(cmd) {
-                    tracing::error!(cmd = %label, "REFUSING prep undo command — {e}");
-                    continue;
+        let spawned = std::thread::Builder::new()
+            .name("punktfunk-prep-undo".into())
+            .spawn(move || {
+                for (cmd, elevated) in undo.iter().rev() {
+                    let label = cmd_label(cmd);
+                    if let Err(e) = exec_path_check(cmd) {
+                        tracing::error!(cmd = %label, "REFUSING prep undo command — {e}");
+                        continue;
+                    }
+                    tracing::info!(cmd = %label, "prep: running undo");
+                    run_hook_process(cmd, "{}", &env, timeout, *elevated);
                 }
-                tracing::info!(cmd = %label, "prep: running undo");
-                run_hook_process(cmd, "{}", &env, timeout, *elevated);
-            }
-        });
+            });
+        if let Err(e) = spawned {
+            tracing::error!(error = %e, "prep undo did not launch");
+        }
     }
 }
 
@@ -1308,12 +1387,19 @@ mod tests {
                 hmac_secret_file: None,
             }],
         };
-        store.set(cfg).unwrap();
-        assert_eq!(store.get().hooks.len(), 1);
+        store.set(cfg.clone(), false).unwrap();
+        assert_eq!(store.get_marked().0.hooks.len(), 1);
+        assert!(!store.get_marked().1);
 
         let reload = HooksStore::load_from(path.clone());
         assert_eq!(reload.get().hooks.len(), 1);
         assert_eq!(reload.get().hooks[0].on, "pairing.pending");
+        // The person's mark is the store's to write, and outlives a restart.
+        store.set(cfg, true).unwrap();
+        assert!(HooksStore::load_from(path.clone()).get_marked().1);
+        let planted = r#"{"hooks": [{"on": "stream.*", "run": "true"}]}"#;
+        std::fs::write(&path, planted).unwrap();
+        assert!(!HooksStore::load_from(path.clone()).get_marked().1);
 
         std::fs::write(&path, b"{ not json").unwrap();
         let corrupt = HooksStore::load_from(path.clone());
@@ -1531,6 +1617,32 @@ mod tests {
             started.elapsed() < Duration::from_secs(5),
             "timeout must kill the hook, not wait it out"
         );
+    }
+
+    /// On a person's own account only a step that person wrote runs: any other runs nothing
+    /// and arms no undo.
+    #[cfg(unix)]
+    #[test]
+    fn prep_runs_nothing_on_a_person_s_own_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("prep.txt");
+        let cmds = vec![PrepCmd {
+            run: format!("echo do >> {}", out.display()),
+            undo: Some(format!("echo undo >> {}", out.display())),
+            elevated: false,
+        }];
+        let guard = run_prep_on(&cmds, &[], Some(&[]));
+        assert!(guard.undo.is_empty());
+        drop(guard);
+        assert!(!out.exists(), "a step ran as the person");
+        // The step the person wrote runs there, and the same steps on any other host.
+        let guard = run_prep_on(&cmds, &[], Some(&cmds));
+        assert_eq!(guard.undo.len(), 1);
+        std::mem::forget(guard);
+        assert!(out.exists());
+        std::fs::remove_file(&out).unwrap();
+        drop(run_prep_on(&cmds, &[], None));
+        assert!(out.exists());
     }
 
     #[cfg(unix)]

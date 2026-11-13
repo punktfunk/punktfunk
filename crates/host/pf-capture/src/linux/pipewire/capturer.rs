@@ -17,7 +17,8 @@ use super::consume::FenceWaitStats;
 use super::plan::{
     gpu_import, negotiation_plan, ImportOutcome, ImportPolicy, ImportState, NegotiationInputs,
 };
-use super::queue::{wait_ready, FrameQueue};
+use super::queue::{wait_ready, FrameQueue, Woke};
+use super::share::{self, CloseOnExit, Seat, ShareKey, StreamCore};
 use super::thread::{pipewire_thread, LoopEnds, PwCtl};
 use super::CaptureOpts;
 use crate::knobs::Knobs;
@@ -75,12 +76,14 @@ pub struct PortalCapturer {
     /// Latch target for a failed [`hdr_offer`](Self::hdr_offer). See [`crate::HdrSource`].
     hdr_source: crate::HdrSource,
     node_id: u32,
-    /// `Drop` sends this. Without it `mainloop.run()` blocks until process
-    /// exit (leaks the thread and EGL/CUDA). `Option` so `Drop` can take it.
-    quit: Option<::pipewire::channel::Sender<PwCtl>>,
-    /// Joined in `Drop` after `quit` so the importer/CUDA is gone before
-    /// the next pipeline builds.
-    join: Option<thread::JoinHandle<()>>,
+    /// The stream's loop thread, which the last capturer's drop quits and joins: the
+    /// importer/CUDA is gone before the next pipeline builds. `None` once this one let go.
+    core: Option<Arc<StreamCore>>,
+    /// This capturer's place among the stream's viewers.
+    seat: Seat,
+    /// The node already had a stream in another format when this one opened. No frame here
+    /// is then [`crate::SharedCaptureTaken`], and convicts no offer.
+    beside_shared: bool,
     /// Virtual output; its `Drop` releases the compositor output. `None` on
     /// the portal path (the portal thread closes its session), or once a
     /// capture-only rebuild took it back (`take_keepalive`).
@@ -88,9 +91,6 @@ pub struct PortalCapturer {
     /// Portal-thread teardown. `None` on the virtual-output path. Its `Drop`
     /// ends the compositor's screencast.
     _portal: Option<PortalSession>,
-    /// Gamescope XFixes reader; `Drop` stops the thread. `None` on the portal
-    /// path (`SPA_META_Cursor`).
-    _gs_cursor: Option<xfixes_cursor::XFixesCursorSource>,
 }
 
 /// Portal-thread teardown. Firing `quit` un-parks the thread, which closes
@@ -200,6 +200,7 @@ impl PortalCapturer {
                 knobs,
             },
             policy,
+            false,
         )?
         .into_capturer(node_id, None, Some(portal), crate::HdrSource::PortalMonitor))
     }
@@ -254,39 +255,44 @@ impl PortalCapturer {
         // Virtual outputs are SDR-only except a gamescope node from our
         // `pipewire-hdr` build — the host checks before Welcome
         // (`capture::capturer_supports_hdr_for`).
-        let mut capturer =
-            spawn_pipewire(remote_fd, node_id, preferred_mode, capture, opts.policy)?
-                .into_capturer(
-                    node_id,
-                    Some(keepalive),
-                    None,
-                    crate::HdrSource::VirtualOutput,
+        // A portal remote is one session's own; only the daemon's node can be shared.
+        let shareable = opts.share && remote_fd.is_none();
+        let capturer = spawn_pipewire(
+            remote_fd,
+            node_id,
+            preferred_mode,
+            capture,
+            opts.policy,
+            shareable,
+        )?
+        .into_capturer(
+            node_id,
+            Some(keepalive),
+            None,
+            crate::HdrSource::VirtualOutput,
+        );
+        // One reader per stream: a viewer that joined reads the pointer the first one placed.
+        if let (Some(core), Some(targets)) = (&capturer.core, opts.gamescope_cursor) {
+            let mut reader = core.gs_cursor.lock().unwrap_or_else(|e| e.into_inner());
+            if reader.is_none() {
+                *reader = xfixes_cursor::XFixesCursorSource::spawn(
+                    targets,
+                    capturer.cursor_slot.clone(),
+                    Arc::clone(&capturer.shared.negotiation),
                 );
-        capturer._gs_cursor = opts.gamescope_cursor.and_then(|targets| {
-            xfixes_cursor::XFixesCursorSource::spawn(
-                targets,
-                capturer.cursor_slot.clone(),
-                Arc::clone(&capturer.shared.negotiation),
-            )
-        });
+            }
+        }
         Ok(capturer)
     }
 }
 
+/// One capturer's ends of a stream: the one it spawned, or one it joined.
 struct PwHandles {
     queue: FrameQueue,
     wake: Receiver<()>,
-    shared: StreamShared,
-    cursor_slot: CursorSlot,
-    importer: ImporterCell,
-    vaapi_dmabuf: bool,
-    hdr_offer: bool,
-    /// Copied from the plan: what the consumer's import of a held frame does.
-    import_policy: ImportPolicy,
-    /// Held frames pass through as dmabufs: the NVENC encoder converts them itself.
-    raw_for_encoder: bool,
-    quit: ::pipewire::channel::Sender<PwCtl>,
-    join: thread::JoinHandle<()>,
+    core: Arc<StreamCore>,
+    seat: Seat,
+    beside_shared: bool,
 }
 
 impl PwHandles {
@@ -304,31 +310,32 @@ impl PwHandles {
             wake: self.wake,
             poked: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             fence_wait: Default::default(),
-            shared: self.shared,
-            cursor_slot: self.cursor_slot,
-            importer: self.importer,
+            shared: self.core.shared.clone(),
+            cursor_slot: self.core.cursor_slot.clone(),
+            importer: self.core.importer.clone(),
             resent_acked: 0,
             stall_since: None,
-            vaapi_dmabuf: self.vaapi_dmabuf,
-            import_policy: self.import_policy,
-            raw_for_encoder: self.raw_for_encoder,
+            vaapi_dmabuf: self.core.vaapi_dmabuf,
+            import_policy: self.core.import_policy,
+            raw_for_encoder: self.core.raw_for_encoder,
             import_state: ImportState::default(),
             negotiation_confirmed: false,
-            hdr_offer: self.hdr_offer,
+            hdr_offer: self.core.hdr_offer,
             hdr_source,
             node_id,
-            quit: Some(self.quit),
-            join: Some(self.join),
+            core: Some(self.core),
+            seat: self.seat,
+            beside_shared: self.beside_shared,
             keepalive,
             _portal: portal,
-            _gs_cursor: None,
         }
     }
 }
 
 /// Spawn one PipeWire consumer with health keyed by source and encoder policy. Its
 /// [`StreamConfig`] resolves here, once: every env and latch read the plan rests on.
-/// `preferred` seeds negotiation and sizes a Mutter virtual monitor.
+/// `preferred` seeds negotiation and sizes a Mutter virtual monitor. `shareable` joins the
+/// stream already on the node when its frames fit this open, and lets a later open join this.
 fn spawn_pipewire(
     fd: Option<OwnedFd>,
     node_id: u32,
@@ -336,6 +343,7 @@ fn spawn_pipewire(
     opts: CaptureOpts,
     // Encode-backend facts from the facade; never re-derived here.
     policy: ZeroCopyPolicy,
+    shareable: bool,
 ) -> Result<PwHandles> {
     // `expect_exact_dims` is forwarded to the thread inside `opts`, not read here.
     let CaptureOpts {
@@ -355,9 +363,11 @@ fn spawn_pipewire(
         identity, &policy,
     )));
     let (cursor_slot, importer) = (CursorSlot::default(), ImporterCell::default());
+    let viewers = Arc::<share::Viewers>::default();
     let ends = LoopEnds {
         queue: queue.clone(),
         wake: wake_tx,
+        viewers: viewers.clone(),
         shared: shared.clone(),
         cursor_slot: cursor_slot.clone(),
         importer: importer.clone(),
@@ -395,6 +405,36 @@ fn spawn_pipewire(
     let vaapi_dmabuf = plan.vaapi_passthrough;
     let import_policy = plan.import_policy;
     let raw_for_encoder = plan.nvenc_raw;
+    let key = ShareKey {
+        plan,
+        policy: policy.clone(),
+        format: [
+            want_444,
+            want_hdr,
+            opts.ten_bit_sdr,
+            sdr10_native,
+            opts.full_range,
+        ],
+    };
+    let mut beside_shared = false;
+    if shareable {
+        match share::find(node_id, &key) {
+            share::Live::Fits(core) => {
+                if let Some((seat, queue, wake)) = core.join() {
+                    tracing::info!(node_id, "sharing the capture stream already on this node");
+                    return Ok(PwHandles {
+                        queue,
+                        wake,
+                        core,
+                        seat,
+                        beside_shared: false,
+                    });
+                }
+            }
+            share::Live::Other => beside_shared = true,
+            share::Live::Free => {}
+        }
+    }
     let cfg = StreamConfig {
         node_id,
         // `allow_zerocopy` is already in `plan`; `want_hdr` may have been cleared by FORCE_SHM.
@@ -405,15 +445,21 @@ fn spawn_pipewire(
     };
     let join = thread::Builder::new()
         .name("punktfunk-pipewire".into())
-        .spawn(move || {
-            if let Err(e) = pipewire_thread(cfg, fd, ends, quit_rx) {
-                tracing::error!(error = %format!("{e:#}"), "pipewire capture thread failed");
+        .spawn({
+            let closing = CloseOnExit(viewers.clone());
+            move || {
+                pf_frame::thread_qos::boost_thread_priority(true);
+                let _closing = closing;
+                if let Err(e) = pipewire_thread(cfg, fd, ends, quit_rx) {
+                    tracing::error!(error = %format!("{e:#}"), "pipewire capture thread failed");
+                }
             }
         })
         .context("spawn pipewire thread")?;
-    Ok(PwHandles {
-        queue,
-        wake: wake_rx,
+    let core = Arc::new(StreamCore {
+        ctl: Some(quit_tx),
+        join: std::sync::Mutex::new(Some(join)),
+        viewers,
         shared,
         cursor_slot,
         importer,
@@ -421,8 +467,18 @@ fn spawn_pipewire(
         hdr_offer: want_hdr,
         import_policy,
         raw_for_encoder,
-        quit: quit_tx,
-        join,
+        key: shareable.then_some(key),
+        gs_cursor: Default::default(),
+    });
+    if shareable {
+        share::register(node_id, &core);
+    }
+    Ok(PwHandles {
+        queue,
+        wake: wake_rx,
+        core,
+        seat: Seat::Opener,
+        beside_shared,
     })
 }
 
@@ -482,7 +538,7 @@ impl Capturer for PortalCapturer {
     /// its last status, so the join handle decides. A static desktop stays `Streaming` (no
     /// buffers) and is not reported dead.
     fn is_alive(&self) -> bool {
-        self.shared.status().is_streaming() && self.join.as_ref().is_some_and(|j| !j.is_finished())
+        self.shared.status().is_streaming() && self.core.as_ref().is_some_and(|c| c.running())
     }
 
     /// A re-sent buffer since the last call: the frame encoded from the earlier read may be
@@ -521,16 +577,22 @@ impl Capturer for PortalCapturer {
 
 impl crate::Feed for PortalCapturer {
     fn wait_arrival(&mut self, deadline: std::time::Instant) {
-        // A driven producer paints on its own requests (`pacer::Pacer`), so
-        // this wait never triggers a paint. It returns on a finished render, not on an
-        // arrival: the producer sends a buffer before it has painted it.
-        if self.shared.status() != StreamStatus::Broken {
-            let _ = wait_ready(&self.queue, &self.wake, &self.poked, deadline);
+        self.wait_paced(std::time::Instant::now(), deadline);
+    }
+
+    /// A driven producer paints on its own requests (`pacer::Pacer`), so this wait never
+    /// triggers a paint. It returns on a finished render, not on an arrival: the producer
+    /// sends a buffer before it has painted it. A broken capture only sits out the gate.
+    fn wait_paced(&mut self, not_before: std::time::Instant, deadline: std::time::Instant) -> bool {
+        if self.shared.status() == StreamStatus::Broken {
+            std::thread::sleep(not_before.saturating_duration_since(std::time::Instant::now()));
+            return false;
         }
+        wait_ready(&self.queue, &self.wake, &self.poked, not_before, deadline) == Woke::Poked
     }
 
     fn arrival_poke(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
-        let (poked, ctl) = (self.poked.clone(), self.quit.clone()?);
+        let (poked, ctl) = (self.poked.clone(), self.core.as_ref()?.ctl.clone()?);
         Some(Arc::new(move || {
             poked.store(true, Ordering::Relaxed);
             let _ = ctl.send(PwCtl::Poke);
@@ -538,7 +600,11 @@ impl crate::Feed for PortalCapturer {
     }
 
     fn set_active(&mut self, active: bool) {
-        self.shared.active.store(active, Ordering::Relaxed);
+        // The thread's per-frame work stops only once every viewer of the stream is idle.
+        match &self.core {
+            Some(core) => (core.viewers).set_active(self.seat, active, &self.shared.active),
+            None => self.shared.active.store(active, Ordering::Relaxed),
+        }
         if !active {
             // Flush: a reused capturer would hand the next stream the previous
             // session's last frame (`pts_ns` from the old clock). Producer
@@ -684,7 +750,8 @@ impl PortalCapturer {
             let slice = Duration::from_millis(500)
                 .min(deadline.saturating_duration_since(std::time::Instant::now()));
             let until = std::time::Instant::now() + slice;
-            let end = if !wait_ready(&self.queue, &self.wake, &self.poked, until) {
+            let woke = wait_ready(&self.queue, &self.wake, &self.poked, started, until);
+            let end = if woke == Woke::Gone {
                 RecvTimeoutError::Disconnected
             } else if std::time::Instant::now() >= deadline {
                 RecvTimeoutError::Timeout
@@ -790,6 +857,15 @@ impl PortalCapturer {
     ) -> Result<CapturedFrame> {
         let within = budget.as_secs_f32();
         match err {
+            // A truncated first attempt proves nothing of a producer that feeds every link.
+            RecvTimeoutError::Timeout
+                if self.beside_shared && matches!(verdict, TimeoutVerdict::Conclusive) =>
+            {
+                Err(
+                    anyhow!("no PipeWire frame within {within}s (node {})", self.node_id)
+                        .context(crate::SharedCaptureTaken),
+                )
+            }
             RecvTimeoutError::Timeout => {
                 let offer = classify_first_frame_timeout(
                     self.shared.negotiation(),
@@ -874,15 +950,11 @@ impl PortalCapturer {
 }
 
 impl PortalCapturer {
-    /// Quit the PipeWire thread and join it: the stream disconnects and EGL/CUDA are released.
-    /// Without this `mainloop.run()` blocks until process exit. `send` errs only if the thread
-    /// already exited.
+    /// Let go of the stream. The last capturer to do so quits the PipeWire thread and joins
+    /// it here ([`StreamCore`]'s drop): the stream disconnects and EGL/CUDA are released.
     fn stop_stream(&mut self) {
-        if let Some(quit) = self.quit.take() {
-            let _ = quit.send(PwCtl::Quit);
-        }
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
+        if let Some(core) = self.core.take() {
+            core.viewers.leave(self.seat, &self.shared.active);
         }
     }
 }
@@ -983,11 +1055,12 @@ mod first_frame_timeout_tests {
 /// What each consumer-side reader answers in each state the loop thread's writes reach.
 #[cfg(test)]
 mod status_reader_tests {
-    use super::{PortalCapturer, TimeoutVerdict};
+    use super::{PortalCapturer, Seat, StreamCore, TimeoutVerdict};
     use crate::linux::{StreamShared, StreamStatus};
     use crate::{CapturedFrame, Capturer, Feed, FramePayload, PixelFormat};
     use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
     use std::sync::mpsc::{channel, sync_channel, Sender, SyncSender};
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     /// A state the loop thread leaves the stream in.
@@ -1054,7 +1127,7 @@ mod status_reader_tests {
             wake,
             poked: Default::default(),
             fence_wait: Default::default(),
-            shared,
+            shared: shared.clone(),
             cursor_slot: Default::default(),
             importer: Default::default(),
             resent_acked: 0,
@@ -1067,11 +1140,24 @@ mod status_reader_tests {
             hdr_offer: false,
             hdr_source: crate::HdrSource::VirtualOutput,
             node_id: 7,
-            quit: None,
-            join: Some(join),
+            core: Some(Arc::new(StreamCore {
+                ctl: None,
+                join: std::sync::Mutex::new(Some(join)),
+                viewers: Default::default(),
+                shared: shared.clone(),
+                cursor_slot: Default::default(),
+                importer: Default::default(),
+                vaapi_dmabuf: false,
+                hdr_offer: false,
+                import_policy: Default::default(),
+                raw_for_encoder: false,
+                key: None,
+                gs_cursor: Default::default(),
+            })),
+            seat: Seat::Opener,
+            beside_shared: false,
             keepalive: None,
             _portal: None,
-            _gs_cursor: None,
         };
         Rig {
             parked: Some(parked),
@@ -1166,6 +1252,20 @@ mod status_reader_tests {
         (first, t0.elapsed() >= BUDGET)
     }
 
+    /// A stream opened beside a shared one that got no frame names that, once the full wait
+    /// ran out; a truncated first attempt stays the ordinary, retried answer.
+    #[test]
+    fn no_frame_beside_a_shared_stream_is_the_taken_capture() {
+        let mut rig = rig(At::Streaming, false);
+        rig.cap.beside_shared = true;
+        let taken = |verdict, cap: &mut PortalCapturer| {
+            let e = cap.frame_within(BUDGET, verdict).err().expect("no frame");
+            e.downcast_ref::<crate::SharedCaptureTaken>().is_some()
+        };
+        assert!(!taken(TimeoutVerdict::Provisional, &mut rig.cap));
+        assert!(taken(TimeoutVerdict::Conclusive, &mut rig.cap));
+    }
+
     /// Whether `wait_arrival` waits out a deadline with nothing queued.
     fn waits(cap: &mut PortalCapturer) -> bool {
         let t0 = Instant::now();
@@ -1222,8 +1322,7 @@ mod status_reader_tests {
     fn a_finished_loop_thread_is_not_alive() {
         let mut r = rig(At::Streaming, false);
         r.parked = None;
-        let join = r.cap.join.as_ref().unwrap();
-        while !join.is_finished() {
+        while r.cap.core.as_ref().unwrap().running() {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(!r.cap.is_alive());

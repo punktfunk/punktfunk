@@ -1,7 +1,11 @@
 package io.unom.punktfunk.console
 
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Say
 import io.unom.punktfunk.kit.library.GameEntry
+import io.unom.punktfunk.kit.library.Hide
+import io.unom.punktfunk.kit.library.HideOutcome
 import io.unom.punktfunk.kit.library.InstallAction
 import io.unom.punktfunk.kit.library.InstallOutcome
 import io.unom.punktfunk.kit.library.LibraryCache
@@ -10,6 +14,7 @@ import io.unom.punktfunk.kit.library.LibraryResult
 import io.unom.punktfunk.kit.library.mgmtBase
 import io.unom.punktfunk.kit.pictureUrl
 import io.unom.punktfunk.kit.security.ClientIdentity
+import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.posterHttp
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
@@ -18,16 +23,20 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 
-// The console's library pipeline, run by [SkiaConsole]: the shelf fetch and its posters, and the
-// two title writes (end a game, change a download), each followed by a fresh read of the host.
+// The console's library pipeline, run by [SkiaConsole]: the shelf fetch and its posters, the
+// title writes (end a game, change a download, hide or show one), and a profile's hidden list.
 
 private val artPool = Executors.newFixedThreadPool(3) { r -> Thread(r, "pf-console-art").apply { isDaemon = true } }
 
 /** The library fetch in flight (its generation; a newer one supersedes it). */
 private val fetchGen = AtomicLong(0)
 
+/** The profile the console's shelf is for, and its cached catalog's: a remembered pick only. */
+internal fun consoleProfile(kh: KnownHost?): String? = kh?.asProfile?.takeIf { it.remember }?.id
+
 /** End a title this device launched, say how it went, then re-read what the host runs. */
 internal fun SkiaConsole.endGame(c: JSONObject) {
+    val res = appContext?.resources ?: return
     val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
     val appId = c.optString("app_id"); val title = c.optString("title")
     val id = identity
@@ -38,7 +47,7 @@ internal fun SkiaConsole.endGame(c: JSONObject) {
     ioPool.execute {
         val outcome = LibraryClient.endGame(id, addr, mgmt, fp, appId, streamPort(fp))
         state.launch {
-            notice(outcome.notice(title))
+            notice(outcome.notice(title).words(res))
             fetchLibrary(c, refreshOnly = true)
         }
     }
@@ -49,6 +58,7 @@ internal fun SkiaConsole.endGame(c: JSONObject) {
  * the whole catalog after a removal (the title's tile turns to "not installed"), else `/status`.
  */
 internal fun SkiaConsole.changeInstall(c: JSONObject) {
+    val res = appContext?.resources ?: return
     val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
     val appId = c.optString("app_id"); val title = c.optString("title")
     val action = runCatching { InstallAction.valueOf(c.optString("action")) }.getOrNull() ?: return
@@ -60,7 +70,7 @@ internal fun SkiaConsole.changeInstall(c: JSONObject) {
     ioPool.execute {
         val outcome = LibraryClient.changeInstall(id, addr, mgmt, fp, appId, action, streamPort(fp))
         state.launch {
-            notice(outcome.notice(action, title))
+            notice(outcome.notice(action, title).words(res))
             val removed = outcome == InstallOutcome.Done && action == InstallAction.Remove
             fetchLibrary(c, refreshOnly = !removed)
         }
@@ -112,19 +122,24 @@ internal fun SkiaConsole.fetchLibrary(c: JSONObject, refreshOnly: Boolean) {
     val gen = fetchGen.incrementAndGet()
     NativeBridge.nativeConsoleLibraryBegin(handle)
     if (id == null) {
-        NativeBridge.nativeConsoleLibraryPhase(handle, ConsoleJson.libraryError(req, "Couldn't load the library", identities.blockedMessage(), true))
+        NativeBridge.nativeConsoleLibraryPhase(
+            handle, ConsoleJson.libraryError(req, app.getString(R.string.lib_load_failed), identities.blockedMessage(), true),
+        )
         return
     }
     val cache = LibraryCache.standard(app.cacheDir)
     val cacheKey = LibraryCache.keyFor(kh, fp)
+    // The console plays as a remembered pick only, so its shelf is that profile's.
+    val profile = consoleProfile(kh)
     val autoWake = state.now { settings.autoWakeEnabled }
     ioPool.execute {
-        val cached = cache.load(cacheKey)?.games?.takeIf { it.isNotEmpty() }
+        val cached = cache.load(cacheKey, profile)?.games?.takeIf { it.isNotEmpty() }
         if (cached != null) state.launch { if (gen == fetchGen.get()) NativeBridge.nativeConsoleLibraryGames(handle, ConsoleJson.libraryGames(req, cached), true) }
         val result = LibraryClient.fetchAcrossWake(
             addr, mgmt, id.certPem, id.privateKeyPem, fp,
             macs = kh?.mac.orEmpty(),
             autoWake = autoWake,
+            profile = profile,
             streamPort = port,
             isCancelled = { gen != fetchGen.get() },
             onWaking = { state.launch { if (gen == fetchGen.get()) NativeBridge.nativeConsoleLibraryStale(handle, 1) } },
@@ -133,7 +148,7 @@ internal fun SkiaConsole.fetchLibrary(c: JSONObject, refreshOnly: Boolean) {
         when (val r = result) {
             is LibraryResult.Ok -> {
                 val games = r.games
-                cache.store(cacheKey, games)
+                cache.store(cacheKey, r.profile, games)
                 val up = LibraryClient.fetchRunning(addr, mgmt, id.certPem, id.privateKeyPem, fp, port)
                 state.launch {
                     if (gen != fetchGen.get()) return@launch
@@ -148,7 +163,9 @@ internal fun SkiaConsole.fetchLibrary(c: JSONObject, refreshOnly: Boolean) {
                 state.launch {
                     if (gen != fetchGen.get()) return@launch
                     if (cached != null) NativeBridge.nativeConsoleLibraryStale(handle, 2)
-                    else NativeBridge.nativeConsoleLibraryPhase(handle, ConsoleJson.libraryError(req, "Not paired", r.message, false))
+                    else NativeBridge.nativeConsoleLibraryPhase(
+                        handle, ConsoleJson.libraryError(req, app.getString(R.string.lib_load_not_paired), r.message.words(app.resources), false),
+                    )
                 }
             }
             is LibraryResult.Error -> {
@@ -156,11 +173,61 @@ internal fun SkiaConsole.fetchLibrary(c: JSONObject, refreshOnly: Boolean) {
                 state.launch {
                     if (gen != fetchGen.get()) return@launch
                     if (cached != null) NativeBridge.nativeConsoleLibraryStale(handle, 2)
-                    else NativeBridge.nativeConsoleLibraryPhase(handle, ConsoleJson.libraryError(req, "Couldn't load the library", r.message, true))
+                    else NativeBridge.nativeConsoleLibraryPhase(
+                        handle, ConsoleJson.libraryError(req, app.getString(R.string.lib_load_failed), r.message.words(app.resources), true),
+                    )
                 }
             }
             null -> {}
         }
+    }
+}
+
+/** The titles the last hidden list held: a title shown again joins the cached catalog as it had it. */
+@Volatile private var lastHidden: List<GameEntry> = emptyList()
+
+/**
+ * `ConsoleCmd::SetHidden`: hide or show a title for the profile this device is the person of.
+ * What the host took, the cached catalog follows at once; the console moves the title and shows
+ * the answer's line.
+ */
+internal fun SkiaConsole.setHidden(c: JSONObject) {
+    val app = appContext ?: return
+    val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
+    val profile = c.optString("profile"); val name = c.optString("name")
+    val appId = c.optString("app_id"); val title = c.optString("title"); val hidden = c.optBoolean("hidden")
+    val id = identity
+    ioPool.execute {
+        val outcome = if (id == null) HideOutcome.Failed(Say.Text(identities.blockedMessage()))
+        else Hide.set(id, addr, mgmt, fp, profile, appId, hidden, streamPort(fp))
+        val done = outcome == HideOutcome.Done
+        if (done) {
+            val back = lastHidden.firstOrNull { it.id == appId }.takeIf { !hidden }
+            val key = LibraryCache.keyFor(services.store.getByFp(fp), fp)
+            LibraryCache.standard(app.cacheDir).noteHidden(key, profile, appId, back)
+        }
+        val json = ConsoleJson.hideAnswer(fp, profile, appId, hidden, done, outcome.notice(hidden, title, name).words(app.resources))
+        state.launch { if (handle != 0L) NativeBridge.nativeConsoleSetHideAnswer(handle, json) }
+    }
+}
+
+/** `ConsoleCmd::FetchHidden`: what a profile hides, for the console's hidden shelf, then their posters. */
+internal fun SkiaConsole.fetchHidden(c: JSONObject) {
+    val app = appContext ?: return
+    val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
+    val profile = c.optString("profile")
+    val id = identity
+    val gen = fetchGen.get()
+    ioPool.execute {
+        val result = if (id == null) null else Hide.fetch(id, addr, mgmt, fp, profile, streamPort(fp))
+        val json = when (result) {
+            is LibraryResult.Ok -> ConsoleJson.hiddenAnswer(result.games.also { lastHidden = it })
+            is LibraryResult.Unauthorized -> ConsoleJson.hiddenAnswer(null, result.message.words(app.resources))
+            is LibraryResult.Error -> ConsoleJson.hiddenAnswer(null, result.message.words(app.resources))
+            null -> ConsoleJson.hiddenAnswer(null, identities.blockedMessage())
+        }
+        state.launch { if (handle != 0L) NativeBridge.nativeConsoleSetHiddenList(handle, fp, profile, json) }
+        if (id != null && result is LibraryResult.Ok) pumpArt(result.games, gen, id, addr, fp, offline = false)
     }
 }
 

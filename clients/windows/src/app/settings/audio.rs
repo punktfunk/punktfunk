@@ -1,8 +1,8 @@
 //! Audio: channels, format, host audio, microphone and this device's endpoints.
 
 use super::{
-    advanced_group, described_labeled, described_overridable, group, presets, rows, setting_combo,
-    setting_toggle, Cx,
+    advanced_group, described_labeled, described_overridable, group, labeled, presets, rows,
+    setting_combo, setting_toggle, Cx,
 };
 use crate::trust::Settings;
 // The audio-format table lives in the session crate, not here: the same three stored values also
@@ -10,11 +10,17 @@ use crate::trust::Settings;
 // preset round-trips. A second copy of the spellings in this file is exactly the drift the
 // shared table exists to prevent — which is why this row has no `const` beside AUDIO_CHANNELS.
 use pf_client_core::session::AUDIO_FORMATS;
+use pf_client_core::settings::Label;
+use pf_l10n::client;
 use windows_reactor::*;
 
-/// Audio channel presets: `(channel count, display label)`. The host clamps to what it can
-/// capture; the resolved count drives the decoder + WASAPI render layout.
-const AUDIO_CHANNELS: &[(u8, &str)] = &[(2, "Stereo"), (6, "5.1 Surround"), (8, "7.1 Surround")];
+/// Audio channel presets: `(channel count, label)`. The host clamps to what it can capture;
+/// the resolved count drives the decoder + WASAPI render layout.
+const AUDIO_CHANNELS: &[(u8, Label)] = &[
+    (2, client::player_audio_channels_2),
+    (6, client::player_audio_channels_6),
+    (8, client::player_audio_channels_8),
+];
 
 /// Audio: channels, format, host audio, microphone and this device's endpoints.
 pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
@@ -25,14 +31,14 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
         preset_mode,
         ..
     } = *cx;
-    let (ac_names, ac_i) = presets(AUDIO_CHANNELS, |v| *v == s.audio_channels);
+    let (ac_names, ac_i) = presets(&labeled(AUDIO_CHANNELS), |v| *v == s.audio_channels);
     let channels_combo = setting_combo(cx, scope, "audio_channels", ac_names, ac_i, |s, i| {
         s.audio_channels = AUDIO_CHANNELS[i].0;
     });
     // The lossless-audio opt-in. An unknown stored value (a newer client's row, arriving through a
     // shared preset) shows as Opus — which is what the session resolves it to as well, so the row
     // and the wire agree rather than the combo silently rewriting the user's choice on save.
-    let (af_names, af_i) = presets(AUDIO_FORMATS, |v| *v == s.audio_format);
+    let (af_names, af_i) = presets(&labeled(AUDIO_FORMATS), |v| *v == s.audio_format);
     let format_combo = setting_combo(cx, scope, "audio_format", af_names, af_i, |s, i| {
         s.audio_format = AUDIO_FORMATS[i].0.to_string();
     });
@@ -55,15 +61,17 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
     let dev_combo = |field: &'static str,
                      saved: &str,
                      devs: &[pf_client_core::audio::AudioDevice],
-                     apply: fn(&mut Settings, String)| {
-        let mut names = vec!["System default".to_string()];
+                     apply: fn(&mut Settings, String),
+                     system: &str,
+                     missing: &dyn Fn(&str) -> String| {
+        let mut names = vec![system.to_string()];
         let mut keys = vec![String::new()];
         for d in devs {
             names.push(d.description.clone());
             keys.push(d.name.clone());
         }
         if !saved.is_empty() && !keys.iter().any(|k| k == saved) {
-            names.push(format!("{saved} (not detected)"));
+            names.push(missing(saved));
             keys.push(saved.to_string());
         }
         (keys.len() > 1).then(|| {
@@ -73,10 +81,22 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
             })
         })
     };
-    let speaker_combo = dev_combo("speaker_device", &s.speaker_device, &speakers, |s, v| {
-        s.speaker_device = v
-    });
-    let mic_dev_combo = dev_combo("mic_device", &s.mic_device, &mics, |s, v| s.mic_device = v);
+    let speaker_combo = dev_combo(
+        "speaker_device",
+        &s.speaker_device,
+        &speakers,
+        |s, v| s.speaker_device = v,
+        client::player_speaker_device_system(),
+        &|name| client::player_speaker_device_missing(name),
+    );
+    let mic_dev_combo = dev_combo(
+        "mic_device",
+        &s.mic_device,
+        &mics,
+        |s, v| s.mic_device = v,
+        client::player_mic_device_system(),
+        &|name| client::player_mic_device_missing(name),
+    );
     // Echo cancellation is meaningless without an uplink, so it greys out with the mic above
     // it. Every commit bumps `rev` and re-renders this screen, so the two stay in step live.
     let echo_toggle = setting_toggle(cx, scope, "echo_cancel", s.echo_cancel, |s, on| {
@@ -92,8 +112,7 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
                 cx,
                 &rows::AUDIO_CHANNELS,
                 channels_combo,
-                "The speaker layout requested from the host. It downmixes if its own \
-                 output has fewer channels.",
+                client::player_audio_channels_hint(),
             )),
             // The endpoint picks are facts about THIS device's hardware — never
             // per preset, like Decoder/GPU.
@@ -102,10 +121,9 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
                     speaker_combo.map(|c| {
                         described_labeled(
                             cx.pal,
-                            rows::SPEAKER.label,
+                            rows::SPEAKER.label(),
                             c,
-                            "Host audio plays here \u{2014} System default follows \
-                             the Windows output device.",
+                            client::player_speaker_device_hint(),
                         )
                     })
                 })
@@ -114,17 +132,20 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
                 cx,
                 &rows::MIC,
                 mic_toggle,
-                "This device\u{2019}s microphone feeds the host\u{2019}s virtual mic. \
-                 Ctrl+Alt+Shift+V mutes and unmutes it during a stream.",
+                &format!(
+                    "{} {}",
+                    client::player_mic_enabled_hint(),
+                    client::player_mic_enabled_keys_hint("Ctrl+Alt+Shift+V"),
+                ),
             )),
             (!preset_mode)
                 .then(|| {
                     mic_dev_combo.map(|c| {
                         described_labeled(
                             cx.pal,
-                            rows::MIC_DEVICE.label,
+                            rows::MIC_DEVICE.label(),
                             c,
-                            "The input that feeds the host\u{2019}s virtual mic.",
+                            client::player_mic_device_hint(),
                         )
                     })
                 })
@@ -133,7 +154,7 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
         .into_iter()
         .flatten()
         .collect(),
-        Some("Applies from the next session."),
+        Some(client::prefs_applies_next_session()),
     );
 
     let d = Settings::default();
@@ -146,11 +167,7 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
             cx,
             &rows::AUDIO_FORMAT,
             format_combo,
-            "Lossless sends uncompressed PCM instead of Opus \u{2014} bit-exact, at \
-             2.3\u{2013}4.6 Mb/s taken off the top of the link and outside the \
-             automatic-bitrate loop. The host has its own switch, off by default, and \
-             quietly stays on Opus if it can\u{2019}t deliver the rate; the stats overlay \
-             names what the session actually got.",
+            client::player_audio_format_hint(),
         ));
     }
     advanced.extend([
@@ -158,16 +175,13 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
             cx,
             &rows::KEEP_HOST_AUDIO,
             keep_host_audio_toggle,
-            "The host\u{2019}s own speakers or headphones keep playing while you stream \
-             \u{2014} both ends hear the same audio. Needs a host on 0.32 or newer.",
+            client::player_keep_host_audio_hint(),
         ),
         described_overridable(
             cx,
             &rows::ECHO_CANCEL,
             echo_toggle,
-            "Keeps the host\u{2019}s audio, playing from this machine\u{2019}s speakers, \
-             from being picked up and sent straight back. Turn it off if your microphone \
-             already does its own processing.",
+            client::player_echo_cancel_hint(),
         ),
     ]);
     let changed = [

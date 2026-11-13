@@ -1,5 +1,5 @@
 // The AU intake both VideoToolbox pumps run before their sink: the background keep-alive drain,
-// the report to the core's loss recovery, H.265 concealment and the format/keyframe bookkeeping
+// the report to the core's loss recovery, H.265 and AV1 concealment and the format/keyframe bookkeeping
 // of `AUPumpState`. Only the sink differs: stage-1 enqueues to an AVSampleBufferDisplayLayer,
 // stage-2 submits to VideoToolbox.
 
@@ -29,7 +29,11 @@ struct AUIntake {
     /// The decoder reads the RPS itself, so a lost reference is concealed in the bitstream first.
     /// HEVC only; a new format builds it again.
     private var concealer: HevcConcealer?
-    private var wasUnrecoverable = false
+    /// AV1: judges a wave start before the admission rule and rewrites a stale one once the rule
+    /// feeds it. It mirrors the decoder's slots, so a new format or a lost decoder builds it again.
+    private var av1Concealer: Av1Concealer?
+    /// When the current unrecoverable stretch began, for the resume log.
+    private var unrecoverableSince: Date?
     /// When the current wait for parameter sets began, for the resume log.
     private var awaitingSince = Date.distantPast
 
@@ -37,6 +41,7 @@ struct AUIntake {
         self.connection = connection
         self.screen = screen
         concealer = connection.videoCodec == .hevc && screen == 0 ? HevcConcealer() : nil
+        av1Concealer = connection.videoCodec == .av1 && screen == 0 ? Av1Concealer() : nil
     }
 
     /// Pull and vet the next AU (100 ms poll); nil when this iteration has nothing for the sink.
@@ -71,17 +76,40 @@ struct AUIntake {
             // The old codec's parameter sets and reference state end here: wait for this
             // format's own IDR, which this AU usually is.
             concealer = connection.videoCodec == .hevc ? HevcConcealer() : nil
+            av1Concealer = connection.videoCodec == .av1 ? Av1Concealer() : nil
             pump.requireIDR()
             intakeLog.notice(
                 "video: the host changed the stream format — rebuilding the decoder for \(String(describing: connection.videoCodec), privacy: .public)"
             )
         }
         if !arrival.admit { return nil }
-        let concealed = conceal(&au)
+        let concealed: AUPumpState.Concealment
+        if let av1Concealer {
+            concealed = av1Concealer.verdict(au.data, flags: au.flags)
+        } else {
+            concealed = conceal(&au)
+        }
         let idrFormat = connection.videoCodec.formatDescription(fromKeyframe: au.data)
-        let step = pump.note(
+        var step = pump.note(
             frameIndex: au.frameIndex, idrFormat: idrFormat, lossAhead: arrival.gap > 0,
             flags: au.flags, concealed: concealed)
+        if let av1Concealer, !step.withhold, pump.format != nil {
+            switch av1Concealer.conceal(au.data) {
+            case .intact:
+                break
+            case .rewritten(let data):
+                au = au.replacing(data: data)
+                intakeLog.notice(
+                    "video: frame \(au.frameIndex, privacy: .public) names a stale AV1 reference — coded to the picture the decoder holds"
+                )
+            case .unrecoverable:
+                step.withhold = true
+                requireIDR()
+                intakeLog.warning(
+                    "video: frame \(au.frameIndex, privacy: .public) names a lost AV1 reference with nothing to stand in — waiting for an IDR"
+                )
+            }
+        }
         if step.askKeyframe { connection.requestKeyframe() }
         if let size = step.newSize { onDecodedSize?(size.width, size.height) }
         if step.resumed {
@@ -114,14 +142,16 @@ struct AUIntake {
         return Intake(au: au, step: step, idr: idrFormat != nil, newFormat: au.newFormat)
     }
 
-    /// The sink lost its decoder state: wait for the next IDR's parameter sets. Stamps the wait
-    /// start for the resume log.
+    /// The sink lost its decoder state: wait for the next IDR's parameter sets, and start the AV1
+    /// mirror over. Stamps the wait start for the resume log.
     mutating func requireIDR() {
         pump.requireIDR()
+        if av1Concealer != nil { av1Concealer = Av1Concealer() }
         awaitingSince = Date()
     }
 
-    /// Run the H.265 concealer over `au`, swapping in its rewrite.
+    /// Run the H.265 concealer over `au`, swapping in its rewrite. Logs where an unrecoverable
+    /// stretch starts and how long it lasted.
     private mutating func conceal(_ au: inout AccessUnit) -> AUPumpState.Concealment {
         guard let concealer else { return .none }
         let concealed: AUPumpState.Concealment
@@ -137,12 +167,18 @@ struct AUIntake {
         case .unrecoverable:
             concealed = .unrecoverable
         }
-        if concealed == .unrecoverable, !wasUnrecoverable {
+        if concealed == .unrecoverable, unrecoverableSince == nil {
+            unrecoverableSince = Date()
             intakeLog.warning(
-                "video: frame \(au.frameIndex, privacy: .public) names a lost reference with nothing to stand in — withholding until an IDR"
+                "video: frame \(au.frameIndex, privacy: .public) names a lost reference with nothing to stand in — withholding until the host re-anchors"
+            )
+        } else if concealed == .decodable, let since = unrecoverableSince {
+            unrecoverableSince = nil
+            let ms = Int(Date().timeIntervalSince(since) * 1000)
+            intakeLog.notice(
+                "video: frame \(au.frameIndex, privacy: .public) decodes again — resumed after \(ms, privacy: .public) ms"
             )
         }
-        wasUnrecoverable = concealed == .unrecoverable
         return concealed
     }
 }

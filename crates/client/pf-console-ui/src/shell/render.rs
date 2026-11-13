@@ -87,6 +87,11 @@ impl Shell {
         );
         let side = f64::from(viewport.insets.left);
         self.ui = self.ui.next(self.backdrop.ink, reduce, reduced_ui, side);
+        // A field that closed takes its text in progress with it.
+        if !self.editing() {
+            self.preedit.clear();
+        }
+        self.ui.preedit.clone_from(&self.preedit);
         self.pads = pads.to_vec();
         self.glyphs = glyph_style(self.input_source, pad_pref, self.device.platform);
         if let Some(Screen::InputTest(test)) = self.stack.last_mut() {
@@ -280,6 +285,8 @@ impl Shell {
         // Only a settled top screen publishes hint hit-boxes: mid-transition two legends
         // share the band, so a reported rect is not necessarily the one under the pointer.
         let settled = chrome.len() == 1 && chrome[0].alpha >= 0.999;
+        #[cfg(test)]
+        crate::textprobe::layer();
         let rects = env.chrome(&chrome);
         if settled {
             self.hint_rects = rects;
@@ -336,6 +343,8 @@ impl Shell {
             }
         }
 
+        #[cfg(test)]
+        crate::textprobe::layer();
         self.draw_overlays(canvas, w, h, k, dt, t, fonts);
         if inset {
             canvas.restore();
@@ -413,7 +422,10 @@ fn shortcuts(hints: Vec<Hint>, glyphs: GlyphStyle, root: bool, no_back_button: b
         })
         .collect();
     if root {
-        kept.insert(0, Hint::new(HintKey::Shoulders, "Tabs"));
+        kept.insert(
+            0,
+            Hint::new(HintKey::Shoulders, pf_l10n::console::console_hint_tabs()),
+        );
     }
     kept
 }
@@ -539,6 +551,9 @@ impl LayerEnv<'_> {
             // a slide or a zoom never carries it. Its targets still count here.
             pinned = screen.pinned(self.k, &ctx);
             if pinned != (0.0, 0.0) {
+                // Its text sits on a tray that blurs the lines under it.
+                #[cfg(test)]
+                crate::textprobe::layer();
                 let mut rec = PictureRecorder::new();
                 let rc = rec.begin_recording(device_edges, false);
                 rc.set_matrix(&base);

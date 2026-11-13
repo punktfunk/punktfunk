@@ -1,0 +1,29 @@
+{
+  "terms": [],
+  "never_translate": [
+    "Punktfunk",
+    "PyroWave",
+    "HEVC",
+    "AV1",
+    "H.264",
+    "HDR",
+    "V-Sync",
+    "DualSense",
+    "DualShock",
+    "Xbox",
+    "Steam Deck",
+    "Wake-on-LAN",
+    "KWin",
+    "Mutter",
+    "Hyprland",
+    "niri",
+    "gamescope",
+    "wlroots",
+    "Sway",
+    "River",
+    "Opus",
+    "Vulkan",
+    "VAAPI",
+    "Direct3D"
+  ]
+}

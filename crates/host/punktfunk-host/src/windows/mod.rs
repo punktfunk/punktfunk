@@ -21,6 +21,8 @@ pub(crate) mod folder_ace;
 pub(crate) mod game_term;
 pub(crate) mod install;
 pub(crate) mod interactive;
+// A seat's person asks its host for a console ticket here.
+pub(crate) mod person_pipe;
 pub(crate) mod plugin_pipe;
 pub(crate) mod registry_ace;
 pub(crate) mod service;

@@ -166,6 +166,9 @@ struct Args {
     /// `--screens N` (2–4) — ask for N screens of `--mode` side by side and count each one's
     /// frames; screen k's go to `<out>.s<stream>`. 1 asks for none.
     screens: u8,
+    /// `--view WxH` — name the size the picture is shown at, smaller than `--mode`: a host that
+    /// reads it scales the picture down before encoding. A `--remode` carries it too.
+    view: Option<(u32, u32)>,
 }
 
 /// The screens `--screens` asks for: `--mode` each, left to right; empty for one.
@@ -407,6 +410,10 @@ fn parse_argv(argv: Vec<String>) -> Args {
             .and_then(|s| s.parse::<u8>().ok())
             .unwrap_or(1)
             .clamp(1, punktfunk_core::quic::v2::msg::SCREENS_MAX as u8),
+        view: get("--view").and_then(|v| {
+            let (w, h) = v.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        }),
     }
 }
 
@@ -960,6 +967,8 @@ async fn handshake(
         profile: args.as_profile.clone(),
         access_only: false,
         screens: screens_ask(args),
+        view: args.view,
+        screen_wish: None,
     };
     v2io::send(send, &hello).await?;
     // `Pending` repeats while the host asks its console about this probe.
@@ -1085,7 +1094,7 @@ async fn control_plane(
         tracing::info!(link_kbps, "sent the link rate");
     }
     if let Some((new_mode, after_secs)) = args.remode {
-        spawn_remode(send, recv, new_mode, after_secs);
+        spawn_remode(send, recv, new_mode, args.view, after_secs);
     } else if let Some((new_kbps, after_secs)) = args.rebitrate {
         spawn_rebitrate(conn, send, recv, new_kbps, after_secs);
     } else if let Some(test) = args.speed_test {
@@ -1139,13 +1148,20 @@ async fn next_of<M: V2Message>(r: &mut CtlRx) -> std::io::Result<M> {
     }
 }
 
-fn spawn_remode(mut rs: CtlTx, mut rr: CtlRx, new_mode: Mode, after_secs: u32) {
+fn spawn_remode(
+    mut rs: CtlTx,
+    mut rr: CtlRx,
+    new_mode: Mode,
+    view: Option<(u32, u32)>,
+    after_secs: u32,
+) {
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(after_secs as u64)).await;
         tracing::info!(?new_mode, "requesting mid-stream mode switch");
         let ask = Reconfigure {
             mode: new_mode,
-            exclude_codecs: 0,
+            view,
+            ..Default::default()
         };
         if v2io::send(&mut rs, &ask).await.is_err() {
             tracing::error!("Reconfigure write failed");

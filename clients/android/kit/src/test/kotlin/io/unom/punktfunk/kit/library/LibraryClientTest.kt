@@ -1,5 +1,7 @@
 package io.unom.punktfunk.kit.library
 
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.say
 import io.unom.punktfunk.kit.security.KnownHost
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -29,7 +31,7 @@ class LibraryClientTest {
     fun a_403_reads_as_not_paired_like_a_401() {
         assertTrue(LibraryClient.refused(401) is LibraryResult.Unauthorized)
         assertTrue(LibraryClient.refused(403) is LibraryResult.Unauthorized)
-        assertEquals(LibraryResult.Error("the host refused it (500)"), LibraryClient.refused(500))
+        assertEquals(LibraryResult.Error(say(R.string.error_mgmt_refused, 500)), LibraryClient.refused(500))
     }
 
     @Test
@@ -37,6 +39,33 @@ class LibraryClientTest {
         val desk = KnownHost("192.168.1.9", 9777, "Desk", "ab".repeat(32), paired = true, id = "desk")
         assertEquals("desk", LibraryCache.keyFor(desk, desk.fpHex))
         assertEquals("ab".repeat(32), LibraryCache.keyFor(null, "ab".repeat(32)))
+    }
+
+    /** Replays `clients/shared/library-profile-vectors.json`, the rule Rust and Swift replay too. */
+    @Test
+    fun a_library_fetch_follows_the_shared_profile_vectors() {
+        val file = java.io.File("../../shared/library-profile-vectors.json")
+        assertTrue("vectors reachable at ${file.absolutePath}", file.isFile)
+        val cases = org.json.JSONObject(file.readText()).getJSONArray("cases")
+        assertTrue(cases.length() > 0)
+        for (i in 0 until cases.length()) {
+            val c = cases.getJSONObject(i)
+            val name = c.getString("name")
+            val host = c.getJSONObject("host")
+            val expect = c.getJSONObject("expect")
+            val asked = ArrayList<String>()
+            val pick = if (c.isNull("pick")) null else c.getString("pick")
+            val shown = LibraryClient.catalog(pick, "https://h:47990") { path ->
+                asked += path
+                host.optJSONObject(path)?.let { it.getInt("status") to it.get("body").toString() } ?: (404 to "")
+            }
+            val want = expect.getJSONArray("asked").let { a -> (0 until a.length()).map { a.getString(it) } }
+            assertEquals("$name: asked", want, asked)
+            val served = if (expect.isNull("as")) null else expect.getString("as")
+            assertEquals("$name: as", served, (shown as? LibraryResult.Ok)?.profile)
+            val ids = expect.optJSONArray("ids")?.let { a -> (0 until a.length()).map { a.getString(it) } }
+            assertEquals("$name: ids", ids, (shown as? LibraryResult.Ok)?.games?.map { it.id })
+        }
     }
 
     private fun page(ids: List<String>, next: String?): Pair<Int, String> {
@@ -59,6 +88,23 @@ class LibraryClientTest {
         assertEquals(listOf("a", "b", "c", "d"), walked.games.map { it.id })
         assertEquals(listOf(null, "c1", "c2"), asked)
         assertEquals("https://h:47990/api/v1/library/art/a/portrait", walked.games[0].art.portrait)
+    }
+
+    @Test
+    fun a_game_carries_the_hosts_overrides_and_an_older_host_none() {
+        val body = """{"items":[
+            {"id":"steam:1","store":"steam","title":"A","art":{},
+             "overrides":{"lines":1080,"hz":60,"hdr":false,"gamepad":"dualsense","beyond_screen":true,"future":1}},
+            {"id":"steam:2","store":"steam","title":"B","art":{},"overrides":{"name":"4K","lines":"x"}},
+            {"id":"steam:3","store":"steam","title":"C","art":{}}
+        ]}"""
+        val games = (LibraryClient.walkPages("https://h:47990") { 200 to body } as LibraryClient.Walk.Done).games
+        assertEquals(
+            GameOverrides(lines = 1080, hz = 60, hdr = false, gamepad = "dualsense", beyondScreen = true),
+            games[0].overrides,
+        )
+        assertNull("a name alone sets nothing", games[1].overrides)
+        assertNull(games[2].overrides)
     }
 
     @Test
@@ -86,7 +132,7 @@ class LibraryClientTest {
         assertEquals("/api/v1/library/page?limit=200&cursor=a%2Bb%3D", LibraryClient.pagePath("a+b="))
     }
 
-    private val unreachable = LibraryResult.Error("couldn't reach the host")
+    private val unreachable = LibraryResult.Error(say(R.string.android_lib_error_unreachable))
 
     private class Run {
         var packets = 0
@@ -129,7 +175,7 @@ class LibraryClientTest {
         for ((macs, autoWake) in listOf(listOf("aa:bb:cc:dd:ee:ff") to false, emptyList<String>() to true)) {
             val res = LibraryClient.fetchAcrossWake(
                 "192.168.1.9", 47990, "", "", "",
-                macs = macs, autoWake = autoWake, onWaking = { waking++ },
+                macs = macs, autoWake = autoWake, profile = null, onWaking = { waking++ },
             )
             assertTrue(res is LibraryResult.Unauthorized)
         }

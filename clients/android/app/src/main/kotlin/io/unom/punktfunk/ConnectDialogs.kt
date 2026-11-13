@@ -31,8 +31,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.asciiDigits
 import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.kit.security.KnownHostStore
@@ -71,10 +74,10 @@ internal fun AddHostSheet(
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 32.dp),
         ) {
-            Text("Add a host", style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(R.string.hosts_add_title), style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(4.dp))
             Text(
-                "Enter its address. You'll pair with the host's PIN on first connect.",
+                stringResource(R.string.hosts_add_hint),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -82,8 +85,8 @@ internal fun AddHostSheet(
             OutlinedTextField(
                 value = hostName,
                 onValueChange = onHostNameChange,
-                label = { Text("Name (optional)") },
-                placeholder = { Text("e.g. Living Room") },
+                label = { Text(stringResource(R.string.hosts_field_name)) },
+                placeholder = { Text(stringResource(R.string.hosts_field_name_placeholder)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -91,15 +94,15 @@ internal fun AddHostSheet(
             OutlinedTextField(
                 value = host,
                 onValueChange = onHostChange,
-                label = { Text("Host") },
+                label = { Text(stringResource(R.string.hosts_field_address)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(16.dp))
             OutlinedTextField(
                 value = port,
-                onValueChange = { v -> onPortChange(v.filter { it.isDigit() }.take(5)) },
-                label = { Text("Port") },
+                onValueChange = { v -> onPortChange(asciiDigits(v).take(5)) },
+                label = { Text(stringResource(R.string.hosts_field_port)) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),
@@ -117,7 +120,7 @@ internal fun AddHostSheet(
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Connect  ($modeLabel)") }
+            ) { Text(stringResource(R.string.android_dial_connect_at_mode, modeLabel)) }
         }
     }
 }
@@ -143,21 +146,21 @@ internal fun PairPinDialog(
     var err by remember(pt) { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = { if (!pairing) onDismiss() },
-        title = { Text("Pair with PIN") },
+        title = { Text(stringResource(R.string.pair_title, pt.name)) },
         text = {
             Column {
-                Text("Enter the 4-digit PIN shown on the host.")
+                Text(stringResource(R.string.pair_intro_pin_only))
                 OutlinedTextField(
                     value = pin,
-                    onValueChange = { v -> pin = v.filter { it.isDigit() }.take(4) },
-                    label = { Text("PIN") },
+                    onValueChange = { v -> pin = asciiDigits(v).take(4) },
+                    label = { Text(stringResource(R.string.pair_pin)) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 )
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("This device") },
+                    label = { Text(stringResource(R.string.pair_device_name)) },
                     singleLine = true,
                 )
                 err?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -180,15 +183,16 @@ internal fun PairPinDialog(
                                 // Verified host fp — the caller saves it.
                                 is HostServices.Paired.Ok -> onPaired(paired.fp)
                                 // Cause-specific: wrong PIN vs not-armed vs unreachable.
-                                is HostServices.Paired.Failed -> err = ConnectErrors.pairMessage(paired.token)
+                                is HostServices.Paired.Failed ->
+                                    err = context.getString(ConnectErrors.pairMessage(paired.token))
                             }
                         }
                     }
                 },
-            ) { Text(if (pairing) "Pairing…" else "Pair") }
+            ) { Text(stringResource(if (pairing) R.string.pair_pairing else R.string.pair_action)) }
         },
         dismissButton = {
-            TextButton(enabled = !pairing, onClick = onDismiss) { Text("Cancel") }
+            TextButton(enabled = !pairing, onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
         },
     )
 }
@@ -224,7 +228,7 @@ internal fun EditHostDialog(
     var pins by remember(target) { mutableStateOf(target.pinnedPresetIds) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Edit host") },
+        title = { Text(stringResource(R.string.hosts_edit_title)) },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
@@ -233,28 +237,28 @@ internal fun EditHostDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Name") },
+                    label = { Text(stringResource(R.string.hosts_field_name)) },
                     placeholder = { Text(target.address) },
                     singleLine = true,
                 )
                 OutlinedTextField(
                     value = address,
                     onValueChange = { address = it },
-                    label = { Text("Address") },
+                    label = { Text(stringResource(R.string.hosts_field_address)) },
                     singleLine = true,
                 )
                 OutlinedTextField(
                     value = port,
-                    onValueChange = { v -> port = v.filter { it.isDigit() }.take(5) },
-                    label = { Text("Port") },
+                    onValueChange = { v -> port = asciiDigits(v).take(5) },
+                    label = { Text(stringResource(R.string.hosts_field_port)) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 )
                 OutlinedTextField(
                     value = mac,
                     onValueChange = { mac = it },
-                    label = { Text("Wake-on-LAN MAC") },
-                    placeholder = { Text("auto-filled when the host is seen") },
+                    label = { Text(stringResource(R.string.hosts_field_mac)) },
+                    placeholder = { Text(stringResource(R.string.hosts_field_mac_placeholder)) },
                     singleLine = true,
                 )
                 Row(
@@ -262,9 +266,9 @@ internal fun EditHostDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("Shared clipboard", style = MaterialTheme.typography.bodyLarge)
+                        Text(stringResource(R.string.hosts_clipboard), style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            "Text copied here pastes on this host and vice versa",
+                            stringResource(R.string.hosts_clipboard_hint),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -300,10 +304,10 @@ internal fun EditHostDialog(
                         ),
                     )
                 },
-            ) { Text("Save") }
+            ) { Text(stringResource(R.string.common_save)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
         },
     )
 }
@@ -320,20 +324,16 @@ internal fun HostActionConfirmDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val label = action.text(LocalContext.current.resources)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("${action.label}?") },
-        text = {
-            Text(
-                "This ends every stream from $hostName and anything running on it. " +
-                    "You'll need to wake or start it again.",
-            )
-        },
+        title = { Text(stringResource(R.string.host_power_confirm_title, label)) },
+        text = { Text(stringResource(R.string.hostcard_action_confirm_body, hostName)) },
         confirmButton = {
-            TextButton(onClick = onConfirm) { Text(action.label) }
+            TextButton(onClick = onConfirm) { Text(label) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
         },
     )
 }

@@ -38,6 +38,7 @@ import { type PolicyPatch, PolicyQuestions } from "./PolicyQuestions";
 /** Default first (the safe baseline), then the situational ones. */
 const PRESET_ORDER = [
 	"default",
+	"play-together",
 	"shared-desktop",
 	"hotdesk",
 	"workstation",
@@ -106,7 +107,7 @@ export const BehaviourPicker: FC<BehaviourPickerProps> = ({
 						<PresetCard
 							key={id}
 							title={presetLabel(id)}
-							summary={p.summary}
+							summary={presetSummary(id, p.summary)}
 							selected={current === id}
 							busy={busy}
 							onClick={() => onApply({ ...policy, preset: id })}
@@ -293,6 +294,19 @@ export const CustomiseDialog: FC<{
 	);
 };
 
+/** What a built-in preset does, in the console's words; the host's line for a preset it lacks. */
+const PRESET_SUMMARY: Record<string, () => string> = {
+	default: () => m.display_preset_default_hint(),
+	"gaming-rig": () => m.display_preset_gaming_rig_hint(),
+	"shared-desktop": () => m.display_preset_shared_desktop_hint(),
+	hotdesk: () => m.display_preset_hotdesk_hint(),
+	workstation: () => m.display_preset_workstation_hint(),
+	"play-together": () => m.display_preset_play_together_hint(),
+};
+
+export const presetSummary = (id: string, host: string): string =>
+	PRESET_SUMMARY[id]?.() ?? host;
+
 export const presetLabel = (id: string): string =>
 	({
 		default: m.display_preset_default(),
@@ -300,4 +314,5 @@ export const presetLabel = (id: string): string =>
 		"shared-desktop": m.display_preset_shared_desktop(),
 		hotdesk: m.display_preset_hotdesk(),
 		workstation: m.display_preset_workstation(),
+		"play-together": m.display_preset_play_together(),
 	})[id] ?? id;

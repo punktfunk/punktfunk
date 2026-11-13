@@ -6,8 +6,8 @@
 use std::time::Duration;
 
 /// `mode_conflict = reject` admission close. Distinct from a transport
-/// failure so a client can render "host busy". Reason bytes carry live mode
-/// + client label.
+/// failure so a client can render "host busy". The reason bytes are empty: a
+/// client words `reject_busy`, and the live mode stays in the host's log.
 pub const REJECT_BUSY_CLOSE_CODE: u32 = 0x42;
 
 /// Pairing-gate close. Occupies 0x60.., disjoint from
@@ -92,6 +92,12 @@ macro_rules! reject_reasons {
                 match self {
                     $(Self::$variant => $token,)*
                 }
+            }
+
+            /// The host message an app words this refusal with: `reject_` and the token,
+            /// `-` written `_`.
+            pub fn message_id(self) -> String {
+                format!("reject_{}", self.as_str().replace('-', "_"))
             }
 
             /// Inverse of [`Self::as_str`]. `None` for a token this build doesn't know.

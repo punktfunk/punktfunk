@@ -24,6 +24,7 @@ struct PunktfunkClientApp: App {
         // Before anything touches the core, so its first lines (identity load, the first connect's
         // transport setup) land in the log ring "Send logs to host" uploads.
         CoreLog.install()
+        ConsoleBridge.setLanguages()
         #if os(iOS) || os(visionOS)
         // Put Geist on the navigation titles before any bar is built.
         BrandTheme.apply()
@@ -32,8 +33,9 @@ struct PunktfunkClientApp: App {
     }
 
     /// The identity's first load is blocking Keychain work, and most of its callers sit on the
-    /// main actor. Loaded here, off it, they find both halves cached. The decoder probes follow:
-    /// each is a one-off decode or shader compile that would otherwise sit on the first connect.
+    /// main actor. Loaded here, off it, they find both halves cached. The decoder probes and the
+    /// presenter's pipelines follow: each is a one-off decode or shader compile that would
+    /// otherwise sit on the first connect.
     private static func warmAtLaunch() {
         #if DEBUG
         if ScreenshotMode.isActive { return }
@@ -46,6 +48,7 @@ struct PunktfunkClientApp: App {
             _ = AV1.hardwareDecodeSupported
             _ = Stage444Probe.hwDecode444_8bit
             _ = Stage444Probe.hwDecode444_10bit
+            MetalVideoPresenter.warm()
         }
     }
 
@@ -86,9 +89,8 @@ struct PunktfunkClientApp: App {
             .font(.geist(17, relativeTo: .body))
             #endif
         }
-        // The Stream menu (Release Mouse ⌃⌥⇧Q, Disconnect ⌃⌥⇧D, Show/Hide Statistics ⌃⌥⇧S —
-        // the cross-client Ctrl+Alt+Shift set) — a real menu bar on macOS, hardware-keyboard
-        // shortcuts on iPad. tvOS has neither.
+        // The Stream menu: the menu bar on macOS, the app menu on iPad and Vision Pro. tvOS has
+        // neither.
         #if os(macOS)
         .commands {
             StreamCommands()

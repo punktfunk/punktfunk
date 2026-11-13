@@ -425,6 +425,8 @@ public final class MetalVideoPresenter {
     private let pipelineHDRToneMap: MTLRenderPipelineState?
     /// PyroWave's 3-plane SDR path (pf_frag_planar → bgra8) — see `renderPlanar`.
     private let pipelinePlanar: MTLRenderPipelineState
+    /// `pf_frag_planar` into `sdr10Drawable`: a 10-bit SDR PyroWave stream.
+    private let pipelinePlanarSDR10: MTLRenderPipelineState
     /// PyroWave planar HDR passthrough (pf_frag_planar → `hdrDrawable`; the layer's PQ colour
     /// space + EDR interpret the samples) and the planar PQ→SDR tone-map (pf_frag_planar_tm →
     /// bgra8; tvOS without HDR headroom).
@@ -530,7 +532,7 @@ public final class MetalVideoPresenter {
         let device: MTLDevice
         let sdr, sdr10, hdr: MTLRenderPipelineState
         let hdrToneMap: MTLRenderPipelineState?
-        let planar, planarHDR, planarToneMap: MTLRenderPipelineState
+        let planar, planarSDR10, planarHDR, planarToneMap: MTLRenderPipelineState
         /// The late-latch twins of `sdr`, `sdr10` and `hdr`; the tone-map variants have none.
         let latchedSDR, latchedSDR10, latchedHDR: MTLRenderPipelineState
     }
@@ -544,6 +546,7 @@ public final class MetalVideoPresenter {
         let pipelineHDR: MTLRenderPipelineState
         let pipelineHDRToneMap: MTLRenderPipelineState?
         let pipelinePlanar: MTLRenderPipelineState
+        let pipelinePlanarSDR10: MTLRenderPipelineState
         let pipelinePlanarHDR: MTLRenderPipelineState
         let pipelinePlanarToneMap: MTLRenderPipelineState
         let latchedSDR: MTLRenderPipelineState
@@ -595,6 +598,8 @@ public final class MetalVideoPresenter {
             planar.fragmentFunction = library.makeFunction(name: "pf_frag_planar")
             planar.colorAttachments[0].pixelFormat = .bgra8Unorm
             pipelinePlanar = try device.makeRenderPipelineState(descriptor: planar)
+            planar.colorAttachments[0].pixelFormat = sdr10Drawable
+            pipelinePlanarSDR10 = try device.makeRenderPipelineState(descriptor: planar)
             let planarHdr = MTLRenderPipelineDescriptor()
             planarHdr.vertexFunction = vtx
             planarHdr.fragmentFunction = library.makeFunction(
@@ -624,9 +629,14 @@ public final class MetalVideoPresenter {
         return Pipelines(
             device: device, sdr: pipelineSDR, sdr10: pipelineSDR10, hdr: pipelineHDR,
             hdrToneMap: pipelineHDRToneMap, planar: pipelinePlanar,
+            planarSDR10: pipelinePlanarSDR10,
             planarHDR: pipelinePlanarHDR, planarToneMap: pipelinePlanarToneMap,
             latchedSDR: latchedSDR, latchedSDR10: latchedSDR10, latchedHDR: latchedHDR)
     }()
+
+    /// Compiles the shader library and pipelines on the calling thread. Run at launch, off the
+    /// main actor, it leaves the first session's `make()` nothing to build.
+    public static func warm() { _ = pipelines }
 
     /// nil if Metal is unavailable (no GPU / a headless CI) or a shader fails to compile — the caller
     /// falls back to stage-1.
@@ -676,6 +686,7 @@ public final class MetalVideoPresenter {
             device: device, queue: queue, pipelineSDR: p.sdr, pipelineSDR10: p.sdr10,
             pipelineHDR: p.hdr,
             pipelineHDRToneMap: p.hdrToneMap, pipelinePlanar: p.planar,
+            pipelinePlanarSDR10: p.planarSDR10,
             pipelinePlanarHDR: p.planarHDR, pipelinePlanarToneMap: p.planarToneMap,
             textureCache: textureCache, layer: layer)
     }
@@ -685,6 +696,7 @@ public final class MetalVideoPresenter {
         pipelineSDR10: MTLRenderPipelineState,
         pipelineHDR: MTLRenderPipelineState, pipelineHDRToneMap: MTLRenderPipelineState?,
         pipelinePlanar: MTLRenderPipelineState,
+        pipelinePlanarSDR10: MTLRenderPipelineState,
         pipelinePlanarHDR: MTLRenderPipelineState,
         pipelinePlanarToneMap: MTLRenderPipelineState,
         textureCache: CVMetalTextureCache, layer: CAMetalLayer
@@ -696,6 +708,7 @@ public final class MetalVideoPresenter {
         self.pipelineHDR = pipelineHDR
         self.pipelineHDRToneMap = pipelineHDRToneMap
         self.pipelinePlanar = pipelinePlanar
+        self.pipelinePlanarSDR10 = pipelinePlanarSDR10
         self.pipelinePlanarHDR = pipelinePlanarHDR
         self.pipelinePlanarToneMap = pipelinePlanarToneMap
         self.textureCache = textureCache
@@ -714,7 +727,7 @@ public final class MetalVideoPresenter {
         #if os(tvOS)
         // Reconfigure on an HDR flip AND on a passthrough↔tone-map flip. Passthrough needs the
         // box in an HDR output mode: the switch our criteria asked for landed (`setHDROutput`),
-        // or the screen reports headroom — which tvOS never does, even in HDR.
+        // or the screen reports headroom above 1.
         stagingLock.lock()
         let headroom = stagedDisplayHeadroom
         let hdrOutput = stagedHDROutput
@@ -767,10 +780,11 @@ public final class MetalVideoPresenter {
     }
 
     /// Set the layer's pixel format + colour config for SDR or HDR through `writeLayer`, on
-    /// `configure`'s thread. EDR is requested on macOS + iOS. tvOS has NO EDR API
-    /// (`wantsExtendedDynamicRangeContent`/`edrMetadata`/`CAEDRMetadata` are all unavailable there) —
-    /// and a bare PQ colour-space tag composites UNtone-mapped (the "overblown HDR" Apple TV report),
-    /// so tvOS instead tone-maps PQ→SDR in the shader (pf_frag_hdr_tv) and keeps the SDR layer config.
+    /// `configure`'s thread. EDR is requested on macOS + iOS. tvOS lacks
+    /// `wantsExtendedDynamicRangeContent`, `edrMetadata` and `CAEDRMetadata`; it has
+    /// `CALayer.toneMapMode` from tvOS 18, which this presenter does not set. A bare PQ
+    /// colour-space tag composites untone-mapped into an SDR output, so without an HDR output
+    /// tvOS tone-maps PQ→SDR in the shader (pf_frag_hdr_tv) and keeps the SDR layer config.
     private func configureColor(hdr: Bool, tenBitSDR: Bool) {
         if hdr {
             #if os(tvOS)
@@ -1242,10 +1256,10 @@ public final class MetalVideoPresenter {
         }
     }
 
-    /// Draw one PyroWave planar frame (three R8 planes off the Metal wavelet decoder) and
-    /// present it. RENDER THREAD, same contract as `render` — PyroWave is 8-bit SDR, so the
-    /// layer always takes the plain SDR config, and the CSC rows arrive precomputed from the
-    /// stream's own sequence-header signaling (no CVPixelBuffer to inspect).
+    /// Draw one PyroWave planar frame (three planes off the Metal wavelet decoder) and present
+    /// it. RENDER THREAD, same contract as `render`. The layer follows the planes: PQ takes
+    /// the HDR config, 10-bit SDR the 10-bit drawable, 8-bit the plain one. The CSC rows arrive
+    /// precomputed from the stream's own sequence-header signaling (no CVPixelBuffer to inspect).
     @discardableResult
     func renderPlanar(
         _ planes: WaveletPlanes,
@@ -1257,7 +1271,7 @@ public final class MetalVideoPresenter {
         let targetFromLayout = drawableTarget
         stagingLock.unlock()
         // A PQ (HDR) pyrowave stream drives the same layer/EDR machinery as the biplanar path.
-        configure(hdr: planes.pq)
+        configure(hdr: planes.pq, tenBitSDR: planes.tenBitSDR)
         applyStagedHdrMeta()
         var csc = planes.csc
         var target = hdrTarget()
@@ -1272,7 +1286,7 @@ public final class MetalVideoPresenter {
         let planarPipeline: MTLRenderPipelineState =
             planes.pq
                 ? (planarPassthrough ? pipelinePlanarHDR : pipelinePlanarToneMap)
-                : pipelinePlanar
+                : (tenBitSDRActive ? pipelinePlanarSDR10 : pipelinePlanar)
         return encodePresent(
             decodedSize: CGSize(width: planes.width, height: planes.height),
             targetFromLayout: targetFromLayout, pipeline: planarPipeline,

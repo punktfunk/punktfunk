@@ -85,8 +85,8 @@ class GamepadRouter(
      * as well would give the host two pads for one pair of hands.
      *
      * Off still opens slots and tracks held state; it only stops the wire sends. That is
-     * deliberate: the exit, mic and stats chords are read off the same slots, and a couch that lost
-     * its quit shortcut because a forwarding preference was off would be the worse bug. Nothing is
+     * deliberate: the shortcuts are read off the same slots, and a couch that lost its quit
+     * shortcut because a forwarding preference was off would be the worse bug. Nothing is
      * claimed by keeping a slot — the Android input stack shares controllers — unlike the USB
      * capture links, which `StreamScreen` does not start at all while this is off.
      */
@@ -99,15 +99,12 @@ class GamepadRouter(
      */
     private val systemForward: Boolean = true,
     /**
-     * The hold-Select guide gesture (`Settings.guideGesture` resolved — auto = off on
-     * Android): Select held ALONE ≥ [GUIDE_HOLD_MS] is the HOST's guide button, sent on
-     * release, with the next press, or at [GUIDE_COMMIT_MS] and then down until release — so
-     * a long hold is the host's long-press, a Gaming-Mode host's QAM. A Select tap is
-     * delivered on release; a Select pressed while other buttons are down passes through
-     * untouched, so the exit/mic chords keep working. pf-client-core's `SelectGesture`, on
-     * the main-thread handler.
+     * This session's pad shortcuts, the actions it cannot perform already left out. One
+     * [Shortcuts.Engine] per slot reads them before the ring's mask: what it forwards reaches
+     * the host or the ring, what it fires always acts. [Shortcuts.Action.Ring] counts only while
+     * [onRingChord] listens.
      */
-    private val guideGesture: Boolean = false,
+    private val shortcuts: List<Shortcuts.Binding> = emptyList(),
 ) {
 
     /** The ctor's forwarding preference, fixed for the session — one term of [forwarding]. */
@@ -123,9 +120,9 @@ class GamepadRouter(
      * Whether this session's access includes the GAMEPAD grant ([SessionAccess.GAMEPAD]) —
      * seeded from the Welcome and kept live by `StreamScreen`'s access poll (an `AccessUpdate`
      * can revoke or restore it mid-session, latest-wins). Gates exactly what the forwarding
-     * preference gates: the wire sends, never the slots — the exit/mic/stats chords must keep
-     * working on a Controller-less access level too (they are local controls that happen to be
-     * read off pad buttons). The host enforces regardless; this stops the client paying to send
+     * preference gates: the wire sends, never the slots — the shortcuts must keep working on a
+     * Controller-less access level too (they are local controls that happen to be read off pad
+     * buttons). The host enforces regardless; this stops the client paying to send
      * events that will be dropped. Volatile: the sensor and USB-capture threads read it per
      * sample through [forwarding].
      */
@@ -167,21 +164,11 @@ class GamepadRouter(
         val ownMotion: Boolean = false,
         /** The kind this slot's Arrival declared; [setPadType] re-plugs the slots it moves. */
         val declared: Int = Gamepad.PREF_AUTO,
+        /** This pad's shortcuts: every transition goes through it before the wire. */
+        val engine: Shortcuts.Engine,
     ) {
-        /** Forwarded button bits currently held (Gamepad.BTN_*) — for release-on-close + chord detection. */
+        /** Button bits down on the host (Gamepad.BTN_*): what [releaseHeld] lifts. */
         var held = 0
-
-        // Hold-Select→guide gesture state ([guideGesture]): the pending Select's commit
-        // timer and press time, a delivered tap's owed release (both on the main handler),
-        // and whether the held Select was transformed into a synthetic guide.
-        var pendingGuide: Runnable? = null
-        var selectDownAt = 0L
-        var pendingTapUp: Runnable? = null
-        var selectAsGuide = false
-        /** `Select+A` opened the ring: this press never reached the host, so its release may not
-         *  either. Cleared by [releaseHeld] — the flush the ring's open performs. */
-        var swallowA = false
-        var swallowSelect = false
     }
 
     /** deviceId → slot. Concurrent: the feedback poll threads read it via [deviceForPad]. */
@@ -212,48 +199,27 @@ class GamepadRouter(
     var onSlotOpened: ((deviceId: Int) -> Unit)? = null
 
     /**
-     * Invoked (main thread) when the emergency-exit chord has been HELD for [EXIT_HOLD_MS] — the caller
-     * leaves the stream. `StreamScreen` wires this to the deliberate-quit exit.
+     * Invoked (main thread) when a pad fires End stream — by default the exit chord held 1 s —
+     * after its held buttons are lifted on the host. `StreamScreen` wires this to the
+     * deliberate-quit exit.
      */
     var onExitChord: (() -> Unit)? = null
 
     /**
-     * Invoked (main thread) with `true` the moment the exit chord completes and the hold countdown
-     * starts, and `false` when it's cancelled (a button lifted early) or the timer elapses. `StreamScreen`
-     * wires this to a "hold to quit" hint so the hold is discoverable — the chord no longer quits on a
-     * quick press, and without an on-screen cue that reads as the shortcut being broken.
+     * Invoked (main thread) with `true` while a pad holds an End stream chord that has not fired
+     * yet, `false` once it fires or a button lifts. `StreamScreen` shows "Hold to quit…" from it.
      */
     var onExitArmed: ((armed: Boolean) -> Unit)? = null
 
     /**
-     * Invoked (main thread) each time the mic-mute chord ([MIC_CHORD], Select + Y) is COMPLETED on
-     * a pad, or a pad's own mute button ([Gamepad.BTN_MISC1] — a DualSense's) is pressed — the
-     * couch equivalent of the stream's on-screen mute button, which a gamepad user
-     * cannot reach. `StreamScreen` wires it to the mute toggle. Unlike the exit chord this fires
-     * immediately: muting is the kind of thing you want to have already happened, and the on-screen
-     * indicator makes an accidental toggle self-evident. The buttons still go to the host — the
-     * chord adds a meaning to them rather than swallowing them, exactly as the exit chord does.
+     * Invoked (main thread) when a pad's own mute button ([Gamepad.BTN_MISC1] — a DualSense's) is
+     * pressed: the couch's microphone toggle. The press still reaches the host.
      */
     var onMicChord: (() -> Unit)? = null
 
     /**
-     * Invoked (main thread) each time the stats chord ([STATS_CHORD], Select + X) is COMPLETED on a
-     * pad — one verbosity tier of the in-stream statistics overlay per completion. It exists
-     * because a controller in both hands has no other way to the numbers: the three-finger tap
-     * needs a touchscreen AND one of the pointer touch models, so a TV or a gamepad-only session
-     * has none. `StreamScreen` wires it to the live tier cycle.
-     *
-     * Fires immediately and once per chord like [onMicChord], and like it the buttons still go to
-     * the host — the chord adds a local meaning to them rather than swallowing them. The Apple
-     * client's `GamepadCapture.statsChord` is the same two buttons; a shortcut that differs per
-     * platform is worse than no shortcut.
-     */
-    var onStatsChord: (() -> Unit)? = null
-
-    /**
-     * `Select+A`, Select first ([opensRing]): the quick-action ring's opener
-     * (design/touch-client-overlay.md §2.6) — the one chord the host never sees the A of. On a
-     * gamepad-only session this is the only route to the ring at all: Back is a wire button while
+     * A pad fired [Shortcuts.Action.Ring], by default `Select + A`: the quick-action ring's opener.
+     * On a gamepad-only session this is the only route to the ring: Back is a wire button while
      * streaming, and the twist needs a touchscreen. Carries the pad's wire index.
      */
     var onRingChord: ((Int) -> Unit)? = null
@@ -265,14 +231,22 @@ class GamepadRouter(
     /** A pad press while the ring owns the pad ([setRingOpen]). Main thread. */
     var onRingNav: ((RingNav) -> Unit)? = null
 
+    /**
+     * A pad fired any other action: the ring's own effect for that slot, a key combination's keys
+     * down and up by [Shortcuts.Phase], a host action armed. Main thread. Ring, End stream, Guide
+     * and Quick access never come here: the router acts on those itself.
+     */
+    var onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Unit)? = null
+
     @Volatile private var ringOpen = false
     /** The ring sector the left stick last resolved to — see [ringSector]. */
     private var stickSector: Int? = null
 
     /**
      * The ring is up: everything held is released on the host NOW (a held sprint must not
-     * survive a menu), and until it closes every press becomes [onRingNav] instead of a wire
-     * send. On close nothing is replayed — the next physical press re-establishes itself.
+     * survive a menu), and until it closes every forwarded press becomes [onRingNav] instead of a
+     * wire send; shortcuts still fire. On close nothing is replayed — the next physical press
+     * re-establishes itself.
      */
     fun setRingOpen(open: Boolean) {
         if (ringOpen == open) return
@@ -303,25 +277,27 @@ class GamepadRouter(
      * press, not the player's, so neither [ringOpen] nor the system-button policy may swallow it.
      */
     fun tapButton(bit: Int) {
-        if (!forwarding) return
         val slot = slots.values.minByOrNull { it.index }
-        val pad = slot?.index ?: 0
-        val presses = if (bit == Gamepad.BTN_MISC1) {
-            // -1: no forwarded pad declared a kind, so the session default answers.
-            Gamepad.quickAccessPresses(
-                NativeBridge.nativePadHasQuickAccess(handle, slot?.declared ?: -1),
-            )
-        } else {
-            listOf(bit)
-        }
-        for ((b, down, afterMs) in tapEvents(presses)) {
+        sendPresses(slot?.index ?: 0, tapEvents(systemPresses(slot, bit)))
+    }
+
+    /** What a Guide or Quick access press puts on the wire, in order. [Gamepad.BTN_MISC1] is Quick
+     *  access as [slot]'s host pad reads it ([Gamepad.quickAccessPresses]). */
+    private fun systemPresses(slot: Slot?, bit: Int): List<Int> = if (bit == Gamepad.BTN_MISC1) {
+        // -1: no forwarded pad declared a kind, so the session default answers.
+        Gamepad.quickAccessPresses(NativeBridge.nativePadHasQuickAccess(handle, slot?.declared ?: -1))
+    } else {
+        listOf(bit)
+    }
+
+    /** [tapEvents]' timed transitions on wire pad [pad], past the ring's mask and the policy. */
+    private fun sendPresses(pad: Int, events: List<Triple<Int, Boolean, Long>>) {
+        if (!forwarding) return
+        for ((b, down, afterMs) in events) {
             if (afterMs == 0L) {
                 NativeBridge.nativeSendGamepadButton(handle, b, down, pad)
             } else {
-                mainHandler.postDelayed(
-                    { NativeBridge.nativeSendGamepadButton(handle, b, down, pad) },
-                    afterMs,
-                )
+                mainHandler.postDelayed({ NativeBridge.nativeSendGamepadButton(handle, b, down, pad) }, afterMs)
             }
         }
     }
@@ -349,8 +325,16 @@ class GamepadRouter(
     var onMotionUnreachable: (() -> Unit)? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    /** The pending exit-chord hold timer, or null when the chord isn't currently armed. */
-    private var pendingExit: Runnable? = null
+
+    /** Ticks every engine when the next hold or owed release comes due ([scheduleTick]). */
+    private val tick = Runnable {
+        val now = SystemClock.uptimeMillis()
+        for (slot in slots.values.toList()) apply(slot, slot.engine.tick(now))
+        settle()
+    }
+
+    /** What [onExitArmed] last said. */
+    private var exitArmed = false
 
     private val inputManager = context.getSystemService(InputManager::class.java)
     private val listener = object : InputManager.InputDeviceListener {
@@ -366,9 +350,8 @@ class GamepadRouter(
     /**
      * One gamepad button transition for the device that produced [event] (already resolved to BTN_*
      * bit [bit]). False when the device has no slot and this key may not open one
-     * ([opensSlotOnKey]): the caller handles it as a plain key. Otherwise forwards the bit on the
-     * slot's pad index and tracks held state. The exit chord (Select + Start + L1 + R1) held
-     * [EXIT_HOLD_MS] on any one pad fires [onExitChord]; [onExitArmed] shows the hold hint.
+     * ([opensSlotOnKey]): the caller handles it as a plain key. Otherwise the slot's shortcuts
+     * read it ([slotButton]) and what they forward goes out on the slot's pad index.
      */
     fun onButton(event: KeyEvent, bit: Int): Boolean {
         val dev = event.device ?: return false
@@ -409,209 +392,97 @@ class GamepadRouter(
      * Is this bit's WIRE SEND kept with this device, though the bit is otherwise tracked normally?
      *
      * Exactly one is: a real mute button ([Slot.hasMuteButton]) under the "local" [systemForward]
-     * policy. It is tracked — the mic toggle in [slotButton] is edge-triggered off held state —
-     * but not forwarded, so every send site has to ask, including [releaseHeld]'s close-time
-     * flush, or a mute held across a disconnect would put a release on the wire for a press that
-     * never went out. Every other system button under that policy leaves [slotButton] at the top
-     * and never reaches a send at all.
+     * policy. It still toggles the mic and reaches the shortcuts, but every send site has to ask,
+     * including [releaseHeld]'s close-time flush, or a mute held across a disconnect would put a
+     * release on the wire for a press that never went out. Every other system button under that
+     * policy leaves [slotButton] at the top and never reaches a send at all.
      */
     private fun localOnly(slot: Slot, bit: Int): Boolean =
         !systemForward && bit == Gamepad.BTN_MISC1 && slot.hasMuteButton
 
     /**
      * One button transition on [slot] — the shared body behind [onButton] and an [ExternalPad]'s
-     * transitions: forward the wire event, track held state, arm/disarm the exit chord, and fire
-     * the instant chords ([MIC_CHORD], [STATS_CHORD], and the mute button's own mic toggle).
+     * transitions. An auto-repeat ([send] false) is no transition. The slot's engine reads the
+     * press before the ring's mask; [apply] routes what it says.
      */
     private fun slotButton(slot: Slot, bit: Int, down: Boolean, send: Boolean) {
-        // The ring owns the pad: presses drive it, and nothing reaches the wire (the slot's
-        // held state was released when it opened).
-        if (ringOpen) {
-            if (down && send) ringNavFor(bit)?.let { onRingNav?.invoke(it) }
-            return
-        }
-        // Raw system buttons stay local under the "local" policy — no wire send and no held
-        // tracking, symmetric on both edges so nothing leaks into the chords either. A Steam
-        // Controller 2's QAM button is BTN_MISC1 and keeps exactly that behaviour.
+        if (down && !send) return
+        // Raw system buttons stay local under the "local" policy, on both edges, so they reach
+        // no shortcut either. A Steam Controller 2's QAM button is BTN_MISC1 and keeps that.
         //
-        // A real MUTE button ([Slot.hasMuteButton]) is deliberately exempt: that policy's own
-        // words are "keeps them entirely with this device", and toggling this device's microphone
-        // is precisely what a mute button does with itself. Returning here would have left the
-        // button present and silently dead under `local`, for a reason nobody would ever find. It
-        // loses its wire send instead (see [localOnly]) and keeps the held tracking the toggle's
-        // edge-trigger reads. It cannot leak into a chord — MISC1 is in none of them.
+        // A real MUTE button ([Slot.hasMuteButton]) is exempt: that policy keeps the button with
+        // this device, and toggling this device's microphone is what a mute button does. It
+        // loses only its wire send ([localOnly]).
         if (!systemForward &&
             (bit == Gamepad.BTN_GUIDE || (bit == Gamepad.BTN_MISC1 && !slot.hasMuteButton))
         ) {
             return
         }
-        if (down) {
-            // `Select+A`, Select first: the ring chord ([opensRing]). A is "jump" or "confirm"
-            // in most games, so its press is withheld and its release dropped with it. A Select
-            // still pending its guide hold belongs to the ring instead: cancel the hold and drop
-            // its withheld press too. A Select already on the wire needs neither — the ring's own
-            // held-state flush ([setRingOpen]) lifts it.
-            if (send && opensRing(slot.held, bit, isGuide(slot))) {
-                slot.pendingGuide?.let {
-                    mainHandler.removeCallbacks(it)
-                    slot.pendingGuide = null
-                    slot.swallowSelect = true
-                }
-                slot.swallowA = true
-                slot.held = slot.held or bit
-                onRingChord?.invoke(slot.index)
-                return
-            }
-            if (guideGesture && send) {
-                // A Select pressed ALONE is held back until the next press, its release or
-                // GUIDE_COMMIT_MS decides ([pendingSelectBecomes]). Held state records it either
-                // way, so the exit/mic chords read as if the gesture didn't exist; the flush
-                // sends Select's down before the new button's.
-                if (bit == Gamepad.BTN_BACK && slot.held == 0) {
-                    slot.held = slot.held or bit
-                    armGuide(slot)
-                    return
-                }
-                flushPendingSelect(slot, bit)
-            }
-            if (send && forwarding && !localOnly(slot, bit)) {
-                NativeBridge.nativeSendGamepadButton(handle, bit, true, slot.index)
-            }
-            val wasHeld = slot.held
-            slot.held = slot.held or bit
-            // Full chord now held on this pad → start the hold countdown (idempotent while held).
-            if (slot.held and EXIT_CHORD == EXIT_CHORD) armExit()
-            // Mic mute and the stats-tier cycle, each edge-triggered on the button that COMPLETES
-            // its chord (see [completesChord]) — the two meanings this client gives Select plus a
-            // face button. Both leave the press on the wire: the game still gets its buttons.
-            //
-            // A pad's own mute button is a second trigger for the SAME toggle, not a new
-            // mechanism — so it gets the same edge-trigger, expressed as the one-button chord it
-            // is. That is load-bearing rather than tidy: [onButton] deliberately still calls this
-            // with `down = true` on auto-repeat and suppresses only `send` (its repeatCount
-            // guard), so an unguarded `bit == BTN_MISC1` would flap the mic for as long as the
-            // button is held down.
-            //
-            // [Slot.hasMuteButton] is the other half, and it is not belt-and-braces: BTN_MISC1 is
-            // the wire's misc/QAM bit, and `Sc2Device` puts a Steam Controller 2's QAM button on
-            // it. Reading "any MISC1" as mute would mute the microphone on every QAM press.
-            if (completesChord(wasHeld, bit, MIC_CHORD) ||
-                (slot.hasMuteButton && completesChord(wasHeld, bit, Gamepad.BTN_MISC1))
-            ) {
-                onMicChord?.invoke()
-            }
-            if (completesChord(wasHeld, bit, STATS_CHORD)) onStatsChord?.invoke()
-        } else {
-            // A swallowed chord button: its press never went out, so its release must not.
-            if ((bit == Gamepad.BTN_A && slot.swallowA) || (bit == Gamepad.BTN_BACK && slot.swallowSelect)) {
-                if (bit == Gamepad.BTN_A) slot.swallowA = false else slot.swallowSelect = false
-                slot.held = slot.held and bit.inv()
-                return
-            }
-            val owned = guideGesture && bit == Gamepad.BTN_BACK && consumeSelectRelease(slot)
-            if (!owned && send && forwarding && !localOnly(slot, bit)) {
-                NativeBridge.nativeSendGamepadButton(handle, bit, false, slot.index)
-            }
-            slot.held = slot.held and bit.inv()
-            // A chord button lifted before the hold elapsed → cancel, unless another pad still
-            // holds the full chord.
-            if (bit and EXIT_CHORD != 0 && slots.values.none { it.held and EXIT_CHORD == EXIT_CHORD }) {
-                disarmExit()
+        // BTN_MISC1 is also a Steam Controller 2's QAM, which must not mute anyone.
+        if (down && bit == Gamepad.BTN_MISC1 && slot.hasMuteButton) onMicChord?.invoke()
+        apply(slot, slot.engine.step(bit, down, SystemClock.uptimeMillis()))
+        settle()
+    }
+
+    /** One engine's outputs for [slot]: a forward obeys the ring's mask, a fire and a lift do not. */
+    private fun apply(slot: Slot, outs: List<Shortcuts.Out>) {
+        for (o in outs) {
+            when (o) {
+                is Shortcuts.Out.Forward ->
+                    if (!ringOpen) {
+                        wire(slot, o.id, o.down)
+                    } else if (o.down) {
+                        ringNavFor(o.id)?.let { onRingNav?.invoke(it) }
+                    }
+                is Shortcuts.Out.Lift -> o.ids.forEach { wire(slot, it, false) }
+                is Shortcuts.Out.Fire -> fire(slot, o.action, o.phase)
             }
         }
     }
 
-    /** Hold a lone Select back: still alone at [GUIDE_COMMIT_MS], it is a synthetic guide, down until release. */
-    private fun armGuide(slot: Slot) {
-        val r = Runnable {
-            slot.pendingGuide = null
-            slot.selectAsGuide = true
-            if (forwarding) {
-                NativeBridge.nativeSendGamepadButton(handle, Gamepad.BTN_GUIDE, true, slot.index)
-            }
-        }
-        slot.pendingGuide = r
-        slot.selectDownAt = SystemClock.uptimeMillis()
-        mainHandler.postDelayed(r, GUIDE_COMMIT_MS)
+    /** One transition on [slot]'s wire pad. A release of a button the host does not hold (the
+     *  ring's flush lifted it) sends nothing. */
+    private fun wire(slot: Slot, bit: Int, down: Boolean) {
+        if (!down && slot.held and bit == 0) return
+        if (forwarding && !localOnly(slot, bit)) NativeBridge.nativeSendGamepadButton(handle, bit, down, slot.index)
+        slot.held = if (down) slot.held or bit else slot.held and bit.inv()
     }
 
-    /** The held Select is the host's guide, sent or still pending past [GUIDE_HOLD_MS]. */
-    private fun isGuide(slot: Slot): Boolean = slot.selectAsGuide ||
-        (slot.pendingGuide != null && heldFor(slot) >= GUIDE_HOLD_MS)
-
-    private fun heldFor(slot: Slot): Long = SystemClock.uptimeMillis() - slot.selectDownAt
-
-    /**
-     * [bit] joined a pending Select: its deferred down — a real Select or the guide
-     * ([pendingSelectBecomes]) — goes out before the caller sends [bit]'s.
-     */
-    private fun flushPendingSelect(slot: Slot, bit: Int) {
-        val r = slot.pendingGuide ?: return
-        mainHandler.removeCallbacks(r)
-        slot.pendingGuide = null
-        val select = pendingSelectBecomes(heldFor(slot), bit)
-        slot.selectAsGuide = select == Gamepad.BTN_GUIDE
-        if (forwarding) {
-            NativeBridge.nativeSendGamepadButton(handle, select, true, slot.index)
-        }
-    }
-
-    /**
-     * Select released with gesture state outstanding — true when the gesture owned the
-     * release. A transformed hold lifts the synthetic guide; a pending one delivers a tap of
-     * [pendingSelectBecomes] now, with the release [TAP_PRESS_MS] behind it (a back-to-back
-     * pair can fold into nothing in the host's per-pad input fold).
-     */
-    private fun consumeSelectRelease(slot: Slot): Boolean {
-        if (slot.selectAsGuide) {
-            slot.selectAsGuide = false
-            if (forwarding) {
-                NativeBridge.nativeSendGamepadButton(handle, Gamepad.BTN_GUIDE, false, slot.index)
-            }
-            return true
-        }
-        val r = slot.pendingGuide ?: return false
-        mainHandler.removeCallbacks(r)
-        slot.pendingGuide = null
-        val tap = pendingSelectBecomes(heldFor(slot), 0)
-        if (forwarding) {
-            NativeBridge.nativeSendGamepadButton(handle, tap, true, slot.index)
-            val up = Runnable {
-                slot.pendingTapUp = null
-                NativeBridge.nativeSendGamepadButton(handle, tap, false, slot.index)
-            }
-            slot.pendingTapUp = up
-            mainHandler.postDelayed(up, TAP_PRESS_MS)
-        }
-        return true
-    }
-
-    /** Arm the exit-chord hold timer (once); on expiry, if the chord is still held, flush + leave. */
-    private fun armExit() {
-        if (pendingExit != null) return // already counting down
-        val r = Runnable {
-            pendingExit = null
-            onExitArmed?.invoke(false) // countdown over — drop the hint whether or not we leave
-            // Fire only if the chord survived the full hold on some pad.
-            val held = slots.values.filter { it.held and EXIT_CHORD == EXIT_CHORD }
-            if (held.isNotEmpty()) {
-                // Release the held buttons + zero the axes on every triggering pad so nothing sticks
-                // host-side once we leave, then signal the deliberate exit.
-                for (s in held) releaseHeld(s)
+    /** A pad shortcut fired. Guide and Quick access go out on this pad's wire index. */
+    private fun fire(slot: Slot, action: Shortcuts.Action, phase: Shortcuts.Phase) {
+        val id = (action as? Shortcuts.Action.Slot)?.slot
+        when {
+            action == Shortcuts.Action.Ring -> onRingChord?.invoke(slot.index)
+            id == SlotId.EndStream -> {
+                releaseHeld(slot)
                 onExitChord?.invoke()
             }
+            id == SlotId.Guide || id == SlotId.Qam -> {
+                val events = tapEvents(systemPresses(slot, if (id == SlotId.Guide) Gamepad.BTN_GUIDE else Gamepad.BTN_MISC1))
+                sendPresses(
+                    slot.index,
+                    when (phase) {
+                        Shortcuts.Phase.DOWN -> events.filter { it.second }
+                        // A tap's releases trail its last press, so an early lift cannot pass it.
+                        Shortcuts.Phase.UP -> events.filter { !it.second }
+                        else -> events
+                    },
+                )
+            }
+            else -> onShortcut?.invoke(action, phase)
         }
-        pendingExit = r
-        mainHandler.postDelayed(r, EXIT_HOLD_MS)
-        onExitArmed?.invoke(true) // chord complete → show the "hold to quit" hint
     }
 
-    /** Cancel a pending exit-chord hold timer. */
-    private fun disarmExit() {
-        val wasArmed = pendingExit != null
-        pendingExit?.let { mainHandler.removeCallbacks(it) }
-        pendingExit = null
-        if (wasArmed) onExitArmed?.invoke(false) // released early — drop the hint
+    /** After a step or tick: the "hold to quit" cue, and the next tick. */
+    private fun settle() {
+        val armed = slots.values.any { it.engine.armedAction == END_STREAM }
+        if (armed != exitArmed) {
+            exitArmed = armed
+            onExitArmed?.invoke(armed)
+        }
+        mainHandler.removeCallbacks(tick)
+        val due = slots.values.mapNotNull { it.engine.nextDue() }.minOrNull() ?: return
+        mainHandler.postDelayed(tick, (due - SystemClock.uptimeMillis()).coerceAtLeast(0))
     }
 
     /**
@@ -730,7 +601,7 @@ class GamepadRouter(
      * A capture-link pad occupying a wire slot without an Android [InputDevice] — the as-is Steam
      * Controller 2 passthrough (USB/BLE claimed directly, invisible to the input stack). Shares
      * the real slots' lifecycle: a stable lowest-free index, Arrival-before-input, held-state
-     * flush + Remove on [close], and full participation in the emergency exit chord.
+     * flush + Remove on [close], and its own shortcuts engine.
      */
     inner class ExternalPad internal constructor(
         private val syntheticId: Int,
@@ -832,6 +703,7 @@ class GamepadRouter(
             Gamepad.AxisMapper(handle, index),
             hasMuteButton = hasMute,
             ownMotion = ownMotion,
+            engine = newEngine(),
         )
         pushSc2Gate()
         return ExternalPad(syntheticId, index, motionReaches)
@@ -872,9 +744,9 @@ class GamepadRouter(
      */
     fun release() {
         inputManager?.unregisterInputDeviceListener(listener)
-        disarmExit() // drop any pending exit-chord timer so it can't fire after teardown
         // Snapshot the ids first — closeSlot mutates the map.
         for (id in slots.keys.toList()) closeSlot(id)
+        mainHandler.removeCallbacks(tick) // no hold fires after teardown
     }
 
     // ---- slots ----
@@ -920,6 +792,7 @@ class GamepadRouter(
             // pad to one type, which would otherwise cost a DualSense its mute button.
             hasMuteButton = map.buttons == Gamepad.PadButtons.GENERIC_SONY,
             declared = pref,
+            engine = newEngine(),
         )
         slots[dev.id] = slot
         // After the table holds the slot, so a listener that sends on this device the moment it is
@@ -934,39 +807,23 @@ class GamepadRouter(
      */
     private fun closeSlot(deviceId: Int) {
         val slot = slots.remove(deviceId) ?: return
+        // A held Guide or key combination comes up, an owed tap release goes out now.
+        apply(slot, slot.engine.flush())
         releaseHeld(slot)
         if (forwarding) NativeBridge.nativeSendGamepadRemove(handle, slot.index)
-        // If this pad was mid-exit-chord, its removal may have left no pad holding it — drop the timer.
-        if (slots.values.none { it.held and EXIT_CHORD == EXIT_CHORD }) disarmExit()
+        settle()
         // Release this controller's feedback bindings (close its lights session / cancel rumble).
         onSlotClosed?.invoke(deviceId)
     }
 
+    /** A new slot's engine. Opening the ring counts only while something opens it. */
+    private fun newEngine() = Shortcuts.Engine(
+        shortcuts.filter { it.action != Shortcuts.Action.Ring || onRingChord != null },
+        Shortcuts.Device.PAD,
+    )
+
     /** Lift every held button + zero the axes/HAT dpad for [slot] (wire events only, all on its index). */
     private fun releaseHeld(slot: Slot) {
-        // Gesture first: a pending (never-sent) Select just drops its timer; an owed tap
-        // release goes out NOW (its down is already on the wire and the handle may not
-        // outlive this slot); a transformed guide — which is not in `held` — is lifted.
-        slot.pendingGuide?.let { mainHandler.removeCallbacks(it) }
-        slot.pendingGuide = null
-        slot.pendingTapUp?.let {
-            mainHandler.removeCallbacks(it)
-            it.run()
-        }
-        if (slot.selectAsGuide) {
-            slot.selectAsGuide = false
-            if (forwarding) {
-                NativeBridge.nativeSendGamepadButton(handle, Gamepad.BTN_GUIDE, false, slot.index)
-            }
-        }
-        // A swallowed chord's buttons were never pressed on the wire: drop them from the release
-        // sweep, then clear the flags. The flush IS what they were protecting — the ring opens on
-        // this path and swallows every event until it closes, so a flag left standing would eat
-        // the release of a LATER, real press and strand that button down on the host.
-        if (slot.swallowA) slot.held = slot.held and Gamepad.BTN_A.inv()
-        if (slot.swallowSelect) slot.held = slot.held and Gamepad.BTN_BACK.inv()
-        slot.swallowA = false
-        slot.swallowSelect = false
         var bits = slot.held
         while (bits != 0) {
             val bit = bits and -bits // lowest set bit
@@ -986,10 +843,9 @@ class GamepadRouter(
         return null
     }
 
-    // `internal` rather than private: the chord masks and [completesChord] are the only part of
-    // this router a JVM unit test can reach — everything else needs an InputManager, a main Looper
-    // and live InputDevices behind it — and until `GamepadChordTest` there was nothing pinning the
-    // chords at all. Still invisible to :app, which is what private bought.
+    // `internal` rather than private: the pure helpers are the only part of this router a JVM
+    // unit test can reach; everything else needs an InputManager, a main Looper and live
+    // InputDevices. Still invisible to :app, which is what private bought.
     internal companion object {
         /** Mirror of `punktfunk-core::input::MAX_PADS` — wire pad indices 0..15. */
         const val MAX_PADS = 16
@@ -1025,72 +881,20 @@ class GamepadRouter(
             return ((deg + 30.0) / 60.0).toInt() % 6
         }
 
-        /** Emergency stream-exit chord: Select + Start + L1 + R1 held together (matches the legacy single-pad chord). */
-        const val EXIT_CHORD = Gamepad.BTN_BACK or Gamepad.BTN_START or Gamepad.BTN_LB or Gamepad.BTN_RB
-
-        /**
-         * How long the exit chord must be held before the stream leaves — long enough that an
-         * accidental brush of the four buttons doesn't quit, short enough to feel responsive (the
-         * on-screen hint covers the gap). Roughly matches SDL/Apple `DISCONNECT_HOLD`.
-         */
-        const val EXIT_HOLD_MS = 1000L
-
-        /**
-         * Mic-mute chord: Select + Y. Y is deliberately NOT one of [EXIT_CHORD]'s buttons, so no
-         * way of reaching the exit chord can pass through this one on the way (and vice versa) —
-         * and Select is a menu button rather than a twitch action, which makes the pair unlikely
-         * to occur inside real play.
-         */
-        const val MIC_CHORD = Gamepad.BTN_BACK or Gamepad.BTN_Y
-
-        /**
-         * Stats-overlay chord: Select + X, one verbosity tier per completion. X keeps both
-         * properties [MIC_CHORD]'s Y has — it is none of [EXIT_CHORD]'s four buttons, so no way of
-         * reaching the exit chord passes through this one on the way (and vice versa), and Select
-         * is a menu button rather than a twitch action. Byte-for-byte the Apple client's
-         * `GamepadCapture.statsChord`, which was modelled on [MIC_CHORD] in the first place and
-         * leaves Y free for the mic chord to land there in turn — the two clients converge on one
-         * pad vocabulary from both ends.
-         */
-        const val STATS_CHORD = Gamepad.BTN_BACK or Gamepad.BTN_X
-
-        /**
-         * Whether pressing [bit] on a pad that held [wasHeld] beforehand COMPLETED [chord]: a
-         * genuine press (`wasHeld` lacks the bit, so an auto-repeat DOWN can't re-fire it) of a
-         * chord member that leaves the whole chord held (`wasHeld or bit` is the slot's held set
-         * the instant after the press). Any other button pressed while the chord is already down
-         * fails the middle test, so a chord fires once per chord, not once per press — and lifting
-         * any member re-arms it, since the next press of that member is a fresh completion.
-         */
-        internal fun completesChord(wasHeld: Int, bit: Int, chord: Int): Boolean =
-            wasHeld and bit == 0 && bit and chord != 0 && (wasHeld or bit) and chord == chord
+        private val END_STREAM = Shortcuts.Action.Slot(SlotId.EndStream)
 
         /**
          * A synthetic tap's wire events as (bit, down, after ms) — pf-client-core's
-         * `tap_events`: each press [TAP_PRESS_MS] after the one before, then every release
-         * together, last pressed first. Apart, because core folds per-transition sends into one
-         * state, and because a chord's first button has to be held before its second counts.
-         * A [android.os.Handler] runs equal delays in the order they were posted.
+         * `tap_events`: each press [Shortcuts.TAP_PRESS_MS] after the one before, then every
+         * release together, last pressed first. Apart, because core folds per-transition sends
+         * into one state, and because a chord's first button has to be held before its second
+         * counts. A [android.os.Handler] runs equal delays in the order they were posted.
          */
         internal fun tapEvents(presses: List<Int>): List<Triple<Int, Boolean, Long>> {
-            val downs = presses.mapIndexed { i, bit -> Triple(bit, true, i * TAP_PRESS_MS) }
-            val up = presses.size * TAP_PRESS_MS
+            val downs = presses.mapIndexed { i, bit -> Triple(bit, true, i * Shortcuts.TAP_PRESS_MS) }
+            val up = presses.size * Shortcuts.TAP_PRESS_MS
             return downs + presses.reversed().map { Triple(it, false, up) }
         }
-
-        /**
-         * Whether pressing [bit] on a pad holding [held] opens the quick-action ring: A, with
-         * Select already down. Select-first only — [RingNav.Confirm] is A's meaning once the ring
-         * is up, so A-then-Select would arm the ring under a thumb that is mid-press.
-         *
-         * Independent of the hold-Select guide gesture, which is off by default here: this used to
-         * key on that gesture's pending timer, so the one chord the start banner promises every pad
-         * user opened nothing at all unless they had turned the gesture on. [selectAsGuide] is the
-         * one exception — once the hold has become the host's guide button, A belongs to whatever
-         * that opened on the host.
-         */
-        internal fun opensRing(held: Int, bit: Int, selectAsGuide: Boolean): Boolean =
-            bit == Gamepad.BTN_A && held and Gamepad.BTN_BACK != 0 && !selectAsGuide
 
         /**
          * Whether a key from a device with no slot yet opens one: a `KEYCODE_BUTTON_*` key, or any
@@ -1101,29 +905,5 @@ class GamepadRouter(
 
         /** Synthetic slot-key base for [ExternalPad]s — below every real (positive) InputDevice id. */
         const val EXTERNAL_ID_BASE = -1000
-
-        /** pf-client-core's `GUIDE_HOLD`: hold Select alone this long and it is the host's guide. */
-        const val GUIDE_HOLD_MS = 350L
-
-        /**
-         * pf-client-core's `GUIDE_COMMIT`: a lone Select held this long sends the guide while
-         * still held. Until then an [EXIT_CHORD] partner may still join.
-         */
-        const val GUIDE_COMMIT_MS = 1000L
-
-        /**
-         * What a pending Select becomes when [bit] joins after [heldMs] (`0` = its own release):
-         * the guide past [GUIDE_HOLD_MS], else a real Select. An [EXIT_CHORD] partner always
-         * keeps it a Select, so the exit chord never presses guide. pf-client-core's
-         * `SelectGesture`.
-         */
-        internal fun pendingSelectBecomes(heldMs: Long, bit: Int): Int =
-            if (heldMs >= GUIDE_HOLD_MS && bit and EXIT_CHORD == 0) Gamepad.BTN_GUIDE else Gamepad.BTN_BACK
-
-        /**
-         * pf-client-core's `TAP_PRESS`: a held-back Select tap's release trails its press by
-         * this much, so the pair can't coalesce into no press at all.
-         */
-        const val TAP_PRESS_MS = 50L
     }
 }

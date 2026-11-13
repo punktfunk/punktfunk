@@ -1,0 +1,123 @@
+{
+  "$comment": "Which library a client asks a host for (design: phase 1, the profile view). Every client's test replays these: pf-client-core library.rs, Swift LibraryClientTests, Kotlin LibraryClientTest. `pick` is the profile id this device saved for the host, null for none. `host` answers each path, matched as written, with `status` and `body`; a path it does not list answers 404 with no body, as a host without that route does. `expect.asked` is every path the client asked, in order, `expect.ids` the catalog it shows, or null when the load fails, and `expect.as` the profile that catalog was fetched as, which its cache entry is filed under (null: the box's).",
+  "cases": [
+    {
+      "name": "no saved pick: today's request",
+      "pick": null,
+      "host": {
+        "/api/v1/library/page?limit=200": {"status": 200, "body": {"items": [
+          {"id": "steam:570", "store": "steam", "title": "Dota 2", "art": {}},
+          {"id": "custom:kid1", "store": "custom", "title": "Quail", "art": {}}
+        ]}}
+      },
+      "expect": {"asked": ["/api/v1/library/page?limit=200"], "as": null, "ids": ["steam:570", "custom:kid1"]}
+    },
+    {
+      "name": "no saved pick on a host older than the paged route: today's whole list",
+      "pick": null,
+      "host": {
+        "/api/v1/library": {"status": 200, "body": [
+          {"id": "steam:570", "store": "steam", "title": "Dota 2", "art": {}}
+        ]}
+      },
+      "expect": {"asked": ["/api/v1/library/page?limit=200", "/api/v1/library"], "as": null, "ids": ["steam:570"]}
+    },
+    {
+      "name": "a saved pick: the library as that profile plays it",
+      "pick": "a1b2c3d4e5f6",
+      "host": {
+        "/api/v1/library/page?limit=200&as=a1b2c3d4e5f6": {"status": 200, "body": {"items": [
+          {"id": "custom:kid1", "store": "custom", "title": "Quail", "art": {}}
+        ]}}
+      },
+      "expect": {"asked": ["/api/v1/library/page?limit=200&as=a1b2c3d4e5f6"], "as": "a1b2c3d4e5f6", "ids": ["custom:kid1"]}
+    },
+    {
+      "name": "every page asks as the profile",
+      "pick": "a1b2c3d4e5f6",
+      "host": {
+        "/api/v1/library/page?limit=200&as=a1b2c3d4e5f6": {"status": 200, "body": {"items": [
+          {"id": "custom:kid1", "store": "custom", "title": "Quail", "art": {}}
+        ], "next_cursor": "c2"}},
+        "/api/v1/library/page?limit=200&cursor=c2&as=a1b2c3d4e5f6": {"status": 200, "body": {"items": [
+          {"id": "steam:570", "store": "steam", "title": "Dota 2", "art": {}}
+        ]}}
+      },
+      "expect": {
+        "asked": [
+          "/api/v1/library/page?limit=200&as=a1b2c3d4e5f6",
+          "/api/v1/library/page?limit=200&cursor=c2&as=a1b2c3d4e5f6"
+        ],
+        "as": "a1b2c3d4e5f6", "ids": ["custom:kid1", "steam:570"]
+      }
+    },
+    {
+      "name": "a profile the host no longer holds: once more as the box, no error",
+      "pick": "a1b2c3d4e5f6",
+      "host": {
+        "/api/v1/library/page?limit=200&as=a1b2c3d4e5f6": {"status": 404, "body": {
+          "error": "That profile is gone from this host. Pick another one.", "code": "profile_unknown"
+        }},
+        "/api/v1/library/page?limit=200": {"status": 200, "body": {"items": [
+          {"id": "steam:570", "store": "steam", "title": "Dota 2", "art": {}},
+          {"id": "custom:kid1", "store": "custom", "title": "Quail", "art": {}}
+        ]}}
+      },
+      "expect": {
+        "asked": ["/api/v1/library/page?limit=200&as=a1b2c3d4e5f6", "/api/v1/library/page?limit=200"],
+        "as": null, "ids": ["steam:570", "custom:kid1"]
+      }
+    },
+    {
+      "name": "a profile gone between pages: the walk starts over as the box",
+      "pick": "a1b2c3d4e5f6",
+      "host": {
+        "/api/v1/library/page?limit=200&as=a1b2c3d4e5f6": {"status": 200, "body": {"items": [
+          {"id": "custom:kid1", "store": "custom", "title": "Quail", "art": {}}
+        ], "next_cursor": "c2"}},
+        "/api/v1/library/page?limit=200&cursor=c2&as=a1b2c3d4e5f6": {"status": 404, "body": {
+          "error": "That profile is gone from this host. Pick another one.", "code": "profile_unknown"
+        }},
+        "/api/v1/library/page?limit=200": {"status": 200, "body": {"items": [
+          {"id": "steam:570", "store": "steam", "title": "Dota 2", "art": {}},
+          {"id": "custom:kid1", "store": "custom", "title": "Quail", "art": {}}
+        ]}}
+      },
+      "expect": {
+        "asked": [
+          "/api/v1/library/page?limit=200&as=a1b2c3d4e5f6",
+          "/api/v1/library/page?limit=200&cursor=c2&as=a1b2c3d4e5f6",
+          "/api/v1/library/page?limit=200"
+        ],
+        "as": null, "ids": ["steam:570", "custom:kid1"]
+      }
+    },
+    {
+      "name": "a host older than the paged route: the whole list, as the profile",
+      "pick": "a1b2c3d4e5f6",
+      "host": {
+        "/api/v1/library?as=a1b2c3d4e5f6": {"status": 200, "body": [
+          {"id": "steam:570", "store": "steam", "title": "Dota 2", "art": {}}
+        ]}
+      },
+      "expect": {
+        "asked": ["/api/v1/library/page?limit=200&as=a1b2c3d4e5f6", "/api/v1/library?as=a1b2c3d4e5f6"],
+        "as": "a1b2c3d4e5f6", "ids": ["steam:570"]
+      }
+    },
+    {
+      "name": "the box's answer stands, a failure too",
+      "pick": "a1b2c3d4e5f6",
+      "host": {
+        "/api/v1/library/page?limit=200&as=a1b2c3d4e5f6": {"status": 404, "body": {
+          "error": "That profile is gone from this host. Pick another one.", "code": "profile_unknown"
+        }},
+        "/api/v1/library/page?limit=200": {"status": 500, "body": {"error": "The library stopped responding."}}
+      },
+      "expect": {
+        "asked": ["/api/v1/library/page?limit=200&as=a1b2c3d4e5f6", "/api/v1/library/page?limit=200"],
+        "as": null, "ids": null
+      }
+    }
+  ]
+}

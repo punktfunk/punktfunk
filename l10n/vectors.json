@@ -1,0 +1,106 @@
+{
+  "about": "What a reader of the message format must produce. format: message, language and arguments to text; a message a language lacks reads English. pick: the OS's languages and the shipped list to the language used. pf-l10n's tests replay this file.",
+  "messages": {
+    "en": {
+      "vec_plain": "Statistics size",
+      "vec_args": "{keys} cycles it during a stream.",
+      "vec_order": "{host} is running {app}",
+      "vec_escape": "Write \\{name\\} for a placeholder and \\\\ for a backslash.",
+      "vec_files": [{
+        "declarations": ["input count", "local n = count: plural"],
+        "selectors": ["n"],
+        "match": {
+          "n=one": "{count} file",
+          "n=other": "{count} files"
+        }
+      }],
+      "vec_only_en": "Only in English"
+    },
+    "de": {
+      "vec_order": "{app} läuft auf {host}"
+    },
+    "pl": {
+      "vec_plain": "Rozmiar statystyk",
+      "vec_files": [{
+        "declarations": ["input count", "local n = count: plural"],
+        "selectors": ["n"],
+        "match": {
+          "n=one": "{count} plik",
+          "n=few": "{count} pliki",
+          "n=many": "{count} plików",
+          "n=other": "{count} pliku"
+        }
+      }]
+    },
+    "ru": {
+      "vec_files": [{
+        "declarations": ["input count", "local n = count: plural"],
+        "selectors": ["n"],
+        "match": {
+          "n=one": "{count} файл",
+          "n=few": "{count} файла",
+          "n=many": "{count} файлов",
+          "n=*": "{count} файла"
+        }
+      }]
+    }
+  },
+  "format": [
+    { "key": "vec_plain", "lang": "en", "args": {}, "want": "Statistics size" },
+    { "key": "vec_plain", "lang": "pl", "args": {}, "want": "Rozmiar statystyk" },
+    { "key": "vec_args", "lang": "en", "args": { "keys": "Ctrl+Alt+Shift+S" }, "want": "Ctrl+Alt+Shift+S cycles it during a stream." },
+    { "key": "vec_order", "lang": "en", "args": { "host": "Desk", "app": "Steam" }, "want": "Desk is running Steam" },
+    { "key": "vec_order", "lang": "de", "args": { "host": "Desk", "app": "Steam" }, "want": "Steam läuft auf Desk" },
+    { "key": "vec_escape", "lang": "en", "args": {}, "want": "Write {name} for a placeholder and \\ for a backslash." },
+    { "key": "vec_files", "lang": "en", "args": { "count": 0 }, "want": "0 files" },
+    { "key": "vec_files", "lang": "en", "args": { "count": 1 }, "want": "1 file" },
+    { "key": "vec_files", "lang": "en", "args": { "count": 2 }, "want": "2 files" },
+    { "key": "vec_files", "lang": "pl", "args": { "count": 1 }, "want": "1 plik" },
+    { "key": "vec_files", "lang": "pl", "args": { "count": 2 }, "want": "2 pliki" },
+    { "key": "vec_files", "lang": "pl", "args": { "count": 5 }, "want": "5 plików" },
+    { "key": "vec_files", "lang": "pl", "args": { "count": 12 }, "want": "12 plików" },
+    { "key": "vec_files", "lang": "pl", "args": { "count": 22 }, "want": "22 pliki" },
+    { "key": "vec_files", "lang": "pl", "args": { "count": 25 }, "want": "25 plików" },
+    { "key": "vec_files", "lang": "ru", "args": { "count": 1 }, "want": "1 файл" },
+    { "key": "vec_files", "lang": "ru", "args": { "count": 2 }, "want": "2 файла" },
+    { "key": "vec_files", "lang": "ru", "args": { "count": 5 }, "want": "5 файлов" },
+    { "key": "vec_files", "lang": "ru", "args": { "count": 11 }, "want": "11 файлов" },
+    { "key": "vec_files", "lang": "ru", "args": { "count": 21 }, "want": "21 файл" },
+    { "key": "vec_files", "lang": "ru", "args": { "count": 22 }, "want": "22 файла" },
+    { "key": "vec_files", "lang": "de", "args": { "count": 2 }, "want": "2 files" },
+    { "key": "vec_only_en", "lang": "de", "args": {}, "want": "Only in English" },
+    { "key": "vec_plain", "lang": "ru", "args": {}, "want": "Statistics size" }
+  ],
+  "pick": [
+    { "os": ["de-AT", "en-US"], "shipped": ["en", "de"], "fallback": {}, "want": "de" },
+    { "os": ["fr-CA", "de"], "shipped": ["en", "de"], "fallback": {}, "want": "de" },
+    { "os": ["ja-JP"], "shipped": ["en", "de"], "fallback": {}, "want": "en" },
+    { "os": [], "shipped": ["en", "de"], "fallback": {}, "want": "en" },
+    { "os": ["en-GB", "de"], "shipped": ["en", "de"], "fallback": {}, "want": "en" },
+    { "os": ["nn-NO"], "shipped": ["en", "nb"], "fallback": { "nn": "nb" }, "want": "nb" },
+    { "os": ["pt_BR"], "shipped": ["en", "pt-PT", "pt-BR"], "fallback": {}, "want": "pt-BR" },
+    { "os": ["pt-AO"], "shipped": ["en", "pt-PT"], "fallback": { "pt": "pt-PT" }, "want": "pt-PT" },
+    { "os": ["zh-Hant-TW"], "shipped": ["en", "zh-Hant"], "fallback": {}, "want": "zh-Hant" },
+    { "os": ["pt_BR.UTF-8"], "shipped": ["en", "pt-PT", "pt-BR"], "fallback": {}, "want": "pt-BR" },
+    { "os": ["zh-TW"], "shipped": ["en", "zh-Hans", "zh-Hant"], "fallback": {}, "want": "zh-Hant" },
+    { "os": ["zh-HK"], "shipped": ["en", "zh-Hans", "zh-Hant"], "fallback": {}, "want": "zh-Hant" },
+    { "os": ["zh-MO"], "shipped": ["en", "zh-Hans", "zh-Hant"], "fallback": {}, "want": "zh-Hant" },
+    { "os": ["zh-CN"], "shipped": ["en", "zh-Hans", "zh-Hant"], "fallback": {}, "want": "zh-Hans" },
+    { "os": ["zh-SG"], "shipped": ["en", "zh-Hans", "zh-Hant"], "fallback": {}, "want": "zh-Hans" },
+    { "os": ["zh"], "shipped": ["en", "zh-Hans", "zh-Hant"], "fallback": {}, "want": "zh-Hans" },
+    { "os": ["zh_TW.UTF-8"], "shipped": ["en", "zh-Hans", "zh-Hant"], "fallback": {}, "want": "zh-Hant" },
+    { "os": ["zh_CN.UTF-8"], "shipped": ["en", "zh-Hans", "zh-Hant"], "fallback": {}, "want": "zh-Hans" },
+    { "os": ["ZH-tw"], "shipped": ["en", "zh-Hans", "zh-Hant"], "fallback": {}, "want": "zh-Hant" },
+    { "os": ["zh-Hant-HK"], "shipped": ["en", "zh-Hans", "zh-Hant"], "fallback": {}, "want": "zh-Hant" },
+    { "os": ["zh-Hans-CN"], "shipped": ["en", "zh-Hans", "zh-Hant"], "fallback": {}, "want": "zh-Hans" },
+    { "os": ["zh-Hant-CN"], "shipped": ["en", "zh-Hans", "zh-Hant"], "fallback": {}, "want": "zh-Hant" },
+    { "os": ["ja-JP"], "shipped": ["en", "zh-Hans", "zh-Hant"], "fallback": {}, "want": "en" },
+    { "os": ["ko-KR"], "shipped": ["en", "zh-Hans", "zh-Hant"], "fallback": {}, "want": "en" },
+    { "os": ["zh-TW", "zh-CN"], "shipped": ["en", "zh-Hans"], "fallback": {}, "want": "zh-Hans" },
+    { "os": ["zh-Hant-TW"], "shipped": ["en", "zh-Hans"], "fallback": {}, "want": "en" },
+    { "os": ["zh-TW"], "shipped": ["en", "zh"], "fallback": {}, "want": "zh" },
+    { "os": ["zh-TW"], "shipped": ["en", "zh-TW", "zh-Hant"], "fallback": {}, "want": "zh-TW" },
+    { "os": ["zh-TW"], "shipped": ["en", "yue"], "fallback": { "zh-TW": "yue" }, "want": "yue" },
+    { "os": ["DE-at"], "shipped": ["en", "de"], "fallback": {}, "want": "de" }
+  ]
+}

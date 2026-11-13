@@ -1,5 +1,5 @@
 //! The Windows plugin runner: the scheduled task, and the ACL policy on what LocalService may
-//! read and write.
+//! read and write. A seat's runner is [`seat`]'s.
 //!
 //! The runner is a separate, unprivileged principal. It reads the scoped `plugin-token` and the
 //! TLS pin, never `mgmt-token`, and it writes only the plugin/script units, their state and the
@@ -11,8 +11,36 @@ use super::ace_plan::{self, Aces};
 use super::*;
 use crate::windows::folder_ace;
 
+mod seat;
+
 /// `NT AUTHORITY\LocalService` in icacls SID form.
 pub(super) const LOCAL_SERVICE_SID: &str = "*S-1-5-19";
+
+/// The runner's account: LocalService, or the account signed in to a seat's session.
+pub(super) fn runner_sid() -> Option<String> {
+    runner_sid_of(seat_runner(), seat::account_sid)
+}
+
+/// [`runner_sid`] for a host that is a seat's or not, with the seat's account read from `seat`.
+fn runner_sid_of(on_seat: bool, seat: impl FnOnce() -> Option<String>) -> Option<String> {
+    match on_seat {
+        true => seat(),
+        false => Some(LOCAL_SERVICE_SID.trim_start_matches('*').to_string()),
+    }
+}
+
+/// `rights` for the runner's account, as icacls spells an ACE.
+fn runner_ace(rights: &str) -> Result<String> {
+    let sid = runner_sid().context("nobody is signed in to this seat")?;
+    Ok(format!("*{sid}:{rights}"))
+}
+
+/// A Windows seat's failed runner, started again; no other host has one.
+pub(super) fn restart_failed_seat_runner() {
+    if seat_runner() {
+        seat::restart_failed();
+    }
+}
 
 /// Secrets the runner may read: the scoped `plugin-token`, the per-plugin tokens it hands each
 /// sandboxed plugin, and the TLS-pin cert (`native-cert.pem` after the identity split, else
@@ -83,6 +111,9 @@ pub(super) fn strip_users_read_once() {
 }
 
 pub(super) fn enable() -> Result<()> {
+    if seat_runner() {
+        return seat::enable();
+    }
     // Converge the principal before start: an older task may still be SYSTEM.
     // Idempotent; `-LogonType ServiceAccount` needs no stored password.
     powershell(&format!(
@@ -100,6 +131,9 @@ pub(super) fn enable() -> Result<()> {
 }
 
 pub(super) fn disable() -> Result<()> {
+    if seat_runner() {
+        return seat::disable();
+    }
     powershell(&format!(
         "Stop-ScheduledTask -TaskName {TASK} -ErrorAction SilentlyContinue; \
          Disable-ScheduledTask -TaskName {TASK} -ErrorAction Stop | Out-Null"
@@ -114,10 +148,11 @@ pub(super) fn disable() -> Result<()> {
 const RUNNER_ACL_MARKER: &str = "plugin-run/runner-acl";
 
 /// A fresh install registers and starts the task without `plugins enable`, which leaves the unit
-/// and state dirs unreadable to LocalService: every plugin import fails EPERM.
+/// and state dirs unreadable to LocalService: every plugin import fails EPERM. A seat's runner
+/// takes its grants at each start.
 pub(super) fn converge_runner_acls(status: &RuntimeStatus) {
     let marker = pf_paths::config_dir().join(RUNNER_ACL_MARKER);
-    if !status.installed || !status.enabled || marker.exists() {
+    if seat_runner() || !status.installed || !status.enabled || marker.exists() {
         return;
     }
     grant_runner_secret_reads();
@@ -257,7 +292,7 @@ pub(super) fn deny_seats() {
 }
 
 /// Restore access after `write_secret_file` replaces the token with a protected file. The
-/// directory ACE also lets LocalService traverse into the dedicated runner-data directory.
+/// directory ACE also lets the runner's account traverse into the runner-data directory.
 pub(super) fn grant_runner_credential(path: &std::path::Path) -> Result<()> {
     let dir = path
         .parent()
@@ -267,20 +302,15 @@ pub(super) fn grant_runner_credential(path: &std::path::Path) -> Result<()> {
 }
 
 pub(super) fn grant_runner_data_dir(dir: &std::path::Path) -> Result<()> {
-    let ok = icacls(
-        dir,
-        &["/grant:r", &format!("{LOCAL_SERVICE_SID}:(OI)(CI)(RX)")],
-    );
-    if !ok {
-        bail!("grant LocalService read on {}", dir.display());
+    if !icacls(dir, &["/grant:r", &runner_ace("(OI)(CI)(RX)")?]) {
+        bail!("grant the runner read on {}", dir.display());
     }
     Ok(())
 }
 
 fn grant_runner_secret_read(path: &std::path::Path) -> Result<()> {
-    let ok = icacls(path, &["/grant:r", &format!("{LOCAL_SERVICE_SID}:(R)")]);
-    if !ok {
-        bail!("grant LocalService read on {}", path.display());
+    if !icacls(path, &["/grant:r", &runner_ace("(R)")?]) {
+        bail!("grant the runner read on {}", path.display());
     }
     Ok(())
 }
@@ -487,7 +517,8 @@ pub(super) fn runner_command() -> Result<(std::path::PathBuf, Vec<String>)> {
 /// The runner's account, and `plugin`'s files capability with the sandbox on, may reach one
 /// directory the operator owns: both ACEs in one walk of its tree, which the next converge
 /// adopts rather than walking again. LocalService holds no ACE inside a user profile, so
-/// without this a launcher installed there reads as not installed.
+/// without this a launcher installed there reads as not installed. A seat's folder is named by
+/// its person or its plugin, so its ACE is placed as the seat's account ([`Hand::Seat`]).
 pub(super) fn grant(
     plugin: Option<&str>,
     dir: &std::path::Path,
@@ -497,12 +528,13 @@ pub(super) fn grant(
     let ace = Ace::of(write, files, false);
     let sids = decision_sids(plugin);
     let aces: Vec<(String, Ace)> = sids.iter().map(|sid| (sid.clone(), ace)).collect();
-    grant_aces(dir, &aces, plugin)?;
+    grant_aces(dir, &aces, plugin, Hand::named())?;
     note(dir, &sids, Some(ace));
     Ok(())
 }
 
-/// The inverse of [`grant`] for a folder no plugin holds any more, in one walk.
+/// The inverse of [`grant`] for a folder no plugin holds any more, in one walk. Removing an ACE
+/// of the runner's own takes access away, so this host does it on any folder.
 pub(super) fn revoke(plugin: &str, dir: &std::path::Path, files: bool) -> Result<()> {
     let sids = decision_sids(Some(plugin));
     let ace = Ace::of(false, files, false);
@@ -512,14 +544,76 @@ pub(super) fn revoke(plugin: &str, dir: &std::path::Path, files: bool) -> Result
     Ok(())
 }
 
-/// The runner's SID, and `plugin`'s files capability with the sandbox on, without icacls' `*`.
+/// LocalService's SID, and `plugin`'s files capability with the sandbox on, without icacls'
+/// `*`. A seat's runner is the seat's account, which needs no ACE to reach what it may.
 fn decision_sids(plugin: Option<&str>) -> Vec<String> {
-    let mut sids = vec![LOCAL_SERVICE_SID.trim_start_matches('*').to_string()];
+    let mut sids = Vec::new();
+    if !seat_runner() {
+        sids.push(LOCAL_SERVICE_SID.trim_start_matches('*').to_string());
+    }
     if let Some(id) = plugin.filter(|_| !runner_sandbox_off()) {
         sids.push(crate::windows::app_container::files_capability_sid(id));
     }
     sids
 }
+
+/// Who places a folder ACE: this host, or the account signed in to a seat's session, which may
+/// change only a folder whose DACL it may change itself.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Hand {
+    Host,
+    Seat,
+}
+
+impl Hand {
+    /// The hand for a folder a person or a plugin named: on a seat host that is SYSTEM, the
+    /// seat's account. A host that isn't SYSTEM already acts with its own account's rights.
+    fn named() -> Hand {
+        Hand::of(seat_runner(), crate::hooks::running_as_system())
+    }
+
+    fn of(on_seat: bool, system: bool) -> Hand {
+        match on_seat && system {
+            true => Hand::Seat,
+            false => Hand::Host,
+        }
+    }
+
+    /// `f`, run by this hand.
+    fn run<R>(self, f: impl FnOnce() -> R) -> Result<R> {
+        match self {
+            Hand::Host => Ok(f()),
+            Hand::Seat => crate::windows::interactive::as_session_user(f),
+        }
+    }
+
+    /// `icacls <dir> <args>`, run by this hand, its output dropped. `true` when it succeeded.
+    fn icacls(self, dir: &std::path::Path, args: &[String]) -> Result<bool> {
+        match self {
+            Hand::Host => Ok(Command::new(icacls_path())
+                .arg(dir)
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .status()
+                .context("run icacls")?
+                .success()),
+            Hand::Seat => {
+                let mut argv = vec![dir.to_string_lossy().into_owned()];
+                argv.extend(args.iter().cloned());
+                let program = std::path::PathBuf::from(icacls_path());
+                let line = crate::windows::app_container::command_line(&program, &argv);
+                let code = crate::windows::interactive::run_hidden_as_current_session_user(
+                    &line,
+                    SEAT_WALK_LIMIT,
+                )?;
+                Ok(code == 0)
+            }
+        }
+    }
+}
+
+/// The longest a folder walk run as a seat's account may take: a large tree takes minutes.
+const SEAT_WALK_LIMIT: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// SIDs by how their ACE is placed: a folder's own files, a link, and the rest, which share one
 /// walk of the tree.
@@ -538,10 +632,16 @@ fn by_reach(aces: &[(String, Ace)]) -> (Vec<&str>, Vec<&str>, Vec<&(String, Ace)
 /// Each `(SID, ACE)` on one directory, in a single `icacls /grant:r` for what walks the tree: an
 /// earlier ACE for a SID is replaced, never stacked, and the tree below is walked once however
 /// many SIDs share it. One directory only: a service account bypasses traverse checks, so the
-/// locked parents above it stay shut. `plugin` names who the walk is listed for.
-fn grant_aces(dir: &std::path::Path, aces: &[(String, Ace)], plugin: Option<&str>) -> Result<()> {
+/// locked parents above it stay shut. `plugin` names who the walk is listed for; `hand` places
+/// the ACEs, and with [`Hand::Seat`] reads the folder too.
+fn grant_aces(
+    dir: &std::path::Path,
+    aces: &[(String, Ace)],
+    plugin: Option<&str>,
+    hand: Hand,
+) -> Result<()> {
     // A typo must not report success — the ACE would land on a name nothing ever reads.
-    if !dir.is_dir() {
+    if !hand.run(|| dir.is_dir())? {
         bail!(
             "'{}' is not a directory (grant the folder holding the launcher, not the .exe)",
             dir.display()
@@ -557,10 +657,12 @@ fn grant_aces(dir: &std::path::Path, aces: &[(String, Ace)], plugin: Option<&str
     };
     let (own, links, tree) = by_reach(aces);
     if !own.is_empty() {
-        folder_ace::place(dir, &own).map_err(|e| owner(format!(": {e:#}")))?;
+        hand.run(|| folder_ace::place(dir, &own))?
+            .map_err(|e| owner(format!(": {e:#}")))?;
     }
     if !links.is_empty() {
-        folder_ace::place_link(dir, &links).map_err(|e| owner(format!(": {e:#}")))?;
+        hand.run(|| folder_ace::place_link(dir, &links))?
+            .map_err(|e| owner(format!(": {e:#}")))?;
     }
     if tree.is_empty() {
         return Ok(());
@@ -568,18 +670,12 @@ fn grant_aces(dir: &std::path::Path, aces: &[(String, Ace)], plugin: Option<&str
     #[cfg(test)]
     WALKS.with(|w| w.set(w.get() + 1));
     let _walk = walks::begin(plugin, &dir.to_string_lossy(), false);
-    let ok = Command::new(icacls_path())
-        .arg(dir)
-        .arg("/grant:r")
-        .args(
-            tree.iter()
-                .map(|(sid, ace)| format!("*{sid}:{}", ace.icacls())),
-        )
-        .stdout(std::process::Stdio::null())
-        .status()
-        .context("run icacls")?
-        .success();
-    if !ok {
+    let mut args = vec!["/grant:r".to_string()];
+    args.extend(
+        tree.iter()
+            .map(|(sid, ace)| format!("*{sid}:{}", ace.icacls())),
+    );
+    if !hand.icacls(dir, &args)? {
         return Err(owner(String::new()));
     }
     Ok(())
@@ -681,41 +777,31 @@ fn held(path: &str, sid: &str, ace: Ace) -> bool {
 
 #[cfg(test)]
 mod tests {
-    /// An `HKLM` key names itself once, an `HKCU` key one per loaded account, anything
-    /// malformed nothing.
+    /// The box's runner is LocalService; a seat's is the account signed in to its session, and
+    /// there is none before anyone is.
     #[test]
-    fn named_keys_take_the_machine_and_each_account() {
-        let sids = [
-            "S-1-5-21-1-2-3-1001".to_string(),
-            "S-1-12-1-4-5".to_string(),
-        ];
-        let named = |k| super::named_keys_for(k, &sids);
+    fn the_runner_is_localservice_or_the_seat_s_account() {
+        use super::runner_sid_of;
+        let seat = "S-1-5-21-1-2-3-1001";
         assert_eq!(
-            named(r"HKLM\SOFTWARE\Valve\Steam"),
-            [r"MACHINE\SOFTWARE\Valve\Steam"]
+            runner_sid_of(false, || unreachable!()).as_deref(),
+            Some("S-1-5-19")
         );
         assert_eq!(
-            named(r"hklm\SOFTWARE\WOW6432Node\Ubisoft"),
-            [r"MACHINE\SOFTWARE\WOW6432Node\Ubisoft"]
+            runner_sid_of(true, || Some(seat.into())).as_deref(),
+            Some(seat)
         );
-        assert_eq!(
-            named(r"HKCU\System\GameConfigStore"),
-            [
-                r"USERS\S-1-5-21-1-2-3-1001\System\GameConfigStore",
-                r"USERS\S-1-12-1-4-5\System\GameConfigStore",
-            ]
-        );
-        for bad in [
-            r"HKLM\",
-            r"HKCU\Software\..\..\S-1-5-18",
-            r"HKLM\SOFTWARE\\Valve",
-            r"HKLM\SOFTWARE\..\SAM",
-            "HKLM\\SOFTWARE\\a\u{7}b",
-            r"HKU\S-1-5-18\Software",
-            r"SOFTWARE\Valve",
-        ] {
-            assert!(named(bad).is_empty(), "{bad}");
-        }
+        assert_eq!(runner_sid_of(true, || None), None);
+    }
+
+    /// A seat host that is SYSTEM places a named folder's ACE as the seat's account; any other
+    /// host already acts with its own account's rights.
+    #[test]
+    fn a_named_folder_on_a_system_seat_host_is_opened_as_the_seat() {
+        use super::Hand;
+        assert_eq!(Hand::of(true, true), Hand::Seat);
+        assert_eq!(Hand::of(true, false), Hand::Host);
+        assert_eq!(Hand::of(false, true), Hand::Host);
     }
 
     /// A folder's SIDs share one walk; what a grant noted, or the folder still carries on a
@@ -724,7 +810,7 @@ mod tests {
     #[test]
     #[ignore = "edits ACLs with icacls; run on a Windows box"]
     fn a_folder_takes_one_walk_and_a_recheck_none() {
-        use super::{converge_folders, held, note, Ace, Placed, PlacedAces, WALKS};
+        use super::{converge_folders, held, note, Ace, Hand, Placed, PlacedAces, WALKS};
         let tmp = tempfile::tempdir().unwrap();
         for d in 0..20 {
             let sub = tmp.path().join(format!("d{d}"));
@@ -756,7 +842,7 @@ mod tests {
 
         let start = walks();
         let mut placed = none.clone();
-        converge_folders(&want, &none, &mut placed, false);
+        converge_folders(&want, &none, &mut placed, false, &|_| Hand::Host);
         assert_eq!(walks() - start, 1, "both SIDs in one walk");
         assert!(placed == want);
         assert!(held(&path, &pkg, Ace::Read) && held(&path, &runner, Ace::Read));
@@ -765,7 +851,7 @@ mod tests {
 
         let start = walks();
         let mut again = want.clone();
-        converge_folders(&want, &want, &mut again, true);
+        converge_folders(&want, &want, &mut again, true, &|_| Hand::Host);
         assert_eq!(
             walks() - start,
             0,
@@ -777,7 +863,7 @@ mod tests {
         let start = walks();
         note(&dir, &[runner.clone(), pkg.clone()], Some(Ace::Read));
         let mut adopted = none.clone();
-        converge_folders(&want, &none, &mut adopted, false);
+        converge_folders(&want, &none, &mut adopted, false, &|_| Hand::Host);
         assert_eq!(walks() - start, 0);
         assert!(adopted == want);
 
@@ -787,7 +873,7 @@ mod tests {
         strip(&pkg);
         let start = walks();
         let mut healed = want.clone();
-        converge_folders(&want, &want, &mut healed, true);
+        converge_folders(&want, &want, &mut healed, true, &|_| Hand::Host);
         assert_eq!(walks() - start, 1);
         assert!(held(&path, &pkg, Ace::Read));
 
@@ -797,23 +883,23 @@ mod tests {
         refused().insert((pkg.clone(), path.clone()));
         let start = walks();
         let mut skipped = want.clone();
-        converge_folders(&want, &want, &mut skipped, true);
+        converge_folders(&want, &want, &mut skipped, true, &|_| Hand::Host);
         assert_eq!(walks() - start, 0);
         assert!(!held(&path, &pkg, Ace::Read));
         refused().clear();
-        converge_folders(&want, &want, &mut skipped, true);
+        converge_folders(&want, &want, &mut skipped, true, &|_| Hand::Host);
         assert!(held(&path, &pkg, Ace::Read));
 
         // Both come off in one walk, and a noted removal costs none.
         let start = walks();
         let mut gone = want.clone();
-        converge_folders(&none, &want, &mut gone, false);
+        converge_folders(&none, &want, &mut gone, false, &|_| Hand::Host);
         assert_eq!(walks() - start, 1);
         assert!(!held(&path, &pkg, Ace::Read));
         let start = walks();
         note(&dir, &[runner.clone(), pkg.clone()], None);
         let mut dropped = want.clone();
-        converge_folders(&none, &want, &mut dropped, false);
+        converge_folders(&none, &want, &mut dropped, false, &|_| Hand::Host);
         assert_eq!(walks() - start, 0);
         assert!(dropped.grantees.values().all(|p| p.paths.is_empty()));
     }
@@ -823,7 +909,7 @@ mod tests {
     #[test]
     #[ignore = "edits ACLs; run on a Windows box"]
     fn a_files_ace_stops_at_the_folder_and_a_tree_ace_at_protection() {
-        use super::{converge_folders, held, Ace, Placed, PlacedAces};
+        use super::{converge_folders, held, Ace, Hand, Placed, PlacedAces};
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().canonicalize().unwrap();
         let spell = |p: std::path::PathBuf| p.to_string_lossy().into_owned();
@@ -855,7 +941,7 @@ mod tests {
         let none = PlacedAces::default();
         let files = aces(Ace::Files);
         let mut placed = none.clone();
-        converge_folders(&files, &none, &mut placed, false);
+        converge_folders(&files, &none, &mut placed, false, &|_| Hand::Host);
         assert!(held(&path, &pkg, Ace::Read) && held(&own, &pkg, Ace::Read));
         let late = spell(dir.join("appmanifest_2.acf"));
         std::fs::write(&late, b"x").unwrap();
@@ -865,17 +951,17 @@ mod tests {
         // Widened to the tree: everything below takes it, except what is protected.
         let tree = aces(Ace::Read);
         let mut widened = files.clone();
-        converge_folders(&tree, &files, &mut widened, false);
+        converge_folders(&tree, &files, &mut widened, false, &|_| Hand::Host);
         assert!(held(&deep, &pkg, Ace::Read));
         assert!(!held(&locked, &pkg, Ace::Read));
 
         // Narrowed back, the tree loses it again.
         let mut narrowed = tree.clone();
-        converge_folders(&files, &tree, &mut narrowed, false);
+        converge_folders(&files, &tree, &mut narrowed, false, &|_| Hand::Host);
         assert!(held(&own, &pkg, Ace::Read) && !held(&deep, &pkg, Ace::Read));
 
         let mut gone = files.clone();
-        converge_folders(&none, &files, &mut gone, false);
+        converge_folders(&none, &files, &mut gone, false, &|_| Hand::Host);
         assert!(!held(&path, &pkg, Ace::Read) && !held(&own, &pkg, Ace::Read));
         assert!(!held(&late, &pkg, Ace::Read), "what it inherited goes too");
     }
@@ -915,7 +1001,11 @@ mod tests {
     }
 }
 
+/// The `PunktfunkScripting` task's state, or a seat's own runner's ([`seat::status`]).
 pub(super) fn runtime_status() -> RuntimeStatus {
+    if seat_runner() {
+        return seat::status();
+    }
     let out = powershell_output(&format!(
         "$t = Get-ScheduledTask -TaskName {TASK} -ErrorAction SilentlyContinue; \
          if ($null -eq $t) {{ 'missing' }} else {{ \"$($t.State)|$($t.Principal.UserId)\" }}"
@@ -1092,48 +1182,60 @@ pub(super) fn verify_next() {
 }
 
 /// Every directory a plugin declared or was granted carries an ACE for the runner's account,
-/// read or Modify, and every `HKLM` key it declared a read; what a gone plugin placed is
-/// stripped. With the sandbox on, the plugin's files capability gets the same plus its code,
-/// state and inbox: a container passes only an ACE its account and its capability both hold, so
-/// a root in a user profile needs both. An ACE an older host placed for the package SID is in
-/// the record and comes off here. A root under the host's own profile is nobody's `~` and gets
-/// nothing; a directory that does not exist yet waits for the next start. The record alone
-/// can't see an ACE that went from its folder, so [`verify_next`] and [`recheck_next`] read the
-/// folders: a plugin without the ACE on its own code can't start.
+/// read or Modify, and every launcher key it declared a read; what a gone plugin placed, or a
+/// key the policy refuses, is stripped. With the sandbox on, the plugin's files capability gets
+/// the same plus its code, state and inbox: a container passes only an ACE its account and its
+/// capability both hold, so a root in a user profile needs both. An ACE an older host placed
+/// for the package SID is in the record and comes off here. A root under the host's own
+/// profile is nobody's `~` and gets nothing; a directory that does not exist yet waits for the
+/// next start. The record alone can't see an ACE that went from its folder, so [`verify_next`]
+/// and [`recheck_next`] read the folders: a plugin without the ACE on its own code can't start.
+/// A seat's runner is the seat's account and gets no ACE; a granted folder's ACE there is placed
+/// as that account ([`Hand::named`]).
 pub(super) fn converge_runner_roots(
     roots: &[access::RunnerRoot],
     home: &std::path::Path,
     manifests: &std::collections::BTreeMap<String, manifest::PluginManifest>,
 ) -> Result<bool> {
     let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
-    let runner = Placed {
-        paths: root_aces(roots, &home),
-        keys: manifests
-            .values()
-            .flat_map(|m| m.registry.iter())
-            .flat_map(|k| named_keys(k))
-            .collect(),
-    };
-    let mut want = PlacedAces {
-        grantees: [(
-            LOCAL_SERVICE_SID.trim_start_matches('*').to_string(),
-            runner,
-        )]
-        .into(),
-    };
+    let sids = user_sids();
+    let declared: std::collections::BTreeMap<&String, std::collections::BTreeSet<String>> =
+        manifests
+            .iter()
+            .map(|(id, m)| (id, plugin_keys(id, &m.registry, &sids)))
+            .collect();
+    let mut want = PlacedAces::default();
+    if !seat_runner() {
+        let runner = Placed {
+            paths: root_aces(roots, &home),
+            keys: declared.values().flatten().cloned().collect(),
+        };
+        let sid = LOCAL_SERVICE_SID.trim_start_matches('*').to_string();
+        want.grantees.insert(sid, runner);
+    }
+    // What this host places itself: a plugin's own folders and what its manifest declares.
+    let mut by_host = std::collections::BTreeSet::new();
     if !runner_sandbox_off() {
         let store = access::AccessStore::open(pf_paths::config_dir());
         for (id, m) in manifests {
             let sid = crate::windows::app_container::files_capability_sid(id);
-            let mut paths = root_aces(&store.plugin_roots(id, m), &home);
-            paths.extend(package_dirs(id));
+            let mut own = package_dirs(id);
             if m.per_account() {
-                paths.extend(profiles_root());
+                own.extend(profiles_root());
             }
-            let keys = m.registry.iter().flat_map(|k| named_keys(k)).collect();
+            by_host.extend(own.keys().cloned());
+            by_host.extend(root_aces(&store.declared_roots(m), &home).into_keys());
+            let mut paths = root_aces(&store.plugin_roots(id, m), &home);
+            paths.extend(own);
+            let keys = declared[id].clone();
             want.grantees.insert(sid, Placed { paths, keys });
         }
     }
+    let named = Hand::named();
+    let hand = |path: &str| match by_host.contains(path) {
+        true => Hand::Host,
+        false => named,
+    };
     let file = pf_paths::config_dir()
         .join(RUNNER_DATA_DIR)
         .join(RUNNER_ACES_FILE);
@@ -1154,7 +1256,7 @@ pub(super) fn converge_runner_roots(
     }
     let mut placed = had.clone();
     let empty = Placed::default();
-    converge_folders(&want, &had, &mut placed, verify);
+    converge_folders(&want, &had, &mut placed, verify, &hand);
     // Stale keys first: an ACE that outlives its plugin is the leak this file exists to close.
     for (sid, old) in &had.grantees {
         let new = want.grantees.get(sid).unwrap_or(&empty);
@@ -1220,8 +1322,15 @@ pub(super) fn converge_runner_roots(
 /// Move every folder ACE in `placed` from `had` to `want`, one walk per folder and verb: an
 /// inheritable ACE makes Windows rewrite every file below, so a folder's SIDs share the walk.
 /// What a grant or revoke already did is recorded without one. With `verify`, a recorded ACE
-/// counts only if the folder's own DACL still carries it.
-fn converge_folders(want: &PlacedAces, had: &PlacedAces, placed: &mut PlacedAces, verify: bool) {
+/// counts only if the folder's own DACL still carries it. `hand` names who places a folder's ACEs;
+/// this host removes them.
+fn converge_folders(
+    want: &PlacedAces,
+    had: &PlacedAces,
+    placed: &mut PlacedAces,
+    verify: bool,
+    hand: &dyn Fn(&str) -> Hand,
+) {
     let paths = |p: &PlacedAces| -> Aces<Ace> {
         p.grantees
             .iter()
@@ -1308,7 +1417,7 @@ fn converge_folders(want: &PlacedAces, had: &PlacedAces, placed: &mut PlacedAces
             continue;
         }
         CONVERGE_WALKED.with(|w| w.set(true));
-        match grant_aces(dir, &place, None) {
+        match grant_aces(dir, &place, None, hand(&step.path)) {
             Ok(()) => {
                 for (sid, ace) in &place {
                     let key = (sid.clone(), step.path.clone());
@@ -1367,7 +1476,9 @@ fn root_aces(
 }
 
 /// What a plugin's container needs beyond its roots: the runtime, the runner bundle and the
-/// plugin tree it loads code from, its own state, and its inbox when it has one.
+/// plugin tree it loads code from, its own state, and its inbox when it has one. A state folder
+/// that is a link gets nothing: the runner's account may write in `plugin-state`, and icacls
+/// would follow the link.
 fn package_dirs(id: &str) -> std::collections::BTreeMap<String, Ace> {
     let cfg = pf_paths::config_dir();
     let mut dirs = std::collections::BTreeMap::new();
@@ -1384,7 +1495,8 @@ fn package_dirs(id: &str) -> std::collections::BTreeMap<String, Ace> {
     code(runner_bundle_dir());
     code(Some(cfg.join("plugins")));
     let state = cfg.join("plugin-state").join(id);
-    if state.is_dir() || std::fs::create_dir_all(&state).is_ok() {
+    let link = std::fs::symlink_metadata(&state).is_ok_and(|m| m.file_type().is_symlink());
+    if !link && (state.is_dir() || std::fs::create_dir_all(&state).is_ok()) {
         dirs.insert(state.to_string_lossy().into_owned(), Ace::Modify);
     }
     let inbox = cfg.join("ingest").join(id);
@@ -1404,42 +1516,46 @@ fn profiles_root() -> Option<(String, Ace)> {
         .then(|| (users.to_string_lossy().into_owned(), Ace::List))
 }
 
-/// A declared key as `SetNamedSecurityInfoW` names it: `HKLM\…` once as `MACHINE\…`, and
-/// `HKCU\…` as `USERS\<sid>\…` under every account whose hive is loaded, as `~` names every
-/// profile. Anything else names no key.
-fn named_keys(declared: &str) -> Vec<String> {
-    named_keys_for(declared, &user_sids())
-}
-
-fn named_keys_for(declared: &str, sids: &[String]) -> Vec<String> {
-    if let Some(rest) = key_under(declared, "HKLM\\") {
-        return vec![format!("MACHINE\\{rest}")];
+/// The keys plugin `id` declared, named in every loaded hive of `sids`. A key the policy refuses
+/// gets no ACE and one warning per run of this host.
+fn plugin_keys(
+    id: &str,
+    declared: &[String],
+    sids: &[String],
+) -> std::collections::BTreeSet<String> {
+    static WARNED: std::sync::Mutex<std::collections::BTreeSet<(String, String)>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let mut keys = std::collections::BTreeSet::new();
+    for key in declared {
+        match super::registry_keys::named_keys_for(key, sids) {
+            Some(named) => keys.extend(named),
+            None => {
+                let first = WARNED
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .insert((id.to_string(), key.clone()));
+                if first {
+                    tracing::warn!(
+                        plugin = %id,
+                        %key,
+                        cause = "not a launcher's key under Software",
+                        "plugin registry key not granted"
+                    );
+                }
+            }
+        }
     }
-    match key_under(declared, "HKCU\\") {
-        Some(rest) => sids.iter().map(|s| format!("USERS\\{s}\\{rest}")).collect(),
-        None => Vec::new(),
-    }
-}
-
-/// The path below `hive` (`HKLM\`), when `declared` is a clean key there.
-fn key_under<'a>(declared: &'a str, hive: &str) -> Option<&'a str> {
-    let rest = declared
-        .get(..hive.len())
-        .filter(|p| p.eq_ignore_ascii_case(hive))
-        .map(|_| &declared[hive.len()..])?;
-    let clean = !rest.is_empty()
-        && rest.len() <= 255
-        && !rest.chars().any(char::is_control)
-        && rest
-            .split('\\')
-            .all(|c| !c.is_empty() && c != "." && c != ".." && !c.contains(['/', '*', '?']));
-    clean.then_some(rest)
+    keys
 }
 
 /// The loaded hives of real accounts: local and domain (`S-1-5-21-…`) and Entra ID
-/// (`S-1-12-1-…`). Service and `_Classes` hives hold no launcher state.
+/// (`S-1-12-1-…`). Service and `_Classes` hives hold no launcher state. A seat's plugins read
+/// its own account's hive alone.
 fn user_sids() -> Vec<String> {
     use winreg::{enums::HKEY_USERS, RegKey};
+    if seat_runner() {
+        return seat::account_sid().into_iter().collect();
+    }
     RegKey::predef(HKEY_USERS)
         .enum_keys()
         .flatten()
@@ -1449,7 +1565,11 @@ fn user_sids() -> Vec<String> {
 }
 
 /// Stop then start: there is no `Restart-ScheduledTask`, and Start on a running task is a no-op.
+/// A seat's runner restarts as [`seat::restart`] does.
 pub(super) fn restart_runtime() -> Result<()> {
+    if seat_runner() {
+        return seat::restart();
+    }
     powershell(&format!(
         "Stop-ScheduledTask -TaskName {TASK} -ErrorAction SilentlyContinue; \
          Start-ScheduledTask -TaskName {TASK} -ErrorAction Stop"

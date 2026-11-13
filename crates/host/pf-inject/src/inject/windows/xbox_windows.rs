@@ -267,8 +267,7 @@ impl PadProto for XboxWinProto {
     type State = XboxState;
     const LABEL: &'static str = "Xbox Wireless/Windows";
     const DEVICE: &'static str = "Xbox Wireless Controller";
-    const CREATE_HINT: &'static str =
-        " (install/repair: punktfunk-host.exe driver install --gamepad)";
+    const CREATE_HINT: &'static str = " (install/repair: run the Punktfunk installer again)";
 
     fn open(&mut self, idx: u8) -> Result<XboxWinPad> {
         let p = XboxWinPad::open(idx, self.identity)?;

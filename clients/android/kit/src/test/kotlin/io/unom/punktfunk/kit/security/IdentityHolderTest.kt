@@ -1,5 +1,6 @@
 package io.unom.punktfunk.kit.security
 
+import io.unom.punktfunk.kit.R
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -39,11 +40,11 @@ class IdentityHolderTest {
         val holder = IdentityHolder({
             if (calls.incrementAndGet() == 1) wedge.await()
             identity
-        }, timeoutMs = 500, onFailure = {})
-        assertEquals(IdentityHolder.NOT_READY, holder.blockedMessage())
+        }, timeoutMs = 500, onFailure = {}, words = { "message $it" })
+        assertEquals("message ${R.string.android_identity_not_ready}", holder.blockedMessage())
         assertNull(holder.await())
         assertTrue(holder.failed && holder.settled)
-        assertEquals(IdentityHolder.UNAVAILABLE, holder.blockedMessage())
+        assertEquals("message ${R.string.android_identity_broken}", holder.blockedMessage())
         assertSame(identity, holder.ensure().get(1, TimeUnit.SECONDS))
         assertSame(identity, holder.current)
         assertFalse(holder.failed)

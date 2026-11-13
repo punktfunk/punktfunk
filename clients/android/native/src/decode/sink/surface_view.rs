@@ -23,10 +23,11 @@ use std::time::{Duration, Instant};
 
 use super::super::async_loop::{Ctx, OutputReady};
 use super::super::display::{apply_dataspace, color_dataspace, stream_dataspace, DisplayTracker};
-use super::super::latency::{now_realtime_ns, p50_max_ms};
+use super::super::latency::now_realtime_ns;
 use super::super::surface_control::{Layer, PresentComplete};
 use super::super::vsync::VsyncShared;
 use super::{Downrate, Routed, Sink};
+use crate::codec_format::p50_max_ms;
 use crate::present::budget::{Confirms, TimelineBudget};
 use crate::present::store::{Held, Store};
 use crate::present::verdict::{Second, Verdict, Verdicts};
@@ -163,8 +164,10 @@ impl PresentMeter {
         }
     }
 
-    #[allow(clippy::type_complexity)] // one caller unpacks it in place; a struct would be noise
-    fn drain(&self) -> (Vec<u64>, u64, Vec<u64>, Vec<u64>, Vec<u64>) {
+    /// The window since the last drain: latches, displays, feed, codec and e2e samples. Each
+    /// sink's 1 Hz line drains it; the ASC sink reads only the decode split.
+    #[allow(clippy::type_complexity)] // each caller unpacks it in place; a struct would be noise
+    pub(super) fn drain(&self) -> (Vec<u64>, u64, Vec<u64>, Vec<u64>, Vec<u64>) {
         let mut g = self
             .inner
             .lock()

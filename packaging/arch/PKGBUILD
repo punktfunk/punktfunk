@@ -254,6 +254,9 @@ package_punktfunk-host() {
   install -Dm0644 "$R/scripts/punktfunk-modules.conf" "$pkgdir/usr/lib/modules-load.d/punktfunk.conf"
   # 32 MB UDP socket buffers (send-side headroom at high bitrate)
   install -Dm0644 "$R/scripts/99-punktfunk-net.conf"  "$pkgdir/usr/lib/sysctl.d/99-punktfunk-net.conf"
+  # Keeps a connected Steam Frame wireless adapter out of power save, which drops the headset link
+  install -Dm0755 "$R/packaging/linux/90-punktfunk-frame-adapter" \
+    "$pkgdir/usr/lib/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter"
   # Nice-limit headroom for the host's data-plane threads: raises the user-session RLIMIT_NICE so
   # pf-frame's setpriority() works on boxes without RealtimeKit (with rtkit the host never needs
   # it). A limit, not a grant — and NEVER a file capability on the host binary (see the KWin
@@ -290,6 +293,9 @@ package_punktfunk-host() {
   install -Dm0755 "$T/punktfunk-tray" "$pkgdir/usr/bin/punktfunk-tray"
   install -Dm0644 "$R/packaging/linux/io.unom.punktfunk.starthost.desktop" \
     "$pkgdir/usr/share/applications/io.unom.punktfunk.starthost.desktop"
+  # Opens the web console signed in: a person's own inside their seat, the operator's elsewhere.
+  install -Dm0644 "$R/packaging/linux/io.unom.punktfunk.webconsole.desktop" \
+    "$pkgdir/usr/share/applications/io.unom.punktfunk.webconsole.desktop"
   local sz png
   for sz in 22x22 48x48; do
     for png in "$R"/packaging/linux/icons/hicolor/$sz/apps/*.png; do
@@ -443,11 +449,13 @@ package_punktfunk-seats() {
     install -Dm0644 "$R/packaging/linux/$f" "$pkgdir/usr/lib/systemd/system/$f"
   done
   install -Dm0644 "$R/packaging/linux/punktfunk-seats-user.conf" "$pkgdir/usr/lib/systemd/system/user@.service.d/50-punktfunk-seats.conf"
+  install -Dm0644 "$R/packaging/linux/punktfunk-seat.pam" "$pkgdir/usr/lib/pam.d/punktfunk-seat"
   install -Dm0644 "$R/packaging/linux/punktfunk-seats.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/punktfunk-seats.conf"
   # A seat's pads: udev hands each one to its seat's user alone.
   install -Dm0644 "$R/packaging/linux/65-punktfunk-seats.rules" "$pkgdir/usr/lib/udev/rules.d/65-punktfunk-seats.rules"
   # The door: the box's host as a system service, and the root helper the console turns it on with.
   install -Dm0755 "$R/packaging/linux/door-helper" "$pkgdir/usr/libexec/punktfunk/door-helper"
+  install -Dm0755 "$R/packaging/linux/door-remove.sh" "$pkgdir/usr/libexec/punktfunk/door-remove"
   for f in punktfunk-door.service punktfunk-web-door.service punktfunk-door-on@.service punktfunk-door-off@.service; do
     install -Dm0644 "$R/packaging/linux/$f" "$pkgdir/usr/lib/systemd/system/$f"
   done
@@ -513,6 +521,8 @@ package_punktfunk-scripting() {
   # systemd USER unit — installed but NOT auto-enabled (opt-in). Enable once you have automation:
   #   systemctl --user enable --now punktfunk-scripting
   install -Dm0644 "$R/scripts/punktfunk-scripting.service" "$pkgdir/usr/lib/systemd/user/punktfunk-scripting.service"
+  install -Dm0644 "$R/scripts/punktfunk-scripting-seat@.service" \
+    "$pkgdir/usr/lib/systemd/user/punktfunk-scripting-seat@.service"
   # Where AppArmor restricts unprivileged user namespaces, the generator trades the unit's namespace
   # sandbox for this profile.
   install -Dm0644 "$R/packaging/linux/apparmor/punktfunk-scripting" "$pkgdir/etc/apparmor.d/punktfunk-scripting"

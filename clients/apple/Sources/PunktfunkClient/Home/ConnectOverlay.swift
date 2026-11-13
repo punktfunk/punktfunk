@@ -79,39 +79,39 @@ struct ConnectOverlay: View {
             switch phase {
             case .connecting(let name):
                 ProgressView().controlSize(.large).tint(overlayFG)
-                Text("Connecting to \(name)")
+                Text(L10n.dialConnectingTo(host: name))
                     .font(.geist(titleSize, .bold, relativeTo: .title3)).foregroundStyle(overlayFG)
                     .multilineTextAlignment(.center)
-                Text("Establishing a secure connection…")
+                Text(L10n.dialConnectingDetail)
                     .font(.geist(bodySize, relativeTo: .caption))
                     .foregroundStyle(overlayFG.opacity(0.6))
-                Button("Cancel") { onCancelConnect() }.buttonStyle(.bordered).padding(.top, 6)
+                Button(L10n.commonCancel) { onCancelConnect() }.buttonStyle(.bordered).padding(.top, 6)
             case .waking(let w) where w.timedOut:
                 Image(systemName: "moon.zzz.fill")
                     .font(.system(size: 34))
                     .foregroundStyle(overlayFG.opacity(0.9))
-                Text("\(w.hostName) didn't wake")
+                Text(L10n.dialWakeParked(host: w.hostName))
                     .font(.geist(titleSize, .bold, relativeTo: .title3)).foregroundStyle(overlayFG)
                     .multilineTextAlignment(.center)
-                Text("It may still be booting, or it's powered off / off this network.")
+                Text(L10n.dialWakeParkedHint)
                     .font(.geist(bodySize, relativeTo: .caption))
                     .foregroundStyle(overlayFG.opacity(0.6))
                     .multilineTextAlignment(.center)
                 HStack(spacing: 12) {
-                    Button("Cancel") { waker.cancel() }.buttonStyle(.bordered)
-                    Button("Try Again") { waker.retry() }.glassProminentButtonStyle()
+                    Button(L10n.commonCancel) { waker.cancel() }.buttonStyle(.bordered)
+                    Button(L10n.commonRetry) { waker.retry() }.glassProminentButtonStyle()
                 }
                 .padding(.top, 6)
             case .waking(let w):
                 ProgressView().controlSize(.large).tint(overlayFG)
-                Text("Waking \(w.hostName)…")
+                Text(L10n.dialWaking(host: w.hostName))
                     .font(.geist(titleSize, .bold, relativeTo: .title3)).foregroundStyle(overlayFG)
                     .multilineTextAlignment(.center)
-                Text("Waiting for it to come online · \(w.seconds)s")
+                Text(L10n.dialWakingProgress(seconds: String(w.seconds)))
                     .font(.geistFixed(bodySize)).foregroundStyle(overlayFG.opacity(0.6))
                     .monospacedDigit()
                 // A wake-only wait (no dial after) offers "Stop Waiting"; a wake-&-connect is "Cancel".
-                Button(w.connectsAfter ? "Cancel" : "Stop Waiting") { waker.cancel() }
+                Button(w.connectsAfter ? L10n.commonCancel : L10n.dialStopWaiting) { waker.cancel() }
                     .buttonStyle(.bordered).padding(.top, 6)
             }
         }

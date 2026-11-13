@@ -246,9 +246,9 @@ final class HostStore: ObservableObject {
     }
 
     /// Presence while a home is on screen, touch or console: a sweep every 10 s, each saved
-    /// host's name following its live advert, and each reachable paired host's actions and
-    /// running title kept warm on the same beat, so a card's menu is built from a settled
-    /// answer. Both caches are TTL-gated inside. Run it from the home's `.task`; it returns
+    /// host's name following its live advert, and each reachable paired host's actions, screens
+    /// and running title kept warm on the same beat, so a card's menu is built from a settled
+    /// answer. Every cache is TTL-gated inside. Run it from the home's `.task`; it returns
     /// when that task is cancelled.
     ///
     /// Each Mac window runs one. A lap that finds a sweep younger than the period skips its
@@ -267,6 +267,7 @@ final class HostStore: ObservableObject {
             }
             for host in hosts where host.pinnedSHA256 != nil && probedOnline.contains(host.id) {
                 power.refresh(host)
+                HostScreenStore.shared.refresh(host)
                 nowPlaying.refresh(host)
             }
             try? await Task.sleep(for: .seconds(Self.presencePeriod))

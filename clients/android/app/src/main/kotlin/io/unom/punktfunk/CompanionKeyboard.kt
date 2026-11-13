@@ -27,6 +27,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import io.unom.punktfunk.kit.keyVk
 
 /*
  * The companion panel's keyboard page (design/android-dual-screen.md §6, D6): a key grid of

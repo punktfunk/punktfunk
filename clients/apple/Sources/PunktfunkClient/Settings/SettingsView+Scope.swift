@@ -20,32 +20,6 @@
 import PunktfunkKit
 import SwiftUI
 
-/// Which layer the settings surface is editing.
-enum SettingsScope: Equatable, Hashable {
-    /// The global defaults every preset inherits from — the only scope before this feature.
-    case defaults
-    /// One preset's overrides, by id.
-    case preset(String)
-
-    var presetID: String? {
-        if case .preset(let id) = self { return id }
-        return nil
-    }
-}
-
-/// One presetable setting, in the one place that knows all three of its faces: the
-/// `UserDefaults` key its global lives under, the overlay slot an override lives in, and the
-/// serialized name a per-row reset carries. Keeping them together is what stops a row from
-/// writing an override the reset button can't find.
-struct SettingsField<Value> {
-    /// The overlay's serialized field name — also the reset key. `resolution` is the one alias,
-    /// covering the width/height/match-window tri-state a single control drives.
-    let name: String
-    let key: String
-    let overlay: WritableKeyPath<SettingsOverlay, Value?>
-    let effective: KeyPath<EffectiveSettings, Value>
-}
-
 /// The catalog of presetable rows. A plain namespace rather than statics on the generic
 /// `SettingsField` itself: members of a generic type can't have their parameter inferred from the
 /// member alone, so every call site would need to spell the type out anyway.
@@ -142,6 +116,10 @@ enum SettingsFields {
         .init(name: "overlay_actions", key: DefaultsKey.overlayActions,
               overlay: \.overlayActions, effective: \.overlayActions)
     }
+    static var shortcuts: SettingsField<String> {
+        .init(name: "shortcuts", key: DefaultsKey.shortcuts,
+              overlay: \.shortcuts, effective: \.shortcuts)
+    }
     static var inhibitShortcuts: SettingsField<Bool> {
         .init(name: "inhibit_shortcuts", key: DefaultsKey.inhibitShortcuts,
               overlay: \.inhibitShortcuts, effective: \.inhibitShortcuts)
@@ -161,10 +139,6 @@ enum SettingsFields {
     static var systemButtons: SettingsField<String> {
         .init(name: "system_buttons", key: DefaultsKey.systemButtons,
               overlay: \.systemButtons, effective: \.systemButtons)
-    }
-    static var guideGesture: SettingsField<String> {
-        .init(name: "guide_gesture", key: DefaultsKey.guideGesture,
-              overlay: \.guideGesture, effective: \.guideGesture)
     }
     static var statsVerbosity: SettingsField<String> {
         .init(name: "stats_verbosity", key: DefaultsKey.statsVerbosity,
@@ -191,21 +165,31 @@ enum SettingsFields {
     }
 }
 
+/// `SettingsView.effective` for one body pass, so the hundred-odd reads of a pass resolve the
+/// layers once. A reference in `@State`: filling it while `body` runs never invalidates the view.
+final class SettingsPass {
+    var settings: EffectiveSettings?
+}
+
 extension SettingsView {
     // MARK: - The layer being edited
 
-    var activePreset: StreamPreset? {
-        scope.presetID.flatMap { presets.preset(id: $0) }
-    }
+    var activePreset: StreamPreset? { scope.preset(in: presets.catalog) }
 
     /// True while a preset is being edited — the gate every tier-G/H row is hidden behind.
     var inPresetScope: Bool { activePreset != nil }
 
-    /// What every row displays: the globals as this view's `@AppStorage` sees them (so SwiftUI
-    /// tracks each of them), with the edited preset's overrides on top. A row the preset doesn't
-    /// override therefore reads as the LIVE global, which is what inherit-by-default has to look
-    /// like.
+    /// What every row displays (`SettingsScope.resolve`), resolved once per body pass and kept
+    /// in `pass` until the next pass or the next write.
     var effective: EffectiveSettings {
+        if let settings = pass.settings { return settings }
+        let settings = SettingsScope.resolve(globals: globals, scope: scope, catalog: presets.catalog)
+        pass.settings = settings
+        return settings
+    }
+
+    /// The globals as this view's `@AppStorage` sees them, so SwiftUI tracks each of them.
+    private var globals: EffectiveSettings {
         var base = EffectiveSettings()
         base.width = width
         base.height = height
@@ -235,6 +219,7 @@ extension SettingsView {
         base.presentPriority = presentPriority
         base.smoothBuffer = smoothBuffer
         base.overlayActions = overlayActions
+        base.shortcuts = shortcuts
         #if !os(tvOS)
         base.invertScroll = invertScroll
         base.modifierLayout = modifierLayout
@@ -248,30 +233,34 @@ extension SettingsView {
         #if os(iOS) || os(visionOS)
         base.touchMode = touchMode
         #endif
-        guard let preset = activePreset else { return base }
-        return base.applying(preset.overrides)
+        return base
     }
 
     // MARK: - Scoped bindings
 
-    /// A control's binding for whichever layer is being edited: `UserDefaults` in defaults scope,
-    /// the preset's overlay in preset scope.
-    ///
-    /// The setter always WRITES on touch. It never compares the new value against the global to
-    /// decide whether to record an override — that comparison is exactly the "copy the settings"
-    /// behaviour the design rejects, and it would silently drop a deliberate pin.
+    /// A control's binding for whichever layer is being edited, written where
+    /// `SettingsScope.route` sends it. The setter always writes on touch.
     func scoped<Value>(_ field: SettingsField<Value>) -> Binding<Value> {
         Binding(
             get: { effective[keyPath: field.effective] },
             set: { newValue in
-                guard let id = scope.presetID else {
+                pass.settings = nil
+                switch SettingsScope.route(scope: scope, catalog: presets.catalog, field: field) {
+                case .defaults(let key):
                     // @AppStorage observes this key, so the write re-renders the whole surface.
+                    UserDefaults.standard.set(newValue, forKey: key)
+                case .override(let id):
+                    presets.setOverride(id, field.overlay, newValue)
+                case .gone:
+                    // The screen already shows Default settings: the write and the scope follow.
+                    scope = .defaults
                     UserDefaults.standard.set(newValue, forKey: field.key)
-                    return
                 }
-                presets.setOverride(id, field.overlay, newValue)
             })
     }
+
+    /// The layer the screen shows: Default settings once the edited preset left the catalog.
+    var shownScope: SettingsScope { inPresetScope ? scope : .defaults }
 
     /// The resolution row's tri-state, written as one act: a single control drives width, height
     /// and (where it exists) match-window, so all of them move together and one reset clears all
@@ -293,42 +282,56 @@ extension SettingsView {
     }
 
     /// Put a row back to inheriting. The ONLY way an override is removed — the model never infers
-    /// "not overridden" from a value comparison.
+    /// "not overridden" from a value comparison. The row's sticky Custom… goes with it, so the
+    /// picker shows the inherited value.
     func resetOverride(_ name: String) {
         guard let id = scope.presetID else { return }
+        pass.settings = nil
         presets.clearOverride(id, field: name)
+        #if os(iOS) || os(visionOS) || os(macOS)
+        if name == OverlayField.resolution { customMode = false }
+        if name == SettingsFields.renderScale.name { customScaleMode = false }
+        #endif
     }
 
-    /// The accent dot + Reset affordance a row carries while it overrides the defaults. Rendered
-    /// inside `described`'s caption line, so it sits with the row it belongs to instead of in some
-    /// separate list of exceptions.
+    #if os(iOS) || os(visionOS) || os(macOS)
+    /// The sticky Custom… flags belong to the layer they were set in.
+    func clearCustomFlags() {
+        customMode = false
+        customScaleMode = false
+    }
+    #endif
+
+    /// The accent dot + Reset affordance a row carries while it overrides any of `names`.
+    /// Rendered inside `described`'s caption line, so it sits with the row it belongs to; Reset
+    /// clears every one of `names`.
     ///
     /// Reset is a BORDERED control pushed to the far edge, not tinted text next to the label: as a
     /// plain button it read as a third word of the notice, and the one action that can undo an
     /// override must not look like prose.
     @ViewBuilder
-    func overrideMarker(_ name: String) -> some View {
-        if isOverridden(name) {
+    func overrideMarker(_ names: [String]) -> some View {
+        if names.contains(where: isOverridden) {
             HStack(spacing: 5) {
                 Circle()
                     .fill(Color.brand)
                     .frame(width: 6, height: 6)
                     // The adjacent text says the state; the dot is the at-a-glance version.
                     .accessibilityHidden(true)
-                Text("Overrides Default settings")
+                Text(L10n.prefsOverridden)
                     .font(.geist(12, .medium, relativeTo: .caption2))
                     .foregroundStyle(Color.brand)
                 Spacer(minLength: 12)
                 Button {
-                    resetOverride(name)
+                    names.forEach(resetOverride)
                 } label: {
-                    Label("Reset", systemImage: "arrow.uturn.backward")
+                    Label(L10n.commonReset, systemImage: "arrow.uturn.backward")
                         .font(.geist(11, .medium, relativeTo: .caption2))
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .accessibilityLabel("Reset to Default settings")
-                .help("Stop overriding this — follow Default settings again")
+                .accessibilityLabel(L10n.prefsOverrideResetFull)
+                .help(L10n.prefsOverrideHelp)
             }
             // The marker carries a bordered button, which needs more air under the control or
             // caption above it than a line of text would. Here rather than at each call site, so
@@ -352,8 +355,8 @@ extension SettingsView {
         // A Picker rather than hand-rolled buttons: the platform owns the selection checkmark
         // and draws it in its OWN column, which leaves each row's icon free to be the preset's
         // colour chip. Rolling the selection by hand would have cost one or the other.
-        Picker("Editing", selection: scopeSelection) {
-            Label("Default settings", systemImage: "gearshape")
+        Picker(L10n.prefsScopeEditing, selection: scopeSelection) {
+            Label(L10n.prefsScopeDefaults, systemImage: "gearshape")
                 .tag(SettingsScope.defaults)
             ForEach(presets.presets) { preset in
                 Label {
@@ -375,28 +378,26 @@ extension SettingsView {
         // Three actions, one sheet. A preset is a name and a colour; deciding them in separate
         // menu items — each raising its own bare alert — is how "make a Work preset" became four
         // trips through this menu.
-        Button {
-            presetDraft = .create()
-        } label: {
-            Label("New Preset…", systemImage: "plus")
-        }
+        newPresetMenu
         if let active = activePreset {
             Button {
                 presetDraft = .edit(active)
             } label: {
-                Label("Edit “\(active.name)”…", systemImage: "pencil")
+                Label(L10n.presetMenuEditNamed(name: active.name), systemImage: "pencil")
             }
             Button {
                 presetDraft = .duplicate(active, name: Self.copyName(of: active.name, in: presets))
             } label: {
-                Label("Duplicate “\(active.name)”…", systemImage: "plus.square.on.square")
+                Label(
+                    L10n.applePresetMenuDuplicateNamed(name: active.name),
+                    systemImage: "plus.square.on.square")
             }
             Divider()
             Button(role: .destructive) {
                 presetPendingDelete = active
             } label: {
                 Label {
-                    Text("Delete “\(active.name)”…")
+                    Text(L10n.applePresetMenuDeleteNamed(name: active.name))
                 } icon: {
                     // The destructive ROLE colours the row on iOS and nothing at all on macOS,
                     // and either way it leaves the icon as a stencil — so the red is rendered in.
@@ -410,9 +411,44 @@ extension SettingsView {
         }
     }
 
+    /// New preset ▸ Empty, which opens the editor for a name and colour, or Second screen, which
+    /// adds that starter under a free name and opens it.
+    var newPresetMenu: some View {
+        Menu {
+            Button(L10n.presetStarterEmpty) { presetDraft = .create() }
+            Button {
+                let starter = StreamPreset.secondScreen { presets.nameTaken($0) }
+                presets.add(starter)
+                scope = .preset(starter.id)
+            } label: {
+                Text(L10n.screenRoleSecond)
+                Text(L10n.screenRoleSecondHint)
+            }
+        } label: {
+            Label(L10n.presetNewTitle, systemImage: "plus")
+        }
+    }
+
+    // MARK: - Host screen
+
+    /// A preset's Host screen row: As on the host card, the roles, then the monitors the saved
+    /// hosts last listed. A preset's alone: a host's default is the pick on its card. Picking As
+    /// on the host card clears the override, as no pin means that.
+    func hostScreenRow(_ preset: StreamPreset) -> some View {
+        let pinned = preset.overrides.hostScreen
+        // The checked role's hint; none for the card's pick or a monitor.
+        let hint = HostScreenChoice.all(hosts: [], pinned: pinned).first(where: \.checked)?.hint
+        return described(hint ?? "", field: "host_screen") {
+            HostScreenPicker(pinned: pinned) { value in
+                guard let value else { return resetOverride("host_screen") }
+                presets.setOverride(preset.id, \.hostScreen, value)
+            }
+        }
+    }
+
     /// The name of the layer being edited, and one line on what editing it means. Shared by both
     /// chromes — the caption is a stacked line on macOS and the list section's footer on iOS.
-    var scopeName: String { activePreset?.name ?? "Default settings" }
+    var scopeName: String { activePreset?.name ?? String(localized: L10n.prefsScopeDefaults) }
 
     /// The edited layer as a glyph: a preset's own colour, or the settings gear for the
     /// defaults. Colour is only worth choosing if it shows up where you chose it.
@@ -436,10 +472,10 @@ extension SettingsView {
     #endif
 
     var scopeCaption: String {
-        activePreset == nil
-            ? "The settings every preset inherits from."
-            : "Overrides Default settings for hosts that use this preset. Untouched rows keep "
-                + "following the defaults."
+        guard let preset = activePreset else {
+            return String(localized: L10n.applePrefsScopeDefaultsHint)
+        }
+        return L10n.prefsScopePresetHint(name: preset.name)
     }
 
     #if os(macOS)
@@ -478,7 +514,7 @@ extension SettingsView {
         presetPrompts(
             Menu { scopeMenuContent } label: {
                 HStack(spacing: 8) {
-                    Text("Editing")
+                    Text(L10n.prefsScopeEditing)
                         .foregroundStyle(.primary)
                     Spacer(minLength: 8)
                     scopeDot
@@ -507,12 +543,12 @@ extension SettingsView {
             // and pinned cards disappear. Neither is an error, but neither should be a surprise —
             // so the counts are in the question, not discovered afterwards.
             .alert(
-                "Delete “\(presetPendingDelete?.name ?? "")”?",
+                L10n.presetDeleteNamedTitle(name: presetPendingDelete?.name ?? ""),
                 isPresented: presetDeletePresented,
                 presenting: presetPendingDelete
             ) { preset in
-                Button("Cancel", role: .cancel) { presetPendingDelete = nil }
-                Button("Delete", role: .destructive) {
+                Button(L10n.commonCancel, role: .cancel) { presetPendingDelete = nil }
+                Button(L10n.commonDelete, role: .destructive) {
                     presets.delete(preset.id)
                     scope = .defaults
                     presetPendingDelete = nil
@@ -531,29 +567,71 @@ extension SettingsView {
     private func deleteWarning(for preset: StreamPreset) -> String {
         let (bound, pinned) = presets.usage(of: preset.id)
         var parts: [String] = []
-        if bound > 0 {
-            parts.append("\(bound) host\(bound == 1 ? "" : "s") will fall back to Default settings")
-        }
-        if pinned > 0 {
-            parts.append("\(pinned) pinned card\(pinned == 1 ? "" : "s") will disappear")
-        }
-        guard !parts.isEmpty else { return "Nothing uses this preset yet." }
-        return parts.joined(separator: ", ") + "."
+        if bound > 0 { parts.append(L10n.presetDeleteHosts(count: bound)) }
+        if pinned > 0 { parts.append(L10n.presetDeleteCards(count: pinned)) }
+        guard !parts.isEmpty else { return String(localized: L10n.presetDeleteUnused) }
+        return parts.joined(separator: " ")
     }
 
-    /// Switching scope is a plain state change — the rows are built by one code path and simply
-    /// read the other layer, so there is nothing to commit on the way out.
+    /// Switching scope is a plain state change: the rows read the other layer, so there is
+    /// nothing to commit on the way out. The menu checks the layer the screen shows.
     private var scopeSelection: Binding<SettingsScope> {
-        Binding(get: { scope }, set: { scope = $0 })
+        Binding(get: { shownScope }, set: { scope = $0 })
     }
 
     /// "Game copy", "Game copy 2", … — the first name that isn't taken, so Duplicate never opens
     /// with a name the accept button refuses.
     static func copyName(of name: String, in store: PresetStore) -> String {
-        let base = "\(name) copy"
+        let base = L10n.presetCopyName(name: name)
         if !store.nameTaken(base) { return base }
-        for n in 2...99 where !store.nameTaken("\(base) \(n)") { return "\(base) \(n)" }
+        for n in 2...99 {
+            let numbered = L10n.presetCopyNameNumbered(name: name, n: String(n))
+            if !store.nameTaken(numbered) { return numbered }
+        }
         return base
     }
 
+}
+
+/// The Host screen picker over the paired hosts' last answers, each asked again when it shows.
+struct HostScreenPicker: View {
+    @ObservedObject private var screens = HostScreenStore.shared
+    @State private var hosts: [StoredHost] = []
+    /// The preset's `host_screen`; nil is the host card's pick.
+    let pinned: String?
+    /// The picked choice's value; nil clears the pin.
+    let pick: (String?) -> Void
+
+    var body: some View {
+        let choices = HostScreenChoice.all(
+            hosts: hosts.compactMap { host in
+                screens.targets(for: host).map { (name: host.displayName, targets: $0) }
+            },
+            pinned: pinned)
+        let selection = Binding(
+            get: { choices.first(where: \.checked)?.value ?? "" },
+            set: { pick($0.isEmpty ? nil : $0) })
+        Group {
+            #if os(tvOS)
+            TVSelectionRow(
+                title: String(localized: L10n.presetHostScreen),
+                options: choices.map { (label: $0.label, tag: $0.value ?? "") },
+                selection: selection)
+            #else
+            let split = choices.firstIndex { $0.header != nil } ?? choices.endIndex
+            Picker(String(localized: L10n.presetHostScreen), selection: selection) {
+                ForEach(choices[..<split], id: \.self) { Text($0.label).tag($0.value ?? "") }
+                if split < choices.endIndex {
+                    Section(choices[split].header ?? "") {
+                        ForEach(choices[split...], id: \.self) { Text($0.label).tag($0.value ?? "") }
+                    }
+                }
+            }
+            #endif
+        }
+        .onAppear {
+            hosts = PresetStore.savedHosts().filter { $0.pinnedSHA256 != nil }
+            hosts.forEach { screens.refresh($0) }
+        }
+    }
 }

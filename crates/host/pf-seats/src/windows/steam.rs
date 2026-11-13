@@ -7,6 +7,7 @@
 //! The seat can read those keys but not change them. Steam started any other way is the box's,
 //! whose start under the default name closes the Steam already running.
 
+use crate::persistence::{default_root, SecretRoot};
 use crate::steam;
 use crate::windows::accounts;
 use crate::windows::enable::run;
@@ -517,17 +518,27 @@ pub(super) fn wrap_box_shortcuts(host_path: &Path, temp: &Path) {
     });
 }
 
-/// Put the box's shared Steam shortcuts back as [`wrap_box_shortcuts`] found them.
-pub(super) fn unwrap_box_shortcuts(temp: &Path) {
+/// Put the box's shared Steam shortcuts back as [`wrap_box_shortcuts`] found them. `Err` while
+/// one still points at the tray: the Seats key holds the only record of them. A box that kept
+/// none has nothing to restore and needs no staging folder.
+pub(super) fn unwrap_box_shortcuts() -> std::io::Result<()> {
+    let kept = kept_links();
+    if kept.is_empty() {
+        return Ok(());
+    }
+    let temp = SecretRoot::open(default_root())?.open_child_dir("temp")?;
+    let mut restored = Ok(());
     with_com(|| {
-        for (path, link) in kept_links() {
+        for (path, link) in kept {
             let path = PathBuf::from(path);
             let wrapped = read_link(&path).is_some_and(|now| now.target.ends_with(TRAY_EXE));
-            if wrapped && let Err(error) = replace_link(&path, &link, temp) {
+            if wrapped && let Err(error) = replace_link(&path, &link, temp.path()) {
                 tracing::warn!(path = %path.display(), %error, "box steam shortcut not restored");
+                restored = Err(error);
             }
         }
     });
+    restored
 }
 
 /// The shortcuts the Seats key keeps, `path\ttarget\targs\tdir\ticon\tindex` per line.
@@ -687,13 +698,23 @@ fn prepare(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A Steam library list is a few kilobytes. The seat's copy is the seat user's to write, and
+/// the service parses it whole: one over this reads as no list and is written afresh.
+const MAX_LIST_BYTES: u64 = 1024 * 1024;
+
+/// `file`'s text, `None` when it is missing, unreadable or over [`MAX_LIST_BYTES`].
+fn read_list(file: &Path) -> Option<String> {
+    let small = std::fs::metadata(file).ok()?.len() <= MAX_LIST_BYTES;
+    small.then(|| std::fs::read_to_string(file).ok()).flatten()
+}
+
 /// Names the box's library folders in both of the copy's lists, after the copy itself. Steam
 /// reads them at sign-in and writes them back, so a change made under a running Steam lasts
 /// only until that write.
 fn list_libraries(src: &Path, dst: &Path) -> std::io::Result<()> {
     let mut shared = ["config", "steamapps"]
         .into_iter()
-        .find_map(|dir| std::fs::read_to_string(src.join(dir).join("libraryfolders.vdf")).ok())
+        .find_map(|dir| read_list(&src.join(dir).join("libraryfolders.vdf")))
         .map(|vdf| steam::library_paths(&vdf))
         .unwrap_or_default();
     if shared.is_empty() {
@@ -702,7 +723,7 @@ fn list_libraries(src: &Path, dst: &Path) -> std::io::Result<()> {
     let own = dst.to_string_lossy();
     for dir in ["config", "steamapps"] {
         let file = dst.join(dir).join("libraryfolders.vdf");
-        let had = std::fs::read_to_string(&file).ok();
+        let had = read_list(&file);
         let list = steam::seat_library_list(had.as_deref(), &own, &shared);
         if had.as_deref() != Some(list.as_str()) {
             std::fs::create_dir_all(dst.join(dir))?;

@@ -206,6 +206,7 @@ mod scene {
             detail: detail.into(),
             forwarded: true,
             rumble: true,
+            audio: false,
         }
     }
 
@@ -288,6 +289,7 @@ mod scene {
             // A pad no family claims: Automatic falls back to the Xbox 360 build and drawing.
             PadInfo {
                 rumble: false,
+                audio: false,
                 ..pad(
                     "USB Gamepad",
                     "0079:0006:USB Gamepad",
@@ -307,6 +309,7 @@ mod scene {
         };
         let create = CreateOptions {
             device_name: "Mac".into(),
+            device_code: None,
             gpu_cache_bytes: 64 << 20,
             fallback_ui: false,
             tv: !matches!(platform, Platform::Desktop),
@@ -317,12 +320,14 @@ mod scene {
             pyrowave_ok: true,
             profiles: false,
             prompts_unlock: false,
+            hides: false,
             settings: Settings::default(),
             presets: Vec::new(),
             known_hosts: Default::default(),
             entry: Default::default(),
             screen: None,
             safe_area: None,
+            languages: Vec::new(),
         };
         let (opts, entry, _store) = create.into_console(platform);
         let mut console = Console::new(opts, entry, &handles)?;

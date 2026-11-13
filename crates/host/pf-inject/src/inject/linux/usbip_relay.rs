@@ -79,19 +79,32 @@ pub struct Hello {
     pub index: u8,
     /// A Puck pad's slot, 0–3.
     pub slot: u8,
+    /// The seat a DualSense's MAC carries ([`crate::pad_broker::ps_seat`]), 0 for the box's own.
+    /// On a seat the supervisor sets it, never the seat.
+    pub seat: u16,
     /// An identity blob (`pf_driver_proto::triton::identity_blob`), or empty.
     pub identity: Vec<u8>,
 }
 
 impl Hello {
     pub fn encode(&self) -> Vec<u8> {
-        let mut m = vec![HELLO, self.kind as u8, self.index, self.slot];
+        let [seat_lo, seat_hi] = self.seat.to_le_bytes();
+        let mut m = vec![
+            HELLO,
+            self.kind as u8,
+            self.index,
+            self.slot,
+            seat_lo,
+            seat_hi,
+        ];
         m.extend_from_slice(&self.identity);
         m
     }
 
     pub fn decode(m: &[u8]) -> Option<Hello> {
-        let (&[HELLO, kind, index, slot], identity) = m.split_first_chunk::<4>()? else {
+        let (&[HELLO, kind, index, slot, seat_lo, seat_hi], identity) =
+            m.split_first_chunk::<6>()?
+        else {
             return None;
         };
         if identity.len() > MAX_IDENTITY {
@@ -101,6 +114,7 @@ impl Hello {
             kind: UsbKind::from_wire(kind)?,
             index,
             slot: slot.min(3),
+            seat: u16::from_le_bytes([seat_lo, seat_hi]),
             identity: identity.to_vec(),
         })
     }
@@ -304,7 +318,7 @@ pub fn served(hello: &Hello, out: Outputs) -> Result<Served> {
         UsbKind::SteamController2Puck => {
             crate::triton_usbip::served_puck(hello.index, hello.slot, identity, out)
         }
-        UsbKind::DualSense => crate::dualsense_usbip::served(hello.index, out),
+        UsbKind::DualSense => crate::dualsense_usbip::served(hello.index, hello.seat, out),
         UsbKind::Switch2Pro => crate::switch2_usbip::served(Model::Pro, hello.index, out),
         UsbKind::Switch2GameCube => crate::switch2_usbip::served(Model::GameCube, hello.index, out),
     })
@@ -378,6 +392,7 @@ mod tests {
                 kind,
                 index: 1,
                 slot: 0,
+                seat: 0,
                 identity: Vec::new(),
             };
             (kind, served(&hello, test_relay().0).unwrap())
@@ -585,13 +600,14 @@ mod tests {
             kind: UsbKind::SteamController2Puck,
             index: 3,
             slot: 2,
+            seat: 0xBEEF,
             identity: vec![1, b'A'],
         };
         assert_eq!(Hello::decode(&hello.encode()), Some(hello.clone()));
         let mut unknown = hello.encode();
         unknown[1] = 200;
         assert_eq!(Hello::decode(&unknown), None, "unknown kind");
-        assert_eq!(Hello::decode(&[HELLO, 1, 0]), None, "short");
+        assert_eq!(Hello::decode(&[HELLO, 1, 0, 0, 0]), None, "short");
         let huge = Hello {
             identity: vec![0; MAX_IDENTITY + 1],
             ..hello

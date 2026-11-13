@@ -5,16 +5,17 @@
 use super::plays_seat_mode;
 use super::{opens_big_picture, Admitted, Agreed, SessionScope};
 use anyhow::{Context, Result};
-use punktfunk_core::quic::{Hello, Welcome};
+use punktfunk_core::quic::Hello;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The session's library launch, before the display opens: the title (the one asked for, else
 /// the profile's home), the command the display runs for it, then reprieve, claim, prep and
-/// the launch hold. A title whose files never arrived is dropped and the client told why on
-/// `outcome`; the returned [`Prepared`](crate::session_launch::Prepared) has `declined` taken.
+/// the launch hold. A title refused in the profile's view runs none of its prep. A title whose
+/// files never arrived is dropped and the client told why on `outcome`; the returned
+/// [`Prepared`](crate::session_launch::Prepared) has `declined` taken. `hdr`: the stream's.
 pub(super) async fn prepare_launch(
     hello: &Hello,
-    welcome: &Welcome,
+    hdr: bool,
     profile: &crate::profiles::Resolved,
     owner: &crate::session_launch::LaunchOwner,
     outcome: &crate::gamelease::OutcomeTx,
@@ -24,7 +25,8 @@ pub(super) async fn prepare_launch(
     Option<String>,
     crate::session_launch::Prepared,
 )> {
-    let target = match resolve_launch(hello.launch.as_deref(), outcome).await? {
+    let view = crate::library::View::session(profile);
+    let target = match resolve_launch(hello.launch.as_deref(), view, outcome).await? {
         Some(t) => Some(t),
         None => home_launch(hello.launch.as_deref(), profile),
     };
@@ -32,7 +34,10 @@ pub(super) async fn prepare_launch(
     let command = target.as_ref().and(hello.launch.clone());
     #[cfg(not(target_os = "windows"))]
     let command = target.as_ref().and_then(|t| t.command.clone());
-    let (prep_cmds, prep_env) = launch_prep(hello, welcome, owner.preset.as_ref());
+    let (prep_cmds, prep_env) = match &target {
+        Some(_) => launch_prep(hello, hdr, owner.preset.as_ref()),
+        None => Default::default(),
+    };
     // `block_in_place`: operator code is blocking and this is a multi-thread runtime.
     let mut prepared = tokio::task::block_in_place(|| {
         crate::session_launch::prepare(target.as_ref(), owner, &prep_cmds, &prep_env, &|| {
@@ -41,57 +46,66 @@ pub(super) async fn prepare_launch(
     });
     // The title's files never arrived: stream without it, and say why.
     match prepared.declined.take() {
-        Some(sentence) => {
-            let _ = outcome.send(punktfunk_core::quic::LaunchOutcome::new(
-                punktfunk_core::quic::LaunchOutcomeKind::Refused,
-                &sentence,
-            ));
+        Some(refusal) => {
+            let _ = outcome.send(refusal);
             Ok((None, None, prepared))
         }
         None => Ok((target, command, prepared)),
     }
 }
 
-/// One library lookup: command, title, process identity. The client picks an existing id,
-/// never a command. An id this host can't start is refused onto `outcome`. Clients list the
-/// box's whole library, so a seat is asked for titles it never could. Blocking: plugin entries
-/// ask over loopback from this async context.
+/// One library lookup in the session profile's `view`: command, title, process identity. The
+/// client picks an existing id, never a command. An id this host can't start, or one the view
+/// holds back, is refused onto `outcome` with [`crate::library::launch_refusal`]'s reason.
+/// Clients list the box's whole library, so a seat is asked for titles it never could. Blocking:
+/// plugin entries ask over loopback from this async context.
 async fn resolve_launch(
     launch: Option<&str>,
+    view: crate::library::View,
     outcome: &crate::gamelease::OutcomeTx,
 ) -> Result<Option<crate::library::LaunchTarget>> {
     let Some(id) = launch else {
         return Ok(None);
     };
     let owned = id.to_string();
-    let found = tokio::task::spawn_blocking(move || crate::library::resolve_launch(&owned))
-        .await
-        .context("resolve the session's library launch")?;
+    let found = tokio::task::spawn_blocking(move || {
+        crate::library::resolve_launch(&view, &owned)
+            .ok_or_else(|| crate::library::launch_refusal(&view, &owned))
+    })
+    .await
+    .context("resolve the session's library launch")?;
     match &found {
-        Some(t) => tracing::info!(
+        Ok(t) => tracing::info!(
             launch_id = id,
             title = %t.game.title,
             command = t.command.as_deref().unwrap_or("-"),
             "resolved library launch for this session"
         ),
-        None => {
+        Err((message, sentence)) => {
             tracing::warn!(
                 launch_id = id,
                 "client requested a title this host can't start — ignoring"
             );
-            let sentence = if pf_paths::seat::box_library_dir().is_some() {
-                "Couldn't start that title — this desktop doesn't have its emulator, launcher \
-                 or game files."
-            } else {
-                "Couldn't start that title — this host doesn't have it in its library any more."
-            };
-            let _ = outcome.send(punktfunk_core::quic::LaunchOutcome::new(
-                punktfunk_core::quic::LaunchOutcomeKind::Refused,
-                sentence,
-            ));
+            let _ = outcome.send(
+                punktfunk_core::quic::LaunchOutcome::new(
+                    punktfunk_core::quic::LaunchOutcomeKind::Refused,
+                    sentence,
+                )
+                .worded(message, &[]),
+            );
         }
     }
-    Ok(found)
+    Ok(found.ok())
+}
+
+/// The verdict for a game a joiner asked for: the shared screen plays its first device's game.
+fn shared_screen_refusal() -> punktfunk_core::quic::LaunchOutcome {
+    punktfunk_core::quic::LaunchOutcome::new(
+        punktfunk_core::quic::LaunchOutcomeKind::Refused,
+        "Couldn't start that game — this screen is shared, and the first device to connect \
+         picks the game.",
+    )
+    .worded("launch_shared_screen", &[])
 }
 
 /// What a bare connect opens: Steam's Game Mode on a seat in Game Mode, else Big Picture for a
@@ -127,7 +141,7 @@ fn opens_game_mode() -> bool {
 /// handheld one. Empty without a launch.
 fn launch_prep(
     hello: &Hello,
-    welcome: &Welcome,
+    hdr: bool,
     preset: Option<&crate::events::PresetRef>,
 ) -> (Vec<crate::hooks::PrepCmd>, Vec<(String, String)>) {
     let Some(id) = hello.launch.as_deref() else {
@@ -142,7 +156,7 @@ fn launch_prep(
         hello.mode.width,
         hello.mode.height,
         hello.mode.refresh_hz,
-        welcome.color.is_hdr(),
+        hdr,
     ));
     (crate::library::prep_for(id), env)
 }
@@ -160,7 +174,7 @@ pub(super) struct Launch {
 }
 
 /// The library launch, before the display opens. Its prep guard, waiting row and audio
-/// policy are held to the session's end.
+/// policy are held to the session's end. A game the join dropped is refused onto `outcome`.
 pub(super) async fn launch_session(
     scope: &mut SessionScope,
     who: &Admitted,
@@ -184,6 +198,9 @@ pub(super) async fn launch_session(
     };
     #[cfg(test)]
     super::tests::fail_at_launch(&conn, scope.life())?;
+    if n.launch_dropped {
+        let _ = outcome.send(shared_screen_refusal());
+    }
     let (
         target,
         command,
@@ -196,7 +213,7 @@ pub(super) async fn launch_session(
         },
     ) = prepare_launch(
         &n.hello,
-        &n.welcome,
+        n.display_hdr,
         &n.resolved,
         &owner,
         outcome,
@@ -205,11 +222,12 @@ pub(super) async fn launch_session(
     .await?;
     scope.hold(prep);
     scope.hold(waiting);
-    // The title's `audio.sessions`, over every session on this display. Lifted with the session.
+    // The launched title's `audio.sessions`, over every session on this display. Lifted with the
+    // session. A refused title has none.
     scope.hold(
-        n.hello
-            .launch
-            .as_deref()
+        target
+            .as_ref()
+            .and(n.hello.launch.as_deref())
             .and_then(crate::library::audio_sessions_for)
             .map(|policy| crate::session_status::apply_audio_policy(policy, &client_label)),
     );

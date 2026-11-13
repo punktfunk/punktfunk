@@ -10,8 +10,7 @@
 //! A USB/IP pad is served by the supervisor too ([`serve`]): its pad server runs the device
 //! from this crate's tables, and the seat gets only a relay for input reports
 //! ([`crate::usbip_relay`]). A seat never answers a control transfer, so it never picks a
-//! descriptor. `Attach` and `Detach`, which handed over a seat-served socket, are refused.
-//! Design: `design/seat-pad-broker.md`.
+//! descriptor. Design: `design/seat-pad-broker.md`.
 
 use crate::gamepad::{build_pad, PadIdentity};
 use crate::uhid_abi::{Identity, UhidDevice};
@@ -87,6 +86,11 @@ impl PadKind {
         PadIdentity::of(self)
     }
 
+    /// Whether the kind is a uinput pad; the rest are uhid.
+    pub fn is_uinput(self) -> bool {
+        self.uinput().is_some()
+    }
+
     /// The uhid identity of a uhid kind at `index`, as the backend itself builds it.
     fn uhid(self, index: u8) -> Option<Identity> {
         use crate::eightbitdo_proto::Model;
@@ -153,40 +157,71 @@ impl PadKind {
     }
 }
 
-/// The marker on a seat's pad: `punktfunk-seat:<account>/<rest>`, what the udev fence reads.
-pub fn seat_phys(account: &str, rest: &str) -> String {
-    format!("punktfunk-seat:{account}/{rest}")
+/// The stamp on a seat's pad: `punktfunk-seat:<mark>/<rest>`. The mark is the seat's account,
+/// or on a uhid pad the token the supervisor's record holds; the udev fence trusts the record.
+pub fn seat_phys(mark: &str, rest: &str) -> String {
+    format!("punktfunk-seat:{mark}/{rest}")
+}
+
+/// The seat a PlayStation pad's MAC carries ([`pf_driver_proto::gamepad::mark_ps_seat`]): 16
+/// bits of the seat's random id, never 0. The id is fixed for the seat's life, so its pads keep
+/// their MACs across restarts.
+pub fn ps_seat(seat_id: &str) -> u16 {
+    let bits = seat_id
+        .get(..4)
+        .and_then(|hex| u16::from_str_radix(hex, 16).ok());
+    bits.unwrap_or(0).max(1)
+}
+
+/// The seat this host's PlayStation pads carry: [`ps_seat`] on a contract seat, 0 on the box's
+/// own host and the owner's row, whose pads keep the box's MACs.
+pub fn own_ps_seat() -> u16 {
+    let id = pf_paths::seat::seat_id().ok().flatten();
+    ps_seat_for(pf_paths::seat::role(), id.as_deref())
+}
+
+fn ps_seat_for(role: pf_paths::seat::HostRole, seat_id: Option<&str>) -> u16 {
+    match seat_id {
+        Some(id) if role.follows_contract() => ps_seat(id),
+        _ => 0,
+    }
+}
+
+/// PlayStation `kind`'s pairing report (feature 0x09 / 0x12) at `index` on `seat`, the bytes its
+/// own host answers. The supervisor's relay answers it, so a seat never picks the MAC
+/// `hid-playstation` holds box-wide. `None` for a pad without one.
+fn ps_pairing(kind: PadKind, index: u8, seat: u16) -> Option<Vec<u8>> {
+    use crate::dualsense_proto::{ds_pairing_reply, DEVTYPE_DUALSENSE, DEVTYPE_DUALSENSE_EDGE};
+    let mut reply = match kind {
+        PadKind::DualSense => ds_pairing_reply(DEVTYPE_DUALSENSE, index).to_vec(),
+        PadKind::DualSenseEdge => ds_pairing_reply(DEVTYPE_DUALSENSE_EDGE, index).to_vec(),
+        PadKind::DualShock4 => crate::dualshock4_proto::ds4_pairing_reply(index).to_vec(),
+        _ => return None,
+    };
+    pf_driver_proto::gamepad::mark_ps_seat(&mut reply, seat);
+    Some(reply)
 }
 
 const MAGIC: [u8; 4] = *b"PFPD";
 const VERSION: u8 = 2;
 const OP_CREATE: u8 = 1;
-const OP_ATTACH: u8 = 2;
-const OP_DETACH: u8 = 3;
+/// Ops 2 and 3 are retired; a decoder refuses them.
 const OP_SERVE: u8 = 4;
 /// A request, whole: magic, version, op, ten bytes of payload.
 pub const REQUEST_LEN: usize = 16;
-/// An answer, whole: version, status, the port for `Attached` and `Served`.
+/// An answer, whole: version, status, the port for `Served`.
 const REPLY_LEN: usize = 4;
 /// The supervisor answers within this; a seat that waits longer has no supervisor. A served
 /// pad's answer waits for its pad server to start.
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// What a seat may ask. `Create`'s `index` is the seat's pad slot, part of the pad's marker.
-/// `Serve`'s identity blob follows the request on the stream. `Attach` and `Detach` are what
-/// a seat served its own USB device with; the supervisor refuses both.
+/// `Serve`'s identity blob follows the request on the stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     Create {
         kind: PadKind,
         index: u8,
-    },
-    Attach {
-        devid: u32,
-        speed: u32,
-    },
-    Detach {
-        port: u16,
     },
     Serve {
         kind: UsbKind,
@@ -206,15 +241,6 @@ impl Request {
                 out[5] = OP_CREATE;
                 out[6] = kind as u8;
                 out[7] = index;
-            }
-            Request::Attach { devid, speed } => {
-                out[5] = OP_ATTACH;
-                out[6..10].copy_from_slice(&devid.to_le_bytes());
-                out[10..14].copy_from_slice(&speed.to_le_bytes());
-            }
-            Request::Detach { port } => {
-                out[5] = OP_DETACH;
-                out[6..8].copy_from_slice(&port.to_le_bytes());
             }
             Request::Serve {
                 kind,
@@ -242,13 +268,6 @@ impl Request {
                 kind: PadKind::from_wire(b[6])?,
                 index: b[7],
             },
-            OP_ATTACH => Request::Attach {
-                devid: u32::from_le_bytes([b[6], b[7], b[8], b[9]]),
-                speed: u32::from_le_bytes([b[10], b[11], b[12], b[13]]),
-            },
-            OP_DETACH => Request::Detach {
-                port: u16::from_le_bytes([b[6], b[7]]),
-            },
             OP_SERVE => {
                 let identity_len = u16::from_le_bytes([b[9], b[10]]);
                 if usize::from(identity_len) > MAX_IDENTITY || b[8] > 3 {
@@ -266,22 +285,17 @@ impl Request {
     }
 }
 
-/// How the supervisor answered. The wire value is stable.
+/// How the supervisor answered. The wire value is stable; 1, 3, 5 and 6 are retired. A peer
+/// that is no running seat's host is closed unanswered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Status {
     /// The relay's seat end rides along.
     Created = 0,
-    /// Not a running seat's host.
-    Refused = 1,
     /// This seat holds every pad it may.
     Capacity = 2,
-    UnknownKind = 3,
     /// The device could not be made; the supervisor's log says why.
     Failed = 4,
-    /// The port rides along.
-    Attached = 5,
-    Detached = 6,
     /// The port and the relay's seat end ride along.
     Served = 7,
 }
@@ -290,12 +304,8 @@ impl Status {
     fn from_wire(value: u8) -> Option<Status> {
         Some(match value {
             0 => Status::Created,
-            1 => Status::Refused,
             2 => Status::Capacity,
-            3 => Status::UnknownKind,
             4 => Status::Failed,
-            5 => Status::Attached,
-            6 => Status::Detached,
             7 => Status::Served,
             _ => return None,
         })
@@ -372,10 +382,9 @@ pub fn writable(node: &Path) -> bool {
 
 /// Ask the supervisor for `kind` at `index`: the seat's end of its relay.
 pub fn request(kind: PadKind, index: u8) -> Result<OwnedFd> {
-    let (status, _, relay) = ask(&Request::Create { kind, index }.encode(), None)?;
+    let (status, _, relay) = ask(&Request::Create { kind, index }.encode())?;
     match status {
         Status::Created => relay.ok_or_else(|| anyhow!("the pad broker answered without a relay")),
-        Status::UnknownKind => bail!("the seat pad broker does not know the {} pad", kind.label()),
         Status::Failed => bail!(
             "the seat pad broker could not make the {} pad (its log says why)",
             kind.label()
@@ -397,14 +406,13 @@ pub fn serve(hello: &Hello) -> Result<(OwnedFd, u16)> {
         slot: hello.slot.min(3),
         identity_len,
     };
-    let (status, port, relay) = ask(&[&request.encode()[..], &hello.identity].concat(), None)?;
+    let (status, port, relay) = ask(&[&request.encode()[..], &hello.identity].concat())?;
     let label = hello.kind.label();
     match status {
         Status::Served => Ok((
             relay.ok_or_else(|| anyhow!("the pad broker answered without a relay"))?,
             port,
         )),
-        Status::UnknownKind => bail!("the seat pad broker does not serve the {label}"),
         Status::Failed => {
             bail!("the seat pad broker could not serve the {label} (its log says why)")
         }
@@ -415,7 +423,6 @@ pub fn serve(hello: &Hello) -> Result<(OwnedFd, u16)> {
 impl Status {
     fn refusal(self) -> String {
         match self {
-            Status::Refused => "the seat pad broker refused this host: not a running seat".into(),
             Status::Capacity => "this seat holds every pad it may".into(),
             other => format!("the seat pad broker answered {other:?}"),
         }
@@ -423,13 +430,13 @@ impl Status {
 }
 
 /// One request, one answer: `(status, port, relay)`.
-fn ask(request: &[u8], pass: Option<BorrowedFd<'_>>) -> Result<(Status, u16, Option<OwnedFd>)> {
+fn ask(request: &[u8]) -> Result<(Status, u16, Option<OwnedFd>)> {
     let stream = UnixStream::connect(SOCKET).with_context(|| {
         format!("connect to the seat pad broker at {SOCKET} (is punktfunk-seats running?)")
     })?;
     let _ = stream.set_read_timeout(Some(TIMEOUT));
     let _ = stream.set_write_timeout(Some(TIMEOUT));
-    send_frame(&stream, request, pass).context("send the pad request")?;
+    send_frame(&stream, request, None).context("send the pad request")?;
     recv_reply(&stream).context("read the pad broker's answer")
 }
 
@@ -445,16 +452,15 @@ fn recv_reply(stream: &UnixStream) -> Result<(Status, u16, Option<OwnedFd>)> {
 
 // ---- the supervisor's side ----
 
-/// A seat's request, read whole off `stream`, with the fd it sent beside it. Anything else is
-/// not a request.
-pub fn read_request(stream: &UnixStream) -> Result<(Request, Option<OwnedFd>)> {
+/// A seat's request, read whole off `stream`; an fd sent beside it is closed. Anything else
+/// is not a request.
+pub fn read_request(stream: &UnixStream) -> Result<Request> {
     let mut buf = [0u8; REQUEST_LEN];
-    let (n, fd) = recv_frame(stream, &mut buf).context("read the pad request")?;
+    let (n, _) = recv_frame(stream, &mut buf).context("read the pad request")?;
     if n != REQUEST_LEN {
         bail!("not a pad request: {n} bytes");
     }
-    let request = Request::decode(&buf).ok_or_else(|| anyhow!("not a pad request: {buf:02x?}"))?;
-    Ok((request, fd))
+    Request::decode(&buf).ok_or_else(|| anyhow!("not a pad request: {buf:02x?}"))
 }
 
 /// The identity blob a `Serve` request said follows it, read whole off `stream`.
@@ -468,7 +474,7 @@ pub fn read_identity(stream: &UnixStream, len: u16) -> Result<Vec<u8>> {
 }
 
 /// Answer `status` on `stream`: the seat's end of its relay for `Created` and `Served`, the
-/// port for `Attached` and `Served`.
+/// port for `Served`.
 pub fn reply(
     stream: &UnixStream,
     status: Status,
@@ -484,6 +490,8 @@ pub fn reply(
 pub struct BrokeredPad {
     kind: PadKind,
     dev: Brokered,
+    /// The feature report the relay answers itself ([`ps_pairing`]).
+    pairing: Option<Vec<u8>>,
 }
 
 enum Brokered {
@@ -491,24 +499,28 @@ enum Brokered {
     Uhid(UhidDevice),
 }
 
-/// Build `kind` as the supervisor, stamped as `account`'s pad `index`. The udev fence reads
-/// the stamp (`packaging/linux/65-punktfunk-seats.rules`).
-pub fn build(kind: PadKind, index: u8, account: &str) -> Result<BrokeredPad> {
+/// Build `kind` as the supervisor, pad `index` stamped with `mark` ([`seat_phys`]). A
+/// PlayStation pad's MAC carries `seat` ([`ps_seat`]), which the supervisor took from its ledger.
+pub fn build(kind: PadKind, index: u8, mark: &str, seat: u16) -> Result<BrokeredPad> {
     let dev = if let Some(identity) = kind.uinput() {
         Brokered::Uinput(build_pad(
             identity,
-            Some(&seat_phys(account, &index.to_string())),
+            Some(&seat_phys(mark, &index.to_string())),
         )?)
     } else {
         let mut id = kind
             .uhid(index)
             .ok_or_else(|| anyhow!("no table for the {} pad", kind.label()))?;
-        // The backend's own `punktfunk/<tag>/<index>`, under the seat's name.
+        // The backend's own `punktfunk/<tag>/<index>`, under the seat's mark.
         let own = id.phys.trim_start_matches("punktfunk/").to_owned();
-        id.phys = seat_phys(account, &own);
+        id.phys = seat_phys(mark, &own);
         Brokered::Uhid(UhidDevice::open(&id.as_create2())?)
     };
-    Ok(BrokeredPad { kind, dev })
+    Ok(BrokeredPad {
+        kind,
+        dev,
+        pairing: ps_pairing(kind, index, seat),
+    })
 }
 
 /// `(supervisor end, seat end)` of a fresh relay.
@@ -529,6 +541,14 @@ pub fn relay_pair() -> Result<(UnixDatagram, OwnedFd)> {
 const LISTEN_FDS_START: RawFd = 3;
 
 impl BrokeredPad {
+    /// A uinput pad's name in sysfs, `inputN`, from its own fd; `None` for a uhid pad.
+    pub fn sysname(&self) -> Option<Result<String>> {
+        match &self.dev {
+            Brokered::Uinput(dev) => Some(dev.sysname()),
+            Brokered::Uhid(_) => None,
+        }
+    }
+
     fn kernel_fd(&self) -> BorrowedFd<'_> {
         match &self.dev {
             Brokered::Uinput(dev) => dev.as_fd(),
@@ -584,16 +604,10 @@ fn usb_store_name(port: u16, recorded: RawFd) -> String {
     format!("served/{port}/{recorded}")
 }
 
-/// What a stored USB socket's name says: `(port, recorded, served)`. `usb/<port>/<recorded>` is
-/// a socket an older supervisor attached for a seat that served its own device.
-fn parse_usb_store_name(name: &str) -> Option<(u16, RawFd, bool)> {
-    let (served, rest) = match name.split_once('/')? {
-        ("served", rest) => (true, rest),
-        ("usb", rest) => (false, rest),
-        _ => return None,
-    };
-    let (port, recorded) = rest.split_once('/')?;
-    Some((port.parse().ok()?, recorded.parse().ok()?, served))
+/// What a stored USB socket's name says: `(port, recorded)`.
+fn parse_usb_store_name(name: &str) -> Option<(u16, RawFd)> {
+    let (port, recorded) = name.strip_prefix("served/")?.split_once('/')?;
+    Some((port.parse().ok()?, recorded.parse().ok()?))
 }
 
 /// Parks a served USB socket in systemd's fd store, so a restarted supervisor watches it
@@ -603,14 +617,10 @@ pub fn keep_usb(port: u16, recorded: RawFd, sock: BorrowedFd<'_>) {
     notify(&format!("FDSTORE=1\nFDNAME={name}"), Some(sock));
 }
 
-/// Takes a USB socket out of the store, under either name: its connection ended.
+/// Takes a USB socket out of the store: its connection ended.
 pub fn forget_usb(port: u16, recorded: RawFd) {
-    for name in [
-        usb_store_name(port, recorded),
-        format!("usb/{port}/{recorded}"),
-    ] {
-        notify(&format!("FDSTOREREMOVE=1\nFDNAME={name}"), None);
-    }
+    let name = usb_store_name(port, recorded);
+    notify(&format!("FDSTOREREMOVE=1\nFDNAME={name}"), None);
 }
 
 /// Parks `fd` in systemd's fd store under `name`, which is neither a pad's nor a USB socket's
@@ -674,8 +684,6 @@ pub struct Kept {
     pub pads: Vec<KeptPad>,
     /// Each served USB socket as `(port, recorded, socket)`.
     pub usb: Vec<(u16, RawFd, OwnedFd)>,
-    /// Each USB socket an older supervisor attached for a seat that served its own device.
-    pub unserved: Vec<(u16, RawFd, OwnedFd)>,
     /// Every other fd, by the name [`keep_fd`] gave it.
     pub other: Vec<(String, OwnedFd)>,
 }
@@ -694,15 +702,15 @@ pub fn kept() -> Kept {
     let names = env("LISTEN_FDNAMES");
     let mut names = names.split(':');
     let (mut kernels, mut relays) = (HashMap::new(), HashMap::new());
-    let (mut usb, mut unserved, mut other) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut usb, mut other) = (Vec::new(), Vec::new());
     for raw in LISTEN_FDS_START..LISTEN_FDS_START + count {
         // SAFETY: systemd passes fds 3 through 3 + LISTEN_FDS - 1 to the process LISTEN_PID
         // names, this one. Nothing else here owns them, and `TAKEN` adopts each once.
         let fd = unsafe { OwnedFd::from_raw_fd(raw) };
         let _ = rustix::io::fcntl_setfd(&fd, rustix::io::FdFlags::CLOEXEC);
         let name = names.next().unwrap_or("");
-        if let Some((port, recorded, served)) = parse_usb_store_name(name) {
-            if served { &mut usb } else { &mut unserved }.push((port, recorded, fd));
+        if let Some((port, recorded)) = parse_usb_store_name(name) {
+            usb.push((port, recorded, fd));
             continue;
         }
         match name
@@ -735,7 +743,12 @@ pub fn kept() -> Kept {
             name,
             kind,
             index,
-            pad: BrokeredPad { kind, dev },
+            // Its driver bound, and read the MAC, before the restart.
+            pad: BrokeredPad {
+                kind,
+                dev,
+                pairing: None,
+            },
             relay: UnixDatagram::from(relay),
         });
     }
@@ -743,7 +756,6 @@ pub fn kept() -> Kept {
     Kept {
         pads: out,
         usb,
-        unserved,
         other,
     }
 }
@@ -754,7 +766,7 @@ pub fn relay(pad: BrokeredPad, seat: UnixDatagram) {
     let kind = pad.kind;
     match pad.dev {
         Brokered::Uinput(dev) => relay_uinput(dev, seat),
-        Brokered::Uhid(dev) => dev.relay(seat, |report| kind.takes(report)),
+        Brokered::Uhid(dev) => dev.relay(seat, |report| kind.takes(report), pad.pairing.as_deref()),
     }
 }
 
@@ -831,20 +843,17 @@ mod tests {
             index: 3,
         };
         assert_eq!(Request::decode(&r.encode()), Some(r));
-        for r in [
-            Request::Attach {
-                devid: 0x0001_0002,
-                speed: 3,
-            },
-            Request::Detach { port: 9 },
-            Request::Serve {
-                kind: UsbKind::SteamController2Puck,
-                index: 4,
-                slot: 3,
-                identity_len: MAX_IDENTITY as u16,
-            },
-        ] {
-            assert_eq!(Request::decode(&r.encode()), Some(r));
+        let puck = Request::Serve {
+            kind: UsbKind::SteamController2Puck,
+            index: 4,
+            slot: 3,
+            identity_len: MAX_IDENTITY as u16,
+        };
+        assert_eq!(Request::decode(&puck.encode()), Some(puck));
+        for retired in [2, 3] {
+            let mut op = r.encode();
+            op[5] = retired;
+            assert_eq!(Request::decode(&op), None, "op {retired}");
         }
         let serve = Request::Serve {
             kind: UsbKind::DualSense,
@@ -900,6 +909,63 @@ mod tests {
         );
     }
 
+    /// Only a contract seat marks its PlayStation pads; the box's own host and the owner's row
+    /// keep today's MACs. A seat's mark is its id's, so a restart keeps it.
+    #[test]
+    fn only_a_contract_seat_marks_its_playstation_pads() {
+        use pf_paths::seat::{HostRole, SeatRole};
+        let id = "beef0123456789abcdef0123456789ab";
+        for role in HostRole::ALL {
+            let want = if role == HostRole::Seat(SeatRole::Contract) {
+                0xBEEF
+            } else {
+                0
+            };
+            assert_eq!(ps_seat_for(role, Some(id)), want, "{role:?}");
+            assert_eq!(ps_seat_for(role, None), 0, "{role:?} without an id");
+        }
+        assert_eq!(ps_seat("0000ffff"), 1, "never the box's own");
+        assert_ne!(ps_seat(id), ps_seat("1234abcd"));
+    }
+
+    /// The relay answers a PlayStation pad's pairing report with the bytes an honest seat host
+    /// would: its index's MAC, marked with its seat. Other kinds have none.
+    #[test]
+    fn the_relay_answers_what_the_seats_own_host_would() {
+        use crate::dualsense_proto::{ds_pairing_reply, DEVTYPE_DUALSENSE, DEVTYPE_DUALSENSE_EDGE};
+        use pf_driver_proto::gamepad::mark_ps_seat;
+        let marked = |mut reply: Vec<u8>| {
+            mark_ps_seat(&mut reply, 0xBEEF);
+            Some(reply)
+        };
+        let cases = [
+            (
+                PadKind::DualSense,
+                ds_pairing_reply(DEVTYPE_DUALSENSE, 3).to_vec(),
+            ),
+            (
+                PadKind::DualSenseEdge,
+                ds_pairing_reply(DEVTYPE_DUALSENSE_EDGE, 3).to_vec(),
+            ),
+            (
+                PadKind::DualShock4,
+                crate::dualshock4_proto::ds4_pairing_reply(3).to_vec(),
+            ),
+        ];
+        for (kind, reply) in cases {
+            assert_eq!(
+                ps_pairing(kind, 3, 0xBEEF),
+                marked(reply),
+                "{}",
+                kind.label()
+            );
+        }
+        assert_eq!(ps_pairing(PadKind::DualSense, 0, 0).unwrap()[0], 0x09);
+        assert_eq!(ps_pairing(PadKind::DualShock4, 0, 0).unwrap()[0], 0x12);
+        assert_eq!(ps_pairing(PadKind::SteamDeck, 0, 0xBEEF), None);
+        assert_eq!(ps_pairing(PadKind::XboxOne, 0, 0xBEEF), None);
+    }
+
     /// A stored pad's name carries what a restarted supervisor needs to relay it again.
     #[test]
     fn a_store_name_round_trips() {
@@ -918,14 +984,13 @@ mod tests {
         );
     }
 
-    /// A kept USB socket's name carries the port and the number its map row records, and
-    /// whether the supervisor served it or an older seat did.
+    /// A kept USB socket's name carries the port and the number its map row records.
     #[test]
     fn a_usb_store_name_round_trips() {
         let name = usb_store_name(9, 17);
         assert!(!name.contains(':'), "systemd's LISTEN_FDNAMES separator");
-        assert_eq!(parse_usb_store_name(&name), Some((9, 17, true)));
-        assert_eq!(parse_usb_store_name("usb/9/17"), Some((9, 17, false)));
+        assert_eq!(parse_usb_store_name(&name), Some((9, 17)));
+        assert_eq!(parse_usb_store_name("usb/9/17"), None);
         assert_eq!(parse_store_name(&name), None, "not a pad");
         assert_eq!(parse_usb_store_name("pad/1-0/10/0/x/k"), None);
         assert_eq!(parse_usb_store_name("usb/9/x"), None);
@@ -962,32 +1027,6 @@ mod tests {
         }
         assert!(!sc2.takes(&[]), "an empty report");
         assert!(PadKind::DualSense.takes(&[0x01]));
-    }
-
-    /// An `Attach` crosses with its socket; the answer carries the port.
-    #[test]
-    fn an_attach_crosses_with_its_socket() {
-        let (supervisor, seat) = UnixStream::pair().unwrap();
-        let (mine, theirs) = UnixStream::pair().unwrap();
-        send_frame(
-            &seat,
-            &Request::Attach { devid: 5, speed: 2 }.encode(),
-            Some(theirs.as_fd()),
-        )
-        .unwrap();
-        let (request, sock) = read_request(&supervisor).unwrap();
-        assert_eq!(request, Request::Attach { devid: 5, speed: 2 });
-        let sock = UnixStream::from(sock.expect("the socket"));
-        use std::io::{Read, Write};
-        (&mine).write_all(b"hi").unwrap();
-        let mut got = [0u8; 2];
-        (&sock).read_exact(&mut got).unwrap();
-        assert_eq!(&got, b"hi");
-
-        reply(&supervisor, Status::Attached, 11, None).unwrap();
-        let (status, port, relay) = recv_reply(&seat).unwrap();
-        assert_eq!((status, port), (Status::Attached, 11));
-        assert!(relay.is_none());
     }
 
     /// The answer carries the relay's seat end, and what the supervisor sends on its end

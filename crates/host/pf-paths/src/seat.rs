@@ -33,8 +33,8 @@ pub enum HostRole {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeatRole {
     /// A seat of its own. Its desktop follows the seat contract: one virtual screen, never a
-    /// real monitor, the box's Seat defaults and no settings of its own
-    /// (`design/web-console-structure-2026-10.md` §2.1).
+    /// real monitor, the box's Seat defaults under what its profile's layer of the box's library
+    /// sets (`design/web-console-structure-2026-10.md` §2.1).
     Contract,
     /// `PUNKTFUNK_SEAT_OWNER=1`: the box owner's own host behind the door, at the desk. It
     /// serves the owner profile and the light-seat profiles that play inside the owner's host.
@@ -340,6 +340,10 @@ pub fn library_dir() -> std::path::PathBuf {
 pub fn pairing_refused() -> bool {
     current().pairing_refused
 }
+
+/// The person token a seat host writes into its own config folder, `0600`. The supervisor
+/// copies, reads and logs nothing of that name.
+pub const PERSON_TOKEN: &str = "person-token";
 
 /// The seat supervisor's pad broker: a seat host asks here for the pads it cannot make itself.
 pub const PADS_SOCKET: &str = "/run/punktfunk/pads.sock";

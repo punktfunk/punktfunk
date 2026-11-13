@@ -82,6 +82,28 @@ fn peer_grants(peer: &Option<Extension<PeerCertFingerprint>>, st: &AppState) -> 
     }
 }
 
+/// [`owner_opens`] for this peer.
+fn opens_owner(peer: &Option<Extension<PeerCertFingerprint>>, st: &AppState) -> bool {
+    let fp = match peer {
+        Some(Extension(PeerCertFingerprint(Some(fp)))) => Some(fp.as_str()),
+        _ => None,
+    };
+    owner_opens(st, fp)
+}
+
+/// Whether device `fp` may play the owner's profile, which a GameStream session plays as.
+/// Moonlight has no profiles and no prompt: a locked owner opens only for a Moonlight device on
+/// its list. No profile store, as in a test that skips `serve`, locks nothing.
+pub(super) fn owner_opens(st: &AppState, fp: Option<&str>) -> bool {
+    let Some(profiles) = st.profiles.get() else {
+        return true;
+    };
+    let owner = profiles
+        .owner_id()
+        .unwrap_or_else(|| crate::profiles::OPERATOR_PROFILE_ID.to_string());
+    profiles.opens(&owner, fp) == crate::profiles::Opens::Yes
+}
+
 /// Resume/cancel: true if there is no session, fingerprints match, or either side is unknown.
 /// Unknown fingerprints fail open so a same-client control is never locked out.
 fn peer_may_control_session(peer: &Option<Extension<PeerCertFingerprint>>, st: &AppState) -> bool {
@@ -257,6 +279,10 @@ async fn launch_under(
             return xml(error_xml(EXPIRED)).into_response();
         }
     }
+    if !opens_owner(&peer, &st) {
+        tracing::warn!("launch rejected — the owner's profile is locked to other devices");
+        return xml(error_xml(LOCKED)).into_response();
+    }
     let req_fp: Option<[u8; 32]> = peer_fp(&peer);
 
     // Snapshot owner + mode (Copy) so the launch lock is not held over admission.
@@ -284,10 +310,11 @@ async fn launch_under(
     match launch(&st, &q) {
         Ok(mut session) => {
             let mode = (session.width, session.height, session.fps);
-            let _reservation = match admit_native(&st, conflict, mode).await {
-                Ok(reservation) => reservation,
-                Err(busy) => return busy,
-            };
+            let (_reservation, joined) =
+                match admit_native(&st, conflict, mode, hdr_asked(&q)).await {
+                    Ok(admitted) => admitted,
+                    Err(busy) => return busy,
+                };
             if steal {
                 // A drop, not a quit — the same as a native steal victim. `launch` clears
                 // first, so the control tick tells the old client while its media stop.
@@ -311,6 +338,7 @@ async fn launch_under(
             // Mint ping before RTSP SETUP. Media planes use it to tell this client's first
             // datagram from others at the same address.
             st.mint_av_ping();
+            *st.gs.joined.lock().unwrap_or_else(|e| e.into_inner()) = joined;
             *st.launch.lock().unwrap_or_else(|e| e.into_inner()) = Some(session);
             tracing::info!(
                 w = session.width,
@@ -330,17 +358,51 @@ async fn launch_under(
 }
 
 /// The launch against the native sessions in the display table, under the same policy: a
-/// refusal is the 503 to answer, a steal ends them first. The reservation holds this launch's
-/// place until it answers; this plane's own rows hold `gs.preempted`, so they never conflict.
+/// refusal is the 503 to answer, a steal ends them first, a join returns the owner's display,
+/// once a native connect still in bring-up streams. A join of an HDR display needs
+/// `hdr_asked`. The reservation holds this launch's place until it answers; this plane's own
+/// rows hold `gs.preempted`, so they never conflict.
 async fn admit_native(
     st: &AppState,
     conflict: crate::vdisplay::policy::ModeConflict,
     mode: (u32, u32, u32),
-) -> std::result::Result<crate::vdisplay::admission::Reservation, Response> {
-    use crate::vdisplay::admission::{admit_under, all_gone, Admission};
-    let (native, reservation) = admit_under(conflict, None, mode, st.gs.preempted.clone());
+    hdr_asked: bool,
+) -> std::result::Result<
+    (
+        crate::vdisplay::admission::Reservation,
+        Option<super::GsJoin>,
+    ),
+    Response,
+> {
+    use crate::vdisplay::admission::{admit_under, all_gone, joined_hdr, Admission};
+    // `join` may wait out a native connect's bring-up: off the runtime's workers.
+    let preempted = st.gs.preempted.clone();
+    let admitted =
+        tokio::task::spawn_blocking(move || admit_under(conflict, None, mode, preempted));
+    let Ok((native, reservation)) = admitted.await else {
+        tracing::warn!("GameStream launch REJECTED — the admission task did not finish");
+        return Err((StatusCode::SERVICE_UNAVAILABLE, xml(error_xml(BUSY))).into_response());
+    };
     match native {
         Admission::Separate => {}
+        Admission::Join(_, d)
+            if d.isolation.is_none() && joined_hdr(d.hdr, hdr_asked).is_none() =>
+        {
+            tracing::warn!(
+                "GameStream launch REJECTED — the display to share is HDR and this client asked for none"
+            );
+            let refusal = error_xml(crate::vdisplay::admission::JOIN_NEEDS_HDR);
+            return Err((StatusCode::SERVICE_UNAVAILABLE, xml(refusal)).into_response());
+        }
+        // Moonlight input takes the shared injector, which an isolated owner does not read.
+        Admission::Join(live, display) if display.isolation.is_none() => {
+            tracing::info!(
+                requested = %format_args!("{}x{}@{}", mode.0, mode.1, mode.2),
+                live = %format_args!("{}x{}@{}", live.0, live.1, live.2),
+                "GameStream launch JOIN — sharing the native session's display"
+            );
+            return Ok((reservation, Some((live, display))));
+        }
         Admission::Steal(victims) => {
             tracing::info!(
                 victims = victims.len(),
@@ -356,14 +418,18 @@ async fn admit_native(
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         }
-        // This plane shares a native session's display no more than another GameStream
-        // client's (`gamestream_admission`).
-        Admission::Join(..) | Admission::Reject(_) => {
+        Admission::Join(..) => {
+            tracing::warn!(
+                "GameStream launch REJECTED — the display to share is an isolated session"
+            );
+            return Err((StatusCode::SERVICE_UNAVAILABLE, xml(error_xml(BUSY))).into_response());
+        }
+        Admission::Reject(_) => {
             tracing::warn!("GameStream launch REJECTED — a native session holds the display");
             return Err((StatusCode::SERVICE_UNAVAILABLE, xml(error_xml(BUSY))).into_response());
         }
     }
-    Ok(reservation)
+    Ok((reservation, None))
 }
 
 async fn h_resume(
@@ -383,6 +449,10 @@ async fn h_resume(
             tracing::warn!("resume rejected — this client's access has expired");
             return xml(error_xml(EXPIRED));
         }
+    }
+    if !opens_owner(&peer, &st) {
+        tracing::warn!("resume rejected — the owner's profile is locked to other devices");
+        return xml(error_xml(LOCKED));
     }
     if !peer_may_control_session(&peer, &st) {
         tracing::warn!("resume rejected — caller does not own the session");
@@ -573,6 +643,13 @@ fn host_audio(q: &HashMap<String, String>) -> Option<bool> {
         .map(|v| v != 0)
 }
 
+/// `/launch`'s `hdrMode`: the client streams HDR. ANNOUNCE's `dynamicRangeMode` confirms it.
+fn hdr_asked(q: &HashMap<String, String>) -> bool {
+    q.get("hdrMode")
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .is_some_and(|v| v != 0)
+}
+
 /// GameStream `mode`: `"WxHxFPS"`.
 fn parse_mode(mode: &str) -> Option<(u32, u32, u32)> {
     let mut it = mode.split('x');
@@ -597,10 +674,10 @@ enum GsDecision {
 /// Single-session mode-conflict. No session or same client → Serve. A different client
 /// applies `policy`; GameStream has no `separate`, so `steal`/`separate` both Steal.
 ///
-/// `join` cannot be honored here: this plane holds one launch on fixed media ports, so two
-/// clients cannot share a display the way the native one lets them. Refusing keeps the
-/// client that is already streaming, which is what asking for `join` asked for — stealing
-/// its session would be the opposite.
+/// `join` cannot be honored here: this plane holds one launch on fixed media ports, so a
+/// second Moonlight client cannot share the first one's display (a native session's it can,
+/// [`admit_native`]). Refusing keeps the client that is already streaming, which is what
+/// asking for `join` asked for — stealing its session would be the opposite.
 fn gamestream_admission(
     live: Option<LiveGs>,
     req_fp: Option<[u8; 32]>,
@@ -737,6 +814,8 @@ const BUSY: &str = "Another device is streaming from this host. Try again when i
 const LAUNCH_FAILED: &str =
     "The host couldn't start this app. Refresh the app list, then try again.";
 const NOT_OWNER: &str = "This session belongs to another device";
+const LOCKED: &str =
+    "The host's owner locked their profile to the devices they chose. Ask them to add this one.";
 const NO_SESSION: &str = "There's no session to resume. Start the app again.";
 const RESUME_FAILED: &str = "The host couldn't resume this session. Start the app again.";
 
@@ -851,6 +930,47 @@ mod tests {
             !peer_is_paired(&other, &st),
             "a non-pinned cert stays rejected"
         );
+    }
+
+    /// A locked owner's profile refuses a Moonlight launch and resume from a device off its list,
+    /// with the sentence Moonlight shows, and lets one on it through to the launch itself.
+    #[tokio::test]
+    async fn a_locked_owner_refuses_moonlight_off_its_list() {
+        let st = test_state();
+        let (listed, other) = (b"listed-moonlight".to_vec(), b"other-moonlight".to_vec());
+        st.paired
+            .lock()
+            .unwrap()
+            .extend([listed.clone(), other.clone()]);
+        let path = crate::test_support::scratch().join("profiles.json");
+        let profiles = crate::profiles::Profiles::load_with(Some(path), None);
+        profiles.ensure_owner("box").unwrap();
+        let owner = profiles.owner_id().unwrap();
+        let profiles = Arc::new(profiles);
+        assert!(st.profiles.set(profiles.clone()).is_ok());
+        let launch = |der: &[u8]| {
+            let peer = PeerCertFingerprint(Some(fp_of(der)));
+            let st = st.clone();
+            async move { drive(&st, "/launch", Some(peer)).await.1 }
+        };
+        assert_eq!(launch(&other).await, error_xml(LAUNCH_FAILED), "open");
+        let device = pf_seats::ipc::Device {
+            fingerprint: fp_of(&listed),
+            name: "Moonlight".into(),
+        };
+        let locked = profiles.locks().edit(&owner, |lock, now| {
+            lock.locked = true;
+            lock.admit(&device, now, true)
+        });
+        assert!(locked.unwrap());
+        assert_eq!(launch(&other).await, error_xml(LOCKED));
+        assert_eq!(launch(&listed).await, error_xml(LAUNCH_FAILED));
+        let peer = Some(Extension(PeerCertFingerprint(Some(fp_of(&other)))));
+        let resumed = h_resume(State(st.clone()), peer, None, Query(HashMap::new())).await;
+        let body = axum::body::to_bytes(resumed.into_response().into_body(), 1 << 20)
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&body), error_xml(LOCKED));
     }
 
     #[test]
@@ -1314,6 +1434,103 @@ mod tests {
         assert!(!stop.load(SeqCst), "the native session keeps streaming");
         let plane = std::slice::from_ref(&st.gs.preempted);
         assert!(all_gone(plane), "no row of this plane");
+    }
+
+    /// Under `join` a launch shares a native session's display: it is served, that session
+    /// keeps streaming, and PLAY gets the owner's mode. An isolated owner refuses it.
+    #[tokio::test]
+    async fn a_launch_under_join_shares_a_native_clients_display() {
+        use crate::vdisplay::admission::{register, LiveDisplay};
+        use crate::vdisplay::policy::ModeConflict;
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+        let _registry = crate::session_status::tests::REGISTRY.lock().await;
+        let launch = |st: Arc<AppState>| {
+            let q = HashMap::from([
+                ("rikey".to_string(), "22".repeat(16)),
+                ("rikeyid".to_string(), "9".to_string()),
+                ("mode".to_string(), "1920x1080x60".to_string()),
+            ]);
+            let peer = Some(Extension(PeerCertFingerprint(Some(fp_of(b"gs-joiner")))));
+            launch_under(st, peer, None, q, ModeConflict::Join)
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let native = |display| {
+            let mode = (2560, 1440, 120);
+            register(
+                Some([0x4e; 32]),
+                mode,
+                stop.clone(),
+                "native".into(),
+                display,
+                None,
+            )
+        };
+
+        let isolation = crate::vdisplay::SessionIsolation {
+            id: "anon1".into(),
+            ei_relay: Default::default(),
+            sink: None,
+            mic_source: None,
+        };
+        let isolated = native(LiveDisplay {
+            isolation: Some(isolation),
+            ..LiveDisplay::default()
+        });
+        let st = test_state();
+        let resp = launch(st.clone()).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            st.launch.lock().unwrap().is_none(),
+            "no session was created"
+        );
+        drop(isolated);
+
+        let _shared = native(LiveDisplay::default());
+        let st = test_state();
+        assert_eq!(launch(st.clone()).await.status(), StatusCode::OK);
+        assert!(!stop.load(SeqCst), "the native session keeps streaming");
+        let joined = st.gs.joined.lock().unwrap().clone();
+        assert_eq!(joined.map(|(mode, _)| mode), Some((2560, 1440, 120)));
+    }
+
+    /// An HDR display is shared only with a launch that asked for HDR.
+    #[tokio::test]
+    async fn a_launch_without_hdr_is_refused_an_hdr_display() {
+        use crate::vdisplay::admission::{register, LiveDisplay};
+        use crate::vdisplay::policy::ModeConflict;
+        let _registry = crate::session_status::tests::REGISTRY.lock().await;
+        let launch = |st: Arc<AppState>, hdr: &str| {
+            let q = HashMap::from([
+                ("rikey".to_string(), "22".repeat(16)),
+                ("rikeyid".to_string(), "9".to_string()),
+                ("mode".to_string(), "1920x1080x60".to_string()),
+                ("hdrMode".to_string(), hdr.to_string()),
+            ]);
+            let peer = Some(Extension(PeerCertFingerprint(Some(fp_of(b"gs-joiner")))));
+            launch_under(st, peer, None, q, ModeConflict::Join)
+        };
+        let hdr = LiveDisplay {
+            hdr: true,
+            ..LiveDisplay::default()
+        };
+        let _native = register(
+            Some([0x4f; 32]),
+            (2560, 1440, 120),
+            Arc::default(),
+            "native".into(),
+            hdr,
+            None,
+        );
+        let st = test_state();
+        let resp = launch(st.clone(), "0").await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            st.launch.lock().unwrap().is_none(),
+            "no session was created"
+        );
+        let st = test_state();
+        assert_eq!(launch(st.clone(), "1").await.status(), StatusCode::OK);
+        assert!(st.gs.joined.lock().unwrap().is_some());
     }
 
     /// A display stolen through admission ends the session on the control tick, as a drop,

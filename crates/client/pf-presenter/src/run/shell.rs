@@ -1,6 +1,8 @@
 //! The window, presenter, overlay and pads the run loop owns.
 
 use super::*;
+use pf_client_core::overlay_actions::SlotId;
+use pf_client_core::shortcuts::{Action, Device, Shortcuts};
 
 impl Shell {
     /// SDL, the window and its presenter, the overlay and the pads: everything the loop
@@ -24,6 +26,9 @@ impl Shell {
         // The keyboard grab exists only while shortcut capture is on, and then Alt+Tab
         // belongs to the host. SDL's default minimizes a grabbed fullscreen window on it.
         sdl3::hint::set("SDL_ALLOW_ALT_TAB_WHILE_GRABBED", "0");
+        // The console draws an input method's text in progress in its field. Unclaimed,
+        // Windows, XIM, IBus and Fcitx draw it in a window of their own and send none.
+        sdl3::hint::set("SDL_IME_IMPLEMENTED_UI", "composition");
         // Wayland `app_id` and X11 WM_CLASS name the desktop entry a task manager groups and
         // pins this window under. The console has its own entry, so it carries that one's id.
         let app_id = if browse {
@@ -163,12 +168,9 @@ impl Shell {
 
         let gamepad_subsystem = sdl.gamepad().context("SDL gamepad")?;
         let (gamepad, pump) = GamepadService::pumped(gamepad_subsystem);
-        let escape_rx = gamepad.escape_events();
-        let chord_rx = gamepad.chord_events();
-        // A Select chord eats the button pressed with Select, so it is only worth claiming where
-        // the overlay it drives exists — a build without the console UI leaves A and X to the game.
-        gamepad.set_chords_live(overlay.is_some());
-        let disconnect_rx = gamepad.disconnect_events();
+        let shortcut_rx = gamepad.shortcut_events();
+        let (shortcuts, keys) =
+            super::shortcuts::adopt(&opts.shortcuts, &gamepad, overlay.is_some());
         let menu_rx = gamepad.menu_events();
         if browse {
             // Menu mode for the launcher's lifetime (an attached session supersedes translation).
@@ -194,6 +196,7 @@ impl Shell {
             overlay_frame: None,
             stats_verbosity: opts.stats_verbosity,
             fullscreen: opts.fullscreen,
+            pad_left_fullscreen: false,
             mouse,
             event_pump,
             native,
@@ -202,7 +205,10 @@ impl Shell {
             #[cfg(target_os = "linux")]
             overlay_focus,
             menu_rx,
-            disconnect_rx,
+            shortcut_rx,
+            shortcuts,
+            keys,
+            armed: None,
             audio_mute_at: Instant::now(),
             audio_mute_seen: 0,
             mic_muted_seen: false,
@@ -210,8 +216,6 @@ impl Shell {
             ring_opener: None,
             ring_was_open: false,
             screen_held: true,
-            chord_rx,
-            escape_rx,
             pump,
             gamepad,
             overlay,
@@ -251,9 +255,10 @@ impl Shell {
         apply_capture(&mut self.window, &self.mouse, false, false, inhibit, 0);
     }
 
-    /// Resize the window to `mode` within the display's usable area, before the stream
-    /// starts. Match-window and fullscreen keep the size they own.
-    pub(super) fn size_to_stream(&mut self, mode: Mode) {
+    /// Resize the window to `picture`, the size the stream is shown at (its view, else its
+    /// mode), within the display's usable area, before the stream starts. Match-window and
+    /// fullscreen keep the size they own.
+    pub(super) fn size_to_stream(&mut self, picture: (u32, u32)) {
         if self.fullscreen || self.opts.match_window {
             return;
         }
@@ -267,7 +272,7 @@ impl Shell {
         // Windows and X11 report the frame; Wayland reports none.
         let frame = self.window.border_size().unwrap_or_default();
         let (w, h, x, y) = stream_window_rect(
-            (mode.width, mode.height),
+            picture,
             self.window.pixel_density(),
             frame,
             area,
@@ -331,6 +336,10 @@ impl Shell {
             {
                 st.session_notice = None;
             }
+            if let Some(said) = st.host_notice.as_ref().and_then(|rx| rx.try_recv().ok()) {
+                st.host_notice = None;
+                st.session_notice = Some((said, Instant::now()));
+            }
             // The game is gone (or already was): leave as End stream does. Anything else
             // keeps the stream and says why.
             let answer = st
@@ -361,8 +370,9 @@ impl Shell {
                         }
                         tracing::warn!(error = %format!("{e:#}"),
                             "overlay frame failed — disabling the console UI");
-                        // The overlay's drop frees images the last present may still sample.
-                        self.presenter.wait_idle();
+                        // The overlay's drop frees images its submits and the last present may
+                        // still use. The pump decodes on: no device-wide idle.
+                        self.presenter.quiesce_queue();
                         self.overlay = None;
                         self.overlay_frame = None;
                     }
@@ -517,17 +527,56 @@ pub(super) fn overlay_scale(display_scale: f32, pref: f32) -> f32 {
 /// How long an access toast holds the pill slot. The chip keeps the standing truth.
 pub(super) const ACCESS_NOTICE_S: u64 = 6;
 
-/// Capture hints (`ui_stream` parity — the words the user reads while released).
-pub(super) const HINT_KEYBOARD: &str =
-    "Click the stream to capture input · Ctrl+Alt+Shift+Q releases · \
-     Ctrl+Alt+Shift+M mouse mode · Ctrl+Alt+Shift+D disconnects · Ctrl+Alt+Shift+S stats";
-pub(super) const HINT_WITH_PAD: &str =
-    "Click the stream to capture input · Ctrl+Alt+Shift+Q releases · \
-     Ctrl+Alt+Shift+D disconnects · hold L1 + R1 + Start + Select to leave";
+/// Capture hint (`ui_stream` parity — the words the user reads while released): one field per
+/// keyboard shortcut that moves the capture or ends the stream, the pad's way out in place of
+/// mouse mode and stats. An action with no key has no field.
+pub(super) fn capture_hint(pad: bool, shortcuts: &Shortcuts) -> String {
+    use pf_l10n::desktop as d;
+    let key = |slot| shortcuts.hint(&Action::Slot(slot), Device::Keyboard);
+    let mut fields = vec![pf_l10n::client::notice_capture_click().to_string()];
+    fields.extend(key(SlotId::ReleaseInput).map(d::desktop_capture_release));
+    if pad {
+        fields.extend(key(SlotId::EndStream).map(d::desktop_capture_disconnect));
+        fields.extend(crate::overlay::leave_line(shortcuts, Device::Pad));
+    } else {
+        fields.extend(key(SlotId::MouseMode).map(d::desktop_capture_mouse_mode));
+        fields.extend(key(SlotId::EndStream).map(d::desktop_capture_disconnect));
+        fields.extend(key(SlotId::Stats).map(d::desktop_capture_stats));
+    }
+    fields.join(" · ")
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The desktop's defaults read as the words the capture hint always had.
+    #[test]
+    fn the_default_capture_hint_names_the_default_chords() {
+        use pf_l10n::{client as c, desktop as d};
+        let s = pf_client_core::shortcuts::defaults(
+            pf_client_core::shortcuts::Client::Desktop,
+            false,
+            "auto",
+        );
+        let pad = [
+            c::notice_capture_click().to_string(),
+            d::desktop_capture_release("Ctrl+Alt+Shift+Q"),
+            d::desktop_capture_disconnect("Ctrl+Alt+Shift+D"),
+            c::notice_exit_hold("L1 + R1 + Start + Select"),
+        ];
+        assert_eq!(capture_hint(true, &s), pad.join(" · "));
+        let keys = [
+            c::notice_capture_click().to_string(),
+            d::desktop_capture_release("Ctrl+Alt+Shift+Q"),
+            d::desktop_capture_mouse_mode("Ctrl+Alt+Shift+M"),
+            d::desktop_capture_disconnect("Ctrl+Alt+Shift+D"),
+            d::desktop_capture_stats("Ctrl+Alt+Shift+S"),
+        ];
+        assert_eq!(capture_hint(false, &s), keys.join(" · "));
+        let leave = crate::overlay::leave_line(&s, Device::Keyboard);
+        assert_eq!(leave, Some(c::notice_exit_keys("Ctrl+Alt+Shift+D")));
+    }
 
     #[test]
     fn stream_window_fits_the_usable_area() {

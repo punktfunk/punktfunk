@@ -5,6 +5,7 @@
 use pf_client_core::collate::{self, GroupBy, GroupKey, SortKey};
 use pf_client_core::library::{GameEntry, DESKTOP_ID};
 use pf_client_core::library_layout::Section;
+use pf_l10n::client;
 
 /// Recently played shows at most this many titles (design D6).
 pub const RECENT_MAX: usize = 12;
@@ -96,7 +97,7 @@ pub fn rows(l: &Layout) -> Vec<Row> {
         };
         match section {
             Section::Desktops if !l.desktops.is_empty() => {
-                out.push(Row::Heading("Desktops".into()));
+                out.push(Row::Heading(client::lib_section_desktops().into()));
                 out.push(Row::Desktops(l.desktops.clone()));
             }
             Section::Recent => {
@@ -106,7 +107,12 @@ pub fn rows(l: &Layout) -> Vec<Row> {
                 played.sort_by_key(|&i| std::cmp::Reverse(last_played(&l.games[i])));
                 played.truncate(RECENT_MAX);
                 let tiles = played.into_iter().map(Tile::Game).collect();
-                band(tiles, Caption::LastPlayed, "Recently played", &mut out);
+                band(
+                    tiles,
+                    Caption::LastPlayed,
+                    client::lib_section_recent(),
+                    &mut out,
+                );
             }
             Section::Favorites => {
                 let tiles = in_order
@@ -115,7 +121,12 @@ pub fn rows(l: &Layout) -> Vec<Row> {
                     .filter(|&i| l.matches(i) && l.favorites.contains(&l.games[i].id))
                     .map(Tile::Game)
                     .collect();
-                band(tiles, l.sort_caption(), "Favorites", &mut out);
+                band(
+                    tiles,
+                    l.sort_caption(),
+                    client::lib_section_favorites(),
+                    &mut out,
+                );
             }
             Section::Launchers => {
                 let tiles = groups
@@ -125,13 +136,55 @@ pub fn rows(l: &Layout) -> Vec<Row> {
                     .filter(|&i| l.matches(i))
                     .map(Tile::Game)
                     .collect();
-                band(tiles, Caption::None, "Launchers", &mut out);
+                band(
+                    tiles,
+                    Caption::None,
+                    client::lib_section_launchers(),
+                    &mut out,
+                );
             }
             Section::Games => games(l, !desktops_on, &mut out),
             // The console's; the desktop shell groups the grid instead (design D5).
             Section::Collections | Section::Desktops => {}
         }
     }
+    out
+}
+
+/// What a profile hides, under `heading`: one grid in the shelf's sort, launchers too, no
+/// desktop.
+pub fn hidden(
+    games: &[GameEntry],
+    sort: SortKey,
+    search: &str,
+    columns: usize,
+    heading: String,
+) -> Vec<Row> {
+    let l = Layout {
+        games,
+        sections: &[],
+        favorites: &[],
+        sort,
+        group: None,
+        search,
+        columns,
+        desktops: Vec::new(),
+    };
+    let tiles: Vec<Tile> = collate::collate(games, sort, None)
+        .into_iter()
+        .flat_map(|g| g.games)
+        .filter(|&i| l.matches(i))
+        .map(Tile::Game)
+        .collect();
+    if tiles.is_empty() {
+        return Vec::new();
+    }
+    let caption = l.sort_caption();
+    let mut out = vec![Row::Heading(heading)];
+    out.extend(tiles.chunks(columns.max(1)).map(|chunk| Row::Posters {
+        tiles: chunk.to_vec(),
+        caption,
+    }));
     out
 }
 
@@ -158,7 +211,7 @@ fn games(l: &Layout, lead_desktop: bool, out: &mut Vec<Row>) {
         }
         let heading = match l.group {
             Some(_) => group.label,
-            None => "Games".into(),
+            None => client::lib_section_games().into(),
         };
         out.push(Row::Heading(heading));
         for chunk in tiles.chunks(columns) {
@@ -171,7 +224,7 @@ fn games(l: &Layout, lead_desktop: bool, out: &mut Vec<Row>) {
     }
     if first && lead_desktop && l.search.is_empty() {
         // No titles at all: the desktop still has a place to be pressed.
-        out.push(Row::Heading("Games".into()));
+        out.push(Row::Heading(client::lib_section_games().into()));
         out.push(Row::Posters {
             tiles: vec![Tile::Desktop],
             caption,
@@ -192,6 +245,7 @@ mod tests {
     fn game(id: &str, title: &str, played: u64) -> GameEntry {
         GameEntry {
             install: None,
+            overrides: None,
             id: id.into(),
             store: "steam".into(),
             title: title.into(),
@@ -214,6 +268,7 @@ mod tests {
     fn launcher(id: &str) -> GameEntry {
         GameEntry {
             install: None,
+            overrides: None,
             role: Some("launcher".into()),
             ..game(id, id, 0)
         }
@@ -314,6 +369,27 @@ mod tests {
                 assert_eq!(tiles, &[Tile::Game(0)]);
             }
         }
+    }
+
+    #[test]
+    fn hidden_titles_are_one_grid_with_launchers() {
+        let games = [
+            launcher("steam"),
+            game("a", "Alpha", 0),
+            game("b", "Beta", 0),
+        ];
+        let rows = hidden(&games, SortKey::HostOrder, "", 2, "Hidden for Kid".into());
+        assert_eq!(headings(&rows), ["Hidden for Kid"]);
+        let tiles: Vec<Tile> = rows
+            .iter()
+            .flat_map(|r| match r {
+                Row::Posters { tiles, .. } => tiles.clone(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert_eq!(tiles.len(), 3, "every hidden title, no desktop: {tiles:?}");
+        assert!(!tiles.contains(&Tile::Desktop));
+        assert!(hidden(&games, SortKey::HostOrder, "zzz", 2, "h".into()).is_empty());
     }
 
     #[test]

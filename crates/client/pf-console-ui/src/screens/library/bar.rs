@@ -49,7 +49,7 @@ impl Pill {
         match self {
             Pill::Sort(s) => s.label(),
             Pill::View(v) => v.label(),
-            Pill::Search => "Search",
+            Pill::Search => pf_l10n::client::lib_search(),
         }
     }
 }

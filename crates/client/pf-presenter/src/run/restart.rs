@@ -95,7 +95,7 @@ pub(crate) fn restart_for<'a>(ev: &'a SessionEvent, f: &RestartFacts) -> Option<
                 release: lost,
                 connector_mode: true,
                 keep_mic_muted: f.keep_mic_muted,
-                phase: "Lost the connection — reconnecting.",
+                phase: pf_l10n::client::notice_reconnecting(),
             })
         }
         SessionEvent::HostNotReady(_) if !f.canceled => Some(Restart {
@@ -105,7 +105,7 @@ pub(crate) fn restart_for<'a>(ev: &'a SessionEvent, f: &RestartFacts) -> Option<
             release: true,
             connector_mode: false,
             keep_mic_muted: f.keep_mic_muted,
-            phase: "The host isn't ready to stream yet — trying again.",
+            phase: pf_l10n::client::notice_host_not_ready_retry(),
         }),
         // Widened, never replaced: a second fallback must not re-offer what the first ruled out.
         // A cancelled stream never dials again, whatever ends it.

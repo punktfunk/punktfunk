@@ -9,11 +9,12 @@
 //!   owner's libraries as the seat sees them (`libraries.rs`).
 //! - `trust/<id>/` is a read-only copy of the box's pairing store and profiles from the door's
 //!   directory, so a seat user can read what it needs and nothing else there. A seat on a
-//!   person's own account gets only the pairing records of the devices its row admits. A seat
-//!   other than the owner's also finds the box's library there.
+//!   person's own account gets only the pairing records of the devices its row admits, and so
+//!   does a locked profile's seat, with its lock and no PIN. A seat other than the owner's also
+//!   finds the box's library there, with its own profile's layer and no other.
 //! - `library/` is the box's library: a copy of the owner's, which the owner's host writes, with
-//!   the plugins' grants and the firmware they staged. The door serves it to every client, and
-//!   each seat's trust copy takes it from here.
+//!   every profile's layer, the plugins' grants and the firmware they staged. The door serves it
+//!   to every client, and each seat's trust copy takes it from here.
 //! - `seats/hosts/<id>/mgmt-token` is the token the box presents to that seat host's loopback
 //!   API. It belongs to the `punktfunk` user, not the seat group: every seat user is a member.
 
@@ -21,6 +22,7 @@ use super::accounts::{is_ordinary, Passwd};
 use super::session::PRIVATE_DIRS;
 use super::{err, run, safe_open};
 use crate::backend::BackendError;
+use crate::locks;
 use crate::model::SeatId;
 use rustix::fs::{AtFlags, Mode, OFlags, XattrFlags};
 use rustix::io::Errno;
@@ -54,16 +56,30 @@ const AVATARS: &str = "profiles";
 pub(super) const MAX_TRUST_BYTES: u64 = 8 * 1024 * 1024;
 
 /// The library files a host reads from its library dir. Play stats stay with each host.
-const LIBRARY_FILES: [&str; 5] = [
+const LIBRARY_FILES: [&str; 6] = [
     "library.json",
     "library-hidden.json",
     "library-metadata.json",
+    "library-overrides.json",
     "library-picks.json",
     "library-scanners.json",
 ];
 
 /// One table per metadata source, a flat folder beside the library files.
 const LIBRARY_METADATA: &str = "library-metadata";
+
+/// A profile's own layer of the library: one folder per profile, named by its id.
+const LIBRARY_PROFILES: &str = "library-profiles";
+/// What a profile's folder holds. Nothing in them runs: `own-titles.json` names the titles its
+/// seat keeps, and how each starts stays on the seat.
+const PROFILE_FILES: [&str; 6] = [
+    "library-hidden.json",
+    "library-overrides.json",
+    "library-picks.json",
+    "library-scanners.json",
+    "own-titles.json",
+    "session-settings.json",
+];
 
 /// The owner's host's file that the door and every seat read beside the library: the display
 /// policy, whose one writer is the owner's host. Copied with the library, into the same dir.
@@ -251,7 +267,7 @@ pub(super) fn ensure_games(state: &Path, gid: u32) -> Result<(), BackendError> {
 /// `name` in `at`, created if absent, as a handle. A link or file there is never followed. With
 /// `replace` it is removed and a folder made in its place; without, the open fails. `games`
 /// is opened without: only root can have linked it, onto a bigger disk say.
-fn dir_in(at: &OwnedFd, name: &str, replace: bool) -> std::io::Result<OwnedFd> {
+pub(super) fn dir_in(at: &OwnedFd, name: &str, replace: bool) -> std::io::Result<OwnedFd> {
     let make = || match rustix::fs::mkdirat(at, name, Mode::from_raw_mode(0o2775 as _)) {
         Ok(()) | Err(Errno::EXIST) => Ok(()),
         Err(e) => Err(e),
@@ -709,10 +725,11 @@ fn sync_file(
     Ok(true)
 }
 
-/// Brings the seat's trust copy level with the box's files in `box_dir`, without the box's
+/// Brings a made seat's trust copy level with the box's files in `box_dir`, without the box's
 /// identity: a game on the seat could otherwise answer as the box. Returns whether anything
 /// changed. The door owns `box_dir` and the owner owns their own copy, so both are read and
-/// written through directory handles.
+/// written through directory handles. A locked profile's seat gets the pairing list its lock
+/// admits and the lock without its PIN ([`lock_filter`]).
 ///
 /// A file that can't be copied keeps its last good copy and the rest still follow; the first
 /// failure is the answer. A box directory that isn't there, as in a reinstall, leaves every copy
@@ -723,7 +740,18 @@ pub(super) fn refresh_trust(
     id: &SeatId,
     reader: Reader,
 ) -> Result<bool, BackendError> {
-    sync_trust(box_dir, state, id, reader, None)
+    sync_trust(box_dir, state, id, reader, Who::Seat { owner: false })
+}
+
+/// [`refresh_trust`] for the owner's row, which follows the owner's lock: every profile that
+/// shares the owner's desktop opens with it.
+pub(super) fn refresh_owner_trust(
+    box_dir: &Path,
+    state: &Path,
+    id: &SeatId,
+    reader: Reader,
+) -> Result<bool, BackendError> {
+    sync_trust(box_dir, state, id, reader, Who::Seat { owner: true })
 }
 
 /// [`refresh_trust`] for a seat on a person's own account, whose pairing list holds only the
@@ -735,7 +763,15 @@ pub(super) fn refresh_person_trust(
     reader: Reader,
     admitted: &BTreeSet<String>,
 ) -> Result<bool, BackendError> {
-    sync_trust(box_dir, state, id, reader, Some(admitted))
+    sync_trust(box_dir, state, id, reader, Who::Person(admitted))
+}
+
+/// Whose trust copy [`sync_trust`] keeps: a person's own account's, admitting these devices, or
+/// another seat's, the owner's row included, which its profile's lock decides.
+#[derive(Clone, Copy)]
+enum Who<'a> {
+    Person(&'a BTreeSet<String>),
+    Seat { owner: bool },
 }
 
 fn sync_trust(
@@ -743,7 +779,7 @@ fn sync_trust(
     state: &Path,
     id: &SeatId,
     reader: Reader,
-    admitted: Option<&BTreeSet<String>>,
+    who: Who<'_>,
 ) -> Result<bool, BackendError> {
     let io = |what: &str, e| io_err("trust_copy", what, e);
     let dst = open_copy(&trust_dir(state, id), reader).map_err(|e| io("open the trust copy", e))?;
@@ -754,6 +790,21 @@ fn sync_trust(
             first.get_or_insert_with(|| io(what, e));
         }
     };
+    let admitted = match who {
+        Who::Person(admitted) => Some(admitted.clone()),
+        Who::Seat { owner } => {
+            let (admitted, copy) = lock_filter(box_dir, id, owner, super::unix_now());
+            let written = match copy {
+                Some(copy) => serde_json::to_vec_pretty(&copy)
+                    .map_err(std::io::Error::other)
+                    .and_then(|bytes| put_file(&dst, locks::FILE, &bytes, reader)),
+                None => unlink(&dst, locks::FILE),
+            };
+            note(written, "write the profile locks");
+            admitted
+        }
+    };
+    let admitted = admitted.as_ref();
     if let Some(admitted) = admitted {
         note(
             write_admitted(box_dir, &dst, reader, admitted),
@@ -860,7 +911,8 @@ fn put_file(dst: &OwnedFd, name: &str, bytes: &[u8], reader: Reader) -> std::io:
 
 /// Brings the box's library level with the owner's own in `home`, for `reader`, the door's
 /// group. Returns whether anything changed. A config folder that isn't there, as in a home not
-/// mounted yet, leaves the copy as it is: the door keeps serving the last library it had.
+/// mounted yet, leaves the copy as it is: the door keeps serving the last library it had. The
+/// display policy follows even when a library file can't; the first failure is the answer.
 pub(super) fn refresh_box_library(
     home: &Path,
     state: &Path,
@@ -876,16 +928,19 @@ pub(super) fn refresh_box_library(
     };
     let dst =
         open_copy(&box_library_dir(state), reader).map_err(|e| io("open the library copy", e))?;
-    let mut changed =
-        sync_library(Some(&src), &dst, reader).map_err(|e| io("copy the owner's library", e))?;
-    changed |= sync_file(Some(&src), &dst, OWNER_POLICY, reader, MAX_TRUST_BYTES)
-        .map_err(|e| io("copy the owner's display policy", e))?;
-    Ok(changed)
+    let library = sync_library(Some(&src), &dst, reader, &|_| true)
+        .map_err(|e| io("copy the owner's library", e));
+    let policy = sync_file(Some(&src), &dst, OWNER_POLICY, reader, MAX_TRUST_BYTES)
+        .map_err(|e| io("copy the owner's display policy", e));
+    Ok(library? | policy?)
 }
 
 /// Brings the box's library in a seat's trust copy level with [`box_library_dir`]: the seat's
-/// `PUNKTFUNK_LIBRARY_DIR`. Never the owner's row, whose host writes the library it reads.
+/// `PUNKTFUNK_LIBRARY_DIR`. Of [`LIBRARY_PROFILES`] it holds only the folder of the profile the
+/// door's `profiles.json` in `box_dir` puts on this seat ([`seat_profile`]). Never the owner's
+/// row, whose host writes the library it reads.
 pub(super) fn refresh_seat_library(
+    box_dir: &Path,
     state: &Path,
     id: &SeatId,
     reader: Reader,
@@ -893,7 +948,85 @@ pub(super) fn refresh_seat_library(
     let io = |what: &str, e| io_err("trust_copy", what, e);
     let dst = open_copy(&trust_dir(state, id), reader).map_err(|e| io("open the trust copy", e))?;
     let src = open_source(&box_library_dir(state)).map_err(|e| io("open the box library", e))?;
-    sync_library(src.as_ref(), &dst, reader).map_err(|e| io("copy the box library", e))
+    let own = seat_profile(box_dir, id);
+    sync_library(src.as_ref(), &dst, reader, &|p| own.as_deref() == Some(p))
+        .map_err(|e| io("copy the box library", e))
+}
+
+/// The profile seat `id` plays: the first in `box_dir`'s `profiles.json` whose `os_account` is
+/// `{"kind": "seat", "seat": id}`, as its host picks its own. Read from the door's file, never
+/// the trust copy: a person owns theirs. A file [`safe_open`] refuses, one over
+/// [`MAX_TRUST_BYTES`] or not `{"profiles": [...]}`, and an id that is not 12 lowercase hex,
+/// name none.
+fn seat_profile(box_dir: &Path, id: &SeatId) -> Option<String> {
+    lock_holder(box_dir, id, false).flatten()
+}
+
+/// The profile whose lock seat `id` follows, from the door's `profiles.json` as
+/// [`seat_profile`] reads it: its own, or with `owner` the owner's, the first on the box's own
+/// session, whose lock every profile sharing that desktop opens with. `None` when the file
+/// doesn't read; `Some(None)` when no profile with a valid id plays there.
+fn lock_holder(box_dir: &Path, id: &SeatId, owner: bool) -> Option<Option<String>> {
+    #[derive(serde::Deserialize)]
+    struct File {
+        profiles: Vec<serde_json::Value>,
+    }
+    let (bytes, _) = safe_open::read(&box_dir.join("profiles.json"), MAX_TRUST_BYTES).ok()??;
+    let file: File = serde_json::from_slice(&bytes).ok()?;
+    let plays = |p: &&serde_json::Value| {
+        let account = &p["os_account"];
+        match owner {
+            true => account["kind"] == "operator",
+            false => account["kind"] == "seat" && account["seat"] == id.as_str(),
+        }
+    };
+    let first = file.profiles.iter().find(plays);
+    let id = first
+        .and_then(|p| p["id"].as_str())
+        .filter(|p| profile_id(p));
+    Some(id.map(str::to_owned))
+}
+
+/// What the door's lock file ([`locks::FILE`]) gives seat `id` at `now`: the devices its pairing
+/// list admits, `None` for every paired one, and the lock copy its host reads, without any PIN,
+/// `None` for none. A lock file that is there and doesn't read admits nobody, and so does a
+/// `profiles.json` that doesn't read while anything is locked.
+fn lock_filter(
+    box_dir: &Path,
+    id: &SeatId,
+    owner: bool,
+    now: i64,
+) -> (Option<BTreeSet<String>>, Option<locks::Locks>) {
+    let read = match safe_open::read(&box_dir.join(locks::FILE), MAX_TRUST_BYTES) {
+        Ok(None) => return (None, None),
+        Ok(Some((bytes, _))) => locks::Locks::parse(&bytes),
+        Err(_) => None,
+    };
+    let closed = locks::Locks {
+        unreadable: true,
+        ..locks::Locks::default()
+    };
+    let Some(read) = read else {
+        return (Some(BTreeSet::new()), Some(closed));
+    };
+    match lock_holder(box_dir, id, owner) {
+        Some(holder) => {
+            let served: Vec<String> = holder.into_iter().collect();
+            (
+                read.admitted_for(&served, now),
+                Some(read.seat_copy(&served)),
+            )
+        }
+        None if read.unreadable || read.profiles.values().any(|l| l.locked) => {
+            (Some(BTreeSet::new()), Some(closed))
+        }
+        None => (None, None),
+    }
+}
+
+/// A profile id as the host mints it: 12 lowercase hex.
+fn profile_id(name: &str) -> bool {
+    name.len() == 12 && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Removes the box's library: the owner's row is gone, and so is the door it was for.
@@ -904,20 +1037,81 @@ pub(super) fn remove_box_library(state: &Path) -> std::io::Result<()> {
     }
 }
 
-/// The library files, the metadata folder, the plugins' grants and the firmware they staged,
-/// from `src` into `dst`, for `reader`.
-fn sync_library(src: Option<&OwnedFd>, dst: &OwnedFd, reader: Reader) -> std::io::Result<bool> {
-    let mut changed = false;
+/// The library files, the metadata folder, the folders of the profiles `profile` admits, the
+/// plugins' grants and the firmware they staged, from `src` into `dst`, for `reader`. An item
+/// that can't be copied keeps its last good copy and the rest still follow; the first failure is
+/// the answer.
+fn sync_library(
+    src: Option<&OwnedFd>,
+    dst: &OwnedFd,
+    reader: Reader,
+    profile: &dyn Fn(&str) -> bool,
+) -> std::io::Result<bool> {
+    let mut tally = Tally::default();
     for name in LIBRARY_FILES {
-        changed |= sync_file(src, dst, name, reader, MAX_LIBRARY_BYTES)?;
+        tally.note(sync_file(src, dst, name, reader, MAX_LIBRARY_BYTES));
     }
-    changed |= sync_flat_dir(src, dst, LIBRARY_METADATA, reader, MAX_LIBRARY_BYTES)?;
-    let run = sub(src, PLUGIN_RUN)?;
-    changed |= sync_dir(run.as_ref(), dst, PLUGIN_RUN, reader, &|run, copy| {
-        sync_file(run, copy, PLUGIN_GRANTS, reader, MAX_TRUST_BYTES)
-    })?;
-    changed |= sync_firmware(src, dst, reader)?;
-    Ok(changed)
+    let metadata = sync_flat_dir(src, dst, LIBRARY_METADATA, reader, MAX_LIBRARY_BYTES);
+    tally.note(metadata);
+    tally.note(sync_profiles(src, dst, reader, profile));
+    tally.note(sub(src, PLUGIN_RUN).and_then(|run| {
+        sync_dir(run.as_ref(), dst, PLUGIN_RUN, reader, &|run, copy| {
+            sync_file(run, copy, PLUGIN_GRANTS, reader, MAX_TRUST_BYTES)
+        })
+    }));
+    tally.note(sync_firmware(src, dst, reader));
+    tally.answer()
+}
+
+/// Whether any step changed its copy, and the first step that failed.
+#[derive(Default)]
+struct Tally {
+    changed: bool,
+    first: Option<std::io::Error>,
+}
+
+impl Tally {
+    fn note(&mut self, step: std::io::Result<bool>) {
+        match step {
+            Ok(did) => self.changed |= did,
+            Err(e) => {
+                self.first.get_or_insert(e);
+            }
+        }
+    }
+
+    fn answer(self) -> std::io::Result<bool> {
+        self.first.map_or(Ok(self.changed), Err)
+    }
+}
+
+/// [`LIBRARY_PROFILES`] from `src` into `dst`: the folder of each profile id `keep` admits,
+/// holding [`PROFILE_FILES`] alone, and every other folder in `dst` emptied and removed. A name
+/// that is no profile id, or a link or file where a folder belongs, counts as absent. A folder
+/// on its way out loses the temp a cut-short copy left too.
+fn sync_profiles(
+    src: Option<&OwnedFd>,
+    dst: &OwnedFd,
+    reader: Reader,
+    keep: &dyn Fn(&str) -> bool,
+) -> std::io::Result<bool> {
+    let files = |src: Option<&OwnedFd>, copy: &OwnedFd| {
+        let mut tally = Tally::default();
+        for name in PROFILE_FILES {
+            tally.note(sync_file(src, copy, name, reader, MAX_LIBRARY_BYTES));
+            if src.is_none() {
+                tally.note(unlink(copy, &format!("{name}.tmp")));
+            }
+        }
+        tally.answer()
+    };
+    let profiles = |src: Option<&OwnedFd>, copy: &OwnedFd| {
+        let mut found = folders(src, |dir| Ok(Some(dir)))?;
+        found.retain(|(name, _)| profile_id(name) && keep(name));
+        sync_each(found, copy, reader, &files)
+    };
+    let src = sub(src, LIBRARY_PROFILES)?;
+    sync_dir(src.as_ref(), dst, LIBRARY_PROFILES, reader, &profiles)
 }
 
 /// `plugin-state/<provider>/firmware/<platform>/<file>` from `src` into `dst`: what a plugin
@@ -971,24 +1165,25 @@ fn folders(
     Ok(out)
 }
 
-/// Each of `found` copied into `dst` through `fill`, and every other folder in `dst` emptied
-/// and removed.
+/// Every folder in `dst` not in `found` emptied and removed, then each of `found` copied into
+/// `dst` through `fill`. A folder that fails keeps what it has and stops none after it; the
+/// first failure is the answer.
 fn sync_each(
     found: Vec<(String, OwnedFd)>,
     dst: &OwnedFd,
     reader: Reader,
     fill: Fill<'_>,
 ) -> std::io::Result<bool> {
-    let mut changed = false;
-    for (name, src) in &found {
-        changed |= sync_dir(Some(src), dst, name, reader, fill)?;
-    }
+    let mut tally = Tally::default();
     for name in names(dst)? {
         if found.iter().all(|(kept, _)| *kept != name) {
-            changed |= sync_dir(None, dst, &name, reader, fill)?;
+            tally.note(sync_dir(None, dst, &name, reader, fill));
         }
     }
-    Ok(changed)
+    for (name, src) in &found {
+        tally.note(sync_dir(Some(src), dst, name, reader, fill));
+    }
+    tally.answer()
 }
 
 /// The folder `name` in `dst` level with `src`, its source already opened: made for `reader`
@@ -1102,14 +1297,82 @@ fn safe_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
-/// The box owner's Steam install: `~/.steam/steam`, else `~/.local/share/Steam`.
-fn steam_root_of(home: &Path) -> Option<PathBuf> {
-    let linked = home.join(".steam/steam");
-    if linked.is_dir() {
-        return Some(std::fs::canonicalize(&linked).unwrap_or(linked));
+/// Where Steam installs itself under a home: its own link, the native folder, Debian's installer,
+/// the Flatpak's home and data folders, and the Snap.
+pub(super) const STEAM_ROOTS: [&str; 6] = [
+    ".steam/steam",
+    ".local/share/Steam",
+    ".steam/debian-installation",
+    ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+    ".var/app/com.valvesoftware.Steam/data/Steam",
+    "snap/steam/common/.local/share/Steam",
+];
+
+/// The seat's Steam folders that get the library list: its own copy, and the folder Debian's
+/// launcher installs into when `~/.steam/steam` names no install.
+pub(super) const SEAT_STEAMS: [&str; 2] = [".local/share/Steam", ".steam/debian-installation"];
+
+/// `~/.steam/steam` and `~/.steam/root` naming the seat's own Steam, once it has one, where the
+/// seat has neither, as `steam.sh` makes them. A launcher with another default install, as
+/// Debian's, then runs that copy. Through descriptors: no link the seat user placed is followed.
+pub(super) fn link_steam(seat: &Passwd) -> std::io::Result<()> {
+    if !seat.home.join(STEAM_MARKER).exists() {
+        return Ok(());
     }
-    let data = home.join(".local/share/Steam");
-    data.is_dir().then_some(data)
+    let steam = seat.home.join(".local/share/Steam");
+    let home = safe_open::dir(&seat.home)?;
+    let dot = match safe_open::dir_at(&home, ".steam")? {
+        Some(dot) => dot,
+        None => {
+            rustix::fs::mkdirat(&home, ".steam", Mode::from_raw_mode(0o755 as _))?;
+            let dot = safe_open::dir_at(&home, ".steam")?.ok_or(Errno::NOENT)?;
+            std::os::unix::fs::fchown(&dot, Some(seat.uid), Some(seat.gid))?;
+            dot
+        }
+    };
+    let owner = rustix::process::Uid::from_raw(seat.uid);
+    let group = rustix::process::Gid::from_raw(seat.gid);
+    for name in ["steam", "root"] {
+        match rustix::fs::symlinkat(&steam, &dot, name) {
+            Ok(()) => {}
+            Err(Errno::EXIST) => continue,
+            Err(error) => return Err(error.into()),
+        }
+        rustix::fs::chownat(
+            &dot,
+            name,
+            Some(owner),
+            Some(group),
+            AtFlags::SYMLINK_NOFOLLOW,
+        )?;
+    }
+    Ok(())
+}
+
+/// The Steam install under `home` that `owns` admits: of [`STEAM_ROOTS`], the one whose library
+/// list Steam wrote last, so an old native install beside the Flatpak in use loses to it. A root
+/// with no list counts oldest, and the first listed wins a tie.
+fn steam_root_of(home: &Path, owns: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    let written = |root: &Path| {
+        let list = root.join("steamapps").join("libraryfolders.vdf");
+        std::fs::metadata(list)
+            .and_then(|meta| meta.modified())
+            .ok()
+    };
+    let mut best: Option<(Option<std::time::SystemTime>, PathBuf)> = None;
+    for root in STEAM_ROOTS.iter().map(|root| home.join(root)) {
+        let Ok(root) = std::fs::canonicalize(&root) else {
+            continue;
+        };
+        if !root.is_dir() || !owns(&root) {
+            continue;
+        }
+        let at = written(&root);
+        if best.as_ref().is_none_or(|(best, _)| at > *best) {
+            best = Some((at, root));
+        }
+    }
+    best.map(|(_, root)| root)
 }
 
 /// A Steam install to clone and the user it is read as.
@@ -1150,8 +1413,8 @@ fn stat_owner(root: &Path) -> Option<u32> {
 
 /// [`steam_source_of`] with `owner` naming who owns a Steam root.
 fn owned_source_of(user: &Passwd, owner: impl Fn(&Path) -> Option<u32>) -> Option<SteamSource> {
-    let root = steam_root_of(&user.home)?;
-    (owner(&root) == Some(user.uid)).then_some(SteamSource {
+    let root = steam_root_of(&user.home, |root| owner(root) == Some(user.uid))?;
+    Some(SteamSource {
         root,
         uid: user.uid,
         gid: user.gid,
@@ -1167,9 +1430,10 @@ fn find_source(users: &[Passwd], owner: impl Fn(&Path) -> Option<u32>) -> Option
         .find_map(|u| owned_source_of(u, &owner))
 }
 
-/// A Steam under the seat's home, cloned from `source` when there is one, and a library list that
-/// names that Steam, then the shared games folder. Never fails the seat: without a clone Steam
-/// downloads itself on first run, and without the list it offers games again.
+/// A Steam under the seat's home, cloned from `source` when there is one, the links that name it
+/// ([`link_steam`]), and a library list that names that Steam, then the shared games folder.
+/// Never fails the seat: without a clone Steam downloads itself on first run, and without the
+/// list it offers games again.
 pub(super) fn provision_steam(
     state: &Path,
     id: &SeatId,
@@ -1190,7 +1454,10 @@ pub(super) fn provision_steam(
             None => tracing::info!("no steam install to clone; the seat downloads its own"),
         }
     }
-    if let Err(error) = write_library_folders(state, &steam) {
+    if let Err(error) = link_steam(passwd) {
+        tracing::warn!(%error, "seat's steam links not made");
+    }
+    if let Err(error) = write_library_folders(&steam) {
         tracing::warn!(%error, "steam library list not written");
     }
     let local = passwd.home.join(".local");
@@ -1281,10 +1548,11 @@ fn clone_names(src: &SteamSource) -> std::io::Result<Vec<String>> {
     Ok(out)
 }
 
-/// Lists the seat's own Steam, then the shared games folder. Steam reads entry `0` as its own
-/// install whatever path stands there, so a folder listed there is lost. Written once; Steam owns
-/// the file afterwards, and [`super::libraries::register`] adds the games folder if it goes.
-fn write_library_folders(state: &Path, steam: &Path) -> std::io::Result<()> {
+/// Lists the seat's own Steam, then the shared games folder as the seat sees it. Steam reads
+/// entry `0` as its own install whatever path stands there, so a folder listed there is lost.
+/// Written once; Steam owns the file afterwards, and [`super::libraries::register`] adds the
+/// games folder if it goes.
+fn write_library_folders(steam: &Path) -> std::io::Result<()> {
     let dir = steam.join("steamapps");
     let file = dir.join("libraryfolders.vdf");
     if file.exists() {
@@ -1293,7 +1561,9 @@ fn write_library_folders(state: &Path, steam: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(&dir)?;
     let folders = [
         steam.to_string_lossy().into_owned(),
-        games_dir(state).to_string_lossy().into_owned(),
+        super::libraries::games_view()
+            .to_string_lossy()
+            .into_owned(),
     ];
     std::fs::write(file, crate::steam::library_folders_vdf(&folders))
 }
@@ -1528,24 +1798,24 @@ mod tests {
             .is_symlink());
     }
 
-    /// A new seat's list names its own Steam at entry 0, the games folder after it, and a list
-    /// Steam already wrote stays.
+    /// A new seat's list names its own Steam at entry 0, the games folder's view after it, and a
+    /// list Steam already wrote stays.
     #[test]
     fn a_new_seat_lists_its_own_steam_first() {
         let temp = tempfile::tempdir().unwrap();
-        let (state, steam) = (temp.path().join("state"), temp.path().join("home/Steam"));
-        write_library_folders(&state, &steam).unwrap();
+        let steam = temp.path().join("home/Steam");
+        write_library_folders(&steam).unwrap();
         let file = steam.join("steamapps/libraryfolders.vdf");
         let listed = crate::steam::library_paths(&std::fs::read_to_string(&file).unwrap());
         assert_eq!(
             listed,
             [
                 steam.to_string_lossy().into_owned(),
-                state.join("games").to_string_lossy().into_owned(),
+                "/run/media/punktfunk/games".to_owned(),
             ]
         );
         std::fs::write(&file, "steam's own").unwrap();
-        write_library_folders(&state, &steam).unwrap();
+        write_library_folders(&steam).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "steam's own");
     }
 
@@ -1692,7 +1962,7 @@ mod tests {
             "unchanged is a no-op"
         );
 
-        assert!(refresh_seat_library(&state, &id(), reader).unwrap());
+        assert!(refresh_seat_library(&home, &state, &id(), reader).unwrap());
         let trust = trust_dir(&state, &id());
         assert!(trust.join("library.json").exists());
         assert!(trust.join("library-metadata/sgdb.json").exists());
@@ -1740,7 +2010,7 @@ mod tests {
         std::fs::remove_dir_all(romm.join("firmware/psx")).unwrap();
         std::fs::remove_file(run.join("plugin-grants.json")).unwrap();
         assert!(refresh_box_library(&home, &state, reader).unwrap());
-        assert!(refresh_seat_library(&state, &id(), reader).unwrap());
+        assert!(refresh_seat_library(&home, &state, &id(), reader).unwrap());
         assert!(!trust.join("library-metadata/sgdb.json").exists());
         assert!(!trust.join("plugin-state/romm/firmware/psx").exists());
         assert!(!trust.join("plugin-run/plugin-grants.json").exists());
@@ -1756,9 +2026,306 @@ mod tests {
 
         remove_box_library(&state).unwrap();
         assert!(!copy.exists());
-        assert!(refresh_seat_library(&state, &id(), reader).unwrap());
+        assert!(refresh_seat_library(&home, &state, &id(), reader).unwrap());
         assert!(!trust.join("library.json").exists());
         assert!(!state_copy.exists());
+    }
+
+    const ANNA: &str = "a1a1a1a1a1a1";
+    const BEN: &str = "b2b2b2b2b2b2";
+    const OTHER_SEAT: &str = "fedcba9876543210fedcba9876543210";
+
+    /// The door's `profiles.json`: the owner, Anna on `anna`'s seat, Ben on `ben`'s.
+    fn profiles_on(box_dir: &Path, anna: &str, ben: &str) {
+        let file = serde_json::json!({"version": 1, "profiles": [
+            {"id": "c3c3c3c3c3c3", "display_name": "Owner", "os_account": {"kind": "operator"}},
+            {"id": ANNA, "display_name": "Anna", "os_account": {"kind": "seat", "seat": anna}},
+            {"id": BEN, "display_name": "Ben", "os_account": {"kind": "seat", "seat": ben}},
+        ]});
+        std::fs::write(box_dir.join("profiles.json"), file.to_string()).unwrap();
+    }
+
+    /// The names in `dir`, sorted; none when it is absent.
+    fn listing(dir: &Path) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = entries
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A locked profile's seat admits only the devices its lock does and finds the lock beside
+    /// its pairing list, without the PIN; an open profile's keeps the box's whole list. The
+    /// owner's row follows the owner's lock, which every profile sharing that desktop opens
+    /// with. A lock file that doesn't read admits nobody.
+    #[test]
+    fn a_locked_profile_s_seat_admits_only_its_devices() {
+        use crate::locks::{Lock, Locks, PinHash};
+        let temp = tempfile::tempdir().unwrap();
+        let box_dir = temp.path();
+        let state_temp = tempfile::tempdir().unwrap();
+        let state = state_temp.path();
+        let reader = Reader::group(own_gid(box_dir));
+        let (tv, phone) = ("aa".repeat(32), "bb".repeat(32));
+        let paired = serde_json::json!({"clients": [
+            {"name": "TV", "fingerprint": tv}, {"name": "Phone", "fingerprint": phone}]});
+        std::fs::write(box_dir.join(PAIRED), paired.to_string()).unwrap();
+        profiles_on(box_dir, id().as_str(), OTHER_SEAT);
+        let owner = SeatId::parse("abcdefabcdefabcdefabcdefabcdefab").unwrap();
+        let admitted = |seat: &SeatId| -> Vec<String> {
+            let text = std::fs::read_to_string(trust_dir(state, seat).join(PAIRED)).unwrap();
+            let file: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let clients = file["clients"].as_array().unwrap().iter();
+            clients
+                .map(|c| c["fingerprint"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let copy = |seat: &SeatId| {
+            let bytes = std::fs::read(trust_dir(state, seat).join(locks::FILE)).ok()?;
+            Some(Locks::parse(&bytes).unwrap())
+        };
+        let lock = |fp: &str| {
+            let mut lock = Lock {
+                locked: true,
+                pin: PinHash::new("2468"),
+                ..Lock::default()
+            };
+            let device = crate::ipc::Device {
+                fingerprint: fp.to_string(),
+                name: "TV".into(),
+            };
+            assert!(lock.admit(&device, super::super::unix_now(), true));
+            lock
+        };
+        let write = |locks: &Locks| {
+            let bytes = serde_json::to_vec(locks).unwrap();
+            std::fs::write(box_dir.join(locks::FILE), bytes).unwrap();
+        };
+
+        refresh_trust(box_dir, state, &id(), reader).unwrap();
+        assert_eq!(admitted(&id()), [tv.clone(), phone.clone()]);
+        assert!(copy(&id()).is_none(), "no lock file, no copy");
+
+        let mut file = Locks::default();
+        file.profiles.insert(ANNA.into(), lock(&tv));
+        file.profiles.insert("c3c3c3c3c3c3".into(), lock(&phone));
+        write(&file);
+        refresh_trust(box_dir, state, &id(), reader).unwrap();
+        assert_eq!(admitted(&id()), std::slice::from_ref(&tv));
+        let anna = copy(&id()).unwrap();
+        assert_eq!(anna.profiles.keys().collect::<Vec<_>>(), [ANNA]);
+        assert!(anna.profiles[ANNA].locked && anna.profiles[ANNA].pin.is_none());
+        assert_eq!(mode(&trust_dir(state, &id()).join(locks::FILE)), 0o640);
+        refresh_owner_trust(box_dir, state, &owner, reader).unwrap();
+        let own = admitted(&owner);
+        assert_eq!(own, std::slice::from_ref(&phone), "the owner's own list");
+
+        // A profile sharing the owner's desktop has no lock of its own: the owner's decides.
+        let mut shared: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(box_dir.join("profiles.json")).unwrap()).unwrap();
+        let sharer = serde_json::json!({"id": "d4d4d4d4d4d4", "display_name": "Guest",
+            "os_account": {"kind": "operator"}});
+        shared["profiles"].as_array_mut().unwrap().push(sharer);
+        std::fs::write(box_dir.join("profiles.json"), shared.to_string()).unwrap();
+        refresh_owner_trust(box_dir, state, &owner, reader).unwrap();
+        assert_eq!(admitted(&owner), std::slice::from_ref(&phone));
+        let keys = copy(&owner)
+            .unwrap()
+            .profiles
+            .into_keys()
+            .collect::<Vec<_>>();
+        assert_eq!(keys, ["c3c3c3c3c3c3"], "the owner's lock alone");
+
+        file.profiles.get_mut(ANNA).unwrap().locked = false;
+        write(&file);
+        refresh_trust(box_dir, state, &id(), reader).unwrap();
+        assert_eq!(admitted(&id()), [tv.clone(), phone.clone()], "open again");
+
+        std::fs::write(box_dir.join(locks::FILE), "not a lock file").unwrap();
+        for (seat, owner) in [(id(), false), (owner.clone(), true)] {
+            sync_trust(box_dir, state, &seat, reader, Who::Seat { owner }).unwrap();
+            assert!(admitted(&seat).is_empty(), "{seat}");
+            assert!(copy(&seat).unwrap().unreadable);
+        }
+        std::fs::remove_file(box_dir.join(locks::FILE)).unwrap();
+        refresh_trust(box_dir, state, &id(), reader).unwrap();
+        assert_eq!(admitted(&id()), [tv, phone]);
+        assert!(copy(&id()).is_none());
+    }
+
+    /// The door's copy holds every profile's layer; a seat's trust copy holds its own profile's
+    /// alone and drops a folder that stops being its own.
+    #[test]
+    fn a_seat_gets_its_own_profile_s_layer_and_no_other() {
+        let temp = tempfile::tempdir().unwrap();
+        let (home, state, box_dir) = (
+            temp.path().join("home"),
+            temp.path().join("state"),
+            temp.path().join("box"),
+        );
+        let layer = home.join(".config/punktfunk").join(LIBRARY_PROFILES);
+        for dir in [
+            layer.join(ANNA),
+            layer.join(BEN),
+            state.clone(),
+            box_dir.clone(),
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(layer.join(ANNA).join("library-hidden.json"), "[1]").unwrap();
+        std::fs::write(layer.join(ANNA).join("session-settings.json"), "{}").unwrap();
+        std::fs::write(layer.join(ANNA).join("own-titles.json"), "{}").unwrap();
+        std::fs::write(layer.join(ANNA).join("notes.txt"), "not a store").unwrap();
+        std::fs::write(layer.join(BEN).join("library-picks.json"), "{}").unwrap();
+        profiles_on(&box_dir, id().as_str(), OTHER_SEAT);
+        let door = Reader::group(own_gid(&home));
+        assert!(refresh_box_library(&home, &state, door).unwrap());
+        let copy = box_library_dir(&state).join(LIBRARY_PROFILES);
+        assert_eq!(listing(&copy), [ANNA, BEN]);
+        assert_eq!(mode(&copy.join(ANNA)), 0o750);
+        assert_eq!(mode(&copy.join(ANNA).join("library-hidden.json")), 0o640);
+        assert_eq!(
+            listing(&copy.join(ANNA)),
+            [
+                "library-hidden.json",
+                "own-titles.json",
+                "session-settings.json"
+            ],
+            "the stores alone"
+        );
+
+        let me = std::fs::metadata(&home).unwrap();
+        let seat = Reader::person(me.uid(), me.gid());
+        let seat_copy = |box_dir: &Path| refresh_seat_library(box_dir, &state, &id(), seat);
+        assert!(seat_copy(&box_dir).unwrap());
+        let trust = trust_dir(&state, &id()).join(LIBRARY_PROFILES);
+        assert_eq!(listing(&trust), [ANNA]);
+        assert_eq!(mode(&trust.join(ANNA)), 0o700);
+        assert_eq!(
+            std::fs::read_to_string(trust.join(ANNA).join("library-hidden.json")).unwrap(),
+            "[1]"
+        );
+        assert_eq!(mode(&trust.join(ANNA).join("library-hidden.json")), 0o600);
+        assert_eq!(mode(&trust.join(ANNA).join("own-titles.json")), 0o600);
+        assert!(!seat_copy(&box_dir).unwrap(), "unchanged is a no-op");
+
+        // The seat becomes Ben's: Anna's folder goes, with what a cut-short copy left.
+        std::fs::write(trust.join(ANNA).join("library-picks.json.tmp"), "{").unwrap();
+        profiles_on(&box_dir, OTHER_SEAT, id().as_str());
+        assert!(seat_copy(&box_dir).unwrap());
+        assert_eq!(listing(&trust), [BEN]);
+
+        // No profile plays the seat, or the door's file is gone: no profile's folder.
+        profiles_on(&box_dir, OTHER_SEAT, OTHER_SEAT);
+        assert!(seat_copy(&box_dir).unwrap());
+        assert!(listing(&trust).is_empty());
+        profiles_on(&box_dir, id().as_str(), OTHER_SEAT);
+        assert!(seat_copy(&box_dir).unwrap());
+        assert!(seat_copy(&temp.path().join("gone")).unwrap());
+        assert!(listing(&trust).is_empty());
+
+        // The owner's host drops Anna's layer: it leaves the door's copy, then the seat's.
+        assert!(seat_copy(&box_dir).unwrap());
+        std::fs::remove_dir_all(layer.join(ANNA)).unwrap();
+        assert!(refresh_box_library(&home, &state, door).unwrap());
+        assert_eq!(listing(&copy), [BEN]);
+        assert!(seat_copy(&box_dir).unwrap());
+        assert!(listing(&trust).is_empty());
+    }
+
+    /// A link, a file where a folder belongs, a name that is no profile id, and a store that is
+    /// a link, a folder or over its cap never cross; the rest of the layer still follows.
+    #[test]
+    fn hostile_profile_entries_are_not_copied() {
+        let temp = tempfile::tempdir().unwrap();
+        let (home, state, box_dir) = (
+            temp.path().join("home"),
+            temp.path().join("state"),
+            temp.path().join("box"),
+        );
+        let layer = home.join(".config/punktfunk").join(LIBRARY_PROFILES);
+        let (anna, secret) = (layer.join(ANNA), temp.path().join("secret"));
+        for dir in [&anna, &state, &box_dir, &secret] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(secret.join("library-hidden.json"), "root only").unwrap();
+        std::os::unix::fs::symlink(
+            secret.join("library-hidden.json"),
+            anna.join("library-hidden.json"),
+        )
+        .unwrap();
+        std::fs::create_dir(anna.join("library-overrides.json")).unwrap();
+        let big = std::fs::File::create(anna.join("library-picks.json")).unwrap();
+        big.set_len(MAX_LIBRARY_BYTES + 1).unwrap();
+        std::fs::write(anna.join("library-scanners.json"), "{}").unwrap();
+        std::os::unix::fs::symlink(&secret, layer.join(BEN)).unwrap();
+        std::fs::write(layer.join("d4d4d4d4d4d4"), "a file").unwrap();
+        for name in ["A1A1A1A1A1A1", "notaprofile", "a1a1a1a1a1a1a1"] {
+            std::fs::create_dir(layer.join(name)).unwrap();
+            std::fs::write(layer.join(name).join("library-hidden.json"), "[]").unwrap();
+        }
+        let door = Reader::group(own_gid(&home));
+        let error = refresh_box_library(&home, &state, door).unwrap_err();
+        assert_eq!(error.code, "box_library");
+        let copy = box_library_dir(&state).join(LIBRARY_PROFILES);
+        assert_eq!(listing(&copy), [ANNA]);
+        assert_eq!(listing(&copy.join(ANNA)), ["library-scanners.json"]);
+
+        profiles_on(&box_dir, id().as_str(), OTHER_SEAT);
+        assert!(refresh_seat_library(&box_dir, &state, &id(), door).unwrap());
+        let trust = trust_dir(&state, &id()).join(LIBRARY_PROFILES);
+        assert_eq!(listing(&trust.join(ANNA)), ["library-scanners.json"]);
+
+        // A linked layer folder is refused whole: the copies keep what they had.
+        std::fs::remove_dir_all(&layer).unwrap();
+        std::os::unix::fs::symlink(&secret, &layer).unwrap();
+        assert!(refresh_box_library(&home, &state, door).is_err());
+        assert_eq!(listing(&copy), [ANNA]);
+    }
+
+    /// A seat's profile is the one whose account names that seat. The owner's row, a light seat,
+    /// an id that is no profile id, and a door file that is a link or no JSON name none.
+    #[test]
+    fn a_seat_s_profile_comes_from_the_door_s_file_alone() {
+        let temp = tempfile::tempdir().unwrap();
+        let box_dir = temp.path();
+        assert_eq!(seat_profile(box_dir, &id()), None, "no file");
+        profiles_on(box_dir, id().as_str(), OTHER_SEAT);
+        assert_eq!(seat_profile(box_dir, &id()).as_deref(), Some(ANNA));
+        let other = SeatId::parse(OTHER_SEAT).unwrap();
+        assert_eq!(seat_profile(box_dir, &other).as_deref(), Some(BEN));
+
+        let file = |rows: serde_json::Value| {
+            let file = serde_json::json!({ "profiles": rows });
+            std::fs::write(box_dir.join("profiles.json"), file.to_string()).unwrap();
+            seat_profile(box_dir, &id())
+        };
+        let seat = serde_json::json!({"kind": "seat", "seat": id().as_str()});
+        for bad in [
+            "../a1a1a1a1a",
+            "A1A1A1A1A1A1",
+            "a1a1a1a1a1a1/..",
+            "operator",
+            "",
+        ] {
+            let rows = serde_json::json!([{"id": bad, "os_account": seat}]);
+            assert_eq!(file(rows), None, "{bad}");
+        }
+        let light = serde_json::json!([{"id": ANNA, "os_account": {"kind": "seat"}}]);
+        assert_eq!(file(light), None, "a light seat");
+        let owner = serde_json::json!([{"id": ANNA, "os_account": {"kind": "operator"}}]);
+        assert_eq!(file(owner), None, "the owner's");
+
+        std::fs::write(box_dir.join("profiles.json"), "not json").unwrap();
+        assert_eq!(seat_profile(box_dir, &id()), None);
+        let real = temp.path().join("real.json");
+        profiles_on(box_dir, id().as_str(), OTHER_SEAT);
+        std::fs::rename(box_dir.join("profiles.json"), &real).unwrap();
+        std::os::unix::fs::symlink(&real, box_dir.join("profiles.json")).unwrap();
+        assert_eq!(seat_profile(box_dir, &id()), None, "a link");
     }
 
     /// The owner's display policy travels with the library: into the copy the door reads, and
@@ -1829,6 +2396,36 @@ mod tests {
             std::fs::read_to_string(box_library_dir(&state).join("library.json")).unwrap(),
             "root only"
         );
+    }
+
+    /// A library file the copy refuses keeps its last good copy and stops none after it: the
+    /// later files, the plugins' grants and the display policy still follow.
+    #[test]
+    fn a_bad_library_file_keeps_its_copy_and_the_rest_follow() {
+        let temp = tempfile::tempdir().unwrap();
+        let (home, state) = (temp.path().join("home"), temp.path().join("state"));
+        let config = home.join(".config/punktfunk");
+        let run = config.join("plugin-run");
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::create_dir(&state).unwrap();
+        std::fs::write(config.join("library.json"), "{}").unwrap();
+        std::fs::write(run.join("plugin-grants.json"), "[1]").unwrap();
+        let reader = Reader::group(own_gid(&home));
+        assert!(refresh_box_library(&home, &state, reader).unwrap());
+
+        // A second link makes the first library file unreadable to the copy.
+        std::fs::hard_link(config.join("library.json"), temp.path().join("backup")).unwrap();
+        std::fs::write(config.join("library-picks.json"), "[]").unwrap();
+        std::fs::write(run.join("plugin-grants.json"), "{}").unwrap();
+        std::fs::write(config.join("display-settings.json"), "{}").unwrap();
+        let error = refresh_box_library(&home, &state, reader).unwrap_err();
+        assert_eq!(error.code, "box_library");
+        let copy = box_library_dir(&state);
+        let read = |name: &str| std::fs::read_to_string(copy.join(name)).unwrap();
+        assert_eq!(read("library.json"), "{}");
+        assert_eq!(read("library-picks.json"), "[]");
+        assert_eq!(read("plugin-run/plugin-grants.json"), "{}");
+        assert_eq!(read("display-settings.json"), "{}");
     }
 
     /// A file the copy refuses leaves its last good copy and doesn't stop the others; a box
@@ -2059,6 +2656,76 @@ mod tests {
         assert_eq!(owned_source_of(&users[3], owner), None);
     }
 
+    /// Of the Steam folders under a home, the one whose list Steam wrote last is the owner's: an
+    /// old native install beside the Flatpak in use loses to it. A root the user doesn't own is
+    /// passed over.
+    #[test]
+    fn the_owner_s_steam_is_the_install_that_wrote_its_list_last() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(temp.path()).unwrap();
+        let list = |root: &str, age: u64| {
+            let steamapps = home.join(root).join("steamapps");
+            std::fs::create_dir_all(&steamapps).unwrap();
+            let file = std::fs::File::create(steamapps.join("libraryfolders.vdf")).unwrap();
+            let at = std::time::SystemTime::now() - std::time::Duration::from_secs(age);
+            file.set_modified(at).unwrap();
+        };
+        let all = |_: &Path| true;
+        assert_eq!(steam_root_of(&home, all), None, "no Steam");
+        list(".local/share/Steam", 3600);
+        assert_eq!(
+            steam_root_of(&home, all),
+            Some(home.join(".local/share/Steam"))
+        );
+        let flatpak = ".var/app/com.valvesoftware.Steam/data/Steam";
+        list(flatpak, 60);
+        assert_eq!(steam_root_of(&home, all), Some(home.join(flatpak)));
+        let native = |root: &Path| !root.starts_with(home.join(".var"));
+        assert_eq!(
+            steam_root_of(&home, native),
+            Some(home.join(".local/share/Steam"))
+        );
+    }
+
+    /// A seat with its own Steam gets the links a launcher follows to it. A link it has stays, and
+    /// a `.steam` that is itself a link is refused.
+    #[test]
+    fn a_seat_s_own_steam_gets_the_links_launchers_follow() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        let seat = Passwd {
+            name: "pf-seat-1".into(),
+            uid: rustix::process::getuid().as_raw(),
+            gid: rustix::process::getgid().as_raw(),
+            gecos: String::new(),
+            home: home.clone(),
+        };
+        link_steam(&seat).unwrap();
+        assert!(!home.join(".steam").exists(), "no install, no links");
+        let own = home.join(".local/share/Steam");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(home.join(STEAM_MARKER), "").unwrap();
+        link_steam(&seat).unwrap();
+        assert_eq!(std::fs::read_link(home.join(".steam/steam")).unwrap(), own);
+        assert_eq!(std::fs::read_link(home.join(".steam/root")).unwrap(), own);
+        std::fs::remove_file(home.join(".steam/root")).unwrap();
+        std::os::unix::fs::symlink("/elsewhere", home.join(".steam/root")).unwrap();
+        link_steam(&seat).unwrap();
+        let kept = std::fs::read_link(home.join(".steam/root")).unwrap();
+        assert_eq!(kept, Path::new("/elsewhere"));
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::remove_dir_all(home.join(".steam")).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join(".steam")).unwrap();
+        assert!(link_steam(&seat).is_err());
+        assert_eq!(
+            std::fs::read_dir(&outside).unwrap().count(),
+            0,
+            "nothing made through it"
+        );
+    }
+
     /// A link where the box's avatar folder should be is refused, and nothing behind it is
     /// copied into a seat's trust copy.
     #[test]
@@ -2122,6 +2789,53 @@ mod tests {
             "pem"
         );
         assert_eq!(mode(&pin.join("native-cert.pem")), 0o600);
+    }
+
+    /// The person token stays the person's: no copy list names it, and a person's row hands the
+    /// box the certificate alone from the folder that holds it.
+    #[test]
+    fn no_copy_takes_the_person_token() {
+        let token = pf_paths::seat::PERSON_TOKEN;
+        let named = TRUST_FILES
+            .iter()
+            .chain(&LIBRARY_FILES)
+            .chain(&PROFILE_FILES)
+            .chain(&[
+                AVATARS,
+                LIBRARY_METADATA,
+                LIBRARY_PROFILES,
+                OWNER_POLICY,
+                PLUGIN_RUN,
+                PLUGIN_GRANTS,
+                PLUGIN_STATE,
+                FIRMWARE,
+            ]);
+        for name in named {
+            assert!(!name.contains(token), "{name}");
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let (state, pin) = (temp.path().join("state"), temp.path().join("pin"));
+        // The folder the token lands in is the person's, and closed to the door's user.
+        let me = std::fs::metadata(temp.path()).unwrap();
+        let person = Passwd {
+            name: "jane".into(),
+            uid: me.uid(),
+            gid: me.gid(),
+            gecos: String::new(),
+            home: temp.path().join("home"),
+        };
+        ensure_person_dirs(&state, &id(), &person).unwrap();
+        let config = person_config_dir(&state, &id());
+        let made = std::fs::metadata(&config).unwrap();
+        assert_eq!((made.uid(), mode(&config)), (me.uid(), 0o700));
+        std::fs::write(config.join("native-cert.pem"), "pem").unwrap();
+        std::fs::write(config.join(token), "secret").unwrap();
+        copy_person_pin(&state, &id(), &pin).unwrap();
+        let copied: Vec<_> = std::fs::read_dir(&pin)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(copied, ["native-cert.pem"]);
     }
 
     /// The supervisor refuses a ledger root another uid owns or may write. Giving a directory

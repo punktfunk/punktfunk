@@ -338,8 +338,10 @@ impl Capture {
         }
     }
 
-    pub fn on_motion(&mut self, xrel: f32, yrel: f32) {
-        if self.captured && !self.desktop {
+    /// Relative motion: capture's, or desktop's while the cursor model
+    /// [takes deltas](crate::cursor_model::CursorModel::takes_deltas).
+    pub fn on_motion(&mut self, xrel: f32, yrel: f32, deltas: bool) {
+        if self.captured && (!self.desktop || deltas) {
             self.pending_rel.0 += xrel;
             self.pending_rel.1 += yrel;
         }
@@ -576,11 +578,21 @@ impl Capture {
 
     /// Down in order, up in reverse so modifiers stay held until the last key.
     pub fn send_chord(&mut self, vks: &[u8]) {
-        for &vk in vks {
-            send(&self.connector, InputKind::KeyDown, u32::from(vk), 0, 0, 0);
-        }
-        for &vk in vks.iter().rev() {
-            send(&self.connector, InputKind::KeyUp, u32::from(vk), 0, 0, 0);
+        self.send_keys(vks, true);
+        self.send_keys(vks, false);
+    }
+
+    /// Half of [`Self::send_chord`]: every down in order, or every up in reverse. A held key
+    /// combination goes down on one call and up on a later one.
+    pub fn send_keys(&mut self, vks: &[u8], down: bool) {
+        if down {
+            for &vk in vks {
+                send(&self.connector, InputKind::KeyDown, u32::from(vk), 0, 0, 0);
+            }
+        } else {
+            for &vk in vks.iter().rev() {
+                send(&self.connector, InputKind::KeyUp, u32::from(vk), 0, 0, 0);
+            }
         }
     }
 

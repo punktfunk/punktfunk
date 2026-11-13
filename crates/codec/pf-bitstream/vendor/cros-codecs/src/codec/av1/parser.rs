@@ -1043,6 +1043,8 @@ pub struct FrameHeaderObu {
     pub mi_cols: u32,
     pub mi_rows: u32,
     pub header_bytes: usize,
+    /// punktfunk: bit offset in the OBU payload of `ref_order_hint[0]`, when coded.
+    pub ref_order_hint_bit: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1893,7 +1895,9 @@ impl Parser {
             let in_spatial_layer = ((self.operating_point_idc >> (header.spatial_id + 8)) & 1) != 0;
             if !in_temporal_layer || !in_spatial_layer {
                 log::debug!("Dropping obu as per drop_obu() in the specification",);
-                return Ok(ObuAction::Drop(reader.consumed(0)));
+                // The whole OBU, payload included: the caller resumes at the next header.
+                let obu_end = u32::try_from(obu_end).map_err(|_| "OBU end overflows u32")?;
+                return Ok(ObuAction::Drop(obu_end));
             }
         }
 
@@ -3049,11 +3053,11 @@ impl Parser {
         // load_previous(), i.e.: the parts that refer to the global motion
         // parameters.
         if fh.primary_ref_frame == PRIMARY_REF_NONE {
-            // setup_past_independence()
+            // setup_past_independence(): every reference, all six parameters.
             #[allow(clippy::needless_range_loop)]
-            for ref_frame in ReferenceFrameType::Last as usize..ReferenceFrameType::AltRef as usize
+            for ref_frame in ReferenceFrameType::Last as usize..=ReferenceFrameType::AltRef as usize
             {
-                for i in 0..5 {
+                for i in 0..6 {
                     prev_gm_params[ref_frame][i] = if i % 3 == 2 {
                         1 << WARPEDMODEL_PREC_BITS
                     } else {
@@ -3627,6 +3631,7 @@ impl Parser {
             && fh.error_resilient_mode
             && enable_order_hint
         {
+            fh.ref_order_hint_bit = Some(r.0.position() as usize);
             for i in 0..NUM_REF_FRAMES {
                 fh.ref_order_hint[i] = r.0.read_bits::<u32>(order_hint_bits.try_into().unwrap())?;
                 if fh.ref_order_hint[i] != self.ref_info[i].ref_order_hint {
@@ -4415,6 +4420,58 @@ mod tests {
         assert!(
             overruns > 0,
             "no cut reached the obu_size bound - the test proves nothing"
+        );
+    }
+
+    /// An OBU outside operating point 0 is dropped whole: the advance covers its payload,
+    /// so the caller's walk resumes on the next OBU header and not inside these bytes.
+    #[test]
+    fn a_dropped_obu_advances_past_its_payload() {
+        let mut parser = Parser::default();
+        parser.should_probe_for_annexb = false;
+        // Operating point 0 holds temporal layer 0 and spatial layer 0 only.
+        parser.operating_point_idc = 0x0101;
+
+        // Metadata OBU with an extension in temporal layer 1: header, extension, size 3,
+        // payload. Then a temporal delimiter.
+        let dropped = [0x2e, 0x20, 0x03, 0xaa, 0xbb, 0xcc];
+        let delimiter = [0x12, 0x00];
+        let au = [&dropped[..], &delimiter[..]].concat();
+
+        let advance = match parser.read_obu(&au).unwrap() {
+            ObuAction::Drop(n) => n as usize,
+            ObuAction::Process(_) => panic!("the OBU is outside the operating point"),
+        };
+        assert_eq!(advance, dropped.len());
+
+        match parser.read_obu(&au[advance..]).unwrap() {
+            ObuAction::Process(obu) => assert_eq!(obu.header.obu_type, ObuType::TemporalDelimiter),
+            ObuAction::Drop(_) => panic!("the delimiter is never dropped"),
+        }
+    }
+
+    /// With no primary reference frame every reference, AltRef included, and all six
+    /// parameters start from the identity (7.20 setup_past_independence). Coding AltRef's
+    /// zoom parameter as "equal to its reference" must then decode to the identity.
+    #[test]
+    fn global_motion_without_a_primary_ref_frame_starts_from_the_identity_on_altref() {
+        use crate::codec::av1::parser::{FrameHeaderObu, PRIMARY_REF_NONE};
+        use crate::codec::av1::reader::Reader;
+
+        // LAST..=ALTREF2: is_global = 0 (six bits). ALTREF: is_global, is_rot_zoom, then
+        // params 2, 3, 0 and 1 as `more_bits = 0` plus three zero bits each.
+        let data = [0b0000_0011, 0, 0];
+        let mut fh = FrameHeaderObu {
+            primary_ref_frame: PRIMARY_REF_NONE,
+            ..Default::default()
+        };
+        Parser::default()
+            .parse_global_motion_params(&mut Reader::new(&data), &mut fh)
+            .unwrap();
+
+        assert_eq!(
+            fh.global_motion_params.gm_params[7],
+            [0, 0, 1 << 16, 0, 0, 1 << 16]
         );
     }
 }

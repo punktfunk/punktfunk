@@ -28,9 +28,9 @@ struct MacShellView<Hosts: View>: View {
     var body: some View {
         NavigationSplitView {
             List(selection: rowSelection) {
-                Label("Hosts", systemImage: "desktopcomputer")
+                Label(L10n.hostsTab, systemImage: "desktopcomputer")
                     .tag(MacDestination.hosts)
-                Label("Library", systemImage: "square.grid.2x2")
+                Label(L10n.hostsTabLibrary, systemImage: "square.grid.2x2")
                     .tag(MacDestination.library)
             }
             .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 240)
@@ -86,10 +86,10 @@ struct MacNavigationCommands: Commands {
 
     var body: some Commands {
         CommandGroup(before: .sidebar) {
-            Button("Hosts") { navigation?.showHosts() }
+            Button(L10n.appleMenuHosts) { navigation?.showHosts() }
                 .keyboardShortcut("1", modifiers: .command)
                 .disabled(navigation == nil)
-            Button("Library") { navigation?.showLibrary() }
+            Button(L10n.appleMenuLibrary) { navigation?.showLibrary() }
                 .keyboardShortcut("2", modifiers: .command)
                 .disabled(navigation == nil)
             Divider()

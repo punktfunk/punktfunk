@@ -86,14 +86,16 @@ impl ControlTask {
                 req = ctrl_rx.recv() => {
                     let Some(req) = req else { break }; // client dropped
                     let frame = match req {
-                        CtrlRequest::Mode(m) => Reconfigure {
-                            mode: m,
+                        CtrlRequest::Mode(mode, view) => Reconfigure {
+                            mode,
                             exclude_codecs: 0,
+                            view,
                         }
                         .encode_v2(),
                         CtrlRequest::Codec(exclude) => Reconfigure {
                             mode: *mode_slot.lock().unwrap_or_else(|e| e.into_inner()),
                             exclude_codecs: exclude,
+                            view: None,
                         }
                         .encode_v2(),
                         CtrlRequest::Probe(p) => crate::quic::ProbeShaped::from(p).encode_v2(),
@@ -160,6 +162,7 @@ impl ControlTask {
                             tracing::info!(mode = ?ack.mode, "host accepted mode switch");
                         } else {
                             tracing::warn!(active = ?ack.mode, "host rejected mode switch");
+                            shared.mode_refusals.fetch_add(1, Ordering::Relaxed);
                         }
                     } else if let Some(cfg) = decode::<v2msg::AudioConfig>(ty, &body)
                         .ok()
@@ -192,8 +195,8 @@ impl ControlTask {
                             );
                         }
                         let delivered = anchor.lock().unwrap_or_else(|e| e.into_inner()).config(cfg);
-                        if let Some(mode) = delivered {
-                            super::anchor::apply(mode_slot, &events, mode);
+                        if let Some(delivery) = delivered {
+                            super::anchor::apply(mode_slot, &events, delivery);
                         }
                     } else if let Ok(result) = decode::<ProbeResult>(ty, &body) {
                         let mut p = probe.lock().unwrap();

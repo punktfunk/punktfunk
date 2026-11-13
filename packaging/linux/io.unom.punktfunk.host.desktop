@@ -1,7 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Punktfunk Host service
-Comment=punktfunk streaming host — KWin virtual-output / input authorization
+Name[de]=Punktfunk-Host-Dienst
+Comment=Punktfunk streaming host — KWin virtual-output / input authorization
+Comment[de]=Punktfunk-Streaming-Host — Freigabe für virtuelle Ausgabe und Eingabe in KWin
 Exec=/usr/bin/punktfunk-host
 Terminal=false
 NoDisplay=true

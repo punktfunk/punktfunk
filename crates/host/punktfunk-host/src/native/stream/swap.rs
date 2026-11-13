@@ -30,7 +30,8 @@ pub(super) enum SwapReason {
     SourceMode,
     /// A rate the encoder cannot take in place.
     Bitrate,
-    /// The client's codec ask: another codec, and with it often another depth or colour.
+    /// Another codec the client asked for, or content that turned HDR or SDR: with either,
+    /// often another depth or colour.
     Format,
 }
 
@@ -160,9 +161,10 @@ impl StreamState {
         }
     }
 
-    /// The capture side of a built pipeline, then its encoder. A new capturer numbers its
-    /// cursor shapes from 1 again, so the last forwarded one is forgotten, and the clipboard
-    /// follows the new capture's gamescope.
+    /// The capture side of a built pipeline, then its encoder. The plan settles on the new
+    /// capture: a joiner's rebuild can join or miss anew, and the control task learns the
+    /// display it joined. A new capturer numbers its cursor shapes from 1 again, so the last
+    /// forwarded one is forgotten, and the clipboard follows the new capture's gamescope.
     fn adopt_pipeline(&mut self, p: Pipeline) {
         let Pipeline {
             capturer,
@@ -181,6 +183,7 @@ impl StreamState {
         self.adopt_reframe(reframe);
         // The old capturer goes before the old encoder, as on teardown.
         self.live.capturer = capturer;
+        self.plan = self.plan.captured_by(&*self.live.capturer);
         self.live.asks = Default::default();
         if let Some(fwd) = self.display.cursor_fwd.as_mut() {
             *fwd = super::super::cursor_fwd::CursorForwarder::new();
@@ -191,6 +194,9 @@ impl StreamState {
         self.live.interval = interval;
         self.live.cur_node_id = node_id;
         self.live.cur_display_gen = display_gen;
+        let joined =
+            crate::native::wiring::joined_display(self.display.vd_params.join_live, display_gen);
+        (self.shared.joined_display).store(joined, std::sync::atomic::Ordering::Relaxed);
         #[cfg(target_os = "linux")]
         {
             super::state::publish_gamescope_xwayland(
@@ -203,10 +209,13 @@ impl StreamState {
         self.publish_arrival_poke();
     }
 
-    /// The running capturer's arrival poke, for the control task. A stale handle after a
-    /// swap only pokes a capturer that is gone.
+    /// The running capturer's poke, for the control task: its feed's, or its remote encoder's,
+    /// which reaches every proxy the capturer opens. A stale handle after a swap only pokes a
+    /// capturer that is gone.
     pub(super) fn publish_arrival_poke(&mut self) {
-        let poke = self.live.capturer.feed().and_then(|f| f.arrival_poke());
+        let capturer = &mut self.live.capturer;
+        let poke = (capturer.feed().and_then(|f| f.arrival_poke()))
+            .or_else(|| capturer.remote_encoder().and_then(|r| r.arrival_poke()));
         *self
             .shared
             .arrival_poke
@@ -282,12 +291,13 @@ pub(super) mod tests {
         }
     }
 
-    /// What the fake's display was asked: the HDR and cursor it was last told, and how many
-    /// displays.
+    /// What the fake's display was asked: the HDR, cursor and join it was last told, and how
+    /// many displays.
     #[derive(Default)]
     pub(in crate::native::stream) struct DisplayAsks {
         pub(in crate::native::stream) hdr: Option<bool>,
         pub(in crate::native::stream) hw_cursor: Option<bool>,
+        pub(in crate::native::stream) join_live: Option<bool>,
         pub(in crate::native::stream) creates: u32,
     }
 
@@ -314,6 +324,9 @@ pub(super) mod tests {
         }
         fn set_hw_cursor(&mut self, on: bool) {
             self.0.lock().unwrap().hw_cursor = Some(on);
+        }
+        fn set_join_live(&mut self, on: bool) {
+            self.0.lock().unwrap().join_live = Some(on);
         }
     }
 
@@ -448,6 +461,10 @@ pub(super) mod tests {
                     gamescope_route: None,
                     sdr10_widen: false,
                     studio_asked: crate::session_plan::StudioAsk::default(),
+                    owner_hdr: None,
+                    owner_format: None,
+                    follows: false,
+                    content_hdr: None,
                 },
             },
             next: now,
@@ -475,6 +492,8 @@ pub(super) mod tests {
                 #[cfg(target_os = "linux")]
                 no_overlay_means_off_output: false,
                 vd_params: crate::vdisplay::SessionParams {
+                    screen: None,
+                    topology: None,
                     client_fp: None,
                     client_hdr: None,
                     hdr: false,
@@ -526,6 +545,8 @@ pub(super) mod tests {
             seat_join: None,
             #[cfg(target_os = "linux")]
             following: None,
+            #[cfg(target_os = "linux")]
+            content: None,
             live_session: crate::session_status::register(
                 crate::session_status::Registration::fake("swap-test"),
             ),
@@ -571,7 +592,8 @@ pub(super) mod tests {
                 sdr10_native: false,
                 slices: 1,
                 reframe_to: None,
-                rgb_full_range: true,
+                mirrored: false,
+                rgb_full_range: crate::encode::RgbFullRange::BOTH,
                 studio_asked: crate::session_plan::StudioAsk::default(),
             },
             bit_depth: 8,
@@ -582,6 +604,7 @@ pub(super) mod tests {
                 driver_dropped: Default::default(),
                 screen_wire: Arc::new(crate::native::wiring::ScreenWire::new()),
                 send_spread_us: Default::default(),
+                keyframe_left: Default::default(),
                 wire_rekeys: Default::default(),
                 live_mode: Arc::new(AtomicU64::new(0)),
                 force_idr: Default::default(),
@@ -596,6 +619,7 @@ pub(super) mod tests {
                 cadence_behind_score: Default::default(),
                 client_packets_received: Default::default(),
                 cursor_client_draws: Default::default(),
+                joined_display: Default::default(),
             },
             ends: LoopEnds {
                 cursor_shape_tx: tokio::sync::watch::channel(None).0,

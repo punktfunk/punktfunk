@@ -118,9 +118,7 @@ impl WindowsLaunch {
 /// [`crate::gamelease::LeaseRequest::spawned`] only when it owns the game rather
 /// than a protocol hand-off.
 pub fn launch_title(id: &str) -> Result<WindowsLaunch> {
-    let entry = all_games()
-        .into_iter()
-        .find(|g| g.id == id)
+    let entry = find_game_for(&View::here(), id)
         .filter(|g| g.launch.is_some())
         .ok_or_else(|| anyhow::anyhow!("no launchable library entry '{id}'"))?;
     let spec = entry.launch.clone().expect("filtered to Some above");
@@ -381,7 +379,8 @@ fn battlenet_exe() -> Option<std::path::PathBuf> {
 }
 
 /// The client a store's launcher tile opens, by `launcher_ui` value. Each forwards to a
-/// running instance, so it is a hand-off. The Amazon and itch apps install per user.
+/// running instance, so it is a hand-off. The Amazon and itch apps install per user, and only
+/// the player's own copy counts: the launch runs as them.
 fn store_client_exe(value: &str) -> Option<std::path::PathBuf> {
     let file = |p: std::path::PathBuf| p.is_file().then_some(p);
     let program_files = |rel: &str| {
@@ -391,7 +390,8 @@ fn store_client_exe(value: &str) -> Option<std::path::PathBuf> {
             .find_map(|pf| file(std::path::PathBuf::from(pf).join(rel)))
     };
     let per_user = |rel: &str| {
-        windows_user_profiles()
+        user_scope(Whose::Player)
+            .1
             .into_iter()
             .find_map(|home| file(home.join(r"AppData\Local").join(rel)))
     };
@@ -705,16 +705,9 @@ pub(crate) fn playnite_art_roots() -> Vec<std::path::PathBuf> {
         .collect()
 }
 
-/// User profiles (`C:\Users\*`), minus `Public`. Users base is `%PUBLIC%`'s
-/// parent ([`super::art::art_roots`]); `%SystemDrive%\Users` if the var is missing.
+/// User profiles (`C:\Users\*`) under [`crate::library::users_base`], minus `Public`.
 fn windows_user_profiles() -> Vec<std::path::PathBuf> {
-    let base = std::env::var_os("PUBLIC")
-        .map(std::path::PathBuf::from)
-        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
-        .or_else(|| {
-            std::env::var_os("SystemDrive").map(|d| std::path::PathBuf::from(d).join("Users"))
-        });
-    let Some(base) = base else {
+    let Some(base) = crate::library::users_base() else {
         return Vec::new();
     };
     let Ok(entries) = std::fs::read_dir(&base) else {

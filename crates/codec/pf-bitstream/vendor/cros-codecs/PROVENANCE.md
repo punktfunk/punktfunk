@@ -355,5 +355,90 @@ this crate with overflow checks off, as it ships: 26, 28, 30 and 31 abort a rele
     `windows(3).position`: the scan runs once per byte of every AU on every client.
     Not a defect; not for upstream.
 
+33. `src/codec/av1/parser.rs` — `FrameHeaderObu::ref_order_hint_bit`: the bit offset in the
+    OBU payload where an error-resilient frame codes `ref_order_hint[0]`, recorded by
+    `parse_uncompressed_frame_header`. `pf_bitstream::av1::conceal` rewrites those hints in
+    place. Not a defect; not for upstream.
+
+34. `src/codec/h265/parser.rs` — `parse_vps`: `vps_num_hrd_parameters` is read with
+    `read_ue_max(vps_num_layer_sets_minus1 + 1)`, the range 7.4.3.1 gives it. Unbounded, it
+    was the loop count for pushes of an `HrdParams`, ~7.7 KB built from five input bits: a
+    64 KB VPS asked for about 1 GB and an allocation failure aborts the process. Regression
+    test: `a_vps_claiming_more_hrd_parameters_than_layer_sets_is_a_parse_error` in
+    `pf-bitstream`. **Report upstream — not yet filed.**
+
+35. `src/codec/h265/parser.rs` — `parse_short_term_ref_pic_set`: a set is refused when it,
+    or the set it predicts from, holds more than `sps_max_dec_pic_buffering_minus1[
+    sps_max_sub_layers_minus1 ]` pictures (7.4.8). A derived set holds up to one more entry
+    than its source and nothing capped it, so a chain of inter-predicted sets grew by one each
+    until `used_by_curr_pic_flag` / `use_delta_flag` (64 deep) indexed out of range at the
+    50th, and `delta_poc_s0/s1` (65) one set later: an index panic in release, from a SPS of
+    about 270 bytes. The bound is at most 16 (`read_ue_max(16)`), so every index stays
+    inside the arrays. The explicit branch reads its counts against the same value.
+    Regression test: `chained_inter_rps_sets_stop_at_the_dpb_size_not_at_the_arrays` in
+    `pf-bitstream`. **Report upstream — not yet filed.**
+
+36. `src/codec/h265/parser.rs` — `parse_hrd_parameters`: `fixed_pic_rate_within_cvs_flag` is 1
+    when `fixed_pic_rate_general_flag` is 1 (E.3.2). Upstream read it only when the general
+    flag was 0 and left it false otherwise, so the next element came out as
+    `low_delay_hrd_flag` instead of `elemental_duration_in_tc_minus1`, and the rest of the HRD,
+    the VUI's `bitstream_restriction` and the SPS extension flags were read a few bits out of
+    step. Any encoder that signals a fixed picture rate in its VUI or VPS HRD hits it.
+    Regression test: `an_hrd_with_a_fixed_picture_rate_leaves_the_rest_of_the_vui_aligned`
+    in `pf-bitstream`. **Report upstream — not yet filed.**
+
+37. `src/codec/h265/parser.rs` — `Slice::replace_header`: a dependent segment keeps its own
+    `num_entry_point_offsets` with the offsets it already kept, and takes `curr_rps_idx`,
+    `num_pic_total_curr` and `st_rps_bits` from the independent header. Upstream restored those
+    three from the dependent parse, which leaves them at their defaults (0, 0 and the SPS's set
+    count), so a dependent segment's header described a picture with no references: the list
+    builder sized its temporary list from zero and a `list_entry_lX` past the active count
+    found nothing. Regression test:
+    `a_dependent_segment_keeps_its_entry_points_and_takes_the_pictures_rps_fields` in the
+    file's own test module. **Report upstream — not yet filed.**
+
+38. `src/codec/h264/parser.rs` — `Sps::max_dpb_frames`: a VUI `max_dec_frame_buffering` is
+    floored at `max_num_ref_frames`. Upstream let the VUI value replace the floored level
+    value, so an SPS stating less than E.2.1 allows (an LTR or RFI configuration that raises
+    the reference count and not the VUI field) opened a DPB the references alone fill; the
+    second reference picture then failed with "DPB is full" and so did every access unit
+    after it, until a new SPS arrived. Deviation 23 floors the builder's value; this floors
+    the parsed one. Regression test:
+    `a_vui_dpb_depth_below_max_num_ref_frames_keeps_the_reference_floor` in `pf-bitstream`.
+    **Report upstream — not yet filed.**
+
+39. `src/codec/h264/parser.rs` — `parse_ref_pic_list_modification`: refuse more than
+    `num_ref_idx_lX_active_minus1 + 1` operations (7.4.3.1). The loop pushed a 12-byte entry
+    per two input bits until the terminating idc 3, so a slice NAL cost about 48 times its
+    size in heap before `modify_ref_pic_list` rejected the extra operation. The planner
+    rejected the same operation already, as a concealed list; it is now a parse error.
+    Regression test: `more_list_modifications_than_active_references_is_a_parse_error` in
+    the file's own test module. **Report upstream — not yet filed.**
+
+40. `src/codec/av1/parser.rs` — `parse_global_motion_params`: with `primary_ref_frame` NONE,
+    `PrevGmParams` is the identity for `LAST_FRAME..=ALTREF_FRAME` and all six parameters
+    (7.20 `setup_past_independence`). Upstream stopped before AltRef and before parameter 5,
+    so AltRef's rotation/zoom and any reference's affine parameter 5 were decoded against a
+    zero reference instead of the identity: a wrong warp matrix into the hardware. Bit
+    consumption is unaffected, so the stream stays in step. Regression test:
+    `global_motion_without_a_primary_ref_frame_starts_from_the_identity_on_altref` in the
+    file's own test module. **Report upstream — not yet filed.**
+
+41. `src/codec/av1/parser.rs` — `read_obu`: `ObuAction::Drop` carries the whole OBU
+    (`obu_end`), not the header and size field. The caller adds the value to its offset, so a
+    dropped OBU's payload was then read as OBU headers: a parse error or garbage for any
+    stream whose operating point 0 excludes a layer. The Annex B end-of-data return at the
+    top of the function has no payload to skip and is unchanged. Regression test:
+    `a_dropped_obu_advances_past_its_payload` in the file's own test module.
+    **Report upstream — not yet filed.**
+
+42. `src/bitstream_utils.rs` — `BitReader::skip_bits` moves whole bytes in one step on a
+    byte boundary of a reader without emulation prevention. It read 31 bits at a time, four
+    one-byte cursor reads each, about 6 ns per skipped byte, and AV1 skips every tile payload
+    but the last this way on the decode thread. Position, remaining bits and the refusal past
+    the end are unchanged. Regression test:
+    `skip_bits_lands_where_reading_the_same_bits_would` in the file's own test module. Not a
+    defect; not for upstream.
+
 Re-sync procedure: fetch the AOSP tree, re-apply this trim, diff `codec/` +
 `bitstream_utils.rs` (expect near-zero conflicts), update the commit pin above.

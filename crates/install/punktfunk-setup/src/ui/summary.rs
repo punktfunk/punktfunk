@@ -13,9 +13,13 @@
 //!
 //! Pin `lines()`. Evidence: `design/installer-v2.md`.
 
+use console::measure_text_width;
+use pf_l10n::tools as t;
+
 use crate::choices::{Action, Choices};
 use crate::facts::{Channel, Facts, Family};
 use crate::plan::{self, Plan};
+use crate::ui::columns;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
@@ -29,6 +33,21 @@ pub enum Field {
     OmarchyToasts,
     OmarchyIdle,
     OmarchyTheme,
+}
+
+impl Field {
+    const ALL: [Field; 10] = [
+        Field::Components,
+        Field::Channel,
+        Field::Group,
+        Field::Gamestream,
+        Field::Clipboard,
+        Field::Linger,
+        Field::Start,
+        Field::OmarchyToasts,
+        Field::OmarchyIdle,
+        Field::OmarchyTheme,
+    ];
 }
 
 /// Separators in the mockup are drawn, never selected.
@@ -122,19 +141,21 @@ impl Screen {
             let channel = self
                 .facts
                 .current_channel
-                .map_or("no repo", Channel::as_str);
+                .map_or(t::setup_channel_none(), Channel::as_str);
             format!("{version} · {channel}")
         } else {
-            format!("punktfunk setup{}", self.suffix())
+            format!("{}{}", t::setup_title(), self.suffix())
         }
     }
 
+    /// The distro and how the host gets onto it. SteamOS builds on the device, so its method is
+    /// words; the others are a package manager's name.
     fn suffix(&self) -> String {
-        format!(
-            "  ·  {} · {}",
-            self.facts.os.pretty,
-            self.facts.family.as_str()
-        )
+        let method = match self.facts.family {
+            Family::Steamos => t::setup_family_on_device(),
+            family => family.as_str(),
+        };
+        format!("  ·  {} · {method}", self.facts.os.pretty)
     }
 
     pub fn selected(&self) -> Item {
@@ -209,66 +230,86 @@ impl Screen {
 
     pub fn label(field: Field) -> &'static str {
         match field {
-            Field::Components => "This machine is",
-            Field::Channel => "Channel",
-            Field::Group => "Full controller support",
-            Field::Gamestream => "Third-party clients",
-            Field::Clipboard => "Shared clipboard",
-            Field::Linger => "Start at boot",
-            Field::Start => "Host service",
-            Field::OmarchyToasts => "Desktop notifications",
-            Field::OmarchyIdle => "Keep the screen awake",
-            Field::OmarchyTheme => "Match the Omarchy theme",
+            Field::Components => t::setup_row_components(),
+            Field::Channel => t::setup_row_channel(),
+            Field::Group => t::setup_row_group(),
+            Field::Gamestream => t::setup_row_gamestream(),
+            Field::Clipboard => t::setup_row_clipboard(),
+            Field::Linger => t::setup_row_linger(),
+            Field::Start => t::setup_row_start(),
+            Field::OmarchyToasts => t::setup_row_omarchy_toasts(),
+            Field::OmarchyIdle => t::setup_row_omarchy_idle(),
+            Field::OmarchyTheme => t::setup_row_omarchy_theme(),
         }
+    }
+
+    /// The label column: the widest label in this language and two columns of air, the same
+    /// width whichever rows the screen shows.
+    pub fn label_width() -> usize {
+        let widest = Field::ALL
+            .iter()
+            .map(|f| measure_text_width(Screen::label(*f)))
+            .max()
+            .unwrap_or(0);
+        widest + 2
+    }
+
+    /// A yes/no value with its reason, the word padded to the wider of the two so the
+    /// reasons line up under each other.
+    fn with_reason(on: bool, reason: &str) -> String {
+        let (yes, no) = (t::setup_yes(), t::setup_no());
+        let width = measure_text_width(yes).max(measure_text_width(no));
+        let word = if on { yes } else { no };
+        format!("{} — {reason}", columns::pad(word, width))
     }
 
     pub fn value(&self, field: Field) -> String {
         let c = &self.choices;
-        let yn = |on: bool| if on { "yes" } else { "no " };
+        let yn = |on: bool| (if on { t::setup_yes() } else { t::setup_no() }).to_string();
         match field {
             // The download page's words, so the terminal reads like the page that sent you here.
             Field::Components => match (c.components.host, c.components.client) {
-                (true, true) => "the host, plus the client app".into(),
-                (false, true) => "the device I play on (client)".into(),
-                _ => "the PC I stream from (host)".into(),
+                (true, true) => t::setup_components_both().into(),
+                (false, true) => t::setup_components_client().into(),
+                _ => t::setup_components_host().into(),
             },
             Field::Channel => match c.switch_from {
                 Some(from) => format!("{} → {}", from.as_str(), c.channel.as_str()),
                 None => c.channel.as_str().to_string(),
             },
-            Field::Group => match (&c.group_why, c.punktfunk_group) {
-                (Some(why), true) => format!("yes — {why}"),
-                (_, true) => "yes — joins the punktfunk group (grants usbip attach)".into(),
-                _ => "no  — the pad arrives as a plain Xbox 360 controller".into(),
+            Field::Group => match (c.group_why, c.punktfunk_group) {
+                (Some(why), true) => Screen::with_reason(true, &why.text()),
+                (_, true) => Screen::with_reason(true, t::setup_why_group_default()),
+                _ => Screen::with_reason(false, t::setup_why_group_off()),
             },
-            Field::Gamestream if c.gamestream => "yes".into(),
-            Field::Gamestream => "no  — punktfunk's own apps don't need it".into(),
-            Field::Clipboard => yn(c.clipboard).trim_end().to_string(),
-            Field::Linger => match (&c.linger_why, c.linger) {
-                (Some(why), true) => format!("yes — {why}"),
-                (_, true) => "yes".into(),
-                _ => "no  — the host waits for your session".into(),
+            Field::Gamestream if c.gamestream => yn(true),
+            Field::Gamestream => Screen::with_reason(false, t::setup_why_gamestream_off()),
+            Field::Clipboard => yn(c.clipboard),
+            Field::Linger => match (c.linger_why, c.linger) {
+                (Some(why), true) => Screen::with_reason(true, &why.text()),
+                (_, true) => yn(true),
+                _ => Screen::with_reason(false, t::setup_why_linger_off()),
             },
-            Field::Start => yn(c.start).trim_end().to_string(),
-            Field::OmarchyToasts => yn(c.omarchy_toasts).trim_end().to_string(),
-            Field::OmarchyIdle => yn(c.omarchy_idle).trim_end().to_string(),
-            Field::OmarchyTheme => yn(c.omarchy_theme).trim_end().to_string(),
+            Field::Start => yn(c.start),
+            Field::OmarchyToasts => yn(c.omarchy_toasts),
+            Field::OmarchyIdle => yn(c.omarchy_idle),
+            Field::OmarchyTheme => yn(c.omarchy_theme),
         }
     }
 
     /// Editor prompt: the sh installer's text, verbatim.
     pub fn why(field: Field) -> &'static str {
         match field {
-            Field::Components => "Host: the PC you stream from. Client: the device you play on. One PC can be both.",
-            Field::Channel => "canary is the latest main build; stable is the released one.",
-            Field::Group => "Joins the punktfunk group for paddles, trackpads and gyro. It grants usbip attach, so only on a machine you trust.",
-            Field::Gamestream => "Serve Moonlight, Artemis, or another third-party client. Punktfunk's own apps don't need this.",
-            Field::Clipboard => "Share the clipboard between this host and your clients. Each client still opts in per host.",
-            Field::Linger => "Starts the host at boot so it is reachable before anyone logs in. It can only stream once a session exists.",
-            Field::Start => "Enable and start the services once the install finishes. Off installs the files and starts nothing.",
-            Field::OmarchyToasts => "A toast when a device asks to pair, and when a stream starts or stops.",
-            Field::OmarchyIdle => "Holds off the idle lock for as long as a stream is running.",
-            Field::OmarchyTheme => "The console follows whatever theme Omarchy is on, instead of its own palette.",
+            Field::Components => t::setup_row_components_hint(),
+            Field::Channel => t::setup_row_channel_hint(),
+            Field::Group => t::setup_row_group_hint(),
+            Field::Gamestream => t::setup_gamestream_hint(),
+            Field::Clipboard => t::setup_row_clipboard_hint(),
+            Field::Linger => t::setup_row_linger_hint(),
+            Field::Start => t::setup_row_start_hint(),
+            Field::OmarchyToasts => t::setup_row_omarchy_toasts_hint(),
+            Field::OmarchyIdle => t::setup_row_omarchy_idle_hint(),
+            Field::OmarchyTheme => t::setup_row_omarchy_theme_hint(),
         }
     }
 
@@ -277,11 +318,12 @@ impl Screen {
         let mut out = vec![self.title()];
         let rule = "─".repeat(63);
         out.push(rule.clone());
+        let width = Screen::label_width();
         for item in &self.items {
             if let Item::Row(field) = item {
                 out.push(format!(
-                    "  {:<25}{}",
-                    Screen::label(*field),
+                    "  {}{}",
+                    columns::pad(Screen::label(*field), width),
                     self.value(*field)
                 ));
             }
@@ -291,7 +333,7 @@ impl Screen {
             .items
             .iter()
             .filter_map(|i| match i {
-                Item::Uninstall => Some("Uninstall"),
+                Item::Uninstall => Some(t::setup_uninstall_action()),
                 _ => None,
             })
             .collect();
@@ -392,7 +434,7 @@ mod tests {
     fn the_group_row_always_states_the_usbip_grant() {
         let s = screen();
         assert!(s.value(Field::Group).contains("usbip attach"));
-        assert!(Screen::why(Field::Group).contains("usbip attach"));
+        assert!(Screen::why(Field::Group).contains("can attach USB devices"));
     }
 
     #[test]

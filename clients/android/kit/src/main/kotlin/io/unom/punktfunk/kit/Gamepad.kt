@@ -39,7 +39,7 @@ object Gamepad {
     const val BTN_Y = 0x8000
 
     // Extended bits (Moonlight `buttonFlags2 << 16` namespace — `input.rs::gamepad`): the four
-    // back grips (Steam L4/L5/R4/R5 ≙ Elite P1–P4), touchpad click, and the misc/QAM button.
+    // back grips (Steam L4/L5/R4/R5 ≙ Elite P1–P4), touchpad click, the misc/QAM button and a second misc.
     // The SC2 capture link sends all six; [buttonBit] finds the upper grip pair on a plain pad.
     const val BTN_PADDLE1 = 0x10000
     const val BTN_PADDLE2 = 0x20000
@@ -47,6 +47,7 @@ object Gamepad {
     const val BTN_PADDLE4 = 0x80000
     const val BTN_TOUCHPAD = 0x100000
     const val BTN_MISC1 = 0x200000
+    const val BTN_MISC2 = 0x400000
 
     /**
      * What a synthetic Quick Access tap presses, in order (punktfunk-core's
@@ -110,12 +111,13 @@ object Gamepad {
     const val PREF_SWITCH2PRO = 17
     const val PREF_SWITCH2GAMECUBE = 18
 
-    /** One pad type: its wire byte, the console's stored spelling, and the label people see. */
+    /** One pad type: its wire byte, the console's stored spelling, and its brand name. Automatic
+     *  has an empty one: the app words it from a message. */
     class Pref(val wire: Int, val name: String, val label: String)
 
     /** Every pad type, in wire order — the one table the pickers and labels draw from. */
     val PREFS: List<Pref> = listOf(
-        Pref(PREF_AUTO, "auto", "Automatic"),
+        Pref(PREF_AUTO, "auto", ""),
         Pref(PREF_XBOX360, "xbox360", "Xbox 360"),
         Pref(PREF_DUALSENSE, "dualsense", "DualSense"),
         Pref(PREF_XBOXONE, "xboxone", "Xbox One"),
@@ -136,8 +138,8 @@ object Gamepad {
         Pref(PREF_SWITCH2GAMECUBE, "switch2gamecube", "GameCube (Switch 2)"),
     )
 
-    /** The label for a wire byte; an unknown one reads as Automatic. */
-    fun prefLabel(pref: Int): String = PREFS.getOrNull(pref)?.label ?: "Automatic"
+    /** The brand name for a wire byte; empty for Automatic and for a byte this build does not know. */
+    fun prefLabel(pref: Int): String = PREFS.getOrNull(pref)?.label.orEmpty()
 
     // USB vendor ids of the controllers we can identify by VID/PID.
     private const val VID_SONY = 0x054C

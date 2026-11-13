@@ -5,7 +5,7 @@
 //! `Overlay::frame` once. The gather keeps the mute notices' clocks. The stream's chrome,
 //! notices and ring show once it is connected.
 
-use super::shell::{overlay_scale, HINT_KEYBOARD, HINT_WITH_PAD};
+use super::shell::{capture_hint, overlay_scale};
 use super::stream::ring_facts;
 use super::*;
 use pf_client_core::gamepad::PadInfo;
@@ -21,7 +21,7 @@ pub(super) struct OverlayFacts<'s> {
     stats_corner: HudCorner,
     stats_scale: f32,
     exit_hint: bool,
-    hint: Option<&'static str>,
+    hint: Option<String>,
     access: Option<String>,
     notice: Option<&'s str>,
     mic_notice: Option<bool>,
@@ -31,6 +31,7 @@ pub(super) struct OverlayFacts<'s> {
     pads: Vec<PadInfo>,
     ring: Option<RingFacts>,
     native: Mode,
+    shortcuts: std::rc::Rc<pf_client_core::shortcuts::Shortcuts>,
 }
 
 impl OverlayFacts<'_> {
@@ -45,7 +46,7 @@ impl OverlayFacts<'_> {
             stats_corner: self.stats_corner,
             stats_scale: self.stats_scale,
             exit_hint: self.exit_hint,
-            hint: self.hint,
+            hint: self.hint.as_deref(),
             access: self.access.as_deref(),
             notice: self.notice,
             mic_notice: self.mic_notice,
@@ -56,6 +57,7 @@ impl OverlayFacts<'_> {
             pads: &self.pads,
             ring: self.ring.as_ref(),
             native: self.native,
+            shortcuts: &self.shortcuts,
         }
     }
 }
@@ -106,13 +108,7 @@ impl Shell {
             hint: live
                 .and_then(|st| st.capture.as_ref())
                 .filter(|cap| !cap.captured() && cap.can_capture() && !self.focus_lost)
-                .map(|_| {
-                    if pad.is_some() {
-                        HINT_WITH_PAD
-                    } else {
-                        HINT_KEYBOARD
-                    }
-                }),
+                .map(|_| capture_hint(pad.is_some(), &self.shortcuts)),
             // A pill that never goes away is chrome, so it rides the stats tier. `None` for a
             // full-control permanent session.
             access: live
@@ -137,6 +133,7 @@ impl Shell {
                 )
             }),
             native: self.native,
+            shortcuts: self.shortcuts.clone(),
         }
     }
 }

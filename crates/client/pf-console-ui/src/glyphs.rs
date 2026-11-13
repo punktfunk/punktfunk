@@ -11,6 +11,7 @@
 use crate::icons::{self, Icon};
 use crate::platform::Platform;
 use crate::theme::{fill, stroke, Fonts, Frame, GLYPH_STROKE, HAIRLINE, W};
+use pf_client_core::shortcuts::Press;
 use punktfunk_core::config::GamepadPref;
 use skia_safe::{Canvas, Color4f, PathBuilder, Point, RRect, Rect};
 
@@ -58,7 +59,8 @@ impl GlyphStyle {
             | Platform::WebOS
             | Platform::Apple
             | Platform::Tizen
-            | Platform::Ps5 => GlyphStyle::Remote,
+            | Platform::Ps5
+            | Platform::Switch => GlyphStyle::Remote,
             Platform::Desktop | Platform::Web => GlyphStyle::Keyboard,
         }
     }
@@ -631,54 +633,86 @@ const CHORD_K: f64 = 1.25;
 const WORD_GAP: f64 = 6.0;
 const WORD_SIZE: f64 = 13.0;
 
-/// One part of a chord as [`pf_client_core::shortcuts`] writes it.
+/// One part of a [`Press`] as the reference page draws it.
 #[derive(Debug, PartialEq)]
 enum Piece {
     Glyph(HintKey),
     /// A TV remote's colour key.
     Colour(Color4f),
-    /// `+`, `or`, `Hold`: a word between badges.
-    Word(&'static str),
+    /// `+`, or a word of the message around the badges ("Hold", "or").
+    Word(String),
 }
 
-/// "Select + A", "Ctrl+Alt+Shift+Q", "Hold Back", "F11 or Alt+Enter". A letter is a face
-/// button only in a pad style; the keyboard's own letters stay keycaps. Back and OK are the
-/// remote's badges in [`GlyphStyle::Remote`], keycaps elsewhere.
-fn pieces(chord: &'static str, style: GlyphStyle) -> Vec<Piece> {
+/// Stand-ins the hold and either messages are filled with, so the badges go where each
+/// language puts its placeholders. Control characters: no message contains one.
+const FIRST: char = '\u{1}';
+const SECOND: char = '\u{2}';
+
+/// "Select + A", "Ctrl+Alt+Shift+Q", "Hold Back", "F11 or Alt+Enter", a gesture's keycap.
+fn pieces(press: Press, style: GlyphStyle) -> Vec<Piece> {
+    let mut out = Vec::new();
+    let (text, first, second) = match press {
+        Press::Keys(keys) => {
+            push_keys(&mut out, keys, style);
+            return out;
+        }
+        Press::Gesture(gesture) => {
+            out.push(Piece::Glyph(HintKey::Key(gesture.label())));
+            return out;
+        }
+        Press::Hold(keys) => (pf_l10n::client::controls_hold(FIRST), keys, ""),
+        Press::Either(a, b) => (pf_l10n::client::controls_either(FIRST, SECOND), a, b),
+    };
+    let mut word = String::new();
+    for ch in text.chars() {
+        let keys = match ch {
+            FIRST => first,
+            SECOND => second,
+            _ => {
+                word.push(ch);
+                continue;
+            }
+        };
+        push_word(&mut out, &mut word);
+        push_keys(&mut out, keys, style);
+    }
+    push_word(&mut out, &mut word);
+    out
+}
+
+/// The message text gathered so far, as one word between badges.
+fn push_word(out: &mut Vec<Piece>, word: &mut String) {
+    let w = word.trim();
+    if !w.is_empty() {
+        out.push(Piece::Word(w.to_string()));
+    }
+    word.clear();
+}
+
+/// Keys joined by `+`. A letter is a face button only in a pad style; the keyboard's own
+/// letters stay keycaps. Back and OK are the remote's badges in [`GlyphStyle::Remote`],
+/// keycaps elsewhere.
+fn push_keys(out: &mut Vec<Piece>, keys: &'static str, style: GlyphStyle) {
     let pad = !matches!(style, GlyphStyle::Keyboard | GlyphStyle::Remote);
     let remote = style == GlyphStyle::Remote;
-    let mut out = Vec::new();
-    for (i, alt) in chord.split(" or ").enumerate() {
-        if i > 0 {
-            out.push(Piece::Word("or"));
+    for (j, key) in keys.split('+').map(str::trim).enumerate() {
+        if j > 0 {
+            out.push(Piece::Word("+".into()));
         }
-        let alt = match alt.strip_prefix("Hold ") {
-            Some(rest) => {
-                out.push(Piece::Word("Hold"));
-                rest
-            }
-            None => alt,
-        };
-        for (j, key) in alt.split('+').map(str::trim).enumerate() {
-            if j > 0 {
-                out.push(Piece::Word("+"));
-            }
-            out.push(match key {
-                "A" if pad => Piece::Glyph(HintKey::Confirm),
-                "B" if pad => Piece::Glyph(HintKey::Back),
-                "X" if pad => Piece::Glyph(HintKey::Tertiary),
-                "Y" if pad => Piece::Glyph(HintKey::Secondary),
-                "Back" if remote => Piece::Glyph(HintKey::Back),
-                "OK" if remote => Piece::Glyph(HintKey::Confirm),
-                "Red" => Piece::Colour(Color4f::new(0.90, 0.27, 0.22, 1.0)),
-                "Green" => Piece::Colour(Color4f::new(0.24, 0.72, 0.33, 1.0)),
-                "Yellow" => Piece::Colour(Color4f::new(0.95, 0.78, 0.20, 1.0)),
-                "Blue" => Piece::Colour(Color4f::new(0.25, 0.50, 0.95, 1.0)),
-                _ => Piece::Glyph(HintKey::Key(key)),
-            });
-        }
+        out.push(match key {
+            "A" if pad => Piece::Glyph(HintKey::Confirm),
+            "B" if pad => Piece::Glyph(HintKey::Back),
+            "X" if pad => Piece::Glyph(HintKey::Tertiary),
+            "Y" if pad => Piece::Glyph(HintKey::Secondary),
+            "Back" if remote => Piece::Glyph(HintKey::Back),
+            "OK" if remote => Piece::Glyph(HintKey::Confirm),
+            "Red" => Piece::Colour(Color4f::new(0.90, 0.27, 0.22, 1.0)),
+            "Green" => Piece::Colour(Color4f::new(0.24, 0.72, 0.33, 1.0)),
+            "Yellow" => Piece::Colour(Color4f::new(0.95, 0.78, 0.20, 1.0)),
+            "Blue" => Piece::Colour(Color4f::new(0.25, 0.50, 0.95, 1.0)),
+            _ => Piece::Glyph(HintKey::Key(key)),
+        });
     }
-    out
 }
 
 fn piece_width(fonts: &Fonts, piece: &Piece, style: GlyphStyle, k: f64) -> f64 {
@@ -697,9 +731,9 @@ pub fn chord_height(k: f64) -> f64 {
 }
 
 /// The width [`draw_chord`] takes, px.
-pub fn chord_width(fonts: &Fonts, chord: &'static str, style: GlyphStyle, k: f64) -> f64 {
+pub fn chord_width(fonts: &Fonts, press: Press, style: GlyphStyle, k: f64) -> f64 {
     let k = k * CHORD_K;
-    pieces(chord, style)
+    pieces(press, style)
         .iter()
         .map(|p| piece_width(fonts, p, style, k))
         .sum()
@@ -711,7 +745,7 @@ pub fn draw_chord(
     canvas: &Canvas,
     ui: &Frame,
     fonts: &Fonts,
-    chord: &'static str,
+    press: Press,
     style: GlyphStyle,
     x: f64,
     cy: f64,
@@ -719,7 +753,7 @@ pub fn draw_chord(
 ) {
     let k = k * CHORD_K;
     let mut pen = x;
-    for piece in pieces(chord, style) {
+    for piece in pieces(press, style) {
         let w = piece_width(fonts, &piece, style, k);
         match piece {
             Piece::Glyph(key) => draw_glyph(canvas, ui, fonts, key, style, pen, cy, k),
@@ -737,7 +771,7 @@ pub fn draw_chord(
                 let size = WORD_SIZE * k;
                 fonts.draw(
                     canvas,
-                    word,
+                    &word,
                     pen + WORD_GAP * k,
                     cy + size * 0.36,
                     W::Regular,
@@ -758,34 +792,52 @@ mod tests {
     /// only on a pad, and Back is the remote's arrow only on a remote.
     #[test]
     fn a_chord_splits_into_badges_and_words() {
-        let p = pieces("L1 + R1 + Start + Select", GlyphStyle::Letters);
+        use Press::{Either, Hold, Keys};
+        let word = |w: &str| Piece::Word(w.into());
+        let p = pieces(Keys("L1 + R1 + Start + Select"), GlyphStyle::Letters);
         assert_eq!(p.len(), 7);
         assert_eq!(p[0], Piece::Glyph(HintKey::Key("L1")));
-        assert_eq!(p[1], Piece::Word("+"));
-        let p = pieces("Hold Back", GlyphStyle::Remote);
-        assert_eq!(p, [Piece::Word("Hold"), Piece::Glyph(HintKey::Back)]);
-        let p = pieces("F11 or Alt+Enter", GlyphStyle::Keyboard);
-        assert!(p.len() == 5 && p[1] == Piece::Word("or"));
+        assert_eq!(p[1], word("+"));
+        let p = pieces(Hold("Back"), GlyphStyle::Remote);
+        assert_eq!(p, [word("Hold"), Piece::Glyph(HintKey::Back)]);
+        let p = pieces(Either("F11", "Alt+Enter"), GlyphStyle::Keyboard);
+        assert!(p.len() == 5 && p[1] == word("or"));
         assert_eq!(
-            pieces("Select + A", GlyphStyle::Shapes)[2],
+            pieces(Keys("Select + A"), GlyphStyle::Shapes)[2],
             Piece::Glyph(HintKey::Confirm)
         );
         assert_eq!(
-            pieces("Ctrl+Alt+Shift+A", GlyphStyle::Keyboard)[6],
+            pieces(Keys("Ctrl+Alt+Shift+A"), GlyphStyle::Keyboard)[6],
             Piece::Glyph(HintKey::Key("A"))
         );
         assert!(matches!(
-            pieces("Green", GlyphStyle::Remote)[0],
+            pieces(Keys("Green"), GlyphStyle::Remote)[0],
             Piece::Colour(_)
         ));
+        let tap = pf_client_core::shortcuts::Gesture::ThreeFingerTap;
+        assert_eq!(
+            pieces(Press::Gesture(tap), GlyphStyle::Remote),
+            [Piece::Glyph(HintKey::Key("Three-finger tap"))]
+        );
+    }
+
+    /// The words around the badges are the message's, wherever it puts its placeholders.
+    #[test]
+    fn a_held_chord_reads_the_pseudo_language() {
+        let p = pf_l10n::with_language("en-XA", || pieces(Press::Hold("Back"), GlyphStyle::Remote));
+        assert!(p.contains(&Piece::Glyph(HintKey::Back)), "{p:?}");
+        assert!(
+            matches!(&p[0], Piece::Word(w) if w.starts_with('[') && w != "Hold"),
+            "{p:?}"
+        );
     }
 
     /// A longer chord is wider, and the page's badges outsize the hint bar's.
     #[test]
     fn a_chord_measures_its_badges() {
         let fonts = crate::theme::build_fonts().unwrap();
-        let one = chord_width(&fonts, "A", GlyphStyle::Letters, 1.0);
-        let two = chord_width(&fonts, "Select + A", GlyphStyle::Letters, 1.0);
+        let one = chord_width(&fonts, Press::Keys("A"), GlyphStyle::Letters, 1.0);
+        let two = chord_width(&fonts, Press::Keys("Select + A"), GlyphStyle::Letters, 1.0);
         assert!(one > BADGE_D && two > one + BADGE_D, "{one} {two}");
     }
 

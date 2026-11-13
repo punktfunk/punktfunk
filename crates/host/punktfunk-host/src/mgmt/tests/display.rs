@@ -56,6 +56,7 @@ async fn host_info_publishes_the_hosts_own_fingerprint() {
         false,
         false,
         None,
+        None,
     ));
     let (status, body) = send(&app, get_req("/api/v1/host")).await;
     assert_eq!(status, StatusCode::OK);
@@ -204,8 +205,8 @@ async fn display_settings_surface() {
     let presets = body["presets"].as_array().expect("presets array");
     assert_eq!(
         presets.len(),
-        5,
-        "all five named presets are surfaced for the console picker"
+        6,
+        "every named preset is surfaced for the console picker"
     );
     assert!(
         body["effective"]["keep_alive"].is_object(),
@@ -445,13 +446,277 @@ fn a_host_wide_put_keeps_every_key_it_omits() {
         "an empty body changes nothing"
     );
     assert_eq!(
-        put_onto(&stored, serde_json::json!({"capture_monitor": null})),
+        put_onto(&stored, serde_json::json!({"capture_monitor": null})).sanitized(),
         DisplayPolicy {
+            screen: None,
             capture_monitor: None,
             ..stored.clone()
         },
         "`null` clears the pin and nothing else"
     );
+}
+
+/// `capture_monitor` is `screen`'s alias for one release: an older console that writes only
+/// the connector moves the screen, and a newer one that writes only `screen` moves both.
+#[test]
+fn a_host_wide_put_moves_the_screen_through_either_name() {
+    use crate::vdisplay::policy::{DisplayPolicy, DisplayTarget};
+    let stored = DisplayPolicy {
+        screen: Some(DisplayTarget::Monitor("DP-1".into())),
+        ..DisplayPolicy::default()
+    }
+    .sanitized();
+    let old = put_onto(&stored, serde_json::json!({"capture_monitor": "HDMI-A-2"})).sanitized();
+    assert_eq!(old.screen, Some(DisplayTarget::Monitor("HDMI-A-2".into())));
+    let new = put_onto(&stored, serde_json::json!({"screen": "own"})).sanitized();
+    assert_eq!(new.screen, Some(DisplayTarget::Own));
+    assert_eq!(new.capture_monitor, None, "the alias follows the screen");
+}
+
+/// A paired device on the cert lane, with the app it calls.
+fn paired_app(name: &str, fp: &str) -> Router {
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join(format!("pf-mgmt-{name}.json"))),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    np.add(name, fp).unwrap();
+    test_app_native(test_state(), np)
+}
+
+/// The picker answers every lane with the own screen first; only a paired device is told
+/// what it is set to. The operator, a plugin and a Full device may choose.
+#[tokio::test]
+async fn display_targets_answer_each_lane() {
+    let fp = "deadbeefcafe";
+    let app = paired_app("picker", fp);
+    let check = |body: &serde_json::Value| {
+        assert!(body["locked"].is_boolean(), "{body}");
+        assert!(!body["host_default"].is_null(), "{body}");
+        assert_eq!(body["may_choose"], true, "{body}");
+        assert_eq!(
+            body["targets"][0],
+            serde_json::json!({"id": "own", "label": "Own screen"})
+        );
+    };
+
+    let (status, body) = send(&app, get_req("/api/v1/display/targets")).await;
+    assert_eq!(status, StatusCode::OK);
+    check(&body);
+    assert!(body["yours"].is_null(), "the operator is no device");
+
+    let req = with_bearer(get_req("/api/v1/display/targets"), "plugin-secret");
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    check(&body);
+    assert!(body["yours"].is_null(), "a plugin is no device");
+
+    let mut req = get_req("/api/v1/display/targets");
+    req.extensions_mut()
+        .insert(PeerCertFingerprint(Some(fp.to_string())));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    check(&body);
+    assert!(
+        !body["yours"].is_null(),
+        "a device reads its own pick: {body}"
+    );
+    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+        assert!(body.get("role").is_none(), "no mirror backend: {body}");
+    }
+}
+
+/// A device writes its screen, or its screen with a topology, and only on its own row.
+/// Refusals come before any write; the accepted write is asserted on the pure parts, since
+/// `policy::prefs()` is bound to the developer's config dir at its first use in this binary.
+#[tokio::test]
+async fn a_device_writes_only_its_own_pick() {
+    use crate::mgmt::display::device_pick;
+    use crate::vdisplay::policy::{ClientOverlay, DisplayTarget, KeepAlive, SetBy, Topology};
+    use serde_json::json;
+    let fp = "deadbeefcafe";
+    let app = paired_app("screen", fp);
+    let put = |row: &str, body: serde_json::Value| {
+        json_req(Method::PUT, &format!("/api/v1/display/clients/{row}"), body)
+    };
+    let (forbidden, unreadable) = (StatusCode::FORBIDDEN, StatusCode::UNPROCESSABLE_ENTITY);
+    let refused = [
+        (
+            "0123456789ab",
+            json!({"screen": "own"}),
+            forbidden,
+            "another device's row",
+        ),
+        (
+            fp,
+            json!({"screen": "own", "keep_alive": {"mode": "forever"}}),
+            forbidden,
+            "a field beside the pick",
+        ),
+        (
+            fp,
+            json!({"screen": "own", "topology": "auto"}),
+            unreadable,
+            "auto is the host's",
+        ),
+        (
+            fp,
+            json!({"screen": "own", "topology": "sideways"}),
+            unreadable,
+            "no such topology",
+        ),
+        (
+            fp,
+            json!({"screen": "own", "topology": null}),
+            unreadable,
+            "a null topology",
+        ),
+        (
+            fp,
+            json!({"topology": "extend"}),
+            unreadable,
+            "a topology alone",
+        ),
+        (fp, json!({"screen": "tv"}), unreadable, "no such screen"),
+    ];
+    for (row, body, status, why) in refused {
+        assert_eq!(send_cert(&app, put(row, body), fp).await, status, "{why}");
+    }
+
+    let pick = |body| device_pick(fp, &fp.to_uppercase(), body).unwrap();
+    let own = Some(DisplayTarget::Own);
+    assert_eq!(pick(json!({"screen": "own"})), (own.clone(), None));
+    let second = json!({"screen": "own", "topology": "extend"});
+    assert_eq!(pick(second), (own, Some(Topology::Extend)));
+    assert_eq!(pick(json!({"screen": null})), (None, None));
+    assert_eq!(pick(json!({})), (None, None), "no screen clears");
+
+    let (screen, topology) =
+        pick(json!({"screen": {"monitor": "HDMI-A-1"}, "topology": "primary"}));
+    let mut row = ClientOverlay {
+        keep_alive: Some(KeepAlive::Forever),
+        topology: Some(Topology::Exclusive),
+        ..ClientOverlay::default()
+    };
+    row.set_device_pick(screen, topology);
+    assert_eq!(
+        row.keep_alive,
+        Some(KeepAlive::Forever),
+        "the rest of the row stays"
+    );
+    assert_eq!(row.topology, None, "a monitor drops the topology");
+    assert_eq!(row.set_by, Some(SetBy::Device));
+    assert_eq!(row.capture_monitor.as_deref(), Some("HDMI-A-1"));
+}
+
+/// `role` is absent off the desk, offers `main` only where the desktop has a main screen, and
+/// names a device's own role only from its counted pick.
+#[test]
+fn screen_roles_exist_only_on_the_desk() {
+    use crate::mgmt::display::screen_roles;
+    use crate::vdisplay::{policy::Topology, Compositor};
+    use serde_json::json;
+    let roles = |seat, c: Compositor, physical, yours| {
+        serde_json::to_value(screen_roles(
+            seat,
+            Some(c),
+            physical,
+            yours,
+            Topology::Exclusive,
+        ))
+        .unwrap()
+    };
+    assert_eq!(
+        roles(false, Compositor::Kwin, Some(true), Some(Topology::Extend)),
+        json!({"yours": "second", "host_default": "only", "offered": ["only", "main", "second"]})
+    );
+    assert_eq!(
+        roles(false, Compositor::Hyprland, None, Some(Topology::Primary)),
+        json!({"yours": "second", "host_default": "only", "offered": ["only", "second"]}),
+        "unreadable heads keep the roles; primary extends on a tiling desktop"
+    );
+    assert_eq!(
+        roles(false, Compositor::Windows, Some(true), None)["yours"],
+        serde_json::Value::Null
+    );
+    assert!(
+        roles(true, Compositor::Kwin, Some(true), None).is_null(),
+        "a contract seat"
+    );
+    assert!(
+        roles(false, Compositor::Gamescope, Some(true), None).is_null(),
+        "gamescope"
+    );
+    assert!(
+        roles(false, Compositor::Kwin, Some(false), None).is_null(),
+        "no monitor"
+    );
+    let unknown = screen_roles(false, None, None, None, Topology::Primary).unwrap();
+    assert_eq!(
+        serde_json::to_value(unknown).unwrap()["offered"],
+        json!(["only", "second"])
+    );
+}
+
+/// A device without `GRANT_DISPLAY` reads that it may not choose, and its write is refused
+/// after the row and body checks, on its own lane and when the door vouches for it.
+#[tokio::test]
+async fn a_device_without_the_screen_grant_may_not_choose() {
+    use punktfunk_core::quic::{GRANT_ALL, GRANT_DISPLAY};
+    let fp = "ab".repeat(32);
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-screen-grant.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let access = crate::native_pairing::Access {
+        grants: GRANT_ALL & !GRANT_DISPLAY,
+        expires_unix: None,
+        until_disconnect: false,
+    };
+    np.add_with_access("tablet", &fp, Some(access)).unwrap();
+    let app = test_app_native(test_state(), np);
+    let as_device = |mut req: axum::http::Request<Body>| {
+        req.extensions_mut()
+            .insert(PeerCertFingerprint(Some(fp.clone())));
+        req
+    };
+
+    let (status, body) = send(&app, as_device(get_req("/api/v1/display/targets"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["may_choose"], false, "{body}");
+
+    let put = |row: &str, body: serde_json::Value| {
+        json_req(Method::PUT, &format!("/api/v1/display/clients/{row}"), body)
+    };
+    let own = serde_json::json!({"screen": "own"});
+    let (status, body) = send(&app, as_device(put("0123456789ab", own.clone()))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body["code"].is_null(), "another row first: {body}");
+    let (status, body) = send(&app, as_device(put(&fp, own.clone()))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "screen_choice_not_granted");
+    assert_eq!(
+        body["error"],
+        "This host decides the screen for this device."
+    );
+
+    let mut vouched = put(&fp, own);
+    vouched.headers_mut().insert(
+        crate::mgmt::auth::VOUCH_HEADER,
+        axum::http::HeaderValue::from_str(&fp).unwrap(),
+    );
+    let (status, body) = send(&app, vouched).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["code"], "screen_choice_not_granted");
 }
 
 /// A body that is not an object has no keys to merge.

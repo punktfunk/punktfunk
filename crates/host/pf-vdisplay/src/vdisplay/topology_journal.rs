@@ -9,8 +9,10 @@
 //! [`reclaim`] runs every file whose owner is dead. The engine names no backend: each entry
 //! goes to [`VirtualDisplay::undo`](crate::VirtualDisplay::undo) of the backend it records.
 //!
-//! An undo that fails, or whose heads do not read back lit, stays for the next pass. A file this
-//! version cannot read is left alone.
+//! An undo that fails, whose heads do not read back lit, or that names a head the compositor
+//! no longer lists stays, and this host runs it again while it lives ([`apply`]): a head may
+//! come back still disabled. Past a few looks it stays for the next pass. A file this version
+//! cannot read is left alone.
 //! Pin the contract with the tests below; the design is
 //! `design/component-health/16-topology-journal.md` (planning).
 
@@ -105,6 +107,14 @@ mod linux {
 
     /// Bumped when a reader of today's file could misread tomorrow's. A newer file is left alone.
     const VERSION: u32 = 1;
+
+    /// How often a head that left mid-stream is looked for again: the delay between a monitor
+    /// switched back on and its picture.
+    const OWED_POLL: Duration = Duration::from_secs(2);
+
+    /// Failed looks before an owed entry is left for the next host: a head that is back but
+    /// refuses its re-enable must not have it re-run (a Hyprland `reload`) every poll.
+    const OWED_TRIES: u32 = 3;
 
     #[derive(Serialize, Deserialize)]
     struct Doc {
@@ -224,8 +234,10 @@ mod linux {
 
     /// Run the entries of `backend` that `seqs` name, newest first, with the journal unlocked:
     /// an undo and its read-back take seconds, and another session's [`push`] must not wait.
-    /// `Ok` removes an entry; `Err` keeps it for the next pass. A seq that is gone, or goes
-    /// while an earlier one runs, is nothing to do.
+    /// `Ok` removes an entry; `Err` keeps it. A seq that is gone, or goes while an earlier one
+    /// runs, is nothing to do. A re-enable that errors or does not read back lit, and an entry
+    /// naming a head that is not listed (unplugged, or a monitor switched off), stay owed:
+    /// [`watch_owed`] runs them again, and the next host takes what it gives up on.
     pub(crate) fn apply(seqs: &[u64], backend: &mut dyn VirtualDisplay) {
         if seqs.is_empty() {
             return;
@@ -235,14 +247,104 @@ mod linux {
             let mine = |e: &&Entry| seqs.contains(&e.seq) && e.backend == name;
             j.doc.entries.iter().filter(mine).cloned().collect()
         });
+        let mut owed = Vec::new();
         let undone = run(&picked, |e| {
             if !with(|j| j.doc.entries.iter().any(|now| now.seq == e.seq)) {
-                return Ok(());
+                return Ok(true);
             }
-            backend.undo(&e.undo)?;
-            settled(&*backend, &e.undo, crate::monitors::DISABLE_BUDGET)
+            let tried = backend
+                .undo(&e.undo)
+                .and_then(|()| settled(&*backend, &e.undo, crate::monitors::DISABLE_BUDGET));
+            let gone = match tried {
+                Ok(gone) => gone,
+                Err(err) => {
+                    if matches!(e.undo, Undo::EnableHeads { .. }) {
+                        owed.push(e.seq);
+                    }
+                    return Err(err);
+                }
+            };
+            if !gone.is_empty() {
+                tracing::info!(
+                    backend = name, heads = ?gone,
+                    "head left while the stream had it off — re-enabled when it is back"
+                );
+                owed.push(e.seq);
+            }
+            Ok(gone.is_empty())
         });
         with(|j| j.settle(&undone));
+        if !owed.is_empty() {
+            watch_owed(name, owed);
+        }
+    }
+
+    /// Look at the heads of the `owed` entries every [`OWED_POLL`] until each is settled: a
+    /// head that left mid-stream, or a re-enable that errored. Umbriel and niri keep a runtime
+    /// disable for the monitor and Hyprland a rule for its name, so a returning head comes back
+    /// still disabled. After [`OWED_TRIES`] failed looks an entry is left in the journal for
+    /// the next host.
+    fn watch_owed(backend: &'static str, owed: Vec<u64>) {
+        let mut owed: Vec<(u64, u32)> = owed.into_iter().map(|seq| (seq, 0)).collect();
+        let spawned = std::thread::Builder::new()
+            .name("topology-owed".into())
+            .spawn(move || {
+                while !owed.is_empty() {
+                    std::thread::sleep(OWED_POLL);
+                    let Some(mut b) = crate::backend_by_id(backend) else {
+                        continue;
+                    };
+                    owed.retain_mut(|(seq, failed)| {
+                        match retry_owed(*seq, &mut *b, crate::monitors::DISABLE_BUDGET) {
+                            Ok(done) => !done,
+                            Err(e) => {
+                                *failed += 1;
+                                tracing::warn!(
+                                    backend, seq = *seq, tries = *failed,
+                                    error = %format!("{e:#}"), "returning head not re-enabled"
+                                );
+                                *failed < OWED_TRIES
+                            }
+                        }
+                    });
+                }
+            });
+        if let Err(e) = spawned {
+            tracing::error!(error = %e, "owed topology undo not watched — the next host runs it");
+        }
+    }
+
+    /// One look at owed entry `seq`: `Ok(true)` once it is settled or gone. Waits while a
+    /// managed output is listed: that session owns the desk, and its teardown comes first.
+    /// Runs the undo only when a head it names is listed dark, so a lit one costs one listing.
+    fn retry_owed(seq: u64, backend: &mut dyn VirtualDisplay, budget: Duration) -> Result<bool> {
+        let Some(undo) = with(|j| {
+            let entry = j.doc.entries.iter().find(|e| e.seq == seq);
+            entry.map(|e| e.undo.clone())
+        }) else {
+            return Ok(true);
+        };
+        let Undo::EnableHeads { heads } = &undo else {
+            return Ok(true);
+        };
+        let listed = backend.heads().context("list the heads")?;
+        if listed.iter().any(|m| m.managed) {
+            return Ok(false);
+        }
+        let dark = |h: &super::Head| listed.iter().any(|m| m.connector == h.name && !m.enabled);
+        if heads.iter().any(dark) {
+            backend.undo(&undo)?;
+        }
+        if !settled(&*backend, &undo, budget)?.is_empty() {
+            return Ok(false);
+        }
+        done(seq);
+        tracing::info!(
+            backend = backend.name(),
+            seq,
+            "owed topology undo settled — the head is back lit"
+        );
+        Ok(true)
     }
 
     /// Test: this process's file becomes one a dead host left, and the next push opens a fresh
@@ -262,8 +364,8 @@ mod linux {
 
     /// Take back what dead hosts left: every file in the dir whose owner is gone, newest entry
     /// first, each through the backend `open` builds for its name. No backend (unknown name, or
-    /// its compositor is not up) keeps the entry, and a file with nothing undone is not rewritten.
-    /// Cheap with nothing there: one listing.
+    /// its compositor is not up), or a head it names that is not listed, keeps the entry, and a
+    /// file with nothing undone is not rewritten. Cheap with nothing there: one listing.
     pub(crate) fn reclaim(open: &dyn Fn(&str) -> Option<Box<dyn VirtualDisplay>>) {
         reclaim_in(&dir(), open)
     }
@@ -296,7 +398,7 @@ mod linux {
                 let mut backend = open(&e.backend)
                     .with_context(|| format!("no {} backend to run the undo", e.backend))?;
                 backend.undo(&e.undo)?;
-                settled(&*backend, &e.undo, crate::monitors::DISABLE_BUDGET)
+                Ok(settled(&*backend, &e.undo, crate::monitors::DISABLE_BUDGET)?.is_empty())
             });
             if undone.is_empty() {
                 continue; // nothing to rewrite, and the fsync can stall behind a busy disk
@@ -308,12 +410,13 @@ mod linux {
         }
     }
 
-    /// Read back what an undo claims: every head an `EnableHeads` names is lit, or no longer
-    /// listed, within `budget`. The compositor applies asynchronously and may decide otherwise;
-    /// a head still dark is the `Err` that keeps the entry.
-    fn settled(backend: &dyn VirtualDisplay, undo: &Undo, budget: Duration) -> Result<()> {
+    /// Read back what an undo claims: every head an `EnableHeads` names that is listed is lit
+    /// within `budget`. The compositor applies asynchronously and may decide otherwise; a head
+    /// still dark is the `Err` that keeps the entry. `Ok` names the heads not listed: an empty
+    /// list settles the entry.
+    fn settled(backend: &dyn VirtualDisplay, undo: &Undo, budget: Duration) -> Result<Vec<String>> {
         let Undo::EnableHeads { heads } = undo else {
-            return Ok(());
+            return Ok(Vec::new());
         };
         let deadline = Instant::now() + budget;
         loop {
@@ -324,7 +427,10 @@ mod linux {
                 .map(|h| h.name.as_str())
                 .collect();
             if dark.is_empty() {
-                return Ok(());
+                let gone = heads
+                    .iter()
+                    .filter(|h| !listed.iter().any(|m| m.connector == h.name));
+                return Ok(gone.map(|h| h.name.clone()).collect());
             }
             if Instant::now() >= deadline {
                 bail!("{} still disabled after the undo", dark.join(", "));
@@ -333,16 +439,17 @@ mod linux {
         }
     }
 
-    /// Undo `entries` newest first; the seqs whose undo answered `Ok`. An `Err` keeps its entry
-    /// and is logged with the backend's own words. No early stop: the entries are independent,
-    /// and the order already puts a head's re-enable before its output's unplug.
-    fn run(entries: &[Entry], mut undo: impl FnMut(&Entry) -> Result<()>) -> Vec<u64> {
+    /// Undo `entries` newest first; the seqs whose undo answered `Ok(true)`. `Ok(false)` keeps
+    /// its entry quietly; an `Err` keeps it and is logged with the backend's own words. No early
+    /// stop: the entries are independent, and the order already puts a head's re-enable before
+    /// its output's unplug.
+    fn run(entries: &[Entry], mut undo: impl FnMut(&Entry) -> Result<bool>) -> Vec<u64> {
         let mut order: Vec<&Entry> = entries.iter().collect();
         order.sort_by_key(|e| std::cmp::Reverse(e.seq));
         order
             .into_iter()
             .filter(|e| match undo(e) {
-                Ok(()) => true,
+                Ok(settled) => settled,
                 Err(err) => {
                     tracing::error!(
                         backend = %e.backend, seq = e.seq, error = %format!("{err:#}"),
@@ -423,6 +530,29 @@ mod linux {
             std::fs::read_dir(dir).map_or(0, |d| d.count())
         }
 
+        fn head(name: &str, enabled: bool) -> crate::monitors::PhysicalMonitor {
+            crate::monitors::PhysicalMonitor {
+                connector: name.into(),
+                description: name.into(),
+                width: 1920,
+                height: 1080,
+                refresh_mhz: 60_000,
+                x: 0,
+                y: 0,
+                scale: 1.0,
+                primary: false,
+                enabled,
+                managed: name.starts_with("PF-"),
+            }
+        }
+
+        /// A fake desk whose heads [`steps`] names are plugged in and lit.
+        fn lit_desk(name: &'static str) -> FakeDisplay {
+            let fake = FakeDisplay::new(name);
+            fake.script(|s| s.heads = vec![head("DP-1", true), head("HDMI-A-1", true)]);
+            fake
+        }
+
         /// Crash table: after k of the three steps, reclaim takes back exactly those k, newest
         /// first, and the file goes.
         #[test]
@@ -434,7 +564,7 @@ mod linux {
                     j.push("fake", undo);
                 }
                 died(&mut j);
-                let fake = FakeDisplay::new("fake");
+                let fake = lit_desk("fake");
                 reclaim_in(&dir, &|name| (name == "fake").then(|| fake.boxed()));
                 let want: Vec<Call> = steps().into_iter().take(k).rev().map(Call::Undo).collect();
                 assert_eq!(fake.take_calls(), want, "k = {k}");
@@ -480,7 +610,7 @@ mod linux {
                 j.push("fake", undo);
             }
             died(&mut j);
-            let fake = FakeDisplay::new("fake");
+            let fake = lit_desk("fake");
             fake.script(|s| s.fail_undo = Some(heads(&["DP-1"])));
             reclaim_in(&dir, &|_| Some(fake.boxed()));
             assert_eq!(
@@ -502,32 +632,34 @@ mod linux {
         }
 
         /// An undo counts only once the heads read back lit: one still listed dark is the
-        /// error that keeps the entry, one no longer listed (unplugged) is settled.
+        /// error that keeps the entry, one no longer listed (unplugged) is named as owed.
         #[test]
         fn an_undo_is_settled_when_its_heads_read_back_lit() {
-            let head = |enabled| crate::monitors::PhysicalMonitor {
-                connector: "DP-1".into(),
-                description: "DP-1".into(),
-                width: 1920,
-                height: 1080,
-                refresh_mhz: 60_000,
-                x: 0,
-                y: 0,
-                scale: 1.0,
-                primary: false,
-                enabled,
-                managed: false,
-            };
             let fake = FakeDisplay::new("fake");
             let undo = heads(&["DP-1"]);
-            fake.script(|s| s.heads = vec![head(false)]);
-            let err = settled(&fake, &undo, Duration::ZERO).expect_err("still dark");
+            let read = |undo: &Undo| settled(&fake, undo, Duration::ZERO);
+            fake.script(|s| s.heads = vec![head("DP-1", false)]);
+            let err = read(&undo).expect_err("still dark");
             assert_eq!(err.to_string(), "DP-1 still disabled after the undo");
-            fake.script(|s| s.heads = vec![head(true)]);
-            assert!(settled(&fake, &undo, Duration::ZERO).is_ok());
+            fake.script(|s| s.heads = vec![head("DP-1", true)]);
+            assert!(read(&undo).unwrap().is_empty());
             fake.script(|s| s.heads = Vec::new());
-            assert!(settled(&fake, &undo, Duration::ZERO).is_ok());
-            assert!(settled(&fake, &output("HEADLESS-2"), Duration::ZERO).is_ok());
+            assert_eq!(read(&undo).unwrap(), ["DP-1"]);
+            assert!(read(&output("HEADLESS-2")).unwrap().is_empty());
+        }
+
+        /// A dead host's undo of a head that is not listed keeps its entry for the next pass.
+        #[test]
+        fn a_dead_hosts_unplugged_head_stays_owed() {
+            let dir = scratch("unplugged");
+            let mut j = Journal::open(&dir);
+            j.push("fake", heads(&["DP-1"]));
+            died(&mut j);
+            let fake = FakeDisplay::new("fake");
+            reclaim_in(&dir, &|_| Some(fake.boxed()));
+            assert_eq!(fake.take_calls(), [Call::Undo(heads(&["DP-1"]))]);
+            assert_eq!(files(&dir), 1);
+            let _ = std::fs::remove_dir_all(&dir);
         }
 
         /// A backend that cannot be opened (its compositor is not up) keeps every entry, in a
@@ -574,7 +706,7 @@ mod linux {
                     let c = push("other", heads(&["DP-2"]));
                     let d = push("fake", heads(&["HDMI-A-1"]));
                     done(a);
-                    let fake = FakeDisplay::new("fake");
+                    let fake = lit_desk("fake");
                     apply(&[a, b, c, d], &mut *fake.boxed());
                     assert_eq!(
                         fake.take_calls(),
@@ -596,7 +728,7 @@ mod linux {
             in_child("a_push_lands_while_an_undo_runs", || {
                 let older = push("fake", output("HEADLESS-2"));
                 let newer = push("fake", heads(&["DP-1"]));
-                let fake = FakeDisplay::new("fake");
+                let fake = lit_desk("fake");
                 let (release, gate) = std::sync::mpsc::channel();
                 fake.script(|s| s.undo_gate = Some(gate));
                 let mut vd = fake.boxed();
@@ -617,6 +749,91 @@ mod linux {
                 undoing.join().unwrap();
                 assert_eq!(fake.take_calls(), [Call::Undo(heads(&["DP-1"]))]);
                 assert_eq!(seqs(), [other]);
+            });
+        }
+
+        /// A head switched off mid-stream is not listed at the undo, so its entry stays. It is
+        /// run again only once the head is back dark with no session on the desk, and settles
+        /// once the head reads back lit.
+        #[test]
+        fn an_unplugged_head_is_owed_until_it_is_back() {
+            in_child("an_unplugged_head_is_owed_until_it_is_back", || {
+                let seq = push("fake", heads(&["DP-1"]));
+                let fake = FakeDisplay::new("fake");
+                fake.script(|s| s.heads = vec![head("PF-1", true)]);
+                apply(&[seq], &mut *fake.boxed());
+                assert_eq!(fake.take_calls(), [Call::Undo(heads(&["DP-1"]))]);
+                assert_eq!(seqs(), [seq], "owed until DP-1 is back");
+
+                let mut vd = fake.boxed();
+                let mut retry = || retry_owed(seq, &mut *vd, Duration::ZERO);
+                fake.script(|s| s.heads = vec![head("PF-1", true), head("DP-1", false)]);
+                assert!(!retry().unwrap(), "a session holds the desk");
+                fake.script(|s| s.heads = Vec::new());
+                assert!(!retry().unwrap(), "still unplugged");
+                assert!(fake.take_calls().is_empty());
+
+                fake.script(|s| s.heads = vec![head("DP-1", false)]);
+                assert!(
+                    retry().is_err(),
+                    "back dark, and the fake re-lights nothing"
+                );
+                assert_eq!(fake.take_calls(), [Call::Undo(heads(&["DP-1"]))]);
+                fake.script(|s| s.heads = vec![head("DP-1", true)]);
+                assert!(retry().unwrap());
+                assert!(fake.take_calls().is_empty(), "a lit head needs no undo");
+                assert!(seqs().is_empty());
+                assert!(retry().unwrap(), "a settled entry is nothing to do");
+            });
+        }
+
+        /// The watch [`apply`] starts settles the owed entry on its own once the head is back.
+        #[test]
+        fn the_owed_watch_settles_a_head_that_came_back() {
+            in_child("the_owed_watch_settles_a_head_that_came_back", || {
+                let seq = push("fake", heads(&["DP-1"]));
+                let fake = FakeDisplay::new("fake");
+                fake.serve_by_name();
+                apply(&[seq], &mut *fake.boxed());
+                assert_eq!(seqs(), [seq]);
+                fake.script(|s| s.heads = vec![head("DP-1", true)]);
+                let deadline = Instant::now() + OWED_POLL * 3;
+                while !seqs().is_empty() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                assert!(seqs().is_empty(), "the watch settled the entry");
+            });
+        }
+
+        /// A re-enable that errors on a live host stays in the journal and is run again by
+        /// the owed watch, which settles the entry once the head reads back lit.
+        #[test]
+        fn a_failed_undo_is_run_again_by_the_owed_watch() {
+            in_child("a_failed_undo_is_run_again_by_the_owed_watch", || {
+                let undo = heads(&["DP-1"]);
+                let seq = push("fake", undo.clone());
+                let fake = FakeDisplay::new("fake");
+                fake.serve_by_name();
+                fake.script(|s| {
+                    s.heads = vec![head("DP-1", false)];
+                    s.fail_undo = Some(undo.clone());
+                });
+                apply(&[seq], &mut *fake.boxed());
+                assert_eq!(fake.take_calls(), [Call::Undo(undo.clone())]);
+                assert_eq!(seqs(), [seq], "the refused re-enable stays owed");
+
+                fake.script(|s| s.fail_undo = None);
+                let deadline = Instant::now() + OWED_POLL * 3;
+                while fake.calls().is_empty() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                assert_eq!(fake.take_calls(), [Call::Undo(undo)], "the watch re-ran it");
+                fake.script(|s| s.heads = vec![head("DP-1", true)]);
+                let deadline = Instant::now() + OWED_POLL * 3;
+                while !seqs().is_empty() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                assert!(seqs().is_empty(), "the head read back lit and settled");
             });
         }
     }

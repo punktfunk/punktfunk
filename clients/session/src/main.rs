@@ -177,6 +177,14 @@ mod session_main {
         pf_client_core::gamescope::under_gamescope()
     }
 
+    /// The shortcuts these settings stream with, as a blob: the player's, or this desktop's
+    /// defaults, where the old *Hold Select for guide* value decides the Hold Select row.
+    pub(crate) fn shortcuts_blob(settings: &trust::Settings) -> String {
+        use pf_client_core::shortcuts::{resolve, Client};
+        let legacy = settings.guide_gesture.as_str();
+        resolve(&settings.shortcuts, Client::Desktop, gaming_mode(), legacy).to_json()
+    }
+
     /// Run fullscreen: `--fullscreen`, or the Deck/gamescope env as a fallback so a
     /// manual launch under Gaming Mode does the right thing too. (Browse-mode only —
     /// gated with `mod browse`, its one caller.)
@@ -295,8 +303,9 @@ mod session_main {
     /// Clipboard decision, then [`params_from_spec`].
     ///
     /// `clipboard_override` is the spawner's per-host decision. `None` reads the
-    /// record this pin resolves to. `display_hdr` is the selected output's HDR
-    /// volume on Windows.
+    /// record this pin resolves to. The launched game's overrides come from this pin's
+    /// library as cached for `profile`, the one the session plays as. `display_hdr` is the
+    /// selected output's HDR volume on Windows.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn session_params(
         settings: &trust::Settings,
@@ -307,7 +316,7 @@ mod session_main {
         port: u16,
         pin: [u8; 32],
         identity: (String, String),
-        launch: Option<String>,
+        (launch, profile): (Option<String>, Option<&str>),
         gamepad: &GamepadService,
         native: Mode,
         display_hdr: Option<punktfunk_core::quic::HdrMeta>,
@@ -319,12 +328,10 @@ mod session_main {
                 .resolve(Some(&trust::hex(&pin)), &addr, port)
                 .is_some_and(|h| h.clipboard_sync)
         });
-        let spec = ResolvedSpec {
-            settings: settings.clone(),
-            clipboard,
-            preset,
-            preset_id,
-        };
+        let overrides = launch.as_deref().and_then(|game| {
+            pf_client_core::library_cache::overrides(&trust::hex(&pin), profile, game)
+        });
+        let spec = ResolvedSpec::new(settings.clone(), clipboard, preset, preset_id, overrides);
         params_from_spec(
             spec,
             addr,
@@ -366,17 +373,20 @@ mod session_main {
         gamepad
             .set_pinned((!settings.forward_pad.is_empty()).then(|| settings.forward_pad.clone()));
         gamepad.set_forwarding(settings.gamepad_forwarding);
-        let game_mode = gaming_mode();
-        gamepad.set_system_buttons(
-            settings.system_buttons_forward(game_mode),
-            settings.guide_gesture_enabled(game_mode),
-        );
+        gamepad.set_system_buttons(settings.system_buttons_forward(gaming_mode()));
         // First build binds it, for --connect and for console launches.
         #[cfg(unix)]
         crate::ctl_socket::spawn(gamepad.clone());
         gamepad.set_pad_audio_prefs(
             settings.pad_haptics,
             pf_client_core::pad_audio::speaker_active(&settings.pad_speaker),
+        );
+        gamepad.set_pad_speaker_volumes(
+            settings
+                .pads
+                .iter()
+                .filter_map(|(k, p)| p.speaker_volume.map(|v| (k.clone(), v)))
+                .collect(),
         );
         gamepad.set_rumble(settings.pad_rumble);
         // Short-circuit: Full chroma off must not build an HEVC decoder.
@@ -415,7 +425,8 @@ mod session_main {
             GamepadPref::Auto => gamepad.auto_pref(),
             explicit => explicit,
         };
-        spec.session_params(
+        let shortcuts = shortcuts_blob(settings);
+        let mut params = spec.session_params(
             Dial {
                 host: addr,
                 port,
@@ -436,7 +447,9 @@ mod session_main {
                 hevc_444_hardware,
                 stats_verbosity: stats_tier(settings),
             },
-        )
+        );
+        params.shortcuts = shortcuts;
+        params
     }
 
     /// The window's starting size under Match-window: the persisted last size, so the
@@ -801,6 +814,9 @@ mod session_main {
         #[cfg(target_os = "linux")]
         enable_mesa_video_decode();
 
+        // Before any text is built: the console's words follow the OS's languages.
+        pf_l10n::set_languages(&pf_l10n::os_languages());
+
         // `--list-adapters`: print the Vulkan physical devices' marketing names (one per
         // line, discrete first) for the desktop shells' GPU picker, then exit.
         if arg_flag("--list-adapters") {
@@ -1017,6 +1033,7 @@ mod session_main {
             touch_mode: settings.touch_mode(),
             mouse_mode: settings.mouse_mode(),
             invert_scroll: settings.invert_scroll,
+            shortcuts: shortcuts_blob(&settings),
             inhibit_shortcuts: settings.inhibit_shortcuts,
             present_priority: settings.present_priority(),
             vsync: settings.vsync,
@@ -1094,7 +1111,7 @@ mod session_main {
                         port,
                         pin,
                         identity,
-                        launch,
+                        (launch, profile.as_deref()),
                         gamepad,
                         native,
                         hdr,

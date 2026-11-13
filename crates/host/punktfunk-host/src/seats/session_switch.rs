@@ -131,14 +131,19 @@ struct SessionManagement {
     has_desktop: bool,
 }
 
+/// Held for a whole switch: zbus answers calls at once, and a second switch's mode, save or
+/// release must not land inside the first's.
+static SWITCHING: Mutex<()> = Mutex::new(());
+
 impl SessionManagement {
     /// Every switch reaches every session, so one a failed rebuild left behind catches up; a
     /// session already there ignores it. Game Mode outlives a disconnect until the switch to
-    /// the desktop, which also ends the one a disconnect left running.
+    /// the desktop, which also ends the one a disconnect left running. One switch at a time.
     fn switch(&self, game: bool) -> fdo::Result<()> {
         if !game && !self.has_desktop {
             return Err(fdo::Error::Failed("this seat has no desktop".into()));
         }
+        let _switching = SWITCHING.lock().unwrap_or_else(|e| e.into_inner());
         let mode = if game { "game" } else { "desktop" };
         if GAME.swap(game, Ordering::Relaxed) != game {
             if let Err(e) = std::fs::write(&self.mode_file, format!("{mode}\n")) {
@@ -219,9 +224,59 @@ mod tests {
 
     const IFACE: &str = "com.steampowered.SteamOSManager1.SessionManagement1";
 
+    /// The mode and the followers are the process's: one test switches at a time.
+    static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Two switches asked at once run one after the other: each session hears a mode while it
+    /// is the mode, and the saved mode is the last one heard.
+    #[test]
+    fn switches_asked_at_once_run_one_after_the_other() {
+        let _serial = SERIAL.blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let mode_file = dir.path().join("seat-session");
+        let service = std::sync::Arc::new(SessionManagement {
+            mode_file: mode_file.clone(),
+            has_desktop: true,
+        });
+        let heard = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let log = heard.clone();
+        let (_following, _) = follow(Box::new(move |game| {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            log.lock()
+                .unwrap()
+                .push((game, GAME.load(Ordering::Relaxed)));
+            true
+        }));
+        let switching: Vec<_> = [true, false]
+            .into_iter()
+            .map(|game| {
+                let service = service.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..20 {
+                        service.switch(game).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for thread in switching {
+            thread.join().unwrap();
+        }
+        let heard = heard.lock().unwrap();
+        assert!(heard.iter().all(|(told, now)| told == now), "{heard:?}");
+        let last = if heard.last().unwrap().0 {
+            "game\n"
+        } else {
+            "desktop\n"
+        };
+        assert_eq!(std::fs::read_to_string(&mode_file).unwrap(), last);
+    }
+
     /// The names steamosctl and Steam call reach the live sessions and the saved mode.
     #[tokio::test]
     async fn steamos_session_calls_switch_the_seat() {
+        let _serial = SERIAL.lock().await;
+        // The desktop a fresh host starts in, whatever a test before this one left.
+        GAME.store(false, Ordering::Relaxed);
         let dir = tempfile::tempdir().unwrap();
         let mode_file = dir.path().join("seat-session");
         let (a, b) = tokio::net::UnixStream::pair().unwrap();

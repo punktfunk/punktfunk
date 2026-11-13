@@ -37,12 +37,14 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.unom.punktfunk.kit.R
 import java.util.Locale
 
 /*
@@ -76,31 +78,35 @@ internal fun StatsGraphs(history: StatsHistory, wide: Boolean, modifier: Modifie
         val tiles: List<@Composable RowScope.() -> Unit> = listOf(
             {
                 Tile(
-                    "Frame rate", latest?.let { f0(it.presentedFps) } ?: "—", "fps",
+                    stringResource(R.string.android_graph_frame_rate), latest?.let { f0(it.presentedFps) } ?: "—", "fps",
                     latest?.let { s ->
-                        (if (s.refreshHz > 0) "of ${s.refreshHz} · " else "") + "received ${f0(s.receivedFps)}"
+                        listOfNotNull(
+                            stringResource(R.string.android_graph_of_refresh, s.refreshHz).takeIf { s.refreshHz > 0 },
+                            stringResource(R.string.overlay_received, f0(s.receivedFps)),
+                        ).joinToString(" · ")
                     }.orEmpty(),
                 )
             },
             {
                 Tile(
-                    "Latency", latest?.let { f0(it.e2eMs) } ?: "—", "ms",
-                    latest?.let { "p95 ${f0(it.e2eP95Ms)} ms" } ?: "capture to glass",
+                    stringResource(R.string.android_graph_latency), latest?.let { f0(it.e2eMs) } ?: "—", "ms",
+                    latest?.let { "p95 ${f0(it.e2eP95Ms)} ms" } ?: stringResource(R.string.android_graph_capture_to_glass),
                 )
             },
             {
                 Tile(
-                    "Bitrate", latest?.let { f1(it.mbps) } ?: "—", "Mb/s",
-                    latest?.takeIf { it.targetMbps > 0f }?.let { "target ${f0(it.targetMbps)}" }.orEmpty(),
+                    stringResource(R.string.android_graph_bitrate), latest?.let { f1(it.mbps) } ?: "—", "Mb/s",
+                    latest?.takeIf { it.targetMbps > 0f }
+                        ?.let { stringResource(R.string.overlay_target, f0(it.targetMbps)) }.orEmpty(),
                 )
             },
             {
                 Tile(
-                    "Loss", latest?.let { f1(it.lostPct) } ?: "—", "%",
+                    stringResource(R.string.android_graph_loss), latest?.let { f1(it.lostPct) } ?: "—", "%",
                     latest?.let { s ->
                         listOfNotNull(
-                            "skipped ${s.skipped}".takeIf { s.skipped > 0 },
-                            s.rttMs?.let { "rtt ${f1(it)} ms" },
+                            stringResource(R.string.overlay_skipped, s.skipped).takeIf { s.skipped > 0 },
+                            s.rttMs?.let { stringResource(R.string.overlay_rtt, "${f1(it)} ms") },
                         ).joinToString(" · ")
                     }.orEmpty(),
                 )
@@ -116,20 +122,20 @@ internal fun StatsGraphs(history: StatsHistory, wide: Boolean, modifier: Modifie
         val charts: List<@Composable () -> Unit> = listOf(
             {
                 TimeChart(
-                    "Frame rate", samples, unit = "fps", height = height,
+                    stringResource(R.string.android_graph_frame_rate), samples, unit = "fps", height = height,
                     series = listOf(
-                        Series("received", RECEIVED) { it.receivedFps },
-                        Series("presented", PRESENTED) { it.presentedFps },
+                        Series(stringResource(R.string.android_graph_received), RECEIVED) { it.receivedFps },
+                        Series(stringResource(R.string.android_graph_presented), PRESENTED) { it.presentedFps },
                     ),
                     reference = latest?.refreshHz?.takeIf { it > 0 }?.toFloat(),
-                    referenceLabel = "refresh",
+                    referenceLabel = stringResource(R.string.android_graph_refresh),
                     // Headroom over the refresh, so its line and label sit inside the plot.
                     top = { ceilTo(it * 1.1f, 10f) },
                 )
             },
             {
                 TimeChart(
-                    "Latency", samples, unit = "ms", height = height,
+                    stringResource(R.string.android_graph_latency), samples, unit = "ms", height = height,
                     series = listOf(Series("p50", LATENCY) { it.e2eMs }),
                     band = Series("p95", LATENCY) { it.e2eP95Ms },
                     top = ::niceCeiling,
@@ -137,10 +143,10 @@ internal fun StatsGraphs(history: StatsHistory, wide: Boolean, modifier: Modifie
             },
             {
                 TimeChart(
-                    "Bitrate", samples, unit = "Mb/s", height = height,
-                    series = listOf(Series("goodput", BITRATE) { it.mbps }),
+                    stringResource(R.string.android_graph_bitrate), samples, unit = "Mb/s", height = height,
+                    series = listOf(Series(stringResource(R.string.android_graph_goodput), BITRATE) { it.mbps }),
                     reference = latest?.targetMbps?.takeIf { it > 0f },
-                    referenceLabel = "target",
+                    referenceLabel = stringResource(R.string.android_graph_target),
                     area = true,
                     top = ::niceCeiling,
                 )
@@ -210,6 +216,7 @@ private fun TimeChart(
 ) {
     val scheme = MaterialTheme.colorScheme
     val measurer = rememberTextMeasurer()
+    val nowLabel = stringResource(R.string.android_graph_now)
     val n = samples.size
     val values = series.map { s -> FloatArray(n) { s.pick(samples[it]) } }
     val bandValues = band?.let { b -> FloatArray(n) { b.pick(samples[it]) } }
@@ -228,8 +235,8 @@ private fun TimeChart(
             Spacer(Modifier.weight(1f))
             val readout = read?.let { i ->
                 val ago = n - 1 - i
-                series.joinToString(" · ") { "${it.label} ${f1(it.pick(samples[i]))}" } +
-                    " $unit · ${if (ago == 0) "now" else "$ago s ago"}"
+                val moment = if (ago == 0) nowLabel else stringResource(R.string.android_graph_seconds_ago, ago)
+                series.joinToString(" · ") { "${it.label} ${f1(it.pick(samples[i]))}" } + " $unit · $moment"
             }
             Text(
                 readout ?: "${SPAN_S} s", style = MaterialTheme.typography.labelSmall,
@@ -287,7 +294,7 @@ private fun TimeChart(
             }
             val axis = measurer.measure("−${SPAN_S} s", label)
             drawText(axis, topLeft = Offset(left, bottom + 2.dp.toPx()))
-            val now = measurer.measure("now", label)
+            val now = measurer.measure(nowLabel, label)
             drawText(now, topLeft = Offset(right - now.size.width, bottom + 2.dp.toPx()))
             if (reference != null && reference <= yTop) {
                 drawLine(

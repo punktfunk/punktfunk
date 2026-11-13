@@ -52,9 +52,11 @@ pub(crate) async fn stats_capture_stop(State(st): State<Arc<MgmtState>>) -> Resp
             (StatusCode::OK, Json(meta)).into_response()
         }
         Ok(None) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the recording — {e}"),
+            "recording_not_saved",
+            "Couldn't save the recording",
+            &e,
         ),
     }
 }
@@ -132,9 +134,11 @@ pub(crate) async fn stats_recording_get(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             api_error(StatusCode::NOT_FOUND, "no recording with that id")
         }
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't read the recording — {e}"),
+            "recording_not_read",
+            "Couldn't read the recording",
+            &e,
         ),
     }
 }
@@ -164,9 +168,11 @@ pub(crate) async fn stats_recording_delete(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             api_error(StatusCode::NOT_FOUND, "no recording with that id")
         }
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't delete the recording — {e}"),
+            "recording_not_deleted",
+            "Couldn't delete the recording",
+            &e,
         ),
     }
 }

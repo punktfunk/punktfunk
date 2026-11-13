@@ -81,6 +81,13 @@
 // `{"Listed": [rows]}`, `"NoProfiles"` or `{"Failed": "why"}`.
 #define PUNKTFUNK_CONSOLE_PUSH_PROFILES 20
 
+// `{"fp_hex": "…", "profile": "…", "answer": HiddenAnswer}` — the answer to the `FetchHidden`
+// command: `{"Listed": [LibraryGame]}` or `{"Failed": "why"}`.
+#define PUNKTFUNK_CONSOLE_PUSH_HIDDEN 21
+
+// `HideAnswer` — the answer to the `SetHidden` command, echoing its host, profile and title.
+#define PUNKTFUNK_CONSOLE_PUSH_HIDE 22
+
 // The room `punktfunk_console_take_unlock` needs: the longest password the wire takes.
 #define PUNKTFUNK_CONSOLE_UNLOCK_MAX 512
 
@@ -236,6 +243,15 @@ char *punktfunk_console_drain_cmds(const PunktfunkConsole *c);
 // The console's background palettes in cycle order, as `[{"id", "name"}]`: what a native
 // picker offers for `ui_palette`. Free with `punktfunk_console_string_free`.
 char *punktfunk_console_palettes(void);
+
+// Word the Rust side's text in the first of `languages_json` that Punktfunk ships, a JSON
+// array of BCP-47 tags, most preferred first. `punktfunk_console_new` does this from its
+// `languages`; call it first when the palettes or the PyroWave warning are read with no
+// console. NULL or bad JSON leaves the language as it was.
+//
+// # Safety
+// `languages_json` is NULL or a NUL-terminated string.
+void punktfunk_console_set_languages(const char *languages_json);
 
 // Free a string from `punktfunk_console_next_event`, `punktfunk_console_drain_cmds` or
 // `punktfunk_console_palettes`.

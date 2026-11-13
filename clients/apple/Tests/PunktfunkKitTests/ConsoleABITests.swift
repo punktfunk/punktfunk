@@ -126,6 +126,19 @@ final class ConsoleABITests: XCTestCase {
         XCTAssertFalse(events.contains(#"{"action":"Quit"}"#), "events: \(events)")
     }
 
+    #if os(macOS)
+    /// The Mac view owns a mouse-moved tracking area: AppKit delivers hover nowhere else.
+    @MainActor
+    func testTheMacViewTracksMouseMoves() throws {
+        let bridge = try XCTUnwrap(ConsoleBridge(
+            options: #"{"device_name": "Test", "gpu_cache_bytes": 0, "settings": {}}"#,
+            device: device, queue: queue))
+        let view = ConsoleMetalView(bridge: bridge, device: device, queue: queue, delegate: nil)
+        view.updateTrackingAreas()
+        XCTAssertTrue(view.trackingAreas.contains { $0.options.contains(.mouseMoved) })
+    }
+    #endif
+
     /// With nothing typed into its prompt, the console hands over nothing and writes nothing;
     /// a NULL buffer is refused, not written through.
     @MainActor
@@ -139,6 +152,25 @@ final class ConsoleABITests: XCTestCase {
             options: #"{"device_name": "Test", "gpu_cache_bytes": 0, "settings": {}}"#,
             device: device, queue: queue))
         XCTAssertNil(bridge.takeUnlock())
+    }
+
+    /// The last reference can drop off the main thread: a detached task keeps the model alive
+    /// across a hop. The handle is still freed on main, and nothing traps.
+    @MainActor
+    func testTheLastReleaseOffTheMainThreadFreesOnMain() async throws {
+        let device = try XCTUnwrap(device)
+        let queue = try XCTUnwrap(queue)
+        let built = await Task.detached { () -> Bool in
+            let bridge = await MainActor.run {
+                ConsoleBridge(
+                    options: #"{"device_name": "Test", "gpu_cache_bytes": 0, "settings": {}}"#,
+                    device: device, queue: queue)
+            }
+            return bridge != nil
+        }.value
+        XCTAssertTrue(built)
+        // The deinit's hop to main runs once this test yields it.
+        await Task.yield()
     }
 }
 #endif

@@ -81,17 +81,21 @@ public final class ExternalDisplay {
         }
     }
 
-    /// The mode to stream while the picture is on the monitor: the session's own, with the
-    /// monitor's pixels and top refresh as Native. A picked resolution or refresh stays. nil with
-    /// no monitor.
-    public static func streamMode(
-        _ settings: EffectiveSettings
-    ) -> (width: UInt32, height: UInt32, hz: UInt32)? {
+    /// The monitor's pixels and top refresh: Native while the picture is on it. nil with no
+    /// monitor.
+    public static var nativeMode: (width: Int, height: Int, hz: Int)? {
         guard let screen = shared.screen else { return nil }
         let px = screen.currentMode?.size ?? screen.nativeBounds.size
         guard px.width > 0, px.height > 0 else { return nil }
-        return settings.streamMode(
-            native: (Int(px.width), Int(px.height), screen.maximumFramesPerSecond))
+        return (Int(px.width), Int(px.height), screen.maximumFramesPerSecond)
+    }
+
+    /// The mode to stream while the picture is on the monitor: the session's own, with
+    /// `nativeMode` as Native. A picked resolution or refresh stays. nil with no monitor.
+    public static func streamMode(
+        _ settings: EffectiveSettings
+    ) -> (width: UInt32, height: UInt32, hz: UInt32)? {
+        nativeMode.map { settings.streamMode(native: $0) }
     }
 }
 

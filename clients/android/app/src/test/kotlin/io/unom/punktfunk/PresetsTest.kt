@@ -1,7 +1,10 @@
 package io.unom.punktfunk
 
 import android.content.Context
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.security.KnownHost
+import java.io.File
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -187,7 +190,7 @@ class PresetsTest {
             codec = "av1", hdrEnabled = false, tenBitSdr = true, compositor = 4,
             audioChannels = 6, audioFormat = AUDIO_FORMAT_LOSSLESS_96, micEnabled = true,
             echoCancel = false, keepHostAudio = true, touchMode = TouchMode.POINTER,
-            mouseMode = MouseMode.CAPTURE, invertScroll = true, overlayActions = "ring-blob",
+            mouseMode = MouseMode.CAPTURE, invertScroll = true, overlayActions = "ring-blob", shortcuts = "shortcuts-blob",
             gamepad = 6, gamepadForwarding = false, systemButtons = "local", guideGesture = "on",
             statsVerbosity = StatsVerbosity.DETAILED, lowLatencyMode = false,
             presentPriority = "smooth", smoothBuffer = 2,
@@ -429,6 +432,36 @@ class PresetsTest {
         assertEquals(12, id.length)
         assertTrue(id.all { it.isDigit() || it in 'a'..'f' })
         assertNotEquals(id, newPresetId())
+    }
+
+    /**
+     * `host_screen` from another client's catalog applies, survives the store, and pinned empty
+     * is no pin: empty is the host card's pick.
+     */
+    @Test
+    fun theHostScreenIsAPresetFieldThatPinnedEmptyClears() {
+        val o = SettingsOverlay.fromJson(JSONObject("""{"host_screen":"monitor:HDMI-A-1"}"""))
+        assertEquals(emptyMap<String, Any>(), o.extra)
+        assertEquals("monitor:HDMI-A-1", o.apply(base).hostScreen)
+        assertEquals("""{"host_screen":"monitor:HDMI-A-1"}""", o.toJson().toString())
+        assertEquals(SettingsOverlay(), o.pin("host_screen", base))
+        assertEquals(SettingsOverlay(), SettingsOverlay.fromJson(JSONObject("""{"host_screen":""}""")))
+    }
+
+    /** `clients/shared/screen-rows-vectors.json` `starter_cases`: the Second screen starter's name and overrides. */
+    @Test
+    fun theSecondScreenStarterTakesAFreeName() {
+        val role = RuntimeEnvironment.getApplication().getString(R.string.screen_role_second)
+        // Gradle runs unit tests with the module dir as cwd (clients/android/app).
+        val cases = JSONObject(File("../../shared/screen-rows-vectors.json").readText()).getJSONArray("starter_cases")
+        assertTrue(cases.length() >= 2)
+        for (i in 0 until cases.length()) {
+            val case = cases.getJSONObject(i)
+            val taken = case.getJSONArray("taken").let { a -> List(a.length()) { a.getString(it) } }
+            val p = secondScreenPreset(freeName(role) { n -> taken.any { it.equals(n, ignoreCase = true) } })
+            assertEquals(case.getString("name"), p.name)
+            assertEquals(case.getJSONObject("overrides").toString(), p.overrides.toJson().toString())
+        }
     }
 
     private fun host() = KnownHost("192.168.1.42", 9777, "Desk", "a".repeat(64), paired = true)

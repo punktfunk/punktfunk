@@ -1,15 +1,15 @@
 │
-◆  punktfunk setup  ·  Bazzite 43 · sysext
+◆  Punktfunk setup  ·  Bazzite 43 · sysext
 │  https://docs.punktfunk.unom.io/docs/bazzite
 │
 │  ▸ Install now with these settings
 │  ──────────────────────────────────────────────────────────
-│    This machine is          the PC I stream from (host)
+│    This device is           The PC I stream from (host)
 │    Channel                  stable
-│    Full controller support  yes — Bazzite — virtual Steam Deck pad
-│    Third-party clients      no  — punktfunk's own apps don't need it
-│    Shared clipboard         yes
-│    Start at boot            yes — Bazzite hosts are usually headless
-│    Host service             yes
+│    Full controller support  Yes — Bazzite — virtual Steam Deck controller
+│    Third-party clients      No  — Punktfunk's own apps don't need it
+│    Shared clipboard         Yes
+│    Start at boot            Yes — Bazzite hosts are usually headless
+│    Host service             Yes
 │
 │  ↑↓ move · Enter select/edit · q quit — nothing runs until you confirm

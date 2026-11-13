@@ -105,15 +105,16 @@ private final class CursorCapture {
 public struct StreamView: NSViewRepresentable {
     private let connection: PunktfunkConnection
     private let captureEnabled: Bool
-    private let overlayShown: Bool
     private let onCaptureChange: ((Bool) -> Void)?
     private let onDisconnectRequest: (() -> Void)?
+    private let onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
     private let onFrame: (@Sendable (AccessUnit) -> Void)?
     private let onSessionEnd: (@Sendable () -> Void)?
-    private let onResizeTarget: ((UInt32, UInt32) -> Void)?
+    private let onResizeTarget: ResizeTarget?
     private let onDecodedSize: (@Sendable (Int, Int) -> Void)?
     private let endToEndMeter: LatencyMeter?
 
+    /// `onShortcut` (main thread) is a keyboard shortcut that fired, in either capture state.
     /// `onFrame`/`onSessionEnd` fire on the pump thread — hop to the main actor for UI.
     /// `captureEnabled: false` disables input capture entirely while UI (e.g. a trust
     /// prompt) is layered over the stream; flipping it to true auto-engages capture
@@ -121,29 +122,27 @@ public struct StreamView: NSViewRepresentable {
     /// "click to capture" / "⌃⌥⇧Q releases" hint with it. `onDisconnectRequest` (main
     /// thread) fires on the reserved ⌃⌥⇧D combo while captured — the owner ends the
     /// session (released, the same combo reaches the Stream menu instead).
-    /// `endToEndMeter` records capture→on-glass for the A/V sync loop. `overlayShown` says the
-    /// owner draws over the video (the stats HUD): the window server blends then, so the
-    /// presenter stops probing for Direct scanout.
+    /// `endToEndMeter` records capture→on-glass for the A/V sync loop.
     public init(
         connection: PunktfunkConnection,
         captureEnabled: Bool = true,
-        overlayShown: Bool = false,
         onCaptureChange: ((Bool) -> Void)? = nil,
         onDisconnectRequest: (() -> Void)? = nil,
+        onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)? = nil,
         // Call-site parity with the touch platforms: macOS has no twist (the ring opens from
         // the keyboard there, a later work package), so the parameter is accepted and unused.
         onDial: ((DialEvent) -> Void)? = nil,
         onFrame: (@Sendable (AccessUnit) -> Void)? = nil,
         onSessionEnd: (@Sendable () -> Void)? = nil,
-        onResizeTarget: ((UInt32, UInt32) -> Void)? = nil,
+        onResizeTarget: ResizeTarget? = nil,
         onDecodedSize: (@Sendable (Int, Int) -> Void)? = nil,
         endToEndMeter: LatencyMeter? = nil
     ) {
         self.connection = connection
         self.captureEnabled = captureEnabled
-        self.overlayShown = overlayShown
         self.onCaptureChange = onCaptureChange
         self.onDisconnectRequest = onDisconnectRequest
+        self.onShortcut = onShortcut
         self.onFrame = onFrame
         self.onSessionEnd = onSessionEnd
         self.onResizeTarget = onResizeTarget
@@ -155,8 +154,8 @@ public struct StreamView: NSViewRepresentable {
         let view = StreamLayerView()
         view.onCaptureChange = onCaptureChange
         view.onDisconnectRequest = onDisconnectRequest
+        view.onShortcut = onShortcut
         view.captureEnabled = captureEnabled
-        view.overlayShown = overlayShown
         view.endToEndMeter = endToEndMeter
         view.onResizeTarget = onResizeTarget
         view.onDecodedSize = onDecodedSize
@@ -167,8 +166,8 @@ public struct StreamView: NSViewRepresentable {
     public func updateNSView(_ view: StreamLayerView, context: Context) {
         view.onCaptureChange = onCaptureChange
         view.onDisconnectRequest = onDisconnectRequest
+        view.onShortcut = onShortcut
         view.captureEnabled = captureEnabled
-        view.overlayShown = overlayShown
         view.endToEndMeter = endToEndMeter
         view.onResizeTarget = onResizeTarget
         view.onDecodedSize = onDecodedSize
@@ -194,8 +193,8 @@ public final class StreamLayerView: NSView {
     public private(set) var connection: PunktfunkConnection?
     /// The session's further screens, while its connection shows them.
     private var screenWindows: ScreenWindows?
-    /// Match-window resize follower (C3) — non-nil while a session is active AND the `matchWindow`
-    /// setting is on (DEFAULT on, for pixel-exact windowed streaming); fed the view's physical-pixel
+    /// Match-window resize follower — non-nil while a session is active; it acts only while the
+    /// `matchWindow` setting is on (`SettingDefault.matchWindow`). Fed the view's physical-pixel
     /// size on every relayout so the host mode tracks the window (1:1, no presenter resample).
     private var matchFollower: MatchWindowFollower?
     /// Last decoded frame size fed into the presenter's aspect-fit. A new-mode IDR after a resize
@@ -208,11 +207,7 @@ public final class StreamLayerView: NSView {
     private var screenValuesStale = true
     /// The view's screen in panel pixels per point (`NSScreen.panelScale`). Main-thread only.
     private var panelScale: Double = 1
-    /// The owner draws over the video (the stats HUD). Main-thread only.
-    var overlayShown = false {
-        didSet { if overlayShown != oldValue { pushDirectPossible() } }
-    }
-    /// Fullscreen with no overlay, as last told to the presenter. Main-thread only.
+    /// Whether the window is fullscreen, as last told to the presenter. Main-thread only.
     private var directPossible: Bool?
     private let cursorCapture = CursorCapture()
     private var inputCapture: InputCapture?
@@ -288,12 +283,14 @@ public final class StreamLayerView: NSView {
     /// Fired (main thread) when the captured-state ⌃⌥⇧D combo asks to end the session — the
     /// view can't do that itself (the connection's owner disconnects).
     public var onDisconnectRequest: (() -> Void)?
+    /// A keyboard shortcut fired; the session runs it. Main thread.
+    public var onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
 
     /// Resize overlay signals (design/midstream-resolution-resize.md client UX): `onResizeTarget`
     /// (main thread, via the follower) fires the instant the window starts steering toward a new
     /// size; `onDecodedSize` (PUMP thread) fires when a new-mode IDR's dims land. The owner drives
     /// the blur+spinner from these — set before `start()`.
-    public var onResizeTarget: ((UInt32, UInt32) -> Void)?
+    public var onResizeTarget: ResizeTarget?
     public var onDecodedSize: (@Sendable (Int, Int) -> Void)?
 
     /// Main-thread only. False = input capture disabled outright (UI layered over the
@@ -331,6 +328,26 @@ public final class StreamLayerView: NSView {
         ) { [weak self] _ in
             guard let self, self.window?.isKeyWindow == true else { return }
             self.releaseCapture()
+        })
+        // The quick actions only this view runs, from the dial or a shortcut, for its session.
+        appObservers.append(NotificationCenter.default.addObserver(
+            forName: .punktfunkStreamSlot, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, let conn = self.connection, note.object as AnyObject === conn else { return }
+            switch note.userInfo?["slot"] as? String {
+            case SlotId.releaseInput.id:
+                // With the ring up, input is already released: it stays so when the ring closes.
+                if self.ringHeldCapture {
+                    self.ringHeldCapture = false
+                } else if self.captured {
+                    self.releaseCapture()
+                } else {
+                    self.engageCapture(fromClick: false)
+                }
+            case SlotId.mouseMode.id: self.toggleMouseMode()
+            case SlotId.minimize.id: self.window?.miniaturize(nil)
+            default: break
+            }
         })
         // The quick-action ring is SwiftUI ABOVE this layer, so a grabbed pointer can never click
         // one of its buttons — release for as long as it is up, and take capture back when it
@@ -696,6 +713,19 @@ public final class StreamLayerView: NSView {
     /// Flip the mouse model with the atomic release/re-engage swap; `reappearAt` (host video
     /// px — the M3 hand-back position) warps the local pointer so leaving relative lands the
     /// cursor exactly where the host last had it.
+    /// Flip the mouse model (capture ⇄ desktop) live, re-engaging capture in the new model so
+    /// disassociation and the absolute/relative forwarding swap atomically. Only the key window
+    /// acts. A gamescope host grants only a relative pointer: absolute sends would be dropped.
+    private func toggleMouseMode() {
+        guard window?.isKeyWindow == true, let conn = connection else { return }
+        guard conn.resolvedCompositor != .gamescope else {
+            streamInputLog.info("mouse mode ignored: gamescope host is relative-only")
+            return
+        }
+        setDesktopMouse(!desktopMouse, reappearAt: nil)
+        streamInputLog.info("mouse mode \(self.desktopMouse ? "desktop" : "capture", privacy: .public)")
+    }
+
     private func setDesktopMouse(_ on: Bool, reappearAt: (x: Int32, y: Int32)?) {
         guard desktopMouse != on else { return }
         let wasCaptured = captured
@@ -1060,59 +1090,14 @@ public final class StreamLayerView: NSView {
             // be a cursor trap with dead input.
             self?.releaseCapture()
         }
-        // ⌃⌥⇧M flips the mouse model (capture ⇄ desktop) live — the SDL clients' identical
-        // chord. Only the key window's stream owns it (same guard as the ⌘⎋ capture toggle).
-        // Re-engage capture in the new model so disassociation and the absolute/relative
-        // forwarding choice swap atomically — releaseCapture restores the old model's grab
-        // (if any), engageCapture installs the new one. On a gamescope host the chord is a
-        // no-op: its EIS grants only a relative pointer, so the desktop model's absolute
-        // sends would be silently dropped (pointer stuck = "all input dead").
-        capture.onToggleMouseMode = { [weak self] in
-            guard let self, self.window?.isKeyWindow == true,
-                  let conn = self.connection else { return }
-            guard conn.resolvedCompositor != .gamescope else {
-                streamInputLog.info("mouse-mode chord ignored: gamescope host is relative-only")
-                return
-            }
-            self.setDesktopMouse(!self.desktopMouse, reappearAt: nil)
-            streamInputLog.info("chord: mouse mode \(self.desktopMouse ? "desktop" : "capture", privacy: .public)")
-        }
-        // The cross-client combos (⌃⌥⇧Q/D/S — Ctrl+Alt+Shift on the other clients), delivered by
-        // the monitor only while captured; the same key-window ownership rule as ⌘⎋ throughout.
-        capture.onReleaseCapture = { [weak self] in
-            guard let self, self.window?.isKeyWindow == true else { return }
-            self.releaseCapture()
-        }
-        capture.onDisconnect = { [weak self] in
-            guard let self, self.window?.isKeyWindow == true else { return }
-            self.onDisconnectRequest?()
-        }
+        // The keyboard shortcuts go to the session, which runs them as the dial does. The
+        // monitor only hands this window's own key events over.
+        capture.onShortcut = { [weak self] action, phase in self?.onShortcut?(action, phase) }
         capture.onToggleFullscreen = { [weak self] in
             // App-level window action: post to the key window's FullscreenController (same routing as
             // the Stream menu's ⌃⌘F item, so captured and released states hit one code path).
             guard self?.window?.isKeyWindow == true else { return }
             NotificationCenter.default.post(name: .punktfunkToggleFullscreen, object: nil)
-        }
-        capture.onToggleMicMute = { [weak self] in
-            // Session-level state the view doesn't own — post to this session's window, so the
-            // captured and released paths end at one toggle.
-            guard let self, self.window?.isKeyWindow == true else { return }
-            NotificationCenter.default.post(name: .punktfunkToggleMicMute, object: self.connection)
-        }
-        capture.onToggleClipboard = { [weak self] in
-            guard let self, self.window?.isKeyWindow == true else { return }
-            NotificationCenter.default.post(name: .punktfunkToggleClipboard, object: self.connection)
-        }
-        capture.onQuickActions = { [weak self] in
-            // The quick-action ring is the session VIEW's, not this layer's — post it (the same
-            // routing as the fullscreen and mic chords), so the captured chord and the Stream
-            // menu's identical equivalent end at one toggle.
-            guard let self, self.window?.isKeyWindow == true else { return }
-            NotificationCenter.default.post(name: .punktfunkToggleQuickActions, object: self.connection)
-        }
-        capture.onCycleStats = { [weak self] in
-            guard let self, self.window?.isKeyWindow == true else { return }
-            StatsVerbosity.requestCycle(for: self.connection)
         }
         capture.start()
         inputCapture = capture
@@ -1156,13 +1141,9 @@ public final class StreamLayerView: NSView {
                 overlayDecodedSize?(w, h)
             },
             adaptiveSync: { [weak self] in Self.isAdaptiveSync(self?.window?.screen ?? NSScreen.main) })
-        // Match-window (C3): when ON, follow the window's pixel size so a windowed session streams
-        // 1:1 (pixel-exact) instead of the presenter resampling a fixed-mode frame into a
-        // non-matching window. The first real `layout()` feeds the initial size, so the stream
-        // converges to the window even though the connect used the explicit/display mode; entering
-        // fullscreen reports the full-display px, restoring a native-res 1:1 present there too.
-        // OPT-IN — `?? false` matches the Settings toggle (which also defaults off); an unset
-        // default keeps the explicit mode.
+        // Match window, opt-in: the host mode follows the window's pixel size, so a windowed
+        // session streams 1:1 instead of resampling a fixed mode. The first `layout()` feeds the
+        // initial size; fullscreen reports the full display. Off, the explicit mode holds.
         let follower = MatchWindowFollower(
             connection: connection,
             enabled: connection.settings.matchWindow,
@@ -1195,10 +1176,10 @@ public final class StreamLayerView: NSView {
         screenWindows = screens
     }
 
-    /// Tell the presenter, on a change, whether the window can scan out Direct: real fullscreen
-    /// (the notch panel window is titled, so never) with nothing of the app's own over the video.
+    /// Tell the presenter, on a change, whether the window can scan out Direct: while it is real
+    /// fullscreen (the notch panel window is titled, so never). The stats HUD does not matter.
     private func pushDirectPossible() {
-        let possible = (window?.styleMask.contains(.fullScreen) ?? false) && !overlayShown
+        let possible = window?.styleMask.contains(.fullScreen) ?? false
         guard possible != directPossible else { return }
         directPossible = possible
         presenter.setDirectPossible(possible)

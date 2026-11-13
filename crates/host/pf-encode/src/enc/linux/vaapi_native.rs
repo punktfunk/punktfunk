@@ -35,10 +35,20 @@ use crate::rfi::{
 /// 80 ms at 100 fps, past a Wi-Fi report. The level's DPB may allow fewer.
 const SLOTS: u8 = 8;
 
+/// The wave knobs, read once when the encoder opens so a frame does not scan the environment.
+#[derive(Clone, Copy)]
+struct WaveKnobs {
+    /// [`rfi::wave_enabled`].
+    enabled: bool,
+    /// [`rfi::pinned_cycle`].
+    pinned: Option<u32>,
+}
+
 pub struct NativeVaapiEncoder {
     /// `None` between a [`Encoder::reset`] and the submit that reopens.
     session: Option<Session>,
     params: SessionParams,
+    waves: WaveKnobs,
     codec: CodecParams,
     hdr: Option<HdrStatic>,
     force_kf: bool,
@@ -46,6 +56,10 @@ pub struct NativeVaapiEncoder {
     anchor: Option<usize>,
     /// The newest frame the client confirmed, while the host holds confirmed references.
     reference_floor: Option<crate::Acked>,
+    /// What the client confirmed it decoded clean, whatever the link.
+    confirmed: Option<crate::Acked>,
+    /// The two pictures the session never replaces, in host wires: a late loss's anchor.
+    kept: rfi::Kept,
     /// Intra refresh wave in flight: the rung a loss with no anchor takes instead of the
     /// IDR ([`recovery_policy`]).
     recovery: Recovery,
@@ -120,11 +134,17 @@ impl NativeVaapiEncoder {
         let mut this = Self {
             session: None,
             params,
+            waves: WaveKnobs {
+                enabled: rfi::wave_enabled(),
+                pinned: rfi::pinned_cycle(),
+            },
             codec,
             hdr: None,
             force_kf: true,
             anchor: None,
             reference_floor: None,
+            confirmed: None,
+            kept: rfi::Kept::default(),
             recovery: Recovery::default(),
             wire_offset: 0,
             frames: 0,
@@ -240,6 +260,32 @@ fn probe_capture_modifier(node: &std::path::Path, fourcc: u32, modifier: u64) ->
     enc.submit(&frame).is_ok()
 }
 
+/// Intel's single-plane layouts, newest first: 4-tiled, Y-tiled, X-tiled.
+const INTEL_TILED: [u64; 3] = [
+    0x0100_0000_0000_0009,
+    0x0100_0000_0000_0002,
+    0x0100_0000_0000_0001,
+];
+
+/// The layouts [`vaapi_capture_modifiers`] tries on the host's render node: what the Vulkan
+/// device owning that node samples. A host can run VA with no Vulkan driver for the GPU; an
+/// Intel node then tries its known layouts. The proof decides either way.
+pub(crate) fn capture_candidates(fourcc: u32) -> Vec<u64> {
+    let node = pf_gpu::linux_render_node();
+    if let Some(list) = super::vk_util::node_capture_modifiers(fourcc, &node) {
+        return list;
+    }
+    let intel = pf_gpu::enumerate()
+        .iter()
+        .find(|g| g.handle.render_node.as_deref() == Some(node.as_path()))
+        .is_some_and(|g| g.vendor_id == pf_gpu::VENDOR_INTEL);
+    if intel {
+        INTEL_TILED.to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
 /// The `candidates` subset libva actually imports for `fourcc` on this render
 /// node, proved by a real GBM alloc + encoder submit per candidate. Verdicts are
 /// cached per (node rdev, fourcc, modifier) so each is proved once per device.
@@ -292,42 +338,50 @@ pub(crate) fn vaapi_capture_modifiers(fourcc: u32, candidates: &[u64]) -> Vec<u6
 /// Whether the host's render node offers an encode entrypoint for `codec`
 /// at this depth — what a native open needs. AV1 is not a native path.
 pub fn probe_can_encode(codec: Codec, ten_bit: bool) -> bool {
+    probe_entrypoint(codec, ten_bit).unwrap_or(false)
+}
+
+/// [`probe_can_encode`] with a probe that could not ask told apart: `None` when no VAAPI
+/// display opened, `Some(false)` when libva answered without an encode entrypoint.
+pub(crate) fn probe_entrypoint(codec: Codec, ten_bit: bool) -> Option<bool> {
     use pf_vaapi::config::{VA_PROFILE_H264_HIGH, VA_PROFILE_HEVC_MAIN, VA_PROFILE_HEVC_MAIN10};
     use pf_vaapi::enc_h264::{VA_ENTRYPOINT_ENC_SLICE, VA_ENTRYPOINT_ENC_SLICE_LP};
     let profile = match (codec, ten_bit) {
         (Codec::H264, false) => VA_PROFILE_H264_HIGH,
         (Codec::H265, false) => VA_PROFILE_HEVC_MAIN,
         (Codec::H265, true) => VA_PROFILE_HEVC_MAIN10,
-        _ => return false,
+        _ => return Some(false),
     };
     let node = pf_gpu::linux_render_node();
     let display = match Libva::load().and_then(|va| Display::open_path(va, &node.to_string_lossy()))
     {
         Ok(d) => d,
         Err(e) => {
-            // A codec set that found nothing is probed again on the next ask; the resolution
-            // warns once per entry, so this line stays at debug.
+            // The resolution holds off asking again and warns once per entry, so this line
+            // stays at debug.
             tracing::debug!(error = %format!("{e:#}"), "no VAAPI display to probe");
-            return false;
+            return None;
         }
     };
-    display
-        .entrypoints(profile)
-        .map(|e| {
-            e.iter()
-                .any(|&p| p == VA_ENTRYPOINT_ENC_SLICE || p == VA_ENTRYPOINT_ENC_SLICE_LP)
-        })
-        .unwrap_or(false)
+    Some(
+        display
+            .entrypoints(profile)
+            .map(|e| {
+                e.iter()
+                    .any(|&p| p == VA_ENTRYPOINT_ENC_SLICE || p == VA_ENTRYPOINT_ENC_SLICE_LP)
+            })
+            .unwrap_or(false),
+    )
 }
 
-/// How a session recovers. iHD tracks each reference's refreshed rows itself and a stripe
-/// that jumps back to the top never heals there, so a loss mid-wave queues a fresh wave
-/// behind the one in flight. There is no wave before the first picture.
-fn recovery_policy(session: &Session, params: &SessionParams) -> RecoveryPolicy {
+/// How a session recovers, on the knobs read at open. iHD tracks each reference's refreshed
+/// rows itself and a stripe that jumps back to the top never heals there, so a loss mid-wave
+/// queues a fresh wave behind the one in flight. There is no wave before the first picture.
+fn recovery_policy(session: &Session, params: &SessionParams, waves: WaveKnobs) -> RecoveryPolicy {
     let fps = (params.fps_num / params.fps_den.max(1)).max(1);
     RecoveryPolicy {
-        cycle: (rfi::wave_enabled() && session.next_wire() > 0)
-            .then(|| rfi::wave_cycle(session.wave_rows(), fps, u32::MAX, rfi::pinned_cycle())),
+        cycle: (waves.enabled && session.next_wire() > 0)
+            .then(|| rfi::wave_cycle(session.wave_rows(), fps, u32::MAX, waves.pinned)),
         mid_wave: MidWave::Queue,
         abandons: true,
     }
@@ -468,7 +522,7 @@ impl Encoder for NativeVaapiEncoder {
             acked: confirmed.is_some(),
             loss: false,
         };
-        let policy = recovery_policy(session, &self.params);
+        let policy = recovery_policy(session, &self.params, self.waves);
         let plan = rfi::plan_frame(self.recovery, pending, &policy);
         let slot = self.anchor.or(confirmed);
         // An owed IDR outranks a recovery anchor, as on NVENC and Vulkan.
@@ -490,6 +544,18 @@ impl Encoder for NativeVaapiEncoder {
         self.anchor = None;
         self.force_kf = false;
         self.recovery = plan.next;
+        let offset = self.wire_offset;
+        let held: Vec<i64> = session
+            .slots()
+            .into_iter()
+            .map(|(_, w)| w + offset)
+            .collect();
+        let wire = session.next_wire() - 1 + offset;
+        self.kept
+            .step(wire, !plan.dirty, self.confirmed.as_ref(), |w| {
+                held.contains(&w)
+            });
+        session.keep([self.kept.pin, self.kept.candidate].map(|w| w.map(|w| w - offset)));
         let pts_ns = self.frames * 1_000_000_000 / u64::from(self.params.fps_num.max(1));
         self.frames += 1;
         self.meta.push_back(PendingMeta {
@@ -566,7 +632,7 @@ impl Encoder for NativeVaapiEncoder {
             .recovery
             .wave
             .is_some_and(|w| w.spoiled_by(Some(next_ts - i64::from(w.index)), next_ts, last));
-        let policy = recovery_policy(session, &self.params);
+        let policy = recovery_policy(session, &self.params, self.waves);
         if let Some(next) = self.recovery.lose(&policy, spoils) {
             tracing::debug!(
                 first,
@@ -591,6 +657,10 @@ impl Encoder for NativeVaapiEncoder {
 
     fn set_reference_floor(&mut self, acked: Option<crate::Acked>) {
         self.reference_floor = acked;
+    }
+
+    fn note_confirmed(&mut self, acked: Option<crate::Acked>) {
+        self.confirmed = acked;
     }
 
     fn distrust_references(&mut self) {
@@ -968,6 +1038,32 @@ mod tests {
                 WAVE_START,
             );
         }
+    }
+
+    /// The anchor soak ([`crate::smoke_pattern::Soak`], its `PF_WAVE_*` knobs). With
+    /// `PF_WAVE_CONFIRM` and a `PF_WAVE_LAG` past the slot ring, every ask anchors on the kept
+    /// picture instead of starting a wave.
+    #[test]
+    #[ignore = "needs a real VAAPI device"]
+    fn native_vaapi_anchor_soak() {
+        let soak = crate::smoke_pattern::Soak::from_env();
+        let (w, h) = (soak.w, soak.h);
+        let bps = soak.mbps * 1_000_000;
+        let knobs = Knobs::from_env();
+        let mut enc = NativeVaapiEncoder::open(
+            soak.codec,
+            w,
+            h,
+            soak.fps,
+            bps,
+            8,
+            ChromaFormat::Yuv420,
+            false,
+            true,
+            &knobs,
+        )
+        .expect("open");
+        soak.run("vaapi", &mut enc, |i| scroll_frame(w, h, i as u32));
     }
 
     #[test]

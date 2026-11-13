@@ -42,6 +42,9 @@ pub struct RowSpec {
     /// Header above this row; only the first row of a group carries it.
     pub header: Option<&'static str>,
     pub label: String,
+    /// What finds the row's state again next frame as rows come and go: a setting's id, never
+    /// its words. `None` falls back to the label.
+    pub id: Option<String>,
     /// `None` = action row: the label alone, where every row's label starts.
     pub value: Option<String>,
     /// Dim the value as a placeholder when the field is empty.
@@ -77,6 +80,7 @@ impl Default for RowSpec {
         RowSpec {
             header: None,
             label: String::new(),
+            id: None,
             value: None,
             value_dim: false,
             caret: false,
@@ -122,7 +126,14 @@ impl RowSpec {
     pub fn toggle(label: impl Into<String>, on: bool) -> RowSpec {
         RowSpec {
             label: label.into(),
-            value: Some(if on { "On" } else { "Off" }.into()),
+            value: Some(
+                if on {
+                    pf_l10n::common::common_on()
+                } else {
+                    pf_l10n::common::common_off()
+                }
+                .into(),
+            ),
             control: Control::Toggle(on),
             ..RowSpec::default()
         }
@@ -214,20 +225,23 @@ pub fn tray(canvas: &Canvas, ui: &Frame, rect: Rect, toward: Toward, k: f64) {
     if rect.height() < 1.0 {
         return;
     }
+    crate::blur::backdrop(canvas, ui, rect, tray_band(rect, toward, k));
+}
+
+/// A tray's ramp over `rect`.
+fn tray_band(rect: Rect, toward: Toward, k: f64) -> crate::blur::Band {
     let (edge, clear) = match toward {
         Toward::Top => (rect.top, rect.bottom),
         Toward::Bottom => (rect.bottom, rect.top),
     };
-    let sigma = (TRAY_SIGMA * k) as f32;
-    let over = (TRAY_OVERHANG * k) as f32;
-    let band = crate::blur::Band {
+    crate::blur::Band {
         edge,
         clear,
-        sigma,
-        over,
-    };
-    crate::blur::backdrop(canvas, ui, rect, band);
+        sigma: (TRAY_SIGMA * k) as f32,
+        over: (TRAY_OVERHANG * k) as f32,
+    }
 }
+
 /// The band at a screen's foot, on the shell's bottom tray: a focused title with its
 /// provenance, or one detail line led by a mark. A screen reaches the tray in by the
 /// band's height (`Screen::pinned`) and paints this from `render_pinned`, so one tray
@@ -236,7 +250,7 @@ pub fn tray(canvas: &Canvas, ui: &Frame, rect: Rect, toward: Toward, k: f64) {
 pub struct Foot<'a> {
     /// Centred, bold: the focused game.
     pub title: Option<&'a str>,
-    /// Tracked capitals under the title: where it comes from.
+    /// Under the title, as written: where it comes from.
     pub subtitle: Option<&'a str>,
     /// A short note on the leading margin, on the subtitle's line.
     pub note: Option<&'a str>,
@@ -251,6 +265,11 @@ pub struct Foot<'a> {
 /// Band heights, design units: a title with its line, or one detail line.
 pub const FOOT_TITLE_H: f64 = 66.0;
 pub const FOOT_DETAIL_H: f64 = 34.0;
+/// The tray's run-up above a detail band that rows bleed under, design units: the ramp
+/// starts this far over the line, which then sits at 40 % of full blur or more.
+pub const FOOT_LEAD: f64 = 30.0;
+/// The detail line's top, in from its band's.
+const FOOT_DETAIL_TOP: f64 = 6.0;
 
 impl Foot<'_> {
     /// Over `band`, the tray already under it; the detail runs from `left` to `right`.
@@ -337,7 +356,7 @@ impl Foot<'_> {
             );
         }
         if let Some(detail) = self.detail.filter(|d| !d.is_empty()) {
-            let top = f64::from(band.top) + 6.0 * k;
+            let top = f64::from(band.top) + FOOT_DETAIL_TOP * k;
             let mark = self.mark.and_then(crate::icons::by_name);
             let lead = if mark.is_some() { 22.0 * k } else { 0.0 };
             let ink = ui.fg(0.55);
@@ -569,10 +588,10 @@ fn soft_edges(
 }
 
 struct SlipPrev {
-    /// Index and label both: the screen rebuilds rows every frame, so an index
+    /// Index and [`row_name`] both: the screen rebuilds rows every frame, so an index
     /// alone would slide this text onto whichever row inherited it.
     row: usize,
-    label: String,
+    name: String,
     text: String,
     /// Offset from the incoming value (∓[`SLIP_DP`]). Relative so a reverse
     /// through zero on a held repeat still travels the right way.
@@ -596,8 +615,13 @@ struct RowState {
     knob: f64,
 }
 
-/// A row across frames: its label, and how many rows above it carry the same label.
+/// A row across frames: its [`row_name`], and how many rows above it carry the same name.
 type RowKey = (String, usize);
+
+/// The row's [`RowSpec::id`], or its label when it has none.
+fn row_name(row: &RowSpec) -> &str {
+    row.id.as_deref().unwrap_or(&row.label)
+}
 
 /// Where a row's switch rests: on or off, and nowhere for a row without one.
 fn knob_rest(row: &RowSpec) -> f64 {
@@ -942,7 +966,7 @@ impl MenuList {
                 } else {
                     Some(SlipPrev {
                         row: self.cursor,
-                        label: row.label.clone(),
+                        name: row_name(row).to_string(),
                         text: prev,
                         offset: -SLIP_DP * f64::from(dir),
                         arm: self.slip.pos,
@@ -969,7 +993,7 @@ impl MenuList {
     /// [`RowKey`], and a new row starts unfocused with its switch at rest.
     fn carry(&mut self, rows: &[RowSpec]) {
         let same = self.state.len() == rows.len()
-            && (self.state.iter().zip(rows)).all(|((key, _), row)| key.0 == row.label);
+            && (self.state.iter().zip(rows)).all(|((key, _), row)| key.0 == row_name(row));
         if same {
             return;
         }
@@ -977,8 +1001,9 @@ impl MenuList {
             std::mem::take(&mut self.state).into_iter().collect();
         self.state = (rows.iter().enumerate())
             .map(|(i, row)| {
-                let twins = rows[..i].iter().filter(|r| r.label == row.label).count();
-                let key = (row.label.clone(), twins);
+                let name = row_name(row);
+                let twins = rows[..i].iter().filter(|r| row_name(r) == name).count();
+                let key = (name.to_string(), twins);
                 let st = last.remove(&key).unwrap_or(RowState {
                     focus: 0.0,
                     shown: None,
@@ -1160,7 +1185,7 @@ impl MenuList {
         if let Some(header) = row.header {
             fonts.draw(
                 canvas,
-                &header.to_uppercase(),
+                header,
                 x0 + 16.0 * k,
                 top - HEADER_RISE * k,
                 W::SemiBold,
@@ -1291,7 +1316,8 @@ impl MenuList {
     }
 
     /// The value field: slider track, the right-aligned readout with its slip crossfade,
-    /// the caret and the chevrons.
+    /// the caret and the chevrons. The caret row also draws [`Frame::preedit`] before its
+    /// caret, underlined, and records itself in [`Frame::caret`].
     fn paint_value(
         &self,
         canvas: &Canvas,
@@ -1311,10 +1337,17 @@ impl MenuList {
             k,
             dot_gutter,
         } = *fr;
-        let value = row.value.as_deref().unwrap_or_default();
+        let preedit = if row.caret { ui.preedit.as_str() } else { "" };
+        let typed: String;
+        let mut value = row.value.as_deref().unwrap_or_default();
+        if !preedit.is_empty() {
+            // Composing text replaces a placeholder and follows a value.
+            typed = format!("{}{preedit}", if row.value_dim { "" } else { value });
+            value = &typed;
+        }
         let vcolor = if row.danger {
             crate::theme::ERROR
-        } else if row.value_dim || !row.enabled {
+        } else if (row.value_dim && preedit.is_empty()) || !row.enabled {
             ui.fg(0.35)
         } else if f > 0.5 {
             ui.fg(1.0)
@@ -1359,11 +1392,11 @@ impl MenuList {
             - track_w
             - if track_w > 0.0 { 12.0 * k } else { 0.0 };
         let place = |s: &str| val_right - f64::from(fonts.measure(s, W::Medium, 15.0 * k));
-        // Gate on index AND label: an index is not identity across a rebuild.
+        // Gate on index AND name: an index is not identity across a rebuild.
         let slipping = self
             .slip_prev
             .as_ref()
-            .filter(|p| p.row == i && p.label == row.label);
+            .filter(|p| p.row == i && p.name == row_name(row));
         let dx = if slipping.is_some() {
             self.slip.pos * k
         } else {
@@ -1411,17 +1444,34 @@ impl MenuList {
         if slipping.is_some() {
             canvas.restore(); // value-field clip
         }
+        if !preedit.is_empty() {
+            let w = fonts
+                .measure(preedit, W::Medium, 15.0 * k)
+                .min(fonts.measure(&shown, W::Medium, 15.0 * k));
+            let line = Rect::from_xywh(
+                (val_right + dx) as f32 - w,
+                (centred + 3.0 * k) as f32,
+                w,
+                (1.5 * k) as f32,
+            );
+            canvas.draw_rect(line, &fill(vcolor));
+        }
         if row.caret {
             // Ride `dx` so the caret stays on the text end mid-slip.
+            let caret_x = (val_right + 3.0 * k + dx) as f32;
             canvas.draw_rect(
                 Rect::from_xywh(
-                    (val_right + 3.0 * k + dx) as f32,
+                    caret_x,
                     (cy - 9.0 * k) as f32,
                     (2.0 * k) as f32,
                     (18.0 * k) as f32,
                 ),
                 &fill(ui.accent(1.0)),
             );
+            let to_device = canvas.local_to_device_as_3x3();
+            let (field, _) = to_device.map_rect(r);
+            let caret_x = to_device.map_point((caret_x, r.top)).x;
+            ui.caret.set(Some((field, caret_x - field.left)));
         }
         if row.adjustable && f > 0.01 {
             let alpha = 0.6 * f as f32;
@@ -1585,6 +1635,17 @@ fn chevron(canvas: &Canvas, ui: &Frame, x: f64, cy: f64, r: f64, left: bool, alp
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A detail line over bleeding rows starts well into its tray's blur, on a screen
+    /// with no inset under it: the shallowest tray there is.
+    #[test]
+    fn a_detail_line_over_rows_sits_in_the_blur() {
+        let depth = (FOOT_LEAD + FOOT_DETAIL_H) as f32;
+        let tray = Rect::from_ltrb(0.0, 100.0, 400.0, 100.0 + depth);
+        let line = tray.top + (FOOT_LEAD + FOOT_DETAIL_TOP) as f32;
+        let strength = tray_band(tray, Toward::Bottom, 1.0).strength(line);
+        assert!(strength >= 0.4, "{strength}");
+    }
 
     #[test]
     fn menu_list_moves_and_recoils() {
@@ -1766,6 +1827,56 @@ mod tests {
         assert!(
             band_diff(&lifted, &still, w, x, cell_y) > 0,
             "and leaves its cell"
+        );
+    }
+
+    /// An input method's text in progress draws where the committed text would, after the
+    /// value or in place of the placeholder, plus an underline below the centre line. The
+    /// field records where its caret is.
+    #[test]
+    fn a_composing_field_draws_its_text_in_progress_underlined() {
+        let fonts = crate::theme::build_fonts().unwrap();
+        let (w, h) = (900, 200);
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).unwrap();
+        let rect = Rect::from_xywh(0.0, 0.0, w as f32, h as f32);
+        let clear = skia_safe::Color4f::new(0.0, 0.0, 0.0, 1.0);
+        let mut draw = |value: &str, preedit: &str| {
+            let ui = crate::theme::Frame {
+                preedit: preedit.into(),
+                ..Default::default()
+            };
+            let mut field = RowSpec::field("Name", value.into(), "Placeholder");
+            field.caret = true;
+            let rows = [field];
+            let mut list = MenuList::new();
+            for _ in 0..240 {
+                surface.canvas().clear(clear);
+                let canvas = surface.canvas();
+                list.render(canvas, &ui, rect, &rows, &fonts, 1.0, 1.0 / 60.0, true);
+            }
+            let cell = list.row_rect(0).expect("the field is in view");
+            (read_back(&mut surface, w, h), cell, ui.caret.get())
+        };
+        let (composing, cell, caret) = draw("ab", "cd");
+        let (plain, ..) = draw("ab", "");
+        let (committed, ..) = draw("abcd", "");
+        let (over_placeholder, ..) = draw("", "cd");
+        let (cd, ..) = draw("cd", "");
+        let x = (cell.left as i32, cell.right as i32);
+        let row = (cell.top as i32, cell.bottom as i32);
+        let above = (cell.top as i32, (cell.top + cell.bottom) as i32 / 2);
+        assert!(band_diff(&composing, &plain, w, x, row) > 0, "it draws");
+        assert_eq!(band_diff(&composing, &committed, w, x, above), 0);
+        assert!(
+            band_diff(&composing, &committed, w, x, row) > 0,
+            "underlined"
+        );
+        assert_eq!(band_diff(&over_placeholder, &cd, w, x, above), 0);
+        let (field, offset) = caret.expect("the caret row records itself");
+        assert!((field.top - cell.top).abs() < 1.0, "{field:?} vs {cell:?}");
+        assert!(
+            offset > field.width() / 2.0 && offset < field.width(),
+            "{offset}"
         );
     }
 

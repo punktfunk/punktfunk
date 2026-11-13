@@ -1,0 +1,156 @@
+{
+	"decky_shortcut_create_failed": "Couldn't create the shortcut",
+	"decky_shortcut_restored_dupes": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Shortcut restored — removed {count} duplicate entry",
+				"n=other": "Shortcut restored — removed {count} duplicate entries"
+			}
+		}
+	],
+	"decky_shortcut_restored": "Shortcut restored to your library",
+	"decky_game_shortcuts_none": "No game shortcuts to remove",
+	"decky_game_shortcuts_removed": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Removed {count} game shortcut",
+				"n=other": "Removed {count} game shortcuts"
+			}
+		}
+	],
+	"decky_force_stopped": "Stopped the stream",
+	"decky_no_stream": "No stream is running",
+	"decky_stream_unreachable": "Couldn't reach the stream",
+	"decky_client_unreachable_end": "Couldn't reach the Punktfunk client.",
+	"decky_game_ended": "Ended {title}.",
+	"decky_end_game_failed": "Couldn't end the game.",
+	"decky_host_trusted": "Trusted",
+	"decky_host_needs_access": "Needs access",
+	"decky_host_connect": "Connect…",
+	"decky_stream": "Stream",
+	"decky_section_client_update": "Client update available",
+	"decky_newer_version": "Newer version",
+	"decky_section_update": "Update available",
+	"decky_update_plugin": "Plugin v{current} → v{latest}",
+	"decky_update_plugin_client": "Plugin v{current} → v{latest} + client",
+	"decky_update_client_only": "New client version",
+	"decky_update_hint": "Installing can take a couple of minutes",
+	"decky_update_button": "Update Punktfunk",
+	"decky_section_hosts": "Hosts",
+	"decky_scanning": "Scanning…",
+	"decky_refresh": "Refresh",
+	"decky_problem_not_installed": "Punktfunk isn’t installed",
+	"decky_problem_scan_failed": "Couldn’t scan for hosts",
+	"decky_problem_outdated": "Update the Punktfunk client",
+	"decky_problem_not_installed_body": "This panel launches the Punktfunk app, which isn’t on this device yet. Install it in Desktop Mode.",
+	"decky_problem_scan_failed_body": "Something went wrong while scanning — Refresh tries again.",
+	"decky_problem_outdated_body": "This client is too old to find hosts on your network. Saved hosts still work.",
+	"decky_scanning_network": "Scanning your network…",
+	"decky_empty_body": "Open Punktfunk to find and pair one.",
+	"decky_open_app": "Open Punktfunk",
+	"decky_open_app_hint": "Settings, adding a host by address, and browsing a host's games all live here.",
+	"decky_play_menu": "Punktfunk in Steam's Play menu",
+	"decky_play_menu_hint": "The ▾ beside a game's Play button lists your hosts that have it, next to Steam Link's; pick one and Play becomes Stream.",
+	"decky_host_steam_menu_hint": "Press the Steam/guide button on the host",
+	"decky_host_steam_menu": "Steam menu on host",
+	"decky_host_qam_hint": "Open the host's Quick Access Menu",
+	"decky_host_qam": "Quick access on host",
+	"decky_end_game_hint": "Close {title} on the host, then end the stream. Unsaved progress is lost.",
+	"decky_end_game_confirm_title": "End {title}?",
+	"decky_section_about": "About",
+	"decky_section_troubleshooting": "Troubleshooting",
+	"decky_version_dev": "v{version} · dev build",
+	"decky_checking": "Checking…",
+	"decky_check_updates": "Check for updates",
+	"decky_recreate_hint": "Missing the Punktfunk entry in your library, or seeing several? This puts one back and removes the rest.",
+	"decky_recreate": "Recreate library shortcut",
+	"decky_remove_game_shortcuts_hint": "Streams started from a game's page run under a hidden entry named after that game. This removes them; each returns on its next Stream.",
+	"decky_remove_game_shortcuts": "Remove game shortcuts",
+	"decky_force_stop_hint": "Ends a stream that stopped responding.",
+	"decky_force_stop": "Force-stop",
+	"decky_trust_refused": "{host} is already saved under a different identity. Remove it in the Punktfunk app before trusting it again.",
+	"decky_trust_outdated": "Update the Punktfunk client to use request access",
+	"decky_client_unreachable": "Couldn’t reach the Punktfunk client — is it still installed?",
+	"decky_trust_save_failed": "Couldn’t save {host}",
+	"decky_trust_approve_toast": "Approve this device in {host}’s web console",
+	"decky_trust_denied": "{host} didn’t let this device in",
+	"decky_trust_title": "Connect to {host}",
+	"decky_trust_no_identity": "No advertised identity for this host — pair with a PIN instead.",
+	"decky_trust_open_host": "{host} accepts new devices. Connecting pins its identity so later streams are silent.",
+	"decky_trust_needs_approval": "{host} needs to let this device in before it can stream.",
+	"decky_use_pin": "Use a PIN instead…",
+	"decky_trust_request_hint": "Asks {host}’s owner to approve this device in its web console — no PIN to type.",
+	"decky_pair_wrong_pin": "Wrong PIN, or the host isn’t showing one. Arm pairing again and retry.",
+	"decky_pair_unreachable": "Couldn’t reach {host}",
+	"decky_pair_outdated": "Update the Punktfunk client to pair from here",
+	"decky_pair_failed": "Pairing failed",
+	"decky_pair_intro": "Start pairing on the Devices page of the host's web console, then enter the PIN it shows.",
+	"decky_boundary_title": "Punktfunk couldn’t draw this view",
+	"decky_boundary_body": "The plugin hit a display error — this device is fine. Reload Punktfunk from Decky's plugin list, or update the plugin.",
+	"decky_waking_to_stream": "Waking {host} to stream {title}",
+	"decky_catalog_title": "Stream from {host}",
+	"decky_catalog_ready": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} Steam game ready in Play menus",
+				"n=other": "{count} Steam games ready in Play menus"
+			}
+		}
+	],
+	"decky_host_asleep": "asleep",
+	"decky_host_awake": "{host} is awake",
+	"decky_play_stream": "Stream",
+	"decky_play_stop": "Stop",
+	"decky_update_server_unreachable": "Couldn’t reach the update server — are you online?",
+	"decky_update_available_plugin": "Update available: plugin v{current} → v{latest}.",
+	"decky_update_available_client": "Update available: client {version}.",
+	"decky_update_available_client_unknown": "Update available: client.",
+	"decky_update_available_both": "Update available: plugin v{current} → v{latest} + client {version}.",
+	"decky_update_available_both_unknown": "Update available: plugin v{current} → v{latest} + client.",
+	"decky_update_client_manual_note": "The client updates outside Punktfunk on this install.",
+	"decky_update_client_outdated": "Couldn’t check the client — it predates update checks. Update it once by hand.",
+	"decky_update_client_check_failed": "Couldn’t check the client for updates",
+	"decky_update_dev_build": "Development build — plugin updates are disabled; the client is up to date.",
+	"decky_up_to_date": "You’re up to date (plugin v{version}).",
+	"decky_client_updated_reboot": "Client updated — reboot to finish.",
+	"decky_client_updated": "Client updated to the latest version.",
+	"decky_client_current": "Client is already up to date.",
+	"decky_client_manual": "This client updates outside Punktfunk — use the way you installed it.",
+	"decky_client_update_unreachable": "Couldn’t reach the client to update it — is it still installed?",
+	"decky_client_manual_command": "This client updates outside Punktfunk. Run: {command}",
+	"decky_client_update_timeout": "Client update timed out — check this device and try again",
+	"decky_client_update_failed": "Client update failed",
+	"decky_client_updating_slow": "Updating the client — this can take a few minutes…",
+	"decky_client_updating": "Updating the client…",
+	"decky_client_update_run": "Client update available ({version}). Run: {command}",
+	"decky_client_update_manual": "A newer client ({version}) is available — update it the way you installed it.",
+	"decky_plugin_updating": "Updating the plugin to v{version} — confirm Decky’s prompt. This can take a couple of minutes.",
+	"decky_plugin_update_manual": "Update the plugin from Decky → Developer → Install Plugin from URL.",
+	"decky_launch_failed": "Launch failed",
+	"decky_launch_failed_named": "Launch failed ({name})",
+	"decky_launch_failed_preset": "Launch failed (“{preset}”)",
+	"decky_end_game_unresolved": "Couldn't tell which game to end.",
+	"decky_trust_request_failed": "Couldn’t request access from {host}",
+	"decky_trust_bad_fingerprint": "Couldn’t read {host}’s identity — pair with a PIN instead."
+}

@@ -50,7 +50,25 @@ struct RunningBadge: View {
             .padding(.vertical, 3)
             .background(Color.green.opacity(0.85), in: Capsule())
             .padding(6)
-            .accessibilityLabel("Running on the host — resume")
+            .accessibilityLabel(L10n.libBadgeRunningA11y)
+    }
+}
+
+/// The host sets this title's stream: a glyph on the tile, the "Host: …" line for a screen
+/// reader and a pointer.
+struct HostOverrideBadge: View {
+    let line: String
+
+    var body: some View {
+        Image(systemName: "slider.horizontal.3")
+            .font(.geist(11, .semibold, relativeTo: .caption2))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(.ultraThinMaterial, in: Capsule())
+            .padding(6)
+            .help(line)
+            .accessibilityLabel(line)
     }
 }
 
@@ -182,7 +200,7 @@ private struct TileFramePreference: PreferenceKey {
 
 /// Sequentially tries cover-art URLs over `loader` (so a paired client can reach the host's own
 /// art proxy, not just public CDNs — see `LibraryArtLoader`), advancing past any that fail to
-/// load, then a placeholder. The loaded image is hard-clipped to fill the card's actual frame
+/// load, then a placeholder until `round` moves on. The loaded image is hard-clipped to fill the card's actual frame
 /// regardless of its own aspect ratio: a portrait capsule fills it as intended, and a fallback
 /// banner (wide hero/header art, used when a title has no portrait capsule) is cropped to the same
 /// tile rather than allowed to size it — see the `Color.clear` in `body` for why that takes more
@@ -200,6 +218,9 @@ struct PosterImage: View {
     /// Publish this poster's on-screen rect to `TileFrames` under this id (the entry's). What the
     /// launch hold flies its cover out of; nil for a poster nothing launches from.
     var frameID: String?
+    /// The shelf's `artRound`: when it moves on, a poster whose candidates all failed walks them
+    /// again.
+    var round = 0
     @State private var index = 0
     @State private var image: PlatformImage?
     @Environment(\.displayScale) private var displayScale
@@ -257,6 +278,7 @@ struct PosterImage: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .task(id: LoadKey(index: index, hasLoader: loader != nil)) { await loadCurrent() }
+        .onChange(of: round) { if image == nil, index >= candidates.count { index = 0 } }
     }
 
     private func loadCurrent() async {
@@ -345,7 +367,7 @@ struct LibraryDesktopTile: View {
                     .font(.geist(m.name, .bold, relativeTo: .headline))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Text(nowPlaying.map { "Resume \($0)" } ?? "Desktop")
+                Text(nowPlaying.map { L10n.libResumeTitle(title: $0) } ?? String(localized: L10n.libDesktop))
                     .font(.geist(m.status, relativeTo: .caption))
                     .foregroundStyle(nowPlaying == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.green))
                     .lineLimit(1)
@@ -412,10 +434,10 @@ enum PlayStatsText {
     /// `Last played 2 hr. ago · 14 hr total · 12 launches`, or nil with nothing recorded.
     static func summary(_ stats: GameStats?) -> String? {
         var parts: [String] = []
-        if let last = lastPlayed(stats) { parts.append("Last played \(last)") }
-        if let total = playTime(stats) { parts.append("\(total) total") }
+        if let last = lastPlayed(stats) { parts.append(L10n.appleLibLastPlayed(when: last)) }
+        if let total = playTime(stats) { parts.append(L10n.appleLibPlayTimeTotal(duration: total)) }
         if let count = stats?.launchCount, count > 0 {
-            parts.append(count == 1 ? "1 launch" : "\(count) launches")
+            parts.append(L10n.libLaunches(count: Int(count)))
         }
         return parts.isEmpty ? nil : parts.joined(separator: " \u{b7} ")
     }
@@ -433,11 +455,11 @@ struct LibraryNoHostView: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("No Library Yet", systemImage: "square.grid.2x2")
+            Label(L10n.libNoHostTitle, systemImage: "square.grid.2x2")
         } description: {
-            Text("Pair a host to browse its games here.")
+            Text(L10n.libNoHostBody)
         } actions: {
-            Button("Show Hosts", action: showHosts)
+            Button(L10n.libNoHostShowHosts, action: showHosts)
         }
     }
 }

@@ -52,20 +52,24 @@ pub fn pipewire_reachable() -> bool {
         .is_some_and(|dir| std::path::Path::new(&dir).join("pipewire-0").exists())
 }
 
-/// Colon-separated display MAC of pad `pad` (a DualSense Edge when `edge`).
-/// [`ds_pairing_reply`] bytes 1..7 are LSB-first (`hid-playstation` `%pMR`
-/// uniq), so the display form reverses them. Used only by the `{mac}`
-/// identity-template placeholder.
+/// Colon-separated display MAC of pad `pad` (a DualSense Edge when `edge`) on
+/// seat `seat`, the pad's own mark (`pad_broker::own_ps_seat`), so the sink
+/// names the MAC its pad reports. [`ds_pairing_reply`] bytes 1..7 are
+/// LSB-first (`hid-playstation` `%pMR` uniq), so the display form reverses
+/// them. Used only by the `{mac}` identity-template placeholder.
 ///
 /// [`ds_pairing_reply`]: pf_inject::dualsense_proto::ds_pairing_reply
-fn pad_mac(pad: u8, edge: bool) -> String {
-    use pf_inject::dualsense_proto::{ds_pairing_reply, DEVTYPE_DUALSENSE, DEVTYPE_DUALSENSE_EDGE};
+fn pad_mac(pad: u8, edge: bool, seat: u16) -> String {
+    use pf_inject::dualsense_proto::{
+        ds_pairing_reply, mark_ps_seat, DEVTYPE_DUALSENSE, DEVTYPE_DUALSENSE_EDGE,
+    };
     let device_type = if edge {
         DEVTYPE_DUALSENSE_EDGE
     } else {
         DEVTYPE_DUALSENSE
     };
-    let reply = ds_pairing_reply(device_type, pad);
+    let mut reply = ds_pairing_reply(device_type, pad);
+    mark_ps_seat(&mut reply, seat);
     let m = &reply[1..7];
     format!(
         "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
@@ -125,7 +129,7 @@ fn resolve_split_target(parent_name: &str, override_var: Option<String>) -> Stri
 
 impl PadSinkIdentity {
     fn new(pad: u8, edge: bool) -> PadSinkIdentity {
-        let mac = pad_mac(pad, edge);
+        let mac = pad_mac(pad, edge, pf_inject::pad_broker::own_ps_seat());
         let mac_bare: String = mac.chars().filter(|c| *c != ':').collect();
         // USB `iProduct` verbatim, model word included. GE's fallback is two
         // substrings (`alsa_output.usb-Sony_Interactive_Entertainment_` AND
@@ -295,6 +299,18 @@ impl Mixer {
 struct PadUd {
     mix: Rc<RefCell<Mixer>>,
     node: PadNode,
+    /// The decoded buffer of one callback, kept so the realtime thread allocates once.
+    samples: Vec<f32>,
+}
+
+impl PadUd {
+    fn new(mix: Rc<RefCell<Mixer>>, node: PadNode) -> PadUd {
+        PadUd {
+            mix,
+            node,
+            samples: Vec::new(),
+        }
+    }
 }
 
 /// Live per-pad node graph and its capture. [`AudioCapturer`] contract: empty
@@ -437,17 +453,13 @@ macro_rules! pad_process {
                     return;
                 }
                 let region = &buf[offset..(offset + size).min(buf.len())];
-                let n = region.len() / 4;
-                let mut samples = Vec::with_capacity(n);
-                for i in 0..n {
-                    samples.push(f32::from_le_bytes([
-                        region[i * 4],
-                        region[i * 4 + 1],
-                        region[i * 4 + 2],
-                        region[i * 4 + 3],
-                    ]));
-                }
-                ud.mix.borrow_mut().add(ud.node, &samples);
+                ud.samples.clear();
+                ud.samples.extend(
+                    region
+                        .chunks_exact(4)
+                        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+                );
+                ud.mix.borrow_mut().add(ud.node, &ud.samples);
             }));
             if outcome.is_err() {
                 tracing::error!("panic in pipewire pad-sink callback — chunk dropped");
@@ -560,10 +572,7 @@ fn pad_sink_thread(
         let parent = pw::stream::StreamBox::new(&core, "punktfunk-pad-audio", parent_props)
             .context("pw pad-sink parent Stream")?;
         let _parent_listener = parent
-            .add_local_listener_with_user_data(PadUd {
-                mix: mix.clone(),
-                node: PadNode::Parent,
-            })
+            .add_local_listener_with_user_data(PadUd::new(mix.clone(), PadNode::Parent))
             .state_changed({
                 let mainloop = mainloop.clone();
                 move |_s, _ud, old, new| {
@@ -605,10 +614,7 @@ fn pad_sink_thread(
         let haptic = pw::stream::StreamBox::new(&core, "punktfunk-pad-audio", haptic_props)
             .context("pw pad-sink haptic Stream")?;
         let _haptic_listener = haptic
-            .add_local_listener_with_user_data(PadUd {
-                mix: mix.clone(),
-                node: PadNode::Haptic,
-            })
+            .add_local_listener_with_user_data(PadUd::new(mix.clone(), PadNode::Haptic))
             .process(pad_process!())
             .register()
             .context("register pad-sink haptic listener")?;
@@ -620,10 +626,7 @@ fn pad_sink_thread(
         let speaker = pw::stream::StreamBox::new(&core, "punktfunk-pad-audio", speaker_props)
             .context("pw pad-sink speaker Stream")?;
         let _speaker_listener = speaker
-            .add_local_listener_with_user_data(PadUd {
-                mix: mix.clone(),
-                node: PadNode::Speaker,
-            })
+            .add_local_listener_with_user_data(PadUd::new(mix.clone(), PadNode::Speaker))
             .process(pad_process!())
             .register()
             .context("register pad-sink speaker listener")?;
@@ -685,12 +688,14 @@ mod tests {
     #[test]
     fn pad_mac_is_reversed_display_form_and_per_pad_unique() {
         // Pairing bytes 1..7 are 74 E7 D6 3A 53 35 LSB-first; display reverses.
-        assert_eq!(pad_mac(0, false), "35:53:3A:D6:E7:74");
+        assert_eq!(pad_mac(0, false, 0), "35:53:3A:D6:E7:74");
         // The pad index offsets the LOW octet — the LAST display octet.
-        assert_eq!(pad_mac(1, false), "35:53:3A:D6:E7:75");
-        assert_ne!(pad_mac(2, false), pad_mac(3, false));
+        assert_eq!(pad_mac(1, false, 0), "35:53:3A:D6:E7:75");
+        assert_ne!(pad_mac(2, false, 0), pad_mac(3, false, 0));
         // The Edge has its own base, the MAC its uhid pad reports.
-        assert_eq!(pad_mac(0, true), "35:53:3A:D6:E7:94");
+        assert_eq!(pad_mac(0, true, 0), "35:53:3A:D6:E7:94");
+        // A seat's pad reports its seat's mark in the two octets above the low one.
+        assert_eq!(pad_mac(0, false, 0xBEEF), "35:53:3A:68:08:74");
     }
 
     #[test]

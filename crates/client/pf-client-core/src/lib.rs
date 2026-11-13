@@ -45,7 +45,6 @@ mod gamepad {
     mod ds5;
     mod feedback;
     mod route;
-    mod select_gesture;
 }
 // Menu-event synthesizer and pad descriptors. Desktop `gamepad` re-exports them; Android feeds the same synthesizer from Kotlin samples (`design/android-skia-console-port.md`).
 #[cfg(portable)]
@@ -79,6 +78,12 @@ pub mod findings;
 // Host power actions (`design/host-actions.md`). Android gets the row type and labels; ureq stays desktop-gated (Android uses OkHttp).
 #[cfg(portable)]
 pub mod host_actions;
+// A sentence the host sent by the id of its message, worded in this app's language.
+#[cfg(portable)]
+pub mod host_text;
+// Which host screen this device streams (`design/screen-pick.md`); ureq stays desktop-gated.
+#[cfg(portable)]
+pub mod display_targets;
 // Log ring (note/render, std only) on every platform. `send_to_host` stays desktop-gated; Android posts via OkHttp (`SkiaConsole.sendLogs`).
 #[cfg(portable)]
 pub mod logring;
@@ -117,7 +122,7 @@ pub mod overlay_actions;
 // sRGB mixes and WCAG contrast for every client theme, the console's included.
 pub mod rgb;
 pub mod ring;
-// The in-stream keys, chords and gestures, for each client's reference screen.
+// In-stream shortcuts: the bindings, their engine and the reference rows.
 pub mod shortcuts;
 // DualSense voice-coil + speaker on the pad's 4-ch device (0xD1 plane): correlation, per-session renderer, tier-A registry the gamepad worker feeds.
 #[cfg(desktop)]
@@ -148,6 +153,9 @@ pub mod trust;
 // Profiles on a box and the picker rule every shell shares (`design/profiles-and-seats.md` §10).
 #[cfg(portable)]
 pub mod profiles;
+// "Hide for me": a title off the shelf of the profile this device plays as, and back.
+#[cfg(portable)]
+pub mod hide;
 // The unlock of a profile on a person's own account: prompt, device key, refusal.
 #[cfg(portable)]
 pub mod unlock;

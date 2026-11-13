@@ -9,13 +9,8 @@ Sleep the host from the couch when you're done, and [wake it](/docs/wake-on-lan)
 - **Web console:** **Host** → the **⋯** beside the host's name. Each action asks for your console
   password.
 - **Paired client:** the host's menu, where **Wake host** appears when it sleeps. The rows appear
-  only for a device with the **Host power** grant. Restart and shut down ask before they run.
-
-## Who may do it
-
-- The **web console** always can.
-- A **paired device** needs the **Host power** grant ([access levels](/docs/access-levels)). Full
-  control includes it; Controller only and View only don't.
+  only for a device with the **Host power** grant, which Full control includes
+  ([access levels](/docs/access-levels)). Restart and shut down ask before they run.
 
 ## What happens
 

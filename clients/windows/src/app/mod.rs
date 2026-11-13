@@ -3,9 +3,9 @@
 //! One root component, [`Shell`], holds the shell's state, and everything that changes it
 //! arrives as a [`Msg`]: event handlers and worker threads (discovery, the spawned session's
 //! reader, the probes) post through an [`AsyncSetState`], a typed handle on the root's queue.
-//! Screens are functions of that state; the four with state of their own (hosts, pairing, the
-//! speed test and the ring editor) are child components fed by props. Each screen lives in its
-//! own submodule:
+//! Screens are functions of that state; the five with state of their own (hosts, pairing, the
+//! speed test, the ring editor and the shortcuts editor) are child components fed by props.
+//! Each screen lives in its own submodule:
 //!
 //! * [`hosts`] — saved/discovered/manual host list, plus per-host forget + speed test
 //! * [`connect`] — the trust gate and session lifecycle glue (connect / request-access flows)
@@ -33,6 +33,8 @@ mod quick_actions;
 /// The shell's decisions as plain functions, table-tested without a window.
 mod rules;
 mod settings;
+/// The in-stream shortcuts' editor, a section of the settings page beside Quick actions.
+mod shortcuts;
 mod speed;
 mod stream;
 mod style;
@@ -49,6 +51,7 @@ use pf_client_core::settings::GamepadUi;
 use pf_client_core::start;
 use pf_fluent::motion::Tween;
 use pf_fluent::Palette;
+use pf_l10n::{client, common, desktop};
 use rules::LinkGate;
 use speed::{SpeedProps, SpeedState};
 use std::collections::HashMap;
@@ -76,6 +79,8 @@ pub(crate) enum Screen {
     /// Shortcuts button).
     Help,
     Pair,
+    /// First connect to a host that takes new devices: its fingerprint, to trust or decline.
+    Trust,
     /// Per-host network speed test (probe burst + recommended bitrate).
     SpeedTest,
     /// The target host's game library (poster grid; tap-to-launch) — paired hosts only,
@@ -117,7 +122,7 @@ pub(crate) fn saved<R, E: std::fmt::Display>(
     if let Some((rev, set_rev)) = rev {
         set_rev.call(rev + 1);
     }
-    r.map_err(|e| set_status.call(format!("Couldn't save \u{2014} {e:#}")))
+    r.map_err(|e| set_status.call(desktop::desktop_save_failed(format!("{e:#}"))))
         .ok()
 }
 
@@ -163,6 +168,8 @@ pub(crate) struct Shared {
     pub(crate) set_seat: Mutex<Option<AsyncSetState<Option<profiles::SeatWait>>>>,
     /// Opens the password prompt the same way ([`unlock::before_dial`]).
     pub(crate) set_unlock: Mutex<Option<AsyncSetState<Option<unlock::UnlockAsk>>>>,
+    /// Re-renders the settings page when a device probe lands ([`settings::probe_devices`]).
+    pub(crate) set_devices: Mutex<Option<AsyncSetState<()>>>,
     pub(crate) pictures: Mutex<profiles::Pictures>,
 }
 
@@ -267,6 +274,7 @@ pub(crate) enum Msg {
     Speed(SpeedState),
     Library(library::LibraryState),
     EndGame(library::EndGameUi),
+    Hide(library::HideEdit),
     LibrarySort(SortKey),
     Forget(Option<HostRef>),
     Rename(Option<HostRef>),
@@ -276,6 +284,7 @@ pub(crate) enum Msg {
     SettingsNav(String),
     SettingsScope(String),
     SettingsDelete(Option<String>),
+    SettingsReset(bool),
     SettingsEdit(bool),
     CustomRes(bool),
     CustomScale(bool),
@@ -283,6 +292,8 @@ pub(crate) enum Msg {
     Picker(Option<profiles::PickerAsk>),
     Seat(Option<profiles::SeatWait>),
     Unlock(Option<unlock::UnlockAsk>),
+    /// The device probe finished: the settings page reads it from `AppCtx::probes`.
+    Devices,
     /// A `punktfunk://` link, from argv or a later instance.
     Link(String),
     LinkConfirm(Option<Box<orchestrate::ConnectPlan>>),
@@ -334,6 +345,7 @@ pub(crate) struct Shell {
     speed: SpeedState,
     library: library::LibraryState,
     end_game: library::EndGameUi,
+    hide: library::HideUi,
     /// The shelf's order: the shared `library_sort`, read at start and written on each pick.
     library_sort: SortKey,
     forget: Option<HostRef>,
@@ -348,6 +360,8 @@ pub(crate) struct Shell {
     /// The layer the settings page edits: "" for the defaults, else a preset id.
     settings_scope: String,
     settings_delete: Option<String>,
+    /// The reset confirmation is up.
+    settings_reset: bool,
     settings_edit: bool,
     /// Resolution / Render scale sit on Custom… while the stored value is a listed one.
     custom_res: bool,
@@ -411,6 +425,7 @@ impl Component for Shell {
             speed: SpeedState::Running,
             library: library::LibraryState::default(),
             end_game: library::EndGameUi::default(),
+            hide: library::HideUi::default(),
             library_sort,
             forget: None,
             rename: None,
@@ -421,6 +436,7 @@ impl Component for Shell {
             settings_nav: "general".into(),
             settings_scope: String::new(),
             settings_delete: None,
+            settings_reset: false,
             settings_edit: false,
             custom_res: false,
             custom_scale: false,
@@ -445,6 +461,8 @@ impl Component for Shell {
         *ctx.shared.set_picker.lock().unwrap() = Some(shell.set(Msg::Picker));
         *ctx.shared.set_seat.lock().unwrap() = Some(shell.set(Msg::Seat));
         *ctx.shared.set_unlock.lock().unwrap() = Some(shell.set(Msg::Unlock));
+        *ctx.shared.set_devices.lock().unwrap() = Some(shell.set(|()| Msg::Devices));
+        settings::probe_devices(&ctx);
         // Before the link poll starts: a link queued at startup is explicit intent and wins.
         open_start_screen(&shell.svc());
         poll_links(shell.set(Msg::Link));
@@ -481,8 +499,15 @@ impl Component for Shell {
             Msg::Probed(p) => self.probed = p,
             Msg::Hud(h) => self.hud = *h,
             Msg::Speed(s) => self.speed = s,
-            Msg::Library(l) => self.library = l,
+            Msg::Library(l) => {
+                // A fetch starts the shelf afresh: what it lists already says what is hidden.
+                if l.phase == library::LibraryPhase::Loading {
+                    self.hide = library::HideUi::default();
+                }
+                self.library = l;
+            }
             Msg::EndGame(e) => self.end_game = e,
+            Msg::Hide(edit) => edit(&mut self.hide),
             Msg::LibrarySort(k) => self.library_sort = k,
             Msg::Forget(f) => self.forget = f,
             Msg::Rename(r) => self.rename = r,
@@ -509,6 +534,7 @@ impl Component for Shell {
             }
             Msg::SettingsScope(s) => self.settings_scope = s,
             Msg::SettingsDelete(d) => self.settings_delete = d,
+            Msg::SettingsReset(r) => self.settings_reset = r,
             Msg::SettingsEdit(e) => self.settings_edit = e,
             Msg::CustomRes(c) => self.custom_res = c,
             Msg::CustomScale(c) => self.custom_scale = c,
@@ -516,6 +542,7 @@ impl Component for Shell {
             Msg::Picker(p) => self.picker = p,
             Msg::Seat(s) => self.seat = s,
             Msg::Unlock(u) => self.unlock = u,
+            Msg::Devices => self.settings_rev += 1,
             Msg::Link(url) => route_link(
                 &self.ctx,
                 &url,
@@ -621,8 +648,11 @@ impl Component for Shell {
             }
             Screen::Settings => settings::settings_page(self),
             Screen::Licenses => licenses::licenses_page(pal, &self.ctx, &svc.set_screen),
-            Screen::Help => help::help_page(pal, &svc.set_screen),
+            Screen::Help => {
+                help::help_page(pal, &self.ctx, &svc.set_screen, &self.set(Msg::SettingsNav))
+            }
             Screen::Pair => component::<pair::PairPage>("pair", svc.clone()).into(),
+            Screen::Trust => connect::trust_page(pal, &self.ctx, &svc.set_screen, &svc.set_status),
             Screen::SpeedTest => component::<speed::SpeedPage>(
                 "speed",
                 SpeedProps {
@@ -721,7 +751,14 @@ impl Shell {
         let pending = self.link_confirm.clone();
         let content = pending
             .as_ref()
-            .map(|p| rules::link_prompt(&p.host.name, &p.host.addr, p.launch.as_deref()))
+            .map(|p| {
+                rules::link_prompt(
+                    &p.host.name,
+                    &p.host.addr,
+                    p.launch.as_deref(),
+                    p.overrides.as_ref(),
+                )
+            })
             .unwrap_or_default();
         let (ctx, ss, st, sc) = (
             self.ctx.clone(),
@@ -730,10 +767,10 @@ impl Shell {
             self.set(Msg::LinkConfirm),
         );
         ContentDialog::new()
-            .title("Open this link?")
+            .title(client::link_confirm_title())
             .content(content)
-            .primary_button_text("Connect")
-            .close_button_text("Cancel")
+            .primary_button_text(common::common_connect())
+            .close_button_text(common::common_cancel())
             .is_open(pending.is_some())
             .on_closed(move |r: ContentDialogResult| {
                 sc.call(None);
@@ -952,14 +989,14 @@ fn route_link(
         Ok(PlanOutcome::Connect(mut p)) => {
             // The plan's profile is the link's `as=`, else the saved pick: only the
             // link's own wins over the picker.
-            p.profile = link.as_profile.clone();
+            p.play_as(link.as_profile.clone());
             dial_link(ctx, &p, set_screen, set_status)
         }
         // A pinned host named by its label or address, which any web page could guess: arm
         // the confirmation, whose OK runs `dial_link` on this same plan. Not the PIN
         // ceremony: re-pairing would throw the pin away.
         Ok(PlanOutcome::ConfirmConnect(mut p)) => {
-            p.profile = link.as_profile.clone();
+            p.play_as(link.as_profile.clone());
             set_link_confirm.call(Some(p))
         }
         // Known but never pinned, or unknown: a link may not pair or trust on its own,
@@ -984,15 +1021,12 @@ fn route_link(
                 from_link: true,
                 ..Target::default()
             };
-            set_status.call(format!(
-                "{name} isn't paired with this device yet \u{2014} pair it to continue."
-            ));
+            set_status.call(desktop::desktop_link_unpaired_host(&name));
             set_screen.call(Screen::Pair);
         }
-        Ok(PlanOutcome::Unsupported(route)) => refuse(format!(
-            "Punktfunk can't open \u{201c}{}\u{201d} links yet.",
-            route.as_str()
-        )),
+        Ok(PlanOutcome::Unsupported(route)) => {
+            refuse(client::link_route_unsupported(route.as_str()))
+        }
         Err(e) => refuse(e.message()),
     }
 }

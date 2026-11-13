@@ -171,17 +171,26 @@ pub(super) async fn run_pump(mut args: WorkerArgs) {
     // Unchanged across a mode switch; the pump recomputes the stream-shape cap from them.
     let bit_depth = welcome.bit_depth;
     let chroma_format = welcome.chroma_format;
-    // ABR holds the probe-measured link ceiling to this. Computed here (Welcome
-    // geometry); the data pump stays codec-agnostic. PyroWave's is the host's pin,
-    // and its floor the same rule at `BPP_FLOOR`.
+    // ABR holds the probe-measured link ceiling to this. Computed here, at the picture the
+    // host encodes; the data pump stays codec-agnostic. PyroWave's is the host's pin, and its
+    // floor the same rule at `BPP_FLOOR`.
+    let (width, height) = negotiated
+        .picture
+        .unwrap_or((welcome.mode.width, welcome.mode.height));
+    let priced = crate::config::Mode {
+        width,
+        height,
+        ..welcome.mode
+    };
+    shared.anchor.lock().unwrap().priced = priced;
     let pyrowave = welcome.codec == crate::quic::CODEC_PYROWAVE;
     let stream_cap_kbps = if pyrowave {
         resolved_bitrate_kbps
     } else {
         crate::abr::stream_ceiling_kbps(
-            welcome.mode.width,
-            welcome.mode.height,
-            welcome.mode.refresh_hz,
+            priced.width,
+            priced.height,
+            priced.refresh_hz,
             welcome.codec,
             welcome.bit_depth,
             welcome.chroma_format,
@@ -189,7 +198,7 @@ pub(super) async fn run_pump(mut args: WorkerArgs) {
     };
     let pyrowave_floor_kbps = pyrowave.then(|| {
         crate::pyrowave::kbps_for(
-            &welcome.mode,
+            &priced,
             welcome.chroma_format == crate::quic::CHROMA_IDC_444,
             welcome.bit_depth,
             crate::pyrowave::BPP_FLOOR,
@@ -235,8 +244,8 @@ pub(super) async fn run_pump(mut args: WorkerArgs) {
     // older host reads the whole flags word as the pad index.
     let gamepad_snapshots = host_caps & crate::quic::HOST_CAP_GAMEPAD_STATE != 0;
     let pad_audio_arrivals = host_caps & crate::quic::HOST_CAP_PAD_AUDIO != 0;
-    // Key and mouse-button edges ride the control stream toward a host that reads them there,
-    // so a lost release cannot hold one down; an older host gets every event as a datagram.
+    // Key, mouse-button and text events ride the control stream toward a host that reads them
+    // there, so none is lost or reordered; an older host gets every event as a datagram.
     let reliable_edges = welcome.host_caps2 & crate::quic::HOST_CAP2_INPUT_EDGES != 0;
     tokio::spawn(input_task::run(
         conn.clone(),

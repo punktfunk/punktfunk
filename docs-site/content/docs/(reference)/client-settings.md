@@ -1,0 +1,264 @@
+---
+title: Client settings
+description: Every setting a Punktfunk client stores — what it does, what it defaults to, and which of them the host can overrule.
+---
+
+Every setting a Punktfunk app keeps, with its default and the apps that offer it. The host's own
+settings are on [Configuration](/docs/configuration).
+
+## Where the settings live
+
+The apps group settings under **Settings** as **General**, **Display**, **Input**, **Audio** and
+**Controllers**. Apple TV has no **Input** and gives **Quick actions** its own category. The
+controller interface (the console) has its own **Settings**, with the same five plus **Presets**
+and **About**. On a Steam Deck the console is the only settings screen: **Open Punktfunk** in the
+[Decky panel](/docs/steam-deck).
+
+## Advanced settings
+
+Rows most players never change are hidden until **Show advanced**, on **General**, is on. A hidden
+setting still applies: a category with one changed says **1 advanced setting changed**, and
+choosing that shows them. While you edit a [preset](/docs/presets-and-links), a row it overrides
+shows either way.
+
+The advanced rows are **Advanced statistics**, **Statistics position**, **Statistics size**, **Exit
+hint**, **Reduce interface resolution**, **Smoothness buffer**, **Render scale**,
+**Full chroma (4:4:4)**, **10-bit SDR**, **V-Sync**, **Follow variable refresh**, **Host
+compositor**, **Video decoder**, **GPU**, **Low-latency mode**, **Keep screen awake**, **Audio quality**, **Keep host audio playing**, **Echo cancellation**, **Forward controllers**,
+**Use controller**, **Guide button**, **Controller haptics**,
+**Controller speaker**, **Steam Controller 2 passthrough** and **DualSense over USB**.
+
+## Screen
+
+A host card's menu has a **Screen** section on every app. It picks how this device uses the host's
+screens, from the next session:
+
+| Pick | The host's monitors | Where apps open |
+|---|---|---|
+| **Only screen** | Turn off while you stream | On this device, the only screen |
+| **Main screen** | Stay on | On this device |
+| **Second screen** | Stay on | On the monitors, as before: this device is one more screen beside them |
+| A monitor, under **Show a monitor** | Stay as they are | As before: you see and drive what that monitor shows |
+
+The three roles are a screen the host makes for this device at its resolution. Monitors are listed
+by name and current mode; a greyed one is streamed by another device or switched off. The host
+offers no **Main screen** on Sway, Hyprland, niri and Umbriel, which have no main screen. With
+another device already streaming, the first one decides what the monitors do
+([Two devices at once](/docs/virtual-displays#two-devices-at-once)). When the host's settings file
+fixes the screen for every device, the section says so and offers no choice. Only Linux and Windows
+hosts list monitors. A [seat](/docs/profiles#what-a-seat-can-do), or a host with no monitors, shows
+no rows: the device gets a screen of its own. An older host offers **Own screen** in place of the
+three roles.
+
+The host keeps the pick for this device. The web console shows it, and can change it, in the
+device's [display settings](/docs/virtual-displays#per-device-settings). Picking needs **Choose
+its screen** in this device's [access](/docs/access-levels#individual-grants). Without it the
+section shows what the host chose and says **This host decides the screen for this device.**
+
+### Host screen in a preset
+
+A [preset](/docs/presets-and-links) can pick the screen for its own connects. **Host screen**, under
+**Display**, shows only while you edit a preset:
+
+| Pick | A connect with the preset |
+|---|---|
+| **As on the host card** | Takes the card's pick. The default. |
+| **Only screen**, **Main screen**, **Second screen** | Asks the host for that role |
+| A monitor, such as **LG TV · HDMI-A-1 — Tower** | Asks for the monitor with that connector, on any host. The hosts that listed it are named after the dash. |
+
+The preset's pick applies to that connect only and never changes the card: a plain click on the
+host still streams as the card says. A game bound to a preset launches with that preset's screen.
+A host without the picked role or monitor, or one that offers no roles, gives the card's pick.
+While a card's default preset picks the screen, the card's **Screen** section shows that pick,
+greyed, with **Set by the preset Couch**.
+
+**New preset…** offers **Empty** and **Second screen**. **Second screen** makes a preset that sets
+only **Host screen**, to **Second screen**: pin it to a host as a card, and a tablet beside the PC
+joins as one more screen.
+
+When the host doesn't give what was asked, the stream says why once, as it starts:
+
+| The stream says | Because |
+|---|---|
+| **Second screen wasn't applied: this host decides the screen for this device.** | This device lacks **Choose its screen**. It gets what the host chose. |
+| **The host's monitors stayed as they were: another device was streaming first.** | The [first session decides](/docs/virtual-displays#two-devices-at-once) what the monitors do. The rest of the pick applies. |
+| **HDMI-A-1 wasn't applied: that monitor can't be streamed now.** | The monitor is off, streamed by another device, or not on this host. This device gets a screen of its own. |
+| **Second screen wasn't applied: this desktop has no monitors.** | The session plays on a [seat](/docs/profiles#what-a-seat-can-do) or a desktop with no monitors. |
+
+## Reset all settings
+
+**Reset all settings…**, the last row of **General**, asks first, then puts every setting back to
+how a fresh install has it. Paired hosts and presets stay, and so does the host the app opens on.
+It shows under the default settings only: while you edit a preset, each row resets on its own. The
+console offers it on Linux, Windows and the Steam Deck.
+
+Linux stores settings in `~/.config/punktfunk/client-gtk-settings.json`, shared with the console;
+Windows in `%APPDATA%\punktfunk\client-windows-settings.json`. Changes apply to the next session.
+
+Names below are the Linux app's. **All** means Linux, Windows, Mac, iPhone, iPad, Apple TV and
+Android. Most settings can differ per [preset](/docs/presets-and-links); the exceptions are
+[listed below](#settings-that-are-facts-about-your-device).
+
+## Video
+
+| Setting | Default | What it does | Where |
+|---|---|---|---|
+| **Resolution** | Native display | The host builds a display at exactly this size. **Native display** is the screen the window is on. **Aspect ratio** picks which sizes are listed; **Custom…** takes a typed width and height. | All. Apple TV: **Stream mode** (Native, or 720p, 1080p or 4K at 60 Hz) and **Custom size**. Android adds **Native display (safe area)**. |
+| **Match window** | Off | The stream follows the window's size; each resize renegotiates. Fullscreen uses the screen's own mode. On a foldable iPhone that covers a fold, an unfold, a rotation and the upright half of a half-open one ([foldable iPhone](/docs/input#foldable-iphone)). | Linux, Windows, Mac, iPhone, iPad, console |
+| **Refresh rate** | Native | The stream's frame rate. | All. Apple TV sets it with **Stream mode**. |
+| **Bitrate** | Automatic | The whole budget on the wire: video, error correction and audio. **Automatic** starts at 20 Mbps, adapts to the link and never drops below 2 Mbps. A fixed rate holds for the session. With PyroWave it offers **Automatic** or **Fixed**, and **PyroWave quality** sets the rate. | All. iPhone, iPad and Mac: **Automatic bitrate** plus a slider, the switch alone with PyroWave; elsewhere type any rate. |
+| **Render scale** | Native (1×) | The host renders at your resolution times this, 0.5× to 4×: pick a stop, or type any percent from 50 to 400. Above 1× is supersampling: the host renders the larger picture and scales it down to your resolution before sending it, so it is sharper and costs the host's GPU, not bandwidth. An older host, or one whose encoder can't scale, sends the larger picture and your device scales it, which costs bandwidth and decoding too. Coloured text stays sharpest with **Full chroma (4:4:4)**. Below 1× is lighter on the host, and your device enlarges the picture. | All |
+| **Picture fit** | Fit | When the stream's shape differs from the screen: **Fit** adds black bars, **Crop to fill** cuts the edges, **Stretch to fill** distorts. | All. On Android 9, **Crop to fill** squeezes instead. |
+| **Second screen** | On | A dual-screen handheld's lower panel, or a foldable half open, shows the companion panel — or the picture, with **Screens** ([dual-screen handhelds](/docs/input#dual-screen-handhelds)). Off keeps the stream on this screen and leaves the other to the system: for a phone on a TV. A preset can carry it. | Android |
+| **Screens** | This monitor | **All monitors** opens a fullscreen window on each of this computer's monitors, one host screen each, laid out as your monitors sit. A monitor plugged in mid-stream joins; close a window to give its monitor back. Needs a host that builds its own displays (not gamescope). A preset can carry it. | Linux, Windows, Mac |
+| **Video codec** | Automatic | Your pick when the host can encode it, otherwise HEVC, then AV1, then H.264. [PyroWave](/docs/pyrowave) is never picked automatically. | All. Apple and Android hide AV1 and PyroWave when the device can't decode them; a row still set to one says HEVC is used instead. |
+| **PyroWave quality** | 1.6 bits per pixel | Sets the rate while the codec is PyroWave. The slider reads as the rate it needs at your stream's size and refresh, such as `3840×2160 at 120 Hz: 1.6 Gbit/s`; higher is sharper. A warning says when this device is on Wi-Fi or its port can't carry that rate. With **Bitrate** on **Automatic**, a weak network lowers it; on **Fixed** the stream holds it. See [Bits per pixel](/docs/pyrowave#bits-per-pixel). | Linux, Windows, Mac, iPhone, iPad, Apple TV, Android, console. Apple TV picks from a list of rates. |
+| **10-bit HDR** | On | Off never sends HDR. On sends 10-bit HDR when the host has HDR content and can encode it. See [HDR](/docs/hdr). | All. Android greys it on a screen without HDR10. |
+| **Full chroma (4:4:4)** | Off | Sharper text and thin lines, at more bandwidth. Needs HEVC or PyroWave and a host that can encode it. | Linux, Windows, Mac, iPhone, iPad, Apple TV |
+| **10-bit SDR** | Off | Smoother gradients without HDR, when the host has a 10-bit desktop or allows widening (see [10-bit SDR](/docs/hdr#10-bit-sdr)) and its encoder supports it. HDR takes over when it engages. | All |
+| **Prioritize** | Lowest latency | **Lowest latency** shows each frame at the next refresh it can make, with no buffer. **Smoothness** holds a small buffer that evens out network hiccups, at that much delay. | All |
+| **Smoothness buffer** | Automatic (2 frames) | Frames held under **Smoothness**, 1 to 3. Each adds about one screen refresh of delay. | All |
+| **V-Sync** | On (Mac: off) | Off shows each frame as soon as it's ready, with tearing. A driver without a tearing mode stays tear-free. | Linux, Windows, Mac |
+| **Follow variable refresh** | On | Prefers the driver's variable-refresh present mode where it offers one. Whether a VRR, FreeSync or G-Sync screen then follows the stream is the compositor's call: Linux desktops want the window fullscreen and focused. | Linux, Windows, Mac, iPhone, iPad |
+| **Host compositor** | Automatic | Which backend a Linux host uses for the virtual display. A host without it picks its own. | All |
+| **Video decoder**, **GPU** | Automatic | The decoder and graphics card this device uses. Change them only to debug; `PUNKTFUNK_DECODER` [overrides](/docs/configuration#client-side-native-clients) the decoder. | Linux, Windows. **GPU**: Windows, and Linux with more than one GPU. |
+| **Low-latency mode** | On | Asks the decoder and system for their low-latency paths. Turn it off if a device misbehaves. | Android |
+| **Keep screen awake** | On | Off, a stream keeps the screen awake only while you play: five minutes after your last key, touch or controller input, this device's own screen saver or sleep takes over. | Linux, Windows, Android, Apple |
+| **Screen** | Flat | Flat, or bent like a curved monitor: the radius in millimetres, 800R the tightest. | Apple Vision Pro |
+
+**Test network speed…** in a host card's menu measures the link — what it carries, then loss and
+jitter at half of that, a rate the link holds — and suggests a bitrate (Android: **Network speed
+test**; Linux and Apple: on the host page). On the Linux and Windows session shells it also names
+what the link does: a host port faster than this device's, an adapter that drops the start of each
+burst, a small receive buffer, a link fault, a queue, Wi-Fi. There is nothing to switch on: the host
+paces every frame at the link rate this device measures. With PyroWave, **PyroWave quality** sets
+the rate instead of **Bitrate**.
+
+## Audio
+
+| Setting | Default | What it does | Where |
+|---|---|---|---|
+| **Audio channels** | Stereo | Stereo, 5.1 or 7.1. A Linux host sends real surround; a Windows host converts its current output. | All |
+| **Audio quality** | Standard (Opus) | **Lossless** sends uncompressed PCM, 2.3 Mbps and up, outside the video budget. The host can refuse it: see [Configuration](/docs/configuration#audio--microphone). | All. Linux and Windows offer 48 and 96 kHz in stereo; Apple and Android add 44.1, 88.2 and 176.4 kHz. |
+| **Keep host audio playing** | Off | Off, the host goes quiet while you stream. On, its own speakers keep playing too. With several clients, one asking is enough. | All |
+| **Stream microphone** | Off | Sends this device's microphone to the host. A shortcut [mutes it](/docs/shortcuts#muting-your-microphone). | All but Apple TV |
+| **Echo cancellation** | On | Keeps the host's audio, playing from your speakers, out of the microphone. Turn it off if your microphone does its own processing. See [Why do I hear myself](/docs/echo). | All but Apple TV |
+| **Spatial audio** | On | On, the sound comes from the window. Off plays the game's own mix straight to your ears. | Apple Vision Pro |
+| **Speaker**, **Microphone** | System default | Which output plays the stream and which input feeds the microphone. | Linux, Windows, Mac (plus **Microphone channel**) |
+
+## Input
+
+Touch and mouse modes are explained on [Mouse, touch and pen](/docs/input), the in-stream keys on
+[Shortcuts and quick actions](/docs/shortcuts).
+
+### Controllers
+
+| Setting | Default | What it does | Where |
+|---|---|---|---|
+| **Forward controllers** | On | Off, this device's controllers aren't sent. Use it when a pad reaches the host another way, such as [USB passthrough](/docs/plugin-setup#recipe-full-controller-passthrough-virtualhere). On Linux and Windows, off also disables the [controller exit chord](/docs/shortcuts#leaving-with-a-controller). | All |
+| **Controller type** | Automatic | The virtual pad the host creates; Automatic matches each controller. An Xbox pad has no gyro: for motion, pick DualSense, DualShock 4 or Steam Deck. | All. **Steam Controller 2**: Linux, Windows, console. |
+| **Controller rumble** | On | Off, controllers don't vibrate from the stream or in the menus, whatever the game sends. A DualSense's haptics follow **Controller haptics**; a Steam Controller 2 in passthrough follows Steam on the host. | Linux, Windows, Android, Apple |
+| **Use controller** | Automatic (all controllers) | Forward only the controller you pick. | Linux, Windows, Apple, console |
+| **Guide button** | Automatic | Where the guide and quick-access buttons go: **Send to host** or **This device**. Automatic keeps them on the device only in Steam Deck Gaming Mode. See [the guide button](/docs/shortcuts#the-guide-button-xbox--ps--steam-and-quick-access). | All |
+| **Controller haptics** | On | Plays a DualSense's voice-coil haptics, over USB or Bluetooth (Android: USB). See [Controller audio](/docs/controller-audio). | Linux, Windows, Android |
+| **Controller speaker** | On (Android: off) | Plays the game's pad audio on a DualSense's speaker. | Linux, Windows, Android |
+| **Speaker volume** | 100 % | How loud one controller's speaker plays, set on that controller's card under **Controllers**. 100 % is what the game sends. | Console on Linux, Windows, Android |
+| **Steam Controller 2 passthrough** | Off | Passes a Steam Controller 2 or a 2015 Steam Controller to a Linux or Windows host as itself, so its trackpads, gyro and haptics work as they do locally. Mac: USB, a dongle or Bluetooth. iPhone, iPad, Apple TV: Bluetooth. Android and the desktop clients always pass one through. | Apple |
+| **DualSense over USB** | On | Drives a USB DualSense or DualShock 4 directly, for adaptive triggers, lightbar and gyro. | Android |
+| **Rumble on this device**, **Gyro from this device** | Off | The phone's own motor and gyro stand in for a clip-on pad's. | Android, iPhone |
+
+### Keyboard, mouse and touch
+
+| Setting | Default | What it does | Where |
+|---|---|---|---|
+| **Touch input** | Trackpad | **Trackpad**, **Direct pointer**, **Touch passthrough** or **Off**. | Linux, Windows, iPhone, iPad, Android |
+| **Mouse input** | Capture (games) (Android: Desktop) | **Capture** locks the pointer for games; **Desktop** points absolutely. | Linux, Windows, Mac, Android |
+| **Capture pointer for games** | On | Locks a hardware mouse for mouse-look in fullscreen. | iPad |
+| **Capture system shortcuts** | On | While input is captured, Alt+Tab and the Windows key (⌘ shortcuts on a Mac) go to the host. The release shortcut (**Ctrl+Alt+Shift+Q** by default) or ⌘⎋ still releases capture. On Linux it needs KDE Plasma, GNOME or a wlroots compositor. | Linux, Windows, Mac |
+| **Modifier keys** | Mac (⌥ Alt · ⌘ Super) | **Windows (⌘ Alt · ⌥ Super)** makes the key beside the space bar send Alt, like a PC keyboard. | Mac, iPhone, iPad |
+| **Invert scroll direction** | Off | Reverses the scrolling sent to the host. | All but Apple TV |
+
+### Quick actions
+
+**Quick actions** edits the in-stream [quick-action dial](/docs/shortcuts#the-quick-action-dial) on the
+dial itself: click or tap a button to change it, drag one onto another to swap them, and add key
+combinations. It's on every app and in the console. On Android, **Back opens quick actions** (on)
+sets what Back does mid-stream.
+
+**Virtual controller** (iPhone, iPad, Android) is under Quick actions:
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Layout** | Full | **Full**, **Sticks and shoulders** or **D-pad and face buttons** |
+| **Opacity** | 45 % | 15–100 % |
+| **Scale** | 100 % | 60–160 % |
+| **Edit layout** | — | Move, resize (50–200 %) or hide each control. Wide and upright screens keep separate layouts. |
+
+### Shortcuts
+
+**Shortcuts** binds a controller chord, a held button or a key to any quick action, and lists this
+device's touch and remote controls. See [Changing a shortcut](/docs/shortcuts#changing-a-shortcut).
+
+## Behavior
+
+| Setting | Default | What it does | Where |
+|---|---|---|---|
+| **Start in** | Host list | **Library** opens the default host's games; **Stream** connects to its desktop. With several paired hosts, set one with **Make default host** in its menu (Apple: **Default host** on the host page) or `punktfunk default-host`. | All |
+| **Auto-wake on connect** | On | Wakes a sleeping saved host with [Wake-on-LAN](/docs/wake-on-lan) and waits. Turn it off for hosts over a VPN. | All |
+| **Start streams fullscreen** | On | F11 or Alt+Enter leaves fullscreen. On Linux and a Mac, **Always** also keeps the app fullscreen. | Linux, Windows, Mac (Linux and Mac: **Fullscreen**: **Off**, **While streaming**, **Always**) |
+| **Stream in background** | Off | Audio and the connection stay live while you switch apps, for 10 minutes unless you pick another limit. | iPhone, iPad, Apple TV, Android phones |
+
+## Interface
+
+| Setting | Default | What it does | Where |
+|---|---|---|---|
+| **Controller interface** | On | Switches to the console when a controller is in use. | Linux, Windows (x64), Android (not Android TV, which always uses it), Apple |
+| **Show it** | With a controller | **Always** keeps the console without a pad, for a docked phone or tablet. | Linux, Windows (x64), Android, Apple |
+| **Background** | Violet | The console's backdrop colour: 20 dark fields, then 16 pale ones. **Eclipse** is true black for OLED screens. | Console; Apple TV **Settings** |
+| **Reduce motion** | Off | Stops the console's moving backdrop. Apple follows the system setting instead, and so do Windows and Linux desktops that report one (GNOME, KDE); the row then hides. | Console on Linux, Windows, Android |
+| **Reduce interface resolution** | On for Android TV, off on phones | Draws the console at 1080p and lets the screen scale it up, for slow 4K TV boxes. The stream isn't affected. | Android console |
+| **Library view** | Grid (Apple: Shelf) | How a host's library opens. | Console, Apple |
+| **Library sections** | All shown | Which sections a host's library shows, and in what order. | Console |
+| **Host order** | Date added | The host row's order: **Date added**, **Name** or **Last connected**. | Console |
+| **Group hosts by** | None | Splits the host row into bands by **Preset** or by **Status**, online before offline. | Console |
+| **Follow system theme** | On | The app and console follow `omarchy-theme-set`. **Hosts in the Omarchy menu** adds your hosts to the Omarchy menu. See [Omarchy](/docs/omarchy#this-box-as-a-client). | Linux on Omarchy, console |
+
+## Overlay
+
+| Setting | Default | What it does | Where |
+|---|---|---|---|
+| **Statistics overlay** | Normal | **Off**, **Compact**, **Normal** or **Detailed**: the level a stream starts at. Change it live in-stream; see [Stats](/docs/stats). | All |
+| **Advanced statistics** | Off | Off shows the figures Moonlight's overlay also shows. On shows Punktfunk's capture-to-screen timings. | All |
+| **Statistics position** | Top left (Apple: top right) | The overlay's corner. | All |
+| **Statistics size** | 100 % | 75 % to 200 %, on top of your display's scaling. The overlay only. | All |
+| **Exit hint** | On | Shows how to leave for a few seconds when a stream starts. | All |
+
+## Settings that are facts about your device
+
+These describe the device you hold, so a preset can't change them and they don't show while you edit
+one: **Video decoder**, **GPU**, **Keep screen awake**, **Screen**, **Spatial audio**, the
+**Speaker** and **Microphone** devices, **Controller rumble**, **Use controller**, **Controller
+haptics**, **Controller speaker**, **Steam Controller 2 passthrough**, **DualSense over USB**,
+**Rumble on this device**, **Gyro from this device**, **Auto-wake on connect**, **Start in**,
+**Stream in background**, **Show advanced**, the [Overlay](#overlay) rows but **Statistics
+overlay**, and the [Interface](#interface) rows.
+
+**Share clipboard** isn't in Settings: it's per host, on the host's page or in its edit sheet. See
+[Shared clipboard](/docs/clipboard).
+
+## When the client and the host disagree
+
+The host answers each request before your decoder and speakers are set up, so you always get what
+it really sends.
+
+| You ask for | The host |
+|---|---|
+| A resolution and refresh rate | Builds a display at exactly that mode. A host [streaming a real monitor](/docs/stream-a-monitor) keeps that monitor's mode and your device scales. A size the encoder can't take fails the connect. |
+| A bitrate | Clamps it to 500 kbps – 8 Gbps. PyroWave reads only zero (**Automatic**) or not (**Fixed**, at your quality). |
+| A PyroWave quality | Holds it between 0.5 and 2 bits per pixel, under its **PyroWave bitrate cap**. A host that doesn't read it uses its own **PyroWave quality**. |
+| A codec | Uses it if it can encode it, otherwise HEVC, AV1, H.264 in that order. |
+| 10-bit HDR | Sends it only for HDR content on an encoder that can; otherwise 8-bit SDR. |
+| 4:4:4 | Sends it only when every requirement is met; otherwise 4:2:0. |
+| A channel count | Rounds it to 2, 6 or 8. |
+| A gamepad type | Uses it; a type it can't create becomes an Xbox 360 pad. |
+| A compositor | Treats it as a hint and picks its own when that one isn't there. |

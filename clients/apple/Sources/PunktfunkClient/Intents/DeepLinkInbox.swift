@@ -18,7 +18,8 @@ enum DeepLinkInbox {
         NotificationCenter.default.post(name: .punktfunkOpenDeepLink, object: link)
     }
 
-    /// True for the one caller that may act on `link`. Every Mac window hears the post.
+    /// True for the one caller that may act on `link`. Every window hears the post, and
+    /// `LinkArbiter` says which asks first.
     static func take(_ link: NSURL) -> Bool {
         guard pending === link else { return false }
         pending = nil

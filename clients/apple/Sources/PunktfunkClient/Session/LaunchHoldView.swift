@@ -255,6 +255,12 @@ struct LaunchHoldView: View {
                     .foregroundStyle(.white.opacity(0.62))
                     .padding(.top, 10)
             }
+            if let hostLine = entry.overrides?.hostLine {
+                Text(hostLine)
+                    .font(.geist(14, .medium, relativeTo: .subheadline))
+                    .foregroundStyle(.white.opacity(0.62))
+                    .padding(.top, 4)
+            }
             if let developer = entry.developer, !developer.isEmpty {
                 Text(developer)
                     .font(.geist(14, .regular, relativeTo: .subheadline))
@@ -281,11 +287,15 @@ struct LaunchHoldView: View {
                 .tint(.white)
                 .frame(maxWidth: 360)
                 .padding(.top, 26)
-                Text(download.state == "downloading" ? "Downloading \u{b7} \(download.line)" : download.line)
+                Text(
+                    download.state == "downloading"
+                        ? [String(localized: L10n.libHoldDownloading), download.line]
+                            .joined(separator: " \u{b7} ")
+                        : download.line)
                     .font(.geist(13, .regular, relativeTo: .footnote))
                     .foregroundStyle(.white.opacity(0.7))
                     .padding(.top, 10)
-                Text("Leaving won't stop the download.")
+                Text(L10n.libHoldLeaving)
                     .font(.geist(12, .regular, relativeTo: .caption))
                     .foregroundStyle(.white.opacity(0.4))
                     .padding(.top, 4)
@@ -294,13 +304,13 @@ struct LaunchHoldView: View {
                     ProgressView().controlSize(.small).tint(.white)
                     Text(
                         connecting
-                            ? "Connecting…"
-                            : windowWait ? "Waiting for the game's window…" : "Starting the game…")
+                            ? L10n.libHoldConnecting
+                            : windowWait ? L10n.libHoldWaitingWindow : L10n.libHoldStarting)
                         .font(.geist(13, .regular, relativeTo: .footnote))
                         .foregroundStyle(.white.opacity(0.5))
                 }
                 .padding(.top, 26)
-                Button("Show stream", action: onShow)
+                Button(L10n.libHoldShowStream, action: onShow)
                     .buttonStyle(.bordered)
                     .padding(.top, 16)
             }

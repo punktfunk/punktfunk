@@ -22,6 +22,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.withStarted
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
 import io.unom.punktfunk.kit.link.DeepLinks
 import io.unom.punktfunk.kit.security.KnownHost
@@ -192,6 +193,12 @@ fun ConnectScreen(
     // power rows then.
     var hostActions by remember { mutableStateOf<Map<String, List<HostActions.Action>>>(emptyMap()) }
     var hostActionsAt by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
+    // The screens each paired host offers this device and its pick (`design/screen-pick.md`),
+    // asked every lap: another device starting a stream moves `in_use_by`.
+    var screens by remember { mutableStateOf<Map<String, DisplayTargets.Targets>>(emptyMap()) }
+    fun recordScreens(fp: String, found: DisplayTargets.Targets?) {
+        screens = if (found == null) screens - fp else screens + (fp to found)
+    }
     LaunchedEffect(ctl.savedHosts, ctl.identity) {
         val id = ctl.identity ?: return@LaunchedEffect
         while (true) {
@@ -200,6 +207,12 @@ fun ConnectScreen(
             for (kh in ctl.savedHosts) {
                 if (!kh.paired || kh.fpHex.isEmpty()) continue
                 if (!kh.isOnline(ctl.reachable)) continue
+                recordScreens(
+                    kh.fpHex,
+                    withContext(Dispatchers.IO) {
+                        DisplayTargets.fetch(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.port)
+                    },
+                )
                 if (now - (hostActionsAt[kh.fpHex] ?: 0L) < HOST_ACTIONS_TTL_MS) continue
                 // Stamp BEFORE the request, so a slow host cannot make every lap ask again.
                 hostActionsAt = hostActionsAt + (kh.fpHex to now)
@@ -240,7 +253,9 @@ fun ConnectScreen(
         ctl.connecting = true
         ctl.pauseBrowse() // a browse running through the burst would measure itself
         scope.launch {
-            runSpeedTest(ctl.services, id, entry.host.address, entry.host.port, entry.host.fpHex) { p ->
+            runSpeedTest(
+                ctl.services, id, entry.host.address, entry.host.port, entry.host.fpHex, context.resources,
+            ) { p ->
                 // A dismissed dialog abandons the run; don't drag it back onto the screen.
                 if (speedTest != null) speedTestPhase = p
             }
@@ -263,7 +278,7 @@ fun ConnectScreen(
     fun copyLink(kh: KnownHost, pin: StreamPreset?) {
         val url = DeepLinks.forHost(kh, preset = pin?.id).toUrl()
         val copied = putLinkOnClipboard(context, url)
-        val message = linkCopyMessage(copied) ?: return
+        val message = linkCopyMessage(copied)?.let { context.getString(it) } ?: return
         // A success dressed as an error banner is a small lie: the notice line for a copy, the
         // status line for a failure.
         if (copied) ctl.notice = message else ctl.status = message
@@ -276,16 +291,17 @@ fun ConnectScreen(
     fun runHostAction(kh: KnownHost, a: HostActions.Action) {
         val id = ctl.requireIdentity() ?: return
         val name = kh.name.ifBlank { kh.address }
-        ctl.notice = "${a.label} — asking $name…"
+        val action = a.text(context.resources)
+        ctl.notice = context.getString(R.string.hostcard_action_asking, action, name)
         ctl.status = null
         // Whatever the host said about itself is about to be wrong: ask again next sweep.
         hostActionsAt = hostActionsAt - kh.fpHex
         scope.launch {
             ctl.notice = withContext(Dispatchers.IO) {
                 HostActions.invoke(
-                    id, kh.address, kh.effectiveMgmtPort, kh.fpHex, name, a.id, a.label, kh.port,
+                    id, kh.address, kh.effectiveMgmtPort, kh.fpHex, name, a.id, action, kh.port,
                 )
-            }
+            }.words(context.resources)
         }
     }
 
@@ -294,9 +310,29 @@ fun ConnectScreen(
             // The host already said it cannot do this right now — say why, rather than send a
             // request we know it will refuse.
             !a.available ->
-                ctl.notice = a.unavailableReason.ifEmpty { "${a.label} isn't available right now" }
+                ctl.notice = a.reason(context.resources).ifEmpty {
+                    context.getString(R.string.hostcard_action_unavailable_body, a.text(context.resources))
+                }
             a.danger -> confirmAction = kh to a
             else -> runHostAction(kh, a)
+        }
+    }
+
+    // A Screen row: write its pick on the host, then show what the host answers. The checked
+    // row and a greyed one carry no pick and write nothing.
+    fun pickScreen(kh: KnownHost, row: DisplayTargets.ScreenRow) {
+        val pick = row.pick ?: return
+        val id = ctl.requireIdentity() ?: return
+        val res = context.resources
+        ctl.status = null
+        scope.launch {
+            val (refused, found) = withContext(Dispatchers.IO) {
+                DisplayTargets.setPick(
+                    id, kh.address, kh.effectiveMgmtPort, kh.fpHex, pick, row.label, kh.port,
+                ) to DisplayTargets.fetch(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.port)
+            }
+            recordScreens(kh.fpHex, found)
+            refused?.let { ctl.status = it.words(res) }
         }
     }
 
@@ -317,7 +353,7 @@ fun ConnectScreen(
     // is to tell a reporter whether the bundle actually landed.
     fun sendLogs(kh: KnownHost) {
         val id = ctl.requireIdentity() ?: return
-        ctl.notice = "Sending logs to ${kh.name.ifBlank { kh.address }}…"
+        ctl.notice = context.getString(R.string.hostcard_sending_logs, kh.name.ifBlank { kh.address })
         ctl.status = null
         scope.launch {
             val message = withContext(Dispatchers.IO) { SendLogs.toHost(context, id, kh) }
@@ -367,6 +403,8 @@ fun ConnectScreen(
         onSwitchProfile = { kh -> switchProfile(kh) },
         hostActions = hostActions,
         onHostAction = { kh, a -> hostAction(kh, a) },
+        screens = screens,
+        onPickScreen = { kh, t -> pickScreen(kh, t) },
         onCopyLink = { kh, pin -> copyLink(kh, pin) },
         onTogglePin = { kh, p -> togglePin(kh, p) },
         onBrowseLibrary = { kh, pin -> onOpenLibrary(kh, pin?.id) },
@@ -469,12 +507,12 @@ fun ConnectScreen(
         onApplySpeedTest = { toPreset ->
             val done = speedTestPhase as? SpeedTestPhase.Done
             if (done != null && speedTestTarget != null) {
-                val where = applySpeedTestResult(
+                val wrote = applySpeedTestResult(
                     done.recommendedKbps, speedTestTarget, toPreset, presetStore, settings,
                     onSettingsChange,
                 )
                 presets = presetStore.all()
-                ctl.notice = "%.0f Mbit/s set in %s".format(done.recommendedMbps, where)
+                ctl.notice = speedTestApplied(wrote, mbitRate(done.recommendedMbps)).words(context.resources)
             }
             speedTest = null
         },

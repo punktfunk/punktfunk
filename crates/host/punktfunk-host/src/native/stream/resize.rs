@@ -8,13 +8,15 @@ use super::*;
 
 impl StreamState {
     /// Mode-set the live monitor, restore its presentation, and open an encoder at the first
-    /// frame of the new size, for the rebuild performer to swap in. `None` → full rebuild.
-    /// `recover_ring` re-attaches the ring at the current mode and demands a second, newer
-    /// present as proof the OS resumed presenting.
+    /// frame of the new size, at `kbps_for` the picture it encodes, for the rebuild performer to
+    /// swap in. `None` → full rebuild.
+    /// With the driver's encoder, only its pool taking a frame proves the new size; a second
+    /// without one restarts the presentation once. `recover_ring` re-attaches the ring at the
+    /// current mode and demands a second, newer present as proof the OS resumed presenting.
     pub(super) fn resize(
         &mut self,
         new_mode: punktfunk_core::Mode,
-        bitrate_kbps: u32,
+        kbps_for: impl Fn(u32, u32) -> u32,
         trace: &crate::bringup::Trace,
         recover_ring: bool,
     ) -> Option<Next> {
@@ -61,18 +63,29 @@ impl StreamState {
         // swap chain after the arrival, so an open in that window fails for a display about to be
         // fine: retry to its own deadline rather than drop the resize to a full rebuild.
         let wire_seq_base = self.clock.next_au();
+        let new_size = (new_mode.width, new_mode.height);
         let pre_opened = if self.plan.capture == crate::session_plan::CaptureBackend::IddPush {
             let opened = loop {
-                match crate::capture::open_driver_encoder(
-                    &self.plan,
-                    &*self.live.capturer,
-                    (new_mode.width, new_mode.height),
-                    effective_hz,
-                    enc_of.enc_kbps(bitrate_kbps) as u64 * 1000,
-                    self.bit_depth,
-                    self.facts.client_hdr,
-                    wire_seq_base,
-                ) {
+                // Framed for the plan's view, as the new-size frames will be.
+                let fitted = crate::session_plan::open_encoder_fitted(
+                    new_size,
+                    new_size,
+                    self.plan.reframe_to,
+                    false,
+                    |framing| {
+                        crate::capture::open_driver_encoder(
+                            &self.plan,
+                            &*self.live.capturer,
+                            framing,
+                            effective_hz,
+                            enc_of.enc_kbps(kbps_for(framing.out.0, framing.out.1)) as u64 * 1000,
+                            self.bit_depth,
+                            self.facts.client_hdr,
+                            wire_seq_base,
+                        )
+                    },
+                );
+                match fitted {
                     Ok(e) => break Some(e),
                     Err(e) => {
                         if std::time::Instant::now() >= open_deadline
@@ -94,14 +107,37 @@ impl StreamState {
         // The driver-encode capturer reads the display's progress off the encoder, and these loops
         // are the one place that polls it without the stream loop's own tick. SET_ENCODE retired
         // `enc`'s section, so the clocks are the pre-opened encoder's or they never move.
-        let live: &dyn crate::encode::Encoder = pre_opened.as_deref().unwrap_or(&*self.live.enc);
+        let live: &dyn crate::encode::Encoder = pre_opened
+            .as_ref()
+            .map_or(&*self.live.enc, |(enc, _)| &**enc);
+        // A pixel-less delivery carries the asked size even while DWM still composes the old
+        // one into the old swap chain, which the pool refuses frame by frame.
+        let pool_took =
+            || pre_opened.is_none() || live.telemetry().is_some_and(|t| t.source_seq > 0);
+        let mut kick_at = pre_opened
+            .is_some()
+            .then(|| std::time::Instant::now() + std::time::Duration::from_secs(1));
         let new_frame = loop {
             if let Some(s) = self.live.capturer.supervised() {
                 s.observe(live.telemetry());
             }
             match self.live.capturer.try_latest() {
-                Ok(Some(f)) if (f.width, f.height) == (new_mode.width, new_mode.height) => break f,
+                Ok(Some(f))
+                    if (f.width, f.height) == (new_mode.width, new_mode.height) && pool_took() =>
+                {
+                    break f
+                }
                 Ok(_) => {
+                    if kick_at.is_some_and(|t| std::time::Instant::now() >= t) {
+                        kick_at = None;
+                        tracing::info!(
+                            "resize: the driver's pool took no frame at the new size — restarting \
+                             the presentation"
+                        );
+                        if let Some(d) = self.live.capturer.display() {
+                            d.restart_presentation();
+                        }
+                    }
                     if std::time::Instant::now() >= deadline {
                         tracing::warn!(
                             "resize: no new-size frame within 3s of the in-place mode set — running \
@@ -156,10 +192,7 @@ impl StreamState {
         };
         trace.mark("first_new_frame");
         let (enc, reframe) = match pre_opened {
-            Some(e) => (
-                e,
-                punktfunk_core::video_fit::Reframe::full((new_frame.width, new_frame.height)),
-            ),
+            Some(opened) => opened,
             None => match open_session_encoder(
                 &self.facts.encoder,
                 &self.plan,
@@ -167,7 +200,7 @@ impl StreamState {
                 &new_frame,
                 (new_mode.width, new_mode.height),
                 effective_hz,
-                |_, _| enc_of.enc_kbps(bitrate_kbps) as u64 * 1000,
+                |w, h| enc_of.enc_kbps(kbps_for(w, h)) as u64 * 1000,
                 self.bit_depth,
                 self.facts.client_hdr,
                 wire_seq_base,

@@ -2,7 +2,7 @@
 //! plane to interleaved f32 and feed AAudio through a jitter ring.
 //!
 //! [`PlaneFormat`] fixes rate, depth, frame size, and the host-resolved stereo/5.1/7.1
-//! layout for the session. [`open_ladder`] tries viable AAudio modes at that exact rate,
+//! layout for the session. [`ladder_for`] lists viable AAudio modes at that exact rate,
 //! [`arm`] verifies that callbacks start, and [`supervise`] reopens disconnected devices.
 //! Unsupported rates are rejected before `Hello` by [`output_rate_is_openable`]; playback
 //! never silently resamples negotiated audio.
@@ -12,6 +12,10 @@
 //! the video reference for A/V sync. See `design/hi-res-audio.md` and
 //! `design/audio-latency-overhaul.md` for the full policy.
 
+use crate::audio_policy::{
+    grant_matches, grown, heard_at, ladder_for, sent, DecodeExit, Next, NoDevice, OpenRung, Perf,
+    Sharing, Supervisor, XrunGrowth, REOPEN_ATTEMPTS,
+};
 use crate::sys::sysprop;
 use ndk::audio::{
     AudioCallbackResult, AudioContentType, AudioDirection, AudioFormat, AudioPerformanceMode,
@@ -24,7 +28,7 @@ use punktfunk_core::error::PunktfunkError;
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -75,8 +79,12 @@ impl Output {
                 let Ok(ts) = s.timestamp(ndk::audio::Clockid::Monotonic) else {
                     return 0;
                 };
-                let ahead = s.frames_written() - ts.frame_position;
-                ts.time_nanoseconds + ahead * 1_000_000_000 / i64::from(rate_hz.max(1))
+                heard_at(
+                    ts.time_nanoseconds,
+                    ts.frame_position,
+                    s.frames_written(),
+                    rate_hz,
+                )
             }
             Output::Track(t) => match t.heard_at_ns() {
                 0 => return 0,
@@ -85,44 +93,6 @@ impl Output {
         };
         (heard_at - crate::sys::now_monotonic_ns()).max(0) as u64
     }
-}
-
-/// One rung of the AAudio open ladder — a sharing mode, a performance mode and the sample rate
-/// they are tried at.
-///
-/// `rate` is `Some(hz)` for an explicit request (AAudio's contract: an explicitly-set rate is
-/// honoured or the open FAILS — it never silently substitutes) and `None` for AAUDIO_UNSPECIFIED,
-/// which lets the HAL name its own. The unspecified rung is not a licence to play at whatever came
-/// back: [`arm`] accepts it only when the granted rate equals the session's, so it rescues the
-/// device that refuses an explicit 48 000/96 000 while already running at it, and rejects the one
-/// that would have handed us a different rate.
-///
-/// `track` opens an `AudioTrack` at `perf` instead; `sharing` then means nothing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct OpenRung {
-    sharing: AudioSharingMode,
-    perf: AudioPerformanceMode,
-    rate: Option<i32>,
-    track: bool,
-}
-
-/// Why [`decode_loop`] returned — only one of them is worth reopening the device for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DecodeExit {
-    /// `AudioPlayback` was dropped (session teardown, or Kotlin's `nativeStopAudio`).
-    Shutdown,
-    /// AAudio reported the stream disconnected. The stream is now dead by AAudio's contract and
-    /// the only recovery is close + open a new one — see [`supervise`].
-    Disconnected,
-    /// The connector closed: no more audio is coming, so there is nothing to reopen FOR.
-    SessionClosed,
-    /// The plane cannot run at all: the Opus decoder would not build, because libopus refuses the
-    /// negotiated rate or the host named a coupling this build does not know. Reopening the
-    /// DEVICE would not change that, so it is not a reason to walk the ladder again.
-    Fatal,
-    /// The host changed the audio format; the packet that opens it waits in the caller's slot
-    /// for a device opened at it.
-    Reformat,
 }
 
 /// Decoded-chunk hand-off depth: 64 frames of slack (matches the core's AUDIO_QUEUE).
@@ -138,32 +108,12 @@ const START_WATCHDOG_POLL_MS: u64 = 10;
 /// an AVR re-handshaking) is not instantaneous, and reopening into the middle of one just spends
 /// the ladder on rungs that were always going to fail.
 const REOPEN_SETTLE_MS: u64 = 250;
-/// How many times a reopen may find no usable device before the plane gives up — ~2 s of trying,
-/// which comfortably outlasts an HDMI mode switch. Bounded rather than infinite so a device that
-/// disconnects permanently (unplugged, claimed by another app for good) settles into silence
-/// instead of a forever loop of opens on the session's audio thread.
-const REOPEN_ATTEMPTS: u32 = 8;
 /// Packets decoded with AAudio never having taken a single sample before we call it — expressed
 /// as a DURATION, because the two planes do not agree on what a packet is worth: 5 ms on Opus, and
 /// down to the ladder's shortest 1 ms rung on a `0xD3` session that is 24-bit surround or at the
 /// top of the rate ladder. A packet count would have meant ~0.2 s there and a warning that fires
 /// before a slow HAL has finished waking.
 const DEAD_STREAM_WARN_MS: u64 = 1_000;
-
-// --- Jitter-ring depths now come from the SHARED policy (`punktfunk_core::audio::JitterTuning`). --
-// They used to be four Android-only constants here. The rationale for Android being DEEPER than the
-// other clients still holds and is preserved in `JitterTuning::AAUDIO`: unlike PipeWire, which
-// adaptively rate-matches the stream to the graph clock and masks host↔DAC drift, AAudio hands us a
-// raw callback and we own the buffer, so drift and Wi-Fi power-save bunching land as
-// underruns/overflows = crackle.
-//
-// Two things changed with the move. The prime floor drops 40 ms → 25 ms, because the policy GROWS
-// the target on the devices that actually underrun instead of every device pre-paying for the worst
-// one. And the ring finally sheds: it had a hard cap but nothing that walked the depth back down, so
-// any drift or burst raised latency permanently and Android converged on its 120 ms ceiling and
-// stayed there — the "audio latency is too high" report.
-/// Throttle the AAudio XRun-driven HW-buffer grow check (cheap, but no need to poll every quantum).
-const XRUN_CHECK_EVERY: u32 = 128;
 
 /// Diagnostics — written by the decode thread + the realtime callback, logged periodically. The
 /// audio analogue of the video `fed`/`rendered` counters (we can't "screenshot" sound).
@@ -213,14 +163,9 @@ fn av_sync_enabled() -> bool {
     )
 }
 
-/// Is this an Android TV / set-top box (as opposed to a phone, tablet or handheld)?
-///
-/// `ro.build.characteristics` carries a comma-separated trait list and contains `tv` on every
-/// Android TV build. Read natively rather than plumbed down from Kotlin's `FEATURE_LEANBACK`
-/// (which `StreamScreen` already computes for the video plane) to keep this decision inside the
-/// audio module — the JNI entry point's signature is a compatibility surface for the kit, and the
-/// only thing that wants this fact is [`open_ladder`]. An unset property reads as "not a TV",
-/// which keeps the pre-existing behaviour on anything that does not answer.
+/// The sysprop half of the TV test for [`ladder_for`]: `ro.build.characteristics` lists `tv` on
+/// every Android TV build. The caller ORs it with Kotlin's `FEATURE_LEANBACK`; an unset property
+/// reads as not a TV.
 fn is_tv_device() -> bool {
     sysprop(c"ro.build.characteristics")
         .is_some_and(|s| s.split(',').any(|trait_| trait_.trim() == "tv"))
@@ -235,13 +180,13 @@ pub struct AudioPlayback {
 
 impl AudioPlayback {
     /// Spawn the audio supervisor: it opens AAudio at the host-RESOLVED format by walking
-    /// [`open_ladder`], runs the decode loop against it, and reopens it if the device disconnects.
+    /// [`ladder_for`], runs the decode loop against it, and reopens it if the device disconnects.
     /// `None` only if the thread itself could not be spawned — an open failure is reported by the
     /// supervisor (the caller leaves video streaming either way).
     ///
     /// `game_audio` (the experimental low-latency mode) tags the stream usage=Game for the HAL's
-    /// game-audio routing; off, the stream is untagged as it was before the overhaul. `is_tv` is
-    /// Kotlin's `FEATURE_LEANBACK` and steers the ladder — see [`open_ladder`].
+    /// game-audio routing; off, the stream is untagged. `is_tv` is Kotlin's `FEATURE_LEANBACK`
+    /// and steers the ladder.
     pub fn start(
         client: Arc<NativeClient>,
         game_audio: bool,
@@ -365,65 +310,6 @@ impl Drop for AudioPlayback {
         }
         // The supervisor stopped + closed the AAudio stream on its way out.
     }
-}
-
-/// AAudio configurations to try, best first.
-///
-/// Phones prefer Exclusive/LowLatency; TVs start at Shared because some HDMI HALs open MMAP
-/// streams that never route. Every mode is tried at the negotiated rate before one final
-/// unspecified-rate attempt, which [`arm`] accepts only if AAudio chose that same rate. No rung
-/// uses a different explicit rate.
-///
-/// `debug.punktfunk.audio_sharing` and `debug.punktfunk.audio_perf` can pin mode choices for
-/// field diagnosis. Rate cannot be overridden because it must match the wire format.
-///
-/// With `track`, two `AudioTrack` rungs (LowLatency, then None) come first. The AAudio rungs
-/// after them still play the front pair on a device whose track refuses the layout.
-fn open_ladder(is_tv: bool, fmt: PlaneFormat, track: bool) -> Vec<OpenRung> {
-    use AudioPerformanceMode::{LowLatency, None as PerfNone};
-    use AudioSharingMode::{Exclusive, Shared};
-    let mut rungs = Vec::new();
-    if track {
-        for perf in [LowLatency, PerfNone] {
-            rungs.push(OpenRung {
-                sharing: Shared,
-                perf,
-                rate: Some(fmt.rate_hz as i32),
-                track: true,
-            });
-        }
-    }
-    let mut modes: Vec<(AudioSharingMode, AudioPerformanceMode)> =
-        match sysprop(c"debug.punktfunk.audio_sharing").as_deref() {
-            Some("exclusive") => vec![(Exclusive, LowLatency), (Exclusive, PerfNone)],
-            Some("shared") => vec![(Shared, LowLatency), (Shared, PerfNone)],
-            _ if is_tv => vec![(Shared, LowLatency), (Shared, PerfNone)],
-            _ => vec![
-                (Exclusive, LowLatency),
-                (Shared, LowLatency),
-                (Shared, PerfNone),
-            ],
-        };
-    // Not every device honours LowLatency (it is a request, like everything else on the builder),
-    // and a HAL that mishandles it is exactly the sort we are laddering around — so `none` has to
-    // be reachable as a forced choice, not only as the last rung.
-    match sysprop(c"debug.punktfunk.audio_perf").as_deref() {
-        Some("none") => modes.iter_mut().for_each(|m| m.1 = PerfNone),
-        Some("lowlatency") | Some("low") => modes.iter_mut().for_each(|m| m.1 = LowLatency),
-        _ => {}
-    }
-    modes.dedup();
-    for rate in [Some(fmt.rate_hz as i32), None] {
-        for &(sharing, perf) in &modes {
-            rungs.push(OpenRung {
-                sharing,
-                perf,
-                rate,
-                track: false,
-            });
-        }
-    }
-    rungs
 }
 
 /// Everything an open attempt needs that does not vary between rungs.
@@ -568,31 +454,27 @@ fn open_any(ladder: &[OpenRung], ctx: &OpenCtx) -> Option<LiveStream> {
 /// Bring one opened stream up and prove the device is really pulling from it. Three failures
 /// after a successful `open_stream` each end in silence behind a healthy-looking log:
 ///
-/// 1. **The grant differs from the request.** The callback writes `num_frames * channels` f32
-///    into AAudio's buffer, so another layout or format is an out-of-bounds write on a realtime
-///    thread. The NDK honours an explicit request or fails the open; this check does not trust
-///    the HAL with a buffer length.
+/// 1. **The grant differs from the request.** [`grant_matches`] refuses it: another layout or
+///    format is an out-of-bounds write on a realtime thread, another rate the wrong audio. The
+///    NDK honours an explicit request or fails the open; this check does not trust the HAL with
+///    a buffer length.
 /// 2. **`request_start` fails.** The caller tries the next rung. A track plays from its open.
 /// 3. **The stream starts and never calls back.** `prove_pulling` catches it, giving up once
 ///    that flag is set (a closing session); the last-resort reopen in [`open_any`] passes
 ///    `None`, since an unproven stream beats no stream. A track's writes count as callbacks.
-///
-/// The rate is held to the rung, or to the session's rate on an unspecified rung: a device that
-/// grants another rate is rejected, never resampled quietly.
 fn arm(
     live: &LiveStream,
     fmt: PlaneFormat,
     counters: &Counters,
     prove_pulling: Option<&AtomicBool>,
 ) -> Result<(), ArmError> {
-    let (rate, ch, float) = live.output.granted();
-    let channels = fmt.channels;
-    let want_rate = live.rung.rate.unwrap_or(fmt.rate_hz as i32);
-    if ch != i32::from(channels) || rate != want_rate || !float {
-        return Err(ArmError::Unusable(format!(
-            "granted rate={rate} ch={ch} f32={float}, needed {want_rate}/{channels}/PCM_Float",
-        )));
-    }
+    grant_matches(
+        live.output.granted(),
+        live.rung.rate,
+        fmt.rate_hz,
+        fmt.channels,
+    )
+    .map_err(ArmError::Unusable)?;
     if let Output::AAudio(s) = &live.output {
         s.request_start()
             .map_err(|e| ArmError::Unusable(format!("request_start: {e}")))?;
@@ -669,6 +551,8 @@ fn supervise_format(
     shutdown: &AtomicBool,
     first: Option<punktfunk_core::client::AudioPacket>,
 ) -> Option<punktfunk_core::client::AudioPacket> {
+    // A format with a first packet is one the host switched to.
+    let mid_session = first.is_some();
     let mut carry = first.map(|pkt| punktfunk_core::client::AudioPacket {
         new_format: None,
         ..pkt
@@ -693,7 +577,13 @@ fn supervise_format(
     // Either signal counts. Kotlin's `FEATURE_LEANBACK` is the authoritative one; the sysprop
     // catches a device reached through some path that did not pass the flag, and neither answering
     // simply keeps the phone ladder.
-    let ladder = open_ladder(is_tv || is_tv_device(), fmt, track);
+    let ladder = ladder_for(
+        is_tv || is_tv_device(),
+        fmt.rate_hz,
+        track,
+        sysprop(c"debug.punktfunk.audio_sharing").as_deref(),
+        sysprop(c"debug.punktfunk.audio_perf").as_deref(),
+    );
     // The one line that says what this session actually resolved — the `Welcome`'s answer, not the
     // request. A report of "hi-res is on but it sounds the same" is triaged from here: `codec=0`
     // means the host declined and the session is ordinary Opus, and the host's own log says why.
@@ -713,8 +603,11 @@ fn supervise_format(
         Some("0") | Some("false")
     );
 
-    let mut generation: u32 = 0;
-    let mut reopen_attempt: u32 = 0;
+    let mut sup = if mid_session {
+        Supervisor::mid_session()
+    } else {
+        Supervisor::default()
+    };
     while !shutdown.load(Ordering::Relaxed) {
         let disconnected = Arc::new(AtomicBool::new(false));
         let ctx = OpenCtx {
@@ -733,27 +626,25 @@ fn supervise_format(
         };
         let live = match open_any(&ladder, &ctx) {
             Some(live) => {
-                reopen_attempt = 0;
+                sup.opened();
                 live
             }
-            None if shutdown.load(Ordering::Relaxed) => return None,
-            // A reopen that lands in the middle of the very route change that caused the
-            // disconnect finds no usable device and would otherwise disable audio permanently —
-            // the exact outcome this supervisor exists to prevent. An HDMI mode switch or an AVR
-            // re-handshake takes a beat, so keep trying across it before giving up.
-            None if generation > 0 && reopen_attempt < REOPEN_ATTEMPTS => {
-                reopen_attempt += 1;
-                log::warn!(
-                    "audio: reopen attempt {reopen_attempt}/{REOPEN_ATTEMPTS} found no usable configuration — retrying"
-                );
-                nap(shutdown, REOPEN_SETTLE_MS);
-                continue;
-            }
-            None => {
-                log_no_configuration(fmt);
-                return None;
-            }
+            None => match sup.no_device(shutdown.load(Ordering::Relaxed)) {
+                NoDevice::Quit => return None,
+                NoDevice::Retry(reopen_attempt) => {
+                    log::warn!(
+                        "audio: reopen attempt {reopen_attempt}/{REOPEN_ATTEMPTS} found no usable configuration — retrying"
+                    );
+                    nap(shutdown, REOPEN_SETTLE_MS);
+                    continue;
+                }
+                NoDevice::GiveUp => {
+                    log_no_configuration(fmt);
+                    return None;
+                }
+            },
         };
+        let generation = sup.generation;
         if generation > 0 {
             log::info!("audio: reopened after disconnect (generation {generation})");
         }
@@ -769,18 +660,16 @@ fn supervise_format(
         );
         live.output.stop();
         drop(live); // closes the stream, or stops and releases the track
-        match exit {
-            DecodeExit::Disconnected if reopen_allowed && !shutdown.load(Ordering::Relaxed) => {
-                generation += 1;
+        match sup.next(exit, reopen_allowed, shutdown.load(Ordering::Relaxed)) {
+            Next::Reopen => {
                 log::warn!("audio: device disconnected — reopening in {REOPEN_SETTLE_MS} ms");
                 nap(shutdown, REOPEN_SETTLE_MS);
             }
-            DecodeExit::Disconnected => {
+            Next::Stop => {
                 log::warn!("audio: device disconnected — not reopening (shutting down, or pinned by debug.punktfunk.audio_reopen)");
                 break;
             }
-            DecodeExit::Shutdown | DecodeExit::SessionClosed | DecodeExit::Fatal => break,
-            DecodeExit::Reformat => break,
+            Next::End => break,
         }
     }
     log::info!(
@@ -789,7 +678,7 @@ fn supervise_format(
         counters.frames_decoded.load(Ordering::Relaxed),
         counters.pcm_written.load(Ordering::Relaxed),
         counters.underruns.load(Ordering::Relaxed),
-        generation + 1,
+        sup.generation + 1,
     );
     carry.filter(|pkt| pkt.new_format.is_some())
 }
@@ -843,10 +732,7 @@ struct Render {
     channels: usize,
     ring: VecDeque<f32>,
     policy: punktfunk_core::audio::JitterPolicy,
-    /// Callbacks since open (throttles the XRun grow check).
-    cb_count: u32,
-    /// Last AAudio XRun count we grew the buffer for.
-    last_xrun: i32,
+    xrun: XrunGrowth,
 }
 
 impl Render {
@@ -874,8 +760,7 @@ impl Render {
             channels,
             ring,
             policy,
-            cb_count: 0,
-            last_xrun: 0,
+            xrun: XrunGrowth::default(),
         }
     }
 
@@ -966,21 +851,19 @@ impl Render {
             .store(self.policy.target_ms() as u64, Ordering::Relaxed);
     }
 
-    /// Google's AAudio anti-glitch technique: when the device reports new XRuns, grow the HW
-    /// buffer by one burst (up to capacity). Both calls are callback-safe and `set` clamps to
-    /// capacity, so it self-limits. Throttled to every `XRUN_CHECK_EVERY` callbacks.
+    /// Google's AAudio anti-glitch technique, by [`XrunGrowth`]: new XRuns grow the HW buffer by
+    /// one burst, up to capacity. Every call here is callback-safe.
     fn grow_on_xrun(&mut self, s: &AudioStream) {
-        self.cb_count = self.cb_count.wrapping_add(1);
-        if self.cb_count % XRUN_CHECK_EVERY != 0 {
+        if !self.xrun.due() || !self.xrun.rose(s.x_run_count()) {
             return;
         }
-        let xr = s.x_run_count();
-        if xr > self.last_xrun {
-            self.last_xrun = xr;
-            let burst = s.frames_per_burst().max(1);
-            let grown = (s.buffer_size_in_frames() + burst).min(s.buffer_capacity_in_frames());
-            let _ = s.set_buffer_size_in_frames(grown);
-        }
+        let burst = s.frames_per_burst().max(1);
+        let size = grown(
+            s.buffer_size_in_frames(),
+            burst,
+            s.buffer_capacity_in_frames(),
+        );
+        let _ = s.set_buffer_size_in_frames(size);
     }
 }
 
@@ -1023,7 +906,7 @@ fn try_open(rung: OpenRung, ctx: &OpenCtx) -> Result<LiveStream, String> {
         let cfg = crate::audio_track::TrackConfig {
             rate_hz: fmt.rate_hz,
             channels,
-            low_latency: rung.perf == AudioPerformanceMode::LowLatency,
+            low_latency: rung.perf == Perf::LowLatency,
             game_audio,
         };
         let fill = Box::new(move |out: &mut [f32]| render.pull(out));
@@ -1078,8 +961,14 @@ fn try_open(rung: OpenRung, ctx: &OpenCtx) -> Result<LiveStream, String> {
     // deadlock — you may not close a stream from inside its own callbacks.
     let cb_disconnected = ctx.disconnected.clone();
     let stream = builder
-        .performance_mode(rung.perf)
-        .sharing_mode(rung.sharing)
+        .performance_mode(match rung.perf {
+            Perf::LowLatency => AudioPerformanceMode::LowLatency,
+            Perf::None => AudioPerformanceMode::None,
+        })
+        .sharing_mode(match rung.sharing {
+            Sharing::Exclusive => AudioSharingMode::Exclusive,
+            Sharing::Shared => AudioSharingMode::Shared,
+        })
         .data_callback(Box::new(callback))
         .error_callback(Box::new(move |_s, e| {
             log::warn!("audio: AAudio error (device reroute/disconnect?): {e:?}");
@@ -1233,9 +1122,9 @@ impl<'a> Plane<'a> {
     }
 
     /// Hand `pcm[..n]` to the ring in a recycled buffer (allocating only when the free-list is
-    /// momentarily empty: startup / after a backpressure drop). Full = drop-newest. A muted
-    /// stream queues the same length in silence, so the ring keeps its cadence and the device
-    /// is never closed and reopened on a toggle.
+    /// momentarily empty: startup / after a backpressure drop). Full = drop-newest; closed ends
+    /// the loop, see [`sent`]. A muted stream queues the same length in silence, so the ring
+    /// keeps its cadence and the device is never closed and reopened on a toggle.
     fn push(&mut self, n: usize) -> Result<(), DecodeExit> {
         let mut buf = self
             .live
@@ -1248,10 +1137,7 @@ impl<'a> Plane<'a> {
         } else {
             buf.extend_from_slice(&self.pcm[..n]);
         }
-        match self.live.tx.try_send(buf) {
-            Ok(()) | Err(TrySendError::Full(_)) => Ok(()),
-            Err(TrySendError::Disconnected(_)) => Err(DecodeExit::Shutdown),
-        }
+        sent(self.live.tx.try_send(buf))
     }
 
     /// One synthesized frame into the ring: an inaudible fade instead of the click a hard gap

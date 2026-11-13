@@ -1,7 +1,7 @@
 ==> Detected Windows (build 26200), x64 — client installer
 ==> Choices (nothing below has run yet)
   Desktop shortcut: no
-==> Stopping running punktfunk apps
+==> Stopping running Punktfunk apps
   + taskkill /F /IM punktfunk-client.exe
   + taskkill /F /IM punktfunk-session.exe
   + taskkill /F /IM punktfunk-console.exe

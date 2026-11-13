@@ -7,8 +7,8 @@ use crate::linux::{
 use crate::{CapturedFrame, Capturer, Feed, FirstFrame, ZeroCopyPolicy};
 use anyhow::{anyhow, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::sync::Arc;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
+use std::sync::{Arc, Weak};
 use std::thread;
 use std::time::Duration;
 
@@ -22,6 +22,10 @@ use std::time::Duration;
 pub struct WlCapturer {
     slot: FrameSlot,
     wake: Receiver<()>,
+    /// Set by [`Feed::arrival_poke`]; the arrival wait takes it and returns with no frame.
+    poked: Arc<AtomicBool>,
+    /// The thread's wake sender, held weakly so the thread's end still disconnects `wake`.
+    poke_wake: Weak<SyncSender<()>>,
     shared: StreamShared,
     output_name: String,
     quit: Arc<AtomicBool>,
@@ -66,6 +70,8 @@ impl WlCapturer {
         Ok(WlCapturer {
             slot: h.slot,
             wake: h.wake,
+            poked: Arc::default(),
+            poke_wake: h.poke_wake,
             shared: h.shared,
             output_name,
             quit: h.quit,
@@ -162,7 +168,22 @@ impl Capturer for WlCapturer {
 
 impl Feed for WlCapturer {
     fn wait_arrival(&mut self, deadline: std::time::Instant) {
-        wait_for_frame(&self.slot, &self.wake, &self.shared, deadline);
+        self.wait_paced(std::time::Instant::now(), deadline);
+    }
+
+    fn wait_paced(&mut self, not_before: std::time::Instant, deadline: std::time::Instant) -> bool {
+        let (slot, wake, shared, poked) = (&self.slot, &self.wake, &self.shared, &self.poked);
+        wait_for_frame(slot, wake, shared, poked, not_before, deadline)
+    }
+
+    fn arrival_poke(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        let (poked, wake) = (self.poked.clone(), self.poke_wake.clone());
+        Some(Arc::new(move || {
+            poked.store(true, Ordering::Relaxed);
+            if let Some(wake) = wake.upgrade() {
+                let _ = wake.try_send(());
+            }
+        }))
     }
 
     fn take_keepalive(&mut self) -> Option<Box<dyn Send>> {
@@ -194,6 +215,8 @@ mod wl_capturer_tests {
         let mut cap = WlCapturer {
             slot: Arc::default(),
             wake,
+            poked: Arc::default(),
+            poke_wake: std::sync::Weak::new(),
             shared: StreamShared::new(pf_zerocopy::zero_copy_health(u64::MAX)),
             output_name: "TEST-1".into(),
             quit: Arc::new(AtomicBool::new(false)),
@@ -236,12 +259,13 @@ mod wl_capturer_tests {
     /// before the capturer's `Drop` joins it.
     struct Rig {
         _parked: Option<std::sync::mpsc::Sender<()>>,
-        edge: Option<std::sync::mpsc::SyncSender<()>>,
+        edge: Option<Arc<std::sync::mpsc::SyncSender<()>>>,
         cap: WlCapturer,
     }
 
     fn rig(at: At) -> Rig {
         let (edge, wake) = sync_channel::<()>(1);
+        let edge = Arc::new(edge);
         let (parked, park) = std::sync::mpsc::channel::<()>();
         let join = std::thread::spawn(move || {
             let _ = park.recv();
@@ -251,6 +275,8 @@ mod wl_capturer_tests {
         let cap = WlCapturer {
             slot: Arc::default(),
             wake,
+            poked: Arc::default(),
+            poke_wake: Arc::downgrade(&edge),
             shared,
             output_name: "TEST-1".into(),
             quit: Arc::new(AtomicBool::new(false)),
@@ -370,5 +396,36 @@ mod wl_capturer_tests {
             assert_eq!(waits(&mut r.cap), wait, "{at:?}");
             assert_eq!(latest(&mut r.gone().cap), gone, "{at:?}");
         }
+    }
+
+    /// A poke from another thread ends the wait with no frame, the gate before `not_before`
+    /// included, and is taken; a frame alone waits the gate out.
+    #[test]
+    fn a_poke_ends_the_gate_and_a_frame_waits_for_it() {
+        use crate::Feed;
+        use std::time::{Duration, Instant};
+        let mut r = rig(At::Streaming);
+        let poke = r.cap.arrival_poke().expect("a poke");
+        let t0 = Instant::now();
+        let (gate, deadline) = (t0 + Duration::from_secs(2), t0 + Duration::from_secs(3));
+        let poked = std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(Duration::from_millis(20));
+                poke();
+            });
+            r.cap.wait_paced(gate, deadline)
+        });
+        assert!(
+            poked && t0.elapsed() < Duration::from_secs(1),
+            "woke on the poke"
+        );
+        r.put_frame();
+        let t0 = Instant::now();
+        let gate = t0 + Duration::from_millis(60);
+        assert!(
+            !r.cap.wait_paced(gate, t0 + Duration::from_secs(2)),
+            "the poke was taken"
+        );
+        assert!(Instant::now() >= gate, "a frame ended the gate");
     }
 }

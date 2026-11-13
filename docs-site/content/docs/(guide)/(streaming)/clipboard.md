@@ -16,10 +16,10 @@ Copy on your device and paste on the host, or the other way round, once three sw
 
 | Client | Where | Switch |
 |---|---|---|
-| Mac, iPhone, iPad | Host card menu → **Host Details…** → **Connection** | **Share clipboard with this host** |
-| Windows | Host tile menu → **Edit…** | **Share clipboard with this host** |
+| Mac, iPhone, iPad | Host card menu → **Host details…** → **Connection** | **Share clipboard** |
+| Windows | Host tile menu → **Edit…** | **Share clipboard** |
 | Linux | Host card ⓘ → **Connection** | **Share clipboard** |
-| Android | Host card menu → **Edit…** | **Shared clipboard** |
+| Android | Host card menu → **Edit…** | **Share clipboard** |
 | Controller home (Android TV, Steam Deck) | The host's options | **Shared clipboard** |
 
 The client reads its switch when a stream starts, so reconnect after changing it. On a Mac,

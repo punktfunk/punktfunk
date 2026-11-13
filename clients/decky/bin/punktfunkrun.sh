@@ -17,8 +17,6 @@
 #   PF_GAME    store-qualified library id (steam:570) the host launches into the stream —
 #              set by a stream started from a Steam game's page          (optional)
 #   PF_AS      profile id to play as, for this stream only               (optional)
-#   PF_REQUEST_ACCESS  non-empty = ask the host's operator to admit this device instead of
-#                      pairing with a PIN. The connect PARKS until somebody approves it.
 #   PF_BROWSE  non-empty = open the client's console home instead of streaming
 #   PF_APPID   flatpak app id                        (default io.unom.punktfunk)
 #   PF_FLATPAK override the flatpak binary path      (default: `flatpak` on PATH)
@@ -123,16 +121,6 @@ if [ -n "${PF_GAME:-}" ]; then
 fi
 if [ -n "${PF_AS:-}" ]; then
     set -- --as "$PF_AS" "$@"
-fi
-
-# REQUEST ACCESS RUNS SUPERVISED — no `--exec`. Under --exec the CLI BECOMES the session, so no
-# process survives to see the stream come up and record the host as paired; the CLI refuses the
-# combination outright rather than downgrading silently. This is safe for gamescope because
-# focus follows reaper's DESCENDANT TREE, not a single process, and `flatpak run`/`bwrap`
-# already sit between reaper and the client on every other path.
-if [ -n "${PF_REQUEST_ACCESS:-}" ]; then
-    echo "punktfunkrun: request access $CLIENT_LABEL launch $PF_REF (waiting for approval)" >&2
-    run_cli launch "$PF_REF" --request-access "$@"
 fi
 
 # The ordinary stream. `--exec` is the documented gamescope-wrapper mode: the CLI becomes the

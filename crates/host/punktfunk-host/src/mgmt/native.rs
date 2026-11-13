@@ -2,7 +2,7 @@
 //! clients, and approve pending knocks.
 
 use super::shared::*;
-use crate::native_pairing::{Access, PairedClient};
+use crate::native_pairing::{stored_grants, Access, PairedClient};
 use punktfunk_core::quic::{
     GRANT_ALL, GRANT_PRESET_CONTROLLER_ONLY, GRANT_PRESET_FULL, GRANT_PRESET_VIEW_ONLY,
     GRANT_RESERVED,
@@ -132,7 +132,9 @@ pub(crate) struct NativeClient {
     name: String,
     /// Hex SHA-256 of the client certificate — the stable id.
     fingerprint: String,
-    /// `GRANT_*` bits 0–5. `null` is a pre-grants record, which means full.
+    /// `GRANT_*` bits 0–8 (`0x100` is choosing its screen), as this host reads the record: an
+    /// older host's Full reads `0x1FF`, and `0xFF` is everything but the screen choice. `null`
+    /// is a pre-grants record, which means full.
     #[schema(example = 1)]
     grants: Option<u32>,
     /// Absolute expiry, unix seconds on the host clock. `null` = permanent.
@@ -155,13 +157,15 @@ pub(crate) struct NativeClient {
 }
 
 impl NativeClient {
-    /// One place derives `access_level`, so list / approve / PATCH never disagree.
+    /// One place derives `grants` and `access_level` ([`stored_grants`]), so list / approve /
+    /// PATCH never disagree.
     fn from_record(c: PairedClient) -> NativeClient {
+        let grants = c.grants.map(|_| stored_grants(&c));
         NativeClient {
-            access_level: Some(access_level(c.grants).to_string()),
+            access_level: Some(access_level(grants).to_string()),
             name: c.name,
             fingerprint: c.fingerprint,
-            grants: c.grants,
+            grants,
             expires_unix: c.expires_unix,
             granted_unix: c.granted_unix,
             until_disconnect: c.until_disconnect,
@@ -321,8 +325,9 @@ pub(crate) async fn arm_native_pairing(
         );
     };
     if np.pairing_refused() {
-        return api_error(
+        return api_error_coded(
             StatusCode::CONFLICT,
+            "seat_pairing_on_box",
             "This is a seat. Pair devices with the box in its console.",
         );
     }
@@ -449,9 +454,11 @@ pub(crate) async fn unpair_native_client(
             StatusCode::NOT_FOUND,
             "no paired native client with that fingerprint",
         ),
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the paired-device list — {e}"),
+            "paired_devices_not_saved",
+            "Couldn't save the paired-device list",
+            &e,
         ),
     }
 }
@@ -511,9 +518,9 @@ pub(crate) async fn update_native_client_access(
     let access = Access {
         grants: match req.grants {
             Some(g) => g,
-            // Same reading as enforcement (absent = full, reserved bits off) so
-            // an expiry-only PATCH re-stores what is in force.
-            None => current.grants.unwrap_or(GRANT_ALL) & GRANT_ALL,
+            // Enforcement's reading, so an expiry-only PATCH re-stores what is in force: the
+            // write marks the record, and an older Full must not land as all but the screen.
+            None => stored_grants(&current),
         },
         expires_unix: if req.clear_expiry == Some(true) {
             None
@@ -546,6 +553,7 @@ pub(crate) async fn update_native_client_access(
                     name: current.name,
                     fingerprint: current.fingerprint,
                     grants: Some(access.grants),
+                    grants_rev: Some(crate::native_pairing::GRANTS_REV),
                     expires_unix: access.expires_unix,
                     granted_unix: Some(crate::clock::unix_secs()),
                     until_disconnect: access.until_disconnect,
@@ -559,9 +567,11 @@ pub(crate) async fn update_native_client_access(
             StatusCode::NOT_FOUND,
             "no paired native client with that fingerprint",
         ),
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the paired-device list — {e}"),
+            "paired_devices_not_saved",
+            "Couldn't save the paired-device list",
+            &e,
         ),
     }
 }
@@ -605,9 +615,11 @@ pub(crate) async fn unpair_all_native_clients(State(st): State<Arc<MgmtState>>) 
             tracing::info!(unpaired, "management API: all native clients unpaired");
             Json(UnpairAllResult { unpaired }).into_response()
         }
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the paired-device list — {e}"),
+            "paired_devices_not_saved",
+            "Couldn't save the paired-device list",
+            &e,
         ),
     }
 }
@@ -643,15 +655,16 @@ pub(crate) async fn list_pending_devices(
                 let stored = paired
                     .iter()
                     .find(|c| c.fingerprint.eq_ignore_ascii_case(&p.fingerprint));
+                let grants = stored.and_then(|c| c.grants.map(|_| stored_grants(c)));
                 PendingDevice {
                     id: p.id,
                     name: p.name,
                     fingerprint: p.fingerprint,
                     age_secs: p.age_secs,
-                    grants: stored.and_then(|c| c.grants),
+                    grants,
                     expires_unix: stored.and_then(|c| c.expires_unix),
                     granted_unix: stored.and_then(|c| c.granted_unix),
-                    access_level: stored.map(|c| access_level(c.grants).to_string()),
+                    access_level: stored.map(|_| access_level(grants).to_string()),
                     until_disconnect: stored.is_some_and(|c| c.until_disconnect),
                     source: match p.source {
                         crate::native_pairing::KnockSource::Lan => "lan".into(),
@@ -721,32 +734,44 @@ pub(crate) async fn approve_pending_device(
                 "management API: pending device approved (delegated pairing)");
             Json(NativeClient::from_record(client)).into_response()
         }
-        Ok(crate::native_pairing::ApproveOutcome::NotFound) => api_error(
+        Ok(crate::native_pairing::ApproveOutcome::NotFound) => api_error_coded(
             StatusCode::NOT_FOUND,
-            "no pending request with that id (it may have expired — have the device retry)",
+            "pending_request_expired",
+            "No pending request with that id (it may have expired — have the device retry)",
         ),
         Ok(crate::native_pairing::ApproveOutcome::WanNeedsBoundPin {
             relayed,
             unfamiliar_origin,
-        }) => api_error(
-            StatusCode::CONFLICT,
-            if relayed {
-                "Couldn't admit this device: it came through the web client, where the name it \
-                 sent proves nothing. Arm a PIN bound to its fingerprint instead, then read the \
-                 PIN out to whoever is holding it."
+        }) => {
+            let (code, text) = if relayed {
+                (
+                    "device_admit_relayed",
+                    "Couldn't admit this device: it came through the web client, where the name \
+                     it sent proves nothing. Arm a PIN bound to its fingerprint instead, then read \
+                     the PIN out to whoever is holding it.",
+                )
             } else if unfamiliar_origin {
-                "Couldn't admit this device: it asked from a page this host doesn't know yet, so \
-                 the name it sent proves nothing. Arm a PIN bound to its fingerprint instead, then \
-                 read the PIN out to whoever is holding it."
+                (
+                    "device_admit_unfamiliar_origin",
+                    "Couldn't admit this device: it asked from a page this host doesn't know yet, \
+                     so the name it sent proves nothing. Arm a PIN bound to its fingerprint \
+                     instead, then read the PIN out to whoever is holding it.",
+                )
             } else {
-                "Couldn't admit this device: it knocked from the internet, where the name it sent \
-                 proves nothing. Arm a PIN bound to its fingerprint instead, then read the PIN \
-                 out to whoever is holding it."
-            },
-        ),
-        Err(e) => api_error(
+                (
+                    "device_admit_internet",
+                    "Couldn't admit this device: it knocked from the internet, where the name it \
+                     sent proves nothing. Arm a PIN bound to its fingerprint instead, then read \
+                     the PIN out to whoever is holding it.",
+                )
+            };
+            api_error_coded(StatusCode::CONFLICT, code, text)
+        }
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the paired-device list — {e}"),
+            "paired_devices_not_saved",
+            "Couldn't save the paired-device list",
+            &e,
         ),
     }
 }

@@ -27,6 +27,8 @@ punktfunk-core = { path = "../../core/punktfunk-core" }
 # video_vk_native.rs, running pf-vkdecode's VkH264Decoder/VkH265Decoder/VkAv1Decoder on
 # the presenter's shared device.
 pf-vkdecode = { path = "../../codec/pf-vkdecode", optional = true }
+# The ladder's notices.
+pf-l10n = { path = "../../../l10n", features = ["desktop"], optional = true }
 # The one bitstream parser (M1): the SOFTWARE rung reads its per-picture colour
 # signalling, IDR flag and recovery-point SEI from the same `AuPlan` every hardware rung
 # already submits from (`video_software.rs`). That is what makes the swscale BT.601
@@ -160,7 +162,7 @@ default = ["desktop", "pyrowave"]
 desktop = [
     "dep:pf-vkdecode", "dep:pf-bitstream", "dep:openh264", "dep:rav1d", "dep:libc",
     "dep:pf-vaapi", "dep:pf-libva", "dep:pf-v4l2dec", "dep:pf-v4l2", "dep:libloading",
-    "dep:pf-dmabuf", "d3d11va",
+    "dep:pf-dmabuf", "dep:pf-l10n", "d3d11va",
 ]
 # DXVA device and native rung. `desktop` includes it; it also builds alone, without the ladder.
 d3d11va = ["dep:pf-dxvadec", "dep:pf-bitstream"]

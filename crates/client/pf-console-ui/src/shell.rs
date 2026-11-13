@@ -90,11 +90,21 @@ impl Tab {
 
     pub(crate) fn name(self) -> &'static str {
         match self {
-            Tab::Hosts => "Hosts",
-            Tab::Games => "Games",
+            Tab::Hosts => pf_l10n::client::hosts_tab(),
+            Tab::Games => pf_l10n::console::console_tab_games(),
             // Named for what it lists today; a players feature would rename it back.
-            Tab::Players => "Controllers",
-            Tab::Settings => "Settings",
+            Tab::Players => pf_l10n::console::console_tab_controllers(),
+            Tab::Settings => pf_l10n::client::hosts_tab_settings(),
+        }
+    }
+
+    /// What a screen reader speaks for the focused tab.
+    fn announcement(self) -> &'static str {
+        match self {
+            Tab::Hosts => pf_l10n::console::console_tab_hosts_a11y(),
+            Tab::Games => pf_l10n::console::console_tab_games_a11y(),
+            Tab::Players => pf_l10n::console::console_tab_controllers_a11y(),
+            Tab::Settings => pf_l10n::console::console_tab_settings_a11y(),
         }
     }
 
@@ -192,6 +202,9 @@ const DOWNLOADS_POLL: f64 = 2.0;
 pub struct ConsoleOptions {
     /// Hostname registered as the default pairing device name.
     pub device_name: String,
+    /// This device's code, as [`punktfunk_core::fp::device_code`] spells it. The host's web
+    /// console shows the same one beside a request for access. `None` shows no code.
+    pub device_code: Option<String>,
     /// The About row's version, verbatim. `None` shows this kit's version: right where the
     /// app ships from this workspace.
     pub version: Option<String>,
@@ -234,6 +247,12 @@ pub struct ConsoleOptions {
     /// `ProfileLocked` close before its failure, so the console asks for a locked profile's
     /// password. False dials a locked profile as it stands.
     pub prompts_unlock: bool,
+    /// The host answers [`ConsoleCmd::SetHidden`] and [`ConsoleCmd::FetchHidden`], so a title
+    /// offers Hide for me where the box says this device may. False offers it nowhere.
+    pub hides: bool,
+    /// The OS's preferred languages, BCP-47, most preferred first. A non-empty list sets the
+    /// process's language ([`pf_l10n::set_languages`]) when the console is built; empty leaves it.
+    pub languages: Vec<String>,
 }
 
 /// A built-in screen in landscape pixels, whole and clear of its cutout.
@@ -247,6 +266,7 @@ impl ConsoleOptions {
     pub fn desktop(device_name: String, system_keyboard: bool) -> ConsoleOptions {
         ConsoleOptions {
             device_name,
+            device_code: None,
             version: None,
             system_keyboard,
             tv: false,
@@ -264,6 +284,8 @@ impl ConsoleOptions {
             screen: None,
             profiles: true,
             prompts_unlock: true,
+            hides: true,
+            languages: Vec::new(),
         }
     }
 }
@@ -389,6 +411,9 @@ pub(crate) struct Shell {
     last_frame: Option<Instant>,
     /// Last menu, pointer, key or text input — the idle clock ([`crate::console::IDLE_AFTER`]).
     last_input: Instant,
+    /// An input method's text in progress for the open field ([`Self::preedit`]). Non-empty,
+    /// the input method owns the keys.
+    preedit: String,
     /// The last frame's ink, motion and inset: what the next frame follows on from, what
     /// input between frames reads, and what a host's chrome over a stream draws in.
     pub(crate) ui: crate::theme::Frame,
@@ -454,9 +479,11 @@ impl Shell {
                 tv: opts.tv,
                 spatial: opts.spatial,
                 fallback_ui: opts.fallback_ui,
+                hides: opts.hides,
                 pyrowave_ok: opts.pyrowave_ok,
                 av1_ok: opts.av1_ok,
                 name: opts.device_name,
+                code: opts.device_code,
                 version: opts.version.unwrap_or_else(|| crate::VERSION.into()),
             },
             hosts: Vec::new(),
@@ -489,6 +516,7 @@ impl Shell {
             t0: Instant::now(),
             last_frame: None,
             last_input: Instant::now(),
+            preedit: String::new(),
             ui: crate::theme::Frame::default(),
             #[cfg(test)]
             fake_clock: None,
@@ -610,7 +638,7 @@ impl Shell {
             return None;
         }
         if self.strip_focus && self.stack.len() == 1 {
-            return Some(format!("{} tab", self.tab.name()));
+            return Some(self.tab.announcement().into());
         }
         let (ctx, screen) = self.ctx_and_top();
         screen.view().announcement(&ctx)
@@ -676,7 +704,11 @@ impl Shell {
         if let Some(text) = self.console.take_notice() {
             self.show_toast(text);
         }
+        if let Some(code) = self.console.take_device_code() {
+            self.device.code = Some(code);
+        }
         self.feed_top();
+        self.apply_hides();
         self.sync_pair();
         self.open_first_paired_library();
         self.sync_wake();
@@ -685,6 +717,7 @@ impl Shell {
         self.collect_profiles();
         self.collect_pictures();
         self.home_shelf();
+        self.games_follow_pick();
         self.tick_launch();
         self.tick_downloads();
         self.settle_focus();
@@ -731,9 +764,14 @@ impl Shell {
     }
 
     /// Feeds the top screen what the service reported: pad test, other players, licences.
-    /// The host's test mode follows the test screen, whatever took it off the top.
+    /// The host's test mode follows the test screen or a recording shortcut, whatever took
+    /// it off the top.
     fn feed_top(&mut self) {
-        let testing = matches!(self.stack.last(), Some(Screen::InputTest(_))) && !self.in_stream;
+        let testing = match self.stack.last() {
+            Some(Screen::InputTest(_)) => true,
+            Some(Screen::ShortcutRow(r)) => r.recording(),
+            _ => false,
+        } && !self.in_stream;
         if testing != self.pad_testing {
             self.pad_testing = testing;
             self.bus.send(ConsoleCmd::PadTest { on: testing });
@@ -751,9 +789,18 @@ impl Shell {
         if let Some(Screen::Players(p)) = self.stack.last_mut() {
             p.others = self.console.other_devices();
         }
-        if let Some(Screen::Controls(c)) = self.stack.last_mut() {
+        if testing && matches!(self.stack.last(), Some(Screen::ShortcutRow(_))) {
+            if let Some(state) = self.console.take_pad_test() {
+                let mut fx = crate::screens::Outbox::default();
+                if let (mut ctx, Screen::ShortcutRow(r)) = self.ctx_and_top() {
+                    r.pad_test(&state, &mut ctx, &mut fx);
+                }
+                self.apply(fx);
+            }
+        }
+        if let Some(Screen::Shortcuts(p)) = self.stack.last_mut() {
             let devices = self.console.other_devices();
-            c.set_keyboard(devices.iter().any(|d| d.kind == "keyboard"));
+            p.set_keyboard(devices.iter().any(|d| d.kind == "keyboard"));
         }
         if let Some(Screen::Licenses(l)) = self.stack.last_mut() {
             if l.waiting() {
@@ -770,6 +817,41 @@ impl Shell {
                 }
             }
         }
+        if let Some(Screen::Library(l)) = self.stack.last_mut() {
+            let answer = (l.hidden_profile())
+                .and_then(|p| self.console.take_hidden_list(l.host_fp_hex(), p));
+            if let Some(answer) = answer {
+                l.set_hidden_list(answer);
+            }
+        }
+    }
+
+    /// What the host made of each hide or show: its line as a toast, and where it took one,
+    /// the title leaves that shelf or comes back to it, and leaves a hidden shelf it was on.
+    fn apply_hides(&mut self) {
+        for a in self.console.take_hide_answers() {
+            let kind = match a.done {
+                true => ToastKind::Success,
+                false => ToastKind::Error,
+            };
+            self.show_toast_kind(a.notice.clone(), kind);
+            let shelf = self.stack.iter_mut().rev().find_map(|s| match s {
+                Screen::Library(l) if l.host_fp_hex() == a.fp_hex => {
+                    (l.hidden_profile() == Some(a.profile.as_str())).then_some(l)
+                }
+                _ => None,
+            });
+            match (a.done, a.hidden, shelf) {
+                (false, _, Some(l)) => l.keep_hidden(&a.app_id),
+                (true, true, _) => drop(self.library.drop_title(&a.fp_hex, &a.app_id)),
+                (true, false, Some(l)) => {
+                    if let Some(game) = l.drop_hidden(&a.app_id) {
+                        self.library.put_title(&a.fp_hex, game);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// A pairing phase reaches the Pair screen on top only when that screen sent its request.
@@ -780,12 +862,11 @@ impl Shell {
         match &phase {
             PairPhase::Idle => {}
             PairPhase::Paired { key } => {
-                let name = self
-                    .hosts
-                    .iter()
-                    .find(|h| &h.key == key)
-                    .map_or_else(|| "the host".to_string(), |h| h.name.clone());
-                self.show_toast_kind(format!("Paired with {name}"), ToastKind::Success);
+                let toast = self.hosts.iter().find(|h| &h.key == key).map_or_else(
+                    || pf_l10n::console::console_pair_paired_unnamed().into(),
+                    |h| pf_l10n::client::pair_paired(&h.name),
+                );
+                self.show_toast_kind(toast, ToastKind::Success);
                 self.console.settle_pair(&req);
                 if top_is_ours {
                     self.apply_nav(Nav::Pop);
@@ -851,9 +932,12 @@ impl Shell {
         }
     }
 
-    /// Fetch the games under the Hosts row once it rests on a host. Lives here: a screen
-    /// cannot send while it draws.
+    /// Fetch the games under the Hosts row once it rests on a host and no connect is up.
+    /// Lives here: a screen cannot send while it draws.
     fn home_shelf(&mut self) {
+        if self.dialing() {
+            return;
+        }
         let Some(Screen::Home(home)) = self.stack.last_mut() else {
             return;
         };
@@ -864,6 +948,29 @@ impl Shell {
         home.set_shelf(crate::screens::library::LibraryScreen::embedded(&host));
         self.send_cmd(ConsoleCmd::fetch_library(&host));
         self.ask_profiles(&host);
+    }
+
+    /// A Games root whose card now remembers another profile is that profile's shelf.
+    fn games_follow_pick(&mut self) {
+        if self.dialing() {
+            return;
+        }
+        let [Screen::Library(l)] = self.stack.as_slice() else {
+            return;
+        };
+        let Some(host) = self.hosts.iter().find(|h| h.key == l.host_key()) else {
+            return;
+        };
+        if !l.shelf_of(host) {
+            let host = host.clone();
+            let root = self.shelf_root(&host);
+            self.stack[0] = root;
+        }
+    }
+
+    /// A connect or a stream is up: the shelf under it stays the one the hold flies from.
+    fn dialing(&self) -> bool {
+        self.in_stream || self.connect.takeover().is_some()
     }
 
     /// This pairing is what turned its host into the default one. False for a second or
@@ -988,11 +1095,12 @@ impl Shell {
                     self.parked[tab.index()] = parked;
                     return None;
                 };
-                // The shared list is one host's: a root whose host is not the last fetched
-                // would show another host's games.
-                let mine = self.library.req().host == host.fp_hex;
+                // The shared list is one host's: a root whose host is not the last fetched,
+                // or whose card now remembers another profile, would show other games.
+                let mine = self.library.req().host == host.fp_hex
+                    && self.games_key.as_deref() == Some(host.key.as_str());
                 match parked {
-                    Some(root) if mine && self.games_key.as_deref() == Some(host.key.as_str()) => {
+                    Some(root) if mine && root.shelf().is_none_or(|l| l.shelf_of(&host)) => {
                         Some(root)
                     }
                     _ => Some(self.shelf_root(&host)),
@@ -1397,11 +1505,15 @@ impl Shell {
 
     /// Keyboard fallback. Arrows and Enter/Esc are menu events; Space confirms and Y/X
     /// mirror Secondary/Tertiary (suppressed while editing — those keys are text).
-    /// `shift` only affects Tab.
+    /// `shift` only affects Tab. While an input method composes, every key is its own: a
+    /// backend that still delivers Backspace or Return then is not editing the field.
     pub(crate) fn key(&mut self, key: crate::input::Key, shift: bool, repeat: bool) -> bool {
         use crate::input::Key as S;
         self.last_input = Instant::now();
         self.input_source = Some(crate::console::InputSource::Keys);
+        if self.editing() && !self.preedit.is_empty() {
+            return true;
+        }
         if self.editing() {
             let (mut ctx, top) = self.ctx_and_top();
             if top.view_mut().edit_key(key, &mut ctx) {
@@ -1432,10 +1544,22 @@ impl Shell {
         true
     }
 
+    /// Committed text for the open field. It replaces any text in progress.
     pub(crate) fn text_input(&mut self, text: &str) {
         self.last_input = Instant::now();
+        self.preedit.clear();
         if let Some(top) = self.stack.last_mut() {
             top.view_mut().text_input(text);
+        }
+    }
+
+    /// An input method's text in progress, replacing the last: drawn in the open field and
+    /// kept out of its value. Empty ends the composition. A password field never shows one.
+    pub(crate) fn preedit(&mut self, text: &str) {
+        self.last_input = Instant::now();
+        self.preedit.clear();
+        if self.edit_field().is_some_and(|f| !f.secure) {
+            self.preedit.push_str(text);
         }
     }
 
@@ -1521,10 +1645,8 @@ impl Shell {
         let ceiling = crate::screens::settings::rows::bitrate_ceiling_kbps(self.device.platform);
         self.settings.bitrate_kbps = kbps.min(ceiling);
         self.store.save(&self.settings);
-        format!(
-            "{} Mb/s set as the default",
-            self.settings.bitrate_kbps / 1_000
-        )
+        let rate = pf_l10n::common::common_mbits(self.settings.bitrate_kbps / 1_000);
+        pf_l10n::client::speedtest_applied_default(rate)
     }
 
     fn apply(&mut self, fx: Outbox) {
@@ -1632,10 +1754,10 @@ impl Shell {
     }
 
     /// Back on the tab strip. The same button backs out of every screen, so exit is a
-    /// question, not a press. Where the app cannot quit the press does nothing, and a TV
+    /// question, not a press. Where the device cannot quit the press does nothing, and a TV
     /// remote's Menu is the system's (`at_root`).
     fn ask_exit(&mut self) -> Option<MenuPulse> {
-        if !self.device.platform.can_quit() {
+        if !self.device.can_quit() {
             return Some(MenuPulse::Boundary);
         }
         let exit = crate::screens::prompt::PromptScreen::exit();
@@ -1788,6 +1910,7 @@ fn stand_in_games() -> Vec<crate::library::LibraryGame> {
         running: i == 1,
         endable: false,
         install: None,
+        overrides: None,
     };
     let stores = ["steam", "lutris", "gog", "epic", "custom", "heroic"];
     let mut out: Vec<_> = (0..12)

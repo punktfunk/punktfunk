@@ -32,10 +32,12 @@ private let statusNoFrame: Int32 = PUNKTFUNK_STATUS_NO_FRAME.rawValue
 private let statusClosed: Int32 = PUNKTFUNK_STATUS_CLOSED.rawValue
 
 /// One reassembled, FEC-recovered, decrypted access unit (Annex-B HEVC from the host).
-/// The screens a connect asks the host for, screen 0 first; none for one picture.
+/// The screens a connect asks the host for, screen 0 first; none for one picture. `views` holds
+/// the size each is shown at when smaller than its mode, zero for none.
 public struct ScreenAsk: Sendable {
     let records: [PunktfunkScreen]
-    public static let none = ScreenAsk(records: [])
+    let views: [PunktfunkScreenView]
+    public static let none = ScreenAsk(records: [], views: [])
 }
 
 public struct AccessUnit: Sendable {
@@ -107,18 +109,52 @@ public protocol AccessUnitMemory: AnyObject {
     func locate(_ pointer: UnsafeRawPointer) -> (token: UInt64, offset: Int)?
 }
 
-/// The lender behind the C callbacks' `userdata`.
+/// The lender behind the C callbacks' `userdata`, with a count of the buffers it has lent the core.
 private final class AccessUnitMemoryBox {
     let memory: AccessUnitMemory
+    private let lock = NSLock()
+    private var lentBuffers = 0
+    private var asked = false
+
     init(_ memory: AccessUnitMemory) { self.memory = memory }
+
+    /// The core asked for a buffer: this lender is the one it assembles in.
+    func lend() {
+        lock.lock()
+        asked = true
+        lentBuffers += 1
+        lock.unlock()
+    }
+
+    func returned() {
+        lock.lock()
+        lentBuffers -= 1
+        lock.unlock()
+    }
+
+    var wasAsked: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return asked
+    }
+
+    var holdsBuffers: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return lentBuffers > 0
+    }
 }
 
 private let accessUnitTake:
     @convention(c) (UnsafeMutableRawPointer?, UInt, UnsafeMutablePointer<PunktfunkAuStore>?) -> Bool = {
         userdata, count, out in
         guard let userdata, let out else { return false }
-        let memory = Unmanaged<AccessUnitMemoryBox>.fromOpaque(userdata).takeUnretainedValue().memory
-        guard let slot = memory.take(Int(count)) else { return false }
+        let box = Unmanaged<AccessUnitMemoryBox>.fromOpaque(userdata).takeUnretainedValue()
+        box.lend()
+        guard let slot = box.memory.take(Int(count)) else {
+            box.returned()
+            return false
+        }
         out.pointee = PunktfunkAuStore(
             data: slot.base.assumingMemoryBound(to: UInt8.self), len: UInt(slot.count),
             token: slot.token)
@@ -128,7 +164,38 @@ private let accessUnitTake:
 private let accessUnitRelease: @convention(c) (UnsafeMutableRawPointer?, UInt64) -> Void = {
     userdata, token in
     guard let userdata else { return }
-    Unmanaged<AccessUnitMemoryBox>.fromOpaque(userdata).takeUnretainedValue().memory.release(token)
+    let box = Unmanaged<AccessUnitMemoryBox>.fromOpaque(userdata).takeUnretainedValue()
+    box.memory.release(token)
+    box.returned()
+}
+
+/// The lenders the core was given. One stays until a later one has been asked for a buffer, so
+/// the core takes from it no more, and every buffer it lent is back. Under `pumpLock`.
+final class AccessUnitLenders {
+    private var boxes: [AccessUnitMemoryBox] = []
+
+    var retained: Int { boxes.count }
+
+    /// Hands `install` the callbacks for `memory`; the lender is kept when it returns true.
+    func lend(_ memory: AccessUnitMemory, install: (inout PunktfunkAuMemory) -> Bool) -> Bool {
+        let box = AccessUnitMemoryBox(memory)
+        var callbacks = PunktfunkAuMemory(
+            take: accessUnitTake, release: accessUnitRelease,
+            userdata: Unmanaged.passUnretained(box).toOpaque())
+        guard install(&callbacks) else { return false }
+        boxes.append(box)
+        return true
+    }
+
+    /// Drops the lenders nothing can call. The core installs a lender on its own thread some
+    /// time after `install`, and assembles in the newest one it has been given.
+    func sweep() {
+        guard let newest = boxes.lastIndex(where: { $0.wasAsked }) else { return }
+        boxes = boxes[..<newest].filter { $0.holdsBuffers } + boxes[newest...]
+    }
+
+    /// For after the core's threads are joined.
+    func removeAll() { boxes.removeAll() }
 }
 
 /// One Opus audio packet (48 kHz stereo, 5 ms frames) — decode with AVAudioConverter
@@ -242,53 +309,27 @@ public enum HostRejection: Sendable {
         }
     }
 
-    /// User-facing sentence — wording shared with the desktop clients.
+    /// The sentence to show for this refusal, from the shared `host` messages.
     public var userMessage: String {
         switch self {
-        case .pairingNotArmed:
-            return "Pairing isn't armed on the host — arm it on the host's Pairing page, "
-                + "then try again."
-        case .pairingBoundToOtherDevice:
-            return "The host's pairing window is armed for a different device — arm it "
-                + "for this one."
-        case .pairingRateLimited:
-            return "Too many pairing attempts — wait a couple of seconds and try again."
-        case .identityRequired:
-            return "The host requires pairing — pair this device (PIN or request access) first."
-        case .denied:
-            return "The host declined this device's request."
-        case .approvalTimeout:
-            return "Nobody approved the request on the host in time — approve this device "
-                + "in the host's console or web UI, then request access again."
-        case .superseded:
-            return "A newer request from this device replaced this one — approve the "
-                + "latest request on the host."
-        case .wireVersionMismatch:
-            return "Client and host versions don't match — update both to the same release."
-        case .busy:
-            return "The host is busy with another session."
-        case .accessExpired:
-            return "Your access to this host has expired — ask its owner to grant "
-                + "access again."
-        case .launchNotPermitted:
-            return "This device isn't permitted to launch games on the host — connect "
-                + "to the desktop instead, or ask the owner to allow launching."
-        case .hostPower:
-            return "The host is going to sleep or shutting down — wake it when you want "
-                + "to play again."
-        case .setupFailed:
-            return "The host accepted the connection but couldn't start the stream — the "
-                + "host's log (web console → Log) has the cause."
-        case .profileUnknown:
-            return "That profile is gone from this host. Pick another one."
-        case .noSeat:
-            return "All seats are taken."
-        case .seatOccupied:
-            return "Someone is already playing as that profile."
-        case .seatUnavailable:
-            return "That profile can't play on this host right now."
-        case .profileLocked:
-            return "This profile needs its account password."
+        case .pairingNotArmed: return String(localized: L10n.rejectNotArmed)
+        case .pairingBoundToOtherDevice: return String(localized: L10n.rejectBoundOther)
+        case .pairingRateLimited: return String(localized: L10n.rejectRateLimited)
+        case .identityRequired: return String(localized: L10n.rejectIdentityRequired)
+        case .denied: return String(localized: L10n.rejectDenied)
+        case .approvalTimeout: return String(localized: L10n.rejectApprovalTimeout)
+        case .superseded: return String(localized: L10n.rejectSuperseded)
+        case .wireVersionMismatch: return String(localized: L10n.rejectWireVersion)
+        case .busy: return String(localized: L10n.rejectBusy)
+        case .accessExpired: return String(localized: L10n.rejectAccessExpired)
+        case .launchNotPermitted: return String(localized: L10n.rejectLaunchNotPermitted)
+        case .hostPower: return String(localized: L10n.rejectHostPower)
+        case .setupFailed: return String(localized: L10n.rejectSetupFailed)
+        case .profileUnknown: return String(localized: L10n.rejectProfileUnknown)
+        case .noSeat: return String(localized: L10n.rejectNoSeat)
+        case .seatOccupied: return String(localized: L10n.rejectSeatOccupied)
+        case .seatUnavailable: return String(localized: L10n.rejectSeatUnavailable)
+        case .profileLocked: return String(localized: L10n.rejectProfileLocked)
         }
     }
 }
@@ -395,8 +436,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
     private let pathMonitor = NWPathMonitor()
     /// The lender `setAccessUnitMemory` installed, for `nextAU` to place pulls. Under `pumpLock`.
     private var accessUnitMemory: AccessUnitMemory?
-    /// Every lender ever installed, retained until `close()` ends the core's calls into them.
-    private var accessUnitMemoryBoxes: [Unmanaged<AccessUnitMemoryBox>] = []
+    /// The lenders the core can still call, kept until it can't. Under `pumpLock`.
+    private let accessUnitLenders = AccessUnitLenders()
     /// Same role for the audio drain thread (its own plane in the core).
     private let audioLock = NSLock()
     /// Same role for the feedback drain thread (rumble + HID-output — two core planes,
@@ -414,6 +455,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// Serializes the (single) cursor pull thread against close() — both cursor planes are
     /// drained by ONE thread, so one lock covers them.
     private let cursorLock = NSLock()
+    /// Held across `networkCheck`, which blocks for ten to twenty seconds: under `abiLock` it
+    /// would stall every send and `probeResult`, which the speed test polls while the check runs.
+    private let checkLock = NSLock()
     /// Same role for each further screen's pump, screens 1 to 3: one screen's poll never waits on
     /// another's.
     private let screenLocks = [NSLock(), NSLock(), NSLock()]
@@ -423,6 +467,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public let settings: EffectiveSettings
     /// The caller opens a window per screen: the session may show more than one picture.
     public let showsScreens: Bool
+    /// The view the connect asked for beside its mode; nil shows the mode itself.
+    public let connectView: (width: UInt32, height: UInt32)?
 
     /// Negotiated session mode (host-confirmed).
     public private(set) var width: UInt32 = 0
@@ -902,6 +948,11 @@ public final class PunktfunkConnection: @unchecked Sendable {
         hostCaps & UInt8(PUNKTFUNK_HOST_CAP_PEN) != 0
     }
 
+    /// The host types committed Unicode text in its own layout (`HOST_CAP_TEXT_INPUT`).
+    public var hostSupportsText: Bool {
+        hostCaps & UInt8(PUNKTFUNK_HOST_CAP_TEXT_INPUT) != 0
+    }
+
     /// The second host capability byte (`punktfunk_connection_host_caps2`); `0` from an older host.
     public private(set) var hostCaps2: UInt8 = 0
 
@@ -910,6 +961,20 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// session says so once, because the host would drop every contact silently.
     public var hostSupportsTouch: Bool {
         hostCaps2 & UInt8(PUNKTFUNK_HOST_CAP2_TOUCH) != 0
+    }
+
+    /// The session started on a screen another device opened and sized
+    /// (`punktfunk_connection_shares_screen`). As it started: that device may leave later.
+    public private(set) var sharesScreen = false
+
+    /// Why the session's screen is not the one its preset asked for
+    /// (`punktfunk_connection_screen_role_reason`). As it started; as asked from a host that does
+    /// not say.
+    public private(set) var screenRoleReason = ScreenRoleReason.asAsked
+
+    /// The stream-start line for a preset's screen the host did not give; nil when it did.
+    public var screenWishLine: String? {
+        ScreenWish.line(wish: settings.hostScreen, reason: screenRoleReason)
     }
 
     // MARK: - Per-client access (design/per-client-access.md §7)
@@ -927,6 +992,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public static let grantPower = UInt32(PUNKTFUNK_GRANT_POWER)
     /// Pause and remove a title's download (`design/plugin-downloads.md`); route-gated, never input.
     public static let grantManageGames = UInt32(PUNKTFUNK_GRANT_MANAGE_GAMES)
+    /// Choosing the screen this device streams and what the host's monitors do meanwhile;
+    /// route-gated and read in the Hello, never input.
+    public static let grantDisplay = UInt32(PUNKTFUNK_GRANT_DISPLAY)
     /// Every defined grant — full control, today's behavior and what an old host's Welcome
     /// decodes to.
     public static let grantAll = UInt32(PUNKTFUNK_GRANT_ALL)
@@ -934,12 +1002,16 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public static let grantAllPrePower = UInt32(PUNKTFUNK_GRANT_ALL_PRE_POWER)
     /// `grantAll` before Manage games existed — see ``normalizedGrants(_:)``.
     public static let grantAllPreManage = UInt32(PUNKTFUNK_GRANT_ALL_PRE_MANAGE)
+    /// `grantAll` before Choose its screen existed — see ``normalizedGrants(_:)``.
+    public static let grantAllPreDisplay = UInt32(PUNKTFUNK_GRANT_ALL_PRE_DISPLAY)
 
-    /// The legacy-full read rule (host-actions §4.3): exactly an older full mask — an old
-    /// host's "Full control" — reads as the current ``grantAll``, so a Full session against an
-    /// old host neither wears a chip nor labels "Custom". Any other mask passes through.
+    /// The wire reader's legacy-full rule: exactly an older full mask reads as the current
+    /// ``grantAll``, so a Full session against an old host neither wears a chip nor labels
+    /// "Custom". A current host's "all but the screen choice" reads as Full too; the host card
+    /// says who decides the screen. Any other mask passes through.
     public static func normalizedGrants(_ grants: UInt32) -> UInt32 {
-        grants == grantAllPrePower || grants == grantAllPreManage ? grantAll : grants
+        grants == grantAllPrePower || grants == grantAllPreManage || grants == grantAllPreDisplay
+            ? grantAll : grants
     }
 
     /// The three user-facing access presets plus "Custom", DERIVED from the mask (never
@@ -962,10 +1034,10 @@ public final class PunktfunkConnection: @unchecked Sendable {
 
         public var label: String {
             switch self {
-            case .fullControl: return "Full control"
-            case .controllerOnly: return "Controller only"
-            case .viewOnly: return "View only"
-            case .custom: return "Custom"
+            case .fullControl: return String(localized: L10n.grantLevelFull)
+            case .controllerOnly: return String(localized: L10n.grantLevelController)
+            case .viewOnly: return String(localized: L10n.grantLevelView)
+            case .custom: return String(localized: L10n.grantLevelCustom)
             }
         }
     }
@@ -1163,9 +1235,13 @@ public final class PunktfunkConnection: @unchecked Sendable {
     ///
     /// `unlock` opens a profile on a person's own account and goes to a pinned host only
     /// (`invalidPin` without a pin). It is wiped when this returns, so it dials once.
+    ///
+    /// `view` is the size the picture is shown at when smaller than the mode
+    /// (`EffectiveSettings.streamView`): a host that reads it encodes that size instead.
     public init(
         host: String, port: UInt16 = 9777,
         width: UInt32, height: UInt32, refreshHz: UInt32,
+        view: (width: UInt32, height: UInt32)? = nil,
         pinSHA256: Data? = nil,
         identity: ClientIdentity? = nil,
         compositor: Compositor = .auto,
@@ -1198,6 +1274,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         defer { unlock?.secret.wipe() }
         self.settings = settings
         self.showsScreens = showsScreens
+        self.connectView = view
         _ = Self.abiVersionGate // version-equality guard — fail loudly before the first C call
         if let pin = pinSHA256, pin.count != 32 { throw PunktfunkClientError.invalidPin }
         if unlock != nil, pinSHA256 == nil { throw PunktfunkClientError.invalidPin }
@@ -1232,6 +1309,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
         opts.width = width
         opts.height = height
         opts.refresh_hz = refreshHz
+        opts.view_width = view?.width ?? 0
+        opts.view_height = view?.height ?? 0
         opts.compositor = compositor.rawValue
         opts.gamepad = gamepad.rawValue
         opts.bitrate_kbps = bitrateKbps
@@ -1269,40 +1348,49 @@ public final class PunktfunkConnection: @unchecked Sendable {
                         withOptionalCString(profileID) { profile in
                             withOptionalCString(settings.presetID) { presetID in
                                 withOptionalCString(settings.presetName) { presetName in
-                                    label.withCString { name in
-                                        opts.profile_id = profile
-                                        opts.host = cs
-                                        opts.client_cert_pem = cert
-                                        opts.client_key_pem = key
-                                        opts.launch_id = launch
-                                        opts.device_name = name
-                                        // This dial's preset; nil names none.
-                                        opts.preset_id = presetID
-                                        opts.preset_name = presetName
-                                        func dial(_ pin: UnsafePointer<UInt8>?) -> OpaquePointer? {
-                                            opts.pin_sha256 = pin
-                                            // Read during the call only.
-                                            return screens.records.withUnsafeBufferPointer { list in
-                                                opts.screens = list.baseAddress
-                                                opts.screen_count = UInt8(clamping: list.count)
-                                                func call() -> OpaquePointer? {
-                                                    punktfunk_connect_opts(
-                                                        &opts, &observed, &connectStatus)
-                                                }
-                                                guard let unlock else { return call() }
-                                                return unlock.withC { c in
-                                                    opts.unlock = c
-                                                    defer { opts.unlock = nil }
-                                                    return call()
+                                    settings.hostScreen.withCString { hostScreen in
+                                        label.withCString { name in
+                                            opts.profile_id = profile
+                                            opts.host = cs
+                                            opts.client_cert_pem = cert
+                                            opts.client_key_pem = key
+                                            opts.launch_id = launch
+                                            opts.device_name = name
+                                            // This dial's preset; nil names none.
+                                            opts.preset_id = presetID
+                                            opts.preset_name = presetName
+                                            // The preset's screen wish; empty asks for none.
+                                            opts.host_screen = hostScreen
+                                            func dial(_ pin: UnsafePointer<UInt8>?) -> OpaquePointer? {
+                                                opts.pin_sha256 = pin
+                                                // Read during the call only.
+                                                let views = screens.views
+                                                return screens.records.withUnsafeBufferPointer { list in
+                                                    views.withUnsafeBufferPointer { views in
+                                                        opts.screens = list.baseAddress
+                                                        opts.screen_count = UInt8(clamping: list.count)
+                                                        opts.screen_views =
+                                                            views.count == list.count ? views.baseAddress : nil
+                                                        func call() -> OpaquePointer? {
+                                                            punktfunk_connect_opts(
+                                                                &opts, &observed, &connectStatus)
+                                                        }
+                                                        guard let unlock else { return call() }
+                                                        return unlock.withC { c in
+                                                            opts.unlock = c
+                                                            defer { opts.unlock = nil }
+                                                            return call()
+                                                        }
+                                                    }
                                                 }
                                             }
-                                        }
-                                        if let pin = pinSHA256 {
-                                            return pin.withUnsafeBytes { p in
-                                                dial(p.bindMemory(to: UInt8.self).baseAddress)
+                                            if let pin = pinSHA256 {
+                                                return pin.withUnsafeBytes { p in
+                                                    dial(p.bindMemory(to: UInt8.self).baseAddress)
+                                                }
                                             }
+                                            return dial(nil)
                                         }
-                                        return dial(nil)
                                     }
                                 }
                             }
@@ -1376,6 +1464,12 @@ public final class PunktfunkConnection: @unchecked Sendable {
         var caps2: UInt8 = 0
         _ = punktfunk_connection_host_caps2(opened, &caps2)
         hostCaps2 = caps2
+        var shared = false
+        _ = punktfunk_connection_shares_screen(opened, &shared)
+        sharesScreen = shared
+        var reason: UInt8 = 0
+        _ = punktfunk_connection_screen_role_reason(opened, &reason)
+        screenRoleReason = ScreenRoleReason(rawValue: reason) ?? .asAsked
         // Where this host serves its game library, straight from the session's Welcome. 0 = the
         // host advertised none (older host / no management API), and the caller keeps whatever it
         // already had. This is the answer that does NOT require an mDNS advert to have been seen.
@@ -1498,7 +1592,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// with `deliveryFlags: deliveryProbeOnly`. nil when the host declined, a round never
     /// reported, or after close.
     public func networkCheck() -> HealthReport? {
-        return withLiveHandle(or: nil) { h in
+        return withLiveHandle(holding: checkLock, or: nil) { h in
             var out = PunktfunkHealthReport()
             guard punktfunk_connection_network_check(h, &out) == statusOK else { return nil }
             let clean: CleanRound? = out.has_clean != 0
@@ -1530,9 +1624,22 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// reconnect. Non-blocking; on acceptance the stream continues at the new mode (the
     /// first new-mode AU is an IDR with fresh parameter sets — `AnnexB.formatDescription`
     /// refresh-on-IDR already handles it) and `currentMode()` reflects the switch.
+    /// At the live size the host keeps the view it scales to, so a rate pick leaves its scale.
     public func requestMode(width: UInt32, height: UInt32, refreshHz: UInt32) {
         withLiveHandle(or: ()) { h in
             _ = punktfunk_connection_request_mode(h, width, height, refreshHz)
+        }
+    }
+
+    /// `requestMode` shown at `view`, the size the picture is shown at when smaller
+    /// (`RenderScale.view`). nil asks for the mode itself and clears a view the host keeps.
+    public func requestMode(
+        width: UInt32, height: UInt32, refreshHz: UInt32,
+        view: (width: UInt32, height: UInt32)?
+    ) {
+        withLiveHandle(or: ()) { h in
+            _ = punktfunk_connection_request_mode_view(
+                h, width, height, refreshHz, view?.width ?? 0, view?.height ?? 0)
         }
     }
 
@@ -1645,6 +1752,28 @@ public final class PunktfunkConnection: @unchecked Sendable {
                 guard let tab = line.firstIndex(of: "\t") else { return nil }
                 let role = UInt8(line[..<tab]).flatMap(Role.init(rawValue:)) ?? .primary
                 return HudLine(role: role, text: String(line[line.index(after: tab)...]))
+            }
+        }
+
+        /// `lines` led by the size the picture decodes at when the host scaled `mode` down to it:
+        /// `1920×1080@60 · host renders 3840×2160`. A decoder's padded output is no such picture.
+        /// Only a line opening with the mode changes, so Compact, which names no size, stays as it is.
+        public static func naming(
+            picture: (width: UInt32, height: UInt32)?,
+            mode: (width: UInt32, height: UInt32, refreshHz: UInt32), in lines: [HudLine]
+        ) -> [HudLine] {
+            guard let p = picture, p.width <= mode.width, p.height <= mode.height,
+                (p.width, p.height) != (mode.width, mode.height)
+            else { return lines }
+            let lead = "\(mode.width)×\(mode.height)@\(mode.refreshHz)"
+            return lines.map { line in
+                guard line.text == lead || line.text.hasPrefix(lead + " · ") else { return line }
+                let host = L10n.overlayHostRenders(
+                    width: String(mode.width), height: String(mode.height))
+                return HudLine(
+                    role: line.role,
+                    text: "\(p.width)×\(p.height)@\(mode.refreshHz) · \(host)"
+                        + line.text.dropFirst(lead.count))
             }
         }
     }
@@ -1791,12 +1920,17 @@ public final class PunktfunkConnection: @unchecked Sendable {
         }
     }
 
-    /// Show these screens from now on, screen 0 first: the host adds, drops and resizes the others
-    /// and answers with a new `screenLayout()`. A host without screens ignores it.
-    public func requestScreens(_ screens: [PunktfunkScreen]) {
+    /// Show these screens from now on, screen 0 first, each at its view in `views` (zero for
+    /// none): the host adds, drops and resizes the others and answers with a new
+    /// `screenLayout()`. A host without screens ignores it.
+    public func requestScreens(_ screens: [PunktfunkScreen], views: [PunktfunkScreenView] = []) {
         withLiveHandle(or: ()) { h in
-            _ = screens.withUnsafeBufferPointer {
-                punktfunk_connection_request_screens(h, $0.baseAddress, UInt($0.count))
+            _ = screens.withUnsafeBufferPointer { list in
+                views.withUnsafeBufferPointer {
+                    punktfunk_connection_request_screens_view(
+                        h, list.baseAddress, $0.count == list.count ? $0.baseAddress : nil,
+                        UInt(list.count))
+                }
             }
         }
     }
@@ -2203,12 +2337,14 @@ public final class PunktfunkConnection: @unchecked Sendable {
         statsLock.lock()
         clipboardLock.lock()
         cursorLock.lock()
+        checkLock.lock()
         screenLocks.forEach { $0.lock() }
         abiLock.lock()
         let h = handle
         handle = nil
         abiLock.unlock()
         screenLocks.reversed().forEach { $0.unlock() }
+        checkLock.unlock()
         cursorLock.unlock()
         clipboardLock.unlock()
         statsLock.unlock()
@@ -2222,30 +2358,25 @@ public final class PunktfunkConnection: @unchecked Sendable {
         // Joined: no core thread can call a lender any more.
         pumpLock.lock()
         accessUnitMemory = nil
-        accessUnitMemoryBoxes.forEach { $0.release() }
-        accessUnitMemoryBoxes.removeAll()
+        accessUnitLenders.removeAll()
         pumpLock.unlock()
     }
 
     /// Assemble access units in `memory` from the next frame on (nil: the heap). The core
     /// writes into its slots on its own threads, and `nextAU` then names the slot instead of
-    /// copying. From the pump thread, between pulls.
+    /// copying. From the pump thread, between pulls. A lender the core can no longer call is
+    /// dropped here (`AccessUnitLenders.sweep`).
     public func setAccessUnitMemory(_ memory: AccessUnitMemory?) {
         pumpLock.lock()
         defer { pumpLock.unlock() }
         let installed = withLiveHandle(or: false) { h -> Bool in
             guard let memory else { return punktfunk_connection_set_au_memory(h, nil) == statusOK }
-            let box = Unmanaged.passRetained(AccessUnitMemoryBox(memory))
-            var callbacks = PunktfunkAuMemory(
-                take: accessUnitTake, release: accessUnitRelease, userdata: box.toOpaque())
-            guard punktfunk_connection_set_au_memory(h, &callbacks) == statusOK else {
-                box.release()
-                return false
+            return accessUnitLenders.lend(memory) {
+                punktfunk_connection_set_au_memory(h, &$0) == statusOK
             }
-            accessUnitMemoryBoxes.append(box)
-            return true
         }
         accessUnitMemory = installed ? memory : nil
+        if installed { accessUnitLenders.sweep() }
     }
 
     /// Send one Opus mic frame (48 kHz) to the host, where it feeds a virtual
@@ -2702,16 +2833,17 @@ public final class PunktfunkConnection: @unchecked Sendable {
     private static func redialDelay(ms: Int64) -> Duration? { ms < 0 ? nil : .milliseconds(ms) }
 
     /// The host's sentence when this session's launch did not give the player their game:
-    /// refused, died on the spot, or picked up without the host seeing it. `nil` otherwise,
-    /// and on a host too old to say. The latest verdict wins, so poll it.
+    /// refused, died on the spot, or picked up without the host seeing it. In the app's language
+    /// when the host names its message, else the host's English. `nil` otherwise, and on a host
+    /// too old to say. The latest verdict wins, so poll it.
     public var launchNotice: String? {
         return withLiveHandle(or: nil) { h in
-            // The wire caps the sentence at 200 bytes; this is that plus room for the NUL.
-            var buf = [CChar](repeating: 0, count: 256)
-            guard punktfunk_connection_launch_notice(h, &buf, UInt(buf.count)) == statusOK
+            // The wire caps the id at 64 bytes, the sentence at 200 and each of 3 placeholders at
+            // 64 + 200; this is that plus room for the separators and the NUL.
+            var buf = [CChar](repeating: 0, count: 1200)
+            guard punktfunk_connection_launch_message(h, &buf, UInt(buf.count)) == statusOK
             else { return nil }
-            let notice = String(cString: buf)
-            return notice.isEmpty ? nil : notice
+            return HostText.launch(lines: String(cString: buf))
         }
     }
 

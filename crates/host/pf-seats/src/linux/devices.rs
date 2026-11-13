@@ -154,6 +154,7 @@ pub(super) fn pin_diagnostic(box_dir: &Path, state: &Path) -> Option<Diagnostic>
     Some(match current(box_dir) {
         Ok(now) if hex::encode(now) == pin => {
             Diagnostic::info("box_pin", "The box certificate matches the pin key proofs use.")
+                .worded("seatcheck_box_pin_ok")
         }
         _ => Diagnostic::error(
             "box_pin",
@@ -161,7 +162,9 @@ pub(super) fn pin_diagnostic(box_dir: &Path, state: &Path) -> Option<Diagnostic>
                 "The box certificate no longer matches {}/{PIN}, so every face or fingerprint unlock is refused. Once the change is known to be the box's own, remove that file.",
                 state.display()
             ),
-        ),
+        )
+        .worded("seatcheck_box_pin_changed")
+        .param("path", format!("{}/{PIN}", state.display())),
     })
 }
 
@@ -175,5 +178,7 @@ pub(super) fn unreadable_diagnostic(id: &SeatId, cause: &str) -> Diagnostic {
                 "The profile's device list couldn't be read, so no device is signed in: {cause}"
             ),
         )
+        .worded("seatcheck_device_list")
+        .param("error", cause)
     }
 }

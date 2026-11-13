@@ -19,7 +19,7 @@
           "actions"
         ],
         "summary": "List host actions",
-        "description": "Per-caller view: platform availability plus whether this caller may invoke each one.\nAdmin: everything permitted. Paired cert: power per the device's live Host-power grant,\n`display.next` while the device owns a live session. Unknown ids still render with the\nserver-supplied title.",
+        "description": "Per-caller view: platform availability plus whether this caller may invoke each one.\nAdmin: everything permitted. Paired cert: power per the device's live Host-power grant,\n`display.next` while the device streams a session of its own and may choose its screen.\nUnknown ids still render with the server-supplied title.",
         "operationId": "listActions",
         "responses": {
           "200": {
@@ -42,7 +42,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/actions/{id}": {
@@ -51,7 +52,7 @@
           "actions"
         ],
         "summary": "Invoke a host action",
-        "description": "Id-only, empty body: nothing in the request reaches the privileged path. Power actions\nanswer `202`, end every session (typed HostPower close), wait ~1 s so this response\nflushes, then act; paired-cert callers need Host power and are `409` while another\ndevice's session is live or a seat host doesn't answer, the admin console never is. One\npower action at a time.\n`display.next` answers `200` with the monitor now streamed and ends nothing; a paired\ncert needs a live session of its own.",
+        "description": "Id-only, empty body: nothing in the request reaches the privileged path. Power actions\nanswer `202`, end every session (typed HostPower close), wait ~1 s so this response\nflushes, then act; paired-cert callers need Host power and are `409` while another\ndevice's session is live or a seat host doesn't answer, the admin console never is. One\npower action at a time.\n`display.next` answers `200` with the monitor now streamed and ends nothing; a paired\ncert needs a live session of its own and the Choose-its-screen grant.",
         "operationId": "invokeAction",
         "parameters": [
           {
@@ -89,7 +90,7 @@
             }
           },
           "403": {
-            "description": "This caller's access does not include this action (no Host power grant, or no live session of its own for `display.next`)",
+            "description": "This caller's access does not include this action (no Host power grant; for `display.next`, no live session of its own or no Choose-its-screen grant)",
             "content": {
               "application/json": {
                 "schema": {
@@ -138,7 +139,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/auth/device/challenge": {
@@ -162,7 +164,8 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "box"
       }
     },
     "/api/v1/auth/device/token": {
@@ -206,7 +209,243 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/auth/person/profile": {
+      "get": {
+        "tags": [
+          "host"
+        ],
+        "summary": "The person's own profile",
+        "description": "The person lane on a seat host: the session's profile as the box's `profiles.json` in this\nhost's trust copy has it. Only that profile, and only on that lane; every other caller gets\n404.",
+        "operationId": "getPersonProfile",
+        "responses": {
+          "200": {
+            "description": "The session's profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonProfile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No person session, or its profile is not in this host's copy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/auth/person/profile/avatar": {
+      "get": {
+        "tags": [
+          "host"
+        ],
+        "summary": "The person's own picture",
+        "description": "As `GET /profiles/{id}/avatar`, for the person session's own profile alone, from this seat\nhost's trust copy.",
+        "operationId": "getPersonAvatar",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "An `ETag` from an earlier response",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Image bytes",
+            "content": {
+              "image/png": {}
+            }
+          },
+          "304": {
+            "description": "The tag in `If-None-Match` is current"
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No person session, or no picture for its profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/auth/person/session": {
+      "post": {
+        "tags": [
+          "host"
+        ],
+        "summary": "Open a person session",
+        "description": "On a seat host, from loopback: trade the one-time ticket `ctl console-url` wrote into the\npage it opened for a session token. The ticket is signed with this host's person token, at\nmost 60 s old, used once, and for this host's own profile. Every other host refuses it. After\nten refused tickets in a minute a refused one answers 429; a good one still opens.",
+        "operationId": "openPersonSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonTicket"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A session for the person lane of this seat host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonGrant"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not a ticket this host takes, or not from loopback",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many refused tickets in the last minute",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-scope": "box"
+      },
+      "delete": {
+        "tags": [
+          "host"
+        ],
+        "summary": "End a person session",
+        "description": "From loopback, the session's own token as the bearer. Answers the same whether it was live.",
+        "operationId": "closePersonSession",
+        "responses": {
+          "204": {
+            "description": "The session, if it was one, is over"
+          },
+          "401": {
+            "description": "Not from loopback",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/auth/person/verify": {
+      "post": {
+        "tags": [
+          "host"
+        ],
+        "summary": "Whose a person session is",
+        "description": "Admin lane, on a seat host: whether `token` is a live person session here, and for which\nprofile. The box asks before it takes a person session's word for that profile.",
+        "operationId": "verifyPersonSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonSessionToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A live session, and its profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonOf"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No live session with that token here",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/client-logs": {
@@ -240,7 +479,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "post": {
         "tags": [
@@ -321,7 +561,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/client-logs/{id}": {
@@ -383,7 +624,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -437,7 +679,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/clients": {
@@ -471,7 +714,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -501,7 +745,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/clients/{fingerprint}": {
@@ -557,7 +802,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "patch": {
         "tags": [
@@ -628,7 +874,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/compositors": {
@@ -663,7 +910,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/diagnostics": {
@@ -695,7 +943,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/diagnostics/refresh": {
@@ -727,7 +976,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/display/clients/{fingerprint}": {
@@ -770,14 +1020,15 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "put": {
         "tags": [
           "display"
         ],
         "summary": "Save one device's overlay",
-        "description": "The WHOLE overlay: a field absent from the body stops being pinned and the\ndevice follows the host again. An overlay that pins nothing is dropped, which\nis the same as `DELETE`.",
+        "description": "The operator writes the WHOLE overlay: a field absent from the body stops being pinned and\nthe device follows the host again. An overlay that pins nothing is dropped, which is the\nsame as `DELETE`. A paired device writes its pick on its own row while its access holds\n`GRANT_DISPLAY` (`0x100`): `screen` alone, keeping the row's `topology`, or `screen` with\n`topology` (`extend`, `primary` or `exclusive`). A monitor drops the row's topology, and a\nnull screen clears the device's pick. Its other fields stay, and it is answered 204.\n`set_by` records who last wrote the pick; the operator's write keeps it while the row's\nscreen and topology are unchanged.",
         "operationId": "setDisplayClient",
         "parameters": [
           {
@@ -811,6 +1062,9 @@
               }
             }
           },
+          "204": {
+            "description": "A device's pick stored"
+          },
           "400": {
             "description": "Empty fingerprint",
             "content": {
@@ -831,6 +1085,26 @@
               }
             }
           },
+          "403": {
+            "description": "A device wrote another row or more than its screen and topology, or may not choose its screen (`screen_choice_not_granted`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is not an overlay, or a device's topology is not `extend`, `primary` or `exclusive`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Overlay could not be persisted",
             "content": {
@@ -841,7 +1115,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "delete": {
         "tags": [
@@ -891,7 +1166,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/display/layout": {
@@ -943,7 +1219,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/monitors": {
@@ -975,7 +1252,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/presets": {
@@ -1010,7 +1288,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "post": {
         "tags": [
@@ -1070,7 +1349,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/presets/{id}": {
@@ -1152,7 +1432,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -1206,7 +1487,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/release": {
@@ -1248,7 +1530,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/settings": {
@@ -1280,7 +1563,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "put": {
         "tags": [
@@ -1340,7 +1624,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/state": {
@@ -1372,7 +1657,41 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
+      }
+    },
+    "/api/v1/display/targets": {
+      "get": {
+        "tags": [
+          "display"
+        ],
+        "summary": "Screen picker",
+        "description": "The device's own screen, then each of the host's monitors with the device streaming it\nnow. A paired device also reads what it is set to and whether it may choose. A host with no\nmirror backend lists its own screen alone. `role` names the roles its own screen takes on\nthe desk.",
+        "operationId": "getDisplayTargets",
+        "responses": {
+          "200": {
+            "description": "What a device may stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisplayTargets"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/downloads": {
@@ -1407,7 +1726,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators": {
@@ -1452,7 +1772,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators/catalog": {
@@ -1494,7 +1815,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators/{id}/adopt": {
@@ -1503,7 +1825,7 @@
           "emulators"
         ],
         "summary": "Adopt a copy of an emulator",
-        "description": "Points the host at the operator's own copy, one no rule finds (a portable build unpacked\nanywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane\nonly. A seat host on a person's own account adopts none: a prepare runs the copy as that\nperson, unasked.",
+        "description": "Points the host at a copy of the caller's own, one no rule finds (a portable build unpacked\nanywhere), so it is listed and launched like any other; `forget` drops it again. The\noperator's lane, and a seat's person on their seat host. On a person's own account only that\nperson adopts one: anyone else's copy would run as them.",
         "operationId": "adoptEmulator",
         "parameters": [
           {
@@ -1565,7 +1887,7 @@
             }
           },
           "403": {
-            "description": "A seat host on a person's own account, which adopts no copy",
+            "description": "A seat host on a person's own account, from any lane but that person's",
             "content": {
               "application/json": {
                 "schema": {
@@ -1594,7 +1916,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/content": {
@@ -1603,7 +1926,7 @@
           "emulators"
         ],
         "summary": "Install a game's update or DLC",
-        "description": "Hands the files to the best copy of the emulator the way it takes them: a folder it scans,\nits own installer, or a registration file. One step per file. An emulator with no way says\nwhy.",
+        "description": "Hands the files to the best copy of the emulator the way it takes them: a folder it scans,\nits own installer, or a registration file. One step per file. An emulator with no way says\nwhy. A Windows seat host takes it from the operator alone.",
         "operationId": "installEmulatorContent",
         "parameters": [
           {
@@ -1661,7 +1984,7 @@
             }
           },
           "403": {
-            "description": "A file outside the plugin's reach",
+            "description": "A file outside the plugin's reach, or a Windows seat host's plugin asks",
             "content": {
               "application/json": {
                 "schema": {
@@ -1680,7 +2003,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/firmware": {
@@ -1778,7 +2102,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators/{id}/install": {
@@ -1871,7 +2196,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/prepare": {
@@ -1880,7 +2206,7 @@
           "emulators"
         ],
         "summary": "Prepare an emulator for a launch",
-        "description": "Every copy of the emulator on this host answers its first-run questions (a setup wizard, a\nwelcome box) the way clicking through would, gets the platform's firmware — copied into\nits firmware folder, or installed by the emulator itself — and has this session's pads\nbound in seat order, which the host undoes when the game exits. Idempotent; each step says\nwhat it did, and a platform still missing its firmware says so.",
+        "description": "Every copy of the emulator on this host answers its first-run questions (a setup wizard, a\nwelcome box) the way clicking through would, gets the platform's firmware — copied into\nits firmware folder, or installed by the emulator itself — and has this session's pads\nbound in seat order, which the host undoes when the game exits. Idempotent; each step says\nwhat it did, and a platform still missing its firmware says so. A Windows seat host takes it\nfrom the operator alone.",
         "operationId": "prepareEmulator",
         "parameters": [
           {
@@ -1938,7 +2264,7 @@
             }
           },
           "403": {
-            "description": "The firmware folder is outside the calling plugin's state directory",
+            "description": "The firmware folder is outside the calling plugin's state directory, or a Windows seat host's plugin asks",
             "content": {
               "application/json": {
                 "schema": {
@@ -1967,7 +2293,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/remove": {
@@ -2043,7 +2370,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/saves": {
@@ -2052,7 +2380,7 @@
           "emulators"
         ],
         "summary": "List a platform's saves",
-        "description": "The save units of the platform on the best copy of the emulator: name, kind, size and a\nstamp that changes with the save. A plugin needs the operator's save grant. With `profile`,\nthat seat's units; a Linux seat's are what its host exported at its last launch or exit.",
+        "description": "The save units of the platform on the best copy of the emulator: name, kind, size and a\nstamp that changes with the save. A plugin needs the operator's save grant. With `profile`,\nthat seat's units; a Linux seat's are what its host exported at its last launch or exit. A\nWindows seat host lists them for the operator alone.",
         "operationId": "getEmulatorSaves",
         "parameters": [
           {
@@ -2127,7 +2455,7 @@
             }
           },
           "403": {
-            "description": "No save grant, or a game folder outside the plugin's reach",
+            "description": "No save grant, a game folder outside the plugin's reach, or a Windows seat host's plugin asks",
             "content": {
               "application/json": {
                 "schema": {
@@ -2156,7 +2484,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators/{id}/saves/export": {
@@ -2165,7 +2494,7 @@
           "emulators"
         ],
         "summary": "Copy saves out",
-        "description": "Writes each named unit into `dir`: the save file, or a tar of a save folder with nothing in\nits headers that differs between machines. A plugin's `dir` is inside its own state folder.\nWith `profile`, that seat's units; a Linux seat's files are its host's last export, and a\nunit it didn't export is left out.",
+        "description": "Writes each named unit into `dir`: the save file, or a tar of a save folder with nothing in\nits headers that differs between machines. A plugin's `dir` is inside its own state folder.\nWith `profile`, that seat's units; a Linux seat's files are its host's last export, and a\nunit it didn't export is left out. A Windows seat host takes it from the operator alone.",
         "operationId": "exportEmulatorSaves",
         "parameters": [
           {
@@ -2232,7 +2561,7 @@
             }
           },
           "403": {
-            "description": "No save grant, or a folder outside the plugin's reach",
+            "description": "No save grant, a folder outside the plugin's reach, or a Windows seat host's plugin asks",
             "content": {
               "application/json": {
                 "schema": {
@@ -2261,7 +2590,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/saves/import": {
@@ -2270,7 +2600,7 @@
           "emulators"
         ],
         "summary": "Put saves back",
-        "description": "Each unit goes where the emulator keeps it, in the first of its kinds with a place for its\nname; what was there is kept in hermir's save backups. A unit with no place yet is a step\nthat says so. A plugin's files are inside its own state folder. With `profile`, into that\nseat's copies; a Linux seat's host puts each back before its next game starts, and the step\nsays so.",
+        "description": "Each unit goes where the emulator keeps it, in the first of its kinds with a place for its\nname; what was there is kept in hermir's save backups. A unit with no place yet is a step\nthat says so. A plugin's files are inside its own state folder. With `profile`, into that\nseat's copies; a Linux seat's host puts each back before its next game starts, and the step\nsays so. A Windows seat host takes it from the operator alone.",
         "operationId": "importEmulatorSaves",
         "parameters": [
           {
@@ -2337,7 +2667,7 @@
             }
           },
           "403": {
-            "description": "No save grant, or a file outside the plugin's reach",
+            "description": "No save grant, a file outside the plugin's reach, or a Windows seat host's plugin asks",
             "content": {
               "application/json": {
                 "schema": {
@@ -2366,7 +2696,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/events": {
@@ -2444,7 +2775,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/events/relay": {
@@ -2489,7 +2821,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/game/end": {
@@ -2551,7 +2884,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/game/holds/{token}/release": {
@@ -2597,7 +2931,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/gpus": {
@@ -2629,7 +2964,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/gpus/preference": {
@@ -2691,7 +3027,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/health": {
@@ -2716,7 +3053,8 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "host"
       }
     },
     "/api/v1/hooks": {
@@ -2725,7 +3063,7 @@
           "hooks"
         ],
         "summary": "Get the hook configuration",
-        "description": "Empty document when none is stored.",
+        "description": "Empty document when none is stored. On a seat host on a person's own account, empty on\nevery lane but that person's own: their hooks may carry their webhooks' secrets.",
         "operationId": "getHooks",
         "responses": {
           "200": {
@@ -2748,14 +3086,15 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "put": {
         "tags": [
           "hooks"
         ],
         "summary": "Replace the hook configuration",
-        "description": "Whole-document PUT, not a patch. Applies from the next event. Commands run as the host\nuser (the interactive session on Windows). An `elevated` hook is refused until an\nadministrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A\nseat host on a person's own account refuses every hook and runs none.",
+        "description": "Whole-document PUT, not a patch. Applies from the next event. Commands run as the host\nuser (the interactive session on Windows). An `elevated` hook is refused until an\nadministrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A\nseat host on a person's own account takes hooks from that person's own session alone, and\nruns only those. On a Windows seat that session names no `hmac_secret_file`.",
         "operationId": "setHooks",
         "requestBody": {
           "content": {
@@ -2779,7 +3118,7 @@
             }
           },
           "400": {
-            "description": "Structurally invalid configuration, or an `elevated` hook this host won't run",
+            "description": "Structurally invalid configuration, an `elevated` hook this host won't run, or a person's secret file on Windows",
             "content": {
               "application/json": {
                 "schema": {
@@ -2799,7 +3138,7 @@
             }
           },
           "403": {
-            "description": "A seat host on a person's own account, which takes no hooks",
+            "description": "A seat host on a person's own account, from any lane but that person's",
             "content": {
               "application/json": {
                 "schema": {
@@ -2818,7 +3157,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/host": {
@@ -2849,7 +3189,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/host/audio/apps": {
@@ -2881,7 +3222,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/host/settings": {
@@ -2913,7 +3255,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       },
       "patch": {
         "tags": [
@@ -2973,7 +3316,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/host/theme": {
@@ -3005,7 +3349,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/library": {
@@ -3014,7 +3359,7 @@
           "library"
         ],
         "summary": "List every title this host knows, sorted by title.",
-        "description": "Plugin-synced entries plus custom ones. Art the host can serve is rewritten to this API's\nart proxy, local paths and remote URLs alike; a URL the proxy already refused passes\nthrough. `?provider=` / `?platform=` (case-insensitive) narrow. `?as=` names the\nasking device's profile: each title it has launched carries its own numbers in `stats.mine`.\n\nThe operator lane sees hidden titles (`hidden: true`) so the console can un-hide them.\nEvery other lane is filtered upstream and cannot tell they exist.",
+        "description": "Plugin-synced entries plus custom ones. Art the host can serve is rewritten to this API's\nart proxy, local paths and remote URLs alike; a URL the proxy already refused passes\nthrough. `?provider=` / `?platform=` (case-insensitive) narrow. `?as=` names a profile: the\nlibrary as it plays it, the box's with the profile's own layer on top, and each title it has\nlaunched carries its own numbers in `stats.mine`.\n\nThe operator lane sees hidden titles (`hidden: true`) so the console can un-hide them; with\n`as`, those the profile hides, and none the box hides. Every other lane is filtered upstream\nand cannot tell they exist.",
         "operationId": "getLibrary",
         "parameters": [
           {
@@ -3038,7 +3383,7 @@
           {
             "name": "as",
             "in": "query",
-            "description": "Profile id whose own play stats fill `stats.mine`",
+            "description": "Profile id: the library as that profile plays it, its own play stats in `stats.mine`",
             "required": false,
             "schema": {
               "type": "string"
@@ -3068,8 +3413,19 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/art/{id}/{kind}": {
@@ -3078,7 +3434,7 @@
           "library"
         ],
         "summary": "Stream one cover-art image for a library entry.",
-        "description": "Resolves `kind` (`portrait` | `hero` | `logo` | `header`) for a catalog id and returns the\nbytes: a launcher's cover cache on the host disk, or a remote URL the host fetches once on\nthe first miss and then serves from its own store. Unknown id or kind is 404 so the client\ncan try the next candidate, and so is a URL the fetch refused — `GET /library` advertises\nthat one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a\nrequest whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the\ncovers are in the owner's home, and the owner's host serves them while it runs.",
+        "description": "Resolves `kind` (`portrait` | `hero` | `logo` | `header`) for a catalog id and returns the\nbytes: a launcher's cover cache on the host disk, or a remote URL the host fetches once on\nthe first miss and then serves from its own store. Unknown id or kind is 404 so the client\ncan try the next candidate, and so is a URL the fetch refused — `GET /library` advertises\nthat one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a\nrequest whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the\ncovers are in the owner's home, and the owner's host serves them while it runs. With `as`,\nthe art as that profile sees it: its own picks first.",
         "operationId": "getLibraryArt",
         "parameters": [
           {
@@ -3095,6 +3451,15 @@
             "in": "path",
             "description": "`portrait` | `hero` | `logo` | `header`",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: the art as that profile sees it",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -3133,7 +3498,7 @@
             }
           },
           "404": {
-            "description": "No art of that kind for that id",
+            "description": "No art of that kind for that id, or `as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -3142,7 +3507,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/custom": {
@@ -3151,7 +3517,7 @@
           "library"
         ],
         "summary": "Create a custom title",
-        "description": "A user-curated entry. The host assigns a stable id, returned in the body.",
+        "description": "A user-curated entry. The host assigns a stable id, returned in the body. On a seat host it is\nthat host's own title, under an `own:` id, kept in its own config folder and run as its\naccount; the box lists its name and picture for the seat's profile. On a profile that uses an\nexisting account only that person adds one, from their own session.",
         "operationId": "createCustomGame",
         "requestBody": {
           "content": {
@@ -3194,6 +3560,16 @@
               }
             }
           },
+          "403": {
+            "description": "A field this lane may not set, or a seat on a person's own account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Couldn't save the catalog",
             "content": {
@@ -3204,7 +3580,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/custom/{id}": {
@@ -3213,13 +3590,13 @@
           "library"
         ],
         "summary": "One custom entry as stored, `detect` and `prep` included",
-        "description": "Operator lane only: the hint names host paths, which is why the catalog read\nmodel leaves it out. The paired-cert allowlist names `GET /library` exactly.",
+        "description": "Operator lane only: the hint names host paths, which is why the catalog read\nmodel leaves it out. The paired-cert allowlist names `GET /library` exactly. On a person's\nown account a title of its own is that person's alone to read: any other lane gets the 404.",
         "operationId": "getCustomGame",
         "parameters": [
           {
             "name": "id",
             "in": "path",
-            "description": "The custom entry id (without the `custom:` prefix)",
+            "description": "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id",
             "required": true,
             "schema": {
               "type": "string"
@@ -3257,7 +3634,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "put": {
         "tags": [
@@ -3268,7 +3646,7 @@
           {
             "name": "id",
             "in": "path",
-            "description": "The custom entry id (without the `custom:` prefix)",
+            "description": "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id",
             "required": true,
             "schema": {
               "type": "string"
@@ -3336,6 +3714,16 @@
               }
             }
           },
+          "409": {
+            "description": "A seat host named a row of the box's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Couldn't save the catalog",
             "content": {
@@ -3346,7 +3734,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "delete": {
         "tags": [
@@ -3357,7 +3746,7 @@
           {
             "name": "id",
             "in": "path",
-            "description": "The custom entry id (without the `custom:` prefix)",
+            "description": "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id",
             "required": true,
             "schema": {
               "type": "string"
@@ -3398,6 +3787,16 @@
               }
             }
           },
+          "409": {
+            "description": "A seat host named a row of the box's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Couldn't save the catalog",
             "content": {
@@ -3408,7 +3807,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/hidden/{id}": {
@@ -3417,7 +3817,7 @@
           "library"
         ],
         "summary": "Hide or un-hide one library title.",
-        "description": "Curation, not access control: the title leaves every play surface and launch resolution\nbut is not deleted. The operator console still lists it (`hidden: true`) so it can return.\nThe id is not required to exist now — a plugin mid-sync or an unmounted drive would\notherwise refuse a choice that should stick. Emits `library.changed` only on a real change.",
+        "description": "Curation, not access control: the title leaves every play surface and launch resolution\nbut is not deleted. The operator console still lists it (`hidden: true`) so it can return.\nThe id is not required to exist now — a plugin mid-sync or an unmounted drive would\notherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it\ncannot bring back a title the box hides. A paired device that is that locked profile's person\nmay set it too, hiding only a title the profile's library lists. Emits `library.changed` only\non a real change.",
         "operationId": "setLibraryEntryHidden",
         "parameters": [
           {
@@ -3425,6 +3825,15 @@
             "in": "path",
             "description": "The library entry id (e.g. `steam:70`)",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: hide it for that profile only",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -3471,6 +3880,26 @@
               }
             }
           },
+          "403": {
+            "description": "A device that isn't the person of the profile `as` names, or a plugin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`as` names no profile on this host, or a device hides a title the profile's library doesn't list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Couldn't save the settings",
             "content": {
@@ -3481,7 +3910,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/install/{id}": {
@@ -3564,7 +3994,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "delete": {
         "tags": [
@@ -3638,7 +4069,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/install/{id}/cancel": {
@@ -3704,7 +4136,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/install/{id}/pause": {
@@ -3780,7 +4213,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/metadata": {
@@ -3815,7 +4249,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "put": {
         "tags": [
@@ -3871,7 +4306,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/metadata/{source}": {
@@ -3954,7 +4390,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "delete": {
         "tags": [
@@ -4025,7 +4462,670 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
+      }
+    },
+    "/api/v1/library/overrides": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Read the game overrides",
+        "description": "The shared overrides, each game's entry and each source's, as `library-overrides.json`\nholds them. `GET /library` carries what each title resolves to. With `as`, the profile's own\nfile: where it has an entry for a game or its source, that entry wins over the box's. Beside\nit, `box_sets`: the box's shared overrides it may point at, which only the console changes,\nand `box_games` and `box_sources`: the box's entries for what that profile's library lists.",
+        "operationId": "getLibraryOverrides",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: that profile's own overrides",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The shared overrides and every game's and source's entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverridesAnswer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-data"
+      }
+    },
+    "/api/v1/library/overrides/games/{id}": {
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Set one game's overrides",
+        "description": "`{ \"set\": id }` points the game at a shared override; fields alone are its own values;\n`{ \"none\": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,\nand the game takes its source's. The id is not required to exist now, as with hiding.\nWith `as`, the entry is that profile's own and `set` may name the box's shared override or\nthe profile's; `{}` hands the game back to the box's entry. A paired device that is that\nlocked profile's person may set it too, for a title the profile's library lists. Emits\n`library.changed`.",
+        "operationId": "setGameOverrides",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The library entry id (e.g. `steam:70`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: set it for that profile only",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverrideEntry"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stored; the game's entry after the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideEntry"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty id, a value out of range, or `set` or `none` beside another field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A device that isn't the person of the profile `as` names, or a plugin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`set` names no shared override, `as` names no profile on this host, or a device names a title the profile's library doesn't list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-data"
+      }
+    },
+    "/api/v1/library/overrides/sets": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Create a shared override",
+        "description": "A named set of stream settings that games and sources point at. The host assigns its id.\nWith `as`, it is that profile's own.",
+        "operationId": "createOverrideSet",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: create it for that profile",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GameOverrides"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created, with its id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideSet"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, or a value out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another shared override has this name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-data"
+      }
+    },
+    "/api/v1/library/overrides/sets/{id}": {
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Change a shared override",
+        "description": "A field left out keeps its value; `null` clears it. Every game and source that uses it\nfollows. With `as`, one of that profile's own. Emits `library.changed` for each source they\nbelong to.",
+        "operationId": "updateOverrideSet",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The shared override's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: one of that profile's own",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverrideSetPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stored; the shared override after the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideSet"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name left, or a value out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No shared override with that id, or `as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another shared override has this name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-data"
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Delete a shared override",
+        "description": "The games and sources that used it lose their entry and go back to what the device\ndecides. The answer counts them. With `as`, one of that profile's own, and only its entries\nlose theirs. Emits `library.changed` for each source they belong to.",
+        "operationId": "deleteOverrideSet",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The shared override's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: one of that profile's own",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted; how many games and sources used it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideUsers"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No shared override with that id, or `as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-data"
+      }
+    },
+    "/api/v1/library/overrides/sources/{source}": {
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Set one source's overrides",
+        "description": "The same body as a game's, without `none`: `{}` clears the source's entry. Each title of\nthe source without an entry of its own takes it. With `as`, the entry is that profile's own\nand `set` may name the box's shared override or the profile's. A paired device that is that\nlocked profile's person, and that profile's person session, may set it too, for a source\nwith a title the profile's library lists. Emits `library.changed`.",
+        "operationId": "setSourceOverrides",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "description": "The source, the store part of a library id (e.g. `lutris`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: set it for that profile only",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverrideEntry"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stored; the source's entry after the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideEntry"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty source, a value out of range, `set` beside values, or `none`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A device that isn't the person of the profile `as` names, or a plugin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`set` names no shared override, `as` names no profile on this host, or a device or person names a source with no title in the profile's library",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-data"
+      }
+    },
+    "/api/v1/library/own": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "A seat host's own titles, as the box may see them",
+        "description": "The custom entries this seat host keeps in its own config folder, each by its `own:` id,\ntitle, platform and `http(s)` art: never how it starts, and never a cover on its disk. The box\nasks when the seat's library changes and when the seat comes up, and lists them for the seat's\nprofile. A host that keeps none answers an empty list.",
+        "operationId": "listOwnTitles",
+        "responses": {
+          "200": {
+            "description": "This seat host's own titles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OwnTitle"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-data"
+      },
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Store a seat's own titles for its profile",
+        "description": "What a seat host's `GET /library/own` answered, for the profile `as` names, on the host that\nwrites the library: the door hands it here, and a Windows box stores its seats' itself. Rows\nare checked as an Art & Metadata source's are: a row with a bad id or title, a cover that isn't\n`http(s)` and a bad platform are dropped. An answer that isn't a list, lists more than 500 or\nnames an id twice is refused, and the stored titles stay. Emits `library.changed` on a change.",
+        "operationId": "storeOwnTitles",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: the profile whose seat answered",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OwnTitle"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored"
+          },
+          "400": {
+            "description": "Not an answer the box keeps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the admin lane",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`as` names no profile with a seat of its own",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the titles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/library/page": {
@@ -4034,7 +5134,7 @@
           "library"
         ],
         "summary": "One page of the library.",
-        "description": "Title order, `limit` titles a page (60 when absent, 200 at most). `next_cursor` names the\nlast title sent; pass it back as `cursor` for the next page. It is a place in the order, not\nan offset: a title added or removed between two pages neither repeats nor skips one.\n`q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,\n`launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a\ncaller that needs only that entry. Lanes see what `GET /library` shows them, `as`\nincluded.",
+        "description": "Title order, `limit` titles a page (60 when absent, 200 at most). `next_cursor` names the\nlast title sent; pass it back as `cursor` for the next page. It is a place in the order, not\nan offset: a title added or removed between two pages neither repeats nor skips one.\n`q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,\n`launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a\ncaller that needs only that entry. Lanes see what `GET /library` shows them, `as`\nincluded. `hidden=true` lists only hidden titles: every one on the operator's lane, and to\na device that is the person of the profile `as` names, the titles that profile hides. Any\nother caller gets the page it would get without it.",
         "operationId": "getLibraryPage",
         "parameters": [
           {
@@ -4112,9 +5212,18 @@
             }
           },
           {
+            "name": "hidden",
+            "in": "query",
+            "description": "`true`: only hidden titles, each `hidden: true`. The operator's lane sees every one; a device that is the person of the profile `as` names sees the titles that profile hides. Ignored for any other caller",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "as",
             "in": "query",
-            "description": "Profile id whose own play stats fill `stats.mine`",
+            "description": "Profile id: the library as that profile plays it, its own play stats in `stats.mine`",
             "required": false,
             "schema": {
               "type": "string"
@@ -4151,8 +5260,19 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/picks/{id}": {
@@ -4161,7 +5281,7 @@
           "library"
         ],
         "summary": "Pick the art for one slot of a library entry",
-        "description": "The operator's choice beats the entry's own art and every metadata source, and survives\nthe provider's next reconcile. `url: null` clears the pick. The id is not required to\nexist now, as with hiding. Emits `library.changed`.",
+        "description": "The operator's choice beats the entry's own art and every metadata source, and survives\nthe provider's next reconcile. `url: null` clears the pick. The id is not required to\nexist now, as with hiding. With `as`, the pick is that profile's own and beats the box's for\nthe same slot. Emits `library.changed`.",
         "operationId": "setLibraryArtPick",
         "parameters": [
           {
@@ -4169,6 +5289,15 @@
             "in": "path",
             "description": "The library entry id (e.g. `steam:70`)",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: pick it for that profile only",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4215,6 +5344,16 @@
               }
             }
           },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Couldn't save the picks",
             "content": {
@@ -4225,7 +5364,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/provider/{provider}": {
@@ -4249,7 +5389,7 @@
           {
             "name": "store",
             "in": "query",
-            "description": "Claim this store for the provider ([a-z0-9_-], `custom`/`manual` reserved)",
+            "description": "Claim this store for the provider ([a-z0-9_-], `custom`/`own`/`manual` reserved)",
             "required": false,
             "schema": {
               "type": "string"
@@ -4323,7 +5463,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "delete": {
         "tags": [
@@ -4384,7 +5525,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/library/provider/{provider}/downloads": {
@@ -4457,7 +5599,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/library/provider/{provider}/running": {
@@ -4530,7 +5673,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/library/scanners": {
@@ -4539,8 +5683,19 @@
           "library"
         ],
         "summary": "List library sources",
-        "description": "One row per installed library plugin, with its enable state. Sources default to\nenabled; disabling hides titles from the next read. The custom store is not a\nsource and is always on. Every row is\n`origin: \"plugin\"`.",
+        "description": "One row per installed library plugin, with its enable state. Sources default to\nenabled; disabling hides titles from the next read. The custom store is not a\nsource and is always on. Every row is\n`origin: \"plugin\"`. With `as`, a source is off when the box or the profile turned it off, and\n`off_by` says which.",
         "operationId": "listLibraryScanners",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: the sources as that profile has them",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "This host's scanners with their enable state",
@@ -4564,8 +5719,19 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/scanners/{id}": {
@@ -4574,7 +5740,7 @@
           "library"
         ],
         "summary": "Enable or disable a library source.",
-        "description": "Takes effect on the next library read. Disabling hides titles; the plugin may keep\nreconciling while off. Nothing is deleted. Emits `library.changed` when the state changes.",
+        "description": "Takes effect on the next library read. Disabling hides titles; the plugin may keep\nreconciling while off. Nothing is deleted. With `as`, the switch is that profile's own: it\nturns a source off for the profile, and cannot turn on one the box turned off. A paired device\nthat is that locked profile's person may set it too. Emits `library.changed` when the state\nchanges.",
         "operationId": "setLibraryScanner",
         "parameters": [
           {
@@ -4582,6 +5748,15 @@
             "in": "path",
             "description": "The scanner id (e.g. `steam`)",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: switch it for that profile only",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4622,7 +5797,7 @@
             }
           },
           "403": {
-            "description": "A plugin toggled another plugin's source",
+            "description": "A plugin toggled another plugin's source or named a profile, or a device that isn't the person of the profile `as` names",
             "content": {
               "application/json": {
                 "schema": {
@@ -4632,7 +5807,7 @@
             }
           },
           "404": {
-            "description": "No such scanner on this platform",
+            "description": "No such scanner on this platform, or `as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -4651,7 +5826,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/local/summary": {
@@ -4696,7 +5872,8 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "host"
       }
     },
     "/api/v1/logs": {
@@ -4752,7 +5929,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/native/clients": {
@@ -4786,7 +5964,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -4836,7 +6015,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/clients/{fingerprint}": {
@@ -4891,7 +6071,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "patch": {
         "tags": [
@@ -4982,7 +6163,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pair": {
@@ -5014,7 +6196,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -5046,7 +6229,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pair/arm": {
@@ -5118,7 +6302,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pending": {
@@ -5153,7 +6338,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pending/{id}/approve": {
@@ -5258,7 +6444,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pending/{id}/deny": {
@@ -5316,7 +6503,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/pair": {
@@ -5348,7 +6536,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/pair/pin": {
@@ -5423,7 +6612,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/plugin-access": {
@@ -5468,7 +6658,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugin-access/requests": {
@@ -5510,7 +6701,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "post": {
         "tags": [
@@ -5573,7 +6765,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugin-access/{plugin}/decide": {
@@ -5582,7 +6775,7 @@
           "plugin-access"
         ],
         "summary": "Grant, deny, or forget an access request",
-        "description": "`allow` turns a pending request into a grant (the platform ACL lands first, so a failed\ngrant stores nothing), or with `write` set grants a path the operator handed over, on\nbehalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.\nA folder that takes longer answers 202 and lists its walk until the record lands.",
+        "description": "`allow` turns a pending request into a grant (the platform ACL lands first, so a failed\ngrant stores nothing), or with `write` set grants a path the operator handed over, on\nbehalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.\nA folder that takes longer answers 202 and lists its walk until the record lands. On a seat\nhost the grant is for its own runner: a folder the seat's account can't list is refused, and\non Windows that account places the folder's access. On a person's own account only that person\ndecides, and an emulator or core install is refused, as it is to a Windows seat's person.",
         "operationId": "decidePluginAccess",
         "parameters": [
           {
@@ -5647,7 +6840,7 @@
             }
           },
           "403": {
-            "description": "Not reachable on the plugin or device lane",
+            "description": "Not reachable on the plugin or device lane, or an install on a person's own account",
             "content": {
               "application/json": {
                 "schema": {
@@ -5676,7 +6869,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugin-access/{plugin}/release": {
@@ -5769,7 +6963,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins": {
@@ -5804,7 +6999,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins/logs": {
@@ -5849,7 +7045,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins/{id}": {
@@ -5905,7 +7102,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "delete": {
         "tags": [
@@ -5939,7 +7137,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins/{id}/ui-credential": {
@@ -5992,7 +7191,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins/{id}/ui/attach": {
@@ -6048,7 +7248,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/profiles": {
@@ -6093,7 +7294,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "post": {
         "tags": [
@@ -6183,7 +7385,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/default": {
@@ -6227,7 +7430,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/doctor": {
@@ -6279,7 +7483,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/door": {
@@ -6357,7 +7562,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/enumerate": {
@@ -6366,7 +7572,7 @@
           "profiles"
         ],
         "summary": "List the profiles a device can pick",
-        "description": "Every profile on the box, the owner first. A client shows this as its picker. Each row's\n`unlock` says what the asking device sends with its connect: a profile on a person's own\nLinux account needs the account's password, or a key proof from a device that enrolled one,\nuntil the device is signed in to its running desktop.",
+        "description": "The profiles the asking device may open, the owner first, and the locked ones that take a\nPIN; the console lists every profile. A client shows this as its picker. Each row's `unlock`\nsays what the asking device sends with its connect: a profile on a person's own Linux account\nneeds the account's password, or a key proof from a device that enrolled one, until the\ndevice is signed in to its running desktop; a locked profile whose list lacks the device\nneeds its PIN. `person` marks the rows whose own library view this device may change now.",
         "operationId": "enumerateProfiles",
         "responses": {
           "200": {
@@ -6402,7 +7608,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/seating": {
@@ -6444,7 +7651,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "put": {
         "tags": [
@@ -6504,7 +7712,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/windows-accounts": {
@@ -6539,7 +7748,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}": {
@@ -6632,7 +7842,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -6705,7 +7916,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/avatar": {
@@ -6769,7 +7981,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "put": {
         "tags": [
@@ -6838,7 +8051,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -6881,7 +8095,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/devices": {
@@ -6890,7 +8105,7 @@
           "profiles"
         ],
         "summary": "List the devices signed in to a profile",
-        "description": "For a profile on a person's own Linux account: each device that unlocked it, and how it gets\nback on. Admin lane only.",
+        "description": "For a profile on a person's own Linux account: each device that unlocked it, and how it gets\nback on. For any other profile: the devices its lock lets in, the same rows, kept while it is\nopen. Admin lane only.",
         "operationId": "listProfileDevices",
         "parameters": [
           {
@@ -6938,7 +8153,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password",
+            "description": "A profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -6957,14 +8172,110 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
+      },
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Let a paired device open a profile",
+        "description": "Puts a device paired with this host, Punktfunk or Moonlight, on the profile's list until it\nis signed out. Answers the list. Admin lane only.",
+        "operationId": "addProfileDevice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileDeviceAdd"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The profile's devices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SignedInDevice"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a device fingerprint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such profile, or no paired device with that fingerprint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The list is full",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
           "profiles"
         ],
         "summary": "Sign every device out of a profile",
-        "description": "For a profile on a person's own Linux account: every device needs the account's password\nagain and every unlock key is forgotten. Admin lane only.",
+        "description": "For a profile on a person's own Linux account: every device needs the account's password\nagain and every unlock key is forgotten. For any other: its lock's list empties, and every\nsession on it from a device off the list ends. Admin lane only.",
         "operationId": "signOutProfileDevices",
         "parameters": [
           {
@@ -7002,7 +8313,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password",
+            "description": "A profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -7021,7 +8332,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/devices/{fingerprint}": {
@@ -7030,7 +8342,7 @@
           "profiles"
         ],
         "summary": "Sign a device out of a profile",
-        "description": "For a profile on a person's own Linux account: the device needs the account's password again\nand its unlock key is forgotten. Admin lane only.",
+        "description": "For a profile on a person's own Linux account: the device needs the account's password again\nand its unlock key is forgotten. For any other: the device leaves its lock's list, and a\nsession it plays there ends. Admin lane only.",
         "operationId": "signOutProfileDevice",
         "parameters": [
           {
@@ -7087,7 +8399,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password",
+            "description": "A profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -7106,7 +8418,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/end": {
@@ -7179,7 +8492,369 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/profiles/{id}/lock": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Read a profile's lock",
+        "description": "Whether it is locked, whether it has a PIN, and the wrong PINs counted against it. Its\ndevices are `GET /profiles/{id}/devices`. Admin lane only.",
+        "operationId": "getProfileLock",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The lock",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Lock a profile",
+        "description": "From now its list is exactly `devices`, paired devices, so a lock keeps the ones someone\nplays on, and with `pin` that is its PIN; a session from any other device ends. One step: on\nany refusal nothing changed. On a profile already locked it changes nothing and takes only\ndevices the profile lets in and no PIN, so it never widens who opens it: the device and PIN\nroutes change a locked profile. Admin lane only.",
+        "operationId": "lockProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Its devices and PIN; an empty list and the PIN it has when absent",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LockProfile"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a device fingerprint, or a PIN that isn't 4 to 8 digits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such profile, or no paired device with a fingerprint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, a lock file that doesn't read, or a locked profile asked for another device or a PIN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Unlock a profile",
+        "description": "Every paired device opens it again. Its list and its PIN stay for the next lock. Admin lane\nonly.",
+        "operationId": "unlockProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/profiles/{id}/lock/pin": {
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Set a profile's PIN",
+        "description": "While it is locked, a device off its list opens it with this PIN, and the PIN puts it on the\nlist. Replaces any PIN it had. Admin lane only.",
+        "operationId": "setProfilePin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfilePin"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not 4 to 8 digits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Clear a profile's PIN",
+        "description": "While it is locked, only the devices on its list open it. Admin lane only.",
+        "operationId": "clearProfilePin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/start": {
@@ -7242,7 +8917,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/stop": {
@@ -7315,7 +8991,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/unlock-challenge": {
@@ -7324,7 +9001,7 @@
           "profiles"
         ],
         "summary": "Ask for a key unlock's challenge",
-        "description": "For a profile on a person's own Linux account and a device that enrolled an unlock key: 32\nrandom bytes for the key to sign, and the seat id the signed message names. It is good for\none proof within two minutes, and a new one replaces it. A device without a key is refused;\nit unlocks with the account's password. Paired devices only.",
+        "description": "For a device that enrolled an unlock key: 32 random bytes for the key to sign, and what the\nsigned message names, the seat id for a profile on a person's own Linux account or the\nprofile id for a locked profile. It is good for one proof within two minutes, and a new one\nreplaces it. A device without a key is refused; it unlocks with the account's password or the\nprofile's PIN. Paired devices only.",
         "operationId": "unlockChallenge",
         "parameters": [
           {
@@ -7389,7 +9066,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password, or this device has no unlock key",
+            "description": "This device has no unlock key for the profile",
             "content": {
               "application/json": {
                 "schema": {
@@ -7408,7 +9085,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/wake": {
@@ -7417,7 +9095,7 @@
           "profiles"
         ],
         "summary": "Get a profile's seat ready",
-        "description": "Starts a stopped seat so the next connect lands in it, and answers at once with the seat\n`starting`; poll `enumerate` until it is `ready`. A profile with no seat to start only gets\nits row back. A paired device wakes the profile it lands in when it names none; any other\nneeds its launch grant. A profile on a person's own Linux account is never woken: its\ndesktop starts when the connect brings the account's password.",
+        "description": "Starts a stopped seat so the next connect lands in it, and answers at once with the seat\n`starting`; poll `enumerate` until it is `ready`. A profile with no seat to start only gets\nits row back. A paired device wakes the profile it lands in when it names none; any other\nneeds its launch grant, and a locked one a device on its list. A profile on a person's own\nLinux account is never woken: its desktop starts when the connect brings the account's\npassword.",
         "operationId": "wakeProfile",
         "parameters": [
           {
@@ -7452,7 +9130,7 @@
             }
           },
           "403": {
-            "description": "This device may not start another profile's seat",
+            "description": "This device may not start that profile's seat",
             "content": {
               "application/json": {
                 "schema": {
@@ -7481,7 +9159,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/session": {
@@ -7520,7 +9199,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/idr": {
@@ -7553,7 +9233,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/last": {
@@ -7585,7 +9266,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/session/settings": {
@@ -7594,6 +9276,17 @@
           "session"
         ],
         "operationId": "getSessionSettings",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: what that profile's own seat plays with",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Stored settings + which axes this build enforces",
@@ -7614,16 +9307,48 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`as` names a profile that plays on the host's own desktop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "put": {
         "tags": [
           "session"
         ],
         "summary": "Set the session policy",
-        "description": "Persisted clamped. Takes effect on the next decision, including a session\nalready streaming — policy is read at session end, not start.",
+        "description": "Persisted clamped. Takes effect on the next decision, including a session\nalready streaming — policy is read at session end, not start. With `as`, the settings of\nthat profile's own seat; a profile on the host's own desktop has none of its own. A paired\ndevice that is that locked profile's person may set them too.",
         "operationId": "setSessionSettings",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: set what that profile's own seat plays with",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7665,6 +9390,36 @@
               }
             }
           },
+          "403": {
+            "description": "`as` on a plugin's lane, or a device that isn't the person of the profile `as` names",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A seat's own host, or `as` names a profile that plays on the host's own desktop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Couldn't save the session settings",
             "content": {
@@ -7675,7 +9430,100 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
+      },
+      "delete": {
+        "tags": [
+          "session"
+        ],
+        "summary": "Drop a profile's own session settings",
+        "description": "Its seat plays with the box's Seat defaults again; the answer is what `GET` with the same\n`as` answers, `configured: false`. Dropping settings a profile never had is the same answer.\n`as` is required: the host's own settings are changed with `PUT`, never dropped. A paired\ndevice that is that locked profile's person may drop them too.",
+        "operationId": "clearSessionSettings",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: the profile whose own settings to drop",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dropped; the profile's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionSettingsState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No `as`, or `as` names the owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`as` on a plugin's lane, or a device that isn't the person of the profile `as` names",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A seat's own host, or `as` names a profile that plays on the host's own desktop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't remove the settings file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/session/{id}": {
@@ -7723,7 +9571,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/access": {
@@ -7798,7 +9647,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/audio": {
@@ -7856,7 +9706,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/idr": {
@@ -7903,7 +9754,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/pads": {
@@ -7968,7 +9820,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/player": {
@@ -8043,7 +9896,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/capture/live": {
@@ -8083,7 +9937,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/capture/start": {
@@ -8115,7 +9970,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/capture/status": {
@@ -8145,7 +10001,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/capture/stop": {
@@ -8189,7 +10046,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/recordings": {
@@ -8224,7 +10082,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/recordings/{id}": {
@@ -8285,7 +10144,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       },
       "delete": {
         "tags": [
@@ -8337,7 +10197,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/status": {
@@ -8368,7 +10229,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/store/catalog": {
@@ -8410,7 +10272,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/install": {
@@ -8419,7 +10282,7 @@
           "store"
         ],
         "summary": "Install a plugin",
-        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A seat host on a person's own account installs from the built-in\nsource alone: anything else would run code the box chose as that person.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
+        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A seat host installs into the seat's own plugins, which its own runner\nruns as the seat's account. On a person's own account it installs for that person's own\nsession, from the built-in source alone: what it installs runs as them. A Windows seat's\nperson installs from the built-in source alone too.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
         "operationId": "installPlugin",
         "requestBody": {
           "content": {
@@ -8463,7 +10326,7 @@
             }
           },
           "403": {
-            "description": "Not authorized for the plugin token, or a plugin from outside the built-in source on a seat host on a person's own account",
+            "description": "Not authorized for the plugin token, or a plugin from outside the built-in source on a seat host on a person's own account or for a Windows seat's person",
             "content": {
               "application/json": {
                 "schema": {
@@ -8482,7 +10345,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/installed": {
@@ -8527,7 +10391,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/jobs": {
@@ -8571,7 +10436,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/jobs/{id}": {
@@ -8634,7 +10500,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/refresh": {
@@ -8676,7 +10543,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/runtime": {
@@ -8685,7 +10553,7 @@
           "store"
         ],
         "summary": "Plugin runner state",
-        "description": "Plugins run only while the runner is on. The runner discovers units at startup, so a freshly\ninstalled plugin may not have appeared yet.",
+        "description": "Plugins run only while the runner is on. The runner discovers units at startup, so a freshly\ninstalled plugin may not have appeared yet. On a seat host on a person's own account the\nrunner is theirs: any lane but their own session reads it as not installed.",
         "operationId": "getPluginRuntime",
         "responses": {
           "200": {
@@ -8718,13 +10586,15 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "post": {
         "tags": [
           "store"
         ],
         "summary": "Turn the plugin runner on or off",
+        "description": "On a seat host on a person's own account only their own session switches it.",
         "operationId": "setPluginRuntime",
         "requestBody": {
           "content": {
@@ -8777,7 +10647,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/sources": {
@@ -8821,7 +10692,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/sources/{name}": {
@@ -8887,7 +10759,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "delete": {
         "tags": [
@@ -8930,7 +10803,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/uninstall": {
@@ -9002,7 +10876,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/update/apply": {
@@ -9054,7 +10929,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/update/check": {
@@ -9106,7 +10982,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/update/status": {
@@ -9138,7 +11015,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/webtransport": {
@@ -9172,7 +11050,8 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "box"
       }
     }
   },
@@ -9309,6 +11188,13 @@
           "title": {
             "type": "string",
             "description": "Clients localize known ids and fall back to this for unknown ones."
+          },
+          "unavailable_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The id of `unavailable_reason`: the host message `apierr_<code>`. Absent when the reason\nis the system's own words."
           },
           "unavailable_reason": {
             "type": [
@@ -9568,13 +11454,34 @@
       },
       "ApiError": {
         "type": "object",
-        "description": "Envelope for every non-2xx body.",
+        "description": "Envelope for every non-2xx body.\n\nA sentence written for a person carries `code`: an app words it as the host message\n`apierr_<code>` with `params`, and shows `error` for a code it does not know. Without\n`code`, `error` is developer text and an app words the failure itself.",
         "required": [
           "error"
         ],
         "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sentence's id: the message `apierr_<code>` in the host's messages."
+          },
           "error": {
-            "type": "string"
+            "type": "string",
+            "description": "The sentence in English, or developer text when `code` is absent."
+          },
+          "params": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The values of that message's placeholders, by name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
@@ -10552,7 +12459,8 @@
               "string",
               "null"
             ],
-            "description": "Mirror this connector for this device only. Absent follows the host,\nwhich is also the only way back to a virtual screen — a device cannot\nopt OUT of a host-wide pin. Nobody has asked to; the reverse direction\nis what the field exists for."
+            "description": "Deprecated: `screen`'s connector, kept one release for older consoles and SDKs.",
+            "deprecated": true
           },
           "game_session": {
             "oneOf": [
@@ -10608,6 +12516,28 @@
             ],
             "format": "double",
             "description": "Scale this device's screen is created at, when the desktop has not already\nremembered one for it (`display-management.md` §5.4). Mutter mints a fresh EDID\nserial per session, so its own `monitors.xml` never rematches — without this the\noperator re-sets the scale on every connect."
+          },
+          "screen": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DisplayTarget",
+                "description": "What this device streams. `own` opts it out of a host-wide monitor; absent follows\nthe host. The device may write this field and `topology` on its own row."
+              }
+            ]
+          },
+          "set_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SetBy",
+                "description": "Who last wrote `screen` or `topology`. Absent when neither is set."
+              }
+            ]
           },
           "topology": {
             "oneOf": [
@@ -10771,6 +12701,11 @@
               "on_window": {
                 "$ref": "#/components/schemas/OnWindow",
                 "description": "Which workspace this title opens on ([`crate::library::OnWindow`]).\nAbsent follows the host's display policy."
+              },
+              "person": {
+                "type": "boolean",
+                "description": "A seat host's own title its person wrote, in their own session, or one of their plugins\npublished. On a person's own account a title without it is neither listed nor started.\nSet by the host, never from a body.",
+                "readOnly": true
               },
               "prep": {
                 "type": "array",
@@ -11157,7 +13092,8 @@
               "string",
               "null"
             ],
-            "description": "Stream this physical connector (`DP-1`, `HDMI-A-2`) instead of a\nvirtual display; `None` is the virtual path. Host-wide, orthogonal\nto `preset`. `PUNKTFUNK_CAPTURE_MONITOR` overrides it so `host.env`\ncan pin without a console write undoing it."
+            "description": "Deprecated: `screen`'s connector, kept one release for older consoles and SDKs. Read\nwhen `screen` is absent; written from `screen`.",
+            "deprecated": true
           },
           "clients": {
             "type": "object",
@@ -11216,6 +13152,17 @@
           },
           "preset": {
             "$ref": "#/components/schemas/Preset"
+          },
+          "screen": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DisplayTarget",
+                "description": "What a device with no `screen` of its own streams; absent is its own screen.\nHost-wide, orthogonal to `preset`. `PUNKTFUNK_CAPTURE_MONITOR` overrides it so\n`host.env` can pin without a console write undoing it."
+              }
+            ]
           },
           "topology": {
             "$ref": "#/components/schemas/Topology"
@@ -11308,6 +13255,83 @@
             "items": {
               "$ref": "#/components/schemas/ApiDisplayInfo"
             }
+          }
+        }
+      },
+      "DisplayTarget": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "A virtual display the host creates for this device.",
+            "enum": [
+              "own"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "A physical head, by connector (`DP-1`, `HDMI-A-2`).",
+            "required": [
+              "monitor"
+            ],
+            "properties": {
+              "monitor": {
+                "type": "string",
+                "description": "A physical head, by connector (`DP-1`, `HDMI-A-2`)."
+              }
+            }
+          }
+        ],
+        "description": "What a device streams: a screen of its own, or one of the host's monitors by connector.\nJSON `\"own\"` or `{\"monitor\": \"HDMI-A-1\"}`."
+      },
+      "DisplayTargets": {
+        "type": "object",
+        "description": "What a device may stream (`GET /display/targets`).",
+        "required": [
+          "locked",
+          "host_default",
+          "may_choose",
+          "targets"
+        ],
+        "properties": {
+          "host_default": {
+            "$ref": "#/components/schemas/DisplayTarget",
+            "description": "What a device with no screen of its own streams."
+          },
+          "locked": {
+            "type": "boolean",
+            "description": "`PUNKTFUNK_CAPTURE_MONITOR` fixes the screen for every device."
+          },
+          "may_choose": {
+            "type": "boolean",
+            "description": "Whether the caller may choose the screen: a paired device's `GRANT_DISPLAY`, always on\nthe operator and plugin lanes. A device's write without it is 403."
+          },
+          "role": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScreenRoles",
+                "description": "The roles a device's own screen takes on this desk. Absent on a contract seat, a host\nwith no mirror backend, a gamescope session, and a desktop that lists no physical\nmonitor."
+              }
+            ]
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScreenRow"
+            }
+          },
+          "yours": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DisplayTarget",
+                "description": "What the calling device is set to, before a taken or missing monitor falls back to its\nown screen. A screen it set itself counts only while `may_choose`. Null on the operator\nand plugin lanes."
+              }
+            ]
           }
         }
       },
@@ -12570,6 +14594,21 @@
                 "$ref": "#/components/schemas/OnWindow",
                 "description": "Which workspace this title's windows open on, where the compositor can\nplace them ([`OnWindow`])."
               },
+              "overrides": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/GameOverrides",
+                    "description": "The stream settings this host sets for the title (`overrides.rs`), resolved: its own, a\nshared override's with that one's `name`, or its source's. Joined at read time."
+                  }
+                ]
+              },
+              "own": {
+                "type": "boolean",
+                "description": "One of the profile in view's own titles (`own:` id). Its seat host keeps how it starts;\nanywhere else it is a name and a picture, and starts nothing."
+              },
               "provider": {
                 "type": [
                   "string",
@@ -12688,6 +14727,54 @@
           "on_quit",
           "always"
         ]
+      },
+      "GameOverrides": {
+        "type": "object",
+        "description": "Stream settings this host sets for a game. A field left out is the device's to decide.",
+        "properties": {
+          "beyond_screen": {
+            "type": "boolean",
+            "description": "`lines` also reaches a device whose screen is smaller, scaled down there."
+          },
+          "gamepad": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A controller by the Hello's name for it: `xbox360`, `dualsense`, `dualshock4`, `auto`, …\nThe host stores the name itself, so `ds` reads back as `dualsense`.",
+            "example": "dualsense"
+          },
+          "hdr": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "hz": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Refresh rate in Hz, never above the device's screen.",
+            "example": 60,
+            "maximum": 240,
+            "minimum": 24
+          },
+          "lines": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Height in lines: 2160 for 4K. The width follows the device's aspect.",
+            "example": 1080,
+            "maximum": 4320,
+            "minimum": 360
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The shared override these values came from. A game's or source's own values have none.",
+            "example": "1080p60 DualSense"
+          }
+        }
       },
       "GameRefPayload": {
         "type": "object",
@@ -13135,6 +15222,13 @@
             "type": "string",
             "description": "What breaks. Empty only on `ok`/`inapplicable`."
           },
+          "impact_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host message `impact` is the English of."
+          },
           "params": {
             "type": "object",
             "description": "Interpolation for localized strings (`{user}`, `{group}`). Only the host can see these.",
@@ -13154,6 +15248,13 @@
                 "$ref": "#/components/schemas/Remedy"
               }
             ]
+          },
+          "remedy_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host message the remedy's `text` is the English of."
           },
           "severity": {
             "$ref": "#/components/schemas/Severity",
@@ -13177,6 +15278,13 @@
           "summary": {
             "type": "string",
             "description": "English fallback. Console localizes when it knows `id`."
+          },
+          "summary_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host message `summary` is the English of, worded with `params`."
           }
         }
       },
@@ -13287,6 +15395,26 @@
               "null"
             ],
             "description": "Why turning the door on would be refused here, as the operator's next move: the files a\nchannel installs it with are missing, or the account isn't in `punktfunk-update`. `null`\nwhen it would start, on the door itself and on a seat host, and for every lane but the\nadmin one. The answer is up to 30 s old; a switch request drops it."
+          },
+          "door_unavailable_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The id of `door_unavailable`: the host message `apierr_<code>`."
+          },
+          "door_unavailable_params": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The values of that message's placeholders, by name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "elevated_commands": {
             "type": [
@@ -13826,6 +15954,14 @@
           }
         }
       },
+      "Layer": {
+        "type": "string",
+        "description": "Whose file a value came from.",
+        "enum": [
+          "box",
+          "profile"
+        ]
+      },
       "Layout": {
         "type": "object",
         "properties": {
@@ -14187,6 +16323,59 @@
           }
         }
       },
+      "LockProfile": {
+        "type": "object",
+        "description": "`POST /profiles/{id}/lock`, optional.",
+        "properties": {
+          "devices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Paired devices, by certificate SHA-256 hex: the list it locks with, in place of any an\nearlier lock left. A profile already locked takes only devices it lets in."
+          },
+          "pin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "4 to 8 digits: its PIN from now. Absent keeps the PIN it has. A profile already locked\ntakes none.",
+            "example": "2468"
+          }
+        }
+      },
+      "LockSummary": {
+        "type": "object",
+        "description": "A profile's lock, as the profile list shows it.",
+        "required": [
+          "locked",
+          "pin",
+          "failed_pins"
+        ],
+        "properties": {
+          "failed_pins": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Wrong PINs in the last 15 minutes over all devices. At 10, PIN entry waits.",
+            "minimum": 0
+          },
+          "locked": {
+            "type": "boolean",
+            "description": "Only the devices on its list, and a device that brings its PIN, open it. Also `true` for\nevery profile while the lock file doesn't read."
+          },
+          "pin": {
+            "type": "boolean",
+            "description": "It has a PIN."
+          },
+          "shared_with": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The owner profile whose lock opens it, for a profile that shares the owner's desktop:\nthe other fields are that lock's."
+          }
+        }
+      },
       "LogEntry": {
         "type": "object",
         "required": [
@@ -14500,7 +16689,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "`GRANT_*` bits 0–5. `null` is a pre-grants record, which means full.",
+            "description": "`GRANT_*` bits 0–8 (`0x100` is choosing its screen), as this host reads the record: an\nolder host's Full reads `0x1FF`, and `0xFF` is everything but the screen choice. `null`\nis a pre-grants record, which means full.",
             "example": 1,
             "minimum": 0
           },
@@ -14606,12 +16795,254 @@
             "properties": {
               "hidden": {
                 "type": "boolean",
-                "description": "Set by [`set_entry_hidden`]. Omitted when false so the shape only grows for hidden titles."
+                "description": "Set by [`set_entry_hidden`]. Omitted when false so the shape only grows for hidden titles.\nWith a profile in view (`as`), the profile hid it: a title the box hides is not listed."
+              },
+              "profile": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ProfileValues",
+                    "description": "With a profile in view, the values on this row that are the profile's own."
+                  }
+                ]
               }
             }
           }
         ],
         "description": "A library entry plus the operator's view of it — whether they hid it.\n\nA field on [`GameEntry`] would leak onto every lane: `GET /library` returns\n`Vec<GameEntry>` except on the operator's lane, so a hidden flag cannot\nreach a paired client. `flatten` keeps the wire a plain entry plus one key."
+      },
+      "OverrideEntry": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/GameOverrides"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "none": {
+                "type": "boolean",
+                "description": "A game's alone, with no other field: the device decides, and the source's entry is\nskipped. A source that sets nothing has no entry."
+              },
+              "set": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "example": "a1b2c3d4e5f6"
+              }
+            }
+          }
+        ],
+        "description": "A game's or a source's entry: `set` names a shared override, the fields are its own, or a\ngame's `none` opts out. Only one of the three; `{}` is no entry. `name` is the shared\noverride's alone."
+      },
+      "OverrideSet": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/GameOverrides"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "example": "a1b2c3d4e5f6"
+              }
+            }
+          }
+        ],
+        "description": "A shared override with its id: what create and update answer."
+      },
+      "OverrideSetPatch": {
+        "type": "object",
+        "description": "`PUT /library/overrides/sets/{id}`: a field left out keeps its value, `null` clears it.",
+        "properties": {
+          "beyond_screen": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "gamepad": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hdr": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "hz": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "lines": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "OverrideUsers": {
+        "type": "object",
+        "description": "How many entries named a deleted shared override. They are removed: those games and sources\ngo back to what the device decides.",
+        "required": [
+          "games",
+          "sources"
+        ],
+        "properties": {
+          "games": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sources": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "OverridesAnswer": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/OverridesDoc"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "box_games": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Beside `box_sets`: the box's entries for the games that profile's library lists, which\napply where it has none of its own.",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/OverrideEntry"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "box_sets": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "With `as` naming a profile with a layer of its own: the box's shared overrides by id,\nwhich that profile's entries may name with `set`. Read only here.",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/GameOverrides"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "box_sources": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Beside `box_sets`: the box's entries for the sources with a title in that library.",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/OverrideEntry"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ],
+        "description": "The body of `GET /library/overrides`."
+      },
+      "OverridesDoc": {
+        "type": "object",
+        "description": "`library-overrides.json`, and the body of `GET /library/overrides`.",
+        "properties": {
+          "games": {
+            "type": "object",
+            "description": "Library id (`steam:570`) → its entry.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OverrideEntry"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "sets": {
+            "type": "object",
+            "description": "Shared overrides by id, 12 lowercase hex.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/GameOverrides"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "sources": {
+            "type": "object",
+            "description": "Source (`lutris`) → the entry each of its titles takes when it has none of its own.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OverrideEntry"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "example": 1,
+            "minimum": 0
+          }
+        }
+      },
+      "OwnTitle": {
+        "type": "object",
+        "description": "One of a profile's own titles as its seat host publishes it to the box: what a shelf shows,\nnever what starts it. Built field by field, so a field added to [`CustomEntry`] stays on the\nseat until it is added here.",
+        "required": [
+          "id",
+          "title"
+        ],
+        "properties": {
+          "art": {
+            "$ref": "#/components/schemas/Artwork",
+            "description": "`http(s)` URLs alone: a cover on the seat's disk stays there."
+          },
+          "id": {
+            "type": "string",
+            "description": "`own:` and 12 lowercase hex, minted by the seat host.",
+            "example": "own:3f9a0c1b2d4e"
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "PC"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
       },
       "PadFrame": {
         "type": "object",
@@ -14945,6 +17376,95 @@
           }
         }
       },
+      "PersonGrant": {
+        "type": "object",
+        "description": "A session a ticket opened.",
+        "required": [
+          "token",
+          "expires_at",
+          "profile"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds; it ends sooner when this host stops or the session is closed."
+          },
+          "profile": {
+            "type": "string",
+            "description": "The profile it is for: this seat host's own."
+          },
+          "token": {
+            "type": "string",
+            "description": "Present as `Authorization: Bearer <token>` to this seat host, or as\n`X-Punktfunk-Person-Session` to the box. 64 lowercase hex."
+          }
+        }
+      },
+      "PersonOf": {
+        "type": "object",
+        "description": "Whose a live session is. The person lane stamps it on each of its calls.",
+        "required": [
+          "profile"
+        ],
+        "properties": {
+          "profile": {
+            "type": "string"
+          }
+        }
+      },
+      "PersonProfile": {
+        "type": "object",
+        "description": "A person's own profile, as their pages show it.",
+        "required": [
+          "id",
+          "display_name",
+          "has_avatar"
+        ],
+        "properties": {
+          "accent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`#RRGGBB`."
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "has_avatar": {
+            "type": "boolean",
+            "description": "It has a picture, at `GET /auth/person/profile/avatar`."
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "PersonSessionToken": {
+        "type": "object",
+        "description": "A session token the box asks about.",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "PersonTicket": {
+        "type": "object",
+        "description": "The ticket `ctl console-url` wrote into the page it opened.",
+        "required": [
+          "ticket"
+        ],
+        "properties": {
+          "ticket": {
+            "type": "string",
+            "description": "`<unix seconds>.<nonce>.<profile id>.<HMAC-SHA256>`, as the page's `ticket` carries it."
+          }
+        }
+      },
       "Phase": {
         "type": "string",
         "description": "Where a session is. It only moves forward; `/status` reports it per row.",
@@ -14999,6 +17519,26 @@
               "discord",
               "firefox"
             ]
+          }
+        }
+      },
+      "PlayingDevice": {
+        "type": "object",
+        "description": "A device playing as a profile now.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the device's certificate, lowercase hex. Absent when its session matches no\nsingle paired device: it can't be kept, only warned about."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name it paired with, else the name its session gave."
           }
         }
       },
@@ -15439,7 +17979,8 @@
           "gaming-rig",
           "shared-desktop",
           "hotdesk",
-          "workstation"
+          "workstation",
+          "play-together"
         ]
       },
       "PresetInfo": {
@@ -15457,7 +17998,7 @@
           },
           "id": {
             "type": "string",
-            "description": "`default` | `gaming-rig` | `shared-desktop` | `hotdesk` | `workstation`."
+            "description": "`default` | `gaming-rig` | `shared-desktop` | `hotdesk` | `workstation` | `play-together`."
           },
           "summary": {
             "type": "string"
@@ -15501,6 +18042,17 @@
                   "null"
                 ],
                 "description": "The device whose seat became this profile, lowercase hex."
+              },
+              "lock": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LockSummary",
+                    "description": "Its lock. Absent for a profile on a person's own account, which opens with its password."
+                  }
+                ]
               },
               "steam_home": {
                 "type": "boolean",
@@ -15563,6 +18115,56 @@
           }
         }
       },
+      "ProfileDeviceAdd": {
+        "type": "object",
+        "description": "`POST /profiles/{id}/devices`.",
+        "required": [
+          "fingerprint"
+        ],
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "description": "SHA-256 of a paired device's certificate, hex: a Punktfunk device or a Moonlight one."
+          }
+        }
+      },
+      "ProfileLock": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/LockSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "playing"
+            ],
+            "properties": {
+              "playing": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PlayingDevice"
+                },
+                "description": "The devices playing as it now, on its desktop's other profiles too: the ones a lock would\ncut off unless they are kept."
+              }
+            }
+          }
+        ],
+        "description": "A profile's lock, as the console shows it."
+      },
+      "ProfilePin": {
+        "type": "object",
+        "description": "`PUT /profiles/{id}/lock/pin`.",
+        "required": [
+          "pin"
+        ],
+        "properties": {
+          "pin": {
+            "type": "string",
+            "description": "4 to 8 digits.",
+            "example": "2468"
+          }
+        }
+      },
       "ProfilePublic": {
         "type": "object",
         "description": "One profile as a client's picker shows it.",
@@ -15612,6 +18214,10 @@
           "owner": {
             "type": "boolean",
             "description": "The box's own session."
+          },
+          "person": {
+            "type": "boolean",
+            "description": "The asking device is this locked profile's person now: it may hide a title for it\n(`PUT /library/hidden/{id}?as=`) and list what it hides (`GET /library/page?hidden=true`)."
           },
           "seat": {
             "oneOf": [
@@ -15683,6 +18289,23 @@
           "seat_password": {
             "type": "string",
             "description": "The new password of an adopted account, after it changed in Windows."
+          }
+        }
+      },
+      "ProfileValues": {
+        "type": "object",
+        "description": "The values on a row that the profile in view (`as`) set itself.",
+        "properties": {
+          "overrides": {
+            "type": "boolean",
+            "description": "`overrides` is the profile's: its entry for the game, or for the game's source."
+          },
+          "picks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The art slots the profile picked: `portrait`, `hero`, `logo`, `header`."
           }
         }
       },
@@ -16217,6 +18840,17 @@
             "type": "string",
             "example": "Steam"
           },
+          "off_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Layer",
+                "description": "With a profile in view (`as`), who turned the source off. Only the box turns on what the\nbox turned off."
+              }
+            ]
+          },
           "origin": {
             "$ref": "#/components/schemas/SourceOrigin",
             "description": "Always `plugin` on this host. `Builtin` remains so OpenAPI still names it for N-1 consoles."
@@ -16241,6 +18875,98 @@
           }
         }
       },
+      "ScreenRole": {
+        "type": "string",
+        "description": "How a device's own screen sits among the host's monitors: its `topology`, from its side.",
+        "enum": [
+          "only",
+          "main",
+          "second"
+        ]
+      },
+      "ScreenRoles": {
+        "type": "object",
+        "description": "The roles a device's own screen takes on the desk.",
+        "required": [
+          "host_default",
+          "offered"
+        ],
+        "properties": {
+          "host_default": {
+            "$ref": "#/components/schemas/ScreenRole",
+            "description": "What a connect gets with no pick of the device's: the console's row for it, else the\nhost's topology."
+          },
+          "offered": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScreenRole"
+            },
+            "description": "The roles this host gives. `main` only where the desktop has a main screen."
+          },
+          "yours": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScreenRole",
+                "description": "The role of the calling device's own pick while it counts and its screen is its own.\nNull with no pick, a monitor pick, no `GRANT_DISPLAY`, and on the operator lane."
+              }
+            ]
+          }
+        }
+      },
+      "ScreenRow": {
+        "type": "object",
+        "description": "One row of the screen picker. The first is always `own`; the rest are the host's heads.",
+        "required": [
+          "id",
+          "label"
+        ],
+        "properties": {
+          "connector": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Driven now. A head another device's exclusive screen switched off is `false`."
+          },
+          "id": {
+            "type": "string",
+            "description": "`own`, else the connector."
+          },
+          "in_use_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pairing label of the other device streaming this monitor, else null. Absent on `own`."
+          },
+          "label": {
+            "type": "string",
+            "description": "The monitor's name (`make model`, else the connector). `Own screen` on the first row,\nwhich clients word themselves."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`WIDTHxHEIGHT@HZ` of the current mode."
+          },
+          "primary": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
       "SeatCheck": {
         "type": "object",
         "description": "One thing the seat checks found.",
@@ -16255,12 +18981,29 @@
             "description": "A stable id such as `rds_role`.",
             "example": "rds_role"
           },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host message `message` is the English of, worded with `params`."
+          },
           "level": {
             "$ref": "#/components/schemas/CheckLevel"
           },
           "message": {
             "type": "string",
             "description": "One plain sentence for the operator."
+          },
+          "params": {
+            "type": "object",
+            "description": "The values of that message's placeholders, by name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "seat_id": {
             "type": [
@@ -16309,9 +19052,35 @@
             ],
             "description": "The progress line while `starting`, or why while `unavailable`."
           },
+          "detail_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host message `detail` is the English of, worded with `detail_params`."
+          },
+          "detail_params": {
+            "type": "object",
+            "description": "The values of that message's placeholders, by name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "kind": {
             "$ref": "#/components/schemas/SeatKind",
             "description": "Which kind of seat it is."
+          },
+          "mgmt_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The management port of the host on its ledger row, for the console. Absent to a paired\ndevice, and for a profile with no row.",
+            "minimum": 0
           },
           "occupant": {
             "type": [
@@ -16960,6 +19729,14 @@
           }
         }
       },
+      "SetBy": {
+        "type": "string",
+        "description": "Who last wrote a device's pick: its `screen`, its `topology`, or both.",
+        "enum": [
+          "device",
+          "console"
+        ]
+      },
       "SetGpuPreference": {
         "type": "object",
         "required": [
@@ -17145,11 +19922,12 @@
       },
       "SignedInDevice": {
         "type": "object",
-        "description": "A device signed in to a profile on a person's own Linux account.",
+        "description": "A device signed in to a profile on a person's own Linux account, or on a locked profile's\nlist.",
         "required": [
           "fingerprint",
           "name",
           "kind",
+          "moonlight",
           "added_unix",
           "last_unix"
         ],
@@ -17171,6 +19949,10 @@
             "format": "int64",
             "description": "When it last unlocked or rejoined, unix seconds."
           },
+          "moonlight": {
+            "type": "boolean",
+            "description": "A Moonlight pairing rather than a Punktfunk one. Never on a person's own account."
+          },
           "name": {
             "type": "string",
             "description": "The name it paired with."
@@ -17183,6 +19965,7 @@
         "enum": [
           "for_now",
           "stay",
+          "added",
           "key"
         ]
       },
@@ -17731,16 +20514,20 @@
       },
       "UnlockChallenge": {
         "type": "object",
-        "description": "`POST /profiles/{id}/unlock-challenge`.",
+        "description": "`POST /profiles/{id}/unlock-challenge`: `seat` for a profile on a person's own Linux account,\n`profile` for a locked one, never both.",
         "required": [
-          "challenge",
-          "seat"
+          "challenge"
         ],
         "properties": {
           "challenge": {
             "type": "string",
             "description": "32 random bytes, lowercase hex: good for one proof within two minutes.",
             "example": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+          },
+          "profile": {
+            "type": "string",
+            "description": "The locked profile's id, as its signed message names it.",
+            "example": "9a3f1c2b7e40"
           },
           "seat": {
             "type": "string",
@@ -17751,11 +20538,13 @@
       },
       "UnlockNeed": {
         "type": "string",
-        "description": "What a device sends with its connect to open a profile on a person's own Linux account.",
+        "description": "What a device sends with its connect to open a profile: a profile on a person's own Linux\naccount, or a locked one. A client that doesn't know a word reads it as `password`.",
         "enum": [
           "none",
           "password",
-          "key"
+          "key",
+          "pin",
+          "pin_key"
         ]
       },
       "UnpairAllResult": {
@@ -17898,6 +20687,26 @@
               "string",
               "null"
             ]
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The failure in words, as the host message `hostupdate_<error_code>` with `from`, `to`\nand `error_params`; `error` keeps the detail."
+          },
+          "error_params": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The values of that message's other placeholders, by name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "finished_unix": {
             "type": "integer",

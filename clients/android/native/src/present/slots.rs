@@ -41,6 +41,9 @@ const GLASS_MIN_PERIODS: i64 = 300;
 const GLASS_WINDOW_PERIODS: i64 = 7200;
 /// A wider gap between fences is a stream pause: its whole periods are a guess.
 const GLASS_MAX_GAP_PERIODS: i64 = 8;
+/// A stated period that moves by more than one part in this is another panel mode. The
+/// choreographer's own reading wobbles by far less.
+const PERIOD_SWITCH_RATIO: i64 = 20;
 
 /// The slot clock, the pacer's memory of the slots it assigned and observed, and the apply margin
 /// the observed slots adapt.
@@ -67,6 +70,8 @@ pub(crate) struct Slots {
     /// rate can be off by a thousandth, a Shield TV stating 60 with its fences at 59.94 a second.
     glass_span_ns: i64,
     glass_periods: i64,
+    /// SurfaceFlinger's own lead as the choreographer states it; 0 = unknown or not followed.
+    sf_lead_ns: i64,
 }
 
 impl Slots {
@@ -99,6 +104,7 @@ impl Slots {
             last_present_ns: 0,
             glass_span_ns: 0,
             glass_periods: 0,
+            sf_lead_ns: 0,
         }
     }
 
@@ -123,10 +129,35 @@ impl Slots {
 
     /// The choreographer's panel period (0 = none yet): the compositor's own statement of the
     /// grid, which a source below the panel rate cannot bias the way present spacings can.
+    /// A rate switch starts the fence average over: its periods counted the old grid.
     pub(crate) fn set_period(&mut self, panel_period_ns: i64) {
-        if panel_period_ns > 0 {
-            self.clock.set_period(panel_period_ns);
+        if panel_period_ns <= 0 {
+            return;
         }
+        let old = self.clock.period_ns();
+        if old > 0 && (panel_period_ns - old).abs() * PERIOD_SWITCH_RATIO > old {
+            (self.glass_span_ns, self.glass_periods) = (0, 0);
+        }
+        self.clock.set_period(panel_period_ns);
+    }
+
+    /// SurfaceFlinger's own lead: a frame timeline's expected present minus its deadline, the
+    /// instant it wakes to latch for that present. 0 keeps every target on the clock's grid.
+    pub(crate) fn set_sf_lead(&mut self, sf_lead_ns: i64) {
+        self.sf_lead_ns = sf_lead_ns;
+    }
+
+    /// Whole periods SurfaceFlinger presents a latch after the clock's grid does: its own lead
+    /// past the fences' lead, which the clock folds into one period. A display queue (a Shield
+    /// TV) lengthens only the fences and adds none. 0 without a stated lead.
+    pub(crate) fn sf_periods(&self) -> i64 {
+        let p = self.clock.period_ns();
+        if self.sf_lead_ns <= 0 || p <= 0 {
+            return 0;
+        }
+        (self.sf_lead_ns - self.clock.lead_ns() + p / 2)
+            .div_euclid(p)
+            .max(0)
     }
 
     /// Pacing off for the rest of the run: the `Skipping` verdict.
@@ -166,9 +197,10 @@ impl Slots {
 
     /// The desired present time for a frame whose earliest presentable instant is `earliest`
     /// (`CLOCK_MONOTONIC`: its due time, or `now_ns` when that is past), and the slot it aims
-    /// at. `0` = as soon as possible: the bootstrap before the first present sample, a device
-    /// without present fences, pacing switched off, or a `downrated` panel, where
-    /// SurfaceFlinger coalesces.
+    /// at. The target is half a period before SurfaceFlinger's expected present for the slot's
+    /// latch: the slot's grid present plus [`Self::sf_periods`]. `0` = as soon as possible: the
+    /// bootstrap before the first present sample, a device without present fences, pacing
+    /// switched off, or a `downrated` panel, where SurfaceFlinger coalesces.
     pub(crate) fn next_target(
         &mut self,
         earliest: i64,
@@ -191,8 +223,9 @@ impl Slots {
             c.held += 1;
         }
         self.last_slot = Some(slot);
+        let p = self.clock.period_ns();
         (
-            self.clock.present_ns(slot) - self.clock.period_ns() / 2,
+            self.clock.present_ns(slot) + self.sf_periods() * p - p / 2,
             Some(slot),
         )
     }
@@ -241,7 +274,7 @@ impl Slots {
     /// it: the compositor's own wake jitter, read before the clock takes the sample. `None`
     /// without a latch or a phased clock.
     pub(crate) fn latch_deviation_ns(&self, latch_ns: i64) -> Option<i64> {
-        if latch_ns == 0 || !self.clock.phased() {
+        if latch_ns <= 0 || !self.clock.phased() {
             return None;
         }
         let anchor = latch_ns + self.clock.lead_ns();
@@ -287,11 +320,12 @@ impl Slots {
         }
     }
 
-    /// One completion's latch (0 = none: `unlatched`). Two transactions latched in one commit
+    /// One completion's latch (0 or below = none: `unlatched`; the platform states -1 for a
+    /// transaction it never latched). Two transactions latched in one commit
     /// share the instant and SurfaceFlinger showed only the newer; the interval histogram sees
     /// the same pair as a 0-slot spacing.
     pub(crate) fn note_latch(&mut self, latch_ns: i64, c: &mut Counters) {
-        if latch_ns == 0 {
+        if latch_ns <= 0 {
             c.unlatched += 1;
             return;
         }
@@ -501,6 +535,39 @@ mod tests {
     }
 
     #[test]
+    fn a_compositor_lead_past_the_folded_one_moves_the_target_by_whole_periods() {
+        // (name, SurfaceFlinger's stated lead, periods added); the fences' lead is LEAD.
+        let rows = [
+            ("none stated", 0, 0),
+            ("the fences' own", LEAD, 0),
+            ("2 ms past the fences'", LEAD + 2_000_000, 0),
+            ("one period past: the clock folded it", LEAD + P, 1),
+            ("3 ms short of one period past", LEAD + P - 3_000_000, 1),
+            ("two periods past", LEAD + 2 * P, 2),
+        ];
+        for (name, sf_lead, n) in rows {
+            let (mut s, mut c) = phased(PresentPriority::Latency, false);
+            s.set_sf_lead(sf_lead);
+            let (target, slot) = s.next_target(T0 + P / 10, T0 + P / 10, false, &mut c);
+            assert_eq!(slot, Some(1), "{name}: the slot stays");
+            assert_eq!(target, s.clock.present_ns(1) + n * P - P / 2, "{name}");
+            assert_eq!(
+                s.latch_ns_for(slot, 0),
+                s.clock.present_ns(1) - LEAD,
+                "{name}"
+            );
+        }
+        // A display queue two refreshes deep lengthens only the fences: nothing added.
+        let mut s = Slots::new(120, P, PresentPriority::Latency, true, false, None);
+        let mut c = Counters::default();
+        s.on_present(T0 + 2 * P, T0 - LEAD, None, true, 0, &mut c);
+        s.set_sf_lead(LEAD);
+        assert_eq!(s.sf_periods(), 0);
+        let (target, slot) = s.next_target(T0 + P / 10, T0 + P / 10, false, &mut c);
+        assert_eq!(target, s.clock.present_ns(slot.expect("phased")) - P / 2);
+    }
+
+    #[test]
     fn an_early_frame_inside_the_hold_band_is_held_and_beyond_it_shares() {
         let (mut s, mut c) = phased(PresentPriority::Latency, false);
         assert_eq!(aim(&mut s, &mut c, T0 + P / 10), 1);
@@ -685,6 +752,12 @@ mod tests {
             s.on_present(present, present - LEAD, None, true, 0, &mut c);
         }
         assert_eq!(s.glass_period_ns(), Some(P5994));
+        // A switch to another mode starts the average over; the stated period's wobble does not.
+        let mut s = glassed(60, P5994, 1000);
+        s.set_period(1_000_000_000 / 60 + 1_000);
+        assert_eq!(s.glass_period_ns(), Some(P5994));
+        s.set_period(1_000_000_000 / 120);
+        assert_eq!(s.glass_period_ns(), None);
         // A latch standing in for a fence measures nothing.
         let mut s = Slots::new(60, exact, PresentPriority::Latency, true, false, None);
         for k in 0..2000 {
@@ -834,7 +907,9 @@ mod tests {
         let mut c = Counters::default();
         let mut s = Slots::new(120, P, PresentPriority::Latency, true, false, None);
         s.note_latch(0, &mut c);
-        assert_eq!(c.unlatched, 1);
+        s.note_latch(-1, &mut c);
+        s.note_latch(-1, &mut c);
+        assert_eq!((c.unlatched, c.coalesced), (3, 0));
         for k in [0, 1, 3, 3] {
             s.on_present(T0 + k * P, T0 + k * P - LEAD, None, false, 0, &mut c);
         }

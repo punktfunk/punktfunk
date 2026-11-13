@@ -1,0 +1,117 @@
+{
+  "parts": {
+    "always": [
+      "common"
+    ],
+    "typescript_only": [
+      "web",
+      "browser",
+      "decky"
+    ],
+    "apple": [
+      "common",
+      "client",
+      "apple",
+      "host"
+    ]
+  },
+  "budgets": {
+    "roles": {
+      "_hint": 110,
+      "_title": 60,
+      "_body": 200,
+      "_confirm": 200,
+      "_failed": 200,
+      "_a11y": 200
+    },
+    "label": 200,
+    "translation_slack": 1.2,
+    "parts": {
+      "web": {
+        "roles": {
+          "_help": 110,
+          "_hint": 110,
+          "_note": 110,
+          "_intro": 110
+        },
+        "label": 200
+      }
+    }
+  },
+  "banned": [
+    {
+      "text": "please",
+      "at": "anywhere",
+      "why": "say what to do, without Please"
+    },
+    {
+      "text": "!",
+      "at": "end",
+      "why": "end with a period, not an exclamation mark"
+    },
+    {
+      "text": "failed to",
+      "at": "anywhere",
+      "why": "say what did not happen: Couldn't …"
+    },
+    {
+      "text": "could not",
+      "at": "anywhere",
+      "why": "write Couldn't"
+    },
+    {
+      "text": "cannot",
+      "at": "anywhere",
+      "why": "write can't"
+    },
+    {
+      "text": "unable to",
+      "at": "anywhere",
+      "why": "write Couldn't or can't"
+    }
+  ],
+  "retired": [
+    {
+      "term": "Mbps",
+      "use": "Mbit/s"
+    },
+    {
+      "term": "Mb/s",
+      "use": "Mbit/s"
+    },
+    {
+      "term": "Gbps",
+      "use": "Gbit/s"
+    },
+    {
+      "term": "this phone",
+      "use": "this device"
+    },
+    {
+      "term": "this iPhone",
+      "use": "this device"
+    },
+    {
+      "term": "this iPad",
+      "use": "this device"
+    },
+    {
+      "term": "this Mac",
+      "use": "this device"
+    },
+    {
+      "term": "colour",
+      "use": "color"
+    }
+  ],
+  "debt": {
+    "android_keycapture_body_what": "Disclosure or legal text; the exact wording is the point.",
+    "android_keycapture_service_description": "Disclosure or legal text; the exact wording is the point.",
+    "apple_about_third_party_intro": "Disclosure or legal text; the exact wording is the point.",
+    "desktop_about_system_libraries_body": "Disclosure or legal text; the exact wording is the point.",
+    "desktop_licenses_bundled_body": "Disclosure or legal text; the exact wording is the point.",
+    "store_install_external_note": "Security text: third-party catalog code runs with the runner's privileges.",
+    "store_spec_lead": "Security text: a raw package registry has no catalog and no review.",
+    "store_update_all_external_note": "Security text: the same warning, for a bulk update."
+  }
+}

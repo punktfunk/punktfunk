@@ -21,6 +21,14 @@ public enum WakePolicy {
     ) -> Bool {
         autoWake && canWake(macs, available: available)
     }
+
+    /// A connect sends Auto-wake's packet before it dials, unless the last probe reached the host.
+    public static func wakesFirst(
+        _ macs: [String], autoWake: Bool, probedOnline: Bool,
+        available: Bool = PunktfunkConnection.wakeOnLANAvailable
+    ) -> Bool {
+        autoWakes(macs, autoWake: autoWake, available: available) && !probedOnline
+    }
 }
 
 /// The player's Auto-wake on connect switch (Settings → General), read live by a view.

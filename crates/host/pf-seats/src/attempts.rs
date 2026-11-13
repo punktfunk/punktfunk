@@ -1,13 +1,16 @@
-//! Attempt limits for password checks, kept in the supervisor's memory. Pure: the caller passes
-//! the time.
+//! Attempt limits for secret checks, kept in memory: the supervisor's for passwords, the host's
+//! per device for profile PINs (a profile's own cap is in its lock file, `locks`). Pure: the
+//! caller passes the time.
 //!
-//! A device, of a seat or an account, waits `2 s × 2^failures` after each failed check and
-//! [`LOCKOUT`] after the fifth. An account lets at most [`ACCOUNT_FAILURES`] failed checks through
-//! in any [`WINDOW`], over all its devices, so a login stack that locks an account after three
-//! (`pam_faillock`) is never driven there from here. A check in flight counts as failed until it
-//! settles, so concurrent attempts can't share one allowance. A refusal here is not a failure, a
-//! pass clears its device and account, and an entry goes once its last failure is a window old.
+//! A device, of a seat, an account or a profile, waits `2 s × 2^failures` after each failed check
+//! and [`LOCKOUT`] after the fifth. An account lets at most [`ACCOUNT_FAILURES`] failed checks
+//! through in any [`WINDOW`], over all its devices, so a login stack that locks an account after
+//! three (`pam_faillock`) is never driven there from here. A check in flight counts as failed
+//! until it settles, so concurrent attempts can't share one allowance. A refusal here is not a
+//! failure, a pass clears its device and account, and an entry goes once its last failure is a
+//! window old.
 
+use crate::backend::BackendError;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -19,16 +22,16 @@ const LOCKOUT: Duration = Duration::from_secs(15 * 60);
 const ACCOUNT_FAILURES: usize = 2;
 const WINDOW: Duration = Duration::from_secs(15 * 60);
 
-/// What a check is for: `device`, a device of a seat or an account, and `account`, the account the
-/// password opens. A side that is `None` has no limit of its own.
+/// What a check is for: `device`, a device of a seat, an account or a profile, and `account`, what
+/// the secret opens. A side that is `None` has no limit of its own.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Target<'a> {
+pub struct Target<'a> {
     pub device: Option<(&'a str, &'a str)>,
     pub account: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Outcome {
+pub enum Outcome {
     /// The password opened the account.
     Passed,
     /// The password may be wrong.
@@ -40,10 +43,10 @@ pub(crate) enum Outcome {
 /// An admitted check: when its charge was taken. [`Attempts::settle`] takes it back.
 #[must_use]
 #[derive(Debug)]
-pub(crate) struct Ticket(Instant);
+pub struct Ticket(Instant);
 
 #[derive(Debug, Default)]
-pub(crate) struct Attempts {
+pub struct Attempts {
     devices: HashMap<(String, String), Device>,
     accounts: HashMap<String, Account>,
 }
@@ -66,7 +69,7 @@ struct Account {
 
 impl Attempts {
     /// Admits a check for `target` at `now`, or answers how long until one would be.
-    pub(crate) fn admit(&mut self, target: Target<'_>, now: Instant) -> Result<Ticket, Duration> {
+    pub fn admit(&mut self, target: Target<'_>, now: Instant) -> Result<Ticket, Duration> {
         self.expire(now);
         let device = target
             .device
@@ -91,13 +94,7 @@ impl Attempts {
     }
 
     /// Counts `outcome`, the answer at `now` of the check `ticket` admitted for `target`.
-    pub(crate) fn settle(
-        &mut self,
-        target: Target<'_>,
-        ticket: Ticket,
-        outcome: Outcome,
-        now: Instant,
-    ) {
+    pub fn settle(&mut self, target: Target<'_>, ticket: Ticket, outcome: Outcome, now: Instant) {
         if let Some((of, device)) = target.device {
             let entry = self.devices.entry(key(of, device)).or_default();
             entry.pending = None;
@@ -125,7 +122,7 @@ impl Attempts {
 
     /// The failures counted at `now`: the device's since its last pass, the account's in the
     /// window.
-    pub(crate) fn failures(&mut self, target: Target<'_>, now: Instant) -> (u32, usize) {
+    pub fn failures(&mut self, target: Target<'_>, now: Instant) -> (u32, usize) {
         self.expire(now);
         let device = target
             .device
@@ -192,15 +189,34 @@ fn delay(failures: u32) -> Duration {
     }
 }
 
-/// The sentence for a refusal that lasts `wait`: seconds under a minute, else minutes, rounded up.
-/// `password` says whether a password was being checked; a key proof names no password.
-pub(crate) fn sentence(wait: Duration, password: bool) -> String {
+/// `wait` in whole seconds under a minute, else in minutes, rounded up.
+fn rounded(wait: Duration) -> (u64, &'static str) {
     let seconds = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
-    let (count, unit) = if seconds < 60 {
+    if seconds < 60 {
         (seconds.max(1), "second")
     } else {
         (seconds.div_ceil(60), "minute")
+    }
+}
+
+/// The `unlock_locked_out` refusal that lasts `wait`, with its message and count.
+pub(crate) fn lockout(wait: Duration, password: bool) -> BackendError {
+    let (count, unit) = rounded(wait);
+    let said = match (password, unit) {
+        (true, "second") => "unlock_locked_out_password_seconds",
+        (true, _) => "unlock_locked_out_password_minutes",
+        (false, "second") => "unlock_locked_out_device_seconds",
+        (false, _) => "unlock_locked_out_device_minutes",
     };
+    BackendError::new("unlock_locked_out", sentence(wait, password))
+        .said(said)
+        .param("count", count)
+}
+
+/// The sentence for a refusal that lasts `wait`: seconds under a minute, else minutes, rounded up.
+/// `password` says whether a password was being checked; a key proof names no password.
+pub(crate) fn sentence(wait: Duration, password: bool) -> String {
+    let (count, unit) = rounded(wait);
     let plural = if count == 1 { "" } else { "s" };
     let what = if password {
         "Too many wrong passwords."

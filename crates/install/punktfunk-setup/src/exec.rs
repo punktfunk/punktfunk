@@ -8,6 +8,8 @@
 //! availability split needs the `-Sy`, and the unit enable needs the user manager
 //! linger may have just made. See `design/installer-v2.md`.
 
+use pf_l10n::tools as t;
+
 use crate::choices::Choices;
 use crate::facts::{Channel, Facts, DOCS};
 use crate::plan::{Level, Plan, StepAction};
@@ -173,10 +175,7 @@ impl Executor<'_> {
         } else {
             Stdin::Null
         };
-        let failed = format!(
-            "that step failed — fix it and re-run (the script is safe to repeat), or follow the page by hand: {}",
-            facts.docs_page
-        );
+        let failed = t::setup_step_failed(&facts.docs_page);
         if !self.opts.quiet {
             return self.run.run_shell(&cmd, stdin).map_err(|_| Failed(failed));
         }
@@ -186,7 +185,7 @@ impl Executor<'_> {
             let skip = output.len().saturating_sub(30);
             let mut text = failed;
             if skip < output.len() {
-                text.push_str("\n   the step's last lines:");
+                text.push_str(&format!("\n   {}", t::setup_step_last_lines()));
                 for line in &output[skip..] {
                     text.push_str("\n     ");
                     text.push_str(line);
@@ -214,14 +213,14 @@ impl Executor<'_> {
             return Ok(true);
         }
         if !self.run.which("certutil") {
-            self.ui.warn(&format!(
-                "certutil is not installed, so the console keeps its browser warning — {} and re-run",
-                facts.family.certutil_package()
-            ));
+            self.ui.warn(&match facts.family.certutil_package() {
+                Some(command) => t::setup_cert_no_certutil(command),
+                None => t::setup_cert_no_certutil_generic().to_string(),
+            });
             return Ok(false);
         }
         if !outcome.started {
-            self.ui.warn("the host is not running, so there is no certificate to trust yet — re-run once it is");
+            self.ui.warn(t::setup_cert_host_not_running());
             return Ok(false);
         }
         // Through the runner, not the filesystem: a demo box answers at once instead of
@@ -231,10 +230,7 @@ impl Executor<'_> {
             shown(&cert)
         );
         if !self.run.probe("sh", &["-c", &wait]).is_some_and(|o| o.ok()) {
-            self.ui.warn(&format!(
-                "the host has not written its certificate yet ({}) — re-run to trust it",
-                shown(&cert)
-            ));
+            self.ui.warn(&t::setup_cert_not_written(shown(&cert)));
             return Ok(false);
         }
         let db_file = format!("{}/cert9.db", shown(&db));
@@ -270,9 +266,9 @@ impl Executor<'_> {
             )
             .is_some_and(|o| o.ok());
         if added {
-            self.ui.ok("console certificate trusted — a Chromium that is already running picks it up on restart");
+            self.ui.ok(t::setup_cert_trusted());
         } else {
-            self.ui.warn("certutil refused the certificate — the browser warning stays; click through once instead");
+            self.ui.warn(t::setup_cert_refused());
         }
         Ok(true)
     }
@@ -300,9 +296,7 @@ impl Executor<'_> {
             }
             // Not fatal: the console generates one on its first start, and the outro says
             // where to read it.
-            Err(e) => self.ui.warn(&format!(
-                "couldn't write {shown} — {e}; the console will generate one instead"
-            )),
+            Err(e) => self.ui.warn(&t::setup_password_write_failed(&shown, e)),
         }
     }
 
@@ -370,9 +364,9 @@ impl Executor<'_> {
             }
         }
         if pins.is_empty() {
-            return Err(Failed(format!(
-                "the {} apt channel offers no punktfunk packages — check /etc/apt/sources.list.d/punktfunk.list ({DOCS}/channels)",
-                choices.channel.as_str()
+            return Err(Failed(t::setup_apt_channel_empty(
+                choices.channel.as_str(),
+                format!("{DOCS}/channels"),
             )));
         }
         self.shell(&format!("sudo apt install --allow-downgrades{pins}"), facts)
@@ -395,10 +389,11 @@ impl Executor<'_> {
             if available {
                 want.push_str(&format!(" {pkg}"));
             } else {
-                let channel = facts.current_channel.map_or("target", Channel::as_str);
-                self.ui.warn(&format!(
-                    "{pkg} is not on the {channel} channel — removing it (the {channel} packages carry its files)"
-                ));
+                self.ui
+                    .warn(&match facts.current_channel.map(Channel::as_str) {
+                        Some(channel) => t::setup_pacman_not_on_channel(pkg, channel),
+                        None => t::setup_pacman_not_on_target(pkg),
+                    });
                 drop.push_str(&format!(" {pkg}"));
             }
         }
@@ -418,9 +413,7 @@ impl Executor<'_> {
                 .shell(r#"sudo loginctl enable-linger "$USER""#, facts)
                 .map(|()| true);
         }
-        self.ui.warn(
-            "no systemd as PID 1 here (a container?) — skipping linger, nothing would honour it",
-        );
+        self.ui.warn(t::setup_linger_no_systemd());
         Ok(false)
     }
 
@@ -437,9 +430,7 @@ impl Executor<'_> {
             .probe("systemctl", &["--user", "show-environment"])
             .is_some_and(|o| o.ok());
         if !live {
-            self.ui.warn(
-                "no user systemd session here (ssh without a login session?) — run this from a terminal in your desktop session:",
-            );
+            self.ui.warn(t::setup_start_no_user_session());
             self.ui
                 .detail("systemctl --user enable --now punktfunk-host punktfunk-web");
             outcome.started = false;

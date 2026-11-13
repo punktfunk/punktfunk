@@ -8,27 +8,9 @@ import Foundation
 import PunktfunkKit
 import SwiftUI
 
-/// Leaving the page abandons the probe: the detached connect/poll loop checks this flag and closes
-/// the connection itself. A single Bool, so a torn read between the loop and the main actor is
-/// harmless.
-private final class ProbeToken: @unchecked Sendable {
-    var cancelled = false
-}
-
-/// What the host is asked to burst: far more than any link carries (it clamps to ≤ 10 Gbit/s), so the
-/// measurement finds where delivery falls off rather than an artificial cap. Five seconds lets the
-/// host's send and this device's receive settle; a short probe swings wildly on the same link.
-private let probeTargetKbps: UInt32 = 3_000_000
-private let probeDurationMs: UInt32 = 5_000
-
-/// Where a measurement is.
-enum SpeedTestPhase: Equatable {
-    case idle
-    case connecting
-    case probing
-    case done(PunktfunkConnection.ProbeResult)
-    case failed(String)
-}
+/// How often the page reads the check's counters while it runs: fifty points a second, which
+/// `ProbeTrace` smooths into the curve.
+private let pollInterval: Duration = .milliseconds(20)
 
 struct SpeedTestView: View {
     let host: StoredHost
@@ -42,13 +24,15 @@ struct SpeedTestView: View {
     @AppStorage(DefaultsKey.bitrateKbps) private var bitrateKbps = SettingDefault.bitrateKbps
     /// The catalog, so Apply writes the layer this host reads its bitrate from.
     @ObservedObject private var presets = PresetStore.shared
-    @State private var phase: SpeedTestPhase = .idle
+    /// The phase and the check's report behind `.done` (`SpeedTestRun`).
+    @State private var state = SpeedTestRun.State()
     @State private var trace = PunktfunkConnection.ProbeTrace()
-    @State private var token = ProbeToken()
     /// What the last Apply changed, said under the buttons.
     @State private var applied: String?
-    /// The check's report behind `phase == .done`: the findings.
-    @State private var report: PunktfunkConnection.HealthReport?
+
+    /// The probe that has not returned, from this page or one closed while it ran. App-wide: the
+    /// core call can't be aborted, and a second probe would share the link it measures.
+    @MainActor private static var probe: Task<SpeedTestRun.Event, Never>?
 
     #if os(tvOS)
     private let chartHeight: CGFloat = 360
@@ -68,9 +52,7 @@ struct SpeedTestView: View {
                     if let report { findings(report) }
                 }
                 controls
-                Text("Measures the stream's own path to \(host.displayName): what it carries, loss "
-                    + "and jitter at a rate it holds, and what the link does. The recommendation "
-                    + "leaves about 30% headroom for encoder bursts.")
+                Text(L10n.appleSpeedtestAboutBody(host: host.displayName))
                     .font(.geist(12, relativeTo: .caption))
                     .foregroundStyle(.secondary)
             }
@@ -86,15 +68,21 @@ struct SpeedTestView: View {
         .onAppear {
             #if DEBUG
             if let shotRun {
-                phase = shotRun.phase
+                state = SpeedTestRun.State(phase: shotRun.phase)
                 trace = shotRun.trace
                 return
             }
             #endif
-            if startsOnAppear, phase == .idle { run() }
+            if !state.inFlight, let out = Self.probe {
+                follow(out)
+            } else if startsOnAppear, phase == .idle {
+                run()
+            }
         }
-        .onDisappear { token.cancelled = true }
     }
+
+    private var phase: SpeedTestPhase { state.phase }
+    private var report: PunktfunkConnection.HealthReport? { state.report }
 
     // MARK: - Pieces
 
@@ -104,10 +92,20 @@ struct SpeedTestView: View {
             Text(headline)
                 .font(.system(.largeTitle, design: .rounded).weight(.semibold))
                 .monospacedDigit()
-                .contentTransition(.numericText())
+                .contentTransition(.numericText(value: headlineValue))
+                .animation(.snappy(duration: 0.3), value: headline)
             Text(caption)
                 .font(.geist(15, relativeTo: .subheadline))
                 .foregroundStyle(isFailed ? Color.red : Color.secondary)
+        }
+    }
+
+    /// What the headline counts, so its digits roll up or down with it.
+    private var headlineValue: Double {
+        switch phase {
+        case .done(let result): Double(result.throughputKbps) / 1000
+        case .probing: trace.live() ?? 0
+        case .idle, .connecting, .failed: 0
         }
     }
 
@@ -115,16 +113,16 @@ struct SpeedTestView: View {
         switch phase {
         case .done(let result): Self.mbpsLabel(kbps: Int(result.throughputKbps))
         case .probing:
-            trace.points.last.map { Self.mbpsLabel(kbps: Int($0.mbps.rounded()) * 1_000) } ?? "…"
+            trace.live().map { Self.mbpsLabel(kbps: Int($0.rounded()) * 1_000) } ?? "…"
         case .idle, .connecting, .failed: "—"
         }
     }
 
     private var caption: String {
         switch phase {
-        case .idle: "Ready to measure the link to \(host.displayName)."
-        case .connecting: "Connecting to \(host.displayName)…"
-        case .probing: "Measuring the link. This takes a few seconds."
+        case .idle: L10n.appleSpeedtestReadyBody(host: host.displayName)
+        case .connecting: L10n.appleSpeedtestConnectingHost(host: host.displayName)
+        case .probing: String(localized: L10n.speedtestMeasuringBody)
         case .done: Self.doneCaption(report, host: host.displayName)
         case .failed(let message): message
         }
@@ -135,33 +133,49 @@ struct SpeedTestView: View {
         return false
     }
 
-    /// Goodput per poll as it lands, with the average, the recommendation and this host's
-    /// current bitrate drawn across it once there is something to compare.
+    /// The check's test traffic as it lands, on a time axis that lays its rounds end to end:
+    /// each ends on a whole second, so the grid marks them. Once there is an answer: what the link carries, the recommendation
+    /// and this host's current bitrate, drawn across it. The rounds run below what the link
+    /// carries on purpose, so the curve sits under that line.
     private var chart: some View {
         Chart {
             ForEach(trace.points, id: \.seconds) { point in
-                AreaMark(x: .value("Time", point.seconds), y: .value("Goodput", point.mbps))
+                AreaMark(
+                    x: .value(String(localized: L10n.appleSpeedtestChartTimeA11y), point.seconds),
+                    y: .value(String(localized: L10n.appleSpeedtestChartGoodputA11y), point.mbps))
                     .foregroundStyle(
                         .linearGradient(
                             colors: [Color.brand.opacity(0.35), Color.brand.opacity(0.02)],
                             startPoint: .top, endPoint: .bottom))
-                    .interpolationMethod(.monotone)
-                LineMark(x: .value("Time", point.seconds), y: .value("Goodput", point.mbps))
+                    .interpolationMethod(.catmullRom)
+                LineMark(
+                    x: .value(String(localized: L10n.appleSpeedtestChartTimeA11y), point.seconds),
+                    y: .value(String(localized: L10n.appleSpeedtestChartGoodputA11y), point.mbps))
                     .foregroundStyle(Color.brand)
-                    .lineStyle(StrokeStyle(lineWidth: 2))
-                    .interpolationMethod(.monotone)
+                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    .interpolationMethod(.catmullRom)
             }
             if case .done(let result) = phase {
-                rule("Average", kbps: Int(result.throughputKbps), color: .secondary, dash: [])
+                rule(
+                    L10n.speedtestMeasured(rate: Self.mbpsLabel(kbps: Int(result.throughputKbps))),
+                    kbps: Int(result.throughputKbps),
+                    annotation: { L10n.speedtestMeasured(rate: $0) },
+                    color: .secondary, dash: [])
                 if let recommended = Self.recommendedKbps(result) {
-                    rule("Recommended", kbps: recommended, color: .green, dash: [6, 4])
+                    rule(
+                        String(localized: L10n.speedtestRecommended), kbps: recommended,
+                        annotation: { L10n.speedtestChartRecommended(rate: $0) },
+                        color: .green, dash: [6, 4])
                 }
             }
             if currentKbps > 0 {
-                rule("Now", kbps: currentKbps, color: .orange, dash: [2, 3])
+                rule(
+                    String(localized: L10n.appleSpeedtestNowA11y), kbps: currentKbps,
+                    annotation: { L10n.appleSpeedtestChartNow(rate: $0) },
+                    color: .orange, dash: [2, 3])
             }
         }
-        .chartXScale(domain: 0...Double(probeDurationMs) / 1000)
+        .chartXScale(domain: 0...max(2, (trace.points.last?.seconds ?? 0).rounded(.up)))
         .chartXAxis {
             AxisMarks(values: .stride(by: 1)) { value in
                 AxisGridLine()
@@ -170,16 +184,21 @@ struct SpeedTestView: View {
                 }
             }
         }
-        .chartYAxisLabel("Mbps")
+        .chartYAxisLabel("Mbit/s")
         .overlay { placeholder }
     }
 
-    private func rule(_ name: String, kbps: Int, color: Color, dash: [CGFloat]) -> some ChartContent {
+    /// `name` is the series VoiceOver reads; `annotation` words the label over the line from the
+    /// rate's text.
+    private func rule(
+        _ name: String, kbps: Int, annotation: @escaping (String) -> String, color: Color,
+        dash: [CGFloat]
+    ) -> some ChartContent {
         RuleMark(y: .value(name, Double(kbps) / 1000))
             .foregroundStyle(color)
             .lineStyle(StrokeStyle(lineWidth: 1.5, dash: dash))
             .annotation(position: .top, alignment: .leading) {
-                Text("\(name) \(Self.mbpsLabel(kbps: kbps))")
+                Text(annotation(Self.mbpsLabel(kbps: kbps)))
                     .font(.geist(11, .medium, relativeTo: .caption2))
                     .foregroundStyle(color)
             }
@@ -190,7 +209,7 @@ struct SpeedTestView: View {
             switch phase {
             case .connecting, .probing: ProgressView()
             case .idle:
-                Text("The chart fills in as the probe runs.")
+                Text(L10n.appleSpeedtestChartEmptyBody)
                     .font(.geist(13, relativeTo: .footnote))
                     .foregroundStyle(.secondary)
             case .done, .failed: EmptyView()
@@ -202,11 +221,15 @@ struct SpeedTestView: View {
         HStack(spacing: 12) {
             // The loss and jitter are the clean round's, at a rate the link holds; a host without
             // a ramp only measured a blast, and a blast's loss is not the link's.
-            tile("Loss", report?.clean.map { String(format: "%.1f %%", $0.lossPct) } ?? "—")
             tile(
-                "Jitter",
+                String(localized: L10n.speedtestLoss),
+                report?.clean.map { String(format: "%.1f %%", $0.lossPct) } ?? "—")
+            tile(
+                String(localized: L10n.appleSpeedtestJitter),
                 report?.clean.map { String(format: "%.1f ms", Double($0.jitterUs) / 1000) } ?? "—")
-            tile("Recommended", Self.recommendedKbps(result).map { Self.mbpsLabel(kbps: $0) } ?? "—")
+            tile(
+                String(localized: L10n.speedtestRecommended),
+                Self.recommendedKbps(result).map { Self.mbpsLabel(kbps: $0) } ?? "—")
         }
     }
 
@@ -224,12 +247,14 @@ struct SpeedTestView: View {
     /// The caption once there is an answer: what the link carries and, with a clean round, the
     /// rate that loss and jitter were measured at.
     static func doneCaption(_ r: PunktfunkConnection.HealthReport?, host: String) -> String {
-        guard let r else { return "Measured goodput from \(host)." }
-        let carries = r.wall
-            ? "The link to \(host) carries \(mbpsLabel(kbps: Int(r.ceilingKbps)))."
-            : "The link to \(host) carries at least \(mbpsLabel(kbps: Int(r.ceilingKbps)))."
+        guard let r else { return L10n.appleSpeedtestMeasuredFromBody(host: host) }
+        let ceiling = mbpsLabel(kbps: Int(r.ceilingKbps))
+        let carries =
+            r.wall
+            ? L10n.speedtestLinkCarriesBody(rate: ceiling)
+            : L10n.speedtestLinkCarriesAtLeastBody(rate: ceiling)
         guard let c = r.clean else { return carries }
-        return carries + " Measured at \(mbpsLabel(kbps: Int(c.rateKbps)))."
+        return carries + " " + L10n.appleSpeedtestMeasuredAtBody(rate: mbpsLabel(kbps: Int(c.rateKbps)))
     }
 
     /// A finding in words — what did not happen, then the next move — the same sentences every
@@ -240,44 +265,31 @@ struct SpeedTestView: View {
         switch f.id {
         case 1:
             return a > 0 && b > 0
-                ? "The host's port is faster than this device's (\(a) vs \(b) Mbit/s), so bursts "
-                    + "overflow the switch between them."
-                : "The host's port is faster than this device's, so bursts overflow the switch "
-                    + "between them."
+                ? L10n.findingSpeedMismatchBody(hostMbit: String(a), deviceMbit: String(b))
+                : String(localized: L10n.findingSpeedMismatchUnknownBody)
         case 2:
-            return String(
-                format: "This device drops the start of every burst (%.1f %% lost) — the adapter's "
-                    + "power saving is the usual cause.", Double(a) / 100)
+            return L10n.findingBurstIntolerantBody(loss: String(format: "%.1f", Double(a) / 100))
         case 3:
             return a > 0
-                ? "This device's own receive buffer dropped \(a) packets; the system caps it at \(b) KB."
-                : "The system caps this device's receive buffer at \(b) KB."
+                ? L10n.findingReceiveBufferBody(packets: a, capKb: String(b))
+                : L10n.findingReceiveBufferCapBody(capKb: String(b))
         case 4:
-            return String(
-                format: "Loss at a rate no link refuses (%.1f %%): check the cable, the port or the "
-                    + "adapter driver.", Double(a) / 100)
+            return L10n.findingLinkFaultBody(loss: String(format: "%.1f", Double(a) / 100))
         case 5:
-            return String(
-                format: "Something on the path buffers instead of dropping (%.0f ms spread); keep "
-                    + "the bitrate under %.0f Mbit/s.", Double(a) / 1000, Double(b) / 1000)
+            return L10n.findingQueueBuildUpBody(
+                spreadMs: String(format: "%.0f", Double(a) / 1000),
+                maxMbit: String(format: "%.0f", Double(b) / 1000))
         case 6:
             return a > 0
-                ? "The host's send buffer refused \(a) packets; raise its limit."
-                : "The host's send buffer is capped at \(b) KB; raise its limit."
+                ? L10n.findingHostSendBufferBody(packets: a)
+                : L10n.findingHostSendBufferCapBody(capKb: String(b))
         case 7:
             return a > 0
-                ? String(format: "This device is on Wi-Fi; bursts lose %.1f %%.", Double(a) / 100)
-                : "This device is on Wi-Fi."
+                ? L10n.findingWifiLossBody(loss: String(format: "%.1f", Double(a) / 100))
+                : String(localized: L10n.findingWifiBody)
         default:
-            return "Finding \(f.id)."
+            return L10n.findingUnknownBody(id: String(f.id))
         }
-    }
-
-    /// The check's report as the page's measurement: the ceiling, and the clean round's loss.
-    static func probeResult(from r: PunktfunkConnection.HealthReport) -> PunktfunkConnection.ProbeResult {
-        PunktfunkConnection.ProbeResult(
-            done: true, recvBytes: 0, recvPackets: 0, hostBytes: 0, hostPackets: 0, elapsedMs: 0,
-            throughputKbps: r.ceilingKbps, lossPct: r.clean?.lossPct ?? 0)
     }
 
     private func tile(_ label: String, _ value: String) -> some View {
@@ -301,18 +313,21 @@ struct SpeedTestView: View {
         HStack(spacing: 12) {
             switch phase {
             case .idle:
-                Button("Start Test", systemImage: "gauge.with.needle") { run() }
+                Button(L10n.appleSpeedtestStart, systemImage: "gauge.with.needle") { run() }
                     .glassProminentButtonStyle()
+                    .disabled(!state.canStart)
             case .connecting, .probing:
-                Button("Stop", role: .cancel) { stop() }
+                Button(L10n.appleSpeedtestStop, role: .cancel) { stop() }
             case .done(let result):
                 if let recommended = Self.recommendedKbps(result) {
                     applyButtons(recommended)
                 }
-                Button("Run Again") { run() }
+                Button(L10n.appleSpeedtestRunAgain) { run() }
+                    .disabled(!state.canStart)
             case .failed:
-                Button("Try Again") { run() }
+                Button(L10n.appleSpeedtestTryAgain) { run() }
                     .glassProminentButtonStyle()
+                    .disabled(!state.canStart)
             }
         }
         if let applied {
@@ -329,21 +344,21 @@ struct SpeedTestView: View {
         let bound = presets.binding(for: host)
         let label = Self.mbpsLabel(kbps: recommended)
         if let bound {
-            Button("Apply to “\(bound.name)”") {
+            Button(L10n.speedtestApplyToPreset(preset: bound.name)) {
                 presets.setOverride(bound.id, \.bitrateKbps, recommended)
-                applied = "“\(bound.name)” streams at \(label) from the next session."
+                applied = L10n.speedtestAppliedPreset(rate: label, preset: bound.name)
             }
             .glassProminentButtonStyle()
             if bound.overrides.bitrateKbps == nil {
-                Button("Set as default (\(label))") {
+                Button(L10n.speedtestSetDefault) {
                     bitrateKbps = recommended
-                    applied = "The default bitrate is \(label) from the next session."
+                    applied = L10n.speedtestAppliedDefault(rate: label)
                 }
             }
         } else {
-            Button("Use \(label)") {
+            Button(L10n.speedtestUseRate(rate: label)) {
                 bitrateKbps = recommended
-                applied = "Streams use \(label) from the next session."
+                applied = L10n.speedtestAppliedDefault(rate: label)
             }
             .glassProminentButtonStyle()
         }
@@ -367,31 +382,37 @@ struct SpeedTestView: View {
     static func mbpsLabel(kbps: Int) -> String {
         if kbps >= 1_000_000 {
             let gbps = Double(kbps) / 1_000_000
-            return gbps == gbps.rounded()
-                ? "\(Int(gbps)) Gbps"
-                : String(format: "%.1f Gbps", gbps)
+            return L10n.commonGbits(
+                value: gbps == gbps.rounded() ? String(Int(gbps)) : String(format: "%.1f", gbps))
         }
-        return kbps % 1_000 == 0
-            ? "\(kbps / 1_000) Mbps"
-            : String(format: "%.1f Mbps", Double(kbps) / 1_000)
+        return L10n.commonMbits(
+            value: kbps % 1_000 == 0
+                ? String(kbps / 1_000) : String(format: "%.1f", Double(kbps) / 1_000))
     }
 
     // MARK: - The probe
 
-    private func stop() {
-        token.cancelled = true
-        phase = .idle
+    private func send(_ event: SpeedTestRun.Event) {
+        state = SpeedTestRun.reduce(state, event)
     }
 
+    private func stop() {
+        send(.stop)
+    }
+
+    /// Waits out a probe another page started; its last word frees Start here.
+    private func follow(_ out: Task<SpeedTestRun.Event, Never>) {
+        send(.busy)
+        Task { send(await out.value) }
+    }
+
+    /// Starts a probe, unless one is still out (`SpeedTestRun`).
     private func run() {
-        // A fresh token per attempt, so abandoning one attempt cannot silence the next.
-        token.cancelled = true
-        token = ProbeToken()
-        let token = token
-        phase = .connecting
+        if !state.inFlight, let out = Self.probe { follow(out) }
+        guard state.canStart else { return }
+        send(.start)
         trace = PunktfunkConnection.ProbeTrace()
         applied = nil
-        report = nil
         let address = host.address
         let port = host.port
         let pin = host.pinnedSHA256
@@ -399,7 +420,7 @@ struct SpeedTestView: View {
         // path, so it should be the streaming path's mode.
         let (w, h, fps) = EffectiveSettings.resolve(host: host, catalog: presets.catalog)
             .streamMode(native: NativeDisplay.mode)
-        Task.detached(priority: .userInitiated) {
+        let probe = Task.detached(priority: .userInitiated) { () -> SpeedTestRun.Event in
             // Same identity and trust as a session, but a TOFU result is not persisted from here.
             let identity = (try? ClientIdentityStore.shared.load())?.identity
             let conn: PunktfunkConnection
@@ -410,30 +431,32 @@ struct SpeedTestView: View {
                     pinSHA256: pin, identity: identity,
                     deliveryFlags: PunktfunkConnection.deliveryProbeOnly)
             } catch {
-                await MainActor.run {
-                    guard !token.cancelled else { return }
-                    phase = .failed(
-                        "Couldn't reach \(address). It may be asleep, or streaming to something "
-                            + "else.")
-                }
-                return
+                return .unreachable(L10n.appleSpeedtestUnreachableBody(address: address))
             }
             defer { conn.close() }
 
-            await MainActor.run { if !token.cancelled { phase = .probing } }
+            await MainActor.run { send(.connected) }
+            // The check answers once, at its end. Its rounds' counters are read meanwhile, so
+            // the chart draws the traffic as it lands.
+            let poll = Task.detached(priority: .utility) {
+                while !Task.isCancelled {
+                    if let now = conn.probeResult() {
+                        await MainActor.run { if phase == .probing { trace.add(now) } }
+                    }
+                    try? await Task.sleep(for: pollInterval)
+                }
+            }
+            defer { poll.cancel() }
             // The whole check, reported once: the ceiling the bring-up ramp proved, a clean round
             // at half of it, two shaped legs, both ends' facts, and the findings. It blocks this
             // detached task for ten to twenty seconds.
-            let checked = conn.networkCheck()
-            await MainActor.run {
-                guard !token.cancelled else { return }
-                if let r = checked {
-                    report = r
-                    phase = .done(Self.probeResult(from: r))
-                } else {
-                    phase = .failed("The measurement never finished. The connection may have dropped.")
-                }
-            }
+            return .checked(conn.networkCheck())
+        }
+        Self.probe = probe
+        Task {
+            let end = await probe.value
+            Self.probe = nil
+            send(end)
         }
     }
 }

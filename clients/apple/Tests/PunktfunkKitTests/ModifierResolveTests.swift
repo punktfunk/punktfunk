@@ -83,5 +83,19 @@ final class ModifierResolveTests: XCTestCase {
         XCTAssertNil(resolve(keyCode: 63, rawFlags: 0x80_0000)) // Fn / Globe
         XCTAssertNil(resolve(keyCode: 57, rawFlags: 0x1_0000)) // Caps Lock
     }
+
+    // MARK: Caps Lock, a lock state sent as a tap
+
+    func testCapsLockTapsOnEveryChangeOfState() {
+        let tap = InputCapture.capsLockTap
+        // The first state always goes out; the host's lock is unknown until then.
+        XCTAssertEqual(tap(57, 0x1_0100, nil).map { [$0.on, $0.tap] }, [true, true])
+        XCTAssertEqual(tap(57, 0x100, true).map { [$0.on, $0.tap] }, [false, true])
+        XCTAssertEqual(tap(57, 0x1_0100, false).map { [$0.on, $0.tap] }, [true, true])
+        // A repeat of the state the host already has toggles nothing.
+        XCTAssertEqual(tap(57, 0x1_0100, true).map { [$0.on, $0.tap] }, [true, false])
+        // Shift with Caps Lock on is Shift's.
+        XCTAssertNil(tap(56, 0x1_0102, true))
+    }
 }
 #endif

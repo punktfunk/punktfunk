@@ -35,8 +35,9 @@ const OFF_INPUT_GEN: usize = core::mem::offset_of!(PadShm, input_gen);
 pub(crate) const INPUT_SLOT: usize = 64;
 
 /// Bounds-checked view of a mapped section, borrowed from whatever keeps it mapped.
-/// Words the driver also writes go through aligned atomics; report bodies are plain copies,
-/// ordered by the sequence word or seqlock around them. Every accessor panics out of range.
+/// Words the driver also writes go through aligned atomics, and so do report bodies, byte by
+/// byte and relaxed: the driver may lap a slot mid-copy, and the sequence word or seqlock
+/// around it decides whether the copy is whole. Every accessor panics out of range.
 /// The raw accesses are [`section::SectionView`]'s; this names the ones the pad channel uses.
 #[derive(Clone, Copy)]
 pub(crate) struct SectionView<'a>(section::SectionView<'a>);
@@ -68,13 +69,15 @@ impl<'a> SectionView<'a> {
         self.0.atomic_u64(off).store(value, order);
     }
 
-    /// One plain copy; the seqlock or sequence word around it orders the driver's read.
+    /// Relaxed byte stores; the seqlock or sequence word around them orders the driver's read.
     pub(crate) fn write_bytes(&self, off: usize, src: &[u8]) {
-        self.0.copy_from_slice(off, src);
+        self.0.write_bytes(off, src);
     }
 
+    /// Relaxed byte loads, torn when the driver writes the range; the caller re-checks its
+    /// sequence word.
     pub(crate) fn read_bytes(&self, off: usize, dst: &mut [u8]) {
-        self.0.copy_to_slice(off, dst);
+        self.0.read_bytes(off, dst);
     }
 }
 

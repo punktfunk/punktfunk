@@ -40,7 +40,7 @@ pub(crate) fn ending<F>(reformat: Option<F>, failed: bool, shutdown: bool) -> En
 pub(crate) enum Retry {
     /// Build another codec. `stepped_down`: the floor moved to a lower rung.
     Rebuild { stepped_down: bool },
-    /// The device keeps refusing the codec: leave the video frozen until the stream restarts.
+    /// The device keeps refusing the codec: move to another, else leave the video frozen.
     GiveUp,
 }
 

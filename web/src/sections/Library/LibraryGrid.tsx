@@ -5,20 +5,24 @@ import {
 } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { toast } from "@unom/ui/toast";
-import { LayoutGrid, Rows3, Search, X } from "lucide-react";
+import { LayoutGrid, Rows3, Search, SquareCheck, X } from "lucide-react";
 import { motion } from "motion/react";
 import { type FC, useEffect, useRef, useState } from "react";
 import { useDownloads } from "@/api/downloads";
 import {
+	deleteCustomGame,
 	getGetLibraryPageQueryKey,
 	getLibraryPage,
 	useDeleteCustomGame,
 	useGetLibraryPage,
+	useSetGameOverrides,
 	useSetLibraryEntryHidden,
 } from "@/api/gen/library/library";
 import type { Download } from "@/api/gen/model/download";
 import type { OperatorGameEntry } from "@/api/gen/model/operatorGameEntry";
+import type { OverrideEntry } from "@/api/gen/model/overrideEntry";
 import type { PlatformCount } from "@/api/gen/model/platformCount";
+import { useAs, useProfileView } from "@/api/seat";
 import { useDialogs } from "@/components/dialogs";
 import { LauncherIcon } from "@/components/launcher-icon";
 import { QueryState } from "@/components/query-state";
@@ -35,16 +39,20 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { apiErrorMessage } from "@/lib/errors";
+import { useLocale } from "@/lib/i18n";
 import { useLocalPref } from "@/lib/prefs";
 import type { Loadable } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
+import { isAbort, useDesktop } from "./desktop";
 import { GameCard } from "./GameCard";
 import { GameRow } from "./GameRow";
-import { customId, refreshLibrary } from "./helpers";
+import { customId, dropTitle, refreshLibrary } from "./helpers";
 import { DownloadsList } from "./Install";
+import { setList } from "./overrides";
 import { useSourceNames } from "./Sources";
+import { refreshOverrides, useOverrideDocs } from "./Stream";
 
 /** Titles asked for at a time: a few rows of a wide grid, a screen and a half of the list. */
 const PAGE = 60;
@@ -59,7 +67,9 @@ const isView = (v: unknown): v is LibraryView => v === "grid" || v === "rows";
 /**
  * Container: the library OVERVIEW. The host pages the list by cursor and searches it, so a
  * library of thousands costs one page at a time; this owns the filters, the pages, per-title
- * delete and hide. A card or row opens the entry's own page.
+ * delete and hide. A card or row opens the entry's own page. A profile's view lists the titles
+ * as that profile has them and changes only its own values: no downloads, and a delete only of a
+ * game the profile alone has.
  */
 export const LibraryGridSection: FC<{
 	/** Show only entries owned by this provider, or everything when null. */
@@ -69,8 +79,11 @@ export const LibraryGridSection: FC<{
 	/** Opens where sources are added: the way out of an empty library. */
 	onSources?: () => void;
 }> = ({ providerFilter, source, onSources }) => {
+	const locale = useLocale();
 	const qc = useQueryClient();
 	const { confirm } = useDialogs();
+	const profile = useProfileView();
+	const as = useAs();
 	const [query, setQuery] = useState("");
 	const q = useDebounced(query.trim(), 250);
 	const [platform, setPlatform] = useState<string | null>(null);
@@ -89,6 +102,7 @@ export const LibraryGridSection: FC<{
 		...(platform ? { platform } : {}),
 		...(install ? { install } : {}),
 		...(providerFilter ? { provider: providerFilter } : {}),
+		...as,
 	};
 	const games = useInfiniteQuery({
 		queryKey: [...getGetLibraryPageQueryKey(filters), "pages"],
@@ -102,11 +116,15 @@ export const LibraryGridSection: FC<{
 		// Typing must not blank the grid between two answers.
 		placeholderData: keepPreviousData,
 	});
-	const launchers = useGetLibraryPage({
-		role: "launcher",
-		limit: 200,
-		...(providerFilter ? { provider: providerFilter } : {}),
-	});
+	const launchers = useGetLibraryPage(
+		{
+			role: "launcher",
+			limit: 200,
+			...(providerFilter ? { provider: providerFilter } : {}),
+			...as,
+		},
+		{ query: { placeholderData: keepPreviousData } },
+	);
 
 	const refresh = () => void refreshLibrary(qc);
 	const remove = useDeleteCustomGame();
@@ -130,6 +148,43 @@ export const LibraryGridSection: FC<{
 		refresh();
 	};
 
+	// A game only the profile has is deleted on its desktop, which may have to start first: a
+	// toast says so and can cancel. The box lists the game a moment longer, so it leaves here now.
+	const desktop = useDesktop(profile?.ownGames ? profile : null);
+	const [deletingOwn, setDeletingOwn] = useState<string | null>(null);
+	const onDeleteOwn = async (entry: OperatorGameEntry) => {
+		const ok = await confirm({
+			title: m.library_delete_confirm(),
+			description: m.library_delete_body(),
+			confirmLabel: m.library_delete(),
+			destructive: true,
+		});
+		if (!ok || !profile) return;
+		const waiting = `delete-${entry.id}`;
+		setDeletingOwn(entry.id);
+		try {
+			await desktop.run(
+				() => deleteCustomGame(entry.id),
+				(cancel) =>
+					toast.loading(
+						m.profile_view_desktop_wait_delete({ name: profile.name }),
+						{
+							id: waiting,
+							duration: Number.POSITIVE_INFINITY,
+							action: { label: m.common_cancel(), onClick: cancel },
+						},
+					),
+			);
+			dropTitle(qc, entry.id);
+		} catch (e) {
+			if (!isAbort(e))
+				toast.error(apiErrorMessage(e) ?? m.library_delete_failed());
+		} finally {
+			toast.dismiss(waiting);
+			setDeletingOwn((id) => (id === entry.id ? null : id));
+		}
+	};
+
 	const setHidden = useSetLibraryEntryHidden();
 	const nameOf = useSourceNames();
 
@@ -139,6 +194,7 @@ export const LibraryGridSection: FC<{
 			await setHidden.mutateAsync({
 				id: entry.id,
 				data: { hidden: entry.hidden !== true },
+				params: as,
 			});
 		} catch (e) {
 			toast.error(apiErrorMessage(e) ?? m.library_hide_failed());
@@ -147,11 +203,49 @@ export const LibraryGridSection: FC<{
 		refresh();
 	};
 
+	// Selection mode: one action, a shared override for every checked title, one call each.
+	const [selecting, setSelecting] = useState(false);
+	const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+	const [applying, setApplying] = useState(false);
+	const overrides = useOverrideDocs(selecting);
+	const setGame = useSetGameOverrides();
+	const leave = () => {
+		setSelecting(false);
+		setPicked(new Set());
+	};
+	useEffect(() => {
+		if (!selecting) return;
+		// An Escape that closed a menu or a dialog is theirs.
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			setSelecting(false);
+			setPicked(new Set());
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [selecting]);
+	const onApply = async (entry: OverrideEntry) => {
+		setApplying(true);
+		let failed = 0;
+		for (const id of picked) {
+			try {
+				await setGame.mutateAsync({ id, data: entry, params: as });
+			} catch {
+				failed++;
+			}
+		}
+		await refreshOverrides(qc);
+		setApplying(false);
+		if (failed > 0)
+			toast.error(m.library_stream_bulk_failed({ count: failed }));
+		else leave();
+	};
+
 	const first = games.data?.pages[0];
 	const byApp = new Map((downloads.data ?? []).map((d) => [d.app_id, d]));
 	return (
 		<>
-			<DownloadsList />
+			{!profile && <DownloadsList />}
 			<LibraryGrid
 				games={{
 					data: games.data?.pages.flatMap((p) => p.items),
@@ -180,15 +274,46 @@ export const LibraryGridSection: FC<{
 				onSources={onSources}
 				view={view}
 				onView={setView}
-				onDelete={onDelete}
+				{...(profile
+					? {
+							who: profile.name,
+							...(profile.ownGames ? { onDelete: onDeleteOwn } : {}),
+						}
+					: { onDelete })}
 				// The custom id whose delete is in flight (if any), so only that title's button disables.
-				deletingId={remove.isPending ? (remove.variables?.id ?? null) : null}
+				deletingId={
+					remove.isPending ? (remove.variables?.id ?? null) : deletingOwn
+				}
 				onToggleHidden={onToggleHidden}
 				// Keyed by ENTRY id, not custom id — hiding addresses any store's entry, not just ours.
 				hidingId={
 					setHidden.isPending ? (setHidden.variables?.id ?? null) : null
 				}
 				nameOf={nameOf}
+				selection={{
+					active: selecting,
+					ids: picked,
+					onActive: (on) => (on ? setSelecting(true) : leave()),
+					onToggle: (id) =>
+						setPicked((prev) => {
+							const next = new Set(prev);
+							if (!next.delete(id)) next.add(id);
+							return next;
+						}),
+					sets: setList(overrides.sets, locale).map((s) => ({
+						id: s.id,
+						name: s.name ?? s.id,
+					})),
+					...(profile
+						? {
+								sameAs: m.profile_view_same_as_owner({
+									owner: profile.ownerName,
+								}),
+							}
+						: {}),
+					onApply: (entry) => void onApply(entry),
+					busy: applying,
+				}}
 			/>
 		</>
 	);
@@ -196,6 +321,26 @@ export const LibraryGridSection: FC<{
 
 /** On this host, or not yet: the filter appears once any title isn't installed. */
 type InstallFilter = "installed" | "missing";
+
+/** Selection mode: checkboxes on the titles, and one action for all the checked ones. */
+export interface LibrarySelection {
+	active: boolean;
+	ids: ReadonlySet<string>;
+	onActive: (active: boolean) => void;
+	onToggle: (id: string) => void;
+	/** The shared overrides to pick from, by name. */
+	sets: { id: string; name: string }[];
+	/** A profile's view: following the owner's library again, by name (*Same as Enrico*). */
+	sameAs?: string;
+	/** Every checked title takes `entry`. */
+	onApply: (entry: OverrideEntry) => void;
+	busy: boolean;
+}
+
+/** `Select` values for "Device decides" and "Same as Enrico" in the selection bar; a set id is
+ * 12 hex. */
+const NO_SET = "device";
+const SAME_AS = "same";
 
 export interface LibraryGridProps {
 	/** The titles loaded so far, every page in order. */
@@ -223,7 +368,8 @@ export interface LibraryGridProps {
 	onSources?: () => void;
 	view: LibraryView;
 	onView: (v: LibraryView) => void;
-	onDelete: (entry: OperatorGameEntry) => void;
+	/** With `who`, offered only on a game that profile alone has: the rest are the owner's. */
+	onDelete?: (entry: OperatorGameEntry) => void;
 	/** Custom id of the title whose delete is in flight, or null — only that one disables. */
 	deletingId: string | null;
 	onToggleHidden: (entry: OperatorGameEntry) => void;
@@ -231,7 +377,60 @@ export interface LibraryGridProps {
 	hidingId: string | null;
 	/** A source's display name by id, for the store and owner badges. */
 	nameOf?: (id: string) => string | undefined;
+	/** Selection mode for the bulk action; absent, the titles only open their pages. */
+	selection?: LibrarySelection;
+	/** The profile whose view this is, by name: its hides and own values are marked as its. */
+	who?: string;
 }
+
+/** The checked count, the shared override chooser, and Done. Escape leaves too. */
+const SelectionBar: FC<{ selection: LibrarySelection }> = ({ selection }) => {
+	const { ids, sets, sameAs, onApply, onActive, busy } = selection;
+	// In a profile's view `{}` follows the owner's library again, so Device decides is `none`.
+	const entryOf = (v: string): OverrideEntry =>
+		v === SAME_AS
+			? {}
+			: v === NO_SET
+				? sameAs
+					? { none: true }
+					: {}
+				: { set: v };
+	return (
+		<div className="sticky bottom-4 z-30 flex flex-wrap items-center gap-3 rounded-card border bg-card p-3">
+			<p className="text-sm font-medium tabular-nums" aria-live="polite">
+				{m.library_stream_selected({ count: ids.size })}
+			</p>
+			<div className="min-w-0 flex-1 sm:max-w-64">
+				<Select
+					value=""
+					onValueChange={(v) => onApply(entryOf(v))}
+					disabled={busy || ids.size === 0}
+				>
+					<SelectTrigger aria-label={m.library_stream_bulk()}>
+						<SelectValue placeholder={m.library_stream_bulk()} />
+					</SelectTrigger>
+					<SelectContent>
+						{sameAs && <SelectItem value={SAME_AS}>{sameAs}</SelectItem>}
+						<SelectItem value={NO_SET}>{m.library_stream_device()}</SelectItem>
+						{sets.map((s) => (
+							<SelectItem key={s.id} value={s.id}>
+								{s.name}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+			</div>
+			{busy && <Spinner className="size-4" />}
+			<Button
+				variant="outline"
+				className="ml-auto"
+				onClick={() => onActive(false)}
+			>
+				{m.common_done()}
+			</Button>
+		</div>
+	);
+};
 
 /** A launcher, as a chip that opens its page: its mark and its name. Dimmed while hidden. */
 const LauncherChip: FC<{ game: OperatorGameEntry }> = ({ game }) => (
@@ -307,18 +506,31 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 	onToggleHidden,
 	hidingId,
 	nameOf,
+	selection,
+	who,
 }) => {
 	const shown = games.data ?? [];
+	const selecting = selection?.active === true;
 	const props = (game: OperatorGameEntry) => {
 		const download = downloadOf?.(game.id);
 		return {
 			game,
-			onDelete: () => onDelete(game),
+			...(onDelete && (!who || game.own)
+				? { onDelete: () => onDelete(game) }
+				: {}),
+			...(who ? { who } : {}),
 			deleting: deletingId === customId(game),
 			onToggleHidden: () => onToggleHidden(game),
 			hiding: hidingId === game.id,
 			nameOf,
 			...(download ? { download } : {}),
+			...(selection
+				? {
+						selecting,
+						selected: selection.ids.has(game.id),
+						onSelect: () => selection.onToggle(game.id),
+					}
+				: {}),
 		};
 	};
 	const empty = shown.length === 0;
@@ -353,6 +565,18 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 							: m.library_count({ count: total })}
 					</p>
 					<div className="flex shrink-0 gap-1">
+						{selection && (
+							<Button
+								variant={selecting ? "default" : "outline"}
+								aria-pressed={selecting}
+								onClick={() => selection.onActive(!selecting)}
+							>
+								<SquareCheck className="size-4" />
+								<span className="sr-only sm:not-sr-only">
+									{m.library_stream_select()}
+								</span>
+							</Button>
+						)}
 						<Button
 							size="icon"
 							variant={view === "grid" ? "default" : "outline"}
@@ -450,7 +674,7 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 				{/* A launcher is a door, not a game: one chip each, not a poster. */}
 				{launchers.length > 0 && (
 					<Stagger gap={ROW_GAP} className="flex flex-wrap items-center gap-2">
-						<span className="mr-1 text-xs font-medium uppercase text-muted-foreground/70">
+						<span className="mr-1 text-xs font-medium text-muted-foreground/70">
 							{m.library_launchers_title()}
 						</span>
 						{launchers.map((g) => (
@@ -470,7 +694,7 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 							{/* A fresh host has no sources, so "no games" is the expected first-run
 							    state. Point at the fix instead of leaving a bare empty grid. */}
 							<p>{m.library_empty()}</p>
-							<p className="mt-2">{m.library_empty_add_source()}</p>
+							{!who && <p className="mt-2">{m.library_empty_add_source()}</p>}
 							{onSources && (
 								<Button className="mt-4" variant="outline" onClick={onSources}>
 									{m.library_open_sources()}
@@ -504,6 +728,7 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 						</Stagger>
 					</div>
 				)}
+				{selection && selecting && <SelectionBar selection={selection} />}
 				{hasMore && (
 					<div className="flex flex-col items-center gap-2">
 						<Sentinel onSeen={onMore} active={!loadingMore} />

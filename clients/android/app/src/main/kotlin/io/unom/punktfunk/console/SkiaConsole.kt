@@ -4,18 +4,23 @@ import android.app.ActivityManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.res.Resources
+import android.hardware.usb.UsbManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
 import io.unom.punktfunk.CONNECT_TIMEOUT_MS
 import io.unom.punktfunk.ConnectErrors
 import io.unom.punktfunk.DialSpec
+import io.unom.punktfunk.DisplayTargets
 import io.unom.punktfunk.HostActions
 import io.unom.punktfunk.HostProfiles
 import io.unom.punktfunk.HostRecords
@@ -38,9 +43,12 @@ import io.unom.punktfunk.matches
 import io.unom.punktfunk.pinTitleShortcut
 import io.unom.punktfunk.runSpeedTest
 import io.unom.punktfunk.shortcutId
+import io.unom.punktfunk.kit.DsDevice
 import io.unom.punktfunk.kit.Gamepad
+import io.unom.punktfunk.kit.HostText
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.ProfilePick
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.VideoDecoders
 import io.unom.punktfunk.kit.deviceBodyVibrator
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
@@ -57,6 +65,7 @@ import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.IdentityHolder
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.kit.security.KnownHostStore
+import io.unom.punktfunk.kit.security.deviceCode
 import io.unom.punktfunk.kit.security.nowSecs
 import io.unom.punktfunk.models.ActiveSession
 import java.util.concurrent.Executors
@@ -105,6 +114,10 @@ object SkiaConsole {
      * otherwise sit on for the rest of the process.
      */
     var healthy by mutableStateOf(true)
+        private set
+
+    /** The field the console opened for the system keyboard; [SkiaConsoleShell] shows it. */
+    internal var systemEntry by mutableStateOf<SystemEntry?>(null)
         private set
 
     internal var appContext: Context? = null
@@ -157,11 +170,10 @@ object SkiaConsole {
      * report of "the gamepad UI just doesn't activate, even on Always, even with a controller"
      * looks like. Reads [healthy] as Compose state, so the note clears itself if it ever recovers.
      */
+    @Composable
     fun unavailable(): String? = when {
-        !wanted() -> "This device has no console UI in this build, so the touch layout stays up."
-        !healthy -> "The console UI couldn't start on this device, so the touch layout is " +
-            "standing in. Restart the app to try again — and if it keeps happening, send this " +
-            "host your logs from a saved host's ⋮ menu."
+        !wanted() -> stringResource(R.string.android_console_unavailable_build)
+        !healthy -> stringResource(R.string.android_console_unavailable_failed)
         else -> null
     }
 
@@ -197,6 +209,8 @@ object SkiaConsole {
         val presets = presetStore.all()
         val opts = JSONObject()
             .put("device_name", deviceName(app))
+            // The app's languages, most preferred first: the console's text follows.
+            .put("languages", JSONArray(io.unom.punktfunk.languageTags(app)))
             .put("gpu_cache_bytes", gpuCacheBytes(app))
             // The touch shell exists as a fallback on phones/tablets but not on a TV —
             // gates the console's own "Controller-optimized UI" off switch.
@@ -206,11 +220,19 @@ object SkiaConsole {
             // The same MediaCodec answer the Hello advertises by: without a real AV1
             // decoder the codec row marks AV1 unsupported instead of offering a dead pick.
             .put("av1_ok", VideoDecoders.decodableCodecBits() and 4 != 0)
+            // A player whose language the tray cannot type gets the system IME for every field
+            // but a password: composition, candidates and dictation live there.
+            .put(
+                "system_keyboard",
+                needsSystemKeyboard(imeLanguageTag(app), io.unom.punktfunk.languageTags(app).firstOrNull().orEmpty()),
+            )
             // Answers `FetchProfiles`, so a connect checks the box's profiles first.
             .put("profiles", true)
             // Takes each launch's password out of the console (`nativeConsoleTakeUnlock`) and
             // reports a `profile-locked` close as phase 7, so the console asks for it.
             .put("prompts_unlock", true)
+            // Answers `SetHidden` and `FetchHidden`, so a locked profile's game menu offers Hide.
+            .put("hides", true)
             .put("settings", ConsoleJson.settings(initial, base))
             .put("presets", JSONArray(ConsoleJson.presets(presets)))
             .put("known_hosts", JSONObject(ConsoleJson.knownHosts(services.store.all())))
@@ -349,8 +371,15 @@ object SkiaConsole {
         // a start entry queues its shelf fetch or desktop dial before that, and a cold-start
         // link waits in `parkedLink`.
         main.post(object : Runnable {
+            var codeSent = false
+
             override fun run() {
                 if (handle == 0L) return
+                // Once, when the identity is there: the console shows it while a request waits.
+                if (!codeSent) identity?.let { id ->
+                    codeSent = true
+                    id.deviceCode()?.let { NativeBridge.nativeConsoleSetDeviceCode(handle, it) }
+                }
                 if (identities.settled) {
                     state.now { parkedLink.also { parkedLink = null } }?.let(::handleDeepLink)
                     drainCommands()
@@ -465,25 +494,28 @@ object SkiaConsole {
      */
     fun handleDeepLink(url: String) {
         if (handle == 0L) return
+        val app = appContext ?: return
         if (!identities.settled) {
             state.now { parkedLink = url }
             return
         }
         val parsed = io.unom.punktfunk.kit.link.DeepLinks.parse(url)
         if (parsed is io.unom.punktfunk.kit.link.DeepLinkResult.Refused) {
-            if (parsed.error != io.unom.punktfunk.kit.link.LinkError.NOT_OUR_SCHEME) notice(parsed.message())
+            if (parsed.error != io.unom.punktfunk.kit.link.LinkError.NOT_OUR_SCHEME) {
+                appContext?.let { notice(parsed.message().words(it.resources)) }
+            }
             return
         }
         val link = (parsed as io.unom.punktfunk.kit.link.DeepLinkResult.Parsed).link
         if (link.route != io.unom.punktfunk.kit.link.LinkRoute.CONNECT) {
-            notice("Punktfunk on Android can't do “${link.route.word}” links yet.")
+            notice(app.getString(R.string.link_route_unsupported, link.route.word))
             return
         }
         val presetRef = link.preset
         if (presetRef != null) {
             val (_, resolution) = presetStore.resolve(presetRef)
             if (resolution != io.unom.punktfunk.PresetResolution.FOUND) {
-                notice("That link asks for a preset called “$presetRef”, which isn't on this device.")
+                notice(app.getString(R.string.link_unknown_preset, presetRef))
                 return
             }
         }
@@ -491,15 +523,15 @@ object SkiaConsole {
             is io.unom.punktfunk.kit.link.HostResolution.Record -> {
                 val kh = resolved.host
                 if (link.pinConflict(kh)) {
-                    notice("That link's fingerprint doesn't match the one pinned for ${kh.name}.")
+                    notice(app.getString(R.string.link_pin_conflict, kh.name))
                     return
                 }
                 if (kh.fpHex.isEmpty() || !kh.paired) {
-                    notice("Pair with ${kh.name} first — a link can't establish trust.")
+                    notice(app.getString(R.string.android_link_pair_first, kh.name))
                     return
                 }
                 if (resolved is io.unom.punktfunk.kit.link.HostResolution.Confirm) {
-                    notice("A link can only dial ${kh.name} by its id — open it from the list.")
+                    notice(app.getString(R.string.android_link_by_id_only, kh.name))
                     return
                 }
                 state.now {
@@ -513,11 +545,11 @@ object SkiaConsole {
                 }
             }
             is io.unom.punktfunk.kit.link.HostResolution.Unknown ->
-                notice("That link points at a host this device hasn't paired with.")
+                notice(app.getString(R.string.android_link_host_unpaired))
             io.unom.punktfunk.kit.link.HostResolution.Ambiguous ->
-                notice("More than one saved host is called “${link.hostRef}”.")
+                notice(app.getString(R.string.link_ambiguous_host, link.hostRef))
             io.unom.punktfunk.kit.link.HostResolution.Unresolvable ->
-                notice("That link points at a host this device doesn't know.")
+                notice(app.getString(R.string.link_host_not_saved))
         }
     }
 
@@ -539,9 +571,27 @@ object SkiaConsole {
                     extras,
                     app?.let(::deviceBodyVibrator),
                     ConsoleJson.otherInputs(),
+                    padAudio = app != null && padAudioOn(app),
                 ),
             )
         }
+    }
+
+    /** A stream would play pad audio: capture and a lane are on, and a USB DualSense is attached. */
+    private fun padAudioOn(app: Context): Boolean {
+        val s = SettingsStore(app).load()
+        if (!s.dsCapture || !(s.padHaptics || s.padSpeaker)) return false
+        val usb = app.getSystemService(Context.USB_SERVICE) as UsbManager
+        return usb.deviceList.values.any {
+            it.vendorId == DsDevice.VID_SONY &&
+                DsDevice.modelFor(it.productId).let { m -> m != null && m != DsDevice.Model.DUALSHOCK4 }
+        }
+    }
+
+    /** The speaker volume saved for the pad the console keys [key], 0..100 (100 = unscaled). */
+    fun padSpeakerVolume(context: Context, key: String): Int {
+        val saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("json", null)
+        return ConsoleJson.padSpeakerVolume(saved?.let { runCatching { JSONObject(it) }.getOrNull() }, key)
     }
 
     /** Whether the console's input test (`ConsoleCmd::PadTest`) has the pad, not the menu. */
@@ -576,7 +626,7 @@ object SkiaConsole {
             handle,
             ConsoleJson.hostRows(
                 services.store.all(), services.discovered, services.reachable, presetStore.all(),
-                services.hostActions, services.nowPlaying,
+                services.hostActions, services.nowPlaying, appContext?.resources, services.screens,
             ),
         )
     }
@@ -608,6 +658,13 @@ object SkiaConsole {
                     state.launch { recordNowPlaying(fp, up) }
                 }
             }
+            if (now - (services.screensAt[fp] ?: 0L) >= SCREENS_TTL_MS) {
+                services.screensAt[fp] = now
+                ioPool.execute {
+                    val found = DisplayTargets.fetch(id, addr, mgmt, fp, port)
+                    state.launch { recordScreens(fp, found) }
+                }
+            }
             if (now - (services.hostActionsAt[fp] ?: 0L) < HOST_ACTIONS_TTL_MS) continue
             services.hostActionsAt[fp] = now
             ioPool.execute {
@@ -632,6 +689,13 @@ object SkiaConsole {
         pushHosts()
     }
 
+    /** Adopt a `/display/targets` answer; null drops the Screen section. Re-pushes only on a change. */
+    private fun recordScreens(fpHex: String, found: DisplayTargets.Targets?) {
+        if (services.screens[fpHex] == found) return
+        if (found == null) services.screens.remove(fpHex) else services.screens[fpHex] = found
+        pushHosts()
+    }
+
     private fun pushKnownHosts() {
         if (handle == 0L) return
         NativeBridge.nativeConsoleSetKnownHosts(handle, ConsoleJson.knownHosts(services.store.all()))
@@ -641,13 +705,40 @@ object SkiaConsole {
         if (handle != 0L) NativeBridge.nativeConsoleNotice(handle, text)
     }
 
+    /** The held launch's refusal in the host's words, read on the hold's own poll: the hold says it. */
+    private fun tellRefusal() {
+        val res = appContext?.resources ?: return
+        val session = state.now { pendingSession } ?: return
+        val said = HostText.launch(NativeBridge.nativeLaunchRefusal(session.handle)) ?: return
+        NativeBridge.nativeConsoleLaunchRefused(handle, said.words(res))
+    }
+
+    /** The system keyboard finished: [typed] replaces the field's text, and the field closes. */
+    fun finishEntry(typed: String) {
+        val entry = systemEntry ?: return
+        systemEntry = null
+        if (handle == 0L) return
+        val (erase, text) = entry.replacement(typed)
+        repeat(erase) { NativeBridge.nativeConsoleKey(handle, 7, false, false) }
+        NativeBridge.nativeConsoleText(handle, text)
+        NativeBridge.nativeConsoleKey(handle, 4, false, false)
+    }
+
+    /** The system keyboard was dismissed: the field closes as it was (Escape). */
+    fun cancelEntry() {
+        systemEntry ?: return
+        systemEntry = null
+        if (handle != 0L) NativeBridge.nativeConsoleKey(handle, 6, false, false)
+    }
+
     // ---- events from the console ---------------------------------------------------------
 
     private fun ConsoleState.onEvent(ev: JSONObject) {
         when {
             ev.has("action") -> onAction(ev.get("action"))
             ev.has("pulse") -> onPulse?.invoke(ev.optString("pulse"))
-            ev.has("editing") -> {} // the shell draws its own keyboard; nothing to raise here
+            ev.has("edit_text") -> systemEntry = SystemEntry.from(ev.getJSONObject("edit_text"))
+            ev.has("editing") -> if (!ev.optBoolean("editing")) systemEntry = null
             // The Skia surface has no accessibility node tree, so the focused row is spoken
             // instead. Already de-duplicated by the render thread: this fires only on a change.
             ev.has("announce") -> onAnnounce?.invoke(ev.optString("announce"))
@@ -709,7 +800,8 @@ object SkiaConsole {
 
     /**
      * `OverlayAction::PinShortcut`: the title's link as a home-screen shortcut. The record and
-     * the cached shelf the link names give the shortcut its key and its poster.
+     * the cached shelf the link names give the shortcut its key and its poster: the link's
+     * profile's shelf, else the console's.
      */
     private fun pinShortcut(a: JSONObject) {
         val app = appContext ?: return
@@ -720,7 +812,8 @@ object SkiaConsole {
         val me = identity
         ioPool.execute {
             val posters = link.launch?.let { id ->
-                LibraryCache.standard(app.cacheDir).load(LibraryCache.keyFor(host, host.fpHex))
+                LibraryCache.standard(app.cacheDir)
+                    .load(LibraryCache.keyFor(host, host.fpHex), link.asProfile ?: consoleProfile(host))
                     ?.games?.firstOrNull { it.id == id }?.art?.posterCandidates
             }.orEmpty()
             val key = shortcutId(host.id, link.launch, link.preset)
@@ -732,10 +825,10 @@ object SkiaConsole {
      * `OverlayAction::Launch` — the console asked for a session. The trust decision was the
      * console's (an unpaired host went to its Pair screen first), so this is the dial itself
      * ([HostServices.dial]): pinned by the row's fingerprint, with the host's bound preset or the
-     * pinned card's one-off, and — for the pair screen's "Request access" — the long approval
-     * budget. The password the console's prompt typed rides the first dial and is wiped once it
-     * returns; a `profile-locked` close reopens that prompt. The result lands on main, beside
-     * `CancelConnect`.
+     * pinned card's one-off, the host's overrides for a cached title, and — for the pair screen's
+     * "Request access" — the long approval budget. The password the console's prompt typed rides
+     * the first dial and is wiped once it returns; a `profile-locked` close reopens that prompt.
+     * The result lands on main, beside `CancelConnect`.
      */
     private fun ConsoleState.onLaunch(a: JSONObject) {
         // Taken first, so a launch that dials nothing still wipes it.
@@ -762,12 +855,11 @@ object SkiaConsole {
             NativeBridge.nativeConsoleSessionPhase(handle, 2, identities.blockedMessage())
             return
         }
-        // The shell raises its hold for a GAME launch off a shelf; a desktop connect and a
-        // launcher tile go straight through, so the session is handed over at once. Mirrors
-        // `Shell::launch_hold`, and reads the same cached catalog the shelf was drawn from.
-        holdsLaunch = launchId != null &&
-            LibraryCache.standard(app.cacheDir).load(LibraryCache.keyFor(kh, fp))?.games
-                ?.firstOrNull { it.id == launchId }?.isLauncher == false
+        // The catalog cached for the profile this launch plays as: it holds the host's overrides
+        // for the title.
+        val entry = launchId?.let { id ->
+            LibraryCache.standard(app.cacheDir).load(LibraryCache.keyFor(kh, fp), profile)?.games?.firstOrNull { it.id == id }
+        }
         val preset: StreamPreset? = presetStore.resolveFor(kh, presetId, launchId)
         val effective = settings.effectiveFor(preset)
         val ticket = HostServices.Ticket()
@@ -781,6 +873,7 @@ object SkiaConsole {
             preset = preset,
             profile = profile,
             promptsUnlock = true,
+            overrides = entry?.overrides,
         )
         // A host the dial saves by what it presented is named by its advert, else its address.
         val name = services.discovered.firstOrNull { it.host == addr && it.port == port }?.name ?: addr
@@ -807,14 +900,13 @@ object SkiaConsole {
                 val h = dialed.session.handle
                 val session = dialed.session
                     .copy(launchedFromLibrary = launchId != null, libraryPresetId = presetId)
-                // The console learns the dial landed and keeps the screen: its launch hold
-                // is still waiting on the game. Handing the session over here instead would
-                // swap the console for the stream view mid-wait, which is the seam this
-                // whole screen exists to remove. `ShowStream` releases it.
+                // The console learns the dial landed and keeps the screen while its launch hold
+                // waits on the game; `ShowStream` releases the session. Only the shell knows
+                // whether it holds: a link, a desktop and a launcher tile start none.
                 NativeBridge.nativeConsoleSessionPhase(handle, 1, "")
                 val take = onConnected
                 when {
-                    holdsLaunch -> pendingSession = session
+                    NativeBridge.nativeConsoleHoldsLaunch(handle) -> pendingSession = session
                     take != null -> take(session)
                     // Nothing on screen to hand it to (the console is parked behind a
                     // stream): close it rather than leave the host feeding a session
@@ -827,7 +919,7 @@ object SkiaConsole {
                     HostRecords.savePick(services.store, kh, null)
                     pushHosts(); pushKnownHosts()
                 }
-                val (phase, message) = failedPhase(token, dialed.said, requestAccess)
+                val (phase, message) = failedPhase(token, dialed.said, requestAccess, app.resources)
                 NativeBridge.nativeConsoleSessionPhase(handle, phase, message)
                 resumeDiscovery()
             }
@@ -849,9 +941,9 @@ object SkiaConsole {
         ioPool.execute {
             val notices = runCatching {
                 app.assets.open("THIRD-PARTY-NOTICES.txt").bufferedReader().use { it.readText() }
-            }.getOrDefault("Third-party notices unavailable.")
+            }.getOrDefault(app.getString(R.string.about_notices_unavailable))
             val json = JSONArray()
-                .put(JSONObject().put("heading", "Third-party software").put("text", notices))
+                .put(JSONObject().put("heading", app.getString(R.string.about_third_party_heading)).put("text", notices))
                 .toString()
             state.launch { if (handle != 0L) NativeBridge.nativeConsoleSetLicenses(handle, json) }
         }
@@ -878,14 +970,17 @@ object SkiaConsole {
         "Probe" to { _ -> resumeDiscovery(); pushHosts() },
         "LoadLicenses" to { _ -> loadLicenses() },
         "FetchLibrary" to { c -> fetchLibrary(c, refreshOnly = false) },
-        "RefreshRunning" to { c -> fetchLibrary(c, refreshOnly = true) },
+        "RefreshRunning" to { c -> tellRefusal(); fetchLibrary(c, refreshOnly = true) },
         "Pair" to ::pair,
         "RequestAccess" to ::requestAccess,
         "SendLogs" to ::sendLogs,
         "SpeedTest" to ::speedTest,
         "HostAction" to ::hostAction,
+        "SetScreen" to ::setScreen,
         "EndGame" to this::endGame,
         "Install" to this::changeInstall,
+        "SetHidden" to this::setHidden,
+        "FetchHidden" to this::fetchHidden,
         "SaveHost" to ::saveHost,
         "UpdateHost" to ::updateHost,
         "ForgetHost" to ::forgetHost,
@@ -1001,13 +1096,14 @@ object SkiaConsole {
     private fun fetchProfiles(c: JSONObject) {
         val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
         val id = identity
+        val res = appContext?.resources ?: return
         ioPool.execute {
             val answer = if (id == null) {
                 ProfilesAnswer.Failed(identities.blockedMessage())
             } else {
                 HostProfiles.fetch(id, addr, mgmt, fp, streamPort(fp))
             }
-            val json = ConsoleJson.profilesAnswer(answer)
+            val json = ConsoleJson.profilesAnswer(answer, res)
             state.launch { if (handle != 0L) NativeBridge.nativeConsoleSetProfiles(handle, fp, json) }
         }
     }
@@ -1068,10 +1164,11 @@ object SkiaConsole {
         }
         // The probe blocks for its two-second burst on the IO pool, and the console keeps
         // drawing.
+        val res = appContext?.resources ?: return
         ioPool.execute {
             kotlinx.coroutines.runBlocking {
                 runSpeedTest(
-                    services, id, addr, port, fp,
+                    services, id, addr, port, fp, res,
                     onProgress = { kbps -> state.launch { advanceSpeedProgress(key, kbps) } },
                 ) { p -> state.launch { advanceSpeed(key, p) } }
             }
@@ -1101,9 +1198,36 @@ object SkiaConsole {
             notice(identities.blockedMessage())
             return
         }
+        val res = appContext?.resources ?: return
         ioPool.execute {
             val message = HostActions.invoke(id, addr, mgmt, fp, hostName, actionId, label, streamPort(fp))
-            state.launch { notice(message) }
+            state.launch { notice(message.words(res)) }
+        }
+    }
+
+    /**
+     * Write a Screen row's pick on the host, a role's topology with it, then ask again: the row
+     * the card shows is the host's answer, refused or not. The console already toasted the pick;
+     * a refusal is a notice.
+     */
+    private fun setScreen(c: JSONObject) {
+        val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
+        val pick = DisplayTargets.Pick.of(c) ?: return
+        val label = c.optString("label")
+        val id = identity
+        if (id == null) {
+            notice(identities.blockedMessage())
+            return
+        }
+        val res = appContext?.resources ?: return
+        ioPool.execute {
+            val refused = DisplayTargets.setPick(id, addr, mgmt, fp, pick, label, streamPort(fp))
+            val found = DisplayTargets.fetch(id, addr, mgmt, fp, streamPort(fp))
+            state.launch {
+                services.screensAt[fp] = android.os.SystemClock.elapsedRealtime()
+                recordScreens(fp, found)
+                refused?.let { notice(it.words(res)) }
+            }
         }
     }
 
@@ -1128,7 +1252,7 @@ object SkiaConsole {
      */
     private fun runPairing(
         c: JSONObject,
-        wording: (String) -> String,
+        wording: (String) -> Int,
         ask: (ClientIdentity, String, Int) -> HostServices.Paired,
     ) {
         val addr = c.optString("addr"); val port = c.optInt("port")
@@ -1159,7 +1283,10 @@ object SkiaConsole {
                         NativeBridge.nativeConsoleSetPair(handle, ConsoleJson.pairPaired(req, fp))
                     }
                     is HostServices.Paired.Failed ->
-                        NativeBridge.nativeConsoleSetPair(handle, ConsoleJson.pairFailed(req, wording(paired.token)))
+                        NativeBridge.nativeConsoleSetPair(
+                            handle,
+                            ConsoleJson.pairFailed(req, (appContext ?: return@launch).getString(wording(paired.token))),
+                        )
                 }
             }
         }
@@ -1203,6 +1330,10 @@ object SkiaConsole {
     /** How long a host's running title stays fresh — `pf_client_core::library::RUNNING_TTL`.
      *  Short: this is the one host fact that changes while somebody is looking at the tile. */
     private const val NOW_PLAYING_TTL_MS = 20_000L
+
+    /** How long a host's screens stay fresh — `pf_client_core::display_targets::TTL`. Another
+     *  device starting a stream moves `in_use_by`. */
+    private const val SCREENS_TTL_MS = 20_000L
 }
 
 /**
@@ -1210,11 +1341,11 @@ object SkiaConsole {
  * asks the box's list again, 7 reopens the password prompt under the host's own sentence ([said],
  * empty for none), and 2 shows any other failure.
  */
-internal fun failedPhase(token: String, said: String, requestAccess: Boolean): Pair<Int, String> =
+internal fun failedPhase(token: String, said: String, requestAccess: Boolean, res: Resources): Pair<Int, String> =
     when (token) {
         PROFILE_LOCKED -> 7 to said
         else -> (if (token == "profile-unknown") 5 else 2) to
-            said.ifEmpty { ConnectErrors.connectMessage(token, requestAccess) }
+            said.ifEmpty { res.getString(ConnectErrors.connectMessage(token, requestAccess)) }
     }
 
 /** One pad's held buttons and axes, by the names the console's `PadTestState` reads. */

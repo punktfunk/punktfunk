@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
@@ -39,6 +38,9 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -50,9 +52,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import io.unom.punktfunk.kit.R
 
 /**
  * The scope switcher: the one new settings concept. Selecting a preset puts the WHOLE settings
@@ -89,7 +94,7 @@ internal fun PresetScopeChips(
         FilterChip(
             selected = selectedId == null,
             onClick = { onSelect(null) },
-            label = { Text("Default settings") },
+            label = { Text(stringResource(R.string.prefs_scope_defaults)) },
         )
         presets.forEach { p ->
             val isSelected = selectedId == p.id
@@ -115,7 +120,7 @@ internal fun PresetScopeChips(
                                 Spacer(Modifier.width(2.dp))
                                 Icon(
                                     Icons.Filled.ArrowDropDown,
-                                    contentDescription = "Manage “${p.name}”",
+                                    contentDescription = stringResource(R.string.android_preset_manage_a11y, p.name),
                                     modifier = Modifier.size(18.dp),
                                 )
                             }
@@ -123,18 +128,24 @@ internal fun PresetScopeChips(
                     },
                 )
                 DropdownMenu(expanded = menuFor == p.id, onDismissRequest = { menuFor = null }) {
-                    DropdownMenuItem(text = { Text("Edit…") }, onClick = { menuFor = null; onEdit(p) })
                     DropdownMenuItem(
-                        text = { Text("Duplicate") },
+                        text = { Text(stringResource(R.string.android_preset_menu_edit)) },
+                        onClick = { menuFor = null; onEdit(p) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.common_duplicate)) },
                         onClick = { menuFor = null; onDuplicate(p) },
                     )
-                    DropdownMenuItem(text = { Text("Delete…") }, onClick = { menuFor = null; onDelete(p) })
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.preset_menu_delete)) },
+                        onClick = { menuFor = null; onDelete(p) },
+                    )
                 }
             }
         }
         AssistChip(
             onClick = onNew,
-            label = { Text("New preset") },
+            label = { Text(stringResource(R.string.preset_new)) },
             leadingIcon = {
                 Icon(Icons.Filled.Add, contentDescription = null, Modifier.size(AssistChipDefaults.IconSize))
             },
@@ -152,6 +163,10 @@ internal fun PresetScopeChips(
  * Names must be unique case-insensitively: two "Work" chips in a menu are ambiguous, and a
  * `punktfunk://…?preset=Work` link would have to refuse rather than guess. [taken] is the live
  * duplicate check, which lets an edit keep its own name (and change only its case).
+ *
+ * Creating starts from Empty or the Second screen starter; the starter names the preset after
+ * the role while the name is still blank or the one it gave. [onConfirm]'s `secondScreen` says
+ * which.
  */
 @Composable
 internal fun PresetEditorDialog(
@@ -161,34 +176,69 @@ internal fun PresetEditorDialog(
     initialAccent: String?,
     creating: Boolean,
     taken: (String) -> Boolean,
-    onConfirm: (name: String, accent: String?) -> Unit,
+    onConfirm: (name: String, accent: String?, secondScreen: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf(initialName) }
     var accent by remember { mutableStateOf(initialAccent) }
+    var secondScreen by remember { mutableStateOf(false) }
     val trimmed = name.trim()
     val duplicate = trimmed.isNotEmpty() && taken(trimmed)
+    val role = stringResource(R.string.screen_role_second)
+    val starterName = remember(role) { freeName(role, taken) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            PresetEditorFields(
-                name = name,
-                accent = accent,
-                duplicate = duplicate,
-                creating = creating,
-                onNameChange = { name = it },
-                onAccentChange = { accent = it },
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (creating) {
+                    PresetStarter(secondScreen) { second ->
+                        if (name.isBlank() || name == starterName) name = if (second) starterName else ""
+                        secondScreen = second
+                    }
+                }
+                PresetEditorFields(
+                    name = name,
+                    accent = accent,
+                    duplicate = duplicate,
+                    creating = creating,
+                    onNameChange = { name = it },
+                    onAccentChange = { accent = it },
+                )
+            }
         },
         confirmButton = {
             TextButton(
                 enabled = trimmed.isNotEmpty() && !duplicate,
-                onClick = { onConfirm(trimmed, accent) },
+                onClick = { onConfirm(trimmed, accent, secondScreen) },
             ) { Text(confirmLabel) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) } },
     )
+}
+
+/** Where a new preset starts: Empty, or the Second screen starter with the role's hint under it. */
+@Composable
+private fun PresetStarter(secondScreen: Boolean, onPick: (secondScreen: Boolean) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        val starters = listOf(R.string.preset_starter_empty, R.string.screen_role_second)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            starters.forEachIndexed { i, label ->
+                SegmentedButton(
+                    selected = secondScreen == (i == 1),
+                    onClick = { onPick(i == 1) },
+                    shape = SegmentedButtonDefaults.itemShape(index = i, count = starters.size),
+                ) { Text(stringResource(label), maxLines = 1) }
+            }
+        }
+        if (secondScreen) {
+            Text(
+                stringResource(R.string.screen_role_second_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 /**
@@ -211,17 +261,16 @@ internal fun PresetEditorFields(
         OutlinedTextField(
             value = name,
             onValueChange = onNameChange,
-            label = { Text("Name") },
-            placeholder = { Text("e.g. Game, Work, Travel") },
+            label = { Text(stringResource(R.string.preset_name)) },
+            placeholder = { Text(stringResource(R.string.preset_name_placeholder)) },
             singleLine = true,
             isError = duplicate,
         )
         Text(
             when {
-                duplicate -> "A preset called “${name.trim()}” already exists."
-                creating -> "A preset starts out inheriting every default setting. Whatever you " +
-                    "change while it's selected becomes an override."
-                else -> "The colour marks this preset on host cards, where its name doesn't fit."
+                duplicate -> stringResource(R.string.preset_name_taken, name.trim())
+                creating -> stringResource(R.string.preset_new_hint)
+                else -> stringResource(R.string.android_preset_edit_hint)
             },
             style = MaterialTheme.typography.bodySmall,
             color = if (duplicate) {
@@ -231,7 +280,7 @@ internal fun PresetEditorFields(
             },
         )
         Text(
-            "Colour",
+            stringResource(R.string.preset_color),
             style = MaterialTheme.typography.labelLarge,
             modifier = Modifier.padding(top = 4.dp),
         )
@@ -277,7 +326,7 @@ internal fun PresetEditorFields(
         ) {
             Swatch(colour = null, selected = accent == null, onClick = { onAccentChange(null) })
             Text(
-                "No colour",
+                stringResource(R.string.preset_color_none),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 12.dp),
@@ -303,6 +352,9 @@ internal fun Swatch(
     modifier: Modifier = Modifier.size(SWATCH_TOTAL),
 ) {
     val fill = colour ?: MaterialTheme.colorScheme.surfaceVariant
+    val description = stringResource(
+        if (colour == null) R.string.preset_color_none else R.string.android_preset_swatch_a11y,
+    )
     Box(
         modifier = modifier
             .aspectRatio(1f)
@@ -315,7 +367,7 @@ internal fun Swatch(
                 },
             )
             .clickable(onClick = onClick)
-            .semantics { contentDescription = if (colour == null) "No colour" else "Colour" },
+            .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -379,38 +431,35 @@ internal fun DeletePresetDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Delete “${preset.name}”?") },
+        title = { Text(stringResource(R.string.preset_delete_named_title, preset.name)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val consequences = buildList {
                     if (boundHosts > 0) {
-                        add("$boundHosts ${plural(boundHosts, "host", "hosts")} will fall back to the default settings")
+                        add(pluralStringResource(R.plurals.preset_delete_hosts, boundHosts, boundHosts))
                     }
                     if (pinnedCards > 0) {
-                        add("$pinnedCards pinned ${plural(pinnedCards, "card", "cards")} will disappear")
+                        add(pluralStringResource(R.plurals.preset_delete_cards, pinnedCards, pinnedCards))
                     }
                 }
                 Text(
                     if (consequences.isEmpty()) {
-                        "Nothing uses this preset."
+                        stringResource(R.string.preset_delete_unused)
                     } else {
-                        consequences.joinToString(", and ") + "."
+                        consequences.joinToString(" ")
                     },
                 )
                 Text(
-                    "The settings it overrides aren't lost anywhere else — the defaults stay " +
-                        "exactly as they are.",
+                    stringResource(R.string.android_preset_delete_note),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },
-        confirmButton = { TextButton(onClick = onConfirm) { Text("Delete") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(stringResource(R.string.common_delete)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) } },
     )
 }
-
-private fun plural(n: Int, one: String, many: String) = if (n == 1) one else many
 
 /**
  * The per-host half of presets, inside the host's Edit sheet: which preset a plain tap uses
@@ -428,13 +477,14 @@ internal fun HostPresetBinding(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val bound = presets.firstOrNull { it.id == boundId }
+    val defaults = stringResource(R.string.prefs_scope_defaults)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
             OutlinedTextField(
-                value = bound?.name ?: "Default settings",
+                value = bound?.name ?: defaults,
                 onValueChange = {},
                 readOnly = true,
-                label = { Text("Preset") },
+                label = { Text(stringResource(R.string.android_preset_binding)) },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                 modifier = Modifier
                     .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
@@ -442,7 +492,7 @@ internal fun HostPresetBinding(
             )
             ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 DropdownMenuItem(
-                    text = { Text("Default settings") },
+                    text = { Text(defaults) },
                     onClick = { onBind(null); expanded = false },
                 )
                 presets.forEach { p ->
@@ -454,18 +504,17 @@ internal fun HostPresetBinding(
             }
         }
         Text(
-            "What a tap on this host connects with.",
+            stringResource(R.string.preset_bind_host_hint),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            "Pinned cards",
+            stringResource(R.string.android_preset_pinned_cards),
             style = MaterialTheme.typography.labelLarge,
             modifier = Modifier.padding(top = 8.dp),
         )
         Text(
-            "A pinned preset gets its own card beside this host — one tap instead of a menu. " +
-                "Pinning changes nothing about which preset is the default.",
+            stringResource(R.string.preset_pin_hint),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

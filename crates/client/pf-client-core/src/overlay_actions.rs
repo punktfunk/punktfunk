@@ -1,6 +1,6 @@
 //! In-stream quick-action ring: the `overlay_actions` JSON blob (schema `v: 2`).
-//! Six slots clockwise from 12 o'clock, custom shortcuts, and the virtual pad
-//! preset. Design: `design/touch-client-overlay.md`.
+//! Six slots clockwise from 12 o'clock, key combinations (`shortcut:`), and the
+//! virtual pad preset. Design: `design/touch-client-overlay.md`.
 //!
 //! [`OverlayConfig::parse`] never fails. Short rings pad empty, long ones
 //! truncate; unknown ids and dangling `shortcut:` refs become empty slots;
@@ -44,6 +44,16 @@ pub enum SlotId {
     StreamMute,
     /// A dual-screen handheld's two screens trade the picture and the companion panel.
     SwapScreens,
+    /// Release the captured mouse and keyboard, or capture them again.
+    ReleaseInput,
+    /// Switch the mouse between capture (relative) and desktop (absolute) mode.
+    MouseMode,
+    /// Toggle the window between fullscreen and windowed.
+    Fullscreen,
+    /// Minimize the window; the stream keeps running.
+    Minimize,
+    /// Start or stop sharing the clipboard with the host, mid-stream.
+    Clipboard,
     Host(String),
     Shortcut(String),
 }
@@ -67,6 +77,11 @@ impl SlotId {
             SlotId::PadType => "pad_type".into(),
             SlotId::StreamMute => "stream_mute".into(),
             SlotId::SwapScreens => "swap_screens".into(),
+            SlotId::ReleaseInput => "release_input".into(),
+            SlotId::MouseMode => "mouse_mode".into(),
+            SlotId::Fullscreen => "fullscreen".into(),
+            SlotId::Minimize => "minimize".into(),
+            SlotId::Clipboard => "clipboard".into(),
             SlotId::Host(id) => format!("host:{id}"),
             SlotId::Shortcut(id) => format!("shortcut:{id}"),
         }
@@ -90,6 +105,11 @@ impl SlotId {
             "pad_type" => SlotId::PadType,
             "stream_mute" => SlotId::StreamMute,
             "swap_screens" => SlotId::SwapScreens,
+            "release_input" => SlotId::ReleaseInput,
+            "mouse_mode" => SlotId::MouseMode,
+            "fullscreen" => SlotId::Fullscreen,
+            "minimize" => SlotId::Minimize,
+            "clipboard" => SlotId::Clipboard,
             _ => {
                 if let Some(id) = s.strip_prefix("host:").filter(|id| !id.is_empty()) {
                     SlotId::Host(id.into())
@@ -196,8 +216,8 @@ pub const KEY_GRID: [&[&str]; 6] = [
     ],
 ];
 
-/// A shortcut's chord as an editor holds it: one toggle per [`CHORD_MODIFIERS`] entry and
-/// one [`KEY_GRID`] key.
+/// A key combination as an editor holds it: one toggle per [`CHORD_MODIFIERS`] entry and at
+/// most one [`KEY_GRID`] key. Modifiers alone are a combination: `win` opens the Start menu.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Chord {
     pub mods: [bool; 4],
@@ -206,7 +226,7 @@ pub struct Chord {
 
 impl Chord {
     /// Read stored keys: modifier aliases (`control`, `option`, `cmd`, `super`, `meta`) fold
-    /// onto their toggle, and the last grid key wins.
+    /// onto their toggle, and the last grid key wins. No grid key leaves `key` empty.
     pub fn parse(keys: &[String]) -> Chord {
         let has = |names: &[&str]| keys.iter().any(|k| names.contains(&k.as_str()));
         Chord {
@@ -434,87 +454,139 @@ pub struct CatalogueEntry {
     pub note: String,
 }
 
+/// Which editor group: the identity, where [`CatalogueGroup::title`] is only its words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupId {
+    Session,
+    Input,
+    View,
+    Audio,
+    Host,
+    Shortcuts,
+    Empty,
+}
+
 /// Editor group, in display order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogueGroup {
+    pub id: GroupId,
     pub title: &'static str,
     pub entries: Vec<CatalogueEntry>,
 }
 
-/// One table every editor renders. Notes are the platform's: desktop has no
-/// virtual pad and no typed-text path; a phone has both. Empty last.
+/// One table every editor renders, worded when it is built. Notes are the platform's:
+/// desktop has no virtual pad, typed-text path or live clipboard switch; a phone has those
+/// and no window to fullscreen or minimize. Empty last.
 pub fn catalogue(cfg: &OverlayConfig, platform: RingPlatform) -> Vec<CatalogueGroup> {
+    use pf_l10n::client as c;
     let e = |id: &str, label: &str, note: &str| CatalogueEntry {
         id: id.into(),
         label: label.into(),
         note: note.into(),
     };
+    let group = |id, title, entries| CatalogueGroup { id, title, entries };
     let desktop = platform == RingPlatform::Desktop;
-    let host = "Only where the host offers it";
+    let host = c::ring_host_note();
+    let windowed = if desktop { "" } else { c::ring_no_window() };
     let mut g = vec![
-        CatalogueGroup {
-            title: "Session",
-            entries: vec![
-                e("end_stream", "End stream", ""),
-                e("end_game", "End game", "Only a game this device launched"),
-                e("disconnect_linger", "Disconnect, keep the game running", ""),
+        group(
+            GroupId::Session,
+            c::ring_group_session(),
+            vec![
+                e("end_stream", c::ring_end_stream(), ""),
+                e("end_game", c::ring_end_game(), c::ring_end_game_note()),
+                e("disconnect_linger", c::ring_disconnect_linger(), ""),
             ],
-        },
-        CatalogueGroup {
-            title: "Input",
-            entries: vec![
-                e("touch_mode", "Touch mode", ""),
-                e("keyboard", "Keyboard", ""),
+        ),
+        group(
+            GroupId::Input,
+            c::ring_group_input(),
+            vec![
+                e("touch_mode", c::ring_touch_mode(), ""),
+                e("keyboard", c::ring_keyboard(), ""),
                 e(
                     "pad",
-                    "Virtual controller",
+                    c::ring_pad(),
                     if desktop {
-                        "Phones and tablets only"
+                        c::ring_pad_note_touch_only()
                     } else {
                         ""
                     },
                 ),
                 e(
                     "send_text",
-                    "Send text",
+                    c::ring_send_text(),
                     if desktop {
-                        "Not on this client yet"
+                        c::ring_send_text_note()
                     } else {
                         ""
                     },
                 ),
-                e("guide", "Guide button", ""),
-                e("qam", "Quick access menu", "Where the host runs Steam"),
-                e("pad_mouse", "Controller mouse", ""),
-                e("pad_type", "Controller type", "For this stream"),
+                e("guide", c::ring_guide(), ""),
+                e("qam", c::ring_qam(), c::ring_qam_note()),
+                e("pad_mouse", c::ring_pad_mouse(), ""),
+                e("pad_type", c::ring_pad_type(), c::ring_pad_type_note()),
+                e("release_input", c::ring_release_input(), ""),
+                e("mouse_mode", c::ring_mouse_mode(), ""),
+                e(
+                    "clipboard",
+                    c::ring_clipboard(),
+                    if desktop {
+                        c::ring_clipboard_unavailable()
+                    } else {
+                        ""
+                    },
+                ),
             ],
-        },
-        CatalogueGroup {
-            title: "View",
-            entries: vec![
-                e("stats", "Statistics", ""),
-                e("swap_screens", "Swap screens", "Dual-screen handhelds only"),
+        ),
+        group(
+            GroupId::View,
+            c::ring_group_view(),
+            vec![
+                e("stats", c::ring_stats(), ""),
+                e(
+                    "swap_screens",
+                    c::ring_swap_screens(),
+                    c::ring_swap_screens_note(),
+                ),
+                e("fullscreen", c::ring_fullscreen(), windowed),
+                e("minimize", c::ring_minimize(), windowed),
             ],
-        },
-        CatalogueGroup {
-            title: "Audio",
-            entries: vec![
-                e("mic", "Microphone", ""),
-                e("stream_mute", "Mute this stream", "This device only"),
+        ),
+        group(
+            GroupId::Audio,
+            c::ring_group_audio(),
+            vec![
+                e("mic", c::ring_mic(), ""),
+                e(
+                    "stream_mute",
+                    c::ring_stream_mute(),
+                    c::ring_stream_mute_note(),
+                ),
             ],
-        },
-        CatalogueGroup {
-            title: "Host",
-            entries: vec![
-                e("host:power.sleep", "Sleep host", host),
-                e("host:power.reboot", "Restart host", host),
-                e("host:power.shutdown", "Shut down host", host),
+        ),
+        group(
+            GroupId::Host,
+            c::ring_group_host(),
+            vec![
+                e("host:power.sleep", pf_l10n::host::host_power_sleep(), host),
+                e(
+                    "host:power.reboot",
+                    pf_l10n::host::host_power_reboot(),
+                    host,
+                ),
+                e(
+                    "host:power.shutdown",
+                    pf_l10n::host::host_power_shutdown(),
+                    host,
+                ),
             ],
-        },
+        ),
     ];
     if !cfg.shortcuts.is_empty() {
         g.push(CatalogueGroup {
-            title: "Shortcuts",
+            id: GroupId::Shortcuts,
+            title: c::ring_group_shortcuts(),
             entries: cfg
                 .shortcuts
                 .iter()
@@ -530,17 +602,18 @@ pub fn catalogue(cfg: &OverlayConfig, platform: RingPlatform) -> Vec<CatalogueGr
         });
     }
     g.push(CatalogueGroup {
-        title: "Empty",
-        entries: vec![e("", "Empty slot", "")],
+        id: GroupId::Empty,
+        title: pf_l10n::client::ring_group_empty(),
+        entries: vec![e("", pf_l10n::client::ring_empty_slot(), "")],
     });
     g
 }
 
-/// Lucide name for a wire id. `mic` swaps to `mic-off` while muted; `more` is
+/// Lucide name for a wire id. `mic` swaps to `mic-off` while `muted`; `more` is
 /// the ring centre. `None` for a shortcut (the chord is the face) and any host
 /// action beyond the three powers. One table so stream and editor cannot
 /// disagree; Rust shells key [`crate::lucide`], Windows keys a baked PNG.
-pub fn slot_icon(id: &str, state: &str) -> Option<&'static str> {
+pub fn slot_icon(id: &str, muted: bool) -> Option<&'static str> {
     Some(match id {
         "end_stream" => "square",
         "end_game" => "x",
@@ -548,7 +621,7 @@ pub fn slot_icon(id: &str, state: &str) -> Option<&'static str> {
         "touch_mode" => "pointer",
         "keyboard" => "keyboard",
         "stats" => "chart-column",
-        "mic" if state == "Muted" => "mic-off",
+        "mic" if muted => "mic-off",
         "mic" => "mic",
         "pad" => "gamepad-2",
         "send_text" => "send",
@@ -558,6 +631,11 @@ pub fn slot_icon(id: &str, state: &str) -> Option<&'static str> {
         "pad_type" => "gamepad-2",
         "stream_mute" => "volume-2",
         "swap_screens" => "arrow-up-down",
+        "release_input" => "lock",
+        "mouse_mode" => "mouse",
+        "fullscreen" => "maximize",
+        "minimize" => "chevron-down",
+        "clipboard" => "copy",
         "more" => "ellipsis",
         "host:power.sleep" => "moon",
         "host:power.reboot" => "rotate-cw",
@@ -585,16 +663,18 @@ pub fn next_pad_type(current: GamepadPref) -> GamepadPref {
     })
 }
 
-/// `(name, short)` for the Controller type slot: the sheet's value and the dial's face.
+/// `(name, short)` for the Controller type slot: the sheet's value and the dial's face. A
+/// pad's name is a brand; a type outside the cycle reads "Other".
 pub fn pad_type_label(pref: GamepadPref) -> (&'static str, &'static str) {
+    use pf_l10n::client as c;
     match pref {
-        GamepadPref::Auto => ("Automatic", "Pad type"),
+        GamepadPref::Auto => (c::ring_pad_type_automatic(), c::ring_pad_type_short()),
         GamepadPref::Xbox360 => ("Xbox 360", "Xbox 360"),
         GamepadPref::XboxOne => ("Xbox One", "Xbox One"),
         GamepadPref::DualSense => ("DualSense", "DualSense"),
         GamepadPref::DualShock4 => ("DualShock 4", "DS4"),
         GamepadPref::SteamDeck => ("Steam Deck", "Deck"),
-        other => (other.as_str(), other.as_str()),
+        _ => (c::ring_pad_type_other(), c::ring_pad_type_other()),
     }
 }
 
@@ -607,19 +687,20 @@ mod tests {
         let blob = r#"{"v":2,"ring":[],"shortcuts":[{"id":"s1","label":"Task Manager","keys":["ctrl","shift","escape"]},{"id":"s2","keys":["alt","f4"]}]}"#;
         let cfg = OverlayConfig::parse(blob, RingPlatform::Desktop);
         let groups = catalogue(&cfg, RingPlatform::Desktop);
-        let titles: Vec<&str> = groups.iter().map(|g| g.title).collect();
+        let ids: Vec<GroupId> = groups.iter().map(|g| g.id).collect();
         assert_eq!(
-            titles,
+            ids,
             [
-                "Session",
-                "Input",
-                "View",
-                "Audio",
-                "Host",
-                "Shortcuts",
-                "Empty"
+                GroupId::Session,
+                GroupId::Input,
+                GroupId::View,
+                GroupId::Audio,
+                GroupId::Host,
+                GroupId::Shortcuts,
+                GroupId::Empty
             ]
         );
+        assert_eq!((groups[0].title, groups[6].title), ("Session", "Empty"));
         let pad = &groups[1].entries[2];
         assert_eq!(
             (pad.id.as_str(), pad.note.as_str()),
@@ -641,7 +722,7 @@ mod tests {
             &OverlayConfig::parse("", RingPlatform::Desktop),
             RingPlatform::Desktop,
         );
-        assert!(none.iter().all(|g| g.title != "Shortcuts"));
+        assert!(none.iter().all(|g| g.id != GroupId::Shortcuts));
     }
 
     #[test]
@@ -754,6 +835,10 @@ mod tests {
             assert_eq!(next_pad_type(pref(name)), GamepadPref::Auto, "{name}");
         }
         assert_eq!(pad_type_label(GamepadPref::DualShock4).1, "DS4");
+        assert_eq!(
+            pad_type_label(GamepadPref::SteamController),
+            ("Other", "Other")
+        );
     }
 
     #[test]
@@ -801,6 +886,44 @@ mod tests {
         assert_eq!(c.key.as_deref(), Some("a"), "the last grid key wins");
         assert_eq!(c.keys(), keys(&["ctrl", "win", "a"]));
         assert_eq!(Chord::parse(&keys(&["option", "hyper"])).key, None);
+        let win = Chord::parse(&keys(&["super"]));
+        assert_eq!(
+            (win.mods, win.key.as_deref()),
+            ([false, false, false, true], None)
+        );
+        assert_eq!(
+            win.keys(),
+            keys(&["win"]),
+            "a modifier alone is a combination"
+        );
+        assert_eq!(chord_chip(&win.keys()), "Win");
+        let two = Chord::parse(&keys(&["shift", "ctrl"]));
+        assert_eq!(two.keys(), keys(&["ctrl", "shift"]));
+        assert_eq!(chord_chip(&two.keys()), "Ctrl+Shift");
+    }
+
+    #[test]
+    fn the_window_and_capture_actions_are_noted_per_platform() {
+        let cfg = OverlayConfig::platform_default(RingPlatform::Desktop);
+        let note = |platform, id: &str| {
+            catalogue(&cfg, platform)
+                .into_iter()
+                .flat_map(|g| g.entries.into_iter().map(move |e| (g.id, e)))
+                .find(|(_, e)| e.id == id)
+                .map(|(g, e)| (g, e.note))
+                .unwrap_or_else(|| panic!("{id} is not in the catalogue"))
+        };
+        let (desk, touch) = (RingPlatform::Desktop, RingPlatform::Touch);
+        for id in ["release_input", "mouse_mode"] {
+            assert_eq!(note(desk, id), (GroupId::Input, String::new()));
+            assert_eq!(note(touch, id), (GroupId::Input, String::new()));
+        }
+        for id in ["fullscreen", "minimize"] {
+            assert_eq!(note(desk, id), (GroupId::View, String::new()));
+            assert_eq!(note(touch, id).1, "This device has no window");
+        }
+        assert_eq!(note(desk, "clipboard").1, "Not on this device yet");
+        assert_eq!(note(touch, "clipboard"), (GroupId::Input, String::new()));
     }
 
     #[test]
@@ -811,8 +934,8 @@ mod tests {
                 if entry.id.is_empty() {
                     continue; // empty slot draws a plus, not a slot icon
                 }
-                let name =
-                    slot_icon(&entry.id, "").unwrap_or_else(|| panic!("{} has no icon", entry.id));
+                let name = slot_icon(&entry.id, false)
+                    .unwrap_or_else(|| panic!("{} has no icon", entry.id));
                 assert!(
                     crate::lucide::path(name).is_some(),
                     "{}: the set does not ship '{name}'",
@@ -820,11 +943,15 @@ mod tests {
                 );
             }
         }
-        assert_eq!(slot_icon("more", ""), Some("ellipsis"), "the ring's centre");
-        assert_eq!(slot_icon("mic", "Muted"), Some("mic-off"));
-        assert_eq!(slot_icon("host:custom.eject", ""), None);
         assert_eq!(
-            slot_icon("shortcut:s1", ""),
+            slot_icon("more", false),
+            Some("ellipsis"),
+            "the ring's centre"
+        );
+        assert_eq!(slot_icon("mic", true), Some("mic-off"));
+        assert_eq!(slot_icon("host:custom.eject", false), None);
+        assert_eq!(
+            slot_icon("shortcut:s1", false),
             None,
             "a chord IS its own face"
         );

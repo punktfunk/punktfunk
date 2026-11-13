@@ -10,6 +10,7 @@ Look up a `punktfunk-host` command or flag here. Most behaviour comes from
 |---|---|---|
 | [`serve`](#serve) | Run the host. | all |
 | [`ctl`](#ctl) | Drive a running host: pairing, devices, sessions, displays, stats, events. | all |
+| [`settings`](#settings) | Write one console setting without a running host. | all |
 | [`plugins`](#plugins) | Install, remove and list plugins, grant them folders, switch the runner on. | all |
 | [`library`](#library) | Print the resolved [game library](/docs/game-library) as JSON. | all |
 | [`detect-conflicts`](#detect-conflicts) | Report other Moonlight-compatible hosts on this machine. | all |
@@ -30,7 +31,8 @@ Look up a `punktfunk-host` command or flag here. Most behaviour comes from
 | [`web`](#web-windows) | Print the web-console login password. | Windows |
 
 `punktfunk-host --help` prints the common commands. `ctl`, `plugins`, `service`, `tray`, `driver`
-and `web` print their usage when run with no arguments.
+and `web` print their usage when run with no arguments. Commands not listed here, such as `spike`,
+`input-test` and `zerocopy-probe`, are developer tools.
 
 ## `serve`
 
@@ -58,7 +60,8 @@ Pairing is required unless `--open`: arm it from the web console — see
 [Pairing & Trust](/docs/pairing).
 
 The management API is HTTPS and listens on every interface by default. Off loopback it serves
-paired clients the read-only status and library. Every admin action needs the token in
+paired devices the status, the library and the host actions their
+[access level](/docs/access-levels) allows. Every admin action needs the token in
 `mgmt-token` and works from loopback only. The host writes that file on first start into its
 config directory (`~/.config/punktfunk`, or `%ProgramData%\punktfunk` on Windows); the console,
 `ctl` and the tray read it. Every endpoint is in the [API Reference](/api).
@@ -97,7 +100,7 @@ punktfunk-host ctl approve 3
 | `stats` | Mode, codec and bitrate of the live stream; frame timings and drops while a capture records. |
 | `stats record start\|stop` | Arm or stop the performance capture. `stop` writes it to disk. The console shares the one slot. |
 | `watch` | Host events as line-JSON. `--kinds pairing.pending,stream.*` filters; `--since <seq>` resumes. |
-| `console-url` | Print a `file://` link that opens the console already logged in. Linux and macOS. |
+| `console-url` | Print a `file://` link that opens the console already logged in. Linux, and inside a Windows seat, where it prints the person's own link and `--open` opens it. |
 
 In `stats`, **Target** is the encoder's bitrate; **Sent** is what left the box and exists only while
 a capture records. A still screen sends little, so read **new** fps beside **repeated** fps.
@@ -132,9 +135,20 @@ JSON (`true`, `30`, `null` to clear) or a bare string. Restart the host to apply
 
 ## `plugins`
 
-`punktfunk-host plugins add|remove|list|enable|disable|status|grant|access|revoke` does what
-the console's **Plugins** page does. Plugins run with the host's privileges; read [Plugins](/docs/plugins)
-first.
+`punktfunk-host plugins` does what the console's **Plugins** page does. A plugin is code on your
+host; read [Plugins](/docs/plugins) first.
+
+| Command | What it does |
+|---|---|
+| `punktfunk-host plugins add <name…>` | Install plugins and restart the runner. |
+| `punktfunk-host plugins remove <name…>` | Uninstall plugins, drop their library titles, restart the runner. |
+| `punktfunk-host plugins list` | List installed plugins and their versions. |
+| `punktfunk-host plugins enable` | Enable and start the runner. |
+| `punktfunk-host plugins disable` | Stop and disable the runner. |
+| `punktfunk-host plugins status` | Show whether the runner is installed, enabled and running. |
+| `punktfunk-host plugins grant <plugin> <dir> [--write]` | Let a plugin reach a folder; read-only unless `--write`. |
+| `punktfunk-host plugins access` | List grants, pending requests and denials. |
+| `punktfunk-host plugins revoke <plugin> <dir>` | Take one grant back. |
 
 ## `library`
 
@@ -233,7 +247,7 @@ elevated: the file is readable by Administrators and SYSTEM only. A silent insta
 ## `list-monitors`
 
 Prints the physical monitors by connector name, the name `PUNKTFUNK_CAPTURE_MONITOR` takes to
-[stream a real monitor](/docs/virtual-displays#stream-a-real-monitor-instead). Run it inside the
+[stream a real monitor](/docs/stream-a-monitor). Run it inside the
 session you want to stream.
 
 ```

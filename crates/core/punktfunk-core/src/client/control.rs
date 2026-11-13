@@ -6,7 +6,8 @@ use crate::quic::{ClipControl, ClipOffer, ProbeRequest, Welcome};
 /// One outbound enum so the worker's `select!` has a single writer — two `&mut ctrl_send`
 /// borrows across branches do not compile.
 pub(crate) enum CtrlRequest {
-    Mode(Mode),
+    /// A mode and the view the picture is shown at, `None` for the mode itself.
+    Mode(Mode, Option<(u32, u32)>),
     /// A codec ask: these `CODEC_*` bits can't be decoded here.
     Codec(u8),
     Probe(ProbeRequest),
@@ -23,8 +24,9 @@ pub(crate) enum CtrlRequest {
     /// Who draws the pointer. Client-local = host excludes and forwards; host-composite = baked
     /// into the video. Latest-wins.
     CursorRender(crate::quic::CursorRenderMode),
-    /// A key press or release, toward a host that reads them off the control stream
-    /// (`HOST_CAP2_INPUT_EDGES`): QUIC resends what the datagram plane would lose.
+    /// A key or button press or release, or a character of text, toward a host that reads them
+    /// off the control stream (`HOST_CAP2_INPUT_EDGES`): QUIC resends what the datagram plane
+    /// would lose and keeps their order.
     InputEdge(crate::input::InputEvent),
     /// A captured Steam Controller 2's identity, ahead of its arrival.
     PadIdentity(crate::quic::PadIdentity),
@@ -46,6 +48,12 @@ pub(crate) struct Negotiated {
     pub(crate) clock_rtt_ns: Option<u64>,
     /// The profile the host resolved this session to; `None` from a host without profiles.
     pub(crate) profile: Option<String>,
+    /// The screen the host says this session streams; `None` from a host that does not say.
+    pub(crate) screen: Option<crate::quic::v2::hello::ScreenEcho>,
+    /// The role the host says this session got; `None` from a host that does not say.
+    pub(crate) role: Option<crate::quic::v2::hello::RoleEcho>,
     /// The host counts axis-unit scroll (`FEATURE_SCROLL_AXIS_UNITS`).
     pub(crate) scroll_axis_units: bool,
+    /// The size the host encodes the Welcome's mode at; `None` encodes the mode.
+    pub(crate) picture: Option<(u32, u32)>,
 }

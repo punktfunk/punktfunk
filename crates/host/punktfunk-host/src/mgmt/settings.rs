@@ -316,8 +316,9 @@ async fn answer(st: &MgmtState) -> Response {
         super::owner::Answer::NoSeat => Json(own).into_response(),
         super::owner::Answer::Reply(200, _, body) => match with_owner_rows(own, &body) {
             Some(merged) => Json(merged).into_response(),
-            None => api_error(
+            None => api_error_coded(
                 StatusCode::BAD_GATEWAY,
+                "owner_settings_unreadable",
                 "The owner's host answered with settings this console can't read.",
             ),
         },
@@ -397,6 +398,9 @@ pub(crate) async fn patch_host_settings(
         .0
         .into_iter()
         .partition(|(id, _)| !door || door_row(id));
+    if let Some(refused) = refused(&patch) {
+        return refused;
+    }
     if !owner.is_empty() {
         let body = Value::Object(owner.clone()).to_string().into_bytes();
         match st
@@ -405,7 +409,7 @@ pub(crate) async fn patch_host_settings(
         {
             super::owner::Answer::Reply(200, ..) => {}
             super::owner::Answer::NoSeat => {
-                return api_error(StatusCode::SERVICE_UNAVAILABLE, super::owner::NO_OWNER)
+                return super::owner::no_owner(StatusCode::SERVICE_UNAVAILABLE)
             }
             other => return other.into_response(),
         }
@@ -413,27 +417,40 @@ pub(crate) async fn patch_host_settings(
     save(&st, patch).await
 }
 
-/// Store `patch` in this host's own file, then answer with the state.
+/// Why this host won't store `patch`: a row that doesn't apply here, or a value its row doesn't
+/// take. On a door it runs before the owner's host stores any row of the same patch.
+fn refused(patch: &serde_json::Map<String, Value>) -> Option<Response> {
+    let find = pf_host_config::registry::find;
+    if let Some(id) = patch
+        .keys()
+        .find(|id| find(id).is_some_and(|s| !s.available()))
+    {
+        return Some(api_error(
+            StatusCode::BAD_REQUEST,
+            &format!("{id} does not apply on this host"),
+        ));
+    }
+    let (id, reason) = patch.iter().find_map(|(id, v)| {
+        let reason = find(id)?.validate(v).err().filter(|_| !v.is_null())?;
+        Some((id.clone(), reason))
+    })?;
+    let invalid = pf_host_config::SaveError::Invalid { id, reason };
+    Some(api_error(StatusCode::BAD_REQUEST, &invalid.to_string()))
+}
+
+/// Store `patch`, which [`refused`] passed, in this host's own file, then answer with the state.
 async fn save(st: &MgmtState, patch: serde_json::Map<String, Value>) -> Response {
     if patch.is_empty() {
         return answer(st).await;
-    }
-    if let Some(id) = patch
-        .keys()
-        .find(|id| pf_host_config::registry::find(id).is_some_and(|s| !s.available()))
-    {
-        return api_error(
-            StatusCode::BAD_REQUEST,
-            &format!("{id} does not apply on this host"),
-        );
     }
     match pf_host_config::save(&patch) {
         Ok(()) => {}
         Err(e @ pf_host_config::SaveError::Io(_)) => {
             tracing::warn!(error = %e, "host settings not saved");
-            return api_error(
+            return api_error_coded(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Couldn't save the host settings — {e}"),
+                "host_settings_not_saved",
+                "Couldn't save the host settings",
             );
         }
         Err(e) => return api_error(StatusCode::BAD_REQUEST, &e.to_string()),

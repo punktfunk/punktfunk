@@ -147,6 +147,21 @@ unsafe impl Pod for UinputFfUpload {}
 // SAFETY: as `UinputSetup`.
 unsafe impl Pod for UinputFfErase {}
 
+/// `events` in one `write`. A short write stops at an event the kernel refused; the rest goes
+/// out past it, as a write per event would.
+fn write_events(mut fd: &File, events: &[u8]) {
+    let mut rest = events;
+    while !rest.is_empty() {
+        let n = fd.write(rest).unwrap_or(0);
+        let skip = if n < rest.len() {
+            n + INPUT_EVENT_LEN
+        } else {
+            n
+        };
+        rest = rest.get(skip..).unwrap_or_default();
+    }
+}
+
 pub(crate) fn input_event(type_: u16, code: u16, value: i32) -> [u8; INPUT_EVENT_LEN] {
     let mut ev = [0u8; INPUT_EVENT_LEN];
     ev[16..18].copy_from_slice(&type_.to_ne_bytes());
@@ -239,18 +254,14 @@ impl FfNotice {
     }
 }
 
-/// Events of one frame, at most, before a relayed device sends them unasked.
-const RELAY_BATCH_MAX: usize = 64 * INPUT_EVENT_LEN;
+/// Events of one frame, at most, before a device sends them unasked.
+const BATCH_MAX: usize = 64 * INPUT_EVENT_LEN;
 
 enum Inner {
     /// `/dev/uinput` itself.
     Kernel(File),
     /// The seat's end of the supervisor's relay. `dead` once the supervisor hung up.
-    Relayed {
-        sock: UnixDatagram,
-        batch: Vec<u8>,
-        dead: bool,
-    },
+    Relayed { sock: UnixDatagram, dead: bool },
 }
 
 /// One `/dev/uinput` device. Set its capabilities, then [`create`](Self::create); drop sends
@@ -258,6 +269,8 @@ enum Inner {
 /// supervisor and only emits and reads; its drop closes the relay, which is its destroy.
 pub(crate) struct UinputDevice {
     inner: Inner,
+    /// The frame's events so far, sent whole at its `SYN_REPORT`.
+    batch: Vec<u8>,
 }
 
 impl UinputDevice {
@@ -271,6 +284,7 @@ impl UinputDevice {
         })?;
         Ok(UinputDevice {
             inner: Inner::Kernel(fd),
+            batch: Vec::with_capacity(BATCH_MAX),
         })
     }
 
@@ -278,6 +292,7 @@ impl UinputDevice {
     pub(crate) fn adopt(fd: OwnedFd) -> UinputDevice {
         UinputDevice {
             inner: Inner::Kernel(File::from(fd)),
+            batch: Vec::with_capacity(BATCH_MAX),
         }
     }
 
@@ -287,11 +302,8 @@ impl UinputDevice {
         sock.set_nonblocking(true)
             .context("set the pad relay non-blocking")?;
         Ok(UinputDevice {
-            inner: Inner::Relayed {
-                sock,
-                batch: Vec::with_capacity(RELAY_BATCH_MAX),
-                dead: false,
-            },
+            inner: Inner::Relayed { sock, dead: false },
+            batch: Vec::with_capacity(BATCH_MAX),
         })
     }
 
@@ -331,6 +343,16 @@ impl UinputDevice {
         Ok(())
     }
 
+    /// `UI_GET_SYSNAME` once created: the device's name in sysfs, `inputN`.
+    pub(crate) fn sysname(&self) -> Result<String> {
+        let fd = self.kernel("UI_GET_SYSNAME")?;
+        let mut buf = [0u8; 64];
+        uapi::ioctl_with(fd.as_fd(), UI_GET_SYSNAME_0 | (64 << 16), &mut buf)
+            .context("UI_GET_SYSNAME")?;
+        let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        Ok(String::from_utf8_lossy(&buf[..len]).into_owned())
+    }
+
     /// `UI_DEV_SETUP` then `UI_DEV_CREATE`. `name` is truncated to the 79 bytes the setup holds.
     pub(crate) fn create(&self, id: InputId, name: &[u8], ff_effects_max: u32) -> Result<()> {
         let fd = self.kernel("UI_DEV_SETUP")?;
@@ -346,33 +368,30 @@ impl UinputDevice {
         Ok(())
     }
 
-    /// Best-effort: a full kernel queue drops the event, and the next frame re-syncs state. A
-    /// relayed device sends the frame at its `SYN_REPORT`.
+    /// Best-effort: a full kernel queue drops the event, and the next frame re-syncs state.
+    /// Events gather until the frame's `SYN_REPORT`, then go out as one write, or one datagram
+    /// on a relay.
     pub(crate) fn emit(&mut self, type_: u16, code: u16, value: i32) {
-        match &mut self.inner {
-            Inner::Kernel(fd) => {
-                let _ = (&*fd).write(&input_event(type_, code, value));
-            }
-            Inner::Relayed { sock, batch, dead } => {
-                batch.extend_from_slice(&input_event(type_, code, value));
-                if type_ != EV_SYN && batch.len() < RELAY_BATCH_MAX {
-                    return;
-                }
-                let sent = sock.send(batch);
-                batch.clear();
-                match sent {
-                    Ok(_) => {}
-                    Err(e) if e.kind() == ErrorKind::WouldBlock => {}
-                    Err(_) => *dead = true,
-                }
-            }
+        self.batch
+            .extend_from_slice(&input_event(type_, code, value));
+        if type_ != EV_SYN && self.batch.len() < BATCH_MAX {
+            return;
         }
+        match &mut self.inner {
+            Inner::Kernel(fd) => write_events(fd, &self.batch),
+            Inner::Relayed { sock, dead } => match sock.send(&self.batch) {
+                Ok(_) => {}
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+                Err(_) => *dead = true,
+            },
+        }
+        self.batch.clear();
     }
 
     /// The supervisor's side of the relay: a seat's frame, written to the kernel whole.
     pub(crate) fn write_batch(&self, events: &[u8]) {
         if let Inner::Kernel(fd) = &self.inner {
-            let _ = (&*fd).write(events);
+            write_events(fd, events);
         }
     }
 
@@ -630,6 +649,27 @@ mod tests {
         }
         assert_eq!(FfNotice::decode(&[9; FF_NOTICE_LEN]), None);
         assert_eq!(FfNotice::decode(&[1; 15]), None);
+    }
+
+    /// A kernel device writes a frame in one `write`, at its `SYN_REPORT`. A datagram socket
+    /// stands in for `/dev/uinput`: one write is one datagram.
+    #[test]
+    fn a_kernel_device_writes_a_frame_in_one_write() {
+        let (node, reader) = UnixDatagram::pair().unwrap();
+        let mut dev = UinputDevice::adopt(OwnedFd::from(node));
+        reader.set_nonblocking(true).unwrap();
+        dev.emit(EV_KEY, 0x130, 1);
+        dev.emit(EV_ABS, 0, -500);
+        let mut buf = [0u8; 1024];
+        assert!(reader.recv(&mut buf).is_err(), "nothing before SYN_REPORT");
+        dev.emit(EV_SYN, SYN_REPORT, 0);
+        let n = reader.recv(&mut buf).unwrap();
+        assert_eq!(n, 3 * INPUT_EVENT_LEN);
+        assert_eq!(
+            &buf[INPUT_EVENT_LEN..2 * INPUT_EVENT_LEN],
+            &input_event(EV_ABS, 0, -500)
+        );
+        assert!(reader.recv(&mut buf).is_err(), "one datagram per frame");
     }
 
     /// A relayed device sends one datagram per frame, and reads a notice the other end sent.

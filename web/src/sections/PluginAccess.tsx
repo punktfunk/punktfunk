@@ -31,6 +31,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
+import { usePerson } from "@/lib/person";
 import { isStringArray, useLocalPref } from "@/lib/prefs";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -39,11 +40,14 @@ export type AccessDecision = "allow" | "deny" | "forget";
 export type DecideAccess = (paths: string[], decision: AccessDecision) => void;
 
 /**
- * The access rows and their decisions. **Allow** asks for the console password in `dialog`, which
- * the page mounts; **Don't allow** and **Forget** only narrow and don't ask.
+ * The access rows and their decisions. **Allow** asks the operator for the console password in
+ * `dialog`, which the page mounts; a person's own seat host proves them, so they aren't asked.
+ * **Don't allow** and **Forget** only narrow and never ask. A person's rows are their seat
+ * host's: only their own desktop's plugins ask there.
  */
 export const usePluginAccess = () => {
 	const qc = useQueryClient();
+	const person = usePerson() !== null;
 	// A large Windows folder outlasts the decision that started it; the count comes from here.
 	const access = useGetPluginAccess({
 		query: {
@@ -80,7 +84,7 @@ export const usePluginAccess = () => {
 		paths: string[],
 		decision: AccessDecision,
 	) => {
-		if (decision === "allow") {
+		if (decision === "allow" && !person) {
 			setAllowing({ plugin, paths });
 			return;
 		}

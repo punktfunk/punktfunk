@@ -16,6 +16,7 @@ host usr/lib/sysusers.d/punktfunk.conf
 host usr/lib/udev/rules.d/60-punktfunk.rules
 host usr/lib/modules-load.d/punktfunk.conf
 host usr/lib/sysctl.d/99-punktfunk-net.conf
+host usr/lib/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter
 host usr/lib/systemd/system/punktfunk-update.service
 host usr/lib/systemd/system/user@.service.d/50-punktfunk-nice.conf
 host usr/lib/systemd/user/punktfunk-host.service
@@ -33,6 +34,7 @@ host usr/share/alsa/ucm2/USB-Audio/Punktfunk/DualSense-PS5-Haptic.conf
 host usr/share/alsa/ucm2/USB-Audio/Punktfunk/DualSense-PS5-Haptic-HiFi.conf
 host usr/share/applications/io.unom.punktfunk.host.desktop
 host usr/share/applications/io.unom.punktfunk.starthost.desktop
+host usr/share/applications/io.unom.punktfunk.webconsole.desktop
 host usr/share/icons/hicolor/22x22/apps/punktfunk-tray.png
 host usr/share/icons/hicolor/22x22/apps/punktfunk-tray-degraded.png
 host usr/share/icons/hicolor/22x22/apps/punktfunk-tray-error.png
@@ -60,6 +62,7 @@ seats usr/libexec/punktfunk/punktfunk-seats
 seats usr/libexec/punktfunk/seat-session
 seats usr/libexec/punktfunk/seat-reap
 seats usr/libexec/punktfunk/door-helper
+seats usr/libexec/punktfunk/door-remove
 seats usr/lib/systemd/system/punktfunk-seats.service
 seats usr/lib/systemd/system/punktfunk-seat@.service
 seats usr/lib/systemd/system/punktfunk-door.service
@@ -67,6 +70,7 @@ seats usr/lib/systemd/system/punktfunk-web-door.service
 seats usr/lib/systemd/system/punktfunk-door-on@.service
 seats usr/lib/systemd/system/punktfunk-door-off@.service
 seats usr/lib/systemd/system/user@.service.d/50-punktfunk-seats.conf
+seats usr/lib/pam.d/punktfunk-seat
 seats usr/lib/tmpfiles.d/punktfunk-seats.conf
 seats usr/lib/udev/rules.d/65-punktfunk-seats.rules
 seats usr/share/polkit-1/rules.d/49-punktfunk-door.rules

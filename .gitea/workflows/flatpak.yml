@@ -52,6 +52,7 @@ on:
       - 'crates/codec/pf-vkdecode/**'
       - 'crates/codec/pyrowave-sys/**'
       - 'crates/core/**'
+      - 'l10n/**'
       - 'packaging/flatpak/**'
       - 'packaging/linux/io.unom.punktfunk.desktop'
       - 'packaging/linux/io.unom.punktfunk.console.desktop'

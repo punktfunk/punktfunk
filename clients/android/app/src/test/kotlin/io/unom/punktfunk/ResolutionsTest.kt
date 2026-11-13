@@ -1,5 +1,6 @@
 package io.unom.punktfunk
 
+import io.unom.punktfunk.kit.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -14,10 +15,10 @@ class ResolutionsTest {
     fun everyListedSizeMapsBackToItsFamily() {
         Resolutions.ASPECTS.forEachIndexed { i, a ->
             for ((w, h) in a.sizes) {
-                assertEquals("${w}x$h → ${a.label}", i, Resolutions.aspectOf(w, h))
+                assertEquals("${w}x$h → ${a.id}", i, Resolutions.aspectOf(w, h))
                 assertTrue("${w}x$h has an odd side", w % 2 == 0 && h % 2 == 0)
             }
-            assertEquals("${a.label} ascending", a.sizes.map { it.second }.sorted(), a.sizes.map { it.second })
+            assertEquals("${a.id} ascending", a.sizes.map { it.second }.sorted(), a.sizes.map { it.second })
         }
     }
 
@@ -44,7 +45,11 @@ class ResolutionsTest {
     @Test
     fun aPhoneLeadsWithItsScreenAndSafeArea() {
         val f = Resolutions.families(3216 to 1440, 3088 to 1440)
-        assertEquals(listOf("Screen", "Safe area", "16:9"), f.take(3).map { it.label })
+        assertEquals(listOf(Resolutions.SCREEN, Resolutions.SAFE_AREA, "16:9"), f.take(3).map { it.id })
+        assertEquals(
+            listOf(R.string.player_resolution_aspect_screen, R.string.player_resolution_aspect_safe_area, null),
+            f.take(3).map { it.nameRes },
+        )
         assertEquals(listOf(1608 to 720, 2412 to 1080, 3216 to 1440), f[0].sizes)
         assertEquals(listOf(1544 to 720, 2316 to 1080, 3088 to 1440), f[1].sizes)
         assertEquals(0, Resolutions.familyOf(f, 2412, 1080))

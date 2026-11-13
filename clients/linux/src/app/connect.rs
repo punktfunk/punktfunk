@@ -1,6 +1,7 @@
 //! The connect flow: the trust gate, the session child's life, deep links and the console.
 
 use super::*;
+use pf_l10n::{client, common, desktop};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -131,9 +132,9 @@ impl Flights {
 /// The banner's line for the hosts streaming.
 fn streaming_line(names: &[&str]) -> String {
     match names {
-        [one] => format!("Streaming from {one}"),
-        [a, b] => format!("Streaming from {a} and {b}"),
-        many => format!("Streaming from {} hosts", many.len()),
+        [one] => desktop::desktop_streaming_from_one(one),
+        [first, second] => desktop::desktop_streaming_from_two(first, second),
+        many => desktop::desktop_streaming_from_many(many.len() as u64),
     }
 }
 
@@ -156,7 +157,7 @@ impl AppModel {
         match route {
             TrustRoute::Pinned(fp_hex) => self.ask_profile(req, fp_hex, false, sender),
             TrustRoute::FingerprintChanged => {
-                self.toast(FINGERPRINT_CHANGED);
+                self.toast(pf_l10n::client::dial_fingerprint_changed());
                 crate::app::gate::pin_dialog(
                     &self.window,
                     sender,
@@ -234,11 +235,10 @@ impl AppModel {
             let saved = orchestrate::persist_on_ready(&req.host, &fp_hex, false);
             self.store.reload(Changed::Hosts);
             match saved {
-                Ok(()) => self.toast(&format!(
-                    "Trusted on first use — fingerprint {}…",
-                    &fp_hex[..16.min(fp_hex.len())]
+                Ok(()) => self.toast(&desktop::desktop_trust_trusted_toast(
+                    &fp_hex[..16.min(fp_hex.len())],
                 )),
-                Err(e) => self.toast(&format!("Connected, but couldn't save — {e:#}")),
+                Err(e) => self.toast(&desktop::desktop_trust_saved_failed(format!("{e:#}"))),
             }
         }
         self.hosts.emit(HostsMsg::Refresh);
@@ -248,13 +248,13 @@ impl AppModel {
     pub(super) fn show_streams(&self) {
         let (names, closing) = self.flights.streams();
         match names[..] {
-            [] if closing => self.streaming.show("Disconnecting\u{2026}", None),
+            [] if closing => self.streaming.show(desktop::desktop_disconnecting(), None),
             [] => self.streaming.hide(),
             _ => self.streaming.show(
                 &streaming_line(&names),
                 Some(match self.flights.live_sessions() {
-                    1 => "Disconnect",
-                    _ => "Disconnect All",
+                    1 => common::common_disconnect(),
+                    _ => desktop::desktop_disconnect_all(),
                 }),
             ),
         }
@@ -277,9 +277,7 @@ impl AppModel {
         let held = std::mem::take(&mut flight.slot);
         let cancelled = matches!(held, Slot::Session(child, _) if child.is_cancelled());
         let outcome = ConnectOutcome::from_exit(code, error, ended, cancelled);
-        let route = flight
-            .attempt
-            .on_exit(&req.host, &outcome, "the client log");
+        let route = flight.attempt.on_exit(&req.host, &outcome, None);
         self.show_streams();
         self.hosts.emit(HostsMsg::SetSession(key, None));
         match route {
@@ -287,7 +285,7 @@ impl AppModel {
             ExitRoute::Banner(msg) => {
                 // Beside another stream the line has to say which host it is about.
                 self.hosts.emit(HostsMsg::ShowError(if self.flights.any() {
-                    format!("{}: {msg}", req.host.name)
+                    client::dial_host_reason(&req.host.name, msg)
                 } else {
                     msg
                 }));
@@ -366,7 +364,7 @@ impl AppModel {
                     })),
                 _ => {
                     drop(known);
-                    self.toast("That host isn't saved on this device.")
+                    self.toast(client::link_host_not_saved())
                 }
             };
         }
@@ -390,7 +388,7 @@ impl AppModel {
                 // Rule 2 of §3: never preempt a live session; another host streams beside it.
                 // Only this layer knows what runs, which is why the brain leaves the check here.
                 if self.flights.busy(&req.card_key()) {
-                    return self.toast("A session is already running — end it first.");
+                    return self.toast(client::link_session_running());
                 }
                 // A link is a launch like any other: with a MAC it takes the dial-first wake
                 // path, so a sleeping host wakes instead of erroring.
@@ -414,22 +412,28 @@ impl AppModel {
                     ..ConnectRequest::default()
                 };
                 if self.flights.busy(&req.card_key()) {
-                    return self.toast("A session is already running — end it first.");
+                    return self.toast(client::link_session_running());
                 }
-                let mut body = format!(
-                    "A link asks to connect to {} ({}).",
-                    req.host.name, req.host.addr
-                );
+                let mut body = client::link_confirm_asks(&req.host.name, &req.host.addr);
                 if let Some(id) = &req.launch {
-                    body.push_str(&format!("\n\nIt also asks the host to launch “{id}”."));
+                    body.push_str("\n\n");
+                    body.push_str(&client::link_confirm_launch(id));
                 }
-                body.push_str(
-                    "\n\nIt names the host by its label or address, which anything that can \
-                     open a link could guess. A link that names the host's id connects without \
-                     asking.",
-                );
-                let dialog = adw::AlertDialog::new(Some("Open this link?"), Some(&body));
-                dialog.add_responses(&[("cancel", "Cancel"), ("connect", "Connect")]);
+                if let Some(line) = plan
+                    .overrides
+                    .as_ref()
+                    .and_then(pf_client_core::library::host_line)
+                {
+                    body.push_str("\n\n");
+                    body.push_str(&line);
+                }
+                body.push_str("\n\n");
+                body.push_str(client::link_confirm_guessable());
+                let dialog = adw::AlertDialog::new(Some(client::link_confirm_title()), Some(&body));
+                dialog.add_responses(&[
+                    ("cancel", common::common_cancel()),
+                    ("connect", common::common_connect()),
+                ]);
                 dialog.set_response_appearance("connect", adw::ResponseAppearance::Suggested);
                 dialog.set_default_response(Some("connect"));
                 dialog.set_close_response("cancel");
@@ -464,12 +468,9 @@ impl AppModel {
                     ..ConnectRequest::default()
                 };
                 if self.flights.busy(&req.card_key()) {
-                    return self.toast("A session is already running — end it first.");
+                    return self.toast(client::link_session_running());
                 }
-                self.toast(&format!(
-                    "{} isn't paired with this device yet — pair it to continue.",
-                    req.host.name
-                ));
+                self.toast(&desktop::desktop_link_unpaired_host(&req.host.name));
                 crate::app::gate::pin_dialog(
                     &self.window,
                     sender,
@@ -478,10 +479,9 @@ impl AppModel {
                     true,
                 );
             }
-            Ok(PlanOutcome::Unsupported(route)) => self.toast(&format!(
-                "Punktfunk can't open “{}” links yet.",
-                route.as_str()
-            )),
+            Ok(PlanOutcome::Unsupported(route)) => {
+                self.toast(&client::link_route_unsupported(route.as_str()))
+            }
             Err(e) => self.toast(&e.message()),
         }
     }

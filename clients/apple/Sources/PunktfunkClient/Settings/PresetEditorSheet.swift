@@ -13,6 +13,9 @@ import SwiftUI
 /// What the sheet was opened to do. Carrying the seed values rather than an id keeps the sheet
 /// free of "which store do I read to find out what I'm editing" — the caller already knows.
 struct PresetDraft: Identifiable {
+    enum Kind: String { case create, edit, duplicate }
+
+    let kind: Kind
     /// nil = creating (a blank preset, or a duplicate); set = editing that preset.
     var editingID: String?
     var name: String
@@ -23,22 +26,27 @@ struct PresetDraft: Identifiable {
     var title: String
     var accept: String
 
-    var id: String { editingID ?? "new-\(title)" }
+    /// A sheet of each kind is its own sheet: the kind keys a new one, never its title.
+    var id: String { editingID ?? "new-\(kind.rawValue)" }
 
     static func create() -> PresetDraft {
-        PresetDraft(name: "", accent: nil, title: "New Preset", accept: "Create")
+        PresetDraft(
+            kind: .create, name: "", accent: nil, title: String(localized: L10n.presetNewTitle),
+            accept: String(localized: L10n.commonCreate))
     }
 
     static func edit(_ preset: StreamPreset) -> PresetDraft {
         PresetDraft(
-            editingID: preset.id, name: preset.name, accent: preset.accent,
-            title: "Edit Preset", accept: "Save")
+            kind: .edit, editingID: preset.id, name: preset.name, accent: preset.accent,
+            title: String(localized: L10n.presetEditTitle),
+            accept: String(localized: L10n.commonSave))
     }
 
     static func duplicate(_ preset: StreamPreset, name: String) -> PresetDraft {
         PresetDraft(
-            name: name, accent: preset.accent, overrides: preset.overrides,
-            title: "Duplicate Preset", accept: "Duplicate")
+            kind: .duplicate, name: name, accent: preset.accent, overrides: preset.overrides,
+            title: String(localized: L10n.applePresetDuplicateTitle),
+            accept: String(localized: L10n.commonDuplicate))
     }
 }
 
@@ -70,7 +78,7 @@ struct PresetEditorSheet: View {
         VStack(spacing: 0) {
             form
             HStack {
-                Button("Cancel", role: .cancel) { dismiss() }
+                Button(L10n.commonCancel, role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 Button(draft.accept) { commit() }
@@ -93,7 +101,7 @@ struct PresetEditorSheet: View {
                 #endif
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
+                        Button(L10n.commonCancel) { dismiss() }
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button(draft.accept) { commit() }
@@ -118,7 +126,7 @@ struct PresetEditorSheet: View {
                     .listRowBackground(Color.clear)
             }
             Section {
-                TextField("Name", text: $name, prompt: Text("Name — e.g. Game, Work, Travel"))
+                TextField(L10n.presetName, text: $name, prompt: Text(L10n.presetNamePlaceholder))
                     #if os(iOS) || os(visionOS)
                     .textInputAutocapitalization(.words)
                     #endif
@@ -131,9 +139,9 @@ struct PresetEditorSheet: View {
                 swatches
                     .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
             } header: {
-                Text("Color")
+                Text(L10n.presetColor)
             } footer: {
-                Text("Tints this preset's chip on host cards and in the stream overlay.")
+                Text(L10n.presetColorHint)
                     .font(.geist(12, relativeTo: .caption))
                     .foregroundStyle(.secondary)
             }
@@ -149,7 +157,9 @@ struct PresetEditorSheet: View {
     private var preview: some View {
         let shown = name.trimmingCharacters(in: .whitespaces)
         return PresetChip(
-            preset: StreamPreset(name: shown.isEmpty ? "Preset" : shown, accent: accent),
+            preset: StreamPreset(
+                name: shown.isEmpty ? String(localized: L10n.applePresetPreviewName) : shown,
+                accent: accent),
             size: Self.chipSize, prominent: true)
             .opacity(shown.isEmpty ? 0.5 : 1)
             .animation(.easeOut(duration: 0.15), value: accent)
@@ -168,7 +178,7 @@ struct PresetEditorSheet: View {
             columns: [GridItem(.adaptive(minimum: 44), spacing: 14, alignment: .center)],
             spacing: 14
         ) {
-            swatch(nil, label: "Default")
+            swatch(nil, label: String(localized: L10n.presetColorNone))
             ForEach(PresetAccent.palette) { option in
                 swatch(option.hex, label: option.name)
             }
@@ -215,21 +225,24 @@ struct PresetEditorSheet: View {
             Text(draft.title)
                 .font(.geist(40, .bold, relativeTo: .title))
             preview
-            TVFieldRow(label: "Name", value: name, placeholder: "e.g. Game, Work, Travel") {
+            TVFieldRow(
+                label: String(localized: L10n.presetName), value: name,
+                placeholder: String(localized: L10n.presetNamePlaceholder)
+            ) {
                 editingName = true
             }
             Text(nameFootnote)
                 .font(.geist(22, relativeTo: .caption))
                 .foregroundStyle(duplicateName ? Color.red : Color.secondary)
             HStack(spacing: 24) {
-                tvSwatch(nil, label: "Default")
+                tvSwatch(nil, label: String(localized: L10n.presetColorNone))
                 ForEach(PresetAccent.palette) { option in
                     tvSwatch(option.hex, label: option.name)
                 }
             }
             .focusSection()
             HStack(spacing: 32) {
-                Button("Cancel", role: .cancel) { dismiss() }
+                Button(L10n.commonCancel, role: .cancel) { dismiss() }
                 Button(draft.accept) { commit() }
                     .disabled(!isNameAcceptable)
             }
@@ -237,7 +250,7 @@ struct PresetEditorSheet: View {
         .frame(maxWidth: 1100)
         .padding(60)
         .fullScreenCover(isPresented: $editingName) {
-            TVTextEntry(title: "Name", text: name) { typed in
+            TVTextEntry(title: String(localized: L10n.presetName), text: name) { typed in
                 name = typed
                 editingName = false
             }
@@ -282,10 +295,10 @@ struct PresetEditorSheet: View {
     private var isNameAcceptable: Bool { !trimmedName.isEmpty && !duplicateName }
 
     private var nameFootnote: String {
-        if duplicateName { return "Another preset is already called “\(trimmedName)”." }
+        if duplicateName { return L10n.presetNameTaken(name: trimmedName) }
         return draft.editingID == nil
-            ? "A new preset inherits every setting. Change one here and only that one is overridden."
-            : "Hosts and pinned cards follow this preset by id, so renaming keeps them attached."
+            ? String(localized: L10n.presetNewHint)
+            : String(localized: L10n.applePresetEditHint)
     }
 
     private func commit() {

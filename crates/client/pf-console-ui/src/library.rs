@@ -35,8 +35,8 @@ impl LibraryView {
 
     pub fn label(self) -> &'static str {
         match self {
-            LibraryView::Shelf => "Shelf",
-            LibraryView::Grid => "Grid",
+            LibraryView::Shelf => pf_l10n::client::player_library_view_shelf(),
+            LibraryView::Grid => pf_l10n::client::player_library_view_grid(),
         }
     }
 
@@ -92,6 +92,9 @@ pub struct LibraryGame {
     /// A title a plugin installs. `None` is installed, as every other title is.
     #[serde(default)]
     pub install: Option<TitleFiles>,
+    /// What the host set for this title ([`pf_client_core::library::GameEntry::overrides`]).
+    #[serde(default)]
+    pub overrides: Option<pf_client_core::library::GameOverrides>,
 }
 
 /// What a shell that reads `/status` itself pushes: `{"downloads": [...], "grants": 255}`.
@@ -178,9 +181,9 @@ impl Stale {
     pub(crate) fn note(self) -> Option<&'static str> {
         match self {
             Stale::No => None,
-            Stale::Checking => Some("Last known library \u{2014} checking the host\u{2026}"),
-            Stale::Waking => Some("Last known library \u{2014} waking the host\u{2026}"),
-            Stale::Offline => Some("Last known library \u{2014} the host didn't answer"),
+            Stale::Checking => Some(pf_l10n::client::lib_stale_checking()),
+            Stale::Waking => Some(pf_l10n::client::lib_stale_waking()),
+            Stale::Offline => Some(pf_l10n::client::lib_stale_offline()),
         }
     }
 }
@@ -202,6 +205,9 @@ struct Shared {
     art_scale: Option<f64>,
     /// Bumped on phase/games changes so the renderer re-syncs its snapshot.
     generation: u64,
+    /// Bumped when a title leaves or joins the list in place ([`LibraryShared::drop_title`]):
+    /// the shelf keeps its place rather than arriving afresh.
+    edits: u64,
     /// The fetch the list answers, set as the shell sends it. Its host says whose list this
     /// is; a list or phase written under another key is dropped.
     req: RequestKey,
@@ -223,6 +229,7 @@ pub(crate) struct LibrarySnapshot {
     pub games: Vec<LibraryGame>,
     pub stale: Stale,
     pub generation: u64,
+    pub edits: u64,
 }
 
 /// One poster, decoded and ready to draw, on its way from a worker thread to the shell.
@@ -269,6 +276,7 @@ impl Default for LibraryShared {
             decoded_in: VecDeque::new(),
             art_scale: None,
             generation: 0,
+            edits: 0,
             req: RequestKey::default(),
             states: std::collections::HashMap::new(),
             downloads: std::collections::HashMap::new(),
@@ -463,6 +471,40 @@ impl LibraryShared {
         s.generation += 1;
     }
 
+    /// Title `id` left the shelf of `host`'s fetch: hidden for the profile it is for. The title
+    /// it was, when this shelf listed it.
+    pub(crate) fn drop_title(&self, host: &str, id: &str) -> Option<LibraryGame> {
+        let mut s = self.0.lock().unwrap();
+        let at = (s.games.iter())
+            .position(|g| g.id == id)
+            .filter(|_| s.req.host == host)?;
+        let gone = s.games.remove(at);
+        if !s.games.iter().any(|g| g.id != DESKTOP_ID) {
+            s.phase = LibraryPhase::Empty;
+        }
+        s.edits += 1;
+        s.generation += 1;
+        Some(gone)
+    }
+
+    /// A hidden title back on the shelf of `host`'s fetch.
+    pub(crate) fn put_title(&self, host: &str, game: LibraryGame) {
+        let mut s = self.0.lock().unwrap();
+        if s.req.host != host || s.games.iter().any(|g| g.id == game.id) {
+            return;
+        }
+        s.games.push(game);
+        let mut games = std::mem::take(&mut s.games);
+        order(&mut games);
+        s.games = games;
+        apply_downloads(&mut s);
+        if s.phase == LibraryPhase::Empty {
+            s.phase = LibraryPhase::Ready;
+        }
+        s.edits += 1;
+        s.generation += 1;
+    }
+
     /// A launched title's download from the last `/status` read, if the host is fetching it.
     pub(crate) fn launch_download(
         &self,
@@ -516,6 +558,16 @@ impl LibraryShared {
         self.0.lock().unwrap().generation
     }
 
+    /// The fetch's host and the first title `f` answers for, without copying the shelf.
+    pub(crate) fn find_game<T>(
+        &self,
+        f: impl FnMut(&LibraryGame) -> Option<T>,
+    ) -> Option<(String, T)> {
+        let s = self.0.lock().unwrap();
+        let found = s.games.iter().find_map(f)?;
+        Some((s.req.host.clone(), found))
+    }
+
     pub(crate) fn snapshot(&self) -> LibrarySnapshot {
         let s = self.0.lock().unwrap();
         LibrarySnapshot {
@@ -523,6 +575,7 @@ impl LibraryShared {
             games: s.games.clone(),
             stale: s.stale,
             generation: s.generation,
+            edits: s.edits,
         }
     }
 
@@ -583,7 +636,7 @@ fn apply_downloads(s: &mut Shared) -> bool {
 fn desktop_tile() -> LibraryGame {
     LibraryGame {
         id: DESKTOP_ID.into(),
-        title: "Desktop".into(),
+        title: pf_l10n::client::lib_desktop().into(),
         store: String::new(),
         launcher: false,
         icon: DESKTOP_ICON.into(),
@@ -595,6 +648,7 @@ fn desktop_tile() -> LibraryGame {
         running: false,
         endable: false,
         install: None,
+        overrides: None,
     }
 }
 
@@ -666,6 +720,7 @@ mod tests {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         };
         let shared = LibraryShared::default();
         shared.set_games(
@@ -709,6 +764,7 @@ mod tests {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         };
         let shared = LibraryShared::default();
         shared.set_games(
@@ -790,6 +846,7 @@ mod tests {
                 running: false,
                 endable: false,
                 install: None,
+                overrides: None,
             }],
         );
         assert_eq!(shared.status_gen(), 0);
@@ -838,6 +895,7 @@ mod tests {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         };
         let shared = LibraryShared::default();
         shared.set_games_cached(&shared.req(), vec![g("Celeste"), g("Tunic")]);
@@ -890,6 +948,7 @@ mod tests {
                     running: false,
                     endable: false,
                     install: None,
+                    overrides: None,
                 })
                 .collect(),
         );
@@ -973,6 +1032,7 @@ mod tests {
                 running: true,
                 endable: false,
                 install: None,
+                overrides: None,
             }],
         );
         assert_eq!(shared.snapshot().games[0].id, DESKTOP_ID);
@@ -1010,6 +1070,7 @@ mod tests {
                     running: false,
                     endable: false,
                     install: None,
+                    overrides: None,
                 })
                 .collect(),
         );

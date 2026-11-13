@@ -186,13 +186,13 @@ pub(crate) fn parse_serve_args(args: &[String]) -> Result<ServeArgs> {
     })
 }
 
-/// Everything `serve` writes before the planes start: the management, tray and plugin tokens,
-/// the plugin ACLs and grants, the endpoint file and the flag pins. Returns
+/// Everything `serve` writes before the planes start: the management, tray, person and plugin
+/// tokens, the plugin ACLs and grants, the endpoint file and the flag pins. Returns
 /// `(mgmt, native, gamestream)`.
 ///
 /// The token exists before the endpoint file names it, and the config-dir ACLs converge before
 /// any runner grant. A first mint of the runner's token, or a moved endpoint, marks the runner
-/// for a restart.
+/// for a restart. A moved endpoint also restarts a running console, which reads it only at start.
 pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::NativeServe, bool)> {
     let mut opts = mgmt::Options {
         bind: args.mgmt_bind,
@@ -217,15 +217,36 @@ pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::N
         // Every seat account can reach the door's directory: no bearer stays there.
         let _ = std::fs::remove_file(pf_paths::config_dir().join(crate::mgmt_token::TRAY_FILE));
     }
+    // A seat host of its own: a fresh person token each start. Linux writes it into its own
+    // config folder, and a folder or file that isn't the account's alone keeps the lane closed.
+    // Windows keeps it in memory and signs tickets through the seat's person pipe.
+    #[cfg(unix)]
+    if crate::person_token::mints(role) {
+        match crate::person_token::mint_in(&pf_paths::config_dir()) {
+            Ok(token) => opts.person_token = Some(token),
+            Err(reason) => tracing::warn!(%reason, "person lane closed"),
+        }
+    }
+    #[cfg(windows)]
+    if crate::person_token::mints(role) {
+        let token = crate::mgmt_token::random_token();
+        crate::windows::person_pipe::serve(token.clone());
+        opts.person_token = Some(token);
+    }
     // Mint only if the runner is installed — otherwise a second admin-adjacent credential sits
     // on disk for a subsystem that is not running. Scope: `plugin_may_access`, not pairing/hooks.
     let runner = crate::plugins::runtime_status();
     let (mints, may_restart) = runner_token(pf_paths::seat::role());
     if runner.installed && mints {
-        opts.restart_runner = may_restart
-            && !pf_paths::config_dir()
-                .join(crate::mgmt_token::PLUGIN_FILE)
-                .exists();
+        // A seat's runner starts again at each start of its host: its own is started by the host
+        // alone, and a made seat's, up since its account's login, predates the credentials this
+        // start rewrote, which its unit hides only as they were when it started.
+        opts.restart_runner = crate::plugins::seat_runner()
+            || role.follows_contract()
+            || (may_restart
+                && !pf_paths::config_dir()
+                    .join(crate::mgmt_token::PLUGIN_FILE)
+                    .exists());
         opts.plugin_token = Some(crate::mgmt_token::load_or_generate_plugin()?);
         // One token per installed plugin, so the API can tell them apart: a plugin may write its
         // own registration and its own provider, and no other's.
@@ -249,10 +270,14 @@ pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::N
         crate::plugins::converge_runner_acls(&runner);
         crate::plugins::converge_seat_denies();
     }
-    // Same function as the token persist so the console unit sees both. A race falls back to
-    // 47990; `Restart=always` retries. A runner up before a port move still dials the old one.
+    // A runner or console up before a port move still dials the old one, and a refused hop
+    // never ends the console. Only a plain host has a console beside it.
     let moved = mgmt::publish_endpoint(opts.bind);
     opts.restart_runner |= moved && runner.installed && mints && may_restart;
+    #[cfg(target_os = "linux")]
+    if moved && role == HostRole::Plain {
+        restart_console();
+    }
     // A flag outranks env and the console's value; pinning it lets the console show why.
     if args.gamestream {
         pf_host_config::pin("gamestream", "--gamestream", serde_json::Value::Bool(true));
@@ -282,6 +307,22 @@ pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::N
     Ok((opts, native, gamestream))
 }
 
+/// Restarts the console unit if it runs, so it reads the endpoint just published. `--no-block`:
+/// the console is ordered after this host.
+#[cfg(target_os = "linux")]
+fn restart_console() {
+    let mut systemctl = std::process::Command::new("systemctl");
+    systemctl.args([
+        "--user",
+        "--no-block",
+        "try-restart",
+        "punktfunk-web.service",
+    ]);
+    if let Err(error) = pf_host_config::session::export_to(&mut systemctl).status() {
+        tracing::warn!(%error, "console not restarted after the mgmt port moved");
+    }
+}
+
 /// Where the browser plane listens. A seat host's is the browser port beside its native port, and
 /// whether it runs follows the box (`webtransport::run`). Any other host's is the operator's switch.
 fn browser_bind(
@@ -309,13 +350,12 @@ fn mints_tray_token(role: HostRole) -> bool {
 }
 
 /// Whether this host mints the plugin runner's token, and whether a first mint restarts the
-/// runner. The runner is the owner's, so the door has none to hand a token to. A Windows seat
-/// host shares the box's runner and must not bounce it.
+/// runner. The runner is the owner's, so the door has none to hand a token to; a seat's runner
+/// is the seat's own.
 fn runner_token(role: HostRole) -> (bool, bool) {
     match role {
         HostRole::Door => (false, false),
-        HostRole::Seat(_) => (true, !cfg!(windows)),
-        HostRole::Plain => (true, true),
+        HostRole::Seat(_) | HostRole::Plain => (true, true),
     }
 }
 
@@ -350,13 +390,16 @@ mod tests {
         }
     }
 
+    /// Only the door has no runner; every other host's runner is its own to restart.
     #[test]
-    fn the_door_mints_no_runner_token_and_a_windows_seat_restarts_no_runner() {
+    fn the_door_mints_no_runner_token() {
         for role in HostRole::ALL {
             let (mints, may_restart) = runner_token(role);
-            assert_eq!(mints, !role.is_door(), "{role:?}");
-            let shares_the_runner = cfg!(windows) && role.is_seat_host();
-            assert!(!mints || may_restart != shares_the_runner, "{role:?}");
+            assert_eq!(
+                (mints, may_restart),
+                (!role.is_door(), !role.is_door()),
+                "{role:?}"
+            );
         }
     }
 

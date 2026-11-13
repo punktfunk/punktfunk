@@ -16,6 +16,7 @@ import {
 	superviseUnit,
 } from "../src/runner.js";
 import { adoptNestedState, writePluginToken } from "../src/runner-linux.js";
+import { pipeName } from "../src/runner-windows.js";
 
 const TOKEN = "runner-token";
 // Fixtures live under sdk/ so the generated plugin files can resolve "effect" and the SDK.
@@ -188,6 +189,38 @@ describe("discovery", () => {
 			JSON.stringify({ name: "plugins", dependencies: {} }),
 		);
 		expect(discoverUnits(d)).toEqual([]);
+	});
+
+	test("a person's own account runs only what their lane installed, and no script", () => {
+		const d = mkdirs("discover-person");
+		write(path.join(d.scriptsDir, "mine.ts"), "export {};");
+		for (const name of ["plugin-theirs", "plugin-planted"]) {
+			write(
+				path.join(d.pluginsDir, "node_modules", "@punktfunk", name, "package.json"),
+				JSON.stringify({ name: `@punktfunk/${name}`, main: "index.js" }),
+			);
+			write(path.join(d.pluginsDir, "node_modules", "@punktfunk", name, "index.js"), "");
+		}
+		write(
+			path.join(d.pluginsDir, "package.json"),
+			JSON.stringify({
+				dependencies: { "@punktfunk/plugin-theirs": "1", "@punktfunk/plugin-planted": "1" },
+			}),
+		);
+		const person = { ...d, configDir: d.dir, personOnly: true };
+		const logs: string[] = [];
+		expect(discoverUnits(person, (l) => logs.push(l))).toEqual([]);
+		expect(logs.join("\n")).toContain("plugin-planted: its person didn't install it");
+		write(
+			path.join(d.dir, "plugin-run", "person-plugins.json"),
+			JSON.stringify(["@punktfunk/plugin-theirs"]),
+		);
+		expect(discoverUnits(person).map((u) => u.name)).toEqual(["@punktfunk/plugin-theirs"]);
+		expect(discoverUnits(d).map((u) => u.name)).toEqual([
+			"mine",
+			"@punktfunk/plugin-planted",
+			"@punktfunk/plugin-theirs",
+		]);
 	});
 });
 
@@ -692,9 +725,11 @@ describe("supervision", () => {
 	test("every supervisor leaves the runner stopped on the refusal status", () => {
 		const repo = path.join(import.meta.dir, "..", "..");
 		const read = (rel: string) => fs.readFileSync(path.join(repo, rel), "utf8");
-		expect(read("scripts/punktfunk-scripting.service")).toContain(
-			`\nRestartPreventExitStatus=${SANDBOX_REFUSED_EXIT}\n`,
-		);
+		for (const unit of ["punktfunk-scripting.service", "punktfunk-scripting-seat@.service"]) {
+			expect(read(`scripts/${unit}`)).toContain(
+				`\nRestartPreventExitStatus=${SANDBOX_REFUSED_EXIT}\n`,
+			);
+		}
 		// NixOS runs that same unit: the scripting package installs it, and the module's drop-in
 		// leaves the status alone.
 		expect(read("packaging/nix/packages.nix")).toContain(
@@ -777,6 +812,37 @@ describe("supervision", () => {
 		}
 	});
 
+	test("a plugin in a child process holds its lease from the supervisor", async () => {
+		const calls: string[] = [];
+		const server = leaseHost("boxed", calls);
+		const d = mkdirs("lease-child");
+		const fiber = Effect.runFork(
+			superviseUnit(
+				{
+					name: "@punktfunk/plugin-boxed",
+					file: path.join(d.pluginsDir, "index.js"),
+					packageDir: d.pluginsDir,
+					manifest: { schema: 1, id: "boxed" },
+				},
+				{
+					connect: { url: `http://127.0.0.1:${server.port}`, token: TOKEN },
+					configDir: d.dir,
+					log: () => {},
+					leaseSettle: "1 millis",
+					sandbox: "on",
+					sandboxRun: () => Effect.never,
+				},
+			),
+		);
+		try {
+			await waitFor(() => calls.includes("PUT"));
+			await Effect.runPromise(Fiber.interrupt(fiber));
+			expect(calls).toEqual(["PUT", "DELETE"]);
+		} finally {
+			server.stop(true);
+		}
+	});
+
 	test("a plugin that dies at start never takes a lease", async () => {
 		const calls: string[] = [];
 		const logs: string[] = [];
@@ -829,4 +895,11 @@ describe("supervision", () => {
 			server.stop(true);
 		}
 	});
+});
+
+test("a seat's runner dials its seat's pipe, never the box's", () => {
+	const seat = "0123456789abcdef0123456789abcdef";
+	expect(pipeName("steam", seat)).toBe(`\\\\.\\pipe\\punktfunk-seat-${seat}-plugin-steam`);
+	expect(pipeName("steam", undefined)).toBe("\\\\.\\pipe\\punktfunk-plugin-steam");
+	expect(pipeName("steam", "../x")).toBe("\\\\.\\pipe\\punktfunk-plugin-steam");
 });

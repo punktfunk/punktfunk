@@ -7,34 +7,61 @@ import { useGetHooks } from "@/api/gen/hooks/hooks";
 import type { HookEntry } from "@/api/gen/model/hookEntry";
 import { useListNativeClients } from "@/api/gen/native/native";
 import { hookAction, hookFilterSummary, useSaveHooks } from "@/api/hooks";
+import { useProfileView, useSeat } from "@/api/seat";
 import { useDialogs } from "@/components/dialogs";
 import { PasswordConfirmDialog } from "@/components/password-confirm";
 import { QueryState } from "@/components/query-state";
+import { SeatScope, SeatTitle } from "@/components/seat-scope";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { apiErrorMessage } from "@/lib/errors";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
 import { HookForm } from "./HookForm";
 
+/** **Automation**, for the owner or a person whose seat has a host of its own. */
+export const SectionAutomation: FC = () => (
+	<SeatScope page="automation">
+		<AutomationHere />
+	</SeatScope>
+);
+
+/** A seat on a person's own account runs no hook: one sentence stands in for the list. */
+export const AutomationHere: FC = () => {
+	useLocale();
+	const seat = useSeat();
+	if (!seat?.own) return <Automation />;
+	return (
+		<Section maxWidth={false}>
+			<div className="flex flex-col gap-card">
+				<SeatTitle title={m.automation_title()} />
+				<p className="max-w-prose text-sm text-muted-foreground">
+					{m.seat_own_automation({ name: seat.name })}
+				</p>
+			</div>
+		</Section>
+	);
+};
+
 /**
- * **Automation** — the operator's event hooks (`GET/PUT /api/v1/hooks`).
- *
- * The host has run these since the API existed and the console never showed them: the only way to
- * see or change what your machine does when a stream starts was to edit the config file by hand.
+ * The event hooks of the page's host (`GET/PUT /api/v1/hooks`).
  *
  * The whole list is written in one PUT (the host has no per-hook route), so this edits a local copy
  * and saves explicitly — no auto-save. That is deliberate for a screen whose contents are shell
  * commands: a half-typed command should never reach the host because a poll landed.
  */
-export const SectionAutomation: FC = () => {
+const Automation: FC = () => {
 	useLocale();
 	const { confirm } = useDialogs();
+	// A person's own console: their seat host takes the list as theirs, with no password, and
+	// the box's device lists are not theirs to read.
+	const person = useProfileView()?.person === true;
 	const query = useGetHooks();
 	const save = useSaveHooks();
 	// Filters store the certificate; these two lists are what turn one back into a device name.
-	const native = useListNativeClients();
-	const moonlight = useListPairedClients();
+	const native = useListNativeClients({ query: { enabled: !person } });
+	const moonlight = useListPairedClients({ query: { enabled: !person } });
 	const deviceNames = useMemo(
 		() =>
 			new Map([
@@ -89,18 +116,26 @@ export const SectionAutomation: FC = () => {
 		setHooks((prev) => (prev ?? []).filter((_, i) => i !== index));
 	};
 
-	const commit = async (password: string) => {
+	const commit = async (password?: string) => {
 		await save.mutateAsync({ hooks: list, password });
 		toast.success(m.automation_saved());
+	};
+	// The person saves at once; a failure keeps the list as edited and says why.
+	const saveOwn = async () => {
+		try {
+			await commit();
+		} catch (e) {
+			toast.error(apiErrorMessage(e) ?? m.automation_save_failed());
+		}
 	};
 
 	return (
 		<Section maxWidth={false}>
 			<div className="flex flex-col gap-card">
 				<div className="space-y-1">
-					<h1 className="text-2xl font-semibold">{m.automation_title()}</h1>
+					<SeatTitle title={m.automation_title()} />
 					<p className="max-w-prose text-sm text-muted-foreground">
-						{m.automation_subtitle()}
+						{person ? m.person_automation_subtitle() : m.automation_subtitle()}
 					</p>
 				</div>
 
@@ -208,7 +243,11 @@ export const SectionAutomation: FC = () => {
 									>
 										{m.display_revert()}
 									</Button>
-									<Button size="sm" onClick={() => setConfirming(true)}>
+									<Button
+										size="sm"
+										disabled={save.isPending}
+										onClick={() => (person ? saveOwn() : setConfirming(true))}
+									>
 										{m.display_save()}
 									</Button>
 								</div>

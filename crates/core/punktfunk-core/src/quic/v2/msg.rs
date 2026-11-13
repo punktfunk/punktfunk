@@ -127,12 +127,63 @@ impl FieldValue for Mode {
     }
 }
 
+/// A picture size, `width u32 ‖ height u32` as one 8-byte value. `None` and a zero axis are
+/// left out; a value of another length or with a zero axis reads as `None`, never an error.
+impl FieldValue for Option<(u32, u32)> {
+    fn put(&self, f: Fields, tag: u64) -> Fields {
+        match *self {
+            Some((w, h)) if w > 0 && h > 0 => {
+                let mut b = [0u8; 8];
+                b[..4].copy_from_slice(&w.to_le_bytes());
+                b[4..].copy_from_slice(&h.to_le_bytes());
+                f.bytes(tag, &b)
+            }
+            _ => f,
+        }
+    }
+    fn get(v: &[u8]) -> Result<Self> {
+        let Ok(b) = <[u8; 8]>::try_from(v) else {
+            return Ok(None);
+        };
+        let w = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        let h = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+        Ok((w > 0 && h > 0).then_some((w, h)))
+    }
+}
+
 impl FieldValue for LaunchOutcomeKind {
     fn put(&self, f: Fields, tag: u64) -> Fields {
         f.u8(tag, *self as u8)
     }
     fn get(v: &[u8]) -> Result<Self> {
         Ok(LaunchOutcomeKind::from_u8(u8_of(v)?))
+    }
+}
+
+/// Name-value pairs as one value: a nested `{1 => name, 2 => value}` field per pair.
+impl FieldValue for Vec<(String, String)> {
+    fn put(&self, f: Fields, tag: u64) -> Fields {
+        let pairs = self.iter().fold(Fields::new(), |all, (name, value)| {
+            all.fields(1, Fields::new().str(1, name).str(2, value))
+        });
+        f.fields(tag, pairs)
+    }
+    fn get(v: &[u8]) -> Result<Self> {
+        let mut out = Vec::new();
+        let mut pairs = FieldReader::new(v);
+        while let Some((_, pair)) = pairs.next_field()? {
+            let (mut name, mut value) = (String::new(), String::new());
+            let mut r = FieldReader::new(pair);
+            while let Some((tag, b)) = r.next_field()? {
+                match tag {
+                    1 => name = String::get(b)?,
+                    2 => value = String::get(b)?,
+                    _ => {}
+                }
+            }
+            out.push((name, value));
+        }
+        Ok(out)
     }
 }
 
@@ -178,10 +229,11 @@ v2_message!(PairProof = reg::MSG_PAIR_PROOF, { 1 => confirm });
 v2_message!(PairResult = reg::MSG_PAIR_RESULT, { 1 => ok });
 v2_message!(AuthChallenge = reg::MSG_AUTH_CHALLENGE, { 1 => nonce });
 v2_message!(AuthResponse = reg::MSG_AUTH_RESPONSE, { 1 => device_key, 2 => signature });
-v2_message!(Refused = reg::MSG_REFUSED, { 1 => code, 2 => reason },
-    check |m| m.reason.len() <= REFUSED_REASON_MAX);
+v2_message!(Refused = reg::MSG_REFUSED,
+    { 1 => code, 2 => reason, 3 => reason_id, 4 => reason_params },
+    check |m| m.bounded());
 
-v2_message!(Reconfigure = reg::MSG_RECONFIGURE, { 1 => mode, 2 => exclude_codecs });
+v2_message!(Reconfigure = reg::MSG_RECONFIGURE, { 1 => mode, 2 => exclude_codecs, 3 => view });
 v2_message!(Reconfigured = reg::MSG_RECONFIGURED,
     { 1 => accepted, 2 => mode, 3 => exclude_codecs });
 v2_message!(SetBitrate = reg::MSG_SET_BITRATE, { 1 => bitrate_kbps });
@@ -198,8 +250,9 @@ v2_message!(CursorShape = reg::MSG_CURSOR_SHAPE,
 v2_message!(CursorRenderMode = reg::MSG_CURSOR_RENDER, { 1 => client_draws });
 v2_message!(AccessUpdate = reg::MSG_ACCESS_UPDATE, { 1 => grants, 2 => remaining_secs });
 v2_message!(AudioState = reg::MSG_AUDIO_STATE, { 1 => muted });
-v2_message!(LaunchOutcome = reg::MSG_LAUNCH_OUTCOME, { 1 => kind, 2 => message },
-    check |m| m.message.len() <= LAUNCH_MESSAGE_MAX);
+v2_message!(LaunchOutcome = reg::MSG_LAUNCH_OUTCOME,
+    { 1 => kind, 2 => message, 3 => message_id, 4 => message_params },
+    check |m| m.bounded());
 v2_message!(PadSlots = reg::MSG_PAD_SLOTS, { 1 => slots });
 v2_message!(ShardPayloadChanged = reg::MSG_SHARD_PAYLOAD_CHANGED, { 1 => shard_payload });
 v2_message!(ShardPayloadAck = reg::MSG_SHARD_PAYLOAD_ACK, { 1 => shard_payload });
@@ -437,6 +490,40 @@ pub fn unlock_signed_message(
     Ok(m)
 }
 
+/// Length of [`profile_unlock_signed_message`].
+pub const PROFILE_UNLOCK_SIGNED_LEN: usize = 187;
+/// First bytes of [`profile_unlock_signed_message`].
+pub const PROFILE_UNLOCK_SIGNED_LABEL: &[u8; 27] = b"punktfunk-profile-unlock-v1";
+
+/// What a locked profile's unlock key signs, with SHA-256 as the digest:
+/// `"punktfunk-profile-unlock-v1" ‖ challenge ‖ profile id ‖ device fingerprint ‖ box
+/// fingerprint`. The id is its ASCII, zero bytes after it to [`PROFILE_ID_MAX`]; the rest is
+/// [`unlock_signed_message`]'s. `InvalidArg` for an id that is not 1 to 64 of `[A-Za-z0-9_-]`.
+pub fn profile_unlock_signed_message(
+    challenge: &[u8; 32],
+    profile_id: &str,
+    device_fp: &[u8; 32],
+    box_fp: &[u8; 32],
+) -> Result<[u8; PROFILE_UNLOCK_SIGNED_LEN]> {
+    let ok = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
+    if !(1..=PROFILE_ID_MAX).contains(&profile_id.len()) || !profile_id.bytes().all(ok) {
+        return Err(PunktfunkError::InvalidArg(
+            "profile id is not 1 to 64 of [A-Za-z0-9_-]",
+        ));
+    }
+    let mut m = [0u8; PROFILE_UNLOCK_SIGNED_LEN];
+    for (at, part) in [
+        (0, &PROFILE_UNLOCK_SIGNED_LABEL[..]),
+        (27, &challenge[..]),
+        (59, profile_id.as_bytes()),
+        (123, &device_fp[..]),
+        (155, &box_fp[..]),
+    ] {
+        m[at..at + part.len()].copy_from_slice(part);
+    }
+    Ok(m)
+}
+
 v2_message!(ClipControl = reg::MSG_CLIP_CONTROL, { 1 => enabled, 2 => flags });
 v2_message!(ClipState = reg::MSG_CLIP_STATE, { 1 => enabled, 2 => policy, 3 => reason });
 v2_message!(ClipFetch = reg::MSG_CLIP_FETCH, { 1 => seq, 2 => file_index, 3 => mime },
@@ -542,17 +629,22 @@ pub struct StreamConfig {
     /// What the host's operator pinned with `PUNKTFUNK_DELIVERY`: `0` nothing, then auto,
     /// wake, burst, smooth, capped.
     pub host_forced_shape: u8,
+    /// The size the epoch encodes at when the host scales `mode` down for the client's view.
+    /// `None` encodes `mode`, as an older host always does.
+    pub picture: Option<(u32, u32)>,
 }
 
 v2_message!(StreamConfig = reg::MSG_STREAM_CONFIG,
     { 1 => epoch, 2 => mode, 3 => codec, 4 => bit_depth, 5 => color, 6 => chroma_format,
       7 => host_iface_kind, 8 => host_link_mbps, 9 => host_sndbuf_kb, 10 => host_forced_shape,
-      11 => stream });
+      11 => stream, 12 => picture });
 
 /// Screens one session carries at most, the first included.
 pub const SCREENS_MAX: usize = 4;
 /// Bytes of one [`Screen`] on the wire.
 const SCREEN_LEN: usize = 20;
+/// Bytes of one screen's view on the wire ([`screen_views`]).
+const SCREEN_VIEW_LEN: usize = 12;
 
 /// One screen of a session. In a `ClientHello` or [`Screens`] it is a monitor the client shows,
 /// placed in the client's pixels beside screen 0; in a [`ScreenLayout`], a display the host
@@ -569,6 +661,10 @@ pub struct Screen {
     pub y: i32,
     /// The client's primary monitor.
     pub primary: bool,
+    /// In an ask, the size the client shows this screen at when smaller than `mode`: the host
+    /// scales the picture to it before encoding. It rides beside the records
+    /// ([`screen_views`]); screen 0's is the hello's or the `Reconfigure`'s. A layout says none.
+    pub view: Option<(u32, u32)>,
 }
 
 /// `index u8 ‖ stream u8 ‖ flags u8 ‖ 0 ‖ width u16 ‖ height u16 ‖ refresh u16 ‖ 0 u16 ‖ x i32 ‖
@@ -607,9 +703,43 @@ impl FieldValue for Vec<Screen> {
                     },
                     x: i32_at(12),
                     y: i32_at(16),
+                    view: None,
                 }
             })
             .collect())
+    }
+}
+
+/// The views of `screens` past the first, as one value beside their records: `index u8 ‖ 0 u8×3
+/// ‖ width u32 ‖ height u32` per screen that names one. `None` when none does, so a list without
+/// views encodes as it always has.
+pub(crate) fn screen_views(screens: &[Screen]) -> Option<Vec<u8>> {
+    let mut b = Vec::new();
+    for s in screens.iter().take(SCREENS_MAX).filter(|s| s.index > 0) {
+        if let Some((w, h)) = s.view.filter(|&(w, h)| w > 0 && h > 0) {
+            b.extend_from_slice(&[s.index, 0, 0, 0]);
+            b.extend_from_slice(&w.to_le_bytes());
+            b.extend_from_slice(&h.to_le_bytes());
+        }
+    }
+    (!b.is_empty()).then_some(b)
+}
+
+/// Each view a [`screen_views`] value `v` names, onto the screens of its index. A torn or
+/// over-long value names none, and an entry for screen 0 is skipped.
+pub(crate) fn read_screen_views(screens: &mut [Screen], v: &[u8]) {
+    if v.len() % SCREEN_VIEW_LEN != 0 || v.len() / SCREEN_VIEW_LEN > SCREENS_MAX {
+        return;
+    }
+    for r in v.chunks_exact(SCREEN_VIEW_LEN) {
+        let u32_at = |o: usize| u32::from_le_bytes([r[o], r[o + 1], r[o + 2], r[o + 3]]);
+        let view = Some((u32_at(4), u32_at(8))).filter(|&(w, h)| w > 0 && h > 0);
+        for s in screens
+            .iter_mut()
+            .filter(|s| s.index == r[0] && s.index > 0)
+        {
+            s.view = view;
+        }
     }
 }
 
@@ -624,13 +754,39 @@ pub struct ScreenLayout {
 v2_message!(ScreenLayout = reg::MSG_SCREEN_LAYOUT, { 1 => screens });
 
 /// `client → host`: every screen the client shows now, screen 0 first. Screen 0's mode still
-/// moves by `Reconfigure`; this adds, drops and resizes the others.
+/// moves by `Reconfigure`; this adds, drops and resizes the others. Their views ride as field 2.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Screens {
     pub screens: Vec<Screen>,
 }
 
-v2_message!(Screens = reg::MSG_SCREENS, { 1 => screens });
+impl V2Message for Screens {
+    const TYPE: u64 = reg::MSG_SCREENS;
+
+    fn fields(&self) -> Fields {
+        let views = screen_views(&self.screens);
+        self.screens
+            .put(Fields::new(), 1)
+            .when(views.is_some(), |f| {
+                f.bytes(2, views.as_deref().unwrap_or_default())
+            })
+    }
+
+    fn from_body(body: &[u8]) -> Result<Self> {
+        let (mut screens, mut views) = (None, None);
+        let mut r = FieldReader::new(body);
+        while let Some((tag, v)) = r.next_field()? {
+            match tag {
+                1 => set_once(&mut screens, <Vec<Screen> as FieldValue>::get(v)?)?,
+                2 => set_once(&mut views, v)?,
+                _ => {}
+            }
+        }
+        let mut screens = screens.unwrap_or_default();
+        read_screen_views(&mut screens, views.unwrap_or_default());
+        Ok(Screens { screens })
+    }
+}
 
 impl StreamConfig {
     /// What a decoder for this epoch is built for.
@@ -767,7 +923,24 @@ mod tests {
         round_trip(Refused {
             code: 0x67,
             reason: "update both".into(),
+            ..Refused::default()
         });
+        let worded = Refused {
+            code: 0x68,
+            reason: "x".repeat(REFUSED_REASON_MAX),
+            ..Refused::default()
+        }
+        .worded(
+            "close_monitor_missing",
+            &[
+                ("monitor", &"é".repeat(400)),
+                ("monitors", &"é".repeat(400)),
+                ("x", "y"),
+            ],
+        );
+        assert_eq!(worded.reason_params.len(), REFUSED_PARAMS_MAX);
+        assert!(worded.encode_v2().len() <= 1024);
+        round_trip(worded);
         round_trip(Redirect {
             addr: "couch-pc.local".into(),
             port: 9778,
@@ -781,10 +954,17 @@ mod tests {
         round_trip(Reconfigure {
             mode,
             exclude_codecs: 0,
+            view: None,
+        });
+        round_trip(Reconfigure {
+            mode,
+            exclude_codecs: 0,
+            view: Some((1920, 1080)),
         });
         round_trip(Reconfigure {
             mode,
             exclude_codecs: CODEC_HEVC | CODEC_AV1,
+            view: None,
         });
         round_trip(Reconfigured {
             accepted: true,
@@ -882,6 +1062,7 @@ mod tests {
             host_link_mbps: 2_500,
             host_sndbuf_kb: 4_096,
             host_forced_shape: 2,
+            picture: Some((1920, 1080)),
         });
         round_trip(StreamConfig {
             stream: 2,
@@ -897,6 +1078,7 @@ mod tests {
                 x: 0,
                 y: 0,
                 primary: true,
+                view: None,
             },
             Screen {
                 index: 1,
@@ -909,12 +1091,18 @@ mod tests {
                 x: -2560,
                 y: -300,
                 primary: false,
+                view: None,
             },
         ];
         round_trip(ScreenLayout {
             screens: screens.clone(),
         });
-        round_trip(Screens { screens });
+        round_trip(Screens {
+            screens: screens.clone(),
+        });
+        let mut viewed = screens;
+        viewed[1].view = Some((1280, 720));
+        round_trip(Screens { screens: viewed });
         round_trip(AudioConfig {
             stream: 0,
             epoch: 1,
@@ -981,6 +1169,7 @@ mod tests {
                     x: 1920,
                     y: 0,
                     primary: false,
+                    view: None,
                 }],
             }
             .encode_v2(),
@@ -988,6 +1177,83 @@ mod tests {
                 0x28, 0x16, 0x01, 0x14, 0x01, 0x02, 0x00, 0x00, 0x80, 0x07, 0x38, 0x04, 0x3C, 0x00,
                 0x00, 0x00, 0x80, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
             ]
+        );
+        // A further screen's view rides as field 2; screen 0's and a layout's never do.
+        let second = Screen {
+            index: 1,
+            mode: Mode {
+                width: 2560,
+                height: 1440,
+                refresh_hz: 60,
+            },
+            ..Default::default()
+        };
+        let mut screens = Screens {
+            screens: vec![second],
+        };
+        let records = screens.encode_v2();
+        assert_eq!(records[..4], [0x29, 0x16, 0x01, 0x14]);
+        screens.screens[0].view = Some((1280, 720));
+        let mut with_view = records.clone();
+        with_view[1] = 0x24;
+        with_view.extend([
+            0x02, 0x0C, 0x01, 0, 0, 0, 0x00, 0x05, 0, 0, 0xD0, 0x02, 0, 0,
+        ]);
+        assert_eq!(screens.encode_v2(), with_view);
+        let first = Screen {
+            index: 0,
+            view: Some((1280, 720)),
+            ..second
+        };
+        assert_eq!(
+            Screens {
+                screens: vec![first]
+            }
+            .encode_v2()[1],
+            0x16
+        );
+        let layout = ScreenLayout {
+            screens: screens.screens.clone(),
+        };
+        assert_eq!(layout.encode_v2()[1], 0x16);
+        let mut ask = Reconfigure {
+            mode: Mode {
+                width: 1920,
+                height: 1080,
+                refresh_hz: 60,
+            },
+            ..Default::default()
+        };
+        let no_view = [
+            0x20, 0x11, 0x01, 0x0C, 0x80, 0x07, 0x00, 0x00, 0x38, 0x04, 0x00, 0x00, 0x3C, 0x00,
+            0x00, 0x00, 0x02, 0x01, 0x00,
+        ];
+        assert_eq!(ask.encode_v2(), no_view);
+        ask.view = Some((1366, 768));
+        let mut with_view = no_view.to_vec();
+        with_view[1] = 0x1B;
+        with_view.extend([0x03, 0x08, 0x56, 0x05, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00]);
+        assert_eq!(ask.encode_v2(), with_view);
+    }
+
+    /// A view of another length or with a zero axis reads as no view, never a failed message.
+    #[test]
+    fn a_bad_view_reads_as_none() {
+        let read = |v: &[u8]| Reconfigure::from_body(&Fields::new().bytes(3, v).into_body());
+        assert_eq!(
+            read(&[0x56, 5, 0, 0, 0, 3, 0, 0]).unwrap().view,
+            Some((1366, 768))
+        );
+        for bad in [&[][..], &[1, 0, 0, 0], &[0, 0, 0, 0, 0, 3, 0, 0], &[1; 12]] {
+            assert_eq!(read(bad).unwrap().view, None, "{bad:?}");
+        }
+        let zero = Reconfigure {
+            view: Some((0, 768)),
+            ..Default::default()
+        };
+        assert_eq!(
+            zero.fields().into_body(),
+            Reconfigure::default().fields().into_body()
         );
     }
 
@@ -999,6 +1265,40 @@ mod tests {
         assert_eq!(at_bound.screens.len(), SCREENS_MAX);
         assert!(Screens::from_body(&list(SCREEN_LEN * (SCREENS_MAX + 1))).is_err());
         assert!(Screens::from_body(&list(SCREEN_LEN - 1)).is_err());
+    }
+
+    /// A torn or over-long view list reads as no views, and an entry for screen 0 or a zero
+    /// axis as none for that screen; the screens decode either way.
+    #[test]
+    fn a_bad_view_list_reads_as_no_views() {
+        let two = vec![
+            Screen::default(),
+            Screen {
+                index: 1,
+                ..Default::default()
+            },
+        ];
+        let entry = |index: u8, w: u32| {
+            let mut e = vec![index, 0, 0, 0];
+            e.extend(w.to_le_bytes());
+            e.extend(720u32.to_le_bytes());
+            e
+        };
+        let read = |views: &[u8]| {
+            let screens = Screens {
+                screens: two.clone(),
+            };
+            let body = screens.fields().bytes(2, views).into_body();
+            let s = Screens::from_body(&body)
+                .expect("the screens decode")
+                .screens;
+            (s[0].view, s[1].view)
+        };
+        assert_eq!(read(&entry(1, 1280)), (None, Some((1280, 720))));
+        assert_eq!(read(&entry(1, 1280)[..11]), (None, None), "torn");
+        assert_eq!(read(&entry(1, 1280).repeat(SCREENS_MAX + 1)), (None, None));
+        assert_eq!(read(&entry(0, 1280)), (None, None), "screen 0");
+        assert_eq!(read(&entry(1, 0)), (None, None), "a zero axis");
     }
 
     #[test]
@@ -1013,6 +1313,7 @@ mod tests {
         let bad_reason = Refused {
             code: 1,
             reason: long(REFUSED_REASON_MAX + 1),
+            ..Refused::default()
         };
         assert!(Refused::from_body(&bad_reason.fields().into_body()).is_err());
         let nowhere = Redirect {
@@ -1218,6 +1519,48 @@ mod tests {
             "0123456789abcdef0123456789abcdeg",
         ] {
             assert!(unlock_signed_message(&challenge, bad, &[0; 32], &[0; 32]).is_err());
+        }
+    }
+
+    /// `clients/shared/profile-unlock-vectors.json`, which every client replays.
+    #[test]
+    fn the_unlock_messages_match_the_shared_vectors() {
+        use sha2::Digest;
+        let raw = include_str!("../../../../../../clients/shared/profile-unlock-vectors.json");
+        let v: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let bytes = |s: &serde_json::Value| -> Vec<u8> {
+            let s = s.as_str().unwrap();
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
+        };
+        let b32 = |s: &serde_json::Value| -> [u8; 32] { bytes(s).try_into().unwrap() };
+        let build = |form: &str, c: &[u8; 32], id: &str, d: &[u8; 32], b: &[u8; 32]| match form {
+            "seat" => unlock_signed_message(c, id, d, b).map(|m| m.to_vec()),
+            "profile" => profile_unlock_signed_message(c, id, d, b).map(|m| m.to_vec()),
+            form => panic!("form {form}"),
+        };
+        for case in v["messages"].as_array().unwrap() {
+            let (name, form) = (&case["name"], case["form"].as_str().unwrap());
+            let id = case[form].as_str().unwrap();
+            let (c, d, b) = (
+                b32(&case["challenge"]),
+                b32(&case["device"]),
+                b32(&case["box"]),
+            );
+            let m = build(form, &c, id, &d, &b).unwrap();
+            if !case["message"].is_null() {
+                assert_eq!(m, bytes(&case["message"]), "{name}");
+            }
+            let digest = crate::fp::hex(&sha2::Sha256::digest(&m).into());
+            assert_eq!(digest, case["sha256"].as_str().unwrap(), "{name}");
+        }
+        for case in v["refused"].as_array().unwrap() {
+            let form = case["form"].as_str().unwrap();
+            let id = case["id"].as_str().unwrap();
+            let built = build(form, &[1; 32], id, &[2; 32], &[3; 32]);
+            assert!(built.is_err(), "{}", case["name"]);
         }
     }
 

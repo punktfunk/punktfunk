@@ -63,7 +63,8 @@ public enum SeatState: String, Codable, Sendable {
 /// A profile's own seat. Absent for one that plays on the box's own session.
 public struct ProfileSeat: Codable, Hashable, Sendable {
     public var state: SeatState = .ready
-    /// The progress line while starting, or why while unavailable.
+    /// The progress line while starting, or why while unavailable. When the host names the
+    /// message (`detail_id`) this is the app's wording of it, else the host's English.
     public var detail: String?
     /// The device playing on it while occupied.
     public var occupant: String?
@@ -75,11 +76,25 @@ public struct ProfileSeat: Codable, Hashable, Sendable {
         case steamSignIn = "steam_sign_in"
     }
 
+    /// What the host names beside `detail`; read, never kept.
+    private enum MessageKeys: String, CodingKey {
+        case detailId = "detail_id"
+        case detailParams = "detail_params"
+    }
+
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let word = try c.decodeIfPresent(String.self, forKey: .state) ?? "ready"
         state = SeatState(rawValue: word) ?? .other
-        detail = try c.decodeIfPresent(String.self, forKey: .detail)
+        let english = try c.decodeIfPresent(String.self, forKey: .detail)
+        let message = try decoder.container(keyedBy: MessageKeys.self)
+        if let id = try message.decodeIfPresent(String.self, forKey: .detailId) {
+            let params = (try? message.decode([String: String].self, forKey: .detailParams)) ?? [:]
+            let said = HostText.word(id, params: params, english: english ?? "")
+            detail = said.isEmpty ? nil : said
+        } else {
+            detail = english
+        }
         occupant = try c.decodeIfPresent(String.self, forKey: .occupant)
         steamSignIn = try c.decodeIfPresent(Bool.self, forKey: .steamSignIn)
     }
@@ -93,11 +108,16 @@ public struct ProfileSeat: Codable, Hashable, Sendable {
     }
 }
 
-/// What a profile on a person's own account needs from this device before it opens. An old host
-/// sends none, and a word this build doesn't know reads as `.none`: the host refuses a dial that
-/// needs more.
+/// What a profile on a person's own account, or a locked one, needs from this device before it
+/// opens. An old host sends none: `.none`. A word this build doesn't know reads as `.password`,
+/// the prompt every client has.
 public enum UnlockNeed: String, Codable, Sendable {
-    case none, password, key
+    case none, password, key, pin
+    /// This device's unlock key, else the locked profile's PIN.
+    case pinKey = "pin_key"
+
+    /// The prompt asks for the profile's PIN, not an account password.
+    public var pin: Bool { self == .pin || self == .pinKey }
 }
 
 /// One row of `enumerate`. Every field defaults, so a host that adds one never fails the list.
@@ -113,9 +133,11 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
     /// This device's old seat became this profile.
     public var legacySeat: Bool = false
     public var unlock: UnlockNeed = .none
+    /// This device may hide titles for this profile now (`HideForMe`). An old host omits it.
+    public var person: Bool = false
 
     private enum CodingKeys: String, CodingKey {
-        case id, accent, avatar, owner, seat, unlock
+        case id, accent, avatar, owner, seat, unlock, person
         case displayName = "display_name"
         case legacySeat = "legacy_seat"
     }
@@ -129,13 +151,29 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
         owner = try c.decodeIfPresent(Bool.self, forKey: .owner) ?? false
         seat = try c.decodeIfPresent(ProfileSeat.self, forKey: .seat)
         legacySeat = try c.decodeIfPresent(Bool.self, forKey: .legacySeat) ?? false
-        let word = try c.decodeIfPresent(String.self, forKey: .unlock) ?? ""
-        unlock = UnlockNeed(rawValue: word) ?? .none
+        let word = try c.decodeIfPresent(String.self, forKey: .unlock)
+        unlock = word.map { UnlockNeed(rawValue: $0) ?? .password } ?? .none
+        person = try c.decodeIfPresent(Bool.self, forKey: .person) ?? false
+    }
+
+    /// `person` only when true, as the host writes it: an old host's row crosses the console
+    /// bridge as it did before.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(displayName, forKey: .displayName)
+        try c.encodeIfPresent(accent, forKey: .accent)
+        try c.encodeIfPresent(avatar, forKey: .avatar)
+        try c.encode(owner, forKey: .owner)
+        try c.encodeIfPresent(seat, forKey: .seat)
+        try c.encode(legacySeat, forKey: .legacySeat)
+        try c.encode(unlock, forKey: .unlock)
+        if person { try c.encode(true, forKey: .person) }
     }
 
     public init(id: String, displayName: String, accent: String? = nil, avatar: String? = nil,
                 owner: Bool = false, seat: ProfileSeat? = nil, legacySeat: Bool = false,
-                unlock: UnlockNeed = .none) {
+                unlock: UnlockNeed = .none, person: Bool = false) {
         self.id = id
         self.displayName = displayName
         self.accent = accent
@@ -144,6 +182,7 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
         self.seat = seat
         self.legacySeat = legacySeat
         self.unlock = unlock
+        self.person = person
     }
 
     public var pick: ProfilePick { ProfilePick(id: id, displayName: displayName, avatar: avatar) }
@@ -153,13 +192,14 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
         guard let seat else { return nil }
         switch seat.state {
         case .occupied:
-            return seat.occupant.map { "In use by \($0)" } ?? "In use"
+            return seat.occupant.map { L10n.profileInUseBy(device: $0) }
+                ?? String(localized: L10n.profileInUse)
         case .starting:
-            return seat.detail ?? "Getting ready…"
+            return seat.detail ?? String(localized: L10n.profileGettingReady)
         case .unavailable:
-            return seat.detail ?? "Unavailable"
+            return seat.detail ?? String(localized: L10n.profileUnavailable)
         default:
-            return seat.steamSignIn == true ? "Steam sign-in once" : nil
+            return seat.steamSignIn == true ? String(localized: L10n.profileSteamSignIn) : nil
         }
     }
 }
@@ -253,12 +293,12 @@ public enum HostProfiles {
         case .stopped: return p.unlock == .none ? .wake : .dial
         case .starting: return .wait(detail: seat.detail)
         case .unavailable:
-            return .refuse(seat.detail ?? "That profile can't play on this host right now.")
+            return .refuse(seat.detail ?? String(localized: L10n.rejectSeatUnavailable))
         }
     }
 
     /// The line while a seat comes up: `Getting Kid's desk ready…`.
     public static func wakingLine(_ displayName: String) -> String {
-        "Getting \(displayName)'s desk ready…"
+        L10n.profileWaking(name: displayName)
     }
 }

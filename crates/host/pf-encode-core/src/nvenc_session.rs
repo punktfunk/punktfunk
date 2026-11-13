@@ -15,9 +15,9 @@ use super::nvenc_core::{
     apply_low_latency_config, build_init_params, cached_ceiling, cached_split_verdict, encode_cap,
     force_frame_mode, open_split_mode, plan_range_recovery, prefix_diverged, preset_guid,
     resolve_slices, resolve_split_subframe, resolve_subframe, seed_config, seed_pic_params,
-    seed_preset_config, session_wave_cycle, slice_offsets_len, store_ceiling, store_split_verdict,
-    subframe_env_forced, ArbAction, BitstreamLock, CeilingKey, EncodeApi, LowLatencyConfig,
-    NvStatusExt, RangePlan, SplitArbiter, SplitKey,
+    seed_preset_config, session_wave_cycle, slice_offsets_len, slice_ready, store_ceiling,
+    store_split_verdict, subframe_env_forced, ArbAction, BitstreamLock, CeilingKey, EncodeApi,
+    LowLatencyConfig, NvStatusExt, RangePlan, SplitArbiter, SplitKey,
 };
 use super::nvenc_status;
 use super::{max_forced_split_mode, resolve_split_mode, AuChunk, Codec, EncodedFrame};
@@ -277,7 +277,9 @@ pub struct Opened<H> {
 /// then bisect `[FLOOR, target]` to within 20 Mbps, then try the floor without split.
 ///
 /// Only a param/caps rejection means "above the ceiling"; any other error ends the search, so
-/// a transient failure never caches a bogus ceiling. A floor that opened only after dropping
+/// a transient failure never caches a bogus ceiling. The search holds the best session while it
+/// opens the next, so the session cap can end it: that returns the session in hand, with no
+/// ceiling, and the error only when nothing is held. A floor that opened only after dropping
 /// split proves nothing about the bitrate, so it caches none.
 pub fn open_at_ceiling<H>(
     requested: u64,
@@ -329,6 +331,7 @@ pub fn open_at_ceiling<H>(
     // `lo` is the highest known-good rate (the floor assumed), `hi` the lowest rejected.
     let (mut lo, mut hi) = (FLOOR_BPS, target);
     let mut best: Option<(H, u64)> = None;
+    let mut proven = true;
     while hi > lo + CLAMP_TOL_BPS {
         let mid = lo + (hi - lo) / 2;
         match open(mid, used_split) {
@@ -340,14 +343,19 @@ pub fn open_at_ceiling<H>(
             }
             Err(e) if nvenc_status::is_param_rejection(&e) => hi = mid,
             Err(e) => {
-                if let Some((old, _)) = best.take() {
-                    destroy(old);
-                }
-                return Err(e);
+                let Some((_, kept_bps)) = &best else {
+                    return Err(e);
+                };
+                tracing::warn!(
+                    error = %format!("{e:#}"),
+                    kept_mbps = kept_bps / 1_000_000,
+                    "NVENC bitrate search ended early — keeping the open session"
+                );
+                proven = false;
+                break;
             }
         }
     }
-    let mut proven = true;
     let (handle, bps) = match best {
         Some(b) => b,
         None => match open(FLOOR_BPS, used_split) {
@@ -411,6 +419,14 @@ pub struct Live {
     /// Wire index each long-term slot holds; an IDR or an invalidation empties it.
     ltr_slots: Vec<Option<i64>>,
     ltr_next: usize,
+    /// The two long-term pictures kept for a late loss ([`crate::rfi::Kept`]).
+    kept: crate::rfi::Kept,
+    /// The long-term slot the next frame predicts from alone: the anchor of a loss the DPB no
+    /// longer reaches ([`NvSession::force_kept`]).
+    ltr_force: Option<usize>,
+    /// Slots marked since the last IDR, one bit each. The driver holds a marked picture until
+    /// the next IDR whatever this table says, and each one takes a short-term DPB place.
+    ltr_held: u32,
 }
 
 impl Default for Live {
@@ -435,6 +451,9 @@ impl Default for Live {
             distrusted: false,
             ltr_slots: Vec::new(),
             ltr_next: 0,
+            kept: crate::rfi::Kept::default(),
+            ltr_force: None,
+            ltr_held: 0,
         }
     }
 }
@@ -451,6 +470,9 @@ pub struct NvSession {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    /// [`session_wave_cycle`] as the session opened. The recovery policy reads it every frame,
+    /// and the open and every reconfigure present the same `intraRefreshCnt`.
+    cycle: u32,
     /// Post-clamp target: the open ladder and reconfigure both write what the session runs at.
     pub bitrate_bps: u64,
     pub buffer_fmt: nv::NV_ENC_BUFFER_FORMAT,
@@ -510,6 +532,8 @@ pub struct NvSession {
     pub ltr_frames: u32,
     /// The newest frame the client confirmed, while the host holds confirmed references.
     pub reference_floor: Option<crate::codec::Acked>,
+    /// What the client confirmed it decoded clean, whatever the link.
+    pub confirmed: Option<crate::codec::Acked>,
 }
 
 impl std::ops::Deref for NvSession {
@@ -545,6 +569,7 @@ impl NvSession {
             width,
             height,
             fps,
+            cycle: session_wave_cycle(codec, height, fps),
             bitrate_bps,
             buffer_fmt: nv::NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_NV12,
             bit_depth: 8,
@@ -574,6 +599,7 @@ impl NvSession {
             slice_offsets: Vec::new(),
             ltr_frames: 0,
             reference_floor: None,
+            confirmed: None,
         }
     }
 
@@ -611,9 +637,10 @@ impl NvSession {
         self.next == 0
     }
 
-    /// Frames a forced intra refresh wave takes on this session ([`session_wave_cycle`]).
+    /// Frames a forced intra refresh wave takes on this session ([`session_wave_cycle`]),
+    /// latched when it opens.
     pub fn wave_cycle(&self) -> u32 {
-        session_wave_cycle(self.codec, self.height, self.fps)
+        self.cycle
     }
 
     /// How this session recovers. The driver owns the sweep: it ignores a re-force mid-sweep,
@@ -915,6 +942,7 @@ impl NvSession {
     /// The session is closed, and `target.device` is a live device of `target.device_type`
     /// for the call.
     pub unsafe fn open(&mut self, target: OpenTarget, split_mode: u32) -> Result<()> {
+        self.cycle = session_wave_cycle(self.codec, self.height, self.fps);
         // Sized per session, never per frame: the doNotWait sampler hands it to the driver.
         self.slice_offsets
             .resize(slice_offsets_len(self.width, self.height), 0);
@@ -1182,8 +1210,12 @@ impl NvSession {
         // P-only + infinite GOP: IDRs are forced, or the opening frame NVENC emits as one.
         // Chunked poll flags early chunks from this before the driver reports `pictureType`.
         let idr = forced || opening;
-        // The long-term step sits out an IDR, which empties the slots, and a wave.
-        let ltr = ltr.filter(|_| !idr && wave.is_none());
+        // An IDR empties the slots: it marks slot 0 and uses none, so a late loss on the next
+        // P still finds it. A wave sits the long-term step out.
+        let ltr = match ltr {
+            Some(_) if idr => Some((Some(0), None)),
+            ltr => ltr.filter(|_| wave.is_none()),
+        };
         let mut pic = nv::NV_ENC_PIC_PARAMS {
             version: nv::NV_ENC_PIC_PARAMS_VER,
             inputWidth: self.width,
@@ -1347,34 +1379,104 @@ impl NvSession {
         self.ltr_mark(ts, idr, ltr);
     }
 
-    /// The long-term step frame `ts` would take while the host holds confirmed references:
-    /// the slot it marks and the newest confirmed one it forces
-    /// ([`crate::rfi::ltr_acked_step`]). `None` without a floor or without long-term slots.
+    /// The long-term step frame `ts` would take: the slot it marks and the one it forces.
+    /// Under confirmed references, the newest confirmed slot ([`crate::rfi::ltr_acked_step`]);
+    /// otherwise the kept candidate's mark ([`crate::rfi::Kept`]) and a late loss's anchor.
+    /// `None` without long-term slots.
     fn ltr_peek(&mut self, ts: i64) -> Option<LtrStep> {
         let n = self.ltr_frames as usize;
         if self.ltr_slots.len() != n {
             self.ltr_slots = vec![None; n];
             self.ltr_next = 0;
         }
-        let acked = self.reference_floor.filter(|_| n > 0)?;
-        Some(crate::rfi::ltr_acked_step(
-            &self.ltr_slots,
-            &acked,
-            ts,
-            self.ltr_next,
-        ))
+        if n == 0 {
+            return None;
+        }
+        let slots = &self.live.ltr_slots;
+        let force = self.live.ltr_force.and_then(|f| slots[f].map(|w| (f, w)));
+        if let Some(acked) = self.reference_floor {
+            // A kept anchor outranks the newest confirmed slot, which reaches back less far.
+            let (mark, confirmed) = crate::rfi::ltr_acked_step(slots, &acked, ts, self.ltr_next);
+            let mark = mark.filter(|&m| force.is_none_or(|(f, _)| f != m));
+            return Some((mark, force.or(confirmed)));
+        }
+        let mut kept = self.live.kept;
+        let keep = kept.step(ts, true, self.confirmed.as_ref(), |w| {
+            slots.contains(&Some(w))
+        });
+        let free =
+            |s: usize| slots[s].is_none_or(|w| !kept.holds(w)) && force.is_none_or(|(f, _)| f != s);
+        let mark = keep
+            .then(|| {
+                (0..n)
+                    .map(|k| (self.live.ltr_next + k) % n)
+                    .find(|&s| free(s))
+            })
+            .flatten();
+        Some((mark, force))
     }
 
-    /// Record frame `ts` in the slot table: an IDR empties it, a step's mark fills its slot.
+    /// Record frame `ts` in the slot table: an IDR empties it, a step's mark fills its slot,
+    /// and the kept pair follows what the slots hold.
     fn ltr_mark(&mut self, ts: i64, idr: bool, step: Option<LtrStep>) {
+        let live = &mut self.live;
         if idr {
-            self.ltr_slots.fill(None);
-            self.ltr_next = 0;
+            live.ltr_slots.fill(None);
+            live.ltr_held = 0;
+            live.ltr_next = 0;
         }
+        live.ltr_force = None;
+        let marked = matches!(step, Some((Some(_), _)));
         if let Some((Some(m), _)) = step {
-            self.ltr_slots[m] = Some(ts);
-            self.ltr_next = (m + 1) % self.ltr_slots.len();
+            live.ltr_slots[m] = Some(ts);
+            live.ltr_held |= 1 << m;
+            live.ltr_next = (m + 1) % live.ltr_slots.len();
         }
+        if self.reference_floor.is_none() {
+            let slots = &live.ltr_slots;
+            live.kept.step(ts, marked, self.confirmed.as_ref(), |w| {
+                slots.contains(&Some(w))
+            });
+        }
+    }
+
+    /// Empty every long-term slot a loss from `first` reached. Outside confirmed references
+    /// each later picture chains from the lost one; under them the floor's own acks decide.
+    fn taint_ltr_from(&mut self, first: i64) {
+        if self.reference_floor.is_none() {
+            for w in &mut self.live.ltr_slots {
+                if w.is_some_and(|w| w >= first) {
+                    *w = None;
+                }
+            }
+        }
+    }
+
+    /// A loss the short-term window no longer reaches: the newest long-term picture before it
+    /// becomes the next frame's only reference, which the client holds however late the report
+    /// came. Under confirmed references only a confirmed one qualifies. `None` when none
+    /// predates the loss, or `first` is not yet coded.
+    fn force_kept(&mut self, first: i64) -> Option<bool> {
+        if first < 0 || first >= self.frame_idx {
+            return None;
+        }
+        let floor = self.reference_floor;
+        let clean = |w: i64| w < first && floor.is_none_or(|a| a.contains(w));
+        let (slot, wire) = self
+            .ltr_slots
+            .iter()
+            .enumerate()
+            .filter_map(|(s, w)| w.filter(|&w| clean(w)).map(|w| (s, w)))
+            .max_by_key(|&(_, w)| w)?;
+        self.live.ltr_force = Some(slot);
+        self.pending_anchor = true;
+        tracing::debug!(
+            first,
+            slot,
+            wire,
+            "nvenc RFI: the DPB is past the loss — anchoring on a kept long-term picture"
+        );
+        Some(true)
     }
 
     /// Unmap one retired input.
@@ -1490,8 +1592,10 @@ impl NvSession {
     }
 
     /// Slice-boundary chunks of the oldest AU: sample it with doNotWait locks for ~2 frame
-    /// intervals, then finish through one blocking lock, the completion authority. A session
-    /// that cannot chunk hands out one whole-AU chunk.
+    /// intervals, then finish through one blocking lock. A driver that hands a complete AU out
+    /// once (R620) finishes on the sample that saw it complete. A finish that disowns the
+    /// sampled bytes latches sub-frame off. A session that cannot chunk hands out one whole-AU
+    /// chunk.
     pub fn poll_chunk(&mut self) -> Result<Option<AuChunk>> {
         if !self.supports_chunked_poll() && self.chunk.is_none() {
             return Ok(self.poll()?.map(AuChunk::whole));
@@ -1509,6 +1613,11 @@ impl NvSession {
         // A driver that never publishes intermediate slices costs this budget, then the lock.
         let budget = Duration::from_micros(2_000_000 / self.fps.max(1) as u64);
         let t0 = Instant::now();
+        // The most bytes this call's samples showed. An earlier call's ended in a chunk, which
+        // `emitted` covers.
+        let mut seen = 0;
+        // The sample that showed every slice. R620 hands a complete AU out once, to that sample.
+        let mut complete: Option<Vec<u8>> = None;
         loop {
             let emitted = self.chunk.as_ref().map_or(0, |c| c.emitted);
             let slices_out = self.chunk.as_ref().map_or(0, |c| c.slices_out);
@@ -1527,13 +1636,15 @@ impl NvSession {
             if let Ok(lock) = lock {
                 let n = lock.info().numSlices;
                 let bytes = lock.bytes().len();
+                seen = seen.max(bytes);
                 if n >= self.slices {
                     // Every slice readable: finish through the blocking lock (`numSlices`
-                    // alone is not trusted across driver branches).
+                    // alone is not trusted across driver branches), with this read in hand.
+                    complete = Some(lock.bytes().to_vec());
                     drop(lock);
                     break;
                 }
-                if n > slices_out && bytes > emitted {
+                if bytes > emitted && slice_ready(n, slices_out, &lock.bytes()[emitted..]) {
                     // New slice(s): cut `[emitted..bytes)`, contiguous Annex-B on a NAL boundary.
                     let data = lock.bytes()[emitted..].to_vec();
                     lock.unlock()
@@ -1577,18 +1688,23 @@ impl NvSession {
                 return Err(nvenc_status::call_err("lock_bitstream (chunk finish)", e));
             }
         };
-        let full = lock.bytes();
+        // An empty finish after a sample saw the AU complete: that sample took it.
+        let full = match (lock.bytes(), complete.as_deref()) {
+            ([], Some(sampled)) => sampled,
+            (full, _) => full,
+        };
         let total = full.len();
-        // The doNotWait bytes must be a byte-exact prefix of the finished AU, or the wire already
-        // carries undetectable corruption. Latch sub-frame off and bail into stall recovery
-        // (rebuild without sub-frame, IDR).
-        if prefix_diverged(&cs.shadow, cs.emitted, full) {
+        // The finished AU must start with the emitted bytes and must not be empty after a sample
+        // saw bytes, or the wire carries undetectable corruption. Latch sub-frame off and bail
+        // into stall recovery (rebuild without sub-frame, IDR).
+        if prefix_diverged(&cs.shadow, cs.emitted, seen, full) {
             drop(lock);
             // SAFETY: the mapping for this retired encode, unmapped once.
             unsafe { self.unmap(p.map) };
             self.subframe_broken = true;
             tracing::warn!(
                 emitted = cs.emitted,
+                seen,
                 total,
                 "NVENC sub-frame readback diverged from the finished AU — this driver's early \
                  slice publishes cannot be trusted; disarming sub-frame for every later session \
@@ -1637,25 +1753,31 @@ impl NvSession {
         if self.encoder.is_null() || !self.rfi_supported || self.distrusted {
             return false;
         }
+        self.taint_ltr_from(first);
         // A sweep in flight answers every ask until it closes. The driver neither honours an
         // invalidation mid-sweep nor keeps sweeping after one, and an anchor tagged there
         // lifts the client onto damage that only the next IDR clears.
         if self.wave.is_some() || super::nvenc_core::wave_always() {
             return self.start_wave(first, last);
         }
-        match plan_range_recovery(first, last, self.frame_idx, self.last_rfi_range) {
+        let short_term = super::nvenc_core::RFI_DPB.saturating_sub(self.ltr_held.count_ones());
+        match plan_range_recovery(first, last, self.frame_idx, self.last_rfi_range, short_term) {
             // Already invalidated. Re-arm the anchor: the previous recovery AU may itself have
             // been lost, and the next frame is equally clean.
             RangePlan::Covered => {
                 self.pending_anchor = true;
                 true
             }
-            RangePlan::Decline => self.start_wave(first, last),
+            RangePlan::Decline => self
+                .force_kept(first)
+                .unwrap_or_else(|| self.start_wave(first, last)),
             RangePlan::Invalidate { first, last } => {
                 // The driver would anchor on `first - 1`; a part-dirty wave picture there would
-                // lift the client onto damage, so wave again instead.
+                // lift the client onto damage, so a kept picture or a wave answers instead.
                 if self.wave_dirty(first - 1) {
-                    return self.start_wave(first, last);
+                    return self
+                        .force_kept(first)
+                        .unwrap_or_else(|| self.start_wave(first, last));
                 }
                 // `inputTimeStamp` is the wire index, so the lost range maps 1:1 onto NVENC
                 // timestamps across rebuilds.
@@ -1903,10 +2025,9 @@ mod ladder_tests {
         assert_eq!(*asked.borrow(), [100_000_000, 500_000_000]);
     }
 
-    /// Only a param rejection means "above the ceiling": anything else ends the search and
-    /// releases the session the bisection held.
-    #[test]
-    fn a_transient_failure_mid_search_propagates_and_releases() {
+    /// A driver that rejects above 300 Mbps and answers the session cap from `cap_from` up to
+    /// there, so the search's first success is the only session it grants.
+    fn capped(cap_from: u64) -> (anyhow::Result<Opened<u64>>, Vec<u64>) {
         let live = RefCell::new(Vec::new());
         let res = open_at_ceiling(
             800_000_000,
@@ -1914,7 +2035,7 @@ mod ladder_tests {
             None,
             |bps, _| match bps {
                 b if b > 300_000_000 => Err(reject()),
-                b if b >= 250_000_000 => Err(call_err(
+                b if b >= cap_from => Err(call_err(
                     "initialize_encoder",
                     NVENCSTATUS::NV_ENC_ERR_OUT_OF_MEMORY,
                 )),
@@ -1925,8 +2046,25 @@ mod ladder_tests {
             },
             |h| live.borrow_mut().retain(|&l| l != h),
         );
+        (res, live.into_inner())
+    }
+
+    /// Only a param rejection means "above the ceiling": anything else ends the search. The
+    /// session the search holds is proven, so it opens the stream and caches no ceiling.
+    #[test]
+    fn a_transient_failure_mid_search_keeps_the_proven_session() {
+        let (res, live) = capped(250_000_000);
+        let o = res.expect("the held session opens");
+        assert_eq!((o.bps, o.ceiling), (207_500_000, None));
+        assert_eq!(live, [o.handle], "one live session: the returned one");
+    }
+
+    /// With nothing held, a transient failure is the open's error.
+    #[test]
+    fn a_transient_failure_with_no_session_held_propagates() {
+        let (res, live) = capped(100_000_000);
         assert!(res.is_err());
-        assert!(live.borrow().is_empty(), "the held session was destroyed");
+        assert!(live.is_empty());
     }
 }
 
@@ -2131,12 +2269,67 @@ mod recovery_tests {
             last: s.frame_idx - 1,
             mask: u16::MAX,
         });
+        let held = s.ltr_slots.clone();
+        assert_eq!(held[0], Some(s.frame_idx - 1), "the IDR holds slot 0");
         REFUSE.set(1);
         assert!(encode(&mut s).is_err());
         assert_eq!(
-            s.ltr_slots,
-            [None, None],
+            s.ltr_slots, held,
             "no slot holds a picture that was never queued"
+        );
+    }
+
+    /// Right after an IDR no long-term slot is held, so the short-term window still reaches
+    /// the IDR, and a loss reported two frames late anchors there instead of waving.
+    #[test]
+    fn a_loss_after_the_idr_anchors_on_it() {
+        let mut s = stub_session(Codec::H265, 128);
+        for _ in 0..3 {
+            encode(&mut s).expect("the stub driver accepts every picture");
+        }
+        assert!(s.invalidate_ref_frames(1, 1));
+        assert!(
+            s.wave.is_none() && s.pending_anchor,
+            "an RFI anchor, not a wave"
+        );
+    }
+
+    /// The first P is lost and reported past the short-term window: the IDR holds long-term
+    /// slot 0, so it anchors the next frame instead of a wave.
+    #[test]
+    fn a_late_loss_after_the_idr_anchors_on_the_idr() {
+        let mut s = stub_session(Codec::H265, 128);
+        for _ in 0..7 {
+            encode(&mut s).expect("the stub driver accepts every picture");
+        }
+        assert!(s.invalidate_ref_frames(1, 1));
+        assert!(s.wave.is_none(), "the IDR answers, not a wave");
+        assert_eq!(s.live.ltr_force, Some(0));
+        assert!(encode(&mut s).expect("the anchor").anchor);
+    }
+
+    /// Confirmations trail by six frames, and a loss is reported past the short-term window:
+    /// the kept long-term picture the client confirmed anchors the next frame, not a wave.
+    #[test]
+    fn a_late_loss_anchors_on_the_kept_picture() {
+        let mut s = stub_session(Codec::H265, 128);
+        for _ in 0..40 {
+            s.confirmed = Some(Acked {
+                last: s.frame_idx - 6,
+                mask: u16::MAX,
+            });
+            encode(&mut s).expect("the stub driver accepts every picture");
+        }
+        let lost = s.frame_idx - 4;
+        assert!(s.invalidate_ref_frames(lost, lost));
+        assert!(s.wave.is_none(), "a kept picture answers, not a wave");
+        assert!(encode(&mut s).expect("the anchor").anchor);
+        assert!(
+            s.ltr_slots
+                .iter()
+                .flatten()
+                .all(|&w| w < lost || w == s.frame_idx - 1),
+            "no slot holds a picture that chained from the loss"
         );
     }
 

@@ -137,6 +137,21 @@ final class ConsoleJSONTests: XCTestCase {
         XCTAssertTrue(pads.last?["battery"] is NSNull)
     }
 
+    /// The iOS SC2 menu pad's input test: the GameController path's names and signs.
+    func testSc2PadTestUsesTheGameControllerNames() throws {
+        var s = Sc2Device.State()
+        s.buttons = Sc2Device.btnA | Sc2Device.btnView | Sc2Device.btnMenu | Sc2Device.btnDpadUp
+        s.lsY = 32767
+        s.rt = 255
+        let data = try XCTUnwrap(ConsoleJSON.padTest(sc2: s).data(using: .utf8))
+        let doc = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(doc["held"] as? [String], ["A", "Back", "Start", "Up", "RT"])
+        let axes = try XCTUnwrap(doc["axes"] as? [[Any]])
+        XCTAssertEqual(axes[1][0] as? String, "LY")
+        XCTAssertEqual(axes[1][1] as? Double, -1)
+        XCTAssertEqual(axes[5][1] as? Double, 1)
+    }
+
     /// The Recent and Most played sorts read `stats`; a title the host never launched has none.
     func testLibraryGamesCarryPlayStats() throws {
         let wire = #"""
@@ -210,6 +225,30 @@ final class ConsoleJSONTests: XCTestCase {
         XCTAssertEqual(merged.modifierLayout, "pc", "only this app edits it")
     }
 
+    /// The console's preset editor reads, sets and clears the host screen, and a card's preset
+    /// chip carries it for the card's Screen section.
+    func testTheHostScreenCrossesTheBridge() throws {
+        var pinned = SettingsOverlay()
+        pinned.hostScreen = "second"
+        let set = ConsoleJSON.overlay(["host_screen": "monitor:DP-1"], over: pinned)
+        XCTAssertEqual(set.hostScreen, "monitor:DP-1")
+        XCTAssertNil(ConsoleJSON.overlay([:], over: pinned).hostScreen, "the console cleared it")
+
+        var saved = host(name: "Desk")
+        saved.presetID = "p1"
+        let preset = StreamPreset(name: "Couch", id: "p1", overrides: pinned)
+        let row = try XCTUnwrap(
+            rows(ConsoleJSON.hostRows(
+                saved: [saved], discovered: [], online: [saved.id], presets: [preset])).first)
+        let chip = try XCTUnwrap(row["bound_preset"] as? [String: Any])
+        XCTAssertEqual(chip["host_screen"] as? String, "second")
+        let catalog = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(ConsoleJSON.presets([preset]).utf8))
+                as? [[String: Any]])
+        let overrides = try XCTUnwrap(catalog.first?["overrides"] as? [String: Any])
+        XCTAssertEqual(overrides["host_screen"] as? String, "second")
+    }
+
     /// `clients/shared/console-bridge-vectors.json`: the models this client writes match its
     /// samples, each answer under its command sample's `req`, and the menu and phase codes
     /// match its table. `Phase` stops at reconnecting: this client never reports a profile the
@@ -258,6 +297,12 @@ final class ConsoleJSONTests: XCTestCase {
         let wire = #"{"id": "steam:570", "store": "steam", "title": "Dota 2", "art": {}}"#
         let dota = try JSONDecoder().decode(GameEntry.self, from: Data(wire.utf8))
         try check("GamesPush", 0, ConsoleJSON.libraryGames(fetch, [dota]))
+        let cyberpunk = try JSONDecoder().decode(GameEntry.self, from: Data(#"""
+            {"id": "steam:1091500", "store": "steam", "title": "Cyberpunk 2077", "art": {},
+             "overrides": {"name": "1080p60 DualSense", "lines": 1080, "hz": 60,
+                           "gamepad": "dualsense"}}
+            """#.utf8))
+        try check("GamesPush", 1, ConsoleJSON.libraryGames(fetch, [cyberpunk]))
         let downloads = [
             HostDownload(
                 appID: "steam:570", state: "downloading", doneBytes: 1_048_576,
@@ -292,6 +337,48 @@ final class ConsoleJSONTests: XCTestCase {
             XCTAssertEqual(
                 phase.map { "\($0)" }, name == "profile_gone" ? nil : camel(name), "phase \(code)")
         }
+    }
+
+    /// The answers to `FetchHidden` and `SetHidden` match the bridge's `HiddenAnswer` and
+    /// `HideAnswer` samples, each answer under the command sample's host and profile.
+    func testHideAnswersMatchTheSharedVectors() throws {
+        let doc = try sharedVectors("console-bridge-vectors.json")
+        let models = try XCTUnwrap(doc["models"] as? [String: [Any]])
+        let commands = try XCTUnwrap(doc["commands"] as? [Any])
+        let fetch = try XCTUnwrap(
+            commands.lazy.compactMap { ($0 as? [String: Any])?["FetchHidden"] as? [String: Any] }
+                .first)
+        func object(_ written: String) throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(written.utf8)) as? [String: Any])
+        }
+        func same(_ got: Any?, _ model: String, _ i: Int) {
+            let want = models[model]?[i]
+            XCTAssertTrue((got as AnyObject?)?.isEqual(want) ?? false, "\(model)[\(i)] wrote \(String(describing: got))")
+        }
+
+        let (fp, profile) = (fetch["fp_hex"] as? String ?? "", fetch["profile"] as? String ?? "")
+        let wire = #"{"id": "steam:70", "store": "steam", "title": "Half-Life", "art": {}}"#
+        let halfLife = try JSONDecoder().decode(GameEntry.self, from: Data(wire.utf8))
+        let listed = try object(ConsoleJSON.hiddenList(fp: fp, profile: profile, games: [halfLife]))
+        XCTAssertEqual(listed["fp_hex"] as? String, "ab12")
+        XCTAssertEqual(listed["profile"] as? String, "a1b2c3d4e5f6")
+        same(listed["answer"], "HiddenAnswer", 0)
+        same(try object(ConsoleJSON.hiddenList(fp: fp, profile: profile, games: []))["answer"], "HiddenAnswer", 1)
+        let failed = ConsoleJSON.hiddenList(
+            fp: fp, profile: profile, games: nil, why: "Couldn't reach the host.")
+        same(try object(failed)["answer"], "HiddenAnswer", 2)
+
+        let done = HideForMe.Outcome.done.notice(hidden: true, title: "Dota 2", name: "Kid")
+        same(
+            try object(ConsoleJSON.hideAnswer(
+                fp: fp, profile: profile, appID: "steam:570", hidden: true, done: true, notice: done)),
+            "HideAnswer", 0)
+        let said = "This device can't change this profile. Ask the host's owner to change it in the web console."
+        same(
+            try object(ConsoleJSON.hideAnswer(
+                fp: fp, profile: profile, appID: "steam:570", hidden: false, done: false,
+                notice: HideForMe.Outcome.refused(said).notice(hidden: false, title: "Dota 2", name: "Kid"))),
+            "HideAnswer", 1)
     }
 
     /// One of the `clients/shared` vector files.

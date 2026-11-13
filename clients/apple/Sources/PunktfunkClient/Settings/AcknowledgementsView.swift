@@ -32,12 +32,12 @@ struct AcknowledgementsView: View {
                     // back here instead of leaving the title off screen under the tab bar.
                     VStack(alignment: .leading, spacing: 18) {
                         #if os(tvOS)
-                        TVScreenTitle("Acknowledgements")
+                        TVScreenTitle(String(localized: L10n.aboutLicensesTitle))
                         #endif
                         Text("Punktfunk")
                             .font(.geist(Self.titleFont, .bold, relativeTo: .title2))
                         if let version {
-                            Text("Version \(version)")
+                            Text(L10n.aboutVersionLine(version: version))
                                 .font(.geist(Self.captionFont, relativeTo: .caption))
                                 .foregroundStyle(.secondary)
                         }
@@ -49,11 +49,9 @@ struct AcknowledgementsView: View {
 
                     Divider()
 
-                    Text("Bundled font")
+                    Text(L10n.aboutBundledFont)
                         .font(.geist(Self.headlineFont, .semibold, relativeTo: .headline))
-                    Text("Punktfunk ships the Geist typeface (Geist Sans), "
-                        + "© The Geist Project Authors / Vercel, used under the SIL Open Font "
-                        + "License 1.1.")
+                    Text(L10n.aboutGeistLicense)
                         .font(.geist(Self.captionFont, relativeTo: .caption))
                         .foregroundStyle(.secondary)
                     if !Licenses.fontLicense.isEmpty {
@@ -63,7 +61,7 @@ struct AcknowledgementsView: View {
 
                     Divider()
 
-                    Text("Swift packages")
+                    Text(L10n.appleAboutSwiftPackages)
                         .font(.geist(Self.headlineFont, .semibold, relativeTo: .headline))
                     Text(Licenses.swiftPackages)
                         .font(.geist(Self.captionFont, relativeTo: .caption))
@@ -71,7 +69,7 @@ struct AcknowledgementsView: View {
 
                     Divider()
 
-                    Text("Third-party software")
+                    Text(L10n.aboutThirdPartyHeading)
                         .font(.geist(Self.headlineFont, .semibold, relativeTo: .headline))
                     Text(Licenses.thirdPartyIntro)
                     .font(.geist(Self.captionFont, relativeTo: .caption))
@@ -96,7 +94,7 @@ struct AcknowledgementsView: View {
             #endif
         }
         #if !os(tvOS)
-        .navigationTitle("Acknowledgements")
+        .navigationTitle(L10n.aboutLicensesTitle)
         #endif
     }
 }

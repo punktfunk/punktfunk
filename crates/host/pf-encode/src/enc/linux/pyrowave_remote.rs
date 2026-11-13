@@ -23,11 +23,11 @@ use crate::{AuChunk, ChromaFormat, EncodedFrame, Encoder, EncoderCaps};
 use anyhow::{bail, Context, Result};
 use pf_frame::{CapturedFrame, FramePayload};
 use pf_zerocopy::ipc::{self, resolve_worker_path, WorkerPath, ENCODE_WORKER_BIN as WORKER_BIN};
+use rustix::buffer::spare_capacity;
 use std::collections::{HashSet, VecDeque};
 use std::fs::File;
 use std::io;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
-use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::Duration;
@@ -53,6 +53,9 @@ struct Params {
     hdr: bool,
     /// The knobs the session opened with; a respawn and the fallback reuse them.
     knobs: Knobs,
+    /// The host's crop ([`Encoder::set_input_crop`]) once taken; a respawn and the fallback
+    /// replay it.
+    crop: Option<[u32; 4]>,
 }
 
 enum Fail {
@@ -216,8 +219,7 @@ impl Link {
                         "AU length {len} outside the return buffer ({cap} bytes)"
                     )));
                 }
-                let mut data = vec![0u8; len];
-                au_buf.read_exact_at(&mut data, 0).map_err(|e| {
+                let data = read_au(au_buf, len).map_err(|e| {
                     Fail::Dead(anyhow::Error::from(e).context("read the AU return buffer"))
                 })?;
                 tracing::trace!(len, encode_us, "pyrowave: AU from the encode worker");
@@ -256,6 +258,23 @@ fn au_len_in_buffer(len: usize, buffer: u64) -> bool {
 
 fn dmabuf_key(fd: BorrowedFd) -> io::Result<u64> {
     Ok(pf_zerocopy::fd_identity(fd)?.1)
+}
+
+/// The first `len` bytes of `file`, with no zero pass over the `Vec`. The read is positioned:
+/// the worker holds the same open file, so a cursor read would move its offset too. A file
+/// shorter than `len` is an `UnexpectedEof`.
+fn read_au(file: &File, len: usize) -> io::Result<Vec<u8>> {
+    let mut data = Vec::with_capacity(len);
+    while data.len() < len {
+        let at = data.len() as u64;
+        match rustix::io::pread(file, spare_capacity(&mut data), at) {
+            Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+            Ok(_) | Err(rustix::io::Errno::INTR) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    data.truncate(len);
+    Ok(data)
 }
 
 #[derive(Debug)]
@@ -350,6 +369,9 @@ fn handshake(mut link: Link, p: &Params, bitrate_bps: u64) -> Result<Handshake> 
                     // 4:4:4 open and fires a spurious "chroma disagrees with Welcome" warn.
                     blends_cursor,
                     chroma_444: chroma444,
+                    // A worker of this protocol takes `SetInputCrop`; the fallback replays it.
+                    downscales_input: true,
+                    crops_input: true,
                     ..EncoderCaps::default()
                 },
                 priority,
@@ -386,6 +408,7 @@ pub(crate) fn open_preferring_worker(
         bit_depth,
         hdr,
         knobs: knobs.clone(),
+        crop: None,
     };
     let inline = || -> Result<Box<dyn Encoder>> {
         super::pyrowave::PyroWaveEncoder::open(
@@ -525,6 +548,10 @@ impl RemotePyroWave {
             if let Some(shard) = self.stream.wire_chunk {
                 e.set_wire_chunking(shard);
             }
+            // The crop decides which picture a capture-sized frame becomes.
+            if let Some(rect) = self.params.crop {
+                e.set_input_crop(rect)?;
+            }
             self.inline = Some(e);
         }
         Ok(self.inline.as_mut().expect("just opened"))
@@ -630,6 +657,10 @@ impl Encoder for RemotePyroWave {
         // Intra-only: no frame references another.
     }
 
+    fn note_confirmed(&mut self, _acked: Option<crate::Acked>) {
+        // Intra-only: no reference to keep.
+    }
+
     fn set_pipelined(&mut self, _on: bool) -> bool {
         // Encode is synchronous; no pipelined-retrieve mode.
         false
@@ -696,12 +727,20 @@ impl Encoder for RemotePyroWave {
                         // Same replay the in-process fallback does: the boundary changes AU bytes.
                         self.set_wire_chunking(shard);
                     }
-                    tracing::info!(
-                        worker = %self.worker_path.display(),
-                        priority = ?hs.priority,
-                        "pyrowave: respawned the encode worker after a mid-session death"
-                    );
-                    return true;
+                    // A worker without the crop would refuse every capture-sized frame.
+                    match self.params.crop.map(|r| self.set_input_crop(r)) {
+                        Some(Err(e)) => self.pin_inline(&format!(
+                            "the respawned worker did not take the crop: {e:#}"
+                        )),
+                        _ => {
+                            tracing::info!(
+                                worker = %self.worker_path.display(),
+                                priority = ?hs.priority,
+                                "pyrowave: respawned the encode worker after a mid-session death"
+                            );
+                            return true;
+                        }
+                    }
                 }
                 Err(e) => tracing::warn!(
                     worker = %self.worker_path.display(),
@@ -819,8 +858,28 @@ impl Encoder for RemotePyroWave {
         // capturer's ring depth constrains nothing here.
     }
 
-    fn set_input_crop(&mut self, _rect: [u32; 4]) -> Result<()> {
-        // `crops_input` is false: the host never asks a worker to crop.
+    fn set_input_crop(&mut self, rect: [u32; 4]) -> Result<()> {
+        if let Some(link) = self.link.as_mut() {
+            match link.request(&ToWorker::SetInputCrop { rect }, &[]) {
+                Ok(FromWorker::Ack { ok: true }) => {}
+                Ok(FromWorker::EncodeErr { message, .. }) => {
+                    bail!("pyrowave encode worker: {message}")
+                }
+                // One request, one reply: a link out of step would answer the next frame.
+                Ok(other) => {
+                    self.link = None;
+                    bail!("unexpected encode worker reply to the crop: {other:?}")
+                }
+                Err(e) => {
+                    self.link = None;
+                    return Err(e.context("pyrowave encode worker"));
+                }
+            }
+        }
+        if let Some(e) = self.inline.as_mut() {
+            e.set_input_crop(rect)?;
+        }
+        self.params.crop = Some(rect);
         Ok(())
     }
 
@@ -847,8 +906,26 @@ mod tests {
         assert!(!au_len_in_buffer(0, 1 << 20));
         assert!(!au_len_in_buffer((1 << 20) + 1, 1 << 20));
     }
+    use std::io::Seek;
     use std::os::fd::AsFd;
+    use std::os::unix::fs::FileExt;
     use std::sync::Arc;
+
+    /// The AU is the file's first `len` bytes, read without moving the shared cursor: a longer
+    /// file (the last AU was bigger) loses its tail, and a shorter one is an error, never a
+    /// zero-padded AU.
+    #[test]
+    fn read_au_returns_the_prefix_and_refuses_a_short_file() {
+        let mut f = File::from(memfd());
+        let au: Vec<u8> = (0..1_500_000u32).map(|i| (i * 7 + i / 251) as u8).collect();
+        f.write_all_at(&au, 0).unwrap();
+        assert_eq!(read_au(&f, au.len()).unwrap(), au);
+        assert_eq!(read_au(&f, 1000).unwrap(), au[..1000]);
+        assert_eq!(read_au(&f, 1).unwrap(), au[..1]);
+        let err = read_au(&f, au.len() + 1).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+        assert_eq!(f.stream_position().unwrap(), 0);
+    }
 
     fn params() -> Params {
         Params {
@@ -859,6 +936,7 @@ mod tests {
             bit_depth: 8,
             hdr: false,
             knobs: Knobs::from_env(),
+            crop: None,
         }
     }
 
@@ -1039,6 +1117,7 @@ mod tests {
                 bit_depth: 8,
                 hdr: false,
                 knobs: Knobs::from_env(),
+                crop: None,
             },
             bitrate_bps: 5_000_000,
             worker_path: PathBuf::from("/usr/bin/punktfunk-encode-worker"),
@@ -1292,6 +1371,57 @@ mod tests {
         }
         assert!(rebuild.load(std::sync::atomic::Ordering::Relaxed));
         server.join().unwrap();
+    }
+
+    /// The crop crosses to the worker and is kept for a respawn and the fallback. A worker that
+    /// declines one fails the call, so the host reopens at the source's size.
+    #[test]
+    fn the_crop_crosses_to_the_worker_and_a_refusal_fails_the_call() {
+        let (host, peer) = ipc::socketpair_seqpacket().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let mut asked = Vec::new();
+            for reply in [
+                FromWorker::Ack { ok: true },
+                FromWorker::EncodeErr {
+                    message: "a 64x64 crop would upscale".into(),
+                    capture_rebuild: false,
+                },
+            ] {
+                let (msg, _) =
+                    worker::recv_eintr::<ToWorker>(peer.as_fd(), &mut buf, None).unwrap();
+                asked.push(msg);
+                worker::send_eintr(peer.as_fd(), &reply, &[]).unwrap();
+            }
+            asked
+        });
+        let mut proxy = RemotePyroWave {
+            link: Some(mock_link(host, File::from(memfd()))),
+            inline: None,
+            params: params(),
+            bitrate_bps: 40_000_000,
+            worker_path: PathBuf::from("/usr/bin/punktfunk-encode-worker"),
+            caps: EncoderCaps::default(),
+            stream: AuStream::default(),
+            pending: VecDeque::new(),
+            respawn_used: false,
+        };
+        let (taken, refused) = ([0, 0, 3840, 2160], [0, 0, 64, 64]);
+        proxy
+            .set_input_crop(taken)
+            .expect("the worker took the crop");
+        let err = proxy.set_input_crop(refused).unwrap_err();
+        assert!(format!("{err:#}").contains("upscale"), "{err:#}");
+        assert_eq!(
+            proxy.params.crop,
+            Some(taken),
+            "only a taken crop is replayed"
+        );
+        assert!(proxy.link.is_some(), "a refusal is an answer, not a death");
+        assert_eq!(
+            server.join().unwrap(),
+            [taken, refused].map(|rect| ToWorker::SetInputCrop { rect })
+        );
     }
 
     /// Every `Encoder` trait method must be written here. The proxy has two backends, so an

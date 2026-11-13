@@ -16,11 +16,21 @@ public struct HostFormDraft: Equatable, Sendable {
     public var address: String
     /// The port field's raw text. Blank is legal and means the default.
     public var port: String
+    /// The Wake-on-LAN field's raw text (`parseMacs`).
+    public var macs: String
 
-    public init(name: String = "", address: String = "", port: String = "") {
+    public init(name: String = "", address: String = "", port: String = "", macs: String = "") {
         self.name = name
         self.address = address
         self.port = port
+        self.macs = macs
+    }
+
+    /// The fields as a form shows `record`.
+    public init(record: StoredHost) {
+        self.init(
+            name: record.name, address: record.address, port: String(record.port),
+            macs: record.wakeMacs.joined(separator: ", "))
     }
 
     /// What is wrong with the draft, in the order a form should send the user to fix it.
@@ -44,7 +54,7 @@ public struct HostFormDraft: Equatable, Sendable {
     public var resolvedPort: UInt16? {
         let split = Self.split(address)
         if let fromAddress = split.port { return fromAddress }
-        let typed = port.trimmingCharacters(in: .whitespacesAndNewlines)
+        let typed = port.trimmingCharacters(in: .whitespacesAndNewlines).withASCIIDigits
         if typed.isEmpty { return Self.defaultPort }
         guard let value = UInt16(typed), value > 0 else { return nil }
         return value
@@ -67,17 +77,48 @@ public struct HostFormDraft: Equatable, Sendable {
         host.port = resolvedPort ?? Self.defaultPort
     }
 
-    /// Split a trailing `:port` off an address. Bare IPv6 (more than one colon, unbracketed) is
-    /// returned whole.
+    /// A host page's save over `host`, which can move while the form is open (a sweep
+    /// re-addresses it, an advert teaches it a MAC). Only a field that differs from `loaded`, the
+    /// form as it last loaded the record, is written. Name, address and port go in together when
+    /// the result can save, the MACs when they parse or the field is blank. What the rules
+    /// refuse keeps the record's value.
+    public func commit(to host: inout StoredHost, changedFrom loaded: HostFormDraft) {
+        var merged = HostFormDraft(record: host)
+        if name != loaded.name { merged.name = name }
+        if address != loaded.address { merged.address = address }
+        if port != loaded.port { merged.port = port }
+        if merged != HostFormDraft(record: host), merged.canSave { merged.apply(to: &host) }
+        guard macs != loaded.macs else { return }
+        let parsed = Self.parseMacs(macs)
+        if parsed != nil || macs.allSatisfy(\.isWhitespace) { host.macAddresses = parsed }
+    }
+
+    /// The Wake-on-LAN field's MACs: split on commas, semicolons and whitespace, keeping the
+    /// well-formed ones as lower-case `aa:bb:cc:dd:ee:ff`. A hyphen separates octets as a colon
+    /// does. nil when none is valid, so clearing the field clears the stored MACs.
+    public static func parseMacs(_ s: String) -> [String]? {
+        let macs = s
+            .split(whereSeparator: { ",; \n\t".contains($0) })
+            .map { $0.lowercased().replacingOccurrences(of: "-", with: ":") }
+            .filter { m in
+                let parts = m.split(separator: ":", omittingEmptySubsequences: false)
+                return parts.count == 6
+                    && parts.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isHexDigit) }
+            }
+        return macs.isEmpty ? nil : macs
+    }
+
+    /// Split a trailing `:port` off an address, after mapping what a CJK keyboard types (full-width
+    /// forms, `。`) to ASCII. Bare IPv6 (more than one colon, unbracketed) is returned whole.
     static func split(_ raw: String) -> (host: String, port: UInt16?) {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = raw.withASCIIAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let colon = text.lastIndex(of: ":") else { return (text, nil) }
         let head = String(text[text.startIndex..<colon])
         let tail = String(text[text.index(after: colon)...])
         // `[fd7a::1]:9777` splits; `fd7a::1` does not.
         let bracketed = head.hasPrefix("[") && head.hasSuffix("]")
         let looksIPv6 = head.contains(":") && !bracketed
-        guard !looksIPv6, !head.isEmpty, let value = UInt16(tail), value > 0 else {
+        guard !looksIPv6, !head.isEmpty, let value = UInt16(tail.withASCIIDigits), value > 0 else {
             return (text, nil)
         }
         return (head, value)

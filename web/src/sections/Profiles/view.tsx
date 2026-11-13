@@ -51,9 +51,17 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { apiErrorMessage } from "@/lib/errors";
 import { fmtDateTimeSecs } from "@/lib/format";
+import { seatCheckText, seatDetail } from "@/lib/host-messages";
 import type { Loadable } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
+import {
+	LockAction,
+	type LockCard,
+	LockChip,
+	LockLines,
+	lockCard,
+} from "./lock";
 import {
 	AccentPicker,
 	type Choice,
@@ -91,9 +99,9 @@ export function playsLine(p: ProfileAdmin, ownerName: string): string {
 	if (seat.state === "occupied" && seat.occupant)
 		return m.profiles_occupied_by({ device: seat.occupant });
 	if (seat.state === "starting")
-		return seat.detail || m.profiles_seat_starting();
+		return seatDetail(seat) || m.profiles_seat_starting();
 	if (seat.state === "unavailable")
-		return seat.detail || STATE_WORD.unavailable();
+		return seatDetail(seat) || STATE_WORD.unavailable();
 	return seat.take_turns
 		? m.profiles_outcome_account()
 		: m.profiles_outcome_desktop();
@@ -133,7 +141,7 @@ export type DoorControl = {
 };
 
 /** The page: one card per profile, the owner first, and **Add profile**. A profile on a person's
- * own account shows its signed-in devices under its row. */
+ * own account shows its signed-in devices under its row; every other card carries its lock. */
 export const ProfilesView: FC<{
 	profiles: Loadable<ProfileAdmin[]>;
 	onAdd: () => void;
@@ -148,6 +156,8 @@ export const ProfilesView: FC<{
 	door?: DoorControl;
 	/** A Linux door: the signed-in devices of a profile on a person's own account. */
 	devices?: (p: ProfileAdmin) => ReactNode;
+	/** Opens the lock dialog of `holder`, the profile whose lock a card shows. */
+	onLock?: (holder: string, locked: boolean) => void;
 }> = ({
 	profiles,
 	onAdd,
@@ -159,9 +169,16 @@ export const ProfilesView: FC<{
 	seats,
 	door,
 	devices,
+	onLock,
 }) => {
 	const list = profiles.data ?? [];
 	const ownerName = list.find((p) => p.owner)?.display_name ?? "";
+	const lockOf = (p: ProfileAdmin): LockCard | undefined => {
+		const lock = lockCard(p, list);
+		return lock && onLock
+			? { ...lock, onOpen: () => onLock(lock.holder, lock.locked) }
+			: lock;
+	};
 	return (
 		<Section maxWidth={false}>
 			<div className="flex flex-col gap-card">
@@ -195,6 +212,7 @@ export const ProfilesView: FC<{
 									seats={seats}
 									linux={door !== undefined}
 									devices={p.seat?.account ? devices?.(p) : undefined}
+									lock={lockOf(p)}
 									busy={busyId === p.id}
 									onRename={() => onRename(p)}
 									onPicture={(f) => onPicture(p, f)}
@@ -283,6 +301,7 @@ const ProfileRow: FC<{
 	linux: boolean;
 	/** Below the row: the profile's signed-in devices. */
 	devices?: ReactNode;
+	lock?: LockCard;
 	busy: boolean;
 	onRename: () => void;
 	onPicture: (file: File) => void;
@@ -294,6 +313,7 @@ const ProfileRow: FC<{
 	seats,
 	linux,
 	devices,
+	lock,
 	busy,
 	onRename,
 	onPicture,
@@ -333,6 +353,7 @@ const ProfileRow: FC<{
 								{STATE_WORD[p.seat.state]()}
 							</Badge>
 						)}
+						{lock && <LockChip lock={lock} />}
 					</div>
 					<p className="text-sm text-muted-foreground">{facts.join(" · ")}</p>
 					{p.seat?.account && (
@@ -342,6 +363,7 @@ const ProfileRow: FC<{
 								: m.profiles_seat_account_line)({ account: p.seat.account })}
 						</p>
 					)}
+					{lock && <LockLines lock={lock} />}
 				</div>
 			</div>
 			<div className="flex shrink-0 items-center justify-end gap-1">
@@ -390,6 +412,7 @@ const ProfileRow: FC<{
 						<KeyRound className="size-4" />
 					</Button>
 				)}
+				{lock && <LockAction lock={lock} disabled={busy} />}
 				<Button
 					variant="ghost"
 					size="icon"
@@ -903,6 +926,61 @@ export const SeatPasswordDialog: FC<{
 	);
 };
 
+/**
+ * The pencil: **Rename profile**, or for a profile whose seat has a host of its own **Edit
+ * profile**, with `exit` under the name. That part saves on its own and loads and fails alone.
+ */
+export const EditProfileDialog: FC<{
+	profile: ProfileAdmin;
+	exit?: ReactNode;
+	onRename: (name: string) => void;
+	onClose: () => void;
+}> = ({ profile, exit, onRename, onClose }) => {
+	const [name, setName] = useState(profile.display_name);
+	const submit = () => {
+		const next = name.trim();
+		if (next && next !== profile.display_name) onRename(next);
+		onClose();
+	};
+	return (
+		<Dialog open onOpenChange={(o) => !o && onClose()}>
+			<DialogContent className="max-w-md">
+				<DialogHeader>
+					<DialogTitle>
+						{exit ? m.profiles_edit_title() : m.profiles_rename_title()}
+					</DialogTitle>
+				</DialogHeader>
+				<form
+					id="profile-edit"
+					className="space-y-2"
+					onSubmit={(e) => {
+						e.preventDefault();
+						submit();
+					}}
+				>
+					<Label htmlFor="profile-name">{m.profiles_name()}</Label>
+					<Input
+						id="profile-name"
+						autoFocus
+						autoComplete="off"
+						value={name}
+						onChange={(e) => setName(e.target.value)}
+					/>
+				</form>
+				{exit}
+				<DialogFooter>
+					<Button type="button" variant="outline" onClick={onClose}>
+						{m.common_cancel()}
+					</Button>
+					<Button type="submit" form="profile-edit">
+						{exit ? m.common_save() : m.action_rename()}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+	);
+};
+
 /** The doctor's verdict under the cards: its first error, else how many notes, else healthy. */
 const DoctorFooter: FC<{ line: DoctorLine }> = ({ line }) => (
 	<div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
@@ -914,9 +992,7 @@ const DoctorFooter: FC<{ line: DoctorLine }> = ({ line }) => (
 		>
 			{line.message ??
 				(line.notes > 0
-					? line.notes === 1
-						? m.profiles_doctor_note()
-						: m.profiles_doctor_notes({ count: line.notes })
+					? m.profiles_doctor_notes({ count: line.notes })
 					: m.profiles_seats_healthy())}
 		</span>
 		<Button variant="outline" size="sm" onClick={line.onOpen}>
@@ -951,7 +1027,7 @@ const CheckList: FC<{ checks: SeatCheck[] }> = ({ checks }) => (
 			return (
 				<li key={`${c.code}-${i}`} className="flex items-start gap-2">
 					<Icon className={cn("mt-0.5 size-4 shrink-0", tone)} />
-					<span>{c.message}</span>
+					<span>{seatCheckText(c)}</span>
 				</li>
 			);
 		})}

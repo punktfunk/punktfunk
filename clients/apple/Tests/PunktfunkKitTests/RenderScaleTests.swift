@@ -52,11 +52,34 @@ final class RenderScaleTests: XCTestCase {
             )
             XCTAssertEqual([Int(m.width), Int(m.height)], want, name)
         }
+        let views = try XCTUnwrap(root["view"] as? [[String: Any]])
+        XCTAssertFalse(views.isEmpty)
+        for row in views {
+            let base = try XCTUnwrap(row["base"] as? [Int], "\(row)")
+            let v = RenderScale.view(
+                baseWidth: base[0], baseHeight: base[1], scale: num(row["scale"]),
+                maxDimension: try XCTUnwrap(row["max"] as? Int, "\(row)"))
+            XCTAssertEqual(v.map { [Int($0.width), Int($0.height)] }, row["want"] as? [Int], "\(row)")
+        }
+    }
+
+    /// Above 1x a further screen asks for its panel × the scale, shown at its panel; at 1x and
+    /// below, and against the codec cap, its panel and no view.
+    func testAFurtherScreenSupersamplesLikeTheFirst() {
+        let ask = { (w: Int, h: Int, scale: Double, cap: Int) -> [UInt32] in
+            let a = RenderScale.screenAsk(baseWidth: w, baseHeight: h, scale: scale, maxDimension: cap)
+            return [a.mode.width, a.mode.height] + (a.view.map { [$0.width, $0.height] } ?? [])
+        }
+        XCTAssertEqual(ask(2560, 1440, 1.5, 8192), [3840, 2160, 2560, 1440])
+        XCTAssertEqual(ask(2560, 1440, 1.0, 8192), [2560, 1440])
+        XCTAssertEqual(ask(2560, 1440, 0.5, 8192), [2560, 1440])
+        XCTAssertEqual(ask(4096, 2304, 2.0, 4096), [4096, 2304])
     }
 
     func testLabels() {
-        XCTAssertEqual(RenderScale.label(1.0), "Native (1×)")
-        XCTAssertEqual(RenderScale.label(2.0), "2× · supersample")
+        XCTAssertEqual(RenderScale.label(1.0), String(localized: L10n.playerRenderScaleNative))
+        XCTAssertEqual(
+            RenderScale.label(2.0), L10n.playerRenderScaleSupersample(scale: "2"))
         XCTAssertEqual(RenderScale.label(0.5), "0.5×")
     }
 }

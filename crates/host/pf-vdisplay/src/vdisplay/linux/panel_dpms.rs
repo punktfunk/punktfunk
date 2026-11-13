@@ -792,6 +792,21 @@ mod tests {
             assert!(journaled("wlroots", |r| blank(r, &["DP-1"], &["DP-1"])).is_some());
             crate::topology_journal::crash();
             let sway = FakeDisplay::new("wlroots");
+            sway.script(|s| {
+                s.heads = vec![crate::monitors::PhysicalMonitor {
+                    connector: "DP-1".into(),
+                    description: "DP-1".into(),
+                    width: 1920,
+                    height: 1080,
+                    refresh_mhz: 60_000,
+                    x: 0,
+                    y: 0,
+                    scale: 1.0,
+                    primary: false,
+                    enabled: true,
+                    managed: false,
+                }]
+            });
             sway.serve_by_name();
             crate::topology_journal::reclaim(&crate::backend_by_id);
             let woken = Undo::EnableHeads {

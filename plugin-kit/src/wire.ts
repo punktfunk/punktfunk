@@ -42,7 +42,7 @@ export type Artwork = typeof Artwork.Type;
  * | `gamebar` | an exe's absolute path; the host runs it only if a signed-in user's Game Bar list names it | windows |
  * | `desktop_id` | an installed `.desktop` entry's id; the host reads its `Exec` | linux |
  * | `exec` | the name of an `exec` template in THIS plugin's manifest — see below | both |
- * | `emulator` | a catalog emulator id (`pcsx2`); `args` name `platform`, `file`, and optionally `core` and `extra` | both |
+ * | `emulator` | a catalog emulator id (`pcsx2`); `args` name `platform`, `file`, and optionally `core` | both |
  *
  * `exec` is how a tile the host cannot name on its own (a ROM through whichever emulator the
  * operator configured) still launches. The template — program and argv — lives in the `punktfunk`

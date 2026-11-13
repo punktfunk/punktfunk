@@ -13,6 +13,7 @@ python3 clients/apple/store/check-limits.py
 | [`macos.md`](macos.md) | macOS Promotional Text, Description, Keywords (DE + EN) |
 | [`tvos.md`](tvos.md) | tvOS Promotional Text, Description, Keywords (DE + EN) |
 | [`visionos.md`](visionos.md) | visionOS Promotional Text, Description, Keywords (DE + EN), screenshots, review notes |
+| [`es-fr.md`](es-fr.md) | Spanish and French Subtitle, Description, Keywords, every platform |
 | [`review-notes.md`](review-notes.md) | App Review notes template + pre-submission checklist |
 | [`privacy-app-addendum.md`](privacy-app-addendum.md) | App-specific privacy text to add to the existing policy page |
 | [`privacy-tvos.md`](privacy-tvos.md) | Privacy Policy text for the Apple TV field (DE + EN), standalone |

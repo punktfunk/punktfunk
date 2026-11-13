@@ -8,6 +8,7 @@ import io.unom.punktfunk.kit.SeatState
 import io.unom.punktfunk.kit.library.Artwork
 import io.unom.punktfunk.kit.library.Download
 import io.unom.punktfunk.kit.library.GameEntry
+import io.unom.punktfunk.kit.library.GameOverrides
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -17,6 +18,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
@@ -69,6 +71,16 @@ class ConsoleBridgeVectorTest {
         assertTrue(SkiaConsole.ignoredCommands.none { it in SkiaConsole.commands })
     }
 
+    /** `SetScreen` writes the pick it carries, a role's topology included. */
+    @Test
+    fun setScreenWritesItsTopology() {
+        val cmds = vectors.getJSONArray("commands")
+        val c = (0 until cmds.length()).firstNotNullOf { cmds.optJSONObject(it)?.optJSONObject("SetScreen") }
+        val pick = DisplayTargets.Pick.of(c)
+        assertEquals(DisplayTargets.Pick(DisplayTargets.DisplayTarget.Own, "extend"), pick)
+        assertEquals("extend", pick!!.json().getString("topology"))
+    }
+
     /** Each answer carries its command's `req` from the vectors, verbatim. */
     @Test
     fun pairAndWakeWriteTheSamples() {
@@ -107,9 +119,13 @@ class ConsoleBridgeVectorTest {
             ),
             ListedProfile(id = "p2", displayName = "Ben", legacySeat = true),
         )
-        assertWrites("ProfilesAnswer", 0, ConsoleJson.profilesAnswer(ProfilesAnswer.Listed(rows)))
-        assertWrites("ProfilesAnswer", 1, ConsoleJson.profilesAnswer(ProfilesAnswer.NoProfiles))
-        assertWrites("ProfilesAnswer", 2, ConsoleJson.profilesAnswer(ProfilesAnswer.Failed("Couldn't load the profiles.")))
+        val res = RuntimeEnvironment.getApplication().resources
+        assertWrites("ProfilesAnswer", 0, ConsoleJson.profilesAnswer(ProfilesAnswer.Listed(rows), res))
+        assertWrites("ProfilesAnswer", 1, ConsoleJson.profilesAnswer(ProfilesAnswer.NoProfiles, res))
+        assertWrites(
+            "ProfilesAnswer", 2,
+            ConsoleJson.profilesAnswer(ProfilesAnswer.Failed("Couldn't load the profiles."), res),
+        )
     }
 
     /** The catalog and the error phase: `nativeConsoleLibraryBegin` stands in for a bare `Loading`. */
@@ -119,6 +135,11 @@ class ConsoleBridgeVectorTest {
         assertWrites("PhasePush", 3, ConsoleJson.libraryError(fetch, "Not paired", "Pair this device first.", false))
         val dota = GameEntry("steam:570", "steam", "Dota 2", Artwork(null, null, null))
         assertWrites("GamesPush", 0, ConsoleJson.libraryGames(fetch, listOf(dota)))
+        val cyberpunk = GameEntry(
+            "steam:1091500", "steam", "Cyberpunk 2077", Artwork(null, null, null),
+            overrides = GameOverrides(name = "1080p60 DualSense", lines = 1080, hz = 60, gamepad = "dualsense"),
+        )
+        assertWrites("GamesPush", 1, ConsoleJson.libraryGames(fetch, listOf(cyberpunk)))
         val downloads = listOf(
             Download(
                 "steam:570", "downloading", doneBytes = 1_048_576, totalBytes = 4_194_304,
@@ -127,6 +148,32 @@ class ConsoleBridgeVectorTest {
             Download("steam:620", "failed", error = "The disk is full."),
         )
         assertWrites("DownloadsPush", 0, ConsoleJson.downloads(downloads, 255))
+    }
+
+    /** `FetchHidden` and `SetHidden` answer with the samples, each echoing its command. */
+    @Test
+    fun hideAnswersWriteTheSamples() {
+        val halfLife = GameEntry("steam:70", "steam", "Half-Life", Artwork(null, null, null))
+        assertWrites("HiddenAnswer", 0, ConsoleJson.hiddenAnswer(listOf(halfLife)))
+        assertWrites("HiddenAnswer", 1, ConsoleJson.hiddenAnswer(emptyList()))
+        assertWrites("HiddenAnswer", 2, ConsoleJson.hiddenAnswer(null, "Couldn't reach the host."))
+        assertWrites(
+            "HideAnswer", 0,
+            ConsoleJson.hideAnswer("ab12", "a1b2c3d4e5f6", "steam:570", true, true, "Dota 2 is hidden for Kid"),
+        )
+        val refused = "This device can't change this profile. Ask the host's owner to change it in the web console."
+        assertWrites(
+            "HideAnswer", 1,
+            ConsoleJson.hideAnswer("ab12", "a1b2c3d4e5f6", "steam:570", false, false, refused),
+        )
+    }
+
+    /** A row the host marks `person` tells the console so; an old host's row stays as it was. */
+    @Test
+    fun aPersonRowCarriesItsMark() {
+        val res = RuntimeEnvironment.getApplication().resources
+        assertTrue(ConsoleJson.profileRow(ListedProfile(id = "kid", person = true), res).getBoolean("person"))
+        assertTrue(!ConsoleJson.profileRow(ListedProfile(id = "kid"), res).has("person"))
     }
 
     /** The second sample's battery reads an `InputDevice`, which a JVM test cannot build. */

@@ -1,0 +1,62 @@
+#!/bin/sh
+# NetworkManager dispatcher hook for the Steam Frame wireless adapter (USB 28de:2432).
+#
+# While the adapter is connected it runs in the low-latency mode SteamOS's Steam sets through
+# Valve's holo-realtek-firmware-toggles, which a desktop lacks: both power saves, the hardware
+# scan and A-MSDU off, packet detection at -75 dBm. Without it the headset's access point drops
+# the dozing adapter, and scans stall the stream.
+#
+# Installed to /usr/lib/NetworkManager/dispatcher.d/. NM runs it as root with the interface and
+# the action; PF_ROOT only redirects /sys for scripts/ci/check-frame-adapter-hook.sh.
+iface=$1
+case ${2:-} in
+    up | reapply) ;;
+    *) exit 0 ;;
+esac
+sys=${PF_ROOT:-}/sys
+usb=$sys/class/net/$iface/device/..
+id="$(cat "$usb/idVendor" 2>/dev/null):$(cat "$usb/idProduct" 2>/dev/null)"
+[ "$id" = 28de:2432 ] || exit 0
+
+log() { logger -t punktfunk-frame-adapter "$iface: $*" 2>/dev/null || :; }
+
+if command -v iw >/dev/null 2>&1; then
+    if iw dev "$iface" set power_save off; then
+        log "power save off"
+    else
+        log "power save stays on: iw refused"
+    fi
+    # rtw89 mishandles A-MSDU. HE MCS 0-4, not Valve's 0-9: above 4 a moving headset drops
+    # packets, and two streams at MCS 4 still carry 576 Mbit/s at 80 MHz.
+    iw dev "$iface" set tidconf tids 0xff amsdu off || log "A-MSDU stays on: iw refused"
+    iw dev "$iface" set bitrates he-mcs-5 1:0-4 2:0-4 he-mcs-6 1:0-4 2:0-4 ||
+        log "rates stay uncapped: iw refused"
+elif [ -n "${CONNECTION_UUID:-}" ]; then
+    # Without iw the profile carries it, and the next connect starts with power save off.
+    if nmcli connection modify "$CONNECTION_UUID" 802-11-wireless.powersave 2; then
+        log "power save off from the next connect (no iw)"
+    fi
+fi
+
+# rtw89 turns a firmware feature off when its bit is set in disable_dm, which lists each one as
+# "[bit] NAME: O|X" (X = off). Inactive power save and the hardware scan join what is off.
+phy=$(basename "$(readlink -f "$sys/class/net/$iface/phy80211")")
+dbg=$sys/kernel/debug/ieee80211/$phy/rtw89
+[ -r "$dbg/disable_dm" ] || exit 0
+mask=$(awk '
+    /^\[[0-9]+\][ \t]+[A-Z0-9_]+:[ \t]+[OX]$/ {
+        bit = substr($1, 2, length($1) - 2)
+        name = $2
+        sub(/:$/, "", name)
+        if ($3 == "X" || name == "INACTIVE_PS" || name == "HW_SCAN") mask += 2 ^ bit
+        n++
+    }
+    END { if (n) printf "0x%x\n", mask }' "$dbg/disable_dm")
+if [ -n "$mask" ] && echo "$mask" >"$dbg/disable_dm" 2>/dev/null; then
+    log "firmware power save and hardware scan off"
+fi
+# A fixed packet detection threshold ignores distant interferers.
+if echo "1 -75" >"$dbg/static_pd_th" 2>/dev/null; then
+    log "packet detection at -75 dBm"
+fi
+exit 0

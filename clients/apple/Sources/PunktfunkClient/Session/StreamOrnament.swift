@@ -30,7 +30,7 @@ struct StreamOrnament: View {
                 }
             HStack(spacing: 12) {
                 Button(action: quickActions) {
-                    Label("Quick Actions", systemImage: "ellipsis.circle")
+                    Label(L10n.appleQuickActionsA11y, systemImage: "ellipsis.circle")
                 }
                 CurveSlider(editing: $editing)
                 NewWindowButton()
@@ -52,6 +52,8 @@ struct StreamOrnament: View {
         .task(id: wakes) {
             resting = false
             try? await Task.sleep(for: .seconds(wakes == 0 ? 6 : 3))
+            // A wake cancels this sleep; only the newest one may rest the pill.
+            guard !Task.isCancelled else { return }
             resting = true
         }
     }
@@ -72,7 +74,7 @@ private struct CurveSlider: View {
                     get: { Double(stops.firstIndex(of: curve) ?? 0) },
                     set: { screen = stops[Int($0.rounded())].rawValue }),
                 in: 0...Double(stops.count - 1), step: 1,
-                label: { Text("Screen") },
+                label: { Text(L10n.playerScreen) },
                 onEditingChanged: { editing = $0 })
             .labelsHidden()
             .accessibilityValue(curve.label)
@@ -90,7 +92,7 @@ struct NewWindowButton: View {
 
     var body: some View {
         Button { openWindow(id: PunktfunkClientApp.mainSceneID) } label: {
-            Label("New Window", systemImage: "macwindow.badge.plus")
+            Label(L10n.appleNewWindow, systemImage: "macwindow.badge.plus")
         }
     }
 }

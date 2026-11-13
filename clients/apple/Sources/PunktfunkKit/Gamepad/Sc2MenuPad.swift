@@ -50,6 +50,9 @@ final class Sc2MenuPad {
         return state
     }
 
+    /// Whether the delivering pad is a 2015 Steam Controller — the console card's kind.
+    var isClassic: Bool { link.isClassic }
+
     init() {
         link = Sc2BleLink(
             queue: queue,

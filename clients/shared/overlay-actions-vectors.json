@@ -3,6 +3,7 @@
   "slot_ids": [
     "end_stream", "end_game", "disconnect_linger", "touch_mode", "keyboard", "stats", "mic", "pad",
     "send_text", "guide", "qam", "pad_mouse", "pad_type", "stream_mute", "swap_screens",
+    "release_input", "mouse_mode", "fullscreen", "minimize", "clipboard",
     "host:power.reboot", "shortcut:s2"
   ],
   "cases": [
@@ -75,6 +76,18 @@
         "v": 2,
         "ring": ["shortcut:s2", null, null, null, null, null],
         "shortcuts": [{"id": "s2", "label": "", "keys": ["alt", "f4"]}],
+        "pad": {"layout": "full", "opacity": 0.45, "scale": 1}
+      }
+    },
+    {
+      "name": "a key combination may be a modifier alone",
+      "platform": "desktop",
+      "blob": "{\"v\":2,\"ring\":[\"shortcut:s1\",\"fullscreen\"],\"shortcuts\":[{\"id\":\"s1\",\"label\":\"Start\",\"keys\":[\"win\"]}]}",
+      "ring": ["shortcut:s1", "fullscreen", null, null, null, null],
+      "round_trip": {
+        "v": 2,
+        "ring": ["shortcut:s1", "fullscreen", null, null, null, null],
+        "shortcuts": [{"id": "s1", "label": "Start", "keys": ["win"]}],
         "pad": {"layout": "full", "opacity": 0.45, "scale": 1}
       }
     },

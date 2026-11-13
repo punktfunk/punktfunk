@@ -1,9 +1,9 @@
-//! One named pipe per installed plugin, `\\.\pipe\punktfunk-plugin-<id>`, serving the
-//! management router over plain HTTP. A plugin process reaches the host here instead of on
-//! the loopback port, so the port can be closed to the runner's account. The DACL admits
-//! SYSTEM, Administrators, LocalService and the plugin's own AppContainer package; a client
-//! whose token carries that package is the plugin, and the connection says so to the router.
-//! Any other client — the runner with the sandbox off — still speaks with a bearer.
+//! One named pipe per installed plugin ([`pipe_name`]), serving the management router over
+//! plain HTTP. A plugin process reaches the host here instead of on the loopback port, so the
+//! port can be closed to the runner's account. The DACL admits SYSTEM, Administrators, the
+//! runner's account and the plugin's own AppContainer package; a client whose token carries
+//! that package is the plugin, and the connection says so to the router. Any other client —
+//! the runner with the sandbox off — still speaks with a bearer.
 //!
 //! The set follows `plugin-run/plugin-tokens.json`. A store job rewrites it and notifies
 //! [`TOKENS_CHANGED`]; a CLI `plugins add` only rewrites it, so the set is re-read on a tick as well.
@@ -33,9 +33,18 @@ const MAX_CONNS_PER_PIPE: usize = 32;
 const PIPE_PEER: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 0);
 
-/// The pipe a plugin with manifest id `id` dials. The SDK derives the same name.
+/// The pipe a plugin with manifest id `id` dials, `\\.\pipe\punktfunk-plugin-<id>`, or on a seat
+/// host `punktfunk-seat-<seat id>-plugin-<id>`: the box serves the first name for its own
+/// plugin. The SDK derives the same name (`runner-windows.ts`).
 pub(crate) fn pipe_name(id: &str) -> String {
-    format!(r"\\.\pipe\punktfunk-plugin-{id}")
+    pipe_name_on(id, pf_paths::seat::seat_id().ok().flatten().as_deref())
+}
+
+fn pipe_name_on(id: &str, seat: Option<&str>) -> String {
+    match seat {
+        Some(seat) => format!(r"\\.\pipe\punktfunk-seat-{seat}-plugin-{id}"),
+        None => format!(r"\\.\pipe\punktfunk-plugin-{id}"),
+    }
 }
 
 /// Serve a pipe per installed plugin until the host exits. `tokens` is the live map auth
@@ -87,7 +96,14 @@ fn installed_ids(tokens: &crate::mgmt::PluginTokens, config_dir: &Path) -> BTree
 /// instance is created before this one is handed to the router, as the port's accept does.
 async fn serve_one(app: Router, id: String) {
     let name = pipe_name(&id);
-    // Without a package SID the pipe is LocalService's alone and every client keeps its bearer.
+    // A seat's account answers once someone is signed in to the seat's session.
+    let runner = loop {
+        match crate::plugins::runner_sid() {
+            Some(sid) => break sid,
+            None => tokio::time::sleep(Duration::from_secs(5)).await,
+        }
+    };
+    // Without a package SID the pipe is the runner's alone and every client keeps its bearer.
     let package = match package_sid(&id) {
         Ok(sid) => Some(sid),
         Err(e) => {
@@ -100,7 +116,7 @@ async fn serve_one(app: Router, id: String) {
     // Once per kind: the runner's own existence check opens the pipe first, from no container.
     let mut announced = [false, false];
     loop {
-        let server = match create_plugin_pipe(&name, first, package.as_deref()) {
+        let server = match create_plugin_pipe(&name, first, &runner, package.as_deref()) {
             Ok(s) => s,
             Err(e) => {
                 // The first instance is refused while another process holds the name: a
@@ -146,5 +162,22 @@ async fn serve_one(app: Router, id: String) {
             )
             .await;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A seat's plugin pipe carries its seat; the bare name stays the box's.
+    #[test]
+    fn a_seat_s_pipe_is_never_the_box_s() {
+        let seat = "0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            super::pipe_name_on("steam", None),
+            r"\\.\pipe\punktfunk-plugin-steam"
+        );
+        assert_eq!(
+            super::pipe_name_on("steam", Some(seat)),
+            r"\\.\pipe\punktfunk-seat-0123456789abcdef0123456789abcdef-plugin-steam"
+        );
     }
 }

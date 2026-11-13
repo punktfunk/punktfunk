@@ -156,8 +156,10 @@ final class LibraryCollationTests: XCTestCase {
 
         XCTAssertEqual(LibraryArrangement(stored: "grid"), .grid)
         XCTAssertEqual(LibraryArrangement(stored: "shelf"), .shelf)
-        XCTAssertEqual(LibraryArrangement(stored: "carousel"), .shelf)
-        XCTAssertEqual(LibraryArrangement(stored: nil), .shelf)
+        // The console reads unset and unknown as the grid (`LibraryView::parse`), and draws it.
+        XCTAssertEqual(LibraryArrangement(stored: "carousel"), .grid)
+        XCTAssertEqual(LibraryArrangement(stored: ""), .grid)
+        XCTAssertEqual(LibraryArrangement(stored: nil), .grid)
     }
 
     /// The desktop model's `running_titles_lead_without_breaking_the_launcher_prefix`: launchers
@@ -205,10 +207,12 @@ final class LibraryCollationTests: XCTestCase {
             let expect: [String]
         }
         struct BrowsableCase: Decodable { let name: String; let ids: [String]?; let expect: Bool }
+        struct OrderCase: Decodable { let name: String; let titles: [String]; let expect: [String] }
 
         let version: Int
         let library: [GameEntry]
         let sortTitle: [TitleCase]
+        let titleOrder: [OrderCase]
         let storeLabels: [String: String]
         let sortKeys: [SortKeyCase]
         let cases: [Case]
@@ -218,6 +222,7 @@ final class LibraryCollationTests: XCTestCase {
         enum CodingKeys: String, CodingKey {
             case version, library, cases, filtered
             case sortTitle = "sort_title"
+            case titleOrder = "title_order"
             case storeLabels = "store_labels"
             case sortKeys = "sort_keys"
             case worthBrowsing = "worth_browsing"
@@ -245,7 +250,7 @@ final class LibraryCollationTests: XCTestCase {
     func testVectorsMatchTheSharedFile() throws {
         let data = try Data(contentsOf: Self.vectorFileURL)
         let file = try JSONDecoder().decode(VectorFile.self, from: data)
-        XCTAssertEqual(file.version, 2, "bump the reader when the file's version moves")
+        XCTAssertEqual(file.version, 3, "bump the reader when the file's version moves")
         let games = file.library
         // The library array is the host wire shape, so the real model decodes it — including
         // `platform`, which is the field this whole feature hangs on.
@@ -253,7 +258,15 @@ final class LibraryCollationTests: XCTestCase {
         XCTAssertEqual(games.first { $0.id == "custom:gow3" }?.platform, "PS3")
 
         for c in file.sortTitle {
-            XCTAssertEqual(LibraryCollation.sortTitle(c.in), c.out, "sortTitle(\(c.in))")
+            // Scalars, not `String ==`: Swift calls か + U+3099 and が equal.
+            XCTAssertEqual(
+                Array(LibraryCollation.sortTitle(c.in).unicodeScalars), Array(c.out.unicodeScalars),
+                "sortTitle(\(c.in))")
+        }
+        for c in file.titleOrder {
+            let shelf = c.titles.map { entry($0, $0, store: "custom") }
+            let got = LibraryCollation.filtered(shelf, sort: .title, filter: nil).map { shelf[$0].title }
+            XCTAssertEqual(got.map { Array($0.unicodeScalars) }, c.expect.map { Array($0.unicodeScalars) }, c.name)
         }
         for (store, label) in file.storeLabels {
             XCTAssertEqual(entry("x", "X", store: store).storeLabel, label, "storeLabel(\(store))")

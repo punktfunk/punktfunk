@@ -1,39 +1,38 @@
 //! Controllers: the pad inventory, forwarding and the emulated pad.
 
 use super::{
-    advanced_group, described_labeled, described_overridable, group, presets, rows, setting_combo,
-    setting_toggle, Cx,
+    advanced_group, described_labeled, described_overridable, group, labeled, presets, rows,
+    setting_combo, setting_toggle, Cx,
 };
 use crate::app::style::*;
 use crate::trust::Settings;
+use pf_client_core::settings::Label;
 use pf_fluent::Token;
+use pf_l10n::{client, desktop};
 use punktfunk_core::config::GamepadPref;
 use windows_reactor::*;
 
 /// Virtual-pad presets: `(stored value, display label)` — the pad the HOST creates. Same set the
 /// GTK client offers; "Automatic" resolves from the physical controller at connect.
-const GAMEPADS: &[(&str, &str)] = &[
-    ("auto", "Automatic (match the controller)"),
-    ("xbox360", "Xbox 360"),
-    ("dualsense", "DualSense"),
-    ("xboxone", "Xbox One"),
-    ("dualshock4", "DualShock 4"),
+const GAMEPADS: &[(&str, Label)] = &[
+    ("auto", client::player_gamepad_auto),
+    ("xbox360", || "Xbox 360"),
+    ("dualsense", || "DualSense"),
+    ("xboxone", || "Xbox One"),
+    ("dualshock4", || "DualShock 4"),
     // Kept in lockstep with the GTK picker: this row was missing here, so a Windows
     // user could not ask the host for the Deck-shaped pad (trackpads, back grips).
-    ("steamdeck", "Steam Deck"),
-    ("steamcontroller2", "Steam Controller 2"),
+    ("steamdeck", || "Steam Deck"),
+    ("steamcontroller2", || "Steam Controller 2"),
 ];
 /// System-button routing: `(stored value, display label)` — where the guide (Xbox/PS)
 /// and quick-access presses land while streaming. The cross-client `system_buttons` key;
 /// Automatic forwards on desktop and stays local under Gaming Mode.
-const SYSTEM_BUTTONS: &[(&str, &str)] = &[
-    ("auto", "Automatic"),
-    ("forward", "Send to host"),
-    ("local", "This device"),
+const SYSTEM_BUTTONS: &[(&str, Label)] = &[
+    ("auto", client::player_system_buttons_auto),
+    ("forward", client::player_system_buttons_forward),
+    ("local", client::player_system_buttons_local),
 ];
-/// The hold-Select guide gesture: `(stored value, display label)` — the cross-client
-/// `guide_gesture` key. Automatic arms it only where the raw press can't reach the host.
-const GUIDE_GESTURES: &[(&str, &str)] = &[("auto", "Automatic"), ("on", "On"), ("off", "Off")];
 
 /// Controllers: the pad inventory, forwarding and the emulated pad.
 pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
@@ -50,7 +49,7 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
     // reaches the spawned session binary, whose service applies the same key.
     let pads = ctx.gamepad.pads();
     let (fwd_names, fwd_i) = {
-        let mut names = vec!["Automatic (all controllers)".to_string()];
+        let mut names = vec![client::player_forward_pad_auto().to_string()];
         names.extend(pads.iter().map(|p| {
             let kind = p.kind_label();
             if kind.is_empty() {
@@ -121,14 +120,14 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
         pf_client_core::pad_audio::speaker_active(&s.pad_speaker),
         |s, on| s.pad_speaker = if on { "pad".into() } else { "off".into() },
     );
-    let (pad_names, pad_i) = presets(GAMEPADS, |v| {
+    let (pad_names, pad_i) = presets(&labeled(GAMEPADS), |v| {
         GamepadPref::from_name(v) == GamepadPref::from_name(&s.gamepad)
     });
     let pad_combo = setting_combo(cx, scope, "gamepad", pad_names, pad_i, |s, i| {
         s.gamepad = GAMEPADS[i].0.to_string();
     })
     .is_enabled(s.gamepad_forwarding);
-    let (sysbtn_names, sysbtn_i) = presets(SYSTEM_BUTTONS, |v| *v == s.system_buttons);
+    let (sysbtn_names, sysbtn_i) = presets(&labeled(SYSTEM_BUTTONS), |v| *v == s.system_buttons);
     let sysbtn_combo = setting_combo(
         cx,
         scope,
@@ -140,20 +139,9 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
         },
     )
     .is_enabled(s.gamepad_forwarding);
-    let (gesture_names, gesture_i) = presets(GUIDE_GESTURES, |v| *v == s.guide_gesture);
-    let gesture_combo = setting_combo(
-        cx,
-        scope,
-        "guide_gesture",
-        gesture_names,
-        gesture_i,
-        |s, i| {
-            s.guide_gesture = GUIDE_GESTURES[i].0.to_string();
-        },
-    )
-    .is_enabled(s.gamepad_forwarding);
 
-    let mut out = group(cx.pal,
+    let mut out = group(
+        cx.pal,
         None,
         [
             // The read-only pad inventory (GTK parity): what THIS device sees right
@@ -161,7 +149,7 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
             // device fact, so defaults scope only, like the forward picker below.
             (!preset_mode).then(|| {
                 let inventory: View = if pads.is_empty() {
-                    text("No controllers detected")
+                    text(client::pad_none_detected())
                         .font_size(12.0)
                         .foreground(cx.pal.get(Token::SecondaryText))
                         .into()
@@ -170,9 +158,7 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
                         pads.iter()
                             .map(|p| {
                                 let sub = if p.steam_virtual {
-                                    "Steam Input's virtual pad \u{2014} Automatic skips \
-                                     it while a real pad is connected"
-                                        .to_string()
+                                    desktop::desktop_pad_steam_virtual().to_string()
                                 } else {
                                     p.kind_label().to_string()
                                 };
@@ -190,33 +176,33 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
                     .spacing(8.0)
                     .into()
                 };
-                described_labeled(cx.pal,
-                    "Detected controllers",
+                described_labeled(
+                    cx.pal,
+                    desktop::desktop_pad_detected(),
                     inventory,
-                    "Plug in or pair a controller and it appears here.",
+                    desktop::desktop_pad_detected_hint(),
                 )
             }),
             Some(described_overridable(
                 cx,
                 &rows::GAMEPAD,
                 pad_combo,
-                "The virtual pad created on the host. Automatic matches your controller \
-                 \u{2014} a DualSense keeps adaptive triggers, lightbar, touchpad and \
-                 motion.",
+                client::player_gamepad_hint(),
             )),
             // This device's motors, so defaults scope only, like Controller haptics.
             (!preset_mode).then(|| {
-                described_labeled(cx.pal,
-                    rows::PAD_RUMBLE.label,
+                described_labeled(
+                    cx.pal,
+                    rows::PAD_RUMBLE.label(),
                     pad_rumble_toggle,
-                    "Off, controllers don't vibrate from the stream or in the menus, whatever the game sends.",
+                    client::player_pad_rumble_hint(),
                 )
             }),
         ]
         .into_iter()
         .flatten()
         .collect(),
-        Some("Applies from the next session."),
+        Some(client::prefs_applies_next_session()),
     );
 
     let d = Settings::default();
@@ -227,11 +213,7 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
             cx,
             &rows::FORWARDING,
             pad_forward_toggle,
-            "Sends controllers connected to this PC to the host. Turn it off when your \
-             controller already reaches the host another way \u{2014} USB passthrough \
-             such as VirtualHere, or a pad plugged into the host itself \u{2014} so games \
-             don't see two of them. Off, this PC never opens the controller at all, which \
-             is what leaves it free for a passthrough tool to claim.",
+            client::player_gamepad_forwarding_hint(),
         ),
     ];
     // Which physical pad this device forwards is a device fact (tier G): defaults scope
@@ -239,53 +221,35 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
     if !preset_mode {
         advanced.push(described_labeled(
             cx.pal,
-            rows::FORWARD_PAD.label,
+            rows::FORWARD_PAD.label(),
             forward_combo,
-            "Every connected controller is forwarded, each as its own player. Pick one to \
-             force single-player \u{2014} only it reaches the host.",
+            client::player_forward_pad_hint(),
         ));
     }
-    advanced.extend([
-        described_overridable(
-            cx,
-            &rows::SYSTEM_BUTTONS,
-            sysbtn_combo,
-            "Where the guide (Xbox/PS) and quick-access presses go while streaming. \
-             Automatic sends them to the host \u{2014} except on devices whose own overlay \
-             reacts to the same press (Gaming Mode), where they stay local and the gesture \
-             below reaches the host.",
-        ),
-        described_overridable(
-            cx,
-            &rows::GUIDE_GESTURE,
-            gesture_combo,
-            "Hold Select on its own to press the host's guide button \u{2014} keep holding \
-             for a Gaming-Mode host's quick-access menu. A Select tap still goes through, \
-             slightly delayed. Automatic arms it only where the real button can't reach \
-             the host.",
-        ),
-    ]);
+    advanced.push(described_overridable(
+        cx,
+        &rows::SYSTEM_BUTTONS,
+        sysbtn_combo,
+        client::player_system_buttons_hint(),
+    ));
     if !preset_mode {
         advanced.push(described_labeled(
             cx.pal,
-            rows::PAD_HAPTICS.label,
+            rows::PAD_HAPTICS.label(),
             pad_haptics_toggle,
-            "Play a DualSense's voice-coil haptics on the pad itself, while controllers are \
-             forwarded.",
+            client::player_pad_haptics_hint(),
         ));
         advanced.push(described_labeled(
             cx.pal,
-            rows::PAD_SPEAKER.label,
+            rows::PAD_SPEAKER.label(),
             pad_speaker_toggle,
-            "Play the audio a game sends to the pad's own speaker on the pad, not through \
-             this PC.",
+            client::player_pad_speaker_hint(),
         ));
     }
     let changed = [
         s.gamepad_forwarding != d.gamepad_forwarding,
         !s.forward_pad.is_empty(),
         s.system_buttons != d.system_buttons,
-        s.guide_gesture != d.guide_gesture,
         s.pad_haptics != d.pad_haptics,
         s.pad_speaker != d.pad_speaker,
     ];
@@ -293,7 +257,7 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
         cx,
         advanced,
         changed.into_iter().filter(|c| *c).count(),
-        ["gamepad_forwarding", "system_buttons", "guide_gesture"]
+        ["gamepad_forwarding", "system_buttons"]
             .into_iter()
             .any(|f| cx.overrides(f)),
     ));

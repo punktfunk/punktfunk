@@ -6,8 +6,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
 import io.unom.punktfunk.kit.discovery.HostDiscovery
+import io.unom.punktfunk.kit.library.LibraryCache
 import io.unom.punktfunk.kit.link.DeepLinkResult
 import io.unom.punktfunk.kit.link.DeepLinks
 import io.unom.punktfunk.kit.link.HostResolution
@@ -176,7 +178,7 @@ internal class ConnectController(
     fun loadIdentity() {
         scope.launch {
             identity = withContext(Dispatchers.IO) { identities.await() }
-            if (identity == null) status = IdentityHolder.UNAVAILABLE
+            if (identity == null) status = context.getString(R.string.android_identity_broken)
         }
     }
 
@@ -192,7 +194,8 @@ internal class ConnectController(
     }
 
     // The dial itself, identity ready, through the profile's unlock. A TOFU dial saves what the
-    // host presented, unpaired. [onFailure] takes an unreachable dial (the wake wait),
+    // host presented, unpaired. The [launch]ed title's overrides come from the catalog cached for
+    // the profile the dial plays as. [onFailure] takes an unreachable dial (the wake wait),
     // [onMismatch] a refused pin; [redial] marks the one dial a [ProfileRetry] grants.
     private fun doConnectDirect(
         targetHost: String,
@@ -236,16 +239,21 @@ internal class ConnectController(
             if (thisAttempt.ticket.cancelled) return@launch
             if (choice !is ProfileChoice.Dial) {
                 connecting = false
-                if (choice is ProfileChoice.Refused) status = choice.line
+                if (choice is ProfileChoice.Refused) status = choice.line.words(context.resources)
                 resumeBrowse()
                 return@launch
             }
             attempt = thisAttempt
             refreshHosts()
+            val overrides = launch?.let { id ->
+                withContext(Dispatchers.IO) {
+                    LibraryCache.standard(context.cacheDir).load(LibraryCache.keyFor(record, pinHex ?: ""), choice.id)
+                }?.games?.firstOrNull { it.id == id }?.overrides
+            }
             val spec = DialSpec(
                 settings.effectiveFor(preset), id, targetHost, targetPort, pinHex ?: "", launch,
                 dialer = "touch/host-grid", preset = preset, profile = choice.id,
-                promptsUnlock = promptsUnlock(context),
+                promptsUnlock = promptsUnlock(context), overrides = overrides,
             )
             // While the password prompt or the biometric sheet is up, it takes the overlay's place.
             val hooks = record?.let { r ->
@@ -297,7 +305,9 @@ internal class ConnectController(
                 } else {
                     // A typed host rejection (busy / versions differ / pairing required) means the
                     // host is awake — waking it would be nonsense; show the stated reason instead.
-                    status = dialed.said.ifEmpty { ConnectErrors.connectMessage(token, requestAccess = false) }
+                    status = dialed.said.ifEmpty {
+                        context.getString(ConnectErrors.connectMessage(token, requestAccess = false))
+                    }
                     if (token == "profile-unknown") refreshHosts()
                 }
             }
@@ -360,9 +370,9 @@ internal class ConnectController(
         // The record this dial's pin names. A TOFU dial is to a host not saved yet, so only a
         // placeholder can be it — never the other OS of a dual-boot box at the same address.
         val kh = knownHostStore.resolve(pinHex ?: "", targetHost, targetPort)
-        // Latched here, not per dial attempt: a wake-and-redial must stream with the same preset
-        // the user asked for, and the "applies from the next session" footers stay truthful.
-        val preset = presetStore.resolveFor(kh, oneOffPreset)
+        // Latched here, not per dial attempt: a wake-and-redial must stream with the same preset,
+        // and the "applies from the next session" footers stay truthful.
+        val preset = presetStore.resolveFor(kh, oneOffPreset, launch)
         val macs = kh?.mac ?: emptyList()
         // "Up" = a live advert that is THIS host — matched by fingerprint first (so it survives a DHCP
         // address change on a cold boot), else by address:port. Returns the CURRENT advert so we can
@@ -409,6 +419,11 @@ internal class ConnectController(
      * streams only for a link. Cancel returns the UI at once; a late answer is dropped.
      */
     fun requestAccess(target: PendingTrust) {
+        // A request names the fingerprint the host must show. A typed host has none: PIN.
+        val pinHex = target.advertisedFp?.takeIf { it.isNotBlank() } ?: run {
+            pendingTrust = target.copy(kind = PendingTrust.Kind.PAIR)
+            return
+        }
         pendingTrust = null
         val id = requireIdentity() ?: return
         val req = RequestAccessState(target)
@@ -416,9 +431,7 @@ internal class ConnectController(
         connecting = true
         status = null
         scope.launch {
-            // Pin the advertised fingerprint for a discovered host (defence against an impostor while
-            // we wait); a manually-typed host has none, so trust-on-first-use.
-            val pinHex = target.advertisedFp ?: ""
+            // The advertised fingerprint is the pin: an impostor cannot answer while we wait.
             val paired = withContext(Dispatchers.IO) {
                 services.requestAccess(target.host, target.port, id, pinHex, deviceName(context))
             }
@@ -433,13 +446,13 @@ internal class ConnectController(
                     if (target.fromLink) {
                         doConnect(target.host, target.port, target.name, paired.fp, target.preset, target.launch)
                     } else {
-                        notice = "Paired with ${target.name}"
+                        notice = context.getString(R.string.pair_paired, target.name)
                     }
                 }
                 // Cause-specific: an operator denial, an approval timeout, and a request that
                 // never reached the host are different problems with different fixes.
                 is HostServices.Paired.Failed ->
-                    status = ConnectErrors.connectMessage(paired.token, requestAccess = true)
+                    status = context.getString(ConnectErrors.connectMessage(paired.token, requestAccess = true))
             }
         }
     }
@@ -524,8 +537,7 @@ internal class ConnectController(
         doConnect(
             pt.host, pt.port, pt.name, pt.advertisedFp, pt.preset, pt.launch,
             onMismatch = {
-                status = "Couldn't connect: the host didn't present the identity it advertised. " +
-                    "Pair with its PIN instead."
+                status = context.getString(R.string.pair_identity_mismatch)
             },
         )
     }
@@ -538,7 +550,7 @@ internal class ConnectController(
         if (pt.fromLink) {
             doConnect(pt.host, pt.port, pt.name, fp, pt.preset, pt.launch)
         } else {
-            notice = "Paired with ${pt.name}"
+            notice = context.getString(R.string.pair_paired, pt.name)
         }
     }
 
@@ -562,14 +574,14 @@ internal class ConnectController(
         val parsed = DeepLinks.parse(url)
         if (parsed is DeepLinkResult.Refused) {
             // A link for someone else's scheme is not our business to complain about.
-            if (parsed.error != LinkError.NOT_OUR_SCHEME) status = parsed.message()
+            if (parsed.error != LinkError.NOT_OUR_SCHEME) status = parsed.message().words(context.resources)
             return
         }
         val link = (parsed as DeepLinkResult.Parsed).link
         if (link.route != LinkRoute.CONNECT) {
             // `wake` and `browse` are reserved in the grammar and parse today; a front-end that
             // hasn't implemented them refuses with a notice rather than silently connecting.
-            status = "Punktfunk on Android can't do “${link.route.word}” links yet."
+            status = context.getString(R.string.link_route_unsupported, link.route.word)
             return
         }
         val presetRef = link.preset
@@ -577,9 +589,9 @@ internal class ConnectController(
             val (_, resolution) = presetStore.resolve(presetRef)
             if (resolution != PresetResolution.FOUND) {
                 status = if (resolution == PresetResolution.AMBIGUOUS) {
-                    "More than one preset is called “$presetRef” — rename one and try again."
+                    context.getString(R.string.link_ambiguous_preset, presetRef)
                 } else {
-                    "That link asks for a preset called “$presetRef”, which isn't on this device."
+                    context.getString(R.string.link_unknown_preset, presetRef)
                 }
                 return
             }
@@ -592,8 +604,7 @@ internal class ConnectController(
                 // A pin that contradicts the stored one is the link being stale or lying. Hard
                 // refusal: this is the one case where doing what the card does would be wrong.
                 if (link.pinConflict(resolved.host)) {
-                    status = "That link's fingerprint doesn't match the one pinned for " +
-                        "${resolved.host.name} — it's out of date, or it isn't that host."
+                    status = context.getString(R.string.link_pin_conflict, resolved.host.name)
                     return
                 }
                 if (resolved.host.fpHex.isEmpty()) {
@@ -628,10 +639,9 @@ internal class ConnectController(
                 fromLink = true,
             )
             HostResolution.Ambiguous ->
-                status = "More than one saved host is called “${link.hostRef}” — " +
-                    "rename one, or use its address."
+                status = context.getString(R.string.link_ambiguous_host, link.hostRef)
             HostResolution.Unresolvable ->
-                status = "That link points at a host this device doesn't know."
+                status = context.getString(R.string.link_host_not_saved)
         }
     }
 

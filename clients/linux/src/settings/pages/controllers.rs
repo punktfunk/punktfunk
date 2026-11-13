@@ -6,6 +6,7 @@ use crate::settings::field::Field;
 use crate::settings::spec::{self, Page};
 use crate::settings::tables::*;
 use adw::prelude::*;
+use pf_l10n::{client, desktop};
 use std::rc::Rc;
 
 pub fn controllers(b: &mut Build) {
@@ -19,7 +20,7 @@ pub fn controllers(b: &mut Build) {
     let pad_type = b.choice(
         &spec::GAMEPAD,
         &[
-            "Automatic",
+            client::player_gamepad_auto(),
             "Xbox 360",
             "DualSense",
             "Xbox One",
@@ -54,7 +55,7 @@ pub fn controllers(b: &mut Build) {
     b.put(&mut p, None, pin);
     // Guide and quick-access presses. Desktop rarely needs them off Automatic; they are here
     // because presets are authored on the desktop and applied everywhere.
-    let row = b.choice(&spec::SYSTEM_BUTTONS, SYSTEM_BUTTON_LABELS);
+    let row = b.choice(&spec::SYSTEM_BUTTONS, &texts(SYSTEM_BUTTON_LABELS));
     follows.push(row.widget().clone().upcast());
     b.put(
         &mut p,
@@ -65,15 +66,6 @@ pub fn controllers(b: &mut Build) {
             index::system_buttons,
             |s, i| s.system_buttons = at(SYSTEM_BUTTONS, i).to_string(),
         ),
-    );
-    let row = b.choice(&spec::GUIDE_GESTURE, GUIDE_GESTURE_LABELS);
-    follows.push(row.widget().clone().upcast());
-    b.put(
-        &mut p,
-        None,
-        Field::choice(&spec::GUIDE_GESTURE, &row, index::guide_gesture, |s, i| {
-            s.guide_gesture = at(GUIDE_GESTURES, i).to_string()
-        }),
     );
     // A DualSense's voice coils and speaker, streamed from the host.
     let (field, haptics) = Field::switch(
@@ -106,7 +98,7 @@ pub fn controllers(b: &mut Build) {
 fn inventory(p: &PageB, g: &adw::PreferencesGroup, pads: &[crate::gamepad::PadInfo]) {
     if pads.is_empty() {
         let none = adw::ActionRow::builder()
-            .title("No controllers detected")
+            .title(client::pad_none_detected())
             .css_classes(["dim-label"])
             .build();
         p.row(g, &none);
@@ -117,7 +109,7 @@ fn inventory(p: &PageB, g: &adw::PreferencesGroup, pads: &[crate::gamepad::PadIn
             .use_markup(false)
             .build();
         row.set_subtitle(if pad.steam_virtual {
-            "Steam Input's virtual pad \u{2014} Automatic skips it while a real pad is connected"
+            desktop::desktop_pad_steam_virtual()
         } else {
             pad.kind_label()
         });
@@ -131,7 +123,7 @@ fn inventory(p: &PageB, g: &adw::PreferencesGroup, pads: &[crate::gamepad::PadIn
 /// the pin at once.
 fn pin_field(b: &Build, pads: &[crate::gamepad::PadInfo]) -> Field {
     let saved = b.seed.forward_pad.clone();
-    let mut names = vec!["Automatic (all controllers)".to_string()];
+    let mut names = vec![client::player_forward_pad_auto().to_string()];
     let mut keys = vec![String::new()];
     for pad in pads {
         let kind = pad.kind_label();
@@ -143,8 +135,11 @@ fn pin_field(b: &Build, pads: &[crate::gamepad::PadInfo]) -> Field {
         keys.push(pad.key.clone());
     }
     if !saved.is_empty() && !keys.contains(&saved) {
-        let name = saved.splitn(3, ':').nth(2).unwrap_or("Saved controller");
-        names.push(format!("{name} (not connected)"));
+        let name = saved
+            .splitn(3, ':')
+            .nth(2)
+            .unwrap_or(desktop::desktop_player_forward_pad_saved_name());
+        names.push(desktop::desktop_player_forward_pad_missing(name));
         keys.push(saved.clone());
     }
     let row = b.choice(
@@ -152,7 +147,7 @@ fn pin_field(b: &Build, pads: &[crate::gamepad::PadInfo]) -> Field {
         &names.iter().map(String::as_str).collect::<Vec<_>>(),
     );
     if pads.is_empty() {
-        set_row_subtitle(row.widget(), "No controllers detected");
+        set_row_subtitle(row.widget(), client::pad_none_detected());
     }
     let keys = Rc::new(keys);
     let (k, svc) = (keys.clone(), b.gamepads.clone());

@@ -158,12 +158,12 @@ async fn title_installs_follow_the_manage_grant() {
     assert!(body.get("grants").is_none(), "{body}");
 }
 
-/// `display.next` follows the caller's own live session, never the Host power grant, and a
-/// refusal ends nothing. Never invoked with a pass: `policy::prefs()` is the developer's own
-/// `display-settings.json`, so a pinned two-head box would really switch.
+/// `display.next` takes a live session of the caller's own and the screen grant, never the
+/// Host power grant, and a refusal ends nothing. Never invoked with a pass: `policy::prefs()`
+/// is the developer's own `display-settings.json`, so a pinned two-head box would really switch.
 #[tokio::test]
-async fn display_next_follows_the_live_session_not_the_power_grant() {
-    use punktfunk_core::quic::GRANT_GAMEPAD;
+async fn display_next_needs_a_live_session_and_the_screen_grant() {
+    use punktfunk_core::quic::{GRANT_DISPLAY, GRANT_GAMEPAD};
     let _serial = crate::session_status::tests::REGISTRY.lock().await;
     let np = Arc::new(
         crate::native_pairing::NativePairing::load_with(
@@ -173,21 +173,24 @@ async fn display_next_follows_the_live_session_not_the_power_grant() {
         )
         .unwrap(),
     );
-    let streaming_fp = "aaaa00000011"; // controller-only, streaming
+    let guest_fp = "aaaa00000011"; // controller-only, streaming
     let idle_fp = "bbbb00000012"; // full control, nothing live
-    np.add_with_access(
-        "streaming",
-        streaming_fp,
+    let picker_fp = "cccc00000013"; // controller and screen choice, streaming
+    let access = |grants| {
         Some(crate::native_pairing::Access {
-            grants: GRANT_GAMEPAD,
+            grants,
             expires_unix: None,
             until_disconnect: false,
-        }),
-    )
-    .unwrap();
+        })
+    };
+    np.add_with_access("guest", guest_fp, access(GRANT_GAMEPAD))
+        .unwrap();
     np.add("idle", idle_fp).unwrap();
+    np.add_with_access("picker", picker_fp, access(GRANT_GAMEPAD | GRANT_DISPLAY))
+        .unwrap();
     let app = test_app_native(test_state(), np);
-    let (_live, stop, quit, _) = fake_session_with_flags(streaming_fp);
+    let (_guest, stop, quit, _) = fake_session_with_flags(guest_fp);
+    let (_picker, ..) = fake_session_with_flags(picker_fp);
 
     let display_next = |body: &serde_json::Value| {
         body["actions"]
@@ -198,21 +201,26 @@ async fn display_next_follows_the_live_session_not_the_power_grant() {
             .cloned()
             .unwrap_or_else(|| panic!("display.next is always listed: {body}"))
     };
-    let discover = |fp: Option<&str>| {
-        let mut req = get_req("/api/v1/actions");
+    let as_device = |mut req: axum::http::Request<Body>, fp: Option<&str>| {
         if let Some(fp) = fp {
             req.extensions_mut()
                 .insert(PeerCertFingerprint(Some(fp.to_string())));
         }
         req
     };
-    let row = display_next(&send(&app, discover(Some(streaming_fp))).await.1);
+    let discover = |fp: Option<&str>| as_device(get_req("/api/v1/actions"), fp);
+    let row = display_next(&send(&app, discover(Some(picker_fp))).await.1);
     assert_eq!(
         row["permitted"], true,
-        "its own session, no grant bit: {row}"
+        "its own session and the grant: {row}"
     );
     assert_eq!(row["group"], "display");
     assert_eq!(row["danger"], false);
+    let row = display_next(&send(&app, discover(Some(guest_fp))).await.1);
+    assert_eq!(
+        row["permitted"], false,
+        "streaming, but the operator picks its screen: {row}"
+    );
     let row = display_next(&send(&app, discover(Some(idle_fp))).await.1);
     assert_eq!(
         row["permitted"], false,
@@ -221,12 +229,20 @@ async fn display_next_follows_the_live_session_not_the_power_grant() {
     let row = display_next(&send(&app, discover(None)).await.1);
     assert_eq!(row["permitted"], true, "the console may always: {row}");
 
-    // Down the power path this device has the grant and would meet the other live device's
+    let invoke = |fp| {
+        let post = axum::http::Request::post("/api/v1/actions/display.next")
+            .body(Body::empty())
+            .unwrap();
+        as_device(post, Some(fp))
+    };
+    let (status, body) = send(&app, invoke(guest_fp)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "screen_choice_not_granted", "{body}");
+    // Down the power path this device has the grant and would meet the other live devices'
     // 409 instead.
-    let post = axum::http::Request::post("/api/v1/actions/display.next")
-        .body(Body::empty())
-        .unwrap();
-    assert_eq!(send_cert(&app, post, idle_fp).await, StatusCode::FORBIDDEN);
+    let (status, body) = send(&app, invoke(idle_fp)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "display_next_not_streaming", "{body}");
     assert!(
         !stop.load(Ordering::SeqCst) && !quit.load(Ordering::SeqCst),
         "a display action ends no session"

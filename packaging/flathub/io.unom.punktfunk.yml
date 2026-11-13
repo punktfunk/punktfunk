@@ -86,12 +86,12 @@ modules:
     sources:
       - type: git
         url: https://github.com/ValveSoftware/gamescope.git
-        commit: 6867f509874f9bc52e12d6f4c4596cdf0d5be6b4
+        commit: 865a71c4048b5137f03b0711bbd80c1d24bc6915
         disable-submodules: true
       # The submodule and wrap pins at that commit; the layer needs nothing else.
       - type: git
         url: https://github.com/Joshua-Ashton/vkroots
-        commit: 5106d8a0df95de66cc58dc1ea37e69c99afc9540
+        commit: 20733b938267dcac60f6ac105dbb757f9cc8df9c
         dest: subprojects/vkroots
       - type: git
         url: https://github.com/g-truc/glm.git

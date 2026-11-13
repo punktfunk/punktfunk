@@ -82,7 +82,14 @@ struct SessionAccess {
     deadline: Option<i64>,
     /// The grants record was deleted while this session was live. Terminal, like expiry.
     revoked: bool,
+    /// When the owner's lock was last asked about this device ([`LOCK_EVERY`]).
+    lock_asked: Option<std::time::Instant>,
+    /// The owner's profile no longer opens for this device. Terminal, like expiry.
+    locked_out: bool,
 }
+
+/// How often a live session asks whether the owner's profile still opens for its device.
+const LOCK_EVERY: Duration = Duration::from_secs(1);
 
 impl SessionAccess {
     /// Subscribe first, then fold the channel's current value, so a console edit racing
@@ -97,6 +104,8 @@ impl SessionAccess {
             mask: GRANT_ALL,
             deadline: None,
             revoked: false,
+            lock_asked: None,
+            locked_out: false,
         };
         if let Some(np) = registry {
             let rx = np.subscribe(&access.fp_hex);
@@ -138,6 +147,20 @@ impl SessionAccess {
     /// "expire now" edit is a past deadline on the watch.
     fn expired(&self, now_unix: i64) -> bool {
         self.revoked || self.deadline.is_some_and(|d| now_unix >= d)
+    }
+
+    /// Asks the owner's lock about this device once per [`LOCK_EVERY`]: a lock or a sign-out
+    /// that leaves it off the owner's list ends the session.
+    fn ask_lock(&mut self, state: &AppState) {
+        let now = std::time::Instant::now();
+        if self
+            .lock_asked
+            .is_some_and(|at| now.duration_since(at) < LOCK_EVERY)
+        {
+            return;
+        }
+        self.lock_asked = Some(now);
+        self.locked_out |= !super::nvhttp::owner_opens(state, Some(&self.fp_hex));
     }
 }
 
@@ -263,9 +286,10 @@ impl rusty_enet::Socket for OwnerFilteredSocket {
         &mut self,
         buffer: &mut [u8; rusty_enet::MTU_MAX],
     ) -> Result<Option<(Self::Address, rusty_enet::PacketReceived)>, std::io::Error> {
-        // Loop so a dropped non-owner datagram does not starve a following owner one.
+        // Keep reading past a dropped non-owner datagram so it cannot starve an owner one, but
+        // yield after `MAX_DROPS_PER_RECEIVE` so ENet's ACK and timeout pass still runs.
         // Timeout is `WouldBlock` on Unix and `TimedOut` on Windows; both map to `Ok(None)`.
-        loop {
+        for _ in 0..MAX_DROPS_PER_RECEIVE {
             match rusty_enet::Socket::receive(&mut self.inner, buffer) {
                 Ok(Some((addr, received))) => {
                     // Decide before rusty_enet allocates per-peer reassembly. No live
@@ -289,8 +313,14 @@ impl rusty_enet::Socket for OwnerFilteredSocket {
                 Err(e) => return Err(e),
             }
         }
+        Ok(None)
     }
 }
+
+/// Datagrams one [`OwnerFilteredSocket::receive`] reads and drops before it reports none.
+/// ENet sends ACKs, checks timeouts and dispatches only once `receive` returns none, and a
+/// flood from another host never leaves the 2 ms read timeout to expire.
+const MAX_DROPS_PER_RECEIVE: usize = 64;
 
 /// Admit a fresh ENet connect only behind a live `/launch` (Moonlight connects after
 /// RTSP, so there is no legitimate connect without one). When both sides captured the
@@ -451,7 +481,8 @@ fn spawn(state: Arc<AppState>) -> Result<Running> {
 }
 
 /// Each 2 ms tick: resolve on a new owner, fold a console edit (watch poll), and cut the
-/// session the tick the deadline passes. Events read the mask this leaves.
+/// session the tick the deadline passes or, within [`LOCK_EVERY`], once the owner's profile
+/// stops opening for its device. Events read the mask this leaves.
 fn tick_access(
     access: &mut Option<SessionAccess>,
     state: &AppState,
@@ -476,14 +507,19 @@ fn tick_access(
             peer.withdraw(lost, inj_tx);
         }
     }
+    if let Some(a) = access.as_mut() {
+        a.ask_lock(state);
+    }
     if let Some(a) = access
         .as_ref()
-        .filter(|a| a.expired(crate::clock::unix_secs()))
+        .filter(|a| a.locked_out || a.expired(crate::clock::unix_secs()))
     {
         // Expiry ends the session as a decision, not a network drop. `quit_session`
         // clears `launch`; the host-side-ended arm then sends TERMINATION + disconnect
         // (GameStream has no AccessUpdate).
-        let why = if a.revoked {
+        let why = if a.locked_out {
+            "the owner's profile no longer opens for this device"
+        } else if a.revoked {
             "gamestream access record removed"
         } else {
             "gamestream access expired"
@@ -962,6 +998,36 @@ mod tests {
         // Address unknown on one side → launch-present only.
         assert!(super::accept_connect(launched(Some(owner)), None));
         assert!(super::accept_connect(launched(None), Some(other)));
+    }
+
+    /// A flood of non-owner datagrams makes `receive` report none after the drop cap, so ENet's
+    /// ACK and timeout pass runs; the datagrams behind the cap are read by the next call.
+    #[test]
+    fn a_non_owner_flood_does_not_hold_receive() {
+        use rusty_enet::Socket;
+        let inner = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        inner
+            .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+            .unwrap();
+        let to = inner.local_addr().unwrap();
+        let state = super::super::test_state();
+        let mut sock = super::OwnerFilteredSocket {
+            inner,
+            state: state.clone(),
+        };
+        let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let other: std::net::IpAddr = "10.9.9.9".parse().unwrap();
+        *state.launch.lock().unwrap() = launched(Some(other));
+        for _ in 0..super::MAX_DROPS_PER_RECEIVE + 5 {
+            sender.send_to(&[1], to).unwrap();
+        }
+        let mut buf = [0u8; rusty_enet::MTU_MAX];
+        assert!(sock.receive(&mut buf).unwrap().is_none());
+        *state.launch.lock().unwrap() = launched(Some(sender.local_addr().unwrap().ip()));
+        assert!(
+            sock.receive(&mut buf).unwrap().is_some(),
+            "the datagrams behind the cap stay queued for the owner"
+        );
     }
 
     /// Wrong type table or reason endianness is ignored by the client (frozen stream or
@@ -1449,6 +1515,56 @@ mod tests {
                 })
             ));
         }
+    }
+
+    /// A live session ends within a second once the owner's profile stops opening for its
+    /// device: a lock without it, or a sign-out. A listed device plays on.
+    #[test]
+    fn a_session_ends_when_the_owner_s_lock_shuts_its_device_out() {
+        let owner = [0xcd; 32];
+        let fp_hex = hex::encode(owner);
+        let dir = crate::test_support::scratch();
+        let path = dir.join("profiles.json");
+        let profiles = crate::profiles::Profiles::load_with(Some(path), None);
+        profiles.ensure_owner("box").unwrap();
+        let owner_id = profiles.owner_id().unwrap();
+        let profiles = std::sync::Arc::new(profiles);
+        let state = launched_state();
+        *state.launch.lock().unwrap() = launched(None).map(|l| super::LaunchSession {
+            gcm_key: KEY,
+            owner_fp: Some(owner),
+            ..l
+        });
+        assert!(state.profiles.set(profiles.clone()).is_ok());
+        let device = pf_seats::ipc::Device {
+            fingerprint: fp_hex.clone(),
+            name: "Moonlight".into(),
+        };
+        let locked = profiles.locks().edit(&owner_id, |lock, now| {
+            lock.locked = true;
+            lock.admit(&device, now, true)
+        });
+        assert!(locked.unwrap());
+        let mut access = None;
+        let mut peer = super::ControlPeer::new();
+        let (tx, _rx) = channel();
+        super::tick_access(&mut access, &state, &mut peer, &tx);
+        assert!(
+            state.launch.lock().unwrap().is_some(),
+            "on the list: it plays"
+        );
+
+        let signed_out = profiles.locks().edit(&owner_id, |lock, _| {
+            lock.list.sign_out(Some(&fp_hex));
+        });
+        signed_out.unwrap();
+        let deadline = std::time::Instant::now() + super::LOCK_EVERY * 3;
+        while state.launch.lock().unwrap().is_some() {
+            assert!(std::time::Instant::now() < deadline, "the session ended");
+            super::tick_access(&mut access, &state, &mut peer, &tx);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(access.is_none());
     }
 
     /// A grant withdrawn mid-press lets go of what it covered: the key-up the client can no

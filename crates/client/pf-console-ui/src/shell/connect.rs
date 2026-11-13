@@ -156,7 +156,8 @@ pub(super) struct SeatWait {
 pub(super) const SEAT_POLL: f64 = pf_client_core::profiles::SEAT_POLL.as_secs_f64();
 
 pub(super) struct Connecting {
-    pub(super) title: String,
+    /// The host's name; `None` for a redial no connect raised, which the card words without it.
+    pub(super) title: Option<String>,
     pub(super) appear: f64,
     /// Host is parked pending operator approval. Takeover title is
     /// "Waiting for approval", not "Connecting".
@@ -204,6 +205,8 @@ pub(super) struct Launching {
     pub(super) title: String,
     /// `PC · 2024 · Steam` — where the host filed it, in the order a player scans it.
     pub(super) facts: String,
+    /// `Host: 1080p60 DualSense` — what the host set for this game; empty when nothing.
+    pub(super) host_line: String,
     /// Studio, and the genres joined; either may be empty, and an older host sends neither.
     pub(super) developer: String,
     pub(super) genres: String,
@@ -241,13 +244,13 @@ pub(super) struct Launching {
 /// it came from. `running`, `untracked` and `grace` keep waiting or reveal: those launches worked.
 pub(super) fn launch_gave_up(title: &str, state: Option<&str>, elapsed: f64) -> Option<String> {
     match state {
-        None if elapsed >= LAUNCH_NO_LEASE => Some(format!(
-            "The host didn't start {title} — nothing is running for it."
-        )),
-        Some("launching") if elapsed >= LAUNCH_HOLD_MAX => {
-            Some(format!("{title} is still starting after 2 minutes."))
+        None if elapsed >= LAUNCH_NO_LEASE => {
+            Some(pf_l10n::client::lib_hold_gave_up_not_started(title))
         }
-        Some("exited") => Some(format!("{title} closed right after starting.")),
+        Some("launching") if elapsed >= LAUNCH_HOLD_MAX => {
+            Some(pf_l10n::client::lib_hold_gave_up_slow(title))
+        }
+        Some("exited") => Some(pf_l10n::client::lib_hold_gave_up_exited(title)),
         _ => None,
     }
 }
@@ -271,7 +274,7 @@ impl Shell {
             Some(title) => {
                 self.last_connect_title = Some(title.clone());
                 self.connect.show_card(Connecting {
-                    title,
+                    title: Some(title),
                     appear: 0.0,
                     request_access: false,
                     starting: None,
@@ -300,7 +303,7 @@ impl Shell {
                 return self.prompt_unlock(d.intent, error);
             }
         }
-        self.show_toast_kind(format!("Couldn't connect — {msg}"), ToastKind::Error);
+        self.show_toast_kind(pf_l10n::client::dial_connect_failed(msg), ToastKind::Error);
     }
 
     /// The box no longer has the profile the last connect named: forget the card's pick and
@@ -383,6 +386,9 @@ impl Shell {
             host,
             title: g.title.clone(),
             facts,
+            host_line: (g.overrides.as_ref())
+                .and_then(pf_client_core::library::host_line)
+                .unwrap_or_default(),
             developer: g.developer.clone().unwrap_or_default(),
             genres: g.genres.join(" \u{b7} "),
             appear: 0.0,
@@ -410,15 +416,23 @@ impl Shell {
         self.actions.push_back(OverlayAction::ShowStream);
     }
 
-    /// One frame of the launch hold: reveal when the host has answered, or
-    /// when it never will; else keep the poll going.
+    /// One frame of the launch hold: the host's own refusal ends it at once; else reveal when
+    /// the host has answered, or when it never will, and keep the poll going meanwhile.
     pub(super) fn tick_launch(&mut self) {
         let t = self.t();
         let reads = self.library.status_gen();
+        // Taken with no hold up too, so a late one never lands on the next launch.
+        let refused = self.console.take_launch_refused();
         let Some(l) = self.connect.launching() else {
             return;
         };
         if l.failed.is_some() {
+            return;
+        }
+        if let Some(why) = refused {
+            if let Some(l) = self.connect.launching_mut() {
+                l.failed = Some(why);
+            }
             return;
         }
         let fresh = reads > l.base_gen;
@@ -507,7 +521,7 @@ impl Shell {
             });
         }
         if let Some(reason) = reason {
-            self.show_toast(format!("Session ended — {reason}"));
+            self.show_toast(pf_l10n::client::ended_with_reason(reason));
         }
     }
 
@@ -535,12 +549,8 @@ impl Shell {
         self.in_stream = false;
         self.connect.end_dial();
         self.connect.show_card(Connecting {
-            // `None` only if the shell never raised the connect (`--connect`
-            // has no console). Prefer a codec-change name over empty string.
-            title: self
-                .last_connect_title
-                .clone()
-                .unwrap_or_else(|| "the host".to_string()),
+            // `None` only if the shell never raised the connect (`--connect` has no console).
+            title: self.last_connect_title.clone(),
             appear: 1.0,
             request_access: false,
             starting: None,
@@ -794,8 +804,9 @@ impl Shell {
         self.connect = Connect::SeatWait(w);
     }
 
-    /// Dial `intent`, whose profile is `row` as the box listed it: first the password prompt,
-    /// where the profile needs one and this host carries it. The console holds no device key.
+    /// Dial `intent`, whose profile is `row` as the box listed it: first the password or PIN
+    /// prompt, where the profile needs one and this host carries it. The console holds no
+    /// device key.
     fn dial_or_prompt(&mut self, intent: ConnectIntent, row: Option<&ListedProfile>) {
         match row {
             Some(row) if self.prompts_unlock => match unlock::before_dial(row.unlock, false) {
@@ -806,16 +817,18 @@ impl Shell {
         }
     }
 
-    /// The password prompt for `intent`'s profile, `error` under its field.
+    /// The prompt for `intent`'s profile, `error` under its field: its PIN where its box lists
+    /// it locked, else its password.
     pub(super) fn prompt_unlock(&mut self, intent: ConnectIntent, error: Option<String>) {
         let id = intent.profile.clone().unwrap_or_default();
-        let name = self
-            .listed_row(&intent)
+        let row = self.listed_row(&intent);
+        let pin = row.is_some_and(|p| p.unlock.pin());
+        let name = row
             .map(|p| p.display_name.clone())
             .filter(|n| !n.is_empty())
             .unwrap_or(id);
         let host = self.host_name(&intent);
-        let screen = crate::screens::unlock::UnlockScreen::new(intent, name, host, error);
+        let screen = crate::screens::unlock::UnlockScreen::new(intent, (name, host), pin, error);
         self.apply_nav(Nav::Push(Box::new(Screen::Unlock(screen))));
     }
 
@@ -915,7 +928,7 @@ mod tests {
     #[test]
     fn a_connect_phase_owns_its_takeover_and_its_card() {
         let card = |title: &str| Connecting {
-            title: title.into(),
+            title: Some(title.into()),
             appear: 0.0,
             request_access: false,
             starting: None,
@@ -923,7 +936,7 @@ mod tests {
         let mut c = asking(None);
         assert_eq!(c.takeover(), Some(Takeover::Asking));
         c.show_card(card("Den"));
-        assert_eq!(c.card().map(|c| c.title.as_str()), Some("Den"));
+        assert_eq!(c.card().and_then(|c| c.title.as_deref()), Some("Den"));
         assert_eq!(
             c.takeover(),
             Some(Takeover::Asking),

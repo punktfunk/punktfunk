@@ -2,6 +2,7 @@
 
 use super::form::ConnectionRows;
 use super::*;
+use pf_l10n::{client, common, desktop};
 
 impl HostsPage {
     /// Write the shortcut, or hand the user the URL when sandboxed.
@@ -18,15 +19,20 @@ impl HostsPage {
         let list = gtk::ListBox::new();
         list.add_css_class("boxed-list");
         list.set_selection_mode(gtk::SelectionMode::None);
-        let name_row = adw::EntryRow::builder().title("Name (optional)").build();
+        let name_row = adw::EntryRow::builder()
+            .title(client::hosts_field_name())
+            .build();
         list.append(&name_row);
         let connection = ConnectionRows::new("", 9777, &[]);
         connection.append_to(&list);
         list.set_size_request(320, -1);
 
-        let dialog = adw::AlertDialog::new(Some("Add Host"), None);
+        let dialog = adw::AlertDialog::new(Some(client::hosts_add_title()), None);
         dialog.set_extra_child(Some(&connection.framed(&list)));
-        dialog.add_responses(&[("cancel", "Cancel"), ("add", "Add")]);
+        dialog.add_responses(&[
+            ("cancel", common::common_cancel()),
+            ("add", client::hosts_add_confirm()),
+        ]);
         dialog.set_response_appearance("add", adw::ResponseAppearance::Suggested);
         dialog.set_default_response(Some("add"));
         dialog.set_close_response("cancel");
@@ -49,9 +55,9 @@ impl HostsPage {
                         } else {
                             name
                         };
-                        format!("Added {shown}. Click it to connect.")
+                        desktop::desktop_hosts_added_click(shown)
                     }
-                    Err(e) => format!("Couldn't save the host \u{2014} {e:#}"),
+                    Err(e) => desktop::desktop_hosts_save_failed(format!("{e:#}")),
                 };
                 let _ = sender.output(HostsOutput::Toast(msg));
                 store.reload(Changed::Hosts);

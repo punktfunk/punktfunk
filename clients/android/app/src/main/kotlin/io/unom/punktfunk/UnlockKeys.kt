@@ -12,6 +12,7 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.KnownHost
 import java.security.KeyPair
@@ -105,9 +106,14 @@ class KeystoreUnlockKeys(context: Context) : UnlockKeys {
 /**
  * The system's biometric sheet over [activity] for [signature], strong biometrics only and no
  * device-credential fallback: the signature once a biometric matched, else `null` (the player
- * chose the password, cancelled, or the sheet failed).
+ * chose the password or the [pin], cancelled, or the sheet failed).
  */
-suspend fun authenticateSigner(activity: FragmentActivity, signature: Signature, profileName: String): Signature? =
+suspend fun authenticateSigner(
+    activity: FragmentActivity,
+    signature: Signature,
+    profileName: String,
+    pin: Boolean = false,
+): Signature? =
     suspendCancellableCoroutine { cont ->
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
@@ -120,8 +126,8 @@ suspend fun authenticateSigner(activity: FragmentActivity, signature: Signature,
         }
         val prompt = BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), callback)
         val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Unlock $profileName")
-            .setNegativeButtonText("Use password")
+            .setTitle(activity.getString(R.string.unlock_title, profileName))
+            .setNegativeButtonText(activity.getString(if (pin) R.string.unlock_use_pin else R.string.android_unlock_use_password))
             .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .build()
         cont.invokeOnCancellation { activity.runOnUiThread { prompt.cancelAuthentication() } }
@@ -133,12 +139,12 @@ suspend fun authenticateSigner(activity: FragmentActivity, signature: Signature,
         }
     }
 
-/** Whether this shell shows the password prompt: the touch UI on a phone or tablet, never a TV. */
-fun promptsUnlock(context: Context): Boolean = !isTvDevice(context) && context is FragmentActivity
+/** Whether this shell shows the unlock prompt: the touch UI on every device, a TV's too. */
+fun promptsUnlock(context: Context): Boolean = context is FragmentActivity
 
 /**
  * The touch shell's [UnlockHooks] for a dial to [host] as [identity]; `null` where it shows no
- * prompt. [ask] shows the password prompt. [sheet] is told while the biometric sheet is up.
+ * prompt. [ask] shows the password or PIN prompt. [sheet] is told while the biometric sheet is up.
  */
 fun touchUnlockHooks(
     context: Context,
@@ -160,13 +166,20 @@ fun touchUnlockHooks(
             }
         },
         message = NativeBridge::nativeProfileUnlockMessage,
-        authenticate = { signature, name ->
+        profileMessage = NativeBridge::nativeLockedProfileUnlockMessage,
+        authenticate = { signature, name, pin ->
             sheet(true)
             try {
-                authenticateSigner(activity, signature, name)
+                authenticateSigner(activity, signature, name, pin)
             } finally {
                 sheet(false)
             }
+        },
+        row = { id ->
+            val answer = withContext(Dispatchers.IO) {
+                HostProfiles.fetch(identity, host.address, host.effectiveMgmtPort, host.fpHex, host.port)
+            }
+            (answer as? ProfilesAnswer.Listed)?.rows?.firstOrNull { it.id == id }
         },
     )
 }

@@ -13,9 +13,9 @@ use pf_console_ui::bridge::{
 };
 use pf_console_ui::console::FrameCost;
 use pf_console_ui::{
-    Console, ConsoleEntry, ConsoleHandles, HostRow, InputSource, Insets, LicenseSection,
-    PadTestState, PairStatus, Platform, ProfilesAnswer, Prompt, SnapshotStore, SpeedPhase,
-    Viewport, WakeStatus,
+    Console, ConsoleEntry, ConsoleHandles, HiddenAnswer, HideAnswer, HostRow, InputSource, Insets,
+    LicenseSection, PadTestState, PairStatus, Platform, ProfilesAnswer, Prompt, SnapshotStore,
+    SpeedPhase, Viewport, WakeStatus,
 };
 use punktfunk_core::quic::v2::msg::{ProfileUnlock, UNLOCK_PASSWORD, UNLOCK_PASSWORD_MAX};
 use skia_safe::gpu::{self, mtl, DirectContext, SurfaceOrigin};
@@ -97,6 +97,11 @@ pub const PUNKTFUNK_CONSOLE_PUSH_PAD_TEST: u8 = 18;
 /// `{"fp_hex": "…", "answer": ProfilesAnswer}` — the answer to the `FetchProfiles` command:
 /// `{"Listed": [rows]}`, `"NoProfiles"` or `{"Failed": "why"}`.
 pub const PUNKTFUNK_CONSOLE_PUSH_PROFILES: u8 = 20;
+/// `{"fp_hex": "…", "profile": "…", "answer": HiddenAnswer}` — the answer to the `FetchHidden`
+/// command: `{"Listed": [LibraryGame]}` or `{"Failed": "why"}`.
+pub const PUNKTFUNK_CONSOLE_PUSH_HIDDEN: u8 = 21;
+/// `HideAnswer` — the answer to the `SetHidden` command, echoing its host, profile and title.
+pub const PUNKTFUNK_CONSOLE_PUSH_HIDE: u8 = 22;
 
 /// The room `punktfunk_console_take_unlock` needs: the longest password the wire takes.
 pub const PUNKTFUNK_CONSOLE_UNLOCK_MAX: usize = 512;
@@ -231,7 +236,8 @@ pub unsafe extern "C" fn punktfunk_console_new(
         let cache_bytes = opts.gpu_cache_bytes;
         // SAFETY: a live device and a queue on it, per this function's contract; Skia retains
         // both for the context's lifetime.
-        let backend = unsafe { mtl::BackendContext::new(mtl_device as _, mtl_queue as _) };
+        let backend =
+            unsafe { mtl::BackendContext::new(mtl_device.cast_const(), mtl_queue.cast_const()) };
         let Some(mut context) = gpu::direct_contexts::make_metal(&backend, None) else {
             tracing::error!("console: Skia's Metal context did not come up");
             return std::ptr::null_mut();
@@ -327,7 +333,7 @@ pub unsafe extern "C" fn punktfunk_console_frame(
         }
         // SAFETY: a live texture from this device, per the contract; Skia retains it while
         // the render target lives.
-        let info = unsafe { mtl::TextureInfo::new(mtl_texture as _) };
+        let info = unsafe { mtl::TextureInfo::new(mtl_texture.cast_const()) };
         let target = gpu::backend_render_targets::make_mtl((width as i32, height as i32), &info);
         let mut wrapped = None;
         for ct in std::iter::once(shell.color_type).chain(COLOR_TYPES) {
@@ -627,6 +633,13 @@ struct ProfilesJson {
     answer: ProfilesAnswer,
 }
 
+#[derive(serde::Deserialize)]
+struct HiddenJson {
+    fp_hex: String,
+    profile: String,
+    answer: HiddenAnswer,
+}
+
 /// Hand the console a model update; `kind` is a `PUNKTFUNK_CONSOLE_PUSH_*`. A bad kind or bad
 /// JSON is a logged no-op.
 ///
@@ -658,6 +671,11 @@ pub unsafe extern "C" fn punktfunk_console_push(
             }
             PUNKTFUNK_CONSOLE_PUSH_PROFILES => {
                 json::<ProfilesJson>(text).map(|v| console.set_profiles(&v.fp_hex, v.answer))
+            }
+            PUNKTFUNK_CONSOLE_PUSH_HIDDEN => json::<HiddenJson>(text)
+                .map(|v| console.set_hidden_list(&v.fp_hex, &v.profile, v.answer)),
+            PUNKTFUNK_CONSOLE_PUSH_HIDE => {
+                json::<HideAnswer>(text).map(|v| console.set_hide_answer(v))
             }
             PUNKTFUNK_CONSOLE_PUSH_LIBRARY_BEGIN => {
                 library.begin_fetch();
@@ -790,9 +808,26 @@ pub unsafe extern "C" fn punktfunk_console_drain_cmds(c: *const PunktfunkConsole
 pub extern "C" fn punktfunk_console_palettes() -> *mut c_char {
     guard(std::ptr::null_mut(), || {
         let list: Vec<_> = (pf_console_ui::palette::PALETTES.iter())
-            .map(|p| serde_json::json!({ "id": p.id, "name": p.name }))
+            .map(|p| serde_json::json!({ "id": p.id, "name": (p.name)() }))
             .collect();
         out_string(serde_json::Value::from(list).to_string())
+    })
+}
+
+/// Word the Rust side's text in the first of `languages_json` that Punktfunk ships, a JSON
+/// array of BCP-47 tags, most preferred first. `punktfunk_console_new` does this from its
+/// `languages`; call it first when the palettes or the PyroWave warning are read with no
+/// console. NULL or bad JSON leaves the language as it was.
+///
+/// # Safety
+/// `languages_json` is NULL or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_console_set_languages(languages_json: *const c_char) {
+    guard((), || {
+        // SAFETY: NULL or NUL-terminated per this function's contract.
+        if let Some(tags) = unsafe { str_arg(languages_json) }.and_then(json::<Vec<String>>) {
+            pf_l10n::set_languages(&tags);
+        }
     })
 }
 
@@ -818,6 +853,42 @@ mod tests {
         ProfileUnlock::new(kind, Zeroizing::new(secret.to_vec()), stay, 0, Vec::new()).unwrap()
     }
 
+    /// The palette names the picker offers are messages, read in the thread's language.
+    #[test]
+    fn palette_names_are_worded_from_messages() {
+        let names = |tag: &str| {
+            pf_l10n::with_language(tag, || {
+                let raw = punktfunk_console_palettes();
+                // SAFETY: a NUL-terminated string from `punktfunk_console_palettes`, freed once.
+                let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_owned();
+                // SAFETY: as above, and not used again.
+                unsafe { punktfunk_console_string_free(raw) };
+                serde_json::from_str::<Vec<serde_json::Value>>(&text).unwrap()
+            })
+        };
+        let (plain, pseudo) = (names("en"), names("en-XA"));
+        assert!(!plain.is_empty());
+        for (p, x) in plain.iter().zip(&pseudo) {
+            assert_eq!(p["id"], x["id"]);
+            assert!(!p["name"].as_str().unwrap().starts_with('['));
+            assert!(x["name"].as_str().unwrap().starts_with('['));
+        }
+    }
+
+    /// Bad input leaves the language alone; a list it ships is taken.
+    #[test]
+    fn set_languages_takes_a_list_and_ignores_the_rest() {
+        let before = pf_l10n::language();
+        // SAFETY: NULL, or a NUL-terminated literal.
+        unsafe {
+            punktfunk_console_set_languages(std::ptr::null());
+            punktfunk_console_set_languages(c"not json".as_ptr());
+            assert_eq!(pf_l10n::language(), before);
+            punktfunk_console_set_languages(c"[\"en-GB\"]".as_ptr());
+        }
+        assert_eq!(pf_l10n::language(), "en");
+    }
+
     /// A password that fits goes over with its switch. One that does not fit, a key proof and
     /// nothing at all leave the buffer and the switch untouched.
     #[test]
@@ -833,5 +904,23 @@ mod tests {
         assert_eq!(hand_over(proof, &mut small, &mut stay), 0);
         assert_eq!(hand_over(None, &mut small, &mut stay), 0);
         assert_eq!((small, stay), ([0, 0], false));
+    }
+
+    /// The hide pushes read every bridge sample: a `HiddenAnswer` under its host and profile,
+    /// a `HideAnswer` as it stands.
+    #[test]
+    fn hide_pushes_read_the_bridge_samples() {
+        let raw = include_str!("../../../shared/console-bridge-vectors.json");
+        let doc: serde_json::Value = serde_json::from_str(raw).unwrap();
+        for answer in doc["models"]["HiddenAnswer"].as_array().unwrap() {
+            let push = serde_json::json!({"fp_hex": "ab12", "profile": "p", "answer": answer});
+            assert!(json::<HiddenJson>(&push.to_string()).is_some(), "{push}");
+        }
+        for answer in doc["models"]["HideAnswer"].as_array().unwrap() {
+            assert!(
+                json::<HideAnswer>(&answer.to_string()).is_some(),
+                "{answer}"
+            );
+        }
     }
 }

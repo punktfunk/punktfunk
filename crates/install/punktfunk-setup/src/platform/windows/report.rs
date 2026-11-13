@@ -4,7 +4,13 @@
 //! is the two facts a user must leave knowing — the moved management port when a
 //! competitor is live, and the unreachable-host warning when the network is Public.
 //!
+//! Only the silent `/LOG` transcript prints `detected`, `choices_summary` and `outro`.
+//! `outro` and the bind label read `pf_l10n`; `detected` and the choices rows stay English.
+//! `footnotes` also fills the wizard's Done page.
+//!
 //! Goldens pin the strings. Design: `design/installer-v2-windows.md`.
+
+use pf_l10n::tools as t;
 
 use super::choices::{NetworkAnswer, WinChoices};
 use super::plan::Artifact;
@@ -79,45 +85,59 @@ pub fn choices_summary(ui: &dyn Reporter, choices: &WinChoices, artifact: Artifa
 /// The bind in the words the wizard's row uses. `None` leaves host.env untouched.
 fn bind_label(choices: &WinChoices) -> String {
     match choices.web_bind.as_deref() {
-        None => "what host.env already says".to_string(),
-        Some(LOOPBACK_BIND) => "this PC only".to_string(),
-        Some(LAN_BIND) => "this local network".to_string(),
+        None => t::setup_bind_value_keep().to_string(),
+        Some(LOOPBACK_BIND) => t::setup_bind_value_loopback().to_string(),
+        Some(LAN_BIND) => t::setup_bind_value_lan().to_string(),
         Some(addr) => addr.to_string(),
     }
 }
 
-pub fn outro(ui: &dyn Reporter, facts: &WinFacts, choices: &WinChoices, artifact: Artifact) {
+pub fn outro(
+    ui: &dyn Reporter,
+    facts: &WinFacts,
+    choices: &WinChoices,
+    artifact: Artifact,
+    host: &str,
+) {
     ui.blank();
-    ui.line("  Done. Next:");
+    ui.line(&format!("  {}", t::setup_win_outro_next()));
     match artifact {
         Artifact::Host => {
-            // The URL has to be the one that answers: a loopback console is not at this PC's
+            // The URL has to be the one that answers: a loopback console is not at this host's
             // network address, and printing it there reads as a failed install.
             match choices.web_bind.as_deref() {
                 Some(LOOPBACK_BIND) => {
-                    ui.line("  1. Open the web console:  https://127.0.0.1:47992  (the certificate is the host's own — continue past the warning)");
-                    ui.line("     It answers on this PC only. Set PUNKTFUNK_UI_BIND in host.env to reach it from another device.");
+                    ui.line(&format!("  1. {}", t::setup_win_outro_console_loopback()));
+                    ui.line(&format!(
+                        "     {}",
+                        t::setup_win_outro_console_loopback_body()
+                    ));
                 }
-                _ => ui.line("  1. Open the web console:  https://<this-PC>:47992  (the certificate is the host's own — continue past the warning)"),
+                _ => ui.line(&format!("  1. {}", t::setup_win_outro_console(host))),
             }
             if !facts.web_password_present {
-                ui.line(
-                    "     password: punktfunk-host web password  (from an elevated PowerShell)",
-                );
+                ui.line(&format!("     {}", t::setup_win_outro_password()));
             }
             ui.line(&format!(
-                "  2. Install a client on the device you stream to ({DOCS}/install-client), connect, and click Approve in the console."
+                "  2. {}",
+                t::setup_win_outro_install_client(format!("{DOCS}/install-client"))
             ));
             for note in footnotes(facts, choices) {
                 ui.line(&format!("  {note}"));
             }
         }
         Artifact::Client => {
-            ui.line("  1. Open Punktfunk from the Start menu and pick your host.");
-            ui.line(&format!("  2. Pairing help: {DOCS}/pairing"));
+            ui.line(&format!("  1. {}", t::setup_win_outro_open_client()));
+            ui.line(&format!(
+                "  2. {}",
+                t::setup_win_outro_pairing_help(format!("{DOCS}/pairing"))
+            ));
         }
     }
-    ui.line(&format!("  Stuck? {DOCS}/troubleshooting"));
+    ui.line(&format!(
+        "  {}",
+        t::setup_win_outro_stuck(format!("{DOCS}/troubleshooting"))
+    ));
     ui.blank();
 }
 
@@ -127,8 +147,9 @@ pub fn outro(ui: &dyn Reporter, facts: &WinFacts, choices: &WinChoices, artifact
 pub fn footnotes(facts: &WinFacts, choices: &WinChoices) -> Vec<String> {
     let mut notes = Vec::new();
     if facts.needs_coexistence() {
-        notes.push(format!(
-            "Running next to Sunshine/Apollo: punktfunk's management API is on :{DEFAULT_MGMT_PORT} — {DOCS}/switching-from-sunshine"
+        notes.push(t::setup_win_note_coexist(
+            DEFAULT_MGMT_PORT,
+            format!("{DOCS}/switching-from-sunshine"),
         ));
     }
     if matches!(choices.network, NetworkAnswer::Skip)
@@ -136,7 +157,8 @@ pub fn footnotes(facts: &WinFacts, choices: &WinChoices) -> Vec<String> {
         && !facts.public_networks().is_empty()
     {
         notes.push(format!(
-            "⚠ This network is Public and the firewall rules don't apply there — the host is unreachable until that changes ({DOCS}/troubleshooting#windows-firewall)"
+            "⚠ {}",
+            t::setup_win_note_public(format!("{DOCS}/troubleshooting#windows-firewall"))
         ));
     }
     notes

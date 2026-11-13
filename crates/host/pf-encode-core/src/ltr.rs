@@ -1,6 +1,6 @@
 //! The two-slot LTR mirror AMF and QSV keep beside the hardware's long-term slots: the wire
-//! index in each slot, which of those a loss tainted, the next round-robin mark and a queued
-//! force. Policy is [`crate::rfi`]; how a mark or a force reaches the hardware stays in each
+//! index in each slot, which of those a loss tainted, the next round-robin mark, the kept pair
+//! and a queued force. Policy is [`crate::rfi`]; how a mark or a force reaches the hardware stays in each
 //! backend.
 
 use crate::{rfi, Acked};
@@ -38,6 +38,8 @@ pub struct LtrMirror {
     /// IDR clears it.
     tainted: [bool; NUM_LTR_SLOTS],
     next: usize,
+    /// The pin and candidate marks follow while the client confirms ([`rfi::Kept`]).
+    kept: rfi::Kept,
     /// The slot the next frame force-references. That frame's step consumes it.
     pending_force: Option<usize>,
 }
@@ -69,13 +71,16 @@ impl LtrMirror {
     ///
     /// Under a `floor` each frame forces the newest confirmed slot ([`rfi::ltr_acked_step`]).
     /// With `keep` the driver keeps the other slot and the frame marks only a free one;
-    /// without, the frame marks the other slot. Otherwise marks land every `interval` frames,
-    /// first on an untrusted slot, else round robin.
+    /// without, the frame marks the other slot. Otherwise a frame the kept pair takes as its
+    /// candidate marks, or every `interval` frames while the client sends no `confirmed`;
+    /// first an untrusted slot, never the pin's.
+    #[allow(clippy::too_many_arguments)]
     pub fn step(
         &mut self,
         forced: bool,
         cur_idx: i64,
         interval: i64,
+        confirmed: Option<&Acked>,
         floor: Option<Acked>,
         keep: bool,
         drop_unforced: bool,
@@ -109,15 +114,46 @@ impl LtrMirror {
             (rfi::FrameRef::Acked | rfi::FrameRef::Chain, _, Some(floor)) => {
                 return self.step_acked(&floor, cur_idx, keep);
             }
-            _ if forced || cur_idx % interval == 0 => {
+            _ if forced || self.marks(cur_idx, interval, confirmed) => {
                 let trusted: [bool; NUM_LTR_SLOTS] = std::array::from_fn(|s| self.trusted(s));
                 let slot = rfi::mark_slot(&trusted, self.next);
+                let pinned = trusted[slot] && self.slots[slot] == self.kept.pin;
+                let slot = if pinned {
+                    (slot + 1) % NUM_LTR_SLOTS
+                } else {
+                    slot
+                };
                 self.mark(slot, cur_idx);
+                if forced {
+                    // The IDR is the next pin, so a late loss right after it still finds it.
+                    self.kept.candidate = Some(cur_idx);
+                }
                 step.mark_slot = Some(slot);
             }
             _ => {}
         }
         step
+    }
+
+    /// Whether frame `cur_idx` takes a mark outside confirmed references: as the kept
+    /// candidate while the client confirms, else every `interval` frames. A pair that starts
+    /// from nothing pins the newest mark the client confirmed.
+    fn marks(&mut self, cur_idx: i64, interval: i64, confirmed: Option<&Acked>) -> bool {
+        let Some(acked) = confirmed else {
+            self.kept = rfi::Kept::default();
+            return cur_idx % interval == 0;
+        };
+        let view = self.trusted_view();
+        if self.kept == rfi::Kept::default() {
+            self.kept.pin = view
+                .iter()
+                .flatten()
+                .copied()
+                .filter(|&w| acked.contains(w))
+                .max();
+        }
+        self.kept
+            .step(cur_idx, true, Some(acked), |w| view.contains(&Some(w)))
     }
 
     /// [`Self::step`] under confirmed references.
@@ -171,11 +207,69 @@ mod tests {
 
     /// AMF's step at interval 8: a queued force drops the other slot.
     fn amf(m: &mut LtrMirror, cur: i64, floor: Option<Acked>, keep: bool) -> LtrStep {
-        m.step(false, cur, 8, floor, keep, true)
+        m.step(false, cur, 8, None, floor, keep, true)
     }
 
     fn floor(last: i64) -> Option<Acked> {
         Some(Acked { last, mask: 0xffff })
+    }
+
+    /// While the client confirms, marks follow the kept pair: a loss reported 40 frames late
+    /// still forces the confirmed pin, where 8-frame marks kept nothing older than the loss.
+    #[test]
+    fn a_late_loss_forces_the_kept_pin() {
+        let lost = 100;
+        let run = |confirms: bool| {
+            let mut m = LtrMirror::default();
+            for cur in 0..lost + 40 {
+                let acked = Acked {
+                    last: (cur - 4).min(lost - 1),
+                    mask: 0xffff,
+                };
+                let confirmed = confirms.then_some(&acked);
+                m.step(cur == 0, cur, 8, confirmed, None, false, true);
+            }
+            m.invalidate(lost, None)
+        };
+        let (_, pin) = run(true).expect("the confirmed pin answers");
+        assert!(pin < lost, "{pin}");
+        assert_eq!(run(false), None);
+    }
+
+    /// Frame 1 is lost and reported 20 frames late; the client confirms from frame 4 on, frame 0
+    /// only. The IDR is the confirmed pin and answers.
+    #[test]
+    fn a_late_loss_after_the_opening_idr_forces_it() {
+        let mut m = LtrMirror::default();
+        let acked = Acked { last: 0, mask: 0 };
+        for cur in 0..21 {
+            let confirmed = (cur >= 4).then_some(&acked);
+            m.step(cur == 0, cur, 30, confirmed, None, false, true);
+        }
+        assert_eq!(m.invalidate(1, None), Some((0, 0)));
+    }
+
+    /// Confirmations flow, an IDR at 40, and its first P is lost; the client's confirmations
+    /// stall before the IDR. The IDR answers the late report.
+    #[test]
+    fn a_late_loss_after_a_forced_idr_forces_it() {
+        let mut m = LtrMirror::default();
+        for cur in 0..61 {
+            let acked = Acked {
+                last: (cur - 4).min(39),
+                mask: 0xffff,
+            };
+            m.step(
+                cur == 0 || cur == 40,
+                cur,
+                30,
+                Some(&acked),
+                None,
+                false,
+                true,
+            );
+        }
+        assert_eq!(m.invalidate(41, None).map(|(_, w)| w), Some(40));
     }
 
     /// An IDR empties the mirror, its taint and a queued force, and marks slot 0.
@@ -186,8 +280,9 @@ mod tests {
             tainted: [true, false],
             next: 1,
             pending_force: Some(1),
+            ..LtrMirror::default()
         };
-        let step = m.step(true, 9, 8, None, false, true);
+        let step = m.step(true, 9, 8, None, None, false, true);
         assert_eq!(
             step,
             LtrStep {
@@ -211,7 +306,7 @@ mod tests {
                 pending_force: Some(0),
                 ..LtrMirror::default()
             };
-            let step = m.step(false, 16, 8, None, false, drop_unforced);
+            let step = m.step(false, 16, 8, None, None, false, drop_unforced);
             assert_eq!(
                 step,
                 LtrStep {
@@ -223,7 +318,7 @@ mod tests {
             assert_eq!(m.slots, [Some(0), Some(8)], "a taint keeps the wire index");
             m.tainted = [true, false];
             m.pending_force = Some(0);
-            let step = m.step(false, 17, 8, None, false, drop_unforced);
+            let step = m.step(false, 17, 8, None, None, false, drop_unforced);
             assert_eq!(step, LtrStep::default());
             assert_eq!(m.pending_force, None, "a force is consumed either way");
         }
@@ -353,7 +448,7 @@ mod tests {
                         loss: false,
                     };
                     let plan = rfi::plan_frame(rfi::Recovery::default(), pending, &NO_WAVE);
-                    let step = m.step(forced, cur, 4, floor, keep, drop_unforced);
+                    let step = m.step(forced, cur, 4, None, floor, keep, drop_unforced);
                     let (was, letter) = match (forced, step.force, step.acked) {
                         (true, ..) => (rfi::FrameRef::Idr, 'I'),
                         (_, Some(_), false) => (rfi::FrameRef::Anchor, 'A'),

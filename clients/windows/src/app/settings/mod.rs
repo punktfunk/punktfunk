@@ -28,7 +28,10 @@ use super::style::*;
 use super::{AppCtx, AsyncSetState, Msg, Shell};
 use crate::trust::Settings;
 use pf_client_core::presets::{PresetsFile, SettingsOverlay, StreamPreset};
+use pf_client_core::settings::Label;
 use pf_fluent::{Palette, Token};
+use pf_l10n::{client, common, desktop};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use windows_reactor::*;
 
@@ -92,23 +95,63 @@ pub(crate) fn update_preset(
     })
 }
 
-/// Re-base the process-lifetime settings snapshot on the file, and re-probe this device's
-/// hardware — called from the navigation handlers that (re)enter this page, NOT per render
-/// pass. `ctx.settings` is loaded once at process start and this process is not the file's
-/// only writer (a spawned session persists its match-window size, the console UI and Decky
-/// save too — presets.rs documents the family), so without this the page opens showing values
-/// another process already replaced, which then visibly "jump" the moment a row is touched and
-/// `commit`'s rebase pulls the file in.
+/// Re-base the settings snapshot on the file, ask each paired host for its screens (which a
+/// preset's Host screen row lists) and re-probe this device's hardware in the background.
+/// Called from the navigation handlers that (re)enter this page, never per render pass.
+/// `ctx.settings` is loaded once at process start and this process is not the file's only
+/// writer (a spawned session, the console UI and Decky save too), so without this the page
+/// opens on values another process already replaced, which "jump" the moment a row is touched
+/// and `commit`'s rebase pulls the file in.
 pub(crate) fn refresh_snapshot(ctx: &Arc<AppCtx>) {
     *ctx.settings.lock().unwrap() = Settings::load();
-    let (speakers, mics) = pf_client_core::audio::devices().unwrap_or_default();
-    *ctx.probes.lock().unwrap() = DeviceProbes {
-        gpus: crate::gpu::adapter_names(),
-        speakers,
-        mics,
-        native: primary_mode(),
-        link: punktfunk_core::transport::ifinfo::local_link_facts(None),
-    };
+    for k in crate::trust::KnownHosts::load()
+        .hosts
+        .iter()
+        .filter(|k| k.paired)
+    {
+        let mgmt = k
+            .mgmt_port
+            .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
+        pf_client_core::display_targets::refresh(&k.addr, mgmt, k.port, &k.fp_hex);
+    }
+    probe_devices(ctx);
+}
+
+/// Probe DXGI, WASAPI and the link on a worker: a driver can sit in limbo for seconds, and
+/// the WinUI thread must not wait on it. The page shows the previous probe until this one
+/// lands, then re-renders. One probe runs at a time; a visit during one reads its result.
+pub(crate) fn probe_devices(ctx: &Arc<AppCtx>) {
+    static BUSY: AtomicBool = AtomicBool::new(false);
+    /// Clears [`BUSY`] when the worker ends, a panic included.
+    struct Idle;
+    impl Drop for Idle {
+        fn drop(&mut self) {
+            BUSY.store(false, Ordering::Release);
+        }
+    }
+    if BUSY.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let ctx = ctx.clone();
+    let spawned = std::thread::Builder::new()
+        .name("pf-device-probe".into())
+        .spawn(move || {
+            let _idle = Idle;
+            let (speakers, mics) = pf_client_core::audio::devices().unwrap_or_default();
+            *ctx.probes.lock().unwrap() = DeviceProbes {
+                gpus: crate::gpu::adapter_names(),
+                speakers,
+                mics,
+                native: primary_mode(),
+                link: punktfunk_core::transport::ifinfo::local_link_facts(None),
+            };
+            if let Some(set) = ctx.shared.set_devices.lock().unwrap().as_ref() {
+                set.call(());
+            }
+        });
+    if spawned.is_err() {
+        BUSY.store(false, Ordering::Release);
+    }
 }
 
 /// The primary display's current mode in real pixels: what a Native stream asks for here.
@@ -141,7 +184,7 @@ fn primary_mode() -> Option<punktfunk_core::Mode> {
 }
 
 /// This device's pickable hardware: DXGI adapters and WASAPI endpoints, and the display and
-/// link PyroWave quality prices against. Probed once per visit by [`refresh_snapshot`], never
+/// link PyroWave quality prices against. Probed once per visit by [`probe_devices`], never
 /// on the render each settings commit triggers.
 #[derive(Default)]
 pub(crate) struct DeviceProbes {
@@ -184,9 +227,17 @@ fn setting_combo(
         })
 }
 
+/// A `(value, message)` table with each message read now, for the page being drawn.
+fn labeled<V: Copy>(table: &[(V, Label)]) -> Vec<(V, &'static str)> {
+    table.iter().map(|(v, l)| (*v, l())).collect()
+}
+
 /// The labels of a `(value, label)` preset table, plus the index of `is_current`'s match.
-fn presets<V>(table: &[(V, &str)], is_current: impl Fn(&V) -> bool) -> (Vec<String>, usize) {
-    let names = table.iter().map(|(_, l)| l.to_string()).collect();
+fn presets<V, L: AsRef<str>>(
+    table: &[(V, L)],
+    is_current: impl Fn(&V) -> bool,
+) -> (Vec<String>, usize) {
+    let names = table.iter().map(|(_, l)| l.as_ref().to_string()).collect();
     let current = table.iter().position(|(v, _)| is_current(v)).unwrap_or(0);
     (names, current)
 }
@@ -202,8 +253,8 @@ fn setting_toggle(
 ) -> ToggleSwitch {
     ToggleSwitch::new()
         .is_on(on)
-        .on_content("On")
-        .off_content("Off")
+        .on_content(common::common_on())
+        .off_content(common::common_off())
         .on_toggled(committer(cx, scope, field, apply))
 }
 
@@ -234,7 +285,7 @@ fn described_overridable(
     control: impl Into<View>,
     caption: &str,
 ) -> View {
-    let (field, label, pal) = (row.key, row.label, cx.pal);
+    let (field, label, pal) = (row.key, row.label(), cx.pal);
     if !cx.overrides(field) {
         return described_labeled(pal, label, control, caption);
     }
@@ -246,7 +297,7 @@ fn described_overridable(
     let pill = Border::new()
         .content(
             hstack((
-                text("Overridden")
+                text(client::prefs_overridden())
                     .font_size(11.0)
                     .font_weight(FontWeight::SEMI_BOLD)
                     .foreground(pal.get(Token::SystemAttention))
@@ -255,7 +306,7 @@ fn described_overridable(
                 blank(1.0, 12.0)
                     .background(ThemeBrush::CardStroke)
                     .vertical_alignment(VerticalAlignment::Center),
-                text("Reset")
+                text(common::common_reset())
                     .font_size(11.0)
                     .font_weight(FontWeight::SEMI_BOLD)
                     .foreground(ThemeBrush::AccentText)
@@ -277,7 +328,7 @@ fn described_overridable(
         // did: the bump re-renders the row showing the inherited value.
         saved(r, &set_status, Some((rev, &set_rev)));
     })
-    .tooltip("Overridden by this preset \u{2014} Reset returns it to Default settings");
+    .tooltip(client::prefs_override_help());
     vstack((
         row_label(label),
         reset_pill,
@@ -367,15 +418,12 @@ fn group(
 /// which shows them. Nothing when none changed.
 fn advanced_group(cx: &Cx, fields: Vec<View>, changed: usize, overridden: bool) -> Vec<View> {
     if cx.s.show_advanced || overridden {
-        return group(cx.pal, Some("Advanced"), fields, None);
+        return group(cx.pal, Some(client::prefs_advanced()), fields, None);
     }
     if changed == 0 || cx.preset_mode {
         return Vec::new();
     }
-    let label = match changed {
-        1 => "1 advanced setting changed".to_string(),
-        n => format!("{n} advanced settings changed"),
-    };
+    let label = client::prefs_advanced_changed(changed as u64);
     let (ctx, rev, set_rev, set_status) = (
         cx.ctx.clone(),
         cx.rev,
@@ -415,6 +463,8 @@ struct Cx<'a> {
     /// Render scale sits on Custom… though the stored scale is a listed stop.
     custom_scale: bool,
     set_custom_scale: &'a AsyncSetState<bool>,
+    /// Raises the reset confirmation.
+    set_reset: &'a AsyncSetState<bool>,
 }
 
 impl Cx<'_> {
@@ -424,15 +474,24 @@ impl Cx<'_> {
     }
 }
 
-/// The sidebar's sections in the Apple client's order: tag, title, Lucide mark.
-const SECTIONS: [(&str, &str, &str); 7] = [
-    ("general", "General", "settings"),
-    ("display", "Display", "maximize"),
-    ("input", "Input", "keyboard"),
-    ("quick_actions", "Quick actions", "rotate-cw"),
-    ("audio", "Audio", "volume-2"),
-    ("controllers", "Controllers", "gamepad-2"),
-    ("about", "About", "circle-help"),
+/// The sidebar's sections in the Apple client's order: tag, title message, Lucide mark.
+const SECTIONS: [(&str, Label, &str); 8] = [
+    ("general", client::prefs_category_general, "settings"),
+    ("display", client::prefs_category_display, "maximize"),
+    ("input", client::prefs_category_input, "keyboard"),
+    (
+        "quick_actions",
+        client::prefs_category_quick_actions,
+        "rotate-cw",
+    ),
+    ("shortcuts", client::player_shortcuts, "pointer"),
+    ("audio", client::prefs_category_audio, "volume-2"),
+    (
+        "controllers",
+        client::prefs_category_controllers,
+        "gamepad-2",
+    ),
+    ("about", client::prefs_category_about, "circle-help"),
 ];
 
 /// The settings screen: a stock WinUI `NavigationView` (the Windows-Settings sidebar pattern),
@@ -449,6 +508,7 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
     let (set_edit, set_rev) = (shell.set(Msg::SettingsEdit), shell.set(Msg::SettingsRev));
     let (set_custom_res, set_custom_scale) =
         (shell.set(Msg::CustomRes), shell.set(Msg::CustomScale));
+    let set_reset = shell.set(Msg::SettingsReset);
     // The layer being edited. A scope pointing at a deleted preset degrades to the defaults,
     // the same rule a dangling host binding follows.
     let active = active_preset(&shell.settings_scope);
@@ -481,6 +541,7 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
         set_custom_res: &set_custom_res,
         custom_scale: shell.custom_scale,
         set_custom_scale: &set_custom_scale,
+        set_reset: &set_reset,
     };
     // The selected section's content, grouped exactly like the Apple client's categories
     // (SettingsCategory + SettingsView+Sections.swift). Each section builds only its own rows.
@@ -488,6 +549,7 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
         "display" => display::display_section(&cx),
         "input" => input::input_section(&cx),
         "quick_actions" => input::quick_actions_section(&cx),
+        "shortcuts" => input::shortcuts_section(&cx),
         "controllers" => controllers::controllers_section(&cx),
         "audio" => audio::audio_section(&cx),
         "about" => about::about_section(pal, &set_screen),
@@ -497,14 +559,14 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
     let title = SECTIONS
         .iter()
         .find(|(tag, ..)| *tag == section)
-        .map_or("General", |(_, title, _)| title);
+        .map_or_else(client::prefs_category_general, |(_, title, _)| title());
 
     let items = SECTIONS.iter().map(|(tag, title, mark)| {
         KeyedView::new(
             *tag,
             NavigationViewItem::new()
                 .tag(tag)
-                .content(*title)
+                .content(title())
                 .icon(lucide::icon(mark, pal))
                 .is_selected(*tag == section),
         )
@@ -539,7 +601,7 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
         // ScrollView scrolls through its direct child's Translation, and a Translation write
         // stops that scroll until the child resizes. The tweened column stays one Border in.
         .content(ScrollView::new().content(Border::new().content(column)))
-        .pane_title("Settings")
+        .pane_title(client::prefs_title())
         .on_selected_tag_changed({
             let ss = shell.set(Msg::SettingsNav);
             move |tag: Option<std::rc::Rc<str>>| {
@@ -565,11 +627,8 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
             Border::new()
                 .content(
                     InfoBar::new()
-                        .title("Your changes aren\u{2019}t being saved")
-                        .message(format!(
-                            "Punktfunk can\u{2019}t write to its settings folder, so nothing \
-                             on this page will survive a restart. {err}"
-                        ))
+                        .title(desktop::desktop_prefs_not_saved_title())
+                        .message(format!("{} {err}", desktop::desktop_prefs_not_saved_body()))
                         .severity(InfoBarSeverity::Error)
                         .is_open(true)
                         .is_closable(false),
@@ -584,7 +643,11 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
     Grid::new()
         .children((
             vstack(bars).grid_row(0),
-            Grid::new().children((nav, sheet_slot)).grid_row(1),
+            // One dialog per view: the reset's rides the inner grid, the delete's the outer.
+            Grid::new()
+                .children((nav, sheet_slot))
+                .grid_row(1)
+                .content_dialog(general::reset_dialog(&cx, shell.settings_reset)),
         ))
         .rows([GridLength::Auto, GridLength::STAR])
         .content_dialog(preset_sheet::delete_dialog(

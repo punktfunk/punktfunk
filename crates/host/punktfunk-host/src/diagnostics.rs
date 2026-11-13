@@ -32,6 +32,7 @@ pub mod ids {
     pub const PAD_AUDIO: &str = "pad_audio";
     pub const PAD_DRIVER: &str = "pad_driver";
     pub const ENCODER_SHARING: &str = "encoder_sharing";
+    pub const GPU_FIRMWARE: &str = "gpu_firmware";
     pub const PLUGIN_SANDBOX: &str = "plugin_sandbox";
     pub const RESTART_PENDING: &str = "restart_pending";
 }
@@ -111,6 +112,15 @@ pub struct HostCheck {
     pub remedy: Option<Remedy>,
     /// Interpolation for localized strings (`{user}`, `{group}`). Only the host can see these.
     pub params: BTreeMap<String, String>,
+    /// The host message `summary` is the English of, worded with `params`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_id: Option<String>,
+    /// The host message `impact` is the English of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impact_id: Option<String>,
+    /// The host message the remedy's `text` is the English of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remedy_id: Option<String>,
     /// First non-ok observation this run. Per-run stamp, not a history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since_unix: Option<u64>,
@@ -127,6 +137,9 @@ impl HostCheck {
             impact: String::new(),
             remedy: None,
             params: BTreeMap::new(),
+            summary_id: None,
+            impact_id: None,
+            remedy_id: None,
             since_unix: None,
             source: CheckSource::Startup,
         }
@@ -142,6 +155,9 @@ impl HostCheck {
             impact: String::new(),
             remedy: None,
             params: BTreeMap::new(),
+            summary_id: None,
+            impact_id: None,
+            remedy_id: None,
             since_unix: None,
             source: CheckSource::Startup,
         }
@@ -163,6 +179,9 @@ impl HostCheck {
             impact: impact.into(),
             remedy: None,
             params: BTreeMap::new(),
+            summary_id: None,
+            impact_id: None,
+            remedy_id: None,
             since_unix: None,
             source: CheckSource::Startup,
         }
@@ -175,6 +194,15 @@ impl HostCheck {
 
     pub fn with_param(mut self, key: &str, value: impl Into<String>) -> Self {
         self.params.insert(key.to_string(), value.into());
+        self
+    }
+
+    /// The message ids of `summary`, `impact` and the remedy's text, in that order; `None` for
+    /// a field this check leaves empty.
+    pub fn worded(mut self, summary: &str, impact: Option<&str>, remedy: Option<&str>) -> Self {
+        self.summary_id = Some(summary.to_string());
+        self.impact_id = impact.map(str::to_string);
+        self.remedy_id = remedy.map(str::to_string);
         self
     }
 
@@ -551,6 +579,7 @@ mod tests {
             ids::OMARCHY_UPDATES,
             ids::VDISPLAY_DRIVER,
             ids::ENCODER_SHARING,
+            ids::GPU_FIRMWARE,
         ] {
             assert!(
                 ids.iter().any(|i| i == expected),

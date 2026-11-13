@@ -28,6 +28,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -39,11 +40,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.firstLetter
 import io.unom.punktfunk.models.HostStatus
 
 /** Left-aligned section header above each block of the connect screen. */
@@ -61,11 +68,19 @@ fun SectionLabel(text: String) {
  * One row of a host card's overflow menu. [startsSection] draws a divider above it, which is how
  * the preset actions ("Connect with: …", "Pin as card: …") stay legible next to the host actions
  * in one flat menu — Compose has no submenus, and the Windows client made the same call.
+ * [detail] is a second line under the label. A row with no [onClick] is a section's title, with
+ * its note as [detail], or with [subhead] a smaller label over a group inside the section. A row
+ * not [enabled] says why in [detail]. A non-null [selected] makes the row one choice of its
+ * section, drawn with a radio button.
  */
 data class HostMenuItem(
     val label: String,
     val startsSection: Boolean = false,
-    val onClick: () -> Unit,
+    val enabled: Boolean = true,
+    val detail: String? = null,
+    val selected: Boolean? = null,
+    val subhead: Boolean = false,
+    val onClick: (() -> Unit)?,
 )
 
 /**
@@ -107,6 +122,10 @@ fun HostCard(
     profileName: String? = null,
     profilePicture: String? = null,
     profileArt: io.unom.punktfunk.ProfileArt? = null,
+    /** The screen a connect gets when it is not the only screen: "Second screen", "Streams LG TV". */
+    screenLine: String? = null,
+    /** Keep [screenLine]'s space, for the same reason as [reservePresetSlot]. */
+    reserveScreenLine: Boolean = false,
 ) {
     // D-pad / controller focus highlight: a clickable card is focusable, but the default state
     // layer is too subtle on a TV across a room — draw a clear primary-colour border when focused.
@@ -159,6 +178,16 @@ fun HostCard(
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
                 )
+                if (screenLine != null || reserveScreenLine) {
+                    Text(
+                        screenLine.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                    )
+                }
                 if (presetLabel != null || reservePresetSlot) {
                     Spacer(Modifier.height(10.dp))
                     Box(
@@ -185,7 +214,7 @@ fun HostCard(
                     IconButton(enabled = enabled, onClick = { menu = true }) {
                         Icon(
                             Icons.Filled.MoreVert,
-                            contentDescription = "More",
+                            contentDescription = stringResource(R.string.hostcard_more_a11y),
                             modifier = Modifier.size(20.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
@@ -193,7 +222,7 @@ fun HostCard(
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         if (onWake != null) {
                             DropdownMenuItem(
-                                text = { Text("Wake host") },
+                                text = { Text(stringResource(R.string.hostcard_wake)) },
                                 onClick = {
                                     menu = false
                                     onWake()
@@ -202,7 +231,7 @@ fun HostCard(
                         }
                         if (onEdit != null) {
                             DropdownMenuItem(
-                                text = { Text("Edit…") },
+                                text = { Text(stringResource(R.string.hostcard_edit)) },
                                 onClick = {
                                     menu = false
                                     onEdit()
@@ -211,7 +240,7 @@ fun HostCard(
                         }
                         if (onForget != null) {
                             DropdownMenuItem(
-                                text = { Text("Forget") },
+                                text = { Text(stringResource(R.string.hostcard_remove)) },
                                 onClick = {
                                     menu = false
                                     onForget()
@@ -220,13 +249,57 @@ fun HostCard(
                         }
                         menuItems.forEach { item ->
                             if (item.startsSection) HorizontalDivider()
-                            DropdownMenuItem(
-                                text = { Text(item.label) },
-                                onClick = {
-                                    menu = false
-                                    item.onClick()
-                                },
-                            )
+                            val onClick = item.onClick
+                            if (onClick == null && item.subhead) {
+                                Text(
+                                    item.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 2.dp),
+                                )
+                            } else if (onClick == null) {
+                                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                    Text(
+                                        item.label,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                    item.detail?.let {
+                                        Text(
+                                            it,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            } else {
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(item.label)
+                                            item.detail?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                                        }
+                                    },
+                                    leadingIcon = if (item.selected != null) {
+                                        { RadioButton(selected = item.selected, onClick = null, enabled = item.enabled) }
+                                    } else {
+                                        null
+                                    },
+                                    enabled = item.enabled,
+                                    onClick = {
+                                        menu = false
+                                        onClick()
+                                    },
+                                    modifier = if (item.selected != null) {
+                                        Modifier.semantics {
+                                            role = Role.RadioButton
+                                            selected = item.selected
+                                        }
+                                    } else {
+                                        Modifier
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -293,9 +366,10 @@ private val PRESENCE_ONLINE = Color(0xFF4ADE80)
  */
 @Composable
 fun HostAvatar(name: String, online: Boolean = false, os: String = "") {
-    val letter = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+    val letter = name.trim().takeIf { it.isNotEmpty() }?.let(::firstLetter) ?: "?"
     val cardColor = CardDefaults.elevatedCardColors().containerColor
     val osIcon = resolveOsIcon(os)
+    val presence = stringResource(if (online) R.string.hostcard_status_online else R.string.hostcard_status_offline)
     Box {
         Box(
             modifier = Modifier
@@ -341,7 +415,7 @@ fun HostAvatar(name: String, online: Boolean = false, os: String = "") {
                             .border(1.5.dp, MaterialTheme.colorScheme.onSurfaceVariant, CircleShape)
                     },
                 )
-                .semantics { contentDescription = if (online) "Online" else "Offline" },
+                .semantics { contentDescription = presence },
         )
     }
 }
@@ -361,7 +435,7 @@ private fun TrustBadge(status: HostStatus, modifier: Modifier = Modifier) {
     }
     Icon(
         icon,
-        contentDescription = status.label,
+        contentDescription = stringResource(status.label),
         tint = tint.copy(alpha = 0.85f),
         modifier = modifier.padding(14.dp).size(18.dp),
     )
@@ -374,10 +448,10 @@ fun EmptyHostsState() {
         modifier = Modifier.fillMaxWidth().padding(vertical = 56.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("No hosts yet", style = MaterialTheme.typography.titleMedium)
+        Text(stringResource(R.string.hosts_empty_title), style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Hosts on your network show up here automatically.\nTap “Add host” to enter one by address.",
+            stringResource(R.string.hosts_empty_body),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

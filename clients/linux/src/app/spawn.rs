@@ -57,7 +57,7 @@ fn plan_for(req: &ConnectRequest, fp_hex: &str, tofu: bool, opts: &SpawnOpts) ->
     // This shell prompts for a locked profile's password and spawns again with it.
     plan.prompts_unlock = true;
     if let Some(profile) = &opts.profile {
-        plan.profile = profile.clone();
+        plan.play_as(profile.clone());
     }
     plan
 }
@@ -131,7 +131,7 @@ pub fn spawn_console(
         SessionEvent::Ended(msg) => ended = Some(msg),
         SessionEvent::Exited(code) => {
             let outcome = ConnectOutcome::from_exit(code, error.take(), ended.take(), false);
-            let banner = outcome.console_banner("the client log");
+            let banner = outcome.console_banner(None);
             let _ = sender.send(AppMsg::ConsoleExited(banner));
         }
         // This shell draws nothing for a ready, an approval wait or a stats line (the console
@@ -145,7 +145,7 @@ pub fn spawn_console(
         .map(drop)
         .map_err(|e| {
             tracing::error!(error = %e, "console did not launch");
-            orchestrate::CONSOLE_NOT_STARTED.to_string()
+            pf_l10n::client::dial_console_not_started().to_string()
         })
 }
 

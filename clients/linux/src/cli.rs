@@ -158,8 +158,18 @@ pub fn headless_library(target: &str) -> glib::ExitCode {
         .or_else(|| saved.map(|h| h.effective_mgmt_port()))
         .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
     let stream_port = saved.map_or(0, |h| h.port);
-    match pf_client_core::library::fetch_games(&addr, port, stream_port, &identity, Some(pin)) {
-        Ok(games) => {
+    let profile = saved
+        .and_then(|h| h.profile.as_ref())
+        .map(|p| p.id.as_str());
+    match pf_client_core::library::fetch_games(
+        &addr,
+        port,
+        stream_port,
+        &identity,
+        Some(pin),
+        profile,
+    ) {
+        Ok((games, _)) => {
             // A fourth column, appended: `game` or `launcher` (design D4). Appended rather than
             // folded into an existing field so anything reading the first three columns is
             // untouched.

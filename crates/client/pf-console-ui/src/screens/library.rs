@@ -95,7 +95,7 @@ fn draw_loading(canvas: &Canvas, ui: &Frame, rect: Rect, k: f64, fonts: &Fonts, 
     // Same arc as `shell::overlays::draw_takeover`. A frozen arc under reduced motion reads hung.
     fonts.centered(
         canvas,
-        "Loading library…",
+        pf_l10n::client::lib_loading(),
         W::Regular,
         14.0 * k,
         ui.fg(0.55),
@@ -104,6 +104,22 @@ fn draw_loading(canvas: &Canvas, ui: &Frame, rect: Rect, k: f64, fonts: &Fonts, 
         w * 0.8,
     );
     crate::theme::spinner(canvas, ui, cx, cy - 26.0 * k, 22.0 * k, t);
+}
+
+/// The state card's button.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum StateAction {
+    Retry,
+    StreamDesktop,
+}
+
+impl StateAction {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            StateAction::Retry => pf_l10n::common::common_retry(),
+            StateAction::StreamDesktop => pf_l10n::client::lib_stream_desktop(),
+        }
+    }
 }
 
 /// Write `library_sort` only. Screens re-read it each frame; assigning the field reverts.
@@ -139,7 +155,8 @@ pub(crate) struct LibraryScreen {
     filter: Option<crate::collate::GroupKey>,
     /// Held, not re-derived: `Store("Steam")` and `Platform("Steam")` both read "Steam".
     filter_label: Option<String>,
-    /// A title search, lowercased: only titles containing it stay.
+    /// A title search as typed: titles containing it stay, both folded by
+    /// [`punktfunk_core::search::fold`].
     query: Option<String>,
     /// A collection's or a search's shelf: the pills and the field, no rows.
     drilled: bool,
@@ -195,6 +212,9 @@ pub(crate) struct LibraryScreen {
     zone: Zone,
     /// The zone is the player's or the ready list's, not the arrival guess.
     seated: bool,
+    /// A band zone's band, section and line as last placed: a band that empties hands focus
+    /// to the line that takes its place.
+    band_seat: Option<(usize, crate::library::Section, usize)>,
     /// Pills, chips, band items and the state button as last drawn, for the pointer and
     /// the line handoff.
     hits: Vec<(Zone, Rect)>,
@@ -202,7 +222,23 @@ pub(crate) struct LibraryScreen {
     embedded: bool,
     /// Embedded, with the row holding focus: no focused card, no title line.
     quiet: bool,
+    /// [`LibraryShared`]'s in-place edits as last synced: a title hidden or shown is no new list.
+    edits: u64,
+    /// What a profile hides, in place of the host's list ([`Self::hidden`]).
+    hidden: Option<Box<Hidden>>,
 }
+
+/// The titles hidden from a profile, as their own shelf: whose, by id and by name, and the
+/// titles asked back whose answer is still out.
+struct Hidden {
+    profile: String,
+    name: String,
+    asked: Vec<String>,
+}
+
+/// A hidden card's ink, and the focused one's: there to bring back, not to play.
+const HIDDEN_ALPHA: f32 = 0.45;
+const HIDDEN_FOCUS_ALPHA: f32 = 0.8;
 
 impl LibraryScreen {
     pub(crate) fn new(host: &HostRow) -> LibraryScreen {
@@ -248,9 +284,87 @@ impl LibraryScreen {
             sections: crate::library::sections(""),
             zone: Zone::Grid,
             seated: false,
+            band_seat: None,
             hits: Vec::new(),
             embedded: false,
             quiet: false,
+            edits: 0,
+            hidden: None,
+        }
+    }
+
+    /// What profile `profile`, called `name`, hides on `host`: the field alone, its cards
+    /// dimmed, OK showing one again. Lists what [`Self::set_hidden_list`] hands it.
+    pub(crate) fn hidden(host: &HostRow, profile: &str, name: &str) -> LibraryScreen {
+        LibraryScreen {
+            drilled: true,
+            filter_label: Some(pf_l10n::client::lib_hidden_for(name)),
+            hidden: Some(Box::new(Hidden {
+                profile: profile.into(),
+                name: name.into(),
+                asked: Vec::new(),
+            })),
+            ..LibraryScreen::new(host)
+        }
+    }
+
+    /// The command that fills a hidden shelf, or asks again.
+    pub(crate) fn fetch_hidden(&self) -> Option<ConsoleCmd> {
+        let h = self.hidden.as_ref()?;
+        Some(ConsoleCmd::FetchHidden {
+            addr: self.host.addr.clone(),
+            mgmt: self.host.mgmt_port,
+            fp_hex: self.host.fp_hex.clone(),
+            profile: h.profile.clone(),
+        })
+    }
+
+    /// The profile a hidden shelf lists for; `None` on any other.
+    pub(crate) fn hidden_profile(&self) -> Option<&str> {
+        self.hidden.as_ref().map(|h| h.profile.as_str())
+    }
+
+    /// The host's answer for a hidden shelf.
+    pub(crate) fn set_hidden_list(&mut self, answer: crate::model::HiddenAnswer) {
+        self.phase = match answer {
+            crate::model::HiddenAnswer::Listed(games) => {
+                self.games = games;
+                match self.games.is_empty() {
+                    true => LibraryPhase::Empty,
+                    false => LibraryPhase::Ready,
+                }
+            }
+            crate::model::HiddenAnswer::Failed(why) => LibraryPhase::Error {
+                title: pf_l10n::client::lib_load_failed().into(),
+                body: why,
+                can_retry: true,
+            },
+        };
+        self.cursor = 0;
+        self.entrance = None;
+        self.entrance_armed = false;
+        self.ready_at = None;
+        self.recollate();
+    }
+
+    /// Title `id` is back on its profile's shelf: it leaves this hidden one, and focus takes
+    /// the title that slides into its place. The title it was.
+    pub(crate) fn drop_hidden(&mut self, id: &str) -> Option<LibraryGame> {
+        let h = self.hidden.as_mut()?;
+        h.asked.retain(|a| a != id);
+        let at = self.games.iter().position(|g| g.id == id)?;
+        let gone = self.games.remove(at);
+        if self.games.is_empty() {
+            self.phase = LibraryPhase::Empty;
+        }
+        self.recollate();
+        Some(gone)
+    }
+
+    /// A hidden title the host kept hidden: OK may ask again.
+    pub(crate) fn keep_hidden(&mut self, id: &str) {
+        if let Some(h) = self.hidden.as_mut() {
+            h.asked.retain(|a| a != id);
         }
     }
 
@@ -329,7 +443,8 @@ impl LibraryScreen {
         }
     }
 
-    /// Re-read sort/view each frame: Settings can change while this screen is on the stack.
+    /// Re-read sort, view and the host's live fields each frame: Settings and the host change
+    /// while this screen is on the stack.
     fn adopt_settings(&mut self, ctx: &Ctx) {
         let sort = crate::collate::SortKey::parse(&ctx.settings.library_sort);
         if sort != self.sort {
@@ -351,11 +466,12 @@ impl LibraryScreen {
             // Which titles a band holds out of the grid follows both.
             self.recollate();
         }
-        // The row was cloned when the shelf opened; what the host has UP moves under it.
-        // Only that field: the rest is frozen on purpose (a pin the carousel dropped must
-        // not retarget this shelf).
+        // The row was cloned when the shelf opened; what the host has UP and the screens it
+        // offers move under it. Only those: the rest is frozen on purpose (a pin the carousel
+        // dropped must not retarget this shelf).
         if let Some(row) = ctx.hosts.iter().find(|h| h.key == self.host.key) {
             self.host.running.clone_from(&row.running);
+            self.host.screens.clone_from(&row.screens);
         }
     }
 
@@ -386,10 +502,11 @@ impl LibraryScreen {
     /// Rebuild display order. Clamp the cursor; identity follow is [`Self::sync`]'s job.
     fn recollate(&mut self) {
         let view = crate::collate::filtered(&self.games, self.sort, self.filter.as_ref());
-        let query = self.query.as_deref();
+        let fold = punktfunk_core::search::fold;
+        let query = self.query.as_deref().map(fold);
         self.view = (view.into_iter())
             .filter(|&i| !self.banded(&self.games[i]))
-            .filter(|&i| query.is_none_or(|q| self.games[i].title.to_lowercase().contains(q)))
+            .filter(|&i| (query.as_deref()).is_none_or(|q| fold(&self.games[i].title).contains(q)))
             .collect();
         self.cursor = self.cursor.clamp(0, (self.view.len() as i32 - 1).max(0));
         self.seat_grid_col();
@@ -427,12 +544,22 @@ impl LibraryScreen {
         &self.host.fp_hex
     }
 
-    /// Whether this is `host`'s shelf: same row key and the same pin, if any.
+    pub(crate) fn host_key(&self) -> &str {
+        &self.host.key
+    }
+
+    /// Whether this is `host`'s shelf: same row key, the same pin, if any, and the same
+    /// remembered profile, whose library the shelf is.
     pub(crate) fn shelf_of(&self, host: &HostRow) -> bool {
         fn pin(h: &HostRow) -> Option<&str> {
             h.pin.as_ref().map(|p| p.id.as_str())
         }
-        self.host.key == host.key && pin(&self.host) == pin(host)
+        fn plays(h: &HostRow) -> Option<&str> {
+            h.remembered().map(|p| p.id.as_str())
+        }
+        self.host.key == host.key
+            && pin(&self.host) == pin(host)
+            && plays(&self.host) == plays(host)
     }
 
     /// A decoded poster, for the launch hold drawn over this shelf. The focused tile
@@ -467,8 +594,8 @@ impl LibraryScreen {
     /// The titles whose name contains `query`, any case. Called before first render, as
     /// [`Self::set_filter`] is.
     pub(crate) fn set_query(&mut self, query: &str) {
-        self.query = Some(query.to_lowercase());
-        self.filter_label = Some(format!("\u{201c}{query}\u{201d}"));
+        self.query = Some(query.into());
+        self.filter_label = Some(pf_l10n::client::lib_query_quoted(query));
         self.drilled = true;
         self.recollate();
     }
@@ -493,17 +620,21 @@ impl LibraryScreen {
         let Some(shared) = self.shared.clone() else {
             return;
         };
-        if shared.generation() != self.generation {
+        if self.hidden.is_none() && shared.generation() != self.generation {
             let snap = shared.snapshot();
             let (phase, games, generation) = (snap.phase, snap.games, snap.generation);
+            // A title hidden or shown in place keeps the shelf: the cursor stays on its index.
+            let edited = !self.games.is_empty() && snap.edits != self.edits;
+            self.edits = snap.edits;
             // Multiset of ids. An order-only change (running-first from `/status`) is not freshness.
-            let fresh = self.games.len() != games.len() || {
-                let mut before: Vec<&str> = self.games.iter().map(|g| g.id.as_str()).collect();
-                let mut after: Vec<&str> = games.iter().map(|g| g.id.as_str()).collect();
-                before.sort_unstable();
-                after.sort_unstable();
-                before != after
-            };
+            let fresh = !edited
+                && (self.games.len() != games.len() || {
+                    let mut before: Vec<&str> = self.games.iter().map(|g| g.id.as_str()).collect();
+                    let mut after: Vec<&str> = games.iter().map(|g| g.id.as_str()).collect();
+                    before.sort_unstable();
+                    after.sort_unstable();
+                    before != after
+                });
             // Title under the cursor. Stack survives a stream; only a moving list can lose it.
             let anchor = (!fresh)
                 .then(|| self.focused().map(|g| g.id.clone()))
@@ -546,9 +677,9 @@ impl LibraryScreen {
         self.arriving
             .extend(decoded.map(|(id, poster)| (id, poster.into_image())));
         self.adopt_decoded();
-        // What this screen lacks goes to its decoder. The bytes stay in the model, so a cover
-        // another screen took, or one this screen evicted, comes back here.
-        // Another screen's cover is a clone, no decode and no upload; the rest decode here.
+        // What this screen lacks goes to its decoder, eight a frame and never past its queue.
+        // The bytes stay in the model, so a cover another screen took, or one this screen
+        // evicted, comes back here. Another screen's cover is a clone: no decode, no upload.
         let mut wanted = self.art_wanted();
         wanted.retain(|id| match shared_cover(&self.host.fp_hex, id, k) {
             Some(img) => {
@@ -558,7 +689,8 @@ impl LibraryScreen {
             None => true,
         });
         let ask = wanted.iter().filter(|id| !self.decoder.pending(id));
-        for (id, bytes) in shared.art_for(ask.map(String::as_str), 8) {
+        let room = self.decoder.room().min(8);
+        for (id, bytes) in shared.art_for(ask.map(String::as_str), room) {
             self.decoder.want(id, bytes, k);
         }
     }
@@ -671,9 +803,9 @@ impl LibraryScreen {
     /// `/status` field the Options screen's Connect row reads, so the two cannot disagree.
     pub(crate) fn desktop_caption(&self) -> String {
         if self.host.running.is_empty() {
-            "Desktop".into()
+            pf_l10n::client::lib_desktop().into()
         } else {
-            format!("Resume {}", self.host.running)
+            pf_l10n::client::lib_resume_title(&self.host.running)
         }
     }
 
@@ -696,12 +828,12 @@ impl LibraryScreen {
         self.query.is_some() && self.len() == 0 && matches!(self.phase, LibraryPhase::Ready)
     }
 
-    fn state_action(&self) -> Option<&'static str> {
+    fn state_action(&self) -> Option<StateAction> {
         match self.phase {
             LibraryPhase::Error {
                 can_retry: true, ..
-            } => Some("Retry"),
-            LibraryPhase::Empty => Some("Stream desktop"),
+            } => Some(StateAction::Retry),
+            LibraryPhase::Empty if self.hidden.is_none() => Some(StateAction::StreamDesktop),
             _ => None,
         }
     }
@@ -709,11 +841,13 @@ impl LibraryScreen {
     /// OK on the state card's button.
     fn state_confirm(&mut self, fx: &mut Outbox) -> Option<MenuPulse> {
         match self.state_action()? {
-            "Retry" => {
+            StateAction::Retry => {
                 self.phase = LibraryPhase::Loading; // optimistic; the fetch re-syncs
-                fx.cmds.push(ConsoleCmd::fetch_library(&self.host));
+                let fetch = self.fetch_hidden();
+                fx.cmds
+                    .push(fetch.unwrap_or_else(|| ConsoleCmd::fetch_library(&self.host)));
             }
-            _ => fx.connect = Some(self.desktop_intent()),
+            StateAction::StreamDesktop => fx.connect = Some(self.desktop_intent()),
         }
         Some(MenuPulse::Confirm)
     }
@@ -721,6 +855,9 @@ impl LibraryScreen {
     fn ready_action(&mut self, ev: MenuEvent, fx: &mut Outbox) -> Option<MenuPulse> {
         if !matches!(self.phase, LibraryPhase::Ready) {
             return None;
+        }
+        if self.hidden.is_some() {
+            return self.hidden_action(ev, fx);
         }
         match ev {
             MenuEvent::Confirm => {
@@ -756,6 +893,37 @@ impl LibraryScreen {
             | MenuEvent::Sector(_)
             | MenuEvent::JumpBack
             | MenuEvent::JumpForward => None,
+        }
+    }
+
+    /// A hidden shelf's pad: OK, or Y as the legend says, asks the host to show the focused
+    /// title again, once until it answers; Back leaves.
+    fn hidden_action(&mut self, ev: MenuEvent, fx: &mut Outbox) -> Option<MenuPulse> {
+        match ev {
+            MenuEvent::Confirm | MenuEvent::Secondary => {
+                let g = self.focused()?.clone();
+                let h = self.hidden.as_mut()?;
+                if h.asked.contains(&g.id) {
+                    return Some(MenuPulse::Boundary);
+                }
+                h.asked.push(g.id.clone());
+                fx.cmds.push(ConsoleCmd::SetHidden {
+                    addr: self.host.addr.clone(),
+                    mgmt: self.host.mgmt_port,
+                    fp_hex: self.host.fp_hex.clone(),
+                    profile: h.profile.clone(),
+                    name: h.name.clone(),
+                    app_id: g.id,
+                    title: g.title,
+                    hidden: false,
+                });
+                Some(MenuPulse::Confirm)
+            }
+            MenuEvent::Back => {
+                fx.pop();
+                None
+            }
+            _ => Some(MenuPulse::Boundary),
         }
     }
 
@@ -856,6 +1024,15 @@ impl LibraryScreen {
         }
     }
 
+    /// A card's ink: whole, or dimmed on a hidden shelf, the focused one less.
+    fn dim(&self, focused: bool) -> f32 {
+        match (self.hidden.is_some(), focused) {
+            (false, _) => 1.0,
+            (true, false) => HIDDEN_ALPHA,
+            (true, true) => HIDDEN_FOCUS_ALPHA,
+        }
+    }
+
     /// The focused-title band shows: on the tab and on a drilled shelf, not under Hosts.
     fn band_shown(&self) -> bool {
         !self.embedded && !self.quiet
@@ -883,8 +1060,8 @@ impl LibraryScreen {
             SortKey::PlayTime if s.play_time_ms >= 60_000 => {
                 let min = s.play_time_ms / 60_000;
                 Some(match min {
-                    0..60 => format!("{min} min played"),
-                    _ => format!("{} h played", min / 60),
+                    0..60 => pf_l10n::client::lib_played_minutes(min),
+                    _ => pf_l10n::client::lib_played_hours(min / 60),
                 })
             }
             _ => None,
@@ -906,6 +1083,8 @@ impl LibraryScreen {
         let ui = ctx.ui;
         let t = ctx.t;
         let (bands, lines) = self.place_zone(ctx);
+        let hidden = games::hides_for(ctx, &self.host)
+            .map(|p| pf_l10n::client::lib_hidden_for(&p.display_name));
         let sectioned = self.sectioned();
         // The lines run on to the screen's foot and blur under the band there.
         let clip = canvas.local_clip_bounds().unwrap_or(rect);
@@ -1009,7 +1188,8 @@ impl LibraryScreen {
                     caption: caption.as_deref(),
                     focused: focused && !this.quiet,
                 };
-                card.paint(canvas, ui, fonts, slot, ch, k, ent.fade as f32);
+                let dim = this.dim(focused);
+                card.paint(canvas, ui, fonts, slot, ch, k, ent.fade as f32 * dim);
                 canvas.restore();
             })
             .id(grid_cell(i))
@@ -1041,14 +1221,20 @@ impl LibraryScreen {
             _ => {
                 let mut els = match split_row {
                     Some(split) => vec![
-                        top("Launchers").id(id),
+                        top(pf_l10n::client::lib_section_launchers()).id(id),
                         rows(0, split),
-                        heading("Games", gap_y + heading_h * 0.56)
-                            .size(grid_w as f32, (gap_y + heading_h) as f32),
+                        heading(
+                            pf_l10n::client::lib_section_games(),
+                            gap_y + heading_h * 0.56,
+                        )
+                        .size(grid_w as f32, (gap_y + heading_h) as f32),
                         rows(split, shape.rows()),
                     ],
                     // Among the tab's rows, the grid is named like the rest.
-                    None if sectioned => vec![top("Games").id(id), rows(0, shape.rows())],
+                    None if sectioned => vec![
+                        top(pf_l10n::client::lib_section_games()).id(id),
+                        rows(0, shape.rows()),
+                    ],
                     None => vec![
                         El::column().size(grid_w as f32, heading_h as f32).id(id),
                         rows(0, shape.rows()),
@@ -1076,8 +1262,17 @@ impl LibraryScreen {
                         )
                         .child(El::column().size(avail as f32, (BAR_AIR * k) as f32)),
                     Line::Chips => root.child(
-                        this.chips_el(ui, ctx.hosts, ctx.profiles, fonts, avail, k, hits)
-                            .id(id),
+                        this.chips_el(
+                            ui,
+                            ctx.hosts,
+                            ctx.profiles,
+                            hidden.clone(),
+                            fonts,
+                            avail,
+                            k,
+                            hits,
+                        )
+                        .id(id),
                     ),
                     Line::Band(b) => root.child(
                         this.band_el(ui, &bands[b], b, fonts, avail, (cw, ch), k, hits)
@@ -1085,7 +1280,7 @@ impl LibraryScreen {
                     ),
                     Line::Grid => root.children(field(id)),
                     Line::State => root.child(
-                        this.state_el(ui, fonts, avail, g.state_h, k, t, hits)
+                        this.state_el(ui, fonts, avail, g.state_h, g.view_h - g.usable, k, t, hits)
                             .id(id),
                     ),
                 };
@@ -1346,7 +1541,7 @@ impl LibraryScreen {
     }
 
     /// What the title band says for the focus: the title and, on the grid, where it comes
-    /// from — `STORE · PLATFORM`, or `STORE · LAUNCHER`.
+    /// from — `Store · Platform`, or `Store · Launcher`, drawn as the data and message read.
     fn title_band(&self, ctx: &Ctx) -> card::TitleBand<'static> {
         let note = self.stale.note();
         let game = match self.zone {
@@ -1363,13 +1558,11 @@ impl LibraryScreen {
         let subtitle = game
             .filter(|g| grid && g.id != crate::library::DESKTOP_ID)
             .map(|g| {
-                let store = store_label(&g.store).to_uppercase();
+                let store = store_label(&g.store);
                 match (g.launcher, g.platform.as_deref().map(str::trim)) {
-                    (true, _) => format!("{store} \u{b7} LAUNCHER"),
-                    (false, Some(p)) if !p.is_empty() => {
-                        format!("{store} \u{b7} {}", p.to_uppercase())
-                    }
-                    _ => store,
+                    (true, _) => format!("{store} \u{b7} {}", pf_l10n::client::lib_launcher()),
+                    (false, Some(p)) if !p.is_empty() => format!("{store} \u{b7} {p}"),
+                    _ => store.to_string(),
                 }
             });
         card::TitleBand {
@@ -1435,12 +1628,13 @@ impl LibraryScreen {
                 for (x, y) in corners {
                     (l, tp, r, b) = (l.min(x), tp.min(y), r.max(x), b.max(y));
                 }
+                let dim = f64::from(self.dim(i as i32 == self.cursor));
                 ShelfCard {
                     i,
                     m,
                     size: (g.w, g.h),
                     prox,
-                    fade: ent.fade * (1.0 - RECEDE_FADE * prox),
+                    fade: ent.fade * (1.0 - RECEDE_FADE * prox) * dim,
                     bounds: Rect::from_ltrb(l as f32, tp as f32, r as f32, b as f32),
                 }
             })
@@ -1466,9 +1660,9 @@ impl LibraryScreen {
         // tab it sits on the margin like every row's; on its own it is centred.
         let heading = match (g.head > 0.0, focus >= lead || lead == self.len()) {
             (false, _) => None,
-            (true, true) => Some("Games"),
-            (true, false) if lead == 1 => Some("Host"),
-            (true, false) => Some("Launchers"),
+            (true, true) => Some(pf_l10n::client::lib_section_games()),
+            (true, false) if lead == 1 => Some(pf_l10n::client::lib_heading_host()),
+            (true, false) => Some(pf_l10n::client::lib_section_launchers()),
         };
         let centred = !self.sectioned();
         let strip = El::paint(move |canvas, r| {
@@ -1592,7 +1786,10 @@ impl LibraryScreen {
     }
 
     /// What a list that is not ready says, and the button it offers, centred in a block
-    /// `h` tall. A pushed or failed shelf with nothing else to stand on focuses the button.
+    /// `h` tall. A block that runs under the title band, whose top stands `under` above the
+    /// clip's foot, centres the copy in what shows above it, so a phone's first screenful
+    /// still says it. A pushed or failed shelf with nothing else to stand on focuses the
+    /// button.
     #[allow(clippy::too_many_arguments)]
     fn state_el<'a>(
         &'a self,
@@ -1600,30 +1797,35 @@ impl LibraryScreen {
         fonts: &'a Fonts,
         width: f64,
         h: f64,
+        under: f64,
         k: f64,
         t: f64,
         hits: &'a RefCell<Vec<(Zone, Rect)>>,
     ) -> El<'a> {
         let (title, body): (String, String) = match &self.phase {
             LibraryPhase::Error { title, body, .. } => (title.clone(), body.clone()),
-            LibraryPhase::Empty => (
-                "No games found".into(),
-                "Install Steam titles or add custom entries in the host's web console. \
-                 This host still streams its desktop."
-                    .into(),
-            ),
-            LibraryPhase::Ready if self.no_match() => (
-                "No matches".into(),
-                format!(
-                    "No title on this host contains {}.",
-                    self.filter_label.as_deref().unwrap_or_default()
+            LibraryPhase::Empty => match &self.hidden {
+                Some(h) => (
+                    pf_l10n::client::lib_hidden_for(&h.name),
+                    pf_l10n::client::lib_hidden_none(&h.name),
                 ),
+                None => (
+                    pf_l10n::client::lib_empty_title().into(),
+                    pf_l10n::client::lib_empty_body().into(),
+                ),
+            },
+            LibraryPhase::Ready if self.no_match() => (
+                pf_l10n::client::lib_no_matches().into(),
+                pf_l10n::client::lib_no_match_body(self.query.as_deref().unwrap_or_default()),
             ),
-            _ => (String::new(), "Loading library\u{2026}".into()),
+            _ => (String::new(), pf_l10n::client::lib_loading().into()),
         };
         let loading = matches!(self.phase, LibraryPhase::Loading)
             || (matches!(self.phase, LibraryPhase::Ready) && !self.no_match());
-        let action = (!self.embedded).then(|| self.state_action()).flatten();
+        let action = (!self.embedded)
+            .then(|| self.state_action())
+            .flatten()
+            .map(StateAction::label);
         let button_h = BUTTON_H * k;
         let content = 30.0 * k
             + 44.0 * k
@@ -1635,7 +1837,11 @@ impl LibraryScreen {
         let y0 = ((h - content) / 2.0).max(0.0);
         let copy = El::paint(move |canvas, r| {
             let cx = f64::from(r.center_x());
-            let top = f64::from(r.top) + y0;
+            // Only ever up from `y0`: the button keeps its laid-out place under the copy.
+            let shown = canvas
+                .local_clip_bounds()
+                .map_or(h, |c| (f64::from(c.bottom - r.top) - under).min(h));
+            let top = f64::from(r.top) + ((shown - content) / 2.0).clamp(0.0, y0);
             let max_w = (600.0 * k).min(width * 0.85);
             if loading {
                 crate::theme::spinner(canvas, ui, cx, top + 14.0 * k, 16.0 * k, t);
@@ -1816,15 +2022,19 @@ impl ScreenView for LibraryScreen {
             Zone::Bar(i) if !self.embedded => {
                 let pill = bar::Pill::all(true)[i];
                 let group = match pill {
-                    bar::Pill::Sort(_) => "Sort",
-                    bar::Pill::View(_) => "View",
-                    bar::Pill::Search => return Some("Search titles".into()),
+                    bar::Pill::Sort(_) => pf_l10n::client::lib_sort(),
+                    bar::Pill::View(_) => pf_l10n::client::lib_view(),
+                    bar::Pill::Search => return Some(pf_l10n::client::lib_search_titles().into()),
                 };
-                let on = self.applied().contains(&i);
-                let state = if on { ", selected" } else { "" };
-                return Some(format!("{group} {}{state}", pill.label()));
+                let mut said = format!("{group} {}", pill.label());
+                if self.applied().contains(&i) {
+                    said = format!("{said}, {}", pf_l10n::console::console_lib_selected_a11y());
+                }
+                return Some(said);
             }
-            Zone::State if !self.embedded => return self.state_action().map(str::to_string),
+            Zone::State if !self.embedded => {
+                return self.state_action().map(|a| a.label().to_string())
+            }
             _ => {}
         }
         if !self.embedded {
@@ -1850,7 +2060,16 @@ impl ScreenView for LibraryScreen {
             }
         }
         if !matches!(self.phase, LibraryPhase::Ready) || self.focused().is_none() {
-            return vec![Hint::new(HintKey::Back, "Back")];
+            return vec![Hint::new(HintKey::Back, pf_l10n::common::common_back())];
+        }
+        // The legend shows a pad's Y, never its A: the one press that brings a title back.
+        if let Some(h) = &self.hidden {
+            let show = pf_l10n::client::lib_show_for(&h.name);
+            return vec![
+                Hint::new(HintKey::Confirm, show.clone()),
+                Hint::new(HintKey::Secondary, show),
+                Hint::new(HintKey::Back, pf_l10n::common::common_back()),
+            ];
         }
         let desktop = self
             .focused()
@@ -1860,16 +2079,16 @@ impl ScreenView for LibraryScreen {
         let ok = match (desktop, running, launcher) {
             // The desktop tile resumes when the host has a game up, and it is the ONE tile
             // that never launches anything.
-            (true, _, _) if !self.host.running.is_empty() => "Resume",
-            (true, _, _) => "Stream",
-            (_, true, _) => "Resume",
-            (_, false, true) => "Open",
-            (_, false, false) => "Play",
+            (true, _, _) if !self.host.running.is_empty() => pf_l10n::client::lib_resume(),
+            (true, _, _) => pf_l10n::client::lib_desktop_action(),
+            (_, true, _) => pf_l10n::client::lib_resume(),
+            (_, false, true) => pf_l10n::common::common_open(),
+            (_, false, false) => pf_l10n::common::common_play(),
         };
         vec![
             Hint::new(HintKey::Confirm, ok),
-            Hint::new(HintKey::Secondary, "Options"),
-            Hint::new(HintKey::Back, "Back"),
+            Hint::new(HintKey::Secondary, pf_l10n::console::console_lib_options()),
+            Hint::new(HintKey::Back, pf_l10n::common::common_back()),
         ]
     }
 

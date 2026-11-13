@@ -1,5 +1,6 @@
 package io.unom.punktfunk
 
+import io.unom.punktfunk.kit.Say
 import io.unom.punktfunk.kit.security.KnownHost
 import java.io.File
 import java.util.Locale
@@ -84,7 +85,7 @@ class SpeedTestTest {
             settings = globals,
             onGlobalChange = { savedGlobals = it },
         )
-        assertEquals("“Game”", where)
+        assertEquals(SpeedTestWrote.Preset("Game"), where)
         assertNull("the global must not move when a preset was the target", savedGlobals)
         val after = s.byId(game.id)!!.overrides
         assertEquals(84_000, after.bitrateKbps)
@@ -106,7 +107,7 @@ class SpeedTestTest {
             42_000, SpeedTestTarget.Ask(work), toPreset = false, presets = s,
             settings = globals, onGlobalChange = { savedGlobals = it },
         )
-        assertEquals("the default bitrate", whereGlobal)
+        assertEquals(SpeedTestWrote.Default, whereGlobal)
         assertEquals(42_000, savedGlobals!!.bitrateKbps)
         assertNull(s.byId(work.id)!!.overrides.bitrateKbps)
 
@@ -116,9 +117,23 @@ class SpeedTestTest {
             42_000, SpeedTestTarget.Ask(work), toPreset = true, presets = s,
             settings = globals, onGlobalChange = { savedGlobals = it },
         )
-        assertEquals("“Work”", wherePreset)
+        assertEquals(SpeedTestWrote.Preset("Work"), wherePreset)
         assertNull(savedGlobals)
         assertEquals(42_000, s.byId(work.id)!!.overrides.bitrateKbps)
+    }
+
+    /** The confirmation names the figure with its unit, then the layer it went to. */
+    @Test
+    fun theConfirmationNamesWhereTheRateWent() {
+        val res = RuntimeEnvironment.getApplication().resources
+        assertEquals(
+            "84 Mbit/s set as the default bitrate",
+            speedTestApplied(SpeedTestWrote.Default, mbitRate(84.0)).words(res),
+        )
+        assertEquals(
+            "84 Mbit/s set in “Game”",
+            speedTestApplied(SpeedTestWrote.Preset("Game"), mbitRate(84.0)).words(res),
+        )
     }
 
     @Test
@@ -143,9 +158,13 @@ class SpeedTestTest {
         assertEquals(null, parseNetworkCheck(v.copyOf(21)))
     }
 
-    /** `clients/shared/finding-vectors.json`: the sentence the console and every shell show. */
+    /**
+     * `clients/shared/finding-vectors.json`: each case's message `key` and `args` are what
+     * [findingMessage] must pick; its `sentence` is the English rendering the resource gives.
+     */
     @Test
     fun everyFindingVectorAgrees() {
+        val res = RuntimeEnvironment.getApplication().resources
         // Gradle runs unit tests with the module dir as cwd (clients/android/app).
         val file = File("../../shared/finding-vectors.json")
         assertTrue("the shared vector file must be reachable at ${file.absolutePath}", file.isFile)
@@ -158,7 +177,18 @@ class SpeedTestTest {
                 val case = cases.getJSONObject(i)
                 val n = case.getJSONArray("numbers")
                 val numbers = (0 until n.length()).map(n::getInt)
-                assertEquals("$case", case.getString("sentence"), findingText(case.getInt("id"), numbers))
+                val say = findingMessage(case.getInt("id"), numbers)
+                val (id, args) = when (say) {
+                    is Say.Msg -> say.id to say.args
+                    is Say.Plural -> say.id to say.args
+                    is Say.Text, is Say.Host -> error("$case: a finding is a message")
+                }
+                assertEquals("$case", case.getString("key"), res.getResourceEntryName(id))
+                // The file lists the placeholders in the order the English text shows them.
+                val named = case.getJSONObject("args")
+                val want = named.keys().asSequence().map(named::getString).toList()
+                assertEquals("$case", want, args.map { "$it" })
+                assertEquals("$case", case.getString("sentence"), say.words(res))
             }
         } finally {
             Locale.setDefault(was)

@@ -107,11 +107,15 @@ New-Item -ItemType Directory -Force -Path (Join-Path $layout 'Assets') | Out-Nul
 # binaries + SDL3.dll, which the sdl3 crate stages. punktfunk-session.exe is the Vulkan
 # session client the shell spawns for every stream (sibling resolution — see clients/windows/
 # src/spawn.rs); Skia links statically and vulkan-1.dll is a GPU-driver component.
-$required = @('punktfunk-client.exe', 'punktfunk-session.exe', 'punktfunk-console.exe', 'punktfunk.exe', 'SDL3.dll')
+# Cargo builds the shell as punktfunk-client-windows.exe; it ships under the name the manifest,
+# the installer and every written shortcut use.
+$required = @('punktfunk-client-windows.exe', 'punktfunk-session.exe', 'punktfunk-console.exe', 'punktfunk.exe', 'SDL3.dll')
+$shippedAs = @{ 'punktfunk-client-windows.exe' = 'punktfunk-client.exe' }
 foreach ($f in $required) {
     $src = Join-Path $TargetDir $f
     if (-not (Test-Path $src)) { throw "missing build artifact '$f' in $TargetDir (did 'cargo build --release' run?)" }
-    Copy-Item $src (Join-Path $layout $f) -Force
+    $dest = if ($shippedAs.ContainsKey($f)) { $shippedAs[$f] } else { $f }
+    Copy-Item $src (Join-Path $layout $dest) -Force
 }
 
 # The VC++ runtime, app-local. Everything here links the DYNAMIC CRT (/MD): the Rust exes,

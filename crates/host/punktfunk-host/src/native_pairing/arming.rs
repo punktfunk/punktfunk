@@ -19,7 +19,7 @@ struct Armed {
     expires_at: Option<Instant>,
     bound_fp: Option<String>,
     /// Applied to the device that completes this window. `None` is full/permanent.
-    /// Disarm/expiry wipes it; the ceremony must read this before consuming the PIN.
+    /// Disarm/expiry wipes it; the ceremony gets it from [`ArmState::take`], with the PIN.
     access: Option<super::Access>,
 }
 
@@ -81,7 +81,8 @@ impl ArmState {
         pin
     }
 
-    /// Window access, or `None` if disarmed/expired. Read before consuming the PIN.
+    /// Window access, or `None` if disarmed/expired.
+    #[cfg(test)]
     pub(super) fn armed_access(&self) -> Option<super::Access> {
         let mut arm = self.arm.lock().unwrap();
         Self::expire(&mut arm);
@@ -116,6 +117,18 @@ impl ArmState {
         *self.arm.lock().unwrap() = Armed::default();
     }
 
+    /// Disarms the window while `pin` is still its PIN and hands back the access it carried
+    /// (`Some(None)` is full/permanent). `None` when it lapsed or was re-armed: the live window
+    /// stays. One lock, so of two ceremonies holding the same PIN only one takes it.
+    pub(super) fn take(&self, pin: &str) -> Option<Option<super::Access>> {
+        let mut arm = self.arm.lock().unwrap();
+        Self::expire(&mut arm);
+        if arm.pin.as_deref() != Some(pin) {
+            return None;
+        }
+        Some(std::mem::take(&mut *arm).access)
+    }
+
     /// Drop a timed window whose deadline passed. Call under the lock before any read.
     fn expire(arm: &mut Armed) {
         if let Some(t) = arm.expires_at {
@@ -125,7 +138,8 @@ impl ArmState {
         }
     }
 
-    /// Live PIN, or `None` if disarmed/expired. Re-read per attempt so a lapsed window cannot pair.
+    /// Live PIN, or `None` if disarmed/expired.
+    #[cfg(test)]
     pub(super) fn current_pin(&self) -> Option<String> {
         let mut arm = self.arm.lock().unwrap();
         Self::expire(&mut arm);

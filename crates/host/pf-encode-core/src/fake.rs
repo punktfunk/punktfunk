@@ -2,9 +2,9 @@
 //! as four bytes, and its flags come from [`rfi::plan_frame`] under the [`RecoveryPolicy`] it
 //! was built with, so a loop sees the recovery order a real backend follows.
 //!
-//! Anchors come from the last [`SLOTS`] clean wire indexes through
-//! [`rfi::plan_slot_recovery`]. A loss resolves at the report, and one that lands while a
-//! wave runs always spoils it. `fail_submits` scripts submit failures, terminal ones with
+//! Anchors come from the last [`SLOTS`] clean wire indexes, plus the two [`rfi::Kept`] holds
+//! past them, through [`rfi::plan_slot_recovery`]. A loss resolves at the report, and one that
+//! lands while a wave runs always spoils it. `fail_submits` scripts submit failures, terminal ones with
 //! `fail_terminal`. Tests and `test-support` only.
 
 use std::collections::VecDeque;
@@ -24,6 +24,8 @@ pub struct FakeEncoder {
     force_kf: bool,
     anchor: bool,
     floor: Option<Acked>,
+    confirmed: Option<Acked>,
+    kept: rfi::Kept,
     /// Wire index of each trusted picture, oldest first.
     trusted: VecDeque<i64>,
     out: VecDeque<EncodedFrame>,
@@ -43,6 +45,8 @@ impl FakeEncoder {
             force_kf: true,
             anchor: false,
             floor: None,
+            confirmed: None,
+            kept: rfi::Kept::default(),
             trusted: VecDeque::new(),
             out: VecDeque::new(),
             next_wire: 0,
@@ -79,10 +83,18 @@ impl Encoder for FakeEncoder {
         if plan.refs == FrameRef::Idr {
             self.trusted.clear();
         }
+        let trusted = &self.trusted;
+        self.kept
+            .step(self.next_wire, !plan.dirty, self.confirmed.as_ref(), |w| {
+                trusted.contains(&w)
+            });
         if !plan.dirty {
             self.trusted.push_back(self.next_wire);
             if self.trusted.len() > SLOTS {
-                self.trusted.pop_front();
+                let kept = self.kept;
+                let oldest = self.trusted.iter().position(|&w| !kept.holds(w));
+                self.trusted
+                    .remove(oldest.expect("a ring larger than the two holds"));
             }
         }
         self.out.push_back(EncodedFrame {
@@ -140,6 +152,10 @@ impl Encoder for FakeEncoder {
 
     fn set_reference_floor(&mut self, acked: Option<Acked>) {
         self.floor = acked;
+    }
+
+    fn note_confirmed(&mut self, acked: Option<Acked>) {
+        self.confirmed = acked;
     }
 
     fn poll(&mut self) -> Result<Option<EncodedFrame>> {
