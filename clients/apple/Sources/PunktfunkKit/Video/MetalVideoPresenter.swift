@@ -673,13 +673,9 @@ public final class MetalVideoPresenter {
         // transient fallback: during a live resize the compositor may composite a drawable from
         // the previous layout before the next render catches up.
         layer.contentsGravity = .resizeAspect
-        // Triple-buffer: more in-flight drawables before `nextDrawable()` (called on the display-link /
-        // MAIN thread) has to block waiting for one to free.
-        // ⚠ This is the STAGE-2/3 depth. Stage-4 (deadline pacing, the iOS default) never
-        // calls `nextDrawable()` — the link vends every drawable — so the third slot only gives
-        // the compositor room to queue a second present ahead of scanout, i.e. the two-refresh
-        // present floor. `Stage2Pipeline.startDeadlinePresenter` clamps it to 2 for that pacing;
-        // keep the two in step if this number ever changes.
+        // Three drawables: the render thread's `nextDrawable()` blocks only once all are in
+        // flight. Deadline pacing never calls it; `Stage2Pipeline.startDeadlinePresenter`
+        // sets the count for its link from `drawableCount(env:)`.
         layer.maximumDrawableCount = 3
 
         return MetalVideoPresenter(
