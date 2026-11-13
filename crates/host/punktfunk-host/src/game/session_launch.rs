@@ -427,6 +427,8 @@ mod tests {
     /// game must end the session that came back. The Windows pid-only shape, driven here.
     #[test]
     fn a_reconnect_still_ends_when_the_first_sessions_game_exits() {
+        // The claim credits play time to the config dir: a scratch one, under the config lock.
+        let _config = crate::mgmt::tests::ConfigDirOverride::new();
         let (fp, id) = ("fp-adopt-exit", "custom:adopt-exit");
         let (target, owner) = (target(id), owner(fp));
         let mut game = std::process::Command::new("sleep")

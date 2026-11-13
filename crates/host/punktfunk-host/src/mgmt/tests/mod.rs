@@ -382,14 +382,14 @@ fn fake_session_with_flags(
 /// One helper for every mgmt test: `check-unsafe-hygiene.sh` greps this file for a fixed
 /// count of `set_var` sites (and prose mentions), all in [`write_env`]. The lock is a field so
 /// Drop restores the env while still holding it — fields drop after `Drop::drop`.
-struct ConfigDirOverride {
+pub(crate) struct ConfigDirOverride {
     tmp: tempfile::TempDir,
     prev: Vec<(&'static str, Option<std::ffi::OsString>)>,
     _serial: std::sync::MutexGuard<'static, ()>,
 }
 
 impl ConfigDirOverride {
-    fn new() -> ConfigDirOverride {
+    pub(crate) fn new() -> ConfigDirOverride {
         Self::with_library(None)
     }
 

@@ -64,7 +64,7 @@ pub(crate) mod shared;
 mod stats;
 mod store;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod theme;
 mod update;
 mod webtransport;
