@@ -46,15 +46,19 @@ pub(crate) fn button(label: impl Into<View>) -> Button {
     Button::new().content(label)
 }
 
-/// A button with a Lucide mark before its label, 8 px apart.
-pub(crate) fn icon_button(mark: &str, label: impl Into<View>) -> Button {
-    Button::new().content(
-        hstack((
-            lucide::mark(mark).vertical_alignment(VerticalAlignment::Center),
-            label.into(),
-        ))
-        .spacing(8.0),
-    )
+/// A button with a Lucide mark before its label, 8 px apart. The label is also its name: a
+/// button whose content is a panel has none, and a screen reader announces "button".
+pub(crate) fn icon_button(mark: &str, label: impl AsRef<str>) -> Button {
+    let label = label.as_ref();
+    Button::new()
+        .content(
+            hstack((
+                lucide::mark(mark).vertical_alignment(VerticalAlignment::Center),
+                text(label),
+            ))
+            .spacing(8.0),
+        )
+        .automation_name(label)
 }
 
 /// A button showing only a Lucide mark. `name` is what a screen reader announces.
@@ -353,7 +357,13 @@ pub(crate) fn row(
 
 /// A switch for a [`row`]: its state in words, then the switch at the row's edge. The control
 /// keeps 154 px for labels of its own; the margin gives back the 114 the bare switch leaves.
-pub(crate) fn switch(pal: &Palette, on: bool, toggled: impl Fn(bool) + 'static) -> View {
+/// `name` is the row's label, what a screen reader announces with the state.
+pub(crate) fn switch(
+    pal: &Palette,
+    name: &str,
+    on: bool,
+    toggled: impl Fn(bool) + 'static,
+) -> View {
     hstack((
         muted(
             pal,
@@ -368,6 +378,7 @@ pub(crate) fn switch(pal: &Palette, on: bool, toggled: impl Fn(bool) + 'static) 
             .on_content("")
             .off_content("")
             .on_toggled(toggled)
+            .automation_name(name)
             .margin(edges(0.0, 0.0, -114.0, 0.0)),
     ))
     .spacing(12.0)

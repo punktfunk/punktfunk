@@ -25,12 +25,14 @@ pub(super) fn home(shell: &Shell, cx: &mut ViewContext<'_, Shell>) -> View {
                 .is_selected(picked),
         )
     };
+    // A host's page has no item, so nothing is picked there: the pane reports a pick only when
+    // it changes, and a click on a Hosts already picked would never lead back to the list.
     let dests = [
         item(
             "hosts",
             client::hosts_tab(),
             "monitor",
-            shell.dest == Dest::Hosts,
+            shell.dest == Dest::Hosts && shell.host_page.is_none(),
         ),
         item(
             "library",

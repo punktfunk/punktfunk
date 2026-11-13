@@ -708,7 +708,7 @@ impl RowCx {
     fn menu(self: &Rc<Self>, g: &GameEntry) -> Menu {
         let (cx, game) = (self.clone(), g.clone());
         self.menu_rows(g)
-            .build(move |act: &TitleAct| cx.act(*act, &game))
+            .build(self.bump.clone(), move |act: &TitleAct| cx.act(*act, &game))
     }
 }
 
@@ -771,6 +771,8 @@ fn poster_face(cx: &RowCx, g: Option<&GameEntry>, width: f64) -> View {
 /// One poster tile `width` wide: the face with its badges, the title under it, and a caption
 /// line where the row has one. A button, so it takes focus and Enter; its menu opens on a
 /// right-click and from the overflow button, a SIBLING so a click on it never also plays.
+/// The overflow sits beside the title: a button's menu opens above it, and from there it
+/// covers this tile's cover rather than the page header.
 fn poster(cx: &Rc<RowCx>, tile: Tile, caption: Caption, width: f64) -> View {
     let pal = &cx.pal;
     let game = match tile {
@@ -838,7 +840,13 @@ fn poster(cx: &Rc<RowCx>, tile: Tile, caption: Caption, width: f64) -> View {
             .text_wrapping(TextWrapping::Wrap)
             .text_trimming(TextTrimming::CharacterEllipsis)
             .max_lines(2)
-            .margin(edges(2.0, 6.0, 2.0, 0.0))
+            // Room for the overflow button beside it.
+            .margin(edges(
+                2.0,
+                6.0,
+                if game.is_some() { 26.0 } else { 2.0 },
+                0.0,
+            ))
             .into(),
     ];
     // Every tile of a captioned row keeps the line, so its rows are one height.
@@ -890,18 +898,15 @@ fn poster(cx: &Rc<RowCx>, tile: Tile, caption: Caption, width: f64) -> View {
     let mut layers: Vec<View> = vec![tile];
     if let Some(g) = game {
         let more = client::lib_title_more_a11y(&g.title);
-        let dots = match on_art {
-            true => Button::new()
-                .content(lucide::mark("ellipsis").foreground(ART_INK))
-                .background(ART_SCRIM)
-                .automation_name(&more),
-            false => mark_button("ellipsis", &more),
-        };
+        // Level with the title's first line: the tile's 11 px of padding and the face's
+        // border above it.
+        let top = face_w * POSTER_RATIO + 12.0;
         layers.push(
-            dots.style(ButtonStyle::Subtle)
+            mark_button("ellipsis", &more)
+                .style(ButtonStyle::Subtle)
                 .horizontal_alignment(HorizontalAlignment::Right)
                 .vertical_alignment(VerticalAlignment::Top)
-                .margin(edges(0.0, 14.0, 15.0, 0.0))
+                .margin(edges(0.0, top, 2.0, 0.0))
                 .menu(cx.menu(g))
                 .tooltip(client::lib_title_more()),
         );
@@ -1157,7 +1162,7 @@ fn customize_button(shell: &Shell, stored: &str) -> View {
                         .grid_column(0)
                         .vertical_alignment(VerticalAlignment::Center),
                     Border::new()
-                        .content(switch(pal, on, toggle))
+                        .content(switch(pal, section.label(), on, toggle))
                         .grid_column(1)
                         .vertical_alignment(VerticalAlignment::Center),
                     Border::new().content(up).grid_column(2),
@@ -1447,6 +1452,14 @@ pub(crate) fn library_page(shell: &Shell) -> View {
                 keys.hash(&mut h);
                 h.finish()
             };
+            // The sections on show, in order: every row but a grid's.
+            let sections = {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                for k in keys.iter().filter(|k| !k.starts_with("row:")) {
+                    k.hash(&mut h);
+                }
+                h.finish()
+            };
             let (listed, row_cx, key_of) = (Rc::new(listed), cx.clone(), keys.clone());
             let source = VirtualSource::new(
                 revision,
@@ -1454,13 +1467,18 @@ pub(crate) fn library_page(shell: &Shell) -> View {
                 move |i| key_of[i].clone(),
                 move |i| row_view(&row_cx, &listed[i]),
             );
-            ScrollViewer::new()
+            let list = ScrollViewer::new()
                 .content(
                     Border::new()
                         .content(ItemsRepeater::new().virtual_source(source))
                         .padding(edges(GUTTER - 11.0, 0.0, GUTTER - 11.0, 32.0)),
                 )
-                .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
+                .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled);
+            // A section that comes, goes or moves mounts a new list. Diffed into the old one, a
+            // section that left and came back leaves the repeater in a layout cycle on a long
+            // scroll, which crashes the app. A Grid: the scroller needs a bounded height.
+            Grid::new()
+                .keyed_children([KeyedView::new(format!("list:{sections:x}"), list)])
                 .into()
         }
     };
@@ -1599,6 +1617,7 @@ fn details_sheet(cx: &Rc<RowCx>, g: &GameEntry, known: &KnownHosts) -> View {
         let picker = ComboBox::new()
             .items_source(names)
             .selected_index(bound)
+            .automation_name(client::lib_title_preset_row())
             .on_selection_changed(move |i: Option<usize>| {
                 // None is "nothing selected", which an in-place items rebuild raises.
                 let Some(i) = i else { return };

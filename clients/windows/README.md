@@ -41,12 +41,14 @@ Walk this after a reactor bump or a change to the render/state architecture:
 - **Pane** — Hosts and Library switch pages with no jump under the title bar; the pane narrows to
   icons below 900 px and overlays below 600; Back leaves a host page; Ctrl+1, Ctrl+2 and Ctrl+F.
 - **Hosts** — discovery populates cards; card hover fill; right-click menu; ⓘ opens the host page;
-  a field there saves on Enter and on focus loss; Add host saves without dialing; the WOL wait
-  screen cancels; Sort and group opens below its button and regroups the page.
+  a field there saves on Enter and on focus loss, focus stays where it went, a refused value
+  snaps back, and unsaved typing survives a probe refresh; Add host saves without dialing; the
+  WOL wait screen cancels; Sort and group opens below its button and regroups the page; a card
+  menu opens on the first click after a pick.
 - **Library** — a chip per paired host and pinned preset; posters load art; the store badge and
   "…" stay legible over a dark cover; the wheel scrolls with the pointer over a band; search in
-  the title bar filters; a title's menu opens Details; Customize moves and hides sections; an
-  offline host's shelf shows Try again.
+  the title bar filters; a title's menu opens Details; Customize moves and hides sections, and
+  the page scrolls after a section comes back, from Customize or a first favorite; an offline host's shelf shows Try again.
 - **Settings** — every section renders; combos still show their selection after a section switch
   *and* a scope switch (the historic blank-combo reconciler bug); preset create / rename / delete;
   colour swatches repaint; the Overridden marker appears on edit and clears on Reset; the GPU combo

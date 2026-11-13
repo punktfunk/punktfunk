@@ -64,16 +64,41 @@ pub(crate) enum Confirm {
 
 pub(crate) enum PageMsg {
     Ask(Option<Confirm>),
-    /// Show the record in every box again: an edit was saved, or refused.
-    Snap,
+    /// An edit was saved or refused: its box shows the record's text, in place, so focus
+    /// stays where the user put it.
+    Settled(Field),
 }
 
 #[derive(Clone, Copy)]
-enum Field {
+pub(crate) enum Field {
     Name,
     Addr,
     Port,
     Mac,
+}
+
+impl Field {
+    const ALL: [Field; 4] = [Field::Name, Field::Addr, Field::Port, Field::Mac];
+
+    /// The record's text for this box.
+    fn stored(self, k: &KnownHost) -> String {
+        match self {
+            Field::Name => k.name.clone(),
+            Field::Addr => k.addr.clone(),
+            Field::Port => k.port.to_string(),
+            Field::Mac => k.mac.join(", "),
+        }
+    }
+
+    /// The row's label, and the box's name for a screen reader.
+    fn label(self) -> &'static str {
+        match self {
+            Field::Name => client::hosts_field_name(),
+            Field::Addr => client::hosts_field_address(),
+            Field::Port => client::hosts_field_port(),
+            Field::Mac => client::hosts_field_mac(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -86,30 +111,34 @@ struct Fields {
 
 pub(crate) struct HostPage {
     fields: Fields,
-    /// The boxes are keyed by it: a bump mounts them afresh, on the record's text.
-    epoch: u64,
     confirm: Option<Confirm>,
 }
 
 impl HostPage {
-    /// Show the stored record in the boxes: all of them when `forced`, else the ones nobody is
+    /// Show the stored record in `fields`: always when `forced`, else in the boxes nobody is
     /// typing in.
-    fn seed(&mut self, who: &HostRef, forced: bool) {
+    fn seed(&mut self, who: &HostRef, fields: &[Field], forced: bool) {
         let known = KnownHosts::load();
         let Some(k) = who.index(&known).map(|i| &known.hosts[i]) else {
             return;
         };
-        let f = &mut self.fields;
-        for (draft, stored) in [
-            (&mut f.name, k.name.clone()),
-            (&mut f.addr, k.addr.clone()),
-            (&mut f.port, k.port.to_string()),
-            (&mut f.mac, k.mac.join(", ")),
-        ] {
+        for &field in fields {
+            let stored = field.stored(k);
+            let draft = self.draft(field);
             let untouched = *draft.live.borrow() == draft.seed;
             if forced || (untouched && draft.seed != stored) {
                 draft.reset(stored);
             }
+        }
+    }
+
+    fn draft(&mut self, field: Field) -> &mut Draft<String> {
+        let f = &mut self.fields;
+        match field {
+            Field::Name => &mut f.name,
+            Field::Addr => &mut f.addr,
+            Field::Port => &mut f.port,
+            Field::Mac => &mut f.mac,
         }
     }
 }
@@ -121,24 +150,20 @@ impl Component for HostPage {
     fn create(props: &HostPageProps, _cx: &ComponentContext<Self>) -> Self {
         let mut page = HostPage {
             fields: Fields::default(),
-            epoch: 0,
             confirm: None,
         };
-        page.seed(&props.who, true);
+        page.seed(&props.who, &Field::ALL, true);
         page
     }
 
     fn input_changed(&mut self, props: &HostPageProps, _cx: &ComponentContext<Self>) {
-        self.seed(&props.who, false);
+        self.seed(&props.who, &Field::ALL, false);
     }
 
     fn update(&mut self, msg: PageMsg, cx: &ComponentContext<Self>) {
         match msg {
             PageMsg::Ask(c) => self.confirm = c,
-            PageMsg::Snap => {
-                self.seed(&cx.input().who, true);
-                self.epoch += 1;
-            }
+            PageMsg::Settled(field) => self.seed(&cx.input().who, &[field], true),
         }
     }
 
@@ -181,34 +206,31 @@ fn commit(
             ..blank()
         }),
     };
-    match edit {
+    let saved = edit.and_then(|edit| {
+        let r = KnownHosts::update(|known| {
+            let h = who.index(known).and_then(|i| known.hosts.get_mut(i))?;
+            h.apply_edit(&edit);
+            Some(HostRef::of(h))
+        });
+        svc.bump_hosts.call(());
+        r.map_err(|e| desktop::desktop_hostcard_save_failed(format!("{e:#}")))
+    });
+    match saved {
         Err(sentence) => svc.set_status.call(sentence),
-        Ok(edit) => {
-            let r = KnownHosts::update(|known| {
-                let h = who.index(known).and_then(|i| known.hosts.get_mut(i))?;
-                h.apply_edit(&edit);
-                Some(HostRef::of(h))
-            });
-            let r = r.map_err(|e| desktop::desktop_hostcard_save_failed(format!("{e:#}")));
-            match r {
-                Err(sentence) => svc.set_status.call(sentence),
-                Ok(now) => {
-                    svc.set_status.call(String::new());
-                    // The record's name or address moved: the page follows it.
-                    if let Some(now) = now {
-                        svc.set_host_page.call(Some(now));
-                    }
-                }
+        Ok(now) => {
+            svc.set_status.call(String::new());
+            // The record's name or address moved: the page follows it.
+            if let Some(now) = now {
+                svc.set_host_page.call(Some(now));
             }
-            svc.bump_hosts.call(());
         }
     }
-    msgs.call(PageMsg::Snap);
+    msgs.call(PageMsg::Settled(field));
 }
 
 /// A field's box: it keeps what is typed in `draft` and saves on Enter and on losing focus.
+/// It shows the live text, so a render while someone types leaves their typing alone.
 fn field_box(
-    page: &HostPage,
     props: &HostPageProps,
     field: Field,
     draft: &Draft<String>,
@@ -222,12 +244,13 @@ fn field_box(
         Rc::new(move || commit(&svc, &who, field, &live.borrow(), &stored, &msgs))
     };
     let typed = TextBox::new()
-        .text(&draft.seed)
+        .text(&*draft.live.borrow())
         .placeholder_text(hint)
+        .automation_name(field.label())
         .on_text_changed(move |t: Rc<str>| *live.borrow_mut() = t.to_string());
     let on_enter = save.clone();
     Border::new()
-        .content(vstack(()).keyed_children([KeyedView::new(page.epoch.to_string(), typed)]))
+        .content(typed)
         .width(match props.width < 560.0 {
             true => FIELD_WIDTH_NARROW,
             false => FIELD_WIDTH,
@@ -478,6 +501,7 @@ fn presets_group(svc: &Svc, k: &KnownHost, who: &HostRef, presets: &[CardPreset]
     let binding = ComboBox::new()
         .items_source(names)
         .selected_index(bound)
+        .automation_name(client::hostcard_connect_with())
         .on_selection_changed({
             let (svc, who) = (svc.clone(), who.clone());
             move |i: Option<usize>| {
@@ -502,11 +526,12 @@ fn presets_group(svc: &Svc, k: &KnownHost, who: &HostRef, presets: &[CardPreset]
     for p in presets {
         let on = k.pinned_presets.iter().any(|id| id == &p.id);
         let (svc, who, id) = (svc.clone(), who.clone(), p.id.clone());
+        let label = client::hostcard_pin_preset(&p.name);
         rows.push(row(
             pal,
-            &client::hostcard_pin_preset(&p.name),
+            &label,
             None,
-            switch(pal, on, move |on: bool| {
+            switch(pal, &label, on, move |on: bool| {
                 hosts::pin_card(&svc, &who, &id, on)
             }),
         ));
@@ -583,14 +608,14 @@ fn connection_group(
 ) -> Vec<View> {
     let (svc, pal) = (&props.svc, &props.svc.pal);
     let f = &page.fields;
-    let field = |field, draft, hint| field_box(page, props, field, draft, hint, msgs);
+    let field = |field, draft, hint| field_box(props, field, draft, hint, msgs);
     let mgmt = match k.mgmt_port {
         Some(port) => port.to_string(),
         None => {
             desktop::desktop_hostcard_mgmt_port_default(pf_client_core::library::DEFAULT_MGMT_PORT)
         }
     };
-    let clipboard = switch(pal, k.clipboard_sync, {
+    let clipboard = switch(pal, client::hostcard_share_clipboard(), k.clipboard_sync, {
         let (svc, who) = (svc.clone(), props.who.clone());
         move |on: bool| {
             let r = KnownHosts::update(|known| {
@@ -607,13 +632,13 @@ fn connection_group(
     let rows = vec![
         row(
             pal,
-            client::hosts_field_name(),
+            Field::Name.label(),
             None,
             field(Field::Name, &f.name, client::hosts_field_name_placeholder()),
         ),
         row(
             pal,
-            client::hosts_field_address(),
+            Field::Addr.label(),
             None,
             field(
                 Field::Addr,
@@ -623,13 +648,13 @@ fn connection_group(
         ),
         row(
             pal,
-            client::hosts_field_port(),
+            Field::Port.label(),
             None,
             field(Field::Port, &f.port, ""),
         ),
         row(
             pal,
-            client::hosts_field_mac(),
+            Field::Mac.label(),
             Some(desktop::desktop_hosts_field_mac_hint()),
             field(Field::Mac, &f.mac, client::hosts_field_mac_placeholder()),
         ),
@@ -762,7 +787,7 @@ fn pairing_group(
                 StartIn::Library => desktop::desktop_hostcard_default_start_library_hint(),
                 StartIn::Stream => desktop::desktop_hostcard_default_start_stream_hint(),
             }),
-            switch(pal, default, {
+            switch(pal, client::hostcard_default_host(), default, {
                 let svc = svc.clone();
                 move |on: bool| {
                     Settings::update(|s| {

@@ -396,8 +396,21 @@ fn host_card(
     }
 }
 
+thread_local! {
+    /// Picks made in any menu so far. A key carries it, so a menu built after a pick is new
+    /// to the reconciler and mounts a fresh flyout: one shown again after a pick swallows
+    /// its first click.
+    static PICKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// A [`MenuRows`] key's row: `picks:index`.
+fn row_index(key: &Key) -> Option<usize> {
+    let (_, i) = key.as_str()?.split_once(':')?;
+    i.parse().ok()
+}
+
 /// A menu whose rows are keyed by their index into an action table, so two rows may carry
-/// the same label.
+/// the same label. Each key also carries [`PICKS`].
 pub(super) struct MenuRows<A> {
     pub(super) items: Vec<MenuItem>,
     actions: Vec<A>,
@@ -416,7 +429,8 @@ impl<A: 'static> MenuRows<A> {
     /// A row, for the top level or a submenu's leaves.
     pub(super) fn row(&mut self, label: impl Into<std::rc::Rc<str>>, action: A) -> MenuItem {
         self.actions.push(action);
-        MenuItem::item((self.actions.len() - 1).to_string(), label)
+        let picks = PICKS.with(std::cell::Cell::get);
+        MenuItem::item(format!("{picks}:{}", self.actions.len() - 1), label)
     }
 
     pub(super) fn push(&mut self, label: impl Into<std::rc::Rc<str>>, action: A) {
@@ -430,16 +444,16 @@ impl<A: 'static> MenuRows<A> {
             .push(MenuItem::separator(format!("sep{}", self.separators)));
     }
 
-    /// The menu, `on_pick` running the clicked row's action.
-    pub(super) fn build(self, on_pick: impl Fn(&A) + 'static) -> Menu {
+    /// The menu, `on_pick` running the clicked row's action. `refresh` re-renders whatever
+    /// owns the menu, so it rebuilds with the new keys even when the pick changed nothing it
+    /// reads.
+    pub(super) fn build(self, refresh: AsyncSetState<()>, on_pick: impl Fn(&A) + 'static) -> Menu {
         let actions = self.actions;
         Menu::new(self.items, move |key: Key| {
-            let picked = key
-                .as_str()
-                .and_then(|k| k.parse::<usize>().ok())
-                .and_then(|i| actions.get(i));
-            if let Some(a) = picked {
+            if let Some(a) = row_index(&key).and_then(|i| actions.get(i)) {
+                PICKS.with(|p| p.set(p.get().wrapping_add(1)));
                 on_pick(a);
+                refresh.call(());
             }
         })
     }
@@ -768,7 +782,7 @@ fn saved_card(props: &HostsProps, c: &SavedCard, presets: &[CardPreset], default
         let (svc, target, who) = (svc.clone(), target.clone(), who.clone());
         let (link_host, pin_id) = (k.clone(), c.pinned.map(|p| p.id.clone()));
         let (saved_pick, pin) = (k.profile.clone(), crate::trust::parse_hex32(&k.fp_hex));
-        rows.build(move |action| match action {
+        rows.build(svc.bump_hosts.clone(), move |action| match action {
             MenuAction::ConnectWith(id) => {
                 let target = Target {
                     preset: Some(id.clone()),
@@ -1083,7 +1097,8 @@ fn hosts_page(page: &HostsPage, props: &HostsProps, refuse: Callback<String>) ->
         .into()
 }
 
-/// One field of a sheet: its label over a box that keeps what is typed in `draft`.
+/// One field of a sheet: its label over a box that keeps what is typed in `draft`. It shows
+/// the live text, so a render while someone types leaves their typing alone.
 pub(super) fn sheet_field(pal: &Palette, label: &str, draft: &Draft<String>, hint: &str) -> View {
     let live = draft.live.clone();
     vstack((
@@ -1091,7 +1106,7 @@ pub(super) fn sheet_field(pal: &Palette, label: &str, draft: &Draft<String>, hin
             .font_size(12.0)
             .horizontal_alignment(HorizontalAlignment::Left),
         TextBox::new()
-            .text(&draft.seed)
+            .text(&*draft.live.borrow())
             .placeholder_text(hint)
             .on_text_changed(move |t: Rc<str>| *live.borrow_mut() = t.to_string()),
     ))
@@ -1226,6 +1241,22 @@ mod tests {
 
     fn labels(rows: &MenuRows<MenuAction>) -> usize {
         rows.items.len()
+    }
+
+    /// A menu built after a pick has keys the one before it lacked, so the reconciler mounts
+    /// a fresh flyout; the row each key names stays the same.
+    #[test]
+    fn a_pick_gives_the_next_menu_new_keys() {
+        let key = |item: MenuItem| match item {
+            MenuItem::Item { key, .. } => key,
+            _ => unreachable!("a row is an item"),
+        };
+        let before = key(MenuRows::new().row("Play", ()));
+        PICKS.with(|p| p.set(p.get() + 1));
+        let after = key(MenuRows::new().row("Play", ()));
+        assert_ne!(before, after);
+        assert_eq!(row_index(&before), Some(0));
+        assert_eq!(row_index(&after), Some(0));
     }
 
     /// The card's menu is the short one: what a connect uses and where the card leads. The
