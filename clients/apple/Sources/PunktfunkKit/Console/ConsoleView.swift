@@ -456,6 +456,15 @@ public final class ConsoleMetalView: ConsolePlatformView {
     public override func mouseMoved(with event: NSEvent) { send(.move, event) }
     public override func rightMouseDown(with event: NSEvent) { send(.back, event) }
 
+    /// AppKit delivers `mouseMoved` only to a tracking area's owner: without one, hover never
+    /// reaches the console.
+    public override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+
     public override func scrollWheel(with event: NSEvent) {
         let scale = window?.backingScaleFactor ?? 2
         let p = convert(event.locationInWindow, from: nil)
