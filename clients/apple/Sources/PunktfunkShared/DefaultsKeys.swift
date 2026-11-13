@@ -133,12 +133,6 @@ public enum DefaultsKey {
     /// discrete channel, and the default N→stereo downmix grabs channels 0/1 (silence when the mic
     /// is higher up), so we fold to mono ourselves. Only meaningful for multi-channel devices.
     public static let micChannel = "punktfunk.micChannel"
-    /// LEGACY (2026-07 presentation rebuild — design/apple-presentation-rebuild.md): the old
-    /// user-visible stage picker's key. No longer read — the presenter is resolved from
-    /// `presentPriority` below; the stage ladder survives only as the
-    /// PUNKTFUNK_PRESENTER=stage1|stage2|stage3|stage4 debug env lever. Kept so a synced old
-    /// value is documented, not mysterious.
-    public static let presenter = "punktfunk.presenter"
     /// The user's presentation intent: "latency" (default — every frame shows as soon as the
     /// display can; jitter appears as the occasional repeat/drop) or "smooth" (a small client
     /// jitter buffer evens the cadence at the cost of added, visible display latency).
