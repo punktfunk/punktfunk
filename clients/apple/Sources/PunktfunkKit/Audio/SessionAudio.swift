@@ -138,10 +138,7 @@ public final class SessionAudio: @unchecked Sendable {
     /// `engineQueue`-confined, like the start paths that consult and feed it.
     private var combinedGate = CombinedTopologyGate()
     #endif
-    /// Retries when a rebuild's `start()` loses the race with a device that is still going away
-    /// (0.3 s, 0.6 s, 1.2 s). A failed rebuild leaves no engine to post the next notification,
-    /// so this ladder — and, on macOS, the HAL listener — is all that stands between a mistimed
-    /// switch and a silent session.
+    /// How many times `rebuildFailed` retries a rebuild whose playback did not come back.
     private static let rebuildAttempts = 3
 
     public init(connection: PunktfunkConnection) {
@@ -821,11 +818,9 @@ public final class SessionAudio: @unchecked Sendable {
         }
     }
 
-    /// A rebuild's playback did not come back (main queue) — walk the retry ladder. Retries
-    /// when a rebuild's `start()` loses the race with a device that is still going away
-    /// (0.3 s, 0.6 s, 1.2 s): a failed rebuild leaves no engine to post the next notification,
-    /// so this ladder — and, on macOS, the HAL listener — is all that stands between a mistimed
-    /// switch and a silent session.
+    /// A rebuild's playback did not come back (main queue): retry after 0.3 s, 0.6 s, then 1.2 s.
+    /// A failed rebuild leaves no engine to post the next notification, so this ladder (and, on
+    /// macOS, the HAL listener) keeps a device still going away from leaving the session silent.
     @MainActor
     private func rebuildFailed(attempt: Int) {
         guard !flag.isStopped else { return }
