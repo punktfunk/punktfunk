@@ -409,10 +409,9 @@ public final class Sc2Capture {
             return
         }
         var state = Sc2Device.State()
-        var report = framed
         let isState = classic
-            ? Sc1Device.parseState(report, into: &state)
-            : Sc2Device.parseState(report, into: &state)
+            ? Sc1Device.parseState(framed, into: &state)
+            : Sc2Device.parseState(framed, into: &state)
         lock.lock()
         if stopped || suspended {
             lock.unlock()
@@ -432,7 +431,7 @@ public final class Sc2Capture {
         }
         if !isState {
             // Battery/status and future report types still belong to the as-is stream.
-            forwardRawLocked(src, &report, pad: pad)
+            forwardRawLocked(src, framed, pad: pad)
             lock.unlock()
             return
         }
@@ -440,7 +439,7 @@ public final class Sc2Capture {
         // a press the client consumed never reaches the game.
         deliver(src.ring.read(state))
         src.ring.apply(&state)
-        forwardRawLocked(src, &report, pad: pad)
+        forwardRawLocked(src, framed, pad: pad)
         mirrorTypedLocked(src, state, pad: pad)
         lock.unlock()
     }
@@ -494,7 +493,7 @@ public final class Sc2Capture {
 
     /// Forward one id-first report on the raw plane: copy into the source's reusable buffer,
     /// send. Caller holds `lock`.
-    private func forwardRawLocked(_ src: PadSource, _ report: inout [UInt8], pad: UInt8) {
+    private func forwardRawLocked(_ src: PadSource, _ report: [UInt8], pad: UInt8) {
         let n = min(report.count, src.rawBuf.count)
         src.rawBuf.replaceSubrange(0 ..< n, with: report[0 ..< n])
         src.rawBuf.withUnsafeBytes { buf in
