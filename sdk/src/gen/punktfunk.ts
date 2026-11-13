@@ -4412,7 +4412,8 @@ readonly "removeEmulator": {
   /**
 * The save units of the platform on the best copy of the emulator: name, kind, size and a
 * stamp that changes with the save. A plugin needs the operator's save grant. With `profile`,
-* that seat's units; a Linux seat's are what its host exported at its last launch or exit.
+* that seat's units; a Linux seat's are what its host exported at its last launch or exit. A
+* Windows seat host lists them for the operator alone.
 */
 readonly "getEmulatorSaves": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params: typeof GetEmulatorSavesParams.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetEmulatorSaves200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulatorSaves400", typeof GetEmulatorSaves400.Type> | PunktfunkError<"GetEmulatorSaves401", typeof GetEmulatorSaves401.Type> | PunktfunkError<"GetEmulatorSaves403", typeof GetEmulatorSaves403.Type> | PunktfunkError<"GetEmulatorSaves404", typeof GetEmulatorSaves404.Type> | PunktfunkError<"GetEmulatorSaves409", typeof GetEmulatorSaves409.Type>>;

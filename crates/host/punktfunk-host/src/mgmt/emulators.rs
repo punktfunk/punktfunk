@@ -318,9 +318,9 @@ pub(crate) async fn prepare_emulator(
     }
 }
 
-/// The emulator writes a Windows seat host (`seat`) takes from the operator alone: it is SYSTEM,
-/// and a plugin's state folder is the seat account's to point anywhere. Its emulators are the
-/// box's copies.
+/// The emulator file routes a Windows seat host (`seat`) takes from the operator alone, the save
+/// list included: it is SYSTEM, and a plugin's state or game folder is the seat account's to
+/// point anywhere. Its emulators are the box's copies.
 fn seat_write_refusal(lane: AuthLane, seat: bool) -> Option<Response> {
     (seat && !lane.is_operator()).then(|| {
         let (code, why) = super::own_account::EMULATORS_YET;
@@ -829,7 +829,8 @@ fn plugin_states() -> std::path::PathBuf {
 ///
 /// The save units of the platform on the best copy of the emulator: name, kind, size and a
 /// stamp that changes with the save. A plugin needs the operator's save grant. With `profile`,
-/// that seat's units; a Linux seat's are what its host exported at its last launch or exit.
+/// that seat's units; a Linux seat's are what its host exported at its last launch or exit. A
+/// Windows seat host lists them for the operator alone.
 #[utoipa::path(
     get,
     path = "/emulators/{id}/saves",
@@ -844,7 +845,7 @@ fn plugin_states() -> std::path::PathBuf {
     responses(
         (status = OK, description = "The save units", body = [SaveUnitView]),
         (status = BAD_REQUEST, description = "A malformed platform, or no copy on this host", body = ApiError),
-        (status = FORBIDDEN, description = "No save grant, or a game folder outside the plugin's reach", body = ApiError),
+        (status = FORBIDDEN, description = "No save grant, a game folder outside the plugin's reach, or a Windows seat host's plugin asks", body = ApiError),
         (status = NOT_FOUND, description = "Not in the catalog, or a profile with no seat", body = ApiError),
         (status = CONFLICT, description = "`profile` on a seat host", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
@@ -857,6 +858,9 @@ pub(crate) async fn get_emulator_saves(
     who: Option<Extension<PluginIdentity>>,
     Query(q): Query<PlatformQuery>,
 ) -> Response {
+    if let Some(refused) = seat_write_refusal(lane, crate::plugins::system_seat_host()) {
+        return refused;
+    }
     let plugin = who.map(|Extension(w)| w.0);
     if let Err((status, why)) = may_move_saves(&st, lane, plugin.as_deref()) {
         return api_error(status, why);

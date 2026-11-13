@@ -2380,7 +2380,7 @@
           "emulators"
         ],
         "summary": "List a platform's saves",
-        "description": "The save units of the platform on the best copy of the emulator: name, kind, size and a\nstamp that changes with the save. A plugin needs the operator's save grant. With `profile`,\nthat seat's units; a Linux seat's are what its host exported at its last launch or exit.",
+        "description": "The save units of the platform on the best copy of the emulator: name, kind, size and a\nstamp that changes with the save. A plugin needs the operator's save grant. With `profile`,\nthat seat's units; a Linux seat's are what its host exported at its last launch or exit. A\nWindows seat host lists them for the operator alone.",
         "operationId": "getEmulatorSaves",
         "parameters": [
           {
@@ -2455,7 +2455,7 @@
             }
           },
           "403": {
-            "description": "No save grant, or a game folder outside the plugin's reach",
+            "description": "No save grant, a game folder outside the plugin's reach, or a Windows seat host's plugin asks",
             "content": {
               "application/json": {
                 "schema": {
