@@ -165,6 +165,12 @@ pub trait Overlay {
         false
     }
 
+    /// The field being edited in swapchain pixels, and its caret's offset from the field's
+    /// left. The run loop opens the input method's candidate window under it.
+    fn text_input_area(&self) -> Option<(sdl3::rect::Rect, i32)> {
+        None
+    }
+
     /// Once per presenter iteration. Re-render (flush + `SHADER_READ_ONLY`) only
     /// on content or size change. The returned image stays untouched until the
     /// next `frame()` — one frame in flight; a ring of two is enough.
