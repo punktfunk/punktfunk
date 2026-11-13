@@ -18,8 +18,9 @@
 // (fires once per press).
 //
 // A poll reads whichever source has a pad — GameController first, else the Steam Controller 2
-// `Sc2MenuPad` reads directly on iOS, where GameController surfaces no such device. Both arrive
-// as a `Snapshot`, so the dead zone, hysteresis and repeat rules below are written once.
+// `Sc2MenuPad` reads directly on iOS and visionOS, where GameController surfaces no such
+// device. Both arrive as a `Snapshot`, so the dead zone, hysteresis and repeat rules below are
+// written once.
 
 import Foundation
 import GameController
