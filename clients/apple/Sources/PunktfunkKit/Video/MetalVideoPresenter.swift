@@ -967,10 +967,20 @@ public final class MetalVideoPresenter {
     private lazy var latchQueue: MTLCommandQueue? = device.makeCommandQueue()
     private lazy var latchEvent: MTLSharedEvent? = device.makeSharedEvent()
     private var latchValue: UInt64 = 0
+    /// The value of the newest parked pass the GPU has finished, raised by its completed
+    /// handler. A queued pass reads its uniform and its planes only when it runs, so neither is
+    /// reused or made non-resident before this reaches the pass.
+    private let latchDone = OSAllocatedUnfairLock(initialState: UInt64(0))
     /// Uniforms in rotation, three unless an allocation failed: `park` rotates over the ones
-    /// that exist.
+    /// that exist, and takes one only once its last pass has run.
     private lazy var latchUniforms: [MTLBuffer] = (0..<3).compactMap { _ in
         device.makeBuffer(length: MemoryLayout<LatchUniform>.stride, options: .storageModeShared)
+    }
+
+    /// Whether pass `value` may take its uniform. The buffer last served pass `value - slots`:
+    /// still queued, that pass would run on this one's uniform.
+    static func latchUniformFree(value: UInt64, done: UInt64, slots: Int) -> Bool {
+        slots > 0 && value <= done + UInt64(slots)
     }
     /// The planes a latch names reach the GPU by resource ID, so they must be resident on the
     /// latch queue: this set holds every surface `latchTextures` wrapped. nil before iOS 18, or
@@ -993,6 +1003,10 @@ public final class MetalVideoPresenter {
     /// must leave: 120 calls is two seconds at 60 Hz, and a live one comes round in a dozen.
     private var latchCache = RecentCache<IOSurfaceID, LatchedSurface>(capacity: 48, idle: 120)
     private var latchTenBit = false
+    /// The other depth's surfaces after a depth flip. They stay resident until `latchDone`
+    /// reaches `latchRetiredAt`: the passes parked before the flip name them.
+    private var latchRetired: [LatchedSurface] = []
+    private var latchRetiredAt: UInt64 = 0
     /// The last luma's size, for the park's fit check.
     private var latchLumaSize: CGSize?
 
@@ -1013,14 +1027,22 @@ public final class MetalVideoPresenter {
             }
         }
         if latchTenBit != tenBit {
-            release(latchCache.removeAll())
+            latchRetired += latchCache.removeAll()
+            latchRetiredAt = latchValue
             latchTenBit = tenBit
+        }
+        var released = false
+        if !latchRetired.isEmpty, latchDone.withLock({ $0 }) >= latchRetiredAt {
+            release(latchRetired)
+            latchRetired.removeAll()
+            released = true
         }
         let hit = latchCache.touch(id)
         let idle = latchCache.sweep()
         release(idle)
+        released = released || !idle.isEmpty
         if let hit, hit.surface === surface {
-            if !idle.isEmpty { residency.commit() }
+            if released { residency.commit() }
             return (hit.luma, hit.chroma)
         }
         func plane(_ i: Int, _ format: MTLPixelFormat) -> MTLTexture? {
@@ -1033,7 +1055,7 @@ public final class MetalVideoPresenter {
         guard let luma = plane(0, tenBit ? .r16Unorm : .r8Unorm),
               let chroma = plane(1, tenBit ? .rg16Unorm : .rg8Unorm)
         else {
-            if !idle.isEmpty { residency.commit() }
+            if released { residency.commit() }
             return nil
         }
         release(latchCache.insert(
@@ -1068,9 +1090,13 @@ public final class MetalVideoPresenter {
             ? pipelines.latchedHDR : (tenBitSDRActive ? pipelines.latchedSDR10 : pipelines.latchedSDR)
         #endif
         let uniforms = latchUniforms
-        guard let pipeline, !uniforms.isEmpty, let commandBuffer = queue.makeCommandBuffer()
-        else { return nil }
         let value = latchValue + 1
+        let done = latchDone
+        guard let pipeline,
+              Self.latchUniformFree(
+                  value: value, done: done.withLock({ $0 }), slots: uniforms.count),
+              let commandBuffer = queue.makeCommandBuffer()
+        else { return nil }
         let uniform = uniforms[Int(value % UInt64(uniforms.count))]
         uniform.contents().storeBytes(of: Int32(-1), toByteOffset: LatchUniform.slotOffset, as: Int32.self)
         commandBuffer.encodeWaitForEvent(event, value: value)
@@ -1099,6 +1125,7 @@ public final class MetalVideoPresenter {
             if presents { parked.drawable.present() }
         }
         commandBuffer.addCompletedHandler { cb in
+            done.withLock { $0 = max($0, value) }
             Self.noteUnfinished(cb, "parked")
             parked.lock.lock()
             let onGPU = parked.onGPU, signalAt = parked.signalAt
