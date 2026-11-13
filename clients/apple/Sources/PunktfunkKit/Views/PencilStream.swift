@@ -243,7 +243,8 @@ final class PencilStream: NSObject {
 }
 
 #if os(iOS)
-// Squeeze → barrel 1 held, tap → barrel 2 click. visionOS has no Apple Pencil interaction.
+// Squeeze → barrel 1 held, tap → barrel 2 click. iOS only: the visionOS 27 SDK marks
+// UIPencilInteraction visionOS 26.2+, above the visionOS 26 deployment target.
 extension PencilStream: UIPencilInteractionDelegate {
     @available(iOS 17.5, *)
     func pencilInteraction(
