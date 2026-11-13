@@ -1,7 +1,7 @@
 // A person's own plugin pages: the plugins their seat host runs, served on the plugin listener as
 // the operator's are. A page path is signed with the session's own key, so it dies with the
 // session. The plugin's `{port, secret}` comes from their seat host on their session and stays
-// in this process; a plugin with no listener of its own is not reached for a person.
+// in this process; a plugin with no listener of its own is reached through that host's relay.
 import { createHmac } from "node:crypto";
 import { safeEqualHex } from "./handoff";
 import {
@@ -12,7 +12,12 @@ import {
 	seatCall,
 } from "./person";
 import { type PluginPage, pageParts } from "./pluginPage";
-import { isDialablePort, PLUGIN_ID_RE, type UiCredential } from "./pluginProxy";
+import {
+	isDialablePort,
+	type PersonReach,
+	PLUGIN_ID_RE,
+	type UiCredential,
+} from "./pluginProxy";
 
 const tag = (session: PersonSession, id: string, exp: string): string =>
 	createHmac("sha256", session.pageKey)
@@ -47,8 +52,8 @@ const cache = new WeakMap<
 >();
 
 /**
- * Plugin `id`'s UI credential on the session's seat host, cached as the operator's is. `null`:
- * not running, no UI, a port the console won't dial, or a plugin the host relays itself.
+ * Plugin `id`'s UI credential on the session's seat host, cached as the operator's is. Port 0 is a
+ * plugin that host relays itself. `null`: not running, no UI, or a port the console won't dial.
  */
 export async function personUiCredential(
 	session: PersonSession,
@@ -81,7 +86,7 @@ export async function personUiCredential(
 	const secret = body?.secret;
 	const cred =
 		typeof port === "number" &&
-		isDialablePort(port) &&
+		(port === 0 || isDialablePort(port)) &&
 		typeof secret === "string" &&
 		secret !== ""
 			? { port, secret }
@@ -89,3 +94,14 @@ export async function personUiCredential(
 	kept.set(id, { cred, at: now });
 	return cred;
 }
+
+/** Plugin `id` as the session's person reaches it ({@link PersonReach}). */
+export const personReach = (
+	session: PersonSession,
+	id: string,
+): PersonReach => ({
+	credential: (opts) => personUiCredential(session, id, opts),
+	// A page may stream: no deadline, as the operator's relay has none.
+	relay: (path, init) =>
+		seatCall(session, path, { ...init, signal: new AbortController().signal }),
+});
