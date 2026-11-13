@@ -714,7 +714,7 @@ public final class MetalVideoPresenter {
         #if os(tvOS)
         // Reconfigure on an HDR flip AND on a passthrough↔tone-map flip. Passthrough needs the
         // box in an HDR output mode: the switch our criteria asked for landed (`setHDROutput`),
-        // or the screen reports headroom — which tvOS never does, even in HDR.
+        // or the screen reports headroom above 1.
         stagingLock.lock()
         let headroom = stagedDisplayHeadroom
         let hdrOutput = stagedHDROutput
@@ -767,10 +767,11 @@ public final class MetalVideoPresenter {
     }
 
     /// Set the layer's pixel format + colour config for SDR or HDR through `writeLayer`, on
-    /// `configure`'s thread. EDR is requested on macOS + iOS. tvOS has NO EDR API
-    /// (`wantsExtendedDynamicRangeContent`/`edrMetadata`/`CAEDRMetadata` are all unavailable there) —
-    /// and a bare PQ colour-space tag composites UNtone-mapped (the "overblown HDR" Apple TV report),
-    /// so tvOS instead tone-maps PQ→SDR in the shader (pf_frag_hdr_tv) and keeps the SDR layer config.
+    /// `configure`'s thread. EDR is requested on macOS + iOS. tvOS lacks
+    /// `wantsExtendedDynamicRangeContent`, `edrMetadata` and `CAEDRMetadata`; it has
+    /// `CALayer.toneMapMode` from tvOS 18, which this presenter does not set. A bare PQ
+    /// colour-space tag composites untone-mapped into an SDR output, so without an HDR output
+    /// tvOS tone-maps PQ→SDR in the shader (pf_frag_hdr_tv) and keeps the SDR layer config.
     private func configureColor(hdr: Bool, tenBitSDR: Bool) {
         if hdr {
             #if os(tvOS)

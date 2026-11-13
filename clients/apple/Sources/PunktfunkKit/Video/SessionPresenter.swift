@@ -1,9 +1,9 @@
 // Per-session presenter stack shared by the Apple stream views.
 //
-// Explicit VideoToolbox decode is the default. iOS presents through CAMetalDisplayLink, tvOS
-// sends decoded IOSurfaces to its video plane, and macOS presents a CAMetalLayer on arrival.
-// The latency intent uses each platform's shortest path; smoothness retains an explicit FIFO.
-// Stage-1's compressed AVSampleBufferDisplayLayer remains a diagnostic/fallback.
+// Explicit VideoToolbox decode is the default, presented by Metal. Which pacing a platform
+// takes is decided in `PresenterChoice.platformDefault` and stated only there. The latency
+// intent keeps no app buffer; smoothness retains an explicit FIFO. Stage-1's compressed
+// AVSampleBufferDisplayLayer remains a diagnostic/fallback.
 //
 // Views own capture, geometry, and ordinary display links; this type owns presenter lifecycle.
 // Start, layout, stop, and ordinary display-link ticks run on the main thread.
@@ -53,7 +53,7 @@ struct WedgePolicy {
 ///
 /// Stage-2/3/4 share explicit decode and the Metal renderer, using arrival, on-glass-gated, or
 /// CAMetalDisplayLink pacing. `decoded` keeps explicit decode but sends its IOSurface directly to
-/// the tvOS video renderer. Stage-1 sends compressed samples to that renderer and remains a debug
+/// the system video renderer, an env-only A/B on iOS and tvOS. Stage-1 sends compressed samples to that renderer and remains a debug
 /// diagnostic because its internal decoder cannot participate in recovery or decode metering.
 ///
 /// Internal rather than private for resolution tests.
@@ -75,8 +75,8 @@ enum PresenterChoice: Equatable {
 
     /// Resolve an explicit diagnostic override, or nil for no supported selection.
     ///
-    /// Stage-2 remains a faithful arrival-pacing A/B. Stage-4 is limited to iOS/tvOS because the
-    /// macOS path has separate synchronization constraints. `decoded` (the video-plane A/B) needs
+    /// Stage-2 remains a faithful arrival-pacing A/B. Stage-4 is refused on macOS, whose
+    /// path has separate synchronization constraints. `decoded` (the video-plane A/B) needs
     /// iOS/tvOS 17.4 for its displayed-IOSurface metering. Stage-1 additionally requires the
     /// caller's release-build gate.
     static func explicit(setting: String?, env: String?, allowStage1: Bool) -> PresenterChoice? {
@@ -102,7 +102,7 @@ enum PresenterChoice: Equatable {
         }
     }
 
-    /// iOS and tvOS use deadline-paced Metal, macOS arrival-paced Metal.
+    /// macOS uses arrival-paced Metal; iOS, tvOS and visionOS deadline-paced Metal.
     ///
     /// The deadline link presents each drawable as late as its deadline allows
     /// (`DeadlinePacer`). Filmed at 240 fps on a 60 Hz Apple TV, a late pick answered controller
@@ -117,18 +117,17 @@ enum PresenterChoice: Equatable {
     }
 }
 
-/// The user's presentation INTENT — what replaced the visible stage picker in the 2026-07
-/// rebuild (design/apple-presentation-rebuild.md). Two intents, one engine per platform:
+/// The user's presentation INTENT. Two intents, one engine per platform:
 ///
-/// - `.latency` (the default): no deliberate app buffer. Metal uses a newest-wins slot; tvOS's
-///   decoded path submits directly and drops on renderer backpressure. Jitter becomes a repeat or
-///   drop rather than standing latency.
-/// - `.smooth(buffer:)`: a small deliberate jitter buffer (`FrameStore.fifo`) evens the present
+/// - `.latency` (the default): no deliberate app buffer. Metal keeps the newest frame or two;
+///   the `decoded` A/B submits directly and drops on renderer backpressure. Jitter becomes a
+///   repeat or drop rather than standing latency.
+/// - `.smooth(buffer:)`: a small deliberate jitter buffer (`FrameStorePolicy.fifo`) evens the present
 ///   cadence at the cost of `buffer` refresh intervals of added display latency — which the HUD
 ///   SHOWS (only the OS floor is shaved, never the user's chosen buffer). `buffer` ∈ 1…3;
 ///   the "Automatic" setting (stored 0) currently maps to 2.
 ///
-/// Mechanism stays internal: intents map onto `PresentPacing`/`FrameStore.Policy` per platform
+/// Mechanism stays internal: intents map onto `PresentPacing`/`FrameStorePolicy` per platform
 /// in `SessionPresenter.start`; the stage ladder survives only as the PUNKTFUNK_PRESENTER debug
 /// env lever. Internal (not private) for unit tests.
 enum PresentPriority: Equatable {
@@ -168,8 +167,8 @@ final class SessionPresenter {
         return .arrival
     }
 
-    /// The decoded sink is zero-buffer and validated for biplanar 4:2:0. Preserve deadline Metal
-    /// for Smoothness and 4:4:4 rather than ignoring intent or risking an unsupported video plane.
+    /// `decoded` is reached only through `PUNKTFUNK_PRESENTER=decoded`. Its sink is zero-buffer
+    /// and was only tried with biplanar 4:2:0, so Smoothness and 4:4:4 keep deadline Metal.
     nonisolated static func effectivePacing(
         _ selected: PresentPacing, priority: PresentPriority, videoLayerCompatible: Bool = true
     ) -> PresentPacing {
@@ -327,11 +326,10 @@ final class SessionPresenter {
             setInteractionBoost(boost)
         }
 
-        // Explicit decode stays default so loss recovery and decode metering survive. Presentation
-        // is deadline Metal on iOS, the decoded video plane on tvOS, and arrival Metal on macOS.
-        // PUNKTFUNK_PRESENTER keeps comparison paths reachable; the old persisted picker is ignored.
-        // The user-facing latency/smoothness intent selects zero buffering or an explicit FIFO.
-        // Stage-1 remains the automatic Metal-missing fallback and an environment-only release A/B.
+        // Explicit decode stays default so loss recovery and decode metering survive. The pacing
+        // comes from `PresenterChoice.platformDefault`; PUNKTFUNK_PRESENTER overrides it for A/B.
+        // The latency/smoothness intent selects zero buffering or an explicit FIFO. Stage-1 is
+        // the Metal-missing fallback.
         #if DEBUG
         let allowStage1 = true
         #else
