@@ -247,6 +247,11 @@ jobs:
           # crates (see this file's header). No FFMPEG_DIR: nothing in this package links libav*
           # (M10), and pack-msix.ps1 no longer copies runtime DLLs from one.
           "CARGO_TARGET_DIR=${{ matrix.td }}" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # A cache daemon of this leg's own. On the default port the legs share one, which ends
+          # with whichever job started it, and the other leg's build then fails at `rustc -vV`.
+          $leg = if ('${{ matrix.arch }}' -eq 'arm64') { 1 } else { 0 }
+          $port = 20000 + ([int64]$env:GITHUB_RUN_ID % 10000) * 2 + $leg
+          "SCCACHE_SERVER_PORT=$port" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           rustup target add ${{ matrix.target }}
           rustc --version
           cargo --version
