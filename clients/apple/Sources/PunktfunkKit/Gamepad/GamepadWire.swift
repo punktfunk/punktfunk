@@ -48,8 +48,8 @@ public enum GamepadWire {
     public static let paddle3 = UInt32(PUNKTFUNK_BTN_PADDLE3)
     public static let paddle4 = UInt32(PUNKTFUNK_BTN_PADDLE4)
 
-    /// Every button `buttonMask`/`sendGuide` can set — walked by `sync`'s transition diff and by
-    /// `flush` on release. Paddles are excluded until their capture lands (see above).
+    /// Every button a capture can set — walked by `GamepadCapture.feed`'s transition diff and by
+    /// each capture's `flush` on release. Paddles stay out until their capture lands (see above).
     public static let allButtons: [UInt32] = [
         dpadUp, dpadDown, dpadLeft, dpadRight, start, back,
         leftStickClick, rightStickClick, leftShoulder, rightShoulder, guide,
