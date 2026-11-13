@@ -420,9 +420,10 @@ impl HostApi {
     }
 
     /// `method` `path` with `body` as (content type, bytes), over the tunnel and then over
-    /// HTTPS with `https`. The tunnel's answer stands, except 401 and 403: a host that predates
-    /// stamping the client certificate on its tunnel refuses the paired lane there. Its refusal
-    /// stands only when HTTPS can't be reached either.
+    /// HTTPS with `https`. The tunnel's answer stands, except 401, 403 and 405: a host that
+    /// predates stamping the client certificate on its tunnel refuses the paired lane there, and
+    /// one before 0.47 carries no `PUT` or `PATCH`. Its refusal stands only when HTTPS can't be
+    /// reached either.
     pub(crate) fn call(
         &self,
         https: &ureq::Agent,
@@ -447,7 +448,7 @@ impl HostApi {
                         status: r.status,
                         body: r.body,
                     };
-                    if !matches!(reply.status, 401 | 403) {
+                    if !matches!(reply.status, 401 | 403 | 405) {
                         return Ok(reply);
                     }
                     refused = Some(reply);
