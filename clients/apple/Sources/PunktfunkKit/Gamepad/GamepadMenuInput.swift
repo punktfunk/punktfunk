@@ -1,16 +1,9 @@
 // Left-stick/dpad menu navigation outside a stream: the console, and the trust card.
 //
-// Polls the active controller at 60 Hz rather than installing `valueChangedHandler`/
-// `pressedChangedHandler` callbacks — mirroring `ControllerTestView`'s "Input" card (see its own
-// comment: "Poll the live controller ... — no handlers installed"), the one thing in this codebase
-// already confirmed on real hardware to read a controller reliably outside a streaming session. Two
-// earlier versions of this class both installed handlers directly (first reading the dpad's combined
-// `.xAxis`/`.yAxis`, then its discrete `.isPressed` states, matching `GamepadCapture`'s pattern) and
-// neither one's callbacks fired on-device even though the SAME controller's input showed up correctly
-// in `ControllerTestView`'s poll-based readout — so polling isn't just a style choice here, it's the
-// only approach confirmed to actually work outside a stream. Being read-only, it also can't conflict
-// with `GamepadCapture` installing its own handlers once a stream starts — there's nothing to hand
-// off or race over.
+// Polls the active controller at 60 Hz instead of installing `valueChangedHandler`/
+// `pressedChangedHandler` callbacks: outside a stream those handlers do not fire on-device, while
+// a poll reads the same controller reliably (as `ControllerTestView`'s "Input" card does). Being
+// read-only, it cannot conflict with the handlers `GamepadCapture` installs once a stream starts.
 //
 // The button set mirrors a console launcher: A confirms, B backs out, Y is a screen's secondary
 // action, X a tertiary one, and the shoulders (L1/R1) are optional fast "jump" steps. Directional
@@ -57,8 +50,8 @@ public final class GamepadMenuInput {
             rightShoulder = gamepad.rightShoulder.isPressed
             x = gamepad.leftThumbstick.xAxis.value
             y = gamepad.leftThumbstick.yAxis.value
-            // Discrete `.isPressed`, never the dpad's combined axis — the first version of this
-            // class read the axis and silently never registered a press on-device.
+            // Discrete `.isPressed`, not the dpad's combined axis: only the former is confirmed
+            // on-device.
             up = gamepad.dpad.up.isPressed
             down = gamepad.dpad.down.isPressed
             left = gamepad.dpad.left.isPressed

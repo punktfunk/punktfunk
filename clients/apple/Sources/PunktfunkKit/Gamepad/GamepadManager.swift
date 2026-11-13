@@ -243,7 +243,7 @@ public final class GamepadManager: ObservableObject {
 
     /// While the SC2 passthrough owns the physical hardware, its GameController shadow must not
     /// ALSO be forwarded: macOS surfaces a captured Steam Controller 2 / Puck as an ordinary
-    /// controller (on-glass 2026-08-31, vendorName "Steam Controller Puck"), and forwarding both
+    /// controller (vendorName "Steam Controller Puck"), and forwarding both
     /// hands the host the same pad twice. Held only while `Sc2Capture` has a claimed wire slot
     /// (`syncShadowSuppression`), never for its lifetime: an SC2 the capture cannot open must
     /// keep the ordinary path rather than be forwarded on neither.
