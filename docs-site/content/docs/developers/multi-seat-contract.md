@@ -416,6 +416,28 @@ entry and opens with the owner's lock, list and PIN. A take-turns profile keeps 
   honours it only with its admin token, on these routes, for the profile `as` names and never
   the owner, and needs no pairing record for the device. Any other seat host decides nothing.
 
+## Linux and Windows, side by side
+
+A row with one answer holds on both. Every other row is a difference the sections above state.
+
+| What a profile has | Linux | Windows |
+|---|---|---|
+| Its own layer: hidden titles, sources, game overrides, session settings | Yes | Yes |
+| Its lock, PIN and device key | The door checks | The box host checks |
+| A device as its person, on `mgmt_routes::PERSON` | The door decides, the owner's host writes | The box host decides and writes |
+| Its own titles, with a command and `prep` | On its seat host; the owner's host stores the list | On its seat host; the box host stores the list |
+| [The person's own session](#the-persons-own-session) | On a seat's own host, made or on their own account | None: a seat writes no token and takes no ticket |
+| Hooks on a made seat | The operator and the person | The operator |
+| Hooks on a person's own account | The person, in their session | Refused |
+| Plugins on a made seat | The seat account's own runner | None: an install answers 409 |
+| Plugins on a person's own account | Refused on every lane | None |
+| The box's titles on its seat | Steam and emulator titles it can start as its own user | Every title but those of one account's sources |
+| Emulators | Installed box-wide; config and saves are the account's | The box's copies; saves and firmware through the box host's `?profile=` |
+| A seat on an existing account | Yes, opened by its password or a device key | On Windows Server |
+
+Open on Windows: the person's own session, a seat's own plugin runner, and a plugin's page for a
+seat.
+
 ## Checking a seat can actually stream
 
 Run this inside the seat's session:
