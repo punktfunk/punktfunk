@@ -264,6 +264,8 @@ pub(super) struct SendStats {
     /// Frames the Windows driver dropped at its pool, session-cumulative. Written by the
     /// encode thread from the driver's telemetry; stays 0 off the driver.
     pub(super) driver_dropped: Arc<AtomicU64>,
+    /// The encode loop's `keyframe_left`, stamped when a keyframe's last packet leaves.
+    pub(super) keyframe_left: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     /// Sealed wire bytes go here each aggregation tick; the control task diffs them into the
     /// per-minute `link health` line's `egress_mbps`.
     pub(super) counters: Arc<crate::session_status::SessionCounters>,
@@ -698,11 +700,18 @@ impl SendLoop {
         }
     }
 
-    /// An AU is on the wire: the bring-up mark, host timing, the spread EWMA and the windows,
-    /// each the first screen's alone.
+    /// An AU is on the wire: the bring-up mark, host timing, the spread EWMA, the windows and a
+    /// keyframe's departure, each the first screen's alone.
     fn sent(&mut self, m: &AuMeta, stat: &PaceStat) {
         if m.stream != 0 {
             return;
+        }
+        if m.flags & u32::from(FLAG_SOF) != 0 {
+            *self
+                .stats
+                .keyframe_left
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
         }
         let probe = m.flags & FLAG_PROBE as u32 != 0;
         if !probe {
@@ -1030,6 +1039,7 @@ mod tests {
             bringup: crate::bringup::Trace::start("test", Arc::new(AtomicU32::new(0))),
             wire_sock: None,
             driver_dropped: Arc::new(AtomicU64::new(0)),
+            keyframe_left: Default::default(),
             counters: counters.clone(),
         };
         let thread = std::thread::spawn({

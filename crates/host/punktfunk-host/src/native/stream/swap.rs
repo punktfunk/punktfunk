@@ -601,6 +601,7 @@ pub(super) mod tests {
                 driver_dropped: Default::default(),
                 screen_wire: Arc::new(crate::native::wiring::ScreenWire::new()),
                 send_spread_us: Default::default(),
+                keyframe_left: Default::default(),
                 wire_rekeys: Default::default(),
                 live_mode: Arc::new(AtomicU64::new(0)),
                 force_idr: Default::default(),
