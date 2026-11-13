@@ -357,7 +357,7 @@ public final class VideoDecoder: @unchecked Sendable {
             return
         }
         let decodedNs = realtimeNowNs()
-        // pts was stamped at timescale 1e9 (AnnexB.sampleBuffer); normalize defensively.
+        // pts was stamped at timescale 1e9 (SamplePack.wrap); normalize defensively.
         let p = CMTimeConvertScale(pts, timescale: 1_000_000_000, method: .default)
         let ptsNs = p.value > 0 ? UInt64(p.value) : 0
         // HDR is the transfer function, never the depth: 10-bit SDR decodes to P010 too, and
