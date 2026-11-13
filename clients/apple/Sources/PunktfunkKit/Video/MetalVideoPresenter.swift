@@ -31,16 +31,12 @@ private let presenterLog = ClientLog(category: "presenter")
 /// `SDR_REFERENCE_WHITE_NITS`). A host-side SDR brightness setting deliberately moves SDR off it.
 private let hdrReferenceWhiteNits: Float = 203.0
 
-/// The SDR layer's colour tag. `colorspace = nil` means NO colour matching: the BT.709-encoded
-/// stream is handed to the compositor untagged and drawn in the display's native space. That is
-/// mild oversaturation on a P3 Mac or iPad, and on a tvOS display composited for HDR it also lifts
-/// the black floor — the 2026-08-13 field report of greys where blacks should be, which arrived
-/// with the client's own HDR switch already OFF, so no other stage had tagged those pixels either.
-/// Tagging lets CoreAnimation colour-match into whatever the output actually is, which is the
-/// strictly correct rendering, so it is now the default.
+/// The SDR layer's colour tag, sRGB. An untagged layer (`colorspace = nil`) draws the BT.709
+/// stream in the display's native space: mild oversaturation on a P3 Mac or iPad, and on a tvOS
+/// display composited for HDR a lifted black floor. Tagged, CoreAnimation colour-matches the
+/// stream into whatever the output is.
 ///
-/// `PUNKTFUNK_SDR_COLORSPACE=none` restores the old untagged look — the A/B lever if a panel
-/// regresses, or for anyone who preferred the more vivid rendition.
+/// `PUNKTFUNK_SDR_COLORSPACE=none` leaves the layer untagged, the A/B lever if a panel regresses.
 private let sdrColorspace: CGColorSpace? = {
     guard ProcessInfo.processInfo.environment["PUNKTFUNK_SDR_COLORSPACE"] != "none" else {
         return nil
@@ -127,13 +123,12 @@ private let preA15AppleTV: Bool = {
 /// Runtime-compiled (no metallib build step needed in SwiftPM): a fullscreen triangle and Y′CbCr→RGB
 /// fragment shaders whose conversion arrives as three constant rows computed per frame on the CPU
 /// (`CscRows` — the Swift port of pf-client-video's `csc_rows`, from the decoded buffer's actual
-/// signaling). One set of coefficients honors BT.601/709/2020 × full/limited × 8/10-bit instead of
-/// the old hardcoded BT.709/BT.2020 matrices — a BT.601-signaled stream (a Linux host's RGB-input
-/// NVENC) used to render with BT.709 coefficients, a constant hue error. uv.y is flipped (1 - p.y)
-/// so the top-left-origin texture presents upright (NDC y is up). Under `HdrMode.pq` the HDR shader
-/// outputs PQ-encoded R′G′B′ as-is — the CAMetalLayer's `itur_2100_PQ` colour space + `edrMetadata`
-/// tell the system compositor the samples are PQ and how to tone-map them (no EOTF here, matching
-/// the host's BT.2020 PQ emission). Under `.linear` the shader decodes PQ itself.
+/// signaling). One set of coefficients honors BT.601/709/2020 × full/limited × 8/10-bit. uv.y is
+/// flipped (1 - p.y) so the top-left-origin texture presents upright (NDC y is up). Under
+/// `HdrMode.pq` the HDR shader outputs PQ-encoded R′G′B′ as-is — the CAMetalLayer's
+/// `itur_2100_PQ` colour space + `edrMetadata` tell the system compositor the samples are PQ and
+/// how to tone-map them (no EOTF here, matching the host's BT.2020 PQ emission). Under `.linear`
+/// the shader decodes PQ itself.
 private let shaderSource = """
 #include <metal_stdlib>
 using namespace metal;
@@ -261,7 +256,7 @@ fragment float4 pf_frag_planar(VOut in [[stage_in]],
 // HdrMode.pq: 10-bit P010 / 4:4:4 (BT.2020, PQ-encoded Y′CbCr) → full-range PQ R′G′B′, output as-is —
 // the CAMetalLayer's itur_2100_PQ colour space + edrMetadata tell the compositor the samples are
 // PQ, so it does the PQ→display tone-map. No EOTF here. The rows fold in the exact 10-bit
-// MSB-packing factor (the old hardcoded shader carried a documented ~0.1% /1024-vs-/1023 error).
+// MSB-packing factor.
 fragment float4 pf_frag_hdr(VOut in [[stage_in]],
                             texture2d<float> lumaTex [[texture(0)]],
                             texture2d<float> chromaTex [[texture(1)]],
@@ -459,12 +454,9 @@ public final class MetalVideoPresenter {
     /// `configure`; not read while `hdrActive`.
     private var tenBitSDRActive = false
     /// Has `configureColor` run even once? `hdrActive` starts `false`, so a session that is SDR from
-    /// the first frame matches the initial state and used to fall straight through `configure`'s
-    /// guard — the layer then kept `make()`'s bare config, which never assigns a colour space, and
-    /// the SDR stream presented untagged for the whole session. That also made
-    /// `PUNKTFUNK_SDR_COLORSPACE` dead code on exactly the sessions it was meant to fix, so an
-    /// operator A/B-ing it in the field saw nothing change. Same-state calls after the first are
-    /// still no-ops, which is what the guard is for.
+    /// the first frame matches the initial state and would skip `configure`'s guard: the layer
+    /// would keep `make()`'s bare config, which assigns no colour space. Same-state calls after
+    /// the first stay no-ops.
     private var didConfigureColor = false
     /// tvOS only: whether HDR frames currently present as PQ PASSTHROUGH (display has HDR headroom
     /// — its own tone-map applies) vs the in-shader tone-map fallback. Render-thread confined;
@@ -1376,8 +1368,7 @@ public final class MetalVideoPresenter {
         if let onPresented {
             #if targetEnvironment(simulator)
             // The simulator SDK exposes neither addPresentedHandler nor presentedTime — report
-            // nil so the caller stamps with its display-link estimate (the pre-presentedTime
-            // behavior; simulator numbers are indicative only anyway).
+            // nil so the caller stamps with its display-link estimate.
             onPresented(nil)
             #else
             // Registered BEFORE present. presentedTime is CACurrentMediaTime-based; 0 means the

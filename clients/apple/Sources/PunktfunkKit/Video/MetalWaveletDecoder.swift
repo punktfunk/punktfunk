@@ -143,7 +143,7 @@ enum WaveletBitstream {
             ok = state.pushPackets(UnsafeBufferPointer(start: base, count: count), wordBase: wordBase)
         }
         guard ok, let frame = state.finish() else { return nil }
-        // The old upstream partial rule: with no SOF the frame is undecodable; at half the
+        // Upstream's partial rule: with no SOF the frame is undecodable; at half the
         // blocks or fewer it is presumed garbage.
         guard frame.totalBlocks > 0, frame.decodedBlocks > frame.totalBlocks / 2 else {
             return nil

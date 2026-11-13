@@ -76,7 +76,7 @@ public final class MatchWindowFollower {
     private let minSpacing: TimeInterval
     /// Render-scale multiplier applied to the live window size before it's requested, so the
     /// match-window path supersamples/undersamples exactly like the fixed-mode connect. 1.0 = the
-    /// window's native pixels (the prior behaviour). `maxDimension` is the codec's per-axis ceiling.
+    /// window's native pixels. `maxDimension` is the codec's per-axis ceiling.
     private let renderScale: Double
     private let maxDimension: Int
     private var enabled: Bool
