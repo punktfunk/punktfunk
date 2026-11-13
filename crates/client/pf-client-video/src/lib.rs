@@ -8,6 +8,9 @@
 // Decoder-input capture behind `PUNKTFUNK_DUMP_VIDEO`, written by the session pump.
 #[cfg(desktop)]
 pub mod au_dump;
+// The AV1 receiver rule and concealer: what the session pump keeps off the decoder after a loss.
+#[cfg(desktop)]
+pub mod av1_intake;
 // The ladder. Every item is re-exported at the root, so `pf_client_core::video::X` is `X` here.
 #[cfg(desktop)]
 mod video;
