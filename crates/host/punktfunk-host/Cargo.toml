@@ -404,8 +404,9 @@ pyrowave = ["pf-encode/pyrowave"]
 winresource = "0.1"
 
 # x86 hosts seal every packet with aws-lc-rs's VAES kernels: 236 ns a packet against 500 on a
-# Zen 4. wasm and armv7 keep RustCrypto; the wire is the same.
-[target.'cfg(all(target_arch = "x86_64", any(target_os = "linux", windows)))'.dependencies]
+# Zen 4. Windows on ARM takes it too: RustCrypto finds no hardware AES there and runs it in
+# software. wasm and armv7 keep RustCrypto; the wire is the same.
+[target.'cfg(any(all(target_arch = "x86_64", any(target_os = "linux", windows)), all(target_arch = "aarch64", windows)))'.dependencies]
 punktfunk-core = { path = "../../core/punktfunk-core", features = ["aes-aws-lc-rs"] }
 
 [lints]
