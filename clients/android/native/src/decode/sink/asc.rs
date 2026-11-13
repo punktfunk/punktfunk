@@ -152,6 +152,9 @@ pub(crate) struct AscSink {
     store: Store<Acquired>,
     budget: AscBudget,
     slots: Slots,
+    /// `debug.punktfunk.asc_sf_lead` = 1: targets add the whole periods of SurfaceFlinger's own
+    /// lead the slot clock folds away ([`Slots::sf_periods`]). Off keeps the grid's targets.
+    sf_lead: bool,
     downrate: Downrate,
     downrated: bool,
     verdicts: Verdicts,
@@ -267,13 +270,14 @@ impl AscSink {
         let hold_band_ns = sysprop(c"debug.punktfunk.asc_hold_band_us")
             .and_then(|v| v.parse::<i64>().ok())
             .map(|us| us.clamp(0, 50_000) * 1000);
+        let sf_lead = sysprop(c"debug.punktfunk.asc_sf_lead").as_deref() == Some("1");
         #[cfg(debug_assertions)]
         let jitter_us = sysprop(c"debug.punktfunk.asc_jitter_us")
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0)
             .min(50_000);
         log::info!(
-            "asc: backend up — {}, reader usage {} ({}x{} @ {} Hz src, panel seed {} Hz, dataspace {:#x}, pacing {}, hold chain {}, hold band {})",
+            "asc: backend up — {}, reader usage {} ({}x{} @ {} Hz src, panel seed {} Hz, dataspace {:#x}, pacing {}, hold chain {}, hold band {}, sf lead {})",
             match priority {
                 PresentPriority::Latency => "latency (one-MAD cushion)".to_string(),
                 PresentPriority::Smooth { buffer } => format!("smooth (buffer {buffer})"),
@@ -287,6 +291,7 @@ impl AscSink {
             if pacing { "on" } else { "OFF (sysprop)" },
             if hold { "ON (sysprop)" } else { "off" },
             hold_band_ns.map_or("auto".to_string(), |ns| format!("{} µs (sysprop)", ns / 1000)),
+            if sf_lead { "ON (sysprop)" } else { "off" },
         );
         Some(AscSink {
             reader,
@@ -312,6 +317,7 @@ impl AscSink {
                 hold,
                 hold_band_ns,
             ),
+            sf_lead,
             downrate: Downrate::new(panel_hz),
             downrated: false,
             verdicts: Verdicts::default(),
@@ -421,15 +427,18 @@ impl AscSink {
 
     /// Drain the reader into the store, then present the due frame if the budget is open.
     /// `panel_period_ns` is the choreographer's panel period (0 = none yet); on a down-rated
-    /// panel every frame goes out at once, as soon as possible, uncapped. Returns `true` when a
-    /// frame was applied.
+    /// panel every frame goes out at once, as soon as possible, uncapped. `sf_lead_ns` is
+    /// SurfaceFlinger's own lead for the targets, 0 for none. Returns `true` when a frame was
+    /// applied.
     fn present_due(
         &mut self,
         now_mono: i64,
         panel_period_ns: i64,
+        sf_lead_ns: i64,
         ev_tx: &mpsc::Sender<DecodeEvent>,
     ) -> bool {
         self.slots.set_period(panel_period_ns);
+        self.slots.set_sf_lead(sf_lead_ns);
         self.downrated = self.downrate.follow(panel_period_ns);
         self.drain_reader();
         let reach = now_mono + self.slots.period_ns();
@@ -759,14 +768,17 @@ impl Sink for AscSink {
         r
     }
 
-    /// The ASC sink phases on its own present fences and takes only the panel period from the
-    /// choreographer.
+    /// The ASC sink phases on its own present fences. It takes the panel period from the
+    /// choreographer, and under `asc_sf_lead` SurfaceFlinger's own lead.
     fn pump(&mut self, ctx: &Ctx, clock: Option<&VsyncShared>) -> bool {
         let Some(tx) = ctx.present_tx.as_ref() else {
             return false;
         };
         let panel = clock.map_or(0, VsyncShared::panel_period_ns);
-        self.present_due(now_monotonic_ns(), panel, tx)
+        let sf_lead = clock
+            .filter(|_| self.sf_lead)
+            .map_or(0, VsyncShared::sf_lead_ns);
+        self.present_due(now_monotonic_ns(), panel, sf_lead, tx)
     }
 
     /// Publish the store's drops to the HUD every pass and emit the 1 Hz `pf.present` line,
