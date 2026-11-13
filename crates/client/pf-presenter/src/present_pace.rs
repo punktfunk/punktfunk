@@ -480,16 +480,10 @@ impl CadenceProbe {
         }
     }
 
-    /// A mode switch or display change invalidates the evidence.
+    /// A mode switch, display change or focus change invalidates the evidence, the
+    /// stream's own spacing included: the next measured refresh reads as at session start.
     pub(crate) fn reset(&mut self) {
-        self.off_grid_milli.clear();
-        self.last_ns = 0;
-        self.last_pts_ns = 0;
-        self.candidate = Cadence::Unknown;
-        self.agree_rounds = 0;
-        self.verdict = Cadence::Unknown;
-        self.refresh_variable = None;
-        self.engine_variable = false;
+        *self = CadenceProbe::new();
     }
 }
 
@@ -1206,6 +1200,22 @@ mod tests {
             Cadence::Fixed,
             "a slower stream on a panel at its mode rate"
         );
+    }
+
+    /// A focus or display event forgets the stream's spacing too: a panel-rate stream's
+    /// panel at its mode period reads fixed again, as at session start.
+    #[test]
+    fn a_reset_reads_the_mode_period_as_at_session_start() {
+        const P: u64 = 16_666_666;
+        let mut p = CadenceProbe::new();
+        p.note_refresh(P, P);
+        assert_eq!(p.verdict(), Cadence::Fixed, "session start");
+        for i in 1..=20u64 {
+            p.note_source(1_000_000_000 + i * P);
+        }
+        p.reset();
+        p.note_refresh(P, P);
+        assert_eq!(p.verdict(), Cadence::Fixed, "after the reset");
     }
 
     /// Batching must not change the verdict: live drain is one frame, tests hand over
