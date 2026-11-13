@@ -42,15 +42,12 @@ final class ScanoutPacer: @unchecked Sendable {
     /// The presents in flight, oldest first, whichever mode issued them.
     private var inFlight: [Present] = []
     private var holds: [CFTimeInterval] = []
-    private var switchedAt: CFTimeInterval
+    /// The last mode switch; never before the first, so creation does not start a probe span.
+    private var switchedAt = -CFTimeInterval.infinity
     private var backoff = ScanoutPacer.baseBackoff
     private var switches = 0
     /// The window is fullscreen; `setDirectPossible` keeps it.
     private var directPossible = true
-
-    init(now: CFTimeInterval = CACurrentMediaTime()) {
-        switchedAt = now
-    }
 
     /// The mode for a frame issued now; a due probe turns `composited` into `direct` here.
     func mode(now: CFTimeInterval) -> Mode {
