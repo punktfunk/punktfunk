@@ -6,13 +6,17 @@ import {
 	ADMIN,
 	asDoor,
 	boxCalls,
+	boxSays,
 	console_,
 	jar,
 	listed,
 	local,
 	OTHER,
+	OWNER,
+	PIN,
 	PROFILE,
 	ran,
+	seat,
 	seatCalls,
 	seatSays,
 	selfSigned,
@@ -31,6 +35,7 @@ beforeEach(() => {
 	ran.length = 0;
 	seatSays.redeem = "grant";
 	listed.port = 0;
+	boxSays.profiles = null;
 });
 
 const send = (path: string, init: RequestInit & { cookie?: string } = {}) =>
@@ -107,6 +112,47 @@ describe("the ticket page", () => {
 			"refused",
 			"192.168.1.44",
 		);
+	});
+
+	test("a Windows box's seat opens its person's console; a take-turns profile has none", async () => {
+		// As a Windows box lists them: the owner plays on the console session, a seat on an
+		// existing account names it, and a take-turns profile has no host of its own.
+		boxSays.profiles = [
+			{
+				id: OWNER,
+				display_name: "Enrico",
+				owner: true,
+				seat: { kind: "desktop", state: "ready", port: 9777 },
+			},
+			{
+				id: PROFILE,
+				display_name: "Anna",
+				owner: false,
+				seat: {
+					kind: "desktop",
+					state: "ready",
+					port: 9778,
+					pin: PIN,
+					mgmt_port: seat.port,
+					account: "anna",
+				},
+			},
+			{
+				id: OTHER,
+				display_name: "Kid",
+				owner: false,
+				seat: { kind: "desktop", state: "ready", port: 9777, take_turns: true },
+			},
+		];
+		const cookies = await signIn();
+		const me = await send("/_auth/person/me", { cookie: cookies });
+		const body = (await me.json()) as { own: boolean; owner: string | null };
+		expect(body.own).toBe(true);
+		expect(body.owner).toBe("Enrico");
+		const before = seatCalls.length;
+		await refusedWith(`/_auth/person?ticket=${ticket(OTHER)}`);
+		await refusedWith(`/_auth/person?ticket=${ticket(OWNER)}`);
+		expect(seatCalls.length).toBe(before);
 	});
 
 	test("the seat host comes from the box, never from the ticket or the request", async () => {
