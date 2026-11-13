@@ -48,17 +48,17 @@ pf-client-core = { path = "../../crates/client/pf-client-core", default-features
 pf-l10n = { path = "../../l10n", features = ["client", "desktop", "os"] }
 
 # WinUI 3 UI via windows-reactor (a declarative React-like framework backed by WinUI). The
-# windows-rs rev is the workspace entry's (root Cargo.toml). `wasapi` (via pf-client-core) still
-# pulls crates.io `windows 0.62`, so two windows-rs copies compile: build time, not correctness.
+# windows-rs revs are the workspace entries' (root Cargo.toml). `wasapi` (via pf-client-core)
+# still pulls crates.io `windows 0.62`, so several windows-rs copies compile: build time, not
+# correctness.
 # ⛔ No blanket `[patch.crates-io] windows`: this rev uses header-named features (`dxgi`) while
 # the crates.io users name `Win32_*` namespaces, and the patch would break every one of them.
 windows-reactor = { workspace = true }
 # The WinUI theme colours and the timer-driven tween reactor does not ship, shared with the
 # installer wizard.
 pf-fluent = { path = "../../crates/core/pf-fluent" }
-# Win32 / DXGI for the GPU picker and the shell's window plumbing. Same rev as windows-reactor, so
-# the `IDXGISwapChain1` handed to `SwapChainPanelHandle::set_swap_chain` satisfies reactor's
-# `windows_core::Interface`. Features are header-named: one per SDK header (#4689).
+# Win32 / DXGI for the GPU picker and the shell's window plumbing. Features are header-named:
+# one per SDK header (#4689).
 windows = { workspace = true, features = [
     # GetCurrentPackageFullName — the packaged-run probe guarding the explicit
     # AppUserModelID (main.rs; MSIX identity must win over the dev-run tag).

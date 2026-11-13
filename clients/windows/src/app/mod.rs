@@ -711,7 +711,10 @@ const APP_ICON: &[u8] =
 const WINDOW_W: f64 = 1000.0;
 const WINDOW_H: f64 = 720.0;
 
-pub fn run(identity: (String, String), gamepad: GamepadService) -> windows::core::Result<()> {
+pub fn run(
+    identity: (String, String),
+    gamepad: GamepadService,
+) -> Result<(), impl std::fmt::Display> {
     let ctx = Arc::new(AppCtx {
         identity,
         settings: Mutex::new(Settings::load()),

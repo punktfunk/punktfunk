@@ -91,6 +91,8 @@ let
       outputHashes = {
         "git+https://github.com/microsoft/windows-rs?rev=58217a690#58217a690d6256ee229044a174de67d72d28bc35" =
           "sha256-zarqTTlHYV0NYyBbVhe8UNHYpn8RFcfl8uBQF1T5Nqc=";
+        "git+https://github.com/microsoft/windows-rs?rev=d19f6bbc0#d19f6bbc0485cc4a9f63352d2948168707b84a9f" =
+          "sha256-yhfSwq3gPlZAv40+dxk45X++7rt24usxmEDpwrgYojc=";
         "git+https://github.com/unom-io/usbfs-iso?rev=ff5468ac68cea3de64ecc4a1e16b4dbdba2f8b39#ff5468ac68cea3de64ecc4a1e16b4dbdba2f8b39" =
           "sha256-4y84oeUPEXC3c/45X/sBIYjJwxID6XvZU283/dLgNKk=";
       };

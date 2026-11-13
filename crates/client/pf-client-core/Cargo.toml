@@ -128,9 +128,9 @@ wasapi = { version = "0.25", optional = true }
 # property stores entirely (the same version the host pins).
 winreg = { version = "0.56", optional = true }
 sdl3 = { version = "0.20", features = ["hidapi", "build-from-source"], optional = true }
-# The OS-clipboard bridge (clipboard.rs) and the reduce-motion query (os_prefs.rs). The
-# workspace entry's pinned rev, so `windows-core` unifies with windows-reactor's. `wasapi`
-# pulls the crates.io copy too; clients/windows/Cargo.toml says why it stays.
+# The OS-clipboard bridge (clipboard.rs) and the reduce-motion query (os_prefs.rs), on the
+# workspace entry's pinned rev. `wasapi` pulls the crates.io copy too;
+# clients/windows/Cargo.toml says why it stays.
 windows = { workspace = true, optional = true, features = [
     # Features are header-named since windows-rs generates from the SDK headers directly
     # (#4689) — one feature per header, replacing the old `Win32_*` namespace features.

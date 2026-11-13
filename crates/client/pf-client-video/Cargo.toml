@@ -120,7 +120,7 @@ libloading = { version = "0.9", optional = true }
 pf-dxvadec = { path = "../../codec/pf-dxvadec", optional = true }
 # D3D11 decode-device plumbing (video_d3d11.rs): device/adapter selection, DXVA probes, and
 # the shared NT-handle hand-off ring `video_d3d11_native` fills. The workspace entry's pinned
-# rev, so `windows-core` unifies with windows-reactor's.
+# rev.
 windows = { workspace = true, features = [
     # Features are header-named since windows-rs generates from the SDK headers directly
     # (#4689) — one feature per header, replacing the old `Win32_*` namespace features.
