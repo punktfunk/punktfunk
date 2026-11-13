@@ -255,8 +255,8 @@ impl NativePairing {
         self.arm.arm_for(ttl, bound_fp, access)
     }
 
-    /// Access choice on the current window (`None` if disarmed, expired, or unset). The PIN
-    /// ceremony reads this before consuming the window; [`Self::disarm`] wipes it with the PIN.
+    /// Access choice on the current window (`None` if disarmed, expired, or unset).
+    #[cfg(test)]
     pub fn armed_access(&self) -> Option<Access> {
         self.arm.armed_access()
     }
@@ -280,8 +280,15 @@ impl NativePairing {
         self.arm.disarm()
     }
 
-    /// Current valid PIN, or `None` if disarmed/expired. Read per attempt so a window that
-    /// lapses mid-connection no longer pairs.
+    /// Consume the window `pin` belongs to: its access choice (`Some(None)` is full/permanent),
+    /// or `None` when it lapsed or was re-armed, which leaves the live window armed. A PIN is
+    /// taken once, however many ceremonies hold it.
+    pub fn take_window(&self, pin: &str) -> Option<Option<Access>> {
+        self.arm.take(pin)
+    }
+
+    /// Current valid PIN, or `None` if disarmed/expired.
+    #[cfg(test)]
     pub fn current_pin(&self) -> Option<String> {
         self.arm.current_pin()
     }
