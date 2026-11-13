@@ -187,13 +187,15 @@ impl Client {
     /// One request passed through as bytes, for the console's proxy to a seat host. The answer
     /// keeps its status and content type, so a refusal reads as the seat host's own.
     /// `method` `path` with the body left for the caller to read, as it arrives. `device` is a
-    /// paired device this caller vouches for: the host answers as it would that device.
+    /// paired device this caller vouches for: the host answers as it would that device. `person`
+    /// is the profile this caller found that device is the person of.
     pub fn send(
         &self,
         method: &str,
         path: &str,
         content_type: Option<&str>,
         device: Option<&str>,
+        person: Option<&str>,
         body: Vec<u8>,
     ) -> Result<(u16, Option<String>, Box<dyn std::io::Read + Send>)> {
         let mut req = ureq::http::Request::builder()
@@ -205,6 +207,9 @@ impl Client {
         }
         if let Some(fp) = device {
             req = req.header(crate::mgmt::auth::VOUCH_HEADER, fp);
+        }
+        if let Some(id) = person {
+            req = req.header(crate::mgmt::person::VOUCH_HEADER, id);
         }
         let req = req
             .body(body)

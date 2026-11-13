@@ -35,7 +35,7 @@ struct ConnectFlow {
     @Binding var profileAsk: ProfileAsk?
     /// The wait for the picked profile's seat to come up.
     @Binding var seatWait: SeatWait?
-    /// The password prompt of a profile on a person's own account.
+    /// The password prompt of a profile on a person's own account, or a locked one's PIN prompt.
     @Binding var unlockAsk: UnlockAsk?
 
     /// What this window's flow keeps between taps, since a `ConnectFlow` lives for one use.
@@ -69,10 +69,12 @@ struct ConnectFlow {
     }
 
     /// The profile a dial plays as, and what opens it. `prompts`: a `ProfileLocked` close opens
-    /// the password prompt rather than an error; `console` sends it to the console's instead.
+    /// the prompt rather than an error; `console` sends it to the console's instead.
     struct ProfileDial {
         var id: String?
         var name: String?
+        /// What its listed row asked for, should the list not answer after a refusal.
+        var need = UnlockNeed.password
         var unlock: ProfileUnlock?
         var prompts = false
         var console: ConsoleDial?
@@ -143,7 +145,9 @@ struct ConnectFlow {
                     return
                 }
                 unlock(host, row) { unlock in
-                    go(ProfileDial(id: id, name: row.displayName, unlock: unlock, prompts: true))
+                    go(ProfileDial(
+                        id: id, name: row.displayName, need: row.unlock, unlock: unlock,
+                        prompts: true))
                 }
             }
             switch ConnectPlan.afterProfiles(
@@ -165,8 +169,8 @@ struct ConnectFlow {
         }
     }
 
-    /// Run `then` with what opens `row`: nothing, its key, or the password the player typed. A
-    /// cancelled prompt runs nothing. An unpinned host gets no unlock.
+    /// Run `then` with what opens `row`: nothing, its key, or the password or PIN the player
+    /// typed. A cancelled prompt runs nothing. An unpinned host gets no unlock.
     private func unlock(
         _ host: StoredHost, _ row: ListedProfile,
         then: @escaping @MainActor (ProfileUnlock?) -> Void
@@ -175,14 +179,15 @@ struct ConnectFlow {
             then(nil)
             return
         }
-        let prompt = passwordPrompt(host, name: row.displayName, unlocker: unlocker)
+        let prompt = unlockPrompt(host, row, unlocker: unlocker)
         Task { @MainActor in
             if case .dial(let unlock) = await unlocker.before(row, prompt: prompt) { then(unlock) }
         }
     }
 
-    /// The prompt after a `ProfileLocked` close, with the host's sentence; then the dial again.
-    /// False when there is nothing to prompt for: the caller shows the error.
+    /// After a `ProfileLocked` close: the profile's fresh row picks the key or the prompt, which
+    /// shows the host's sentence; then the dial again. A list that doesn't answer leaves the
+    /// row the dial knew. False when there is nothing to prompt for: the caller shows the error.
     private func reprompt(
         _ host: StoredHost, _ profile: ProfileDial, said: String?,
         dial: @escaping @MainActor (ProfileDial) -> Void
@@ -190,12 +195,18 @@ struct ConnectFlow {
         guard profile.prompts, let id = profile.id, let unlocker = unlocker(for: host) else {
             return false
         }
-        let prompt = passwordPrompt(host, name: profile.name ?? id, unlocker: unlocker)
+        let sent = profile.unlock != nil
         Task { @MainActor in
+            let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
+            guard life.isOpen else { return }
+            let row = answer.rows?.first { $0.id == id }
+                ?? ListedProfile(id: id, displayName: profile.name ?? id, unlock: profile.need)
+            let prompt = unlockPrompt(host, row, unlocker: unlocker)
             guard case .dial(let unlock) = await unlocker.refused(
-                profile: id, said: said, prompt: prompt)
+                row, sent: sent, said: said, prompt: prompt)
             else { return }
             var next = profile
+            next.need = row.unlock
             next.unlock = unlock
             dial(next)
         }
@@ -221,19 +232,20 @@ struct ConnectFlow {
         }
     }
 
-    /// Shows the password prompt and answers what the player entered.
-    private func passwordPrompt(
-        _ host: StoredHost, name: String, unlocker: ProfileUnlocker
+    /// Shows `row`'s prompt, its password or its PIN, and answers what the player entered.
+    private func unlockPrompt(
+        _ host: StoredHost, _ row: ListedProfile, unlocker: ProfileUnlocker
     ) -> ProfileUnlocker.Prompt {
         let ask = $unlockAsk
         let (hostName, switchTitle) = (host.displayName, unlocker.switchTitle)
+        let (name, pin) = (row.displayName, row.unlock.pin)
         return { error in
             await withCheckedContinuation { done in
                 Task { @MainActor in
                     // A picker or seat sheet may still be closing, and a sheet shown over it drops.
                     try? await Task.sleep(nanoseconds: 400_000_000)
                     ask.wrappedValue = UnlockAsk(
-                        hostName: hostName, profileName: name, error: error,
+                        hostName: hostName, profileName: name, pin: pin, error: error,
                         switchTitle: switchTitle
                     ) { done.resume(returning: $0) }
                 }

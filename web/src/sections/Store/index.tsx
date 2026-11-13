@@ -23,6 +23,7 @@ import { SeatScope, SeatTitle } from "@/components/seat-scope";
 import { Stagger } from "@/components/stagger";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useLocale } from "@/lib/i18n";
+import { usePerson } from "@/lib/person";
 import { m } from "@/paraglide/messages";
 import { BrowseTab } from "./Browse";
 import {
@@ -86,6 +87,7 @@ const Store: FC = () => {
 	useLocale();
 	const { confirm } = useDialogs();
 	const own = useOwnAccount();
+	const person = usePerson() !== null;
 	const [tab, setTab] = useState<StoreTab>("browse");
 	// The catalog entry awaiting its install confirmation, and the raw-spec dialog's open state.
 	const [target, setTarget] = useState<CatalogEntry | null>(null);
@@ -267,7 +269,7 @@ const Store: FC = () => {
 					<div className="space-y-1">
 						<SeatTitle title={m.store_title()} />
 						<p className="text-sm text-muted-foreground">
-							{m.store_subtitle()}
+							{person ? m.person_store_subtitle() : m.store_subtitle()}
 						</p>
 					</div>
 				</div>
@@ -309,7 +311,10 @@ const Store: FC = () => {
 								</>
 							)}
 						</TabsTrigger>
-						<TabsTrigger value="sources">{m.store_tab_sources()}</TabsTrigger>
+						{/* Which catalogs a host trusts stays the operator's choice. */}
+						{!person && (
+							<TabsTrigger value="sources">{m.store_tab_sources()}</TabsTrigger>
+						)}
 					</TabsList>
 
 					{/* Each panel drives its own entrance: switching tabs mounts it after the page animated. */}

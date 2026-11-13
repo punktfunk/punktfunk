@@ -11,6 +11,7 @@ import {
 } from "@/api/gen/profiles/profiles";
 import {
 	onProfileGone,
+	personScope,
 	type SeatPage,
 	SeatScopeContext,
 	type SeatScopeValue,
@@ -26,6 +27,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { apiErrorMessage } from "@/lib/errors";
+import { usePerson } from "@/lib/person";
 import { useLocalPref } from "@/lib/prefs";
 import { m } from "@/paraglide/messages";
 
@@ -39,10 +41,26 @@ const isIdOrNull = (v: unknown): v is string | null =>
 	v === null || typeof v === "string";
 
 /**
- * Runs a page's queries against the pick and offers it. The pick is remembered once per browser;
- * one that is not on this page's list shows the owner's.
+ * Runs a page's queries against the pick and offers it. In a person's own console the page is
+ * theirs alone, with no pick and no read of the box's profiles.
  */
 export const SeatScope: FC<{ page: SeatPage; children: ReactNode }> = ({
+	page,
+	children,
+}) => {
+	const person = usePerson();
+	if (person)
+		return (
+			<SeatScopeView {...personScope(page, person)}>{children}</SeatScopeView>
+		);
+	return <OperatorScope page={page}>{children}</OperatorScope>;
+};
+
+/**
+ * The operator's pick, remembered once per browser; one that is not on this page's list shows
+ * the owner's.
+ */
+const OperatorScope: FC<{ page: SeatPage; children: ReactNode }> = ({
 	page,
 	children,
 }) => {

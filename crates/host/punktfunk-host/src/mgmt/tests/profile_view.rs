@@ -3,16 +3,16 @@
 use super::*;
 
 /// The owner, the box's own session.
-const OWNER: &str = "0f0f0f0f0f0f";
+pub(super) const OWNER: &str = "0f0f0f0f0f0f";
 /// A profile with a seat of its own.
-const SEAT_P: &str = "a1b2c3d4e5f6";
+pub(super) const SEAT_P: &str = "a1b2c3d4e5f6";
 /// A profile that shares the owner's desktop.
-const SHARER: &str = "0a0b0c0d0e0f";
+pub(super) const SHARER: &str = "0a0b0c0d0e0f";
 /// [`SEAT_P`]'s row in the seats ledger.
 const SEAT: &str = "0123456789abcdef0123456789abcdef";
 
 /// The owner, [`SEAT_P`] and [`SHARER`].
-fn profiles() -> serde_json::Value {
+pub(super) fn profiles() -> serde_json::Value {
     let p = |id: &str, account: serde_json::Value| serde_json::json!({"id": id, "display_name": id, "os_account": account});
     serde_json::json!({"profiles": [
         p(OWNER, serde_json::json!({"kind": "operator"})),
@@ -32,7 +32,7 @@ pub(super) fn profiles_state(dir: &std::path::Path, profiles: serde_json::Value)
 }
 
 /// The box's library in `dir`, and a layer for [`SEAT_P`] that changes every row it touches.
-fn write_fixture(dir: &std::path::Path) {
+pub(super) fn write_fixture(dir: &std::path::Path) {
     let write = |rel: &str, v: serde_json::Value| {
         let path = dir.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -356,6 +356,67 @@ async fn a_profile_s_layer_adds_and_narrows_never_widens() {
     assert_eq!(s, StatusCode::OK, "{json}");
     assert_eq!(titles_but_backup(&json), [("Portal".to_string(), false)]);
     assert!(json[0].get("profile").is_none(), "{json}");
+}
+
+/// On every read that takes `as` and the cert lane reaches, a device that may not open a locked
+/// profile hears what an unknown id gets, and a device on its list reads it. The operator reads
+/// every profile, as before.
+#[tokio::test]
+async fn a_device_reads_only_a_profile_it_may_open() {
+    use axum::http::Method;
+    let tmp = ConfigDirOverride::new();
+    write_fixture(tmp.path());
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-profile-view-lock.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let (listed, other) = ("a7".repeat(32), "b8".repeat(32));
+    np.add("listed", &listed).unwrap();
+    np.add("other", &other).unwrap();
+    let state = profiles_state(tmp.path(), profiles());
+    let store = state.profiles.get().unwrap().clone();
+    let device = pf_seats::ipc::Device {
+        fingerprint: listed.clone(),
+        name: "listed".into(),
+    };
+    let locked = store.locks().edit(SEAT_P, |lock, now| {
+        lock.locked = true;
+        lock.admit(&device, now, true)
+    });
+    assert!(locked.unwrap());
+    let app = test_app_native(state, np);
+    let doc: serde_json::Value = serde_json::from_str(&crate::mgmt::openapi_json()).unwrap();
+    let mut reads = Vec::new();
+    for (path, ops) in doc["paths"].as_object().unwrap() {
+        let Some(op) = ops.get("get") else {
+            continue;
+        };
+        let takes_as = op["parameters"]
+            .as_array()
+            .is_some_and(|ps| ps.iter().any(|p| p["name"] == "as" && p["in"] == "query"));
+        if takes_as && auth::cert_may_access(&Method::GET, path) {
+            reads.push(path.clone());
+        }
+    }
+    assert!(reads.contains(&"/api/v1/library".to_string()), "{reads:?}");
+    for path in &reads {
+        // A route's own arguments name a title and an art kind the fixture has.
+        let concrete = path.replace("{kind}", "portrait").replace("{id}", "s1");
+        let at = |id: &str| format!("{concrete}?as={id}");
+        let (status, body) = get_cert(&app, &at(SEAT_P), &other).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}: {body}");
+        assert_eq!(body["code"], "profile_unknown", "{path}");
+        let (_, unknown) = get_cert(&app, &at("0123456789ab"), &other).await;
+        assert_eq!(body, unknown, "{path}: no hint that it exists");
+        let (status, body) = get_cert(&app, &at(SEAT_P), &listed).await;
+        assert_ne!(body["code"], "profile_unknown", "{path}: {status}");
+        let (status, body) = send(&app, get_req(&at(SEAT_P))).await;
+        assert_ne!(body["code"], "profile_unknown", "{path}: {status}");
+    }
 }
 
 /// A profile that shares the owner's desktop lists what the owner lists, less what it hides;
@@ -821,8 +882,8 @@ async fn box_lists(app: &Router, profile: &str) -> serde_json::Value {
 
 /// [`SEAT_P`]'s seat host keeps a game with a command of its own: it lists and starts it, and
 /// tells the box its name and picture alone. The box, handed that answer, lists the row for the
-/// profile and starts none of it. A person's own account takes no such game. The seat's half runs
-/// in a child, as the role is process environment.
+/// profile and starts none of it. On a person's own account the console adds no such game. The
+/// seat's half runs in a child, as the role is process environment.
 #[tokio::test]
 async fn a_seat_host_keeps_its_own_titles_and_the_box_lists_their_names() {
     let Some(out) = std::env::var_os(CHILD) else {
@@ -841,7 +902,6 @@ async fn a_seat_host_keeps_its_own_titles_and_the_box_lists_their_names() {
         let (s, refused) = send(&app, post()).await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{refused}");
         assert_eq!(refused["code"], "library_own_account");
-        assert!(!crate::library::keeps_own_titles());
         let titles = crate::library::published_own_titles();
         std::fs::write(&out, serde_json::to_vec(&titles).unwrap()).unwrap();
         return;

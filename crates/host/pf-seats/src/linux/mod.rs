@@ -644,7 +644,7 @@ impl LinuxBackend {
     fn prepare_owner(&self, seat: &Seat, passwd: &accounts::Passwd) -> Result<bool, BackendError> {
         accounts::require_recorded(&self.inner.state, &seat.account)?;
         let reader = Tracked::of(seat, passwd).reader;
-        shared::refresh_trust(&self.inner.box_dir, &self.inner.state, &seat.id, reader)?;
+        shared::refresh_owner_trust(&self.inner.box_dir, &self.inner.state, &seat.id, reader)?;
         *self.inner.owner.lock().unwrap_or_else(|e| e.into_inner()) = Some(passwd.clone());
         if let Err(error) = refresh_box_library(&self.inner) {
             tracing::warn!(account = %seat.account, %error, "box library not copied");
@@ -1614,14 +1614,16 @@ fn level_seat(
     true
 }
 
-/// A running seat's trust copy, whose pairing list follows who a person's row admits as presence
-/// runs out; then the environment file of a row on a person's own account; then, for a seat other
-/// than the owner's, the box's library in its trust copy. The first failure ends it.
+/// A running seat's trust copy, whose pairing list follows who a person's row, or a locked
+/// profile's lock, admits as presence runs out; then the environment file of a row on a person's
+/// own account; then, for a seat other than the owner's, the box's library in its trust copy.
+/// The first failure ends it.
 fn refresh_copies(inner: &Inner, id: &SeatId, tracked: &Tracked) -> Result<(), BackendError> {
     let (box_dir, state, reader) = (&inner.box_dir, &inner.state, tracked.reader);
     match tracked.kind {
         Own::Person => person_trust(inner, id, reader)?,
-        Own::Owner | Own::Seat => shared::refresh_trust(box_dir, state, id, reader)?,
+        Own::Owner => shared::refresh_owner_trust(box_dir, state, id, reader)?,
+        Own::Seat => shared::refresh_trust(box_dir, state, id, reader)?,
     };
     if let Some((seat, passwd)) = &tracked.guest {
         rewrite_env(inner, seat, tracked.kind, passwd)?;

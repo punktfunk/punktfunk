@@ -213,6 +213,241 @@
         "x-scope": "box"
       }
     },
+    "/api/v1/auth/person/profile": {
+      "get": {
+        "tags": [
+          "host"
+        ],
+        "summary": "The person's own profile",
+        "description": "The person lane on a seat host: the session's profile as the box's `profiles.json` in this\nhost's trust copy has it. Only that profile, and only on that lane; every other caller gets\n404.",
+        "operationId": "getPersonProfile",
+        "responses": {
+          "200": {
+            "description": "The session's profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonProfile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No person session, or its profile is not in this host's copy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/auth/person/profile/avatar": {
+      "get": {
+        "tags": [
+          "host"
+        ],
+        "summary": "The person's own picture",
+        "description": "As `GET /profiles/{id}/avatar`, for the person session's own profile alone, from this seat\nhost's trust copy.",
+        "operationId": "getPersonAvatar",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "An `ETag` from an earlier response",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Image bytes",
+            "content": {
+              "image/png": {}
+            }
+          },
+          "304": {
+            "description": "The tag in `If-None-Match` is current"
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No person session, or no picture for its profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/auth/person/session": {
+      "post": {
+        "tags": [
+          "host"
+        ],
+        "summary": "Open a person session",
+        "description": "On a seat host, from loopback: trade the one-time ticket `ctl console-url` wrote into the\npage it opened for a session token. The ticket is signed with this host's person token, at\nmost 60 s old, used once, and for this host's own profile. Every other host refuses it. After\nten refused tickets in a minute a refused one answers 429; a good one still opens.",
+        "operationId": "openPersonSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonTicket"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A session for the person lane of this seat host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonGrant"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not a ticket this host takes, or not from loopback",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many refused tickets in the last minute",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-scope": "box"
+      },
+      "delete": {
+        "tags": [
+          "host"
+        ],
+        "summary": "End a person session",
+        "description": "From loopback, the session's own token as the bearer. Answers the same whether it was live.",
+        "operationId": "closePersonSession",
+        "responses": {
+          "204": {
+            "description": "The session, if it was one, is over"
+          },
+          "401": {
+            "description": "Not from loopback",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/auth/person/verify": {
+      "post": {
+        "tags": [
+          "host"
+        ],
+        "summary": "Whose a person session is",
+        "description": "Admin lane, on a seat host: whether `token` is a live person session here, and for which\nprofile. The box asks before it takes a person session's word for that profile.",
+        "operationId": "verifyPersonSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonSessionToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A live session, and its profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonOf"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No live session with that token here",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
     "/api/v1/client-logs": {
       "get": {
         "tags": [
@@ -1590,7 +1825,7 @@
           "emulators"
         ],
         "summary": "Adopt a copy of an emulator",
-        "description": "Points the host at the operator's own copy, one no rule finds (a portable build unpacked\nanywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane\nonly. A seat host on a person's own account adopts none: a prepare runs the copy as that\nperson, unasked.",
+        "description": "Points the host at a copy of the caller's own, one no rule finds (a portable build unpacked\nanywhere), so it is listed and launched like any other; `forget` drops it again. The\noperator's lane, and a seat's person on their seat host. On a person's own account only that\nperson adopts one: anyone else's copy would run as them.",
         "operationId": "adoptEmulator",
         "parameters": [
           {
@@ -1652,7 +1887,7 @@
             }
           },
           "403": {
-            "description": "A seat host on a person's own account, which adopts no copy",
+            "description": "A seat host on a person's own account, from any lane but that person's",
             "content": {
               "application/json": {
                 "schema": {
@@ -2828,7 +3063,7 @@
           "hooks"
         ],
         "summary": "Get the hook configuration",
-        "description": "Empty document when none is stored.",
+        "description": "Empty document when none is stored. On a seat host on a person's own account, empty on\nevery lane but that person's own: their hooks may carry their webhooks' secrets.",
         "operationId": "getHooks",
         "responses": {
           "200": {
@@ -2859,7 +3094,7 @@
           "hooks"
         ],
         "summary": "Replace the hook configuration",
-        "description": "Whole-document PUT, not a patch. Applies from the next event. Commands run as the host\nuser (the interactive session on Windows). An `elevated` hook is refused until an\nadministrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A\nseat host on a person's own account refuses every hook and runs none.",
+        "description": "Whole-document PUT, not a patch. Applies from the next event. Commands run as the host\nuser (the interactive session on Windows). An `elevated` hook is refused until an\nadministrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A\nseat host on a person's own account takes hooks from that person's own session alone, and\nruns only those.",
         "operationId": "setHooks",
         "requestBody": {
           "content": {
@@ -2903,7 +3138,7 @@
             }
           },
           "403": {
-            "description": "A seat host on a person's own account, which takes no hooks",
+            "description": "A seat host on a person's own account, from any lane but that person's",
             "content": {
               "application/json": {
                 "schema": {
@@ -3282,7 +3517,7 @@
           "library"
         ],
         "summary": "Create a custom title",
-        "description": "A user-curated entry. The host assigns a stable id, returned in the body. On a seat host it is\nthat host's own title, under an `own:` id, kept in its own config folder and run as its\naccount; the box lists its name and picture for the seat's profile. A profile that uses an\nexisting account takes none.",
+        "description": "A user-curated entry. The host assigns a stable id, returned in the body. On a seat host it is\nthat host's own title, under an `own:` id, kept in its own config folder and run as its\naccount; the box lists its name and picture for the seat's profile. On a profile that uses an\nexisting account only that person adds one, from their own session.",
         "operationId": "createCustomGame",
         "requestBody": {
           "content": {
@@ -3355,7 +3590,7 @@
           "library"
         ],
         "summary": "One custom entry as stored, `detect` and `prep` included",
-        "description": "Operator lane only: the hint names host paths, which is why the catalog read\nmodel leaves it out. The paired-cert allowlist names `GET /library` exactly.",
+        "description": "Operator lane only: the hint names host paths, which is why the catalog read\nmodel leaves it out. The paired-cert allowlist names `GET /library` exactly. On a person's\nown account a title of its own is that person's alone to read: any other lane gets the 404.",
         "operationId": "getCustomGame",
         "parameters": [
           {
@@ -3582,7 +3817,7 @@
           "library"
         ],
         "summary": "Hide or un-hide one library title.",
-        "description": "Curation, not access control: the title leaves every play surface and launch resolution\nbut is not deleted. The operator console still lists it (`hidden: true`) so it can return.\nThe id is not required to exist now — a plugin mid-sync or an unmounted drive would\notherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it\ncannot bring back a title the box hides. Emits `library.changed` only on a real change.",
+        "description": "Curation, not access control: the title leaves every play surface and launch resolution\nbut is not deleted. The operator console still lists it (`hidden: true`) so it can return.\nThe id is not required to exist now — a plugin mid-sync or an unmounted drive would\notherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it\ncannot bring back a title the box hides. A paired device that is that locked profile's person\nmay set it too, hiding only a title the profile's library lists. Emits `library.changed` only\non a real change.",
         "operationId": "setLibraryEntryHidden",
         "parameters": [
           {
@@ -3645,8 +3880,18 @@
               }
             }
           },
+          "403": {
+            "description": "A device that isn't the person of the profile `as` names, or a plugin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "404": {
-            "description": "`as` names no profile on this host",
+            "description": "`as` names no profile on this host, or a device hides a title the profile's library doesn't list",
             "content": {
               "application/json": {
                 "schema": {
@@ -4227,7 +4472,7 @@
           "library"
         ],
         "summary": "Read the game overrides",
-        "description": "The shared overrides, each game's entry and each source's, as `library-overrides.json`\nholds them. `GET /library` carries what each title resolves to. With `as`, the profile's own\nfile: where it has an entry for a game or its source, that entry wins over the box's.",
+        "description": "The shared overrides, each game's entry and each source's, as `library-overrides.json`\nholds them. `GET /library` carries what each title resolves to. With `as`, the profile's own\nfile: where it has an entry for a game or its source, that entry wins over the box's. Beside\nit, `box_sets`: the box's shared overrides it may point at, which only the console changes.",
         "operationId": "getLibraryOverrides",
         "parameters": [
           {
@@ -4246,7 +4491,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OverridesDoc"
+                  "$ref": "#/components/schemas/OverridesAnswer"
                 }
               }
             }
@@ -4281,7 +4526,7 @@
           "library"
         ],
         "summary": "Set one game's overrides",
-        "description": "`{ \"set\": id }` points the game at a shared override; fields alone are its own values;\n`{ \"none\": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,\nand the game takes its source's. The id is not required to exist now, as with hiding.\nWith `as`, the entry is that profile's own and `set` may name the box's shared override or\nthe profile's; `{}` hands the game back to the box's entry. Emits `library.changed`.",
+        "description": "`{ \"set\": id }` points the game at a shared override; fields alone are its own values;\n`{ \"none\": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,\nand the game takes its source's. The id is not required to exist now, as with hiding.\nWith `as`, the entry is that profile's own and `set` may name the box's shared override or\nthe profile's; `{}` hands the game back to the box's entry. A paired device that is that\nlocked profile's person may set it too, for a title the profile's library lists. Emits\n`library.changed`.",
         "operationId": "setGameOverrides",
         "parameters": [
           {
@@ -4344,8 +4589,18 @@
               }
             }
           },
+          "403": {
+            "description": "A device that isn't the person of the profile `as` names, or a plugin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "404": {
-            "description": "`set` names no shared override, or `as` names no profile on this host",
+            "description": "`set` names no shared override, `as` names no profile on this host, or a device names a title the profile's library doesn't list",
             "content": {
               "application/json": {
                 "schema": {
@@ -4642,7 +4897,7 @@
           "library"
         ],
         "summary": "Set one source's overrides",
-        "description": "The same body as a game's, without `none`: `{}` clears the source's entry. Each title of\nthe source without an entry of its own takes it. With `as`, the entry is that profile's own.\nEmits `library.changed`.",
+        "description": "The same body as a game's, without `none`: `{}` clears the source's entry. Each title of\nthe source without an entry of its own takes it. With `as`, the entry is that profile's own\nand `set` may name the box's shared override or the profile's. A paired device that is that\nlocked profile's person, and that profile's person session, may set it too, for a source\nwith a title the profile's library lists. Emits `library.changed`.",
         "operationId": "setSourceOverrides",
         "parameters": [
           {
@@ -4705,8 +4960,18 @@
               }
             }
           },
+          "403": {
+            "description": "A device that isn't the person of the profile `as` names, or a plugin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "404": {
-            "description": "`set` names no shared override, or `as` names no profile on this host",
+            "description": "`set` names no shared override, `as` names no profile on this host, or a device or person names a source with no title in the profile's library",
             "content": {
               "application/json": {
                 "schema": {
@@ -4869,7 +5134,7 @@
           "library"
         ],
         "summary": "One page of the library.",
-        "description": "Title order, `limit` titles a page (60 when absent, 200 at most). `next_cursor` names the\nlast title sent; pass it back as `cursor` for the next page. It is a place in the order, not\nan offset: a title added or removed between two pages neither repeats nor skips one.\n`q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,\n`launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a\ncaller that needs only that entry. Lanes see what `GET /library` shows them, `as`\nincluded.",
+        "description": "Title order, `limit` titles a page (60 when absent, 200 at most). `next_cursor` names the\nlast title sent; pass it back as `cursor` for the next page. It is a place in the order, not\nan offset: a title added or removed between two pages neither repeats nor skips one.\n`q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,\n`launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a\ncaller that needs only that entry. Lanes see what `GET /library` shows them, `as`\nincluded. `hidden=true` lists only hidden titles: every one on the operator's lane, and to\na device that is the person of the profile `as` names, the titles that profile hides. Any\nother caller gets the page it would get without it.",
         "operationId": "getLibraryPage",
         "parameters": [
           {
@@ -4941,6 +5206,15 @@
             "name": "install",
             "in": "query",
             "description": "`installed` (on this host) or `missing` (not installed)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "`true`: only hidden titles, each `hidden: true`. The operator's lane sees every one; a device that is the person of the profile `as` names sees the titles that profile hides. Ignored for any other caller",
             "required": false,
             "schema": {
               "type": "string"
@@ -5466,7 +5740,7 @@
           "library"
         ],
         "summary": "Enable or disable a library source.",
-        "description": "Takes effect on the next library read. Disabling hides titles; the plugin may keep\nreconciling while off. Nothing is deleted. With `as`, the switch is that profile's own: it\nturns a source off for the profile, and cannot turn on one the box turned off. Emits\n`library.changed` when the state changes.",
+        "description": "Takes effect on the next library read. Disabling hides titles; the plugin may keep\nreconciling while off. Nothing is deleted. With `as`, the switch is that profile's own: it\nturns a source off for the profile, and cannot turn on one the box turned off. A paired device\nthat is that locked profile's person may set it too. Emits `library.changed` when the state\nchanges.",
         "operationId": "setLibraryScanner",
         "parameters": [
           {
@@ -5523,7 +5797,7 @@
             }
           },
           "403": {
-            "description": "A plugin toggled another plugin's source, or named a profile",
+            "description": "A plugin toggled another plugin's source or named a profile, or a device that isn't the person of the profile `as` names",
             "content": {
               "application/json": {
                 "schema": {
@@ -6501,7 +6775,7 @@
           "plugin-access"
         ],
         "summary": "Grant, deny, or forget an access request",
-        "description": "`allow` turns a pending request into a grant (the platform ACL lands first, so a failed\ngrant stores nothing), or with `write` set grants a path the operator handed over, on\nbehalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.\nA folder that takes longer answers 202 and lists its walk until the record lands.",
+        "description": "`allow` turns a pending request into a grant (the platform ACL lands first, so a failed\ngrant stores nothing), or with `write` set grants a path the operator handed over, on\nbehalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.\nA folder that takes longer answers 202 and lists its walk until the record lands. On a seat\nhost the grant is for its own runner: a folder the seat's account can't list is refused. On a\nperson's own account only that person decides, and an emulator or core install is refused.",
         "operationId": "decidePluginAccess",
         "parameters": [
           {
@@ -6566,7 +6840,7 @@
             }
           },
           "403": {
-            "description": "Not reachable on the plugin or device lane",
+            "description": "Not reachable on the plugin or device lane, or an install on a person's own account",
             "content": {
               "application/json": {
                 "schema": {
@@ -7298,7 +7572,7 @@
           "profiles"
         ],
         "summary": "List the profiles a device can pick",
-        "description": "Every profile on the box, the owner first. A client shows this as its picker. Each row's\n`unlock` says what the asking device sends with its connect: a profile on a person's own\nLinux account needs the account's password, or a key proof from a device that enrolled one,\nuntil the device is signed in to its running desktop.",
+        "description": "The profiles the asking device may open, the owner first, and the locked ones that take a\nPIN; the console lists every profile. A client shows this as its picker. Each row's `unlock`\nsays what the asking device sends with its connect: a profile on a person's own Linux account\nneeds the account's password, or a key proof from a device that enrolled one, until the\ndevice is signed in to its running desktop; a locked profile whose list lacks the device\nneeds its PIN. `person` marks the rows whose own library view this device may change now.",
         "operationId": "enumerateProfiles",
         "responses": {
           "200": {
@@ -7831,7 +8105,7 @@
           "profiles"
         ],
         "summary": "List the devices signed in to a profile",
-        "description": "For a profile on a person's own Linux account: each device that unlocked it, and how it gets\nback on. Admin lane only.",
+        "description": "For a profile on a person's own Linux account: each device that unlocked it, and how it gets\nback on. For any other profile: the devices its lock lets in, the same rows, kept while it is\nopen. Admin lane only.",
         "operationId": "listProfileDevices",
         "parameters": [
           {
@@ -7879,7 +8153,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password",
+            "description": "A profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -7901,12 +8175,107 @@
         },
         "x-scope": "box"
       },
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Let a paired device open a profile",
+        "description": "Puts a device paired with this host, Punktfunk or Moonlight, on the profile's list until it\nis signed out. Answers the list. Admin lane only.",
+        "operationId": "addProfileDevice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileDeviceAdd"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The profile's devices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SignedInDevice"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a device fingerprint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such profile, or no paired device with that fingerprint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The list is full",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
       "delete": {
         "tags": [
           "profiles"
         ],
         "summary": "Sign every device out of a profile",
-        "description": "For a profile on a person's own Linux account: every device needs the account's password\nagain and every unlock key is forgotten. Admin lane only.",
+        "description": "For a profile on a person's own Linux account: every device needs the account's password\nagain and every unlock key is forgotten. For any other: its lock's list empties, and every\nsession on it from a device off the list ends. Admin lane only.",
         "operationId": "signOutProfileDevices",
         "parameters": [
           {
@@ -7944,7 +8313,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password",
+            "description": "A profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -7973,7 +8342,7 @@
           "profiles"
         ],
         "summary": "Sign a device out of a profile",
-        "description": "For a profile on a person's own Linux account: the device needs the account's password again\nand its unlock key is forgotten. Admin lane only.",
+        "description": "For a profile on a person's own Linux account: the device needs the account's password again\nand its unlock key is forgotten. For any other: the device leaves its lock's list, and a\nsession it plays there ends. Admin lane only.",
         "operationId": "signOutProfileDevice",
         "parameters": [
           {
@@ -8030,7 +8399,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password",
+            "description": "A profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -8115,6 +8484,367 @@
           },
           "503": {
             "description": "The seat's host didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/profiles/{id}/lock": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Read a profile's lock",
+        "description": "Whether it is locked, whether it has a PIN, and the wrong PINs counted against it. Its\ndevices are `GET /profiles/{id}/devices`. Admin lane only.",
+        "operationId": "getProfileLock",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The lock",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Lock a profile",
+        "description": "From now its list is exactly `devices`, paired devices, so a lock keeps the ones someone\nplays on, and with `pin` that is its PIN; a session from any other device ends. One step: on\nany refusal nothing changed. On a profile already locked it changes nothing and takes only\ndevices the profile lets in and no PIN, so it never widens who opens it: the device and PIN\nroutes change a locked profile. Admin lane only.",
+        "operationId": "lockProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Its devices and PIN; an empty list and the PIN it has when absent",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LockProfile"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a device fingerprint, or a PIN that isn't 4 to 8 digits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such profile, or no paired device with a fingerprint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, a lock file that doesn't read, or a locked profile asked for another device or a PIN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Unlock a profile",
+        "description": "Every paired device opens it again. Its list and its PIN stay for the next lock. Admin lane\nonly.",
+        "operationId": "unlockProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/profiles/{id}/lock/pin": {
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Set a profile's PIN",
+        "description": "While it is locked, a device off its list opens it with this PIN, and the PIN puts it on the\nlist. Replaces any PIN it had. Admin lane only.",
+        "operationId": "setProfilePin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfilePin"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not 4 to 8 digits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Clear a profile's PIN",
+        "description": "While it is locked, only the devices on its list open it. Admin lane only.",
+        "operationId": "clearProfilePin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -8271,7 +9001,7 @@
           "profiles"
         ],
         "summary": "Ask for a key unlock's challenge",
-        "description": "For a profile on a person's own Linux account and a device that enrolled an unlock key: 32\nrandom bytes for the key to sign, and the seat id the signed message names. It is good for\none proof within two minutes, and a new one replaces it. A device without a key is refused;\nit unlocks with the account's password. Paired devices only.",
+        "description": "For a device that enrolled an unlock key: 32 random bytes for the key to sign, and what the\nsigned message names, the seat id for a profile on a person's own Linux account or the\nprofile id for a locked profile. It is good for one proof within two minutes, and a new one\nreplaces it. A device without a key is refused; it unlocks with the account's password or the\nprofile's PIN. Paired devices only.",
         "operationId": "unlockChallenge",
         "parameters": [
           {
@@ -8336,7 +9066,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password, or this device has no unlock key",
+            "description": "This device has no unlock key for the profile",
             "content": {
               "application/json": {
                 "schema": {
@@ -8365,7 +9095,7 @@
           "profiles"
         ],
         "summary": "Get a profile's seat ready",
-        "description": "Starts a stopped seat so the next connect lands in it, and answers at once with the seat\n`starting`; poll `enumerate` until it is `ready`. A profile with no seat to start only gets\nits row back. A paired device wakes the profile it lands in when it names none; any other\nneeds its launch grant. A profile on a person's own Linux account is never woken: its\ndesktop starts when the connect brings the account's password.",
+        "description": "Starts a stopped seat so the next connect lands in it, and answers at once with the seat\n`starting`; poll `enumerate` until it is `ready`. A profile with no seat to start only gets\nits row back. A paired device wakes the profile it lands in when it names none; any other\nneeds its launch grant, and a locked one a device on its list. A profile on a person's own\nLinux account is never woken: its desktop starts when the connect brings the account's\npassword.",
         "operationId": "wakeProfile",
         "parameters": [
           {
@@ -8400,7 +9130,7 @@
             }
           },
           "403": {
-            "description": "This device may not start another profile's seat",
+            "description": "This device may not start that profile's seat",
             "content": {
               "application/json": {
                 "schema": {
@@ -8606,7 +9336,7 @@
           "session"
         ],
         "summary": "Set the session policy",
-        "description": "Persisted clamped. Takes effect on the next decision, including a session\nalready streaming — policy is read at session end, not start. With `as`, the settings of\nthat profile's own seat; a profile on the host's own desktop has none of its own.",
+        "description": "Persisted clamped. Takes effect on the next decision, including a session\nalready streaming — policy is read at session end, not start. With `as`, the settings of\nthat profile's own seat; a profile on the host's own desktop has none of its own. A paired\ndevice that is that locked profile's person may set them too.",
         "operationId": "setSessionSettings",
         "parameters": [
           {
@@ -8661,7 +9391,7 @@
             }
           },
           "403": {
-            "description": "`as` on a lane other than the operator's",
+            "description": "`as` on a plugin's lane, or a device that isn't the person of the profile `as` names",
             "content": {
               "application/json": {
                 "schema": {
@@ -8708,7 +9438,7 @@
           "session"
         ],
         "summary": "Drop a profile's own session settings",
-        "description": "Its seat plays with the box's Seat defaults again; the answer is what `GET` with the same\n`as` answers, `configured: false`. Dropping settings a profile never had is the same answer.\n`as` is required: the host's own settings are changed with `PUT`, never dropped.",
+        "description": "Its seat plays with the box's Seat defaults again; the answer is what `GET` with the same\n`as` answers, `configured: false`. Dropping settings a profile never had is the same answer.\n`as` is required: the host's own settings are changed with `PUT`, never dropped. A paired\ndevice that is that locked profile's person may drop them too.",
         "operationId": "clearSessionSettings",
         "parameters": [
           {
@@ -8753,7 +9483,7 @@
             }
           },
           "403": {
-            "description": "`as` on a lane other than the operator's",
+            "description": "`as` on a plugin's lane, or a device that isn't the person of the profile `as` names",
             "content": {
               "application/json": {
                 "schema": {
@@ -11970,6 +12700,11 @@
               "on_window": {
                 "$ref": "#/components/schemas/OnWindow",
                 "description": "Which workspace this title opens on ([`crate::library::OnWindow`]).\nAbsent follows the host's display policy."
+              },
+              "person": {
+                "type": "boolean",
+                "description": "A seat host's own title its person wrote, in their own session. On a person's own account\na title without it is neither listed nor started. Set by the host, never from a body.",
+                "readOnly": true
               },
               "prep": {
                 "type": "array",
@@ -15587,6 +16322,59 @@
           }
         }
       },
+      "LockProfile": {
+        "type": "object",
+        "description": "`POST /profiles/{id}/lock`, optional.",
+        "properties": {
+          "devices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Paired devices, by certificate SHA-256 hex: the list it locks with, in place of any an\nearlier lock left. A profile already locked takes only devices it lets in."
+          },
+          "pin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "4 to 8 digits: its PIN from now. Absent keeps the PIN it has. A profile already locked\ntakes none.",
+            "example": "2468"
+          }
+        }
+      },
+      "LockSummary": {
+        "type": "object",
+        "description": "A profile's lock, as the profile list shows it.",
+        "required": [
+          "locked",
+          "pin",
+          "failed_pins"
+        ],
+        "properties": {
+          "failed_pins": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Wrong PINs in the last 15 minutes over all devices. At 10, PIN entry waits.",
+            "minimum": 0
+          },
+          "locked": {
+            "type": "boolean",
+            "description": "Only the devices on its list, and a device that brings its PIN, open it. Also `true` for\nevery profile while the lock file doesn't read."
+          },
+          "pin": {
+            "type": "boolean",
+            "description": "It has a PIN."
+          },
+          "shared_with": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The owner profile whose lock opens it, for a profile that shares the owner's desktop:\nthe other fields are that lock's."
+          }
+        }
+      },
       "LogEntry": {
         "type": "object",
         "required": [
@@ -16132,6 +16920,32 @@
           }
         }
       },
+      "OverridesAnswer": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/OverridesDoc"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "box_sets": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "With `as` naming a profile with a layer of its own: the box's shared overrides by id,\nwhich that profile's entries may name with `set`. Read only here.",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/GameOverrides"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ],
+        "description": "The body of `GET /library/overrides`."
+      },
       "OverridesDoc": {
         "type": "object",
         "description": "`library-overrides.json`, and the body of `GET /library/overrides`.",
@@ -16535,6 +17349,95 @@
           }
         }
       },
+      "PersonGrant": {
+        "type": "object",
+        "description": "A session a ticket opened.",
+        "required": [
+          "token",
+          "expires_at",
+          "profile"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds; it ends sooner when this host stops or the session is closed."
+          },
+          "profile": {
+            "type": "string",
+            "description": "The profile it is for: this seat host's own."
+          },
+          "token": {
+            "type": "string",
+            "description": "Present as `Authorization: Bearer <token>` to this seat host, or as\n`X-Punktfunk-Person-Session` to the box. 64 lowercase hex."
+          }
+        }
+      },
+      "PersonOf": {
+        "type": "object",
+        "description": "Whose a live session is. The person lane stamps it on each of its calls.",
+        "required": [
+          "profile"
+        ],
+        "properties": {
+          "profile": {
+            "type": "string"
+          }
+        }
+      },
+      "PersonProfile": {
+        "type": "object",
+        "description": "A person's own profile, as their pages show it.",
+        "required": [
+          "id",
+          "display_name",
+          "has_avatar"
+        ],
+        "properties": {
+          "accent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`#RRGGBB`."
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "has_avatar": {
+            "type": "boolean",
+            "description": "It has a picture, at `GET /auth/person/profile/avatar`."
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "PersonSessionToken": {
+        "type": "object",
+        "description": "A session token the box asks about.",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "PersonTicket": {
+        "type": "object",
+        "description": "The ticket `ctl console-url` wrote into the page it opened.",
+        "required": [
+          "ticket"
+        ],
+        "properties": {
+          "ticket": {
+            "type": "string",
+            "description": "`<unix seconds>.<nonce>.<profile id>.<HMAC-SHA256>`, as the page's `ticket` carries it."
+          }
+        }
+      },
       "Phase": {
         "type": "string",
         "description": "Where a session is. It only moves forward; `/status` reports it per row.",
@@ -16589,6 +17492,26 @@
               "discord",
               "firefox"
             ]
+          }
+        }
+      },
+      "PlayingDevice": {
+        "type": "object",
+        "description": "A device playing as a profile now.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the device's certificate, lowercase hex. Absent when its session matches no\nsingle paired device: it can't be kept, only warned about."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name it paired with, else the name its session gave."
           }
         }
       },
@@ -17093,6 +18016,17 @@
                 ],
                 "description": "The device whose seat became this profile, lowercase hex."
               },
+              "lock": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LockSummary",
+                    "description": "Its lock. Absent for a profile on a person's own account, which opens with its password."
+                  }
+                ]
+              },
               "steam_home": {
                 "type": "boolean",
                 "description": "This host keeps a Steam home for it, with that Steam's sign-in and saved games. A removal\nwith `erase` deletes it."
@@ -17154,6 +18088,56 @@
           }
         }
       },
+      "ProfileDeviceAdd": {
+        "type": "object",
+        "description": "`POST /profiles/{id}/devices`.",
+        "required": [
+          "fingerprint"
+        ],
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "description": "SHA-256 of a paired device's certificate, hex: a Punktfunk device or a Moonlight one."
+          }
+        }
+      },
+      "ProfileLock": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/LockSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "playing"
+            ],
+            "properties": {
+              "playing": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PlayingDevice"
+                },
+                "description": "The devices playing as it now, on its desktop's other profiles too: the ones a lock would\ncut off unless they are kept."
+              }
+            }
+          }
+        ],
+        "description": "A profile's lock, as the console shows it."
+      },
+      "ProfilePin": {
+        "type": "object",
+        "description": "`PUT /profiles/{id}/lock/pin`.",
+        "required": [
+          "pin"
+        ],
+        "properties": {
+          "pin": {
+            "type": "string",
+            "description": "4 to 8 digits.",
+            "example": "2468"
+          }
+        }
+      },
       "ProfilePublic": {
         "type": "object",
         "description": "One profile as a client's picker shows it.",
@@ -17203,6 +18187,10 @@
           "owner": {
             "type": "boolean",
             "description": "The box's own session."
+          },
+          "person": {
+            "type": "boolean",
+            "description": "The asking device is this locked profile's person now: it may hide a title for it\n(`PUT /library/hidden/{id}?as=`) and list what it hides (`GET /library/page?hidden=true`)."
           },
           "seat": {
             "oneOf": [
@@ -18058,6 +19046,15 @@
             "$ref": "#/components/schemas/SeatKind",
             "description": "Which kind of seat it is."
           },
+          "mgmt_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The management port of the host on its ledger row, for the console. Absent to a paired\ndevice, and for a profile with no row.",
+            "minimum": 0
+          },
           "occupant": {
             "type": [
               "string",
@@ -18898,11 +19895,12 @@
       },
       "SignedInDevice": {
         "type": "object",
-        "description": "A device signed in to a profile on a person's own Linux account.",
+        "description": "A device signed in to a profile on a person's own Linux account, or on a locked profile's\nlist.",
         "required": [
           "fingerprint",
           "name",
           "kind",
+          "moonlight",
           "added_unix",
           "last_unix"
         ],
@@ -18924,6 +19922,10 @@
             "format": "int64",
             "description": "When it last unlocked or rejoined, unix seconds."
           },
+          "moonlight": {
+            "type": "boolean",
+            "description": "A Moonlight pairing rather than a Punktfunk one. Never on a person's own account."
+          },
           "name": {
             "type": "string",
             "description": "The name it paired with."
@@ -18936,6 +19938,7 @@
         "enum": [
           "for_now",
           "stay",
+          "added",
           "key"
         ]
       },
@@ -19484,16 +20487,20 @@
       },
       "UnlockChallenge": {
         "type": "object",
-        "description": "`POST /profiles/{id}/unlock-challenge`.",
+        "description": "`POST /profiles/{id}/unlock-challenge`: `seat` for a profile on a person's own Linux account,\n`profile` for a locked one, never both.",
         "required": [
-          "challenge",
-          "seat"
+          "challenge"
         ],
         "properties": {
           "challenge": {
             "type": "string",
             "description": "32 random bytes, lowercase hex: good for one proof within two minutes.",
             "example": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+          },
+          "profile": {
+            "type": "string",
+            "description": "The locked profile's id, as its signed message names it.",
+            "example": "9a3f1c2b7e40"
           },
           "seat": {
             "type": "string",
@@ -19504,11 +20511,13 @@
       },
       "UnlockNeed": {
         "type": "string",
-        "description": "What a device sends with its connect to open a profile on a person's own Linux account.",
+        "description": "What a device sends with its connect to open a profile: a profile on a person's own Linux\naccount, or a locked one. A client that doesn't know a word reads it as `password`.",
         "enum": [
           "none",
           "password",
-          "key"
+          "key",
+          "pin",
+          "pin_key"
         ]
       },
       "UnpairAllResult": {

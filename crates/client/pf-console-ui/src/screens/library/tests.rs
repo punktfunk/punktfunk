@@ -1003,6 +1003,113 @@ fn games(spec: &[(&str, Option<&str>)]) -> Vec<LibraryGame> {
         .collect()
 }
 
+/// A title hidden in place is no new list: the next title takes its cell, no entrance replays,
+/// and one shown again leaves focus where it is.
+#[test]
+fn a_hidden_title_hands_focus_to_its_neighbour() {
+    let (mut s, library) = live_shelf();
+    let mut settings = pf_client_core::trust::Settings {
+        library_view: LibraryView::Grid.id().to_string(),
+        ..Default::default()
+    };
+    s.grid_cols_last = Some(3);
+    press(&mut s, &library, &mut settings, down());
+    press(&mut s, &library, &mut settings, right());
+    assert_eq!(s.focused().map(|g| g.title.as_str()), Some("Alpha"));
+    let entrance = s.entrance_armed;
+    let host = library.req().host;
+    let alpha = library.drop_title(&host, "g1").expect("on the shelf");
+    s.sync(&library);
+    s.place_zone(&Ctx::test(&mut settings, &library));
+    assert_eq!((s.zone, s.cursor), (Zone::Grid, 1));
+    assert_eq!(s.focused().map(|g| g.title.as_str()), Some("Nimbus"));
+    assert_eq!(
+        s.entrance_armed, entrance,
+        "the shelf does not arrive again"
+    );
+
+    library.put_title(&host, alpha);
+    s.sync(&library);
+    assert_eq!(s.focused().map(|g| g.title.as_str()), Some("Nimbus"));
+}
+
+/// A band its last title leaves hands focus to the line that takes its place, not the top.
+#[test]
+fn an_emptied_band_hands_focus_down_not_up() {
+    let (mut s, library) = live_shelf();
+    let mut settings = pf_client_core::trust::Settings {
+        library_view: LibraryView::Grid.id().to_string(),
+        ..Default::default()
+    };
+    crate::library::toggle_favorite(&mut settings, &s.host.fp_hex, "g2");
+    s.grid_cols_last = Some(3);
+    press(&mut s, &library, &mut settings, down());
+    let Zone::Band { band, .. } = s.zone else {
+        panic!("Down from Desktops reaches Favorites: {:?}", s.zone);
+    };
+    let (bands, _) = s.bands(&Ctx::test(&mut settings, &library));
+    assert_eq!(bands[band].section, crate::library::Section::Favorites);
+    // A frame places the moved focus, as one always does before the host answers.
+    s.place_zone(&Ctx::test(&mut settings, &library));
+
+    library.drop_title(&library.req().host, "g2");
+    s.sync(&library);
+    s.place_zone(&Ctx::test(&mut settings, &library));
+    assert_eq!(s.zone, Zone::Grid, "the grid took the band's place");
+}
+
+/// A hidden shelf lists the host's answer; OK asks once to show the focused title, and once
+/// the host takes it the next one slides into its place.
+#[test]
+fn a_hidden_shelf_shows_a_title_again() {
+    crate::screens::settings::tests::fake_home();
+    let library = LibraryShared::default();
+    let mut s = LibraryScreen::hidden(&host(), "kid", "Kid");
+    s.sync(&library);
+    assert!(matches!(
+        s.fetch_hidden(),
+        Some(ConsoleCmd::FetchHidden { ref profile, .. }) if profile == "kid"
+    ));
+    let list = games(&[("Alpha", None), ("Bravo", None), ("Charlie", None)]);
+    s.set_hidden_list(crate::model::HiddenAnswer::Listed(list));
+    let mut settings = shelf_settings();
+    press(&mut s, &library, &mut settings, right());
+    assert_eq!(s.focused().map(|g| g.title.as_str()), Some("Bravo"));
+    let hints = s.hints(&Ctx::test(&mut settings, &library));
+    assert_eq!(hints[0].label, "Show for Kid");
+
+    let (_, fx) = press(&mut s, &library, &mut settings, MenuEvent::Confirm);
+    match fx.cmds.as_slice() {
+        [ConsoleCmd::SetHidden {
+            profile,
+            app_id,
+            hidden: false,
+            ..
+        }] => assert_eq!((profile.as_str(), app_id.as_str()), ("kid", "g1")),
+        other => panic!("one show, got {other:?}"),
+    }
+    let (pulse, fx) = press(&mut s, &library, &mut settings, MenuEvent::Confirm);
+    assert!(fx.cmds.is_empty(), "asked once until the host answers");
+    assert!(matches!(pulse, Some(MenuPulse::Boundary)));
+
+    let back = s.drop_hidden("g1").expect("listed");
+    assert_eq!(back.title, "Bravo");
+    assert_eq!(s.focused().map(|g| g.title.as_str()), Some("Charlie"));
+    let (_, fx) = press(&mut s, &library, &mut settings, MenuEvent::Secondary);
+    assert!(
+        matches!(fx.cmds.as_slice(), [ConsoleCmd::SetHidden { app_id, .. }] if app_id == "g2"),
+        "Y, as the legend says, shows the focused title too"
+    );
+    s.drop_hidden("g0");
+    s.drop_hidden("g2");
+    assert!(matches!(s.phase, LibraryPhase::Empty));
+    assert_eq!(
+        s.state_action(),
+        None,
+        "nothing to stream from an empty hidden shelf"
+    );
+}
+
 /// Covers already held do not push the decode-ahead further down the library.
 #[test]
 fn decode_ahead_is_a_window_of_places() {

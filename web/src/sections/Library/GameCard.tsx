@@ -3,6 +3,7 @@ import { Eye, EyeOff, Trash2, UserRound } from "lucide-react";
 import { type FC, useId, useState } from "react";
 import type { Download } from "@/api/gen/model/download";
 import type { OperatorGameEntry } from "@/api/gen/model/operatorGameEntry";
+import { useWhose, type Whose } from "@/api/seat";
 import { LauncherIcon } from "@/components/launcher-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,12 +36,15 @@ export interface GameCardProps {
 	who?: string;
 }
 
-/** **Hide for Anna**, or the owner's library's **Hide from your devices**, and the way back. */
-export const hideLabel = (hidden: boolean, who?: string): string =>
+/**
+ * **Hide for Anna** (to Anna herself, **Hide for me**), or the owner's library's **Hide from your
+ * devices**, and the way back.
+ */
+export const hideLabel = (hidden: boolean, who: Whose | null): string =>
 	who
 		? hidden
-			? m.profile_view_show({ name: who })
-			: m.profile_view_hide({ name: who })
+			? who.show
+			: who.hide
 		: hidden
 			? m.library_unhide_action()
 			: m.library_hide_action();
@@ -114,6 +118,7 @@ export const GameCard: FC<GameCardProps> = ({
 	onSelect,
 	who,
 }) => {
+	const whose = useWhose(who);
 	// Every store can be hidden: the titles most worth hiding are the ones the operator cannot
 	// edit. The host keys the setting by entry id and never needs to own the entry.
 	const hidden = game.hidden === true;
@@ -169,12 +174,7 @@ export const GameCard: FC<GameCardProps> = ({
 					)}
 					{/* Inset on both sides, so a long badge ends in its ellipsis inside the card. */}
 					<div className="absolute top-1.5 right-1.5 left-1.5 flex flex-wrap gap-1">
-						{own && (
-							<OwnBadge
-								label={m.profile_view_own({ name: who ?? "" })}
-								className={small}
-							/>
-						)}
+						{own && <OwnBadge label={whose?.own ?? ""} className={small} />}
 						{emulated && (
 							<Badge
 								variant="outline"
@@ -184,10 +184,10 @@ export const GameCard: FC<GameCardProps> = ({
 							</Badge>
 						)}
 						{hidden &&
-							(who ? (
+							(whose ? (
 								<OwnBadge
 									label={m.library_hidden_badge()}
-									mark={m.profile_view_hidden_badge({ name: who })}
+									mark={whose.hidden}
 									short
 									className={small}
 								/>
@@ -203,7 +203,7 @@ export const GameCard: FC<GameCardProps> = ({
 							(ownStream ? (
 								<OwnBadge
 									label={stream}
-									mark={m.profile_view_own({ name: who ?? "" })}
+									mark={whose?.own ?? ""}
 									className={small}
 								/>
 							) : (
@@ -252,8 +252,8 @@ export const GameCard: FC<GameCardProps> = ({
 						variant="secondary"
 						size="icon"
 						className="size-7 bg-background/80 backdrop-blur"
-						aria-label={hideLabel(hidden, who)}
-						title={hideLabel(hidden, who)}
+						aria-label={hideLabel(hidden, whose)}
+						title={hideLabel(hidden, whose)}
 						aria-pressed={hidden}
 						disabled={hiding}
 						onClick={onToggleHidden}

@@ -1,0 +1,177 @@
+{
+  "$comment": "\"Hide for me\" (design: phase 4.1). Every client's test replays these: pf-client-core hide.rs, and the Swift and Kotlin ports. A client offers the action only for the profile it plays as on a host (its saved pick), and only when that profile's enumerate row says person: true. A host that never sends person has no action: no probing.",
+  "offer": [
+    {
+      "name": "the saved pick's row says person: offered, named after the profile",
+      "listed": [
+        {"id": "0f0f0f0f0f0f", "display_name": "Ada", "owner": true, "unlock": "none"},
+        {"id": "a1b2c3d4e5f6", "display_name": "Kid", "owner": false, "unlock": "none", "person": true}
+      ],
+      "pick": "a1b2c3d4e5f6",
+      "offered": "Kid"
+    },
+    {
+      "name": "an old host sends no person: no action",
+      "listed": [
+        {"id": "0f0f0f0f0f0f", "display_name": "Ada", "owner": true},
+        {"id": "a1b2c3d4e5f6", "display_name": "Kid", "owner": false}
+      ],
+      "pick": "a1b2c3d4e5f6",
+      "offered": null
+    },
+    {
+      "name": "person: false reads as absent",
+      "listed": [{"id": "a1b2c3d4e5f6", "display_name": "Kid", "person": false}],
+      "pick": "a1b2c3d4e5f6",
+      "offered": null
+    },
+    {
+      "name": "no saved pick: no action, whatever a row says",
+      "listed": [{"id": "a1b2c3d4e5f6", "display_name": "Kid", "person": true}],
+      "pick": null,
+      "offered": null
+    },
+    {
+      "name": "another profile's row says person, not the pick's",
+      "listed": [
+        {"id": "0a0b0c0d0e0f", "display_name": "Ben", "person": true},
+        {"id": "a1b2c3d4e5f6", "display_name": "Kid"}
+      ],
+      "pick": "a1b2c3d4e5f6",
+      "offered": null
+    },
+    {
+      "name": "the pick is gone from the list",
+      "listed": [{"id": "0a0b0c0d0e0f", "display_name": "Ben", "person": true}],
+      "pick": "a1b2c3d4e5f6",
+      "offered": null
+    },
+    {
+      "name": "a host with no profiles (enumerate answered 404)",
+      "listed": null,
+      "pick": "a1b2c3d4e5f6",
+      "offered": null
+    }
+  ],
+  "$offer": "listed: the enumerate rows (null: the host has no profiles). pick: the saved pick's id (null: Ask every time). offered: the display_name the entry's words carry (\"Hide for Kid\"), or null for no entry.",
+  "set_hidden": [
+    {
+      "name": "hide",
+      "profile": "a1b2c3d4e5f6", "id": "steam:570", "hidden": true,
+      "path": "/api/v1/library/hidden/steam:570?as=a1b2c3d4e5f6", "body": {"hidden": true},
+      "reply": {"status": 200, "body": {"id": "steam:570", "hidden": true}},
+      "outcome": "done", "said": null
+    },
+    {
+      "name": "show again",
+      "profile": "a1b2c3d4e5f6", "id": "steam:570", "hidden": false,
+      "path": "/api/v1/library/hidden/steam:570?as=a1b2c3d4e5f6", "body": {"hidden": false},
+      "reply": {"status": 200, "body": {"id": "steam:570", "hidden": false}},
+      "outcome": "done", "said": null
+    },
+    {
+      "name": "an id is one path segment: unreserved characters and ':' stay, the rest is escaped",
+      "profile": "a1b2c3d4e5f6", "id": "custom:Mario Kart/8?", "hidden": true,
+      "path": "/api/v1/library/hidden/custom:Mario%20Kart%2F8%3F?as=a1b2c3d4e5f6", "body": {"hidden": true},
+      "reply": {"status": 200, "body": {"id": "custom:Mario Kart/8?", "hidden": true}},
+      "outcome": "done", "said": null
+    },
+    {
+      "name": "not this profile's person (any more): the host's sentence, by its code",
+      "profile": "a1b2c3d4e5f6", "id": "steam:570", "hidden": true,
+      "path": "/api/v1/library/hidden/steam:570?as=a1b2c3d4e5f6", "body": {"hidden": true},
+      "reply": {"status": 403, "body": {"error": "This device can't change this profile. Ask the host's owner to change it in the web console.", "code": "profile_change_not_allowed"}},
+      "outcome": "refused", "said": "This device can't change this profile. Ask the host's owner to change it in the web console."
+    },
+    {
+      "name": "the profile is gone",
+      "profile": "a1b2c3d4e5f6", "id": "steam:570", "hidden": true,
+      "path": "/api/v1/library/hidden/steam:570?as=a1b2c3d4e5f6", "body": {"hidden": true},
+      "reply": {"status": 404, "body": {"error": "That profile is gone from this host. Pick another one.", "code": "profile_unknown"}},
+      "outcome": "refused", "said": "That profile is gone from this host. Pick another one."
+    },
+    {
+      "name": "a sentence with no code, or a code this build doesn't know, stands as the host wrote it",
+      "profile": "a1b2c3d4e5f6", "id": "steam:99", "hidden": true,
+      "path": "/api/v1/library/hidden/steam:99?as=a1b2c3d4e5f6", "body": {"hidden": true},
+      "reply": {"status": 404, "body": {"error": "this profile's library lists no such title"}},
+      "outcome": "refused", "said": "this profile's library lists no such title"
+    },
+    {
+      "name": "a newer host's code",
+      "profile": "a1b2c3d4e5f6", "id": "steam:570", "hidden": false,
+      "path": "/api/v1/library/hidden/steam:570?as=a1b2c3d4e5f6", "body": {"hidden": false},
+      "reply": {"status": 409, "body": {"error": "A newer host says no.", "code": "something_new"}},
+      "outcome": "refused", "said": "A newer host says no."
+    },
+    {
+      "name": "no sentence: the client words the failure (\"Couldn't hide …\")",
+      "profile": "a1b2c3d4e5f6", "id": "steam:570", "hidden": true,
+      "path": "/api/v1/library/hidden/steam:570?as=a1b2c3d4e5f6", "body": {"hidden": true},
+      "reply": {"status": 502, "body": null},
+      "outcome": "failed", "said": null
+    }
+  ],
+  "$set_hidden": "One PUT per hide or show: path and JSON body exactly as written (the profile in as=, percent-encoded like the library fetch's). reply.body null is an empty body. outcome done: the title leaves the shelf (or joins it) at once and the cached catalog for that host and profile follows, with no new fetch. refused: show `said`, the host's sentence (worded by apierr_<code> where the client has that message, else the host's English), nothing changes. failed: the client's lib_hide_failed / lib_show_failed with the cause; nothing changes.",
+  "hidden_list": [
+    {
+      "name": "one page",
+      "profile": "a1b2c3d4e5f6",
+      "host": {
+        "/api/v1/library/page?limit=200&hidden=true&as=a1b2c3d4e5f6": {"status": 200, "body": {"items": [
+          {"id": "steam:70", "store": "steam", "title": "Half-Life", "art": {}, "hidden": true}
+        ], "total": 1, "platforms": []}}
+      },
+      "asked": ["/api/v1/library/page?limit=200&hidden=true&as=a1b2c3d4e5f6"],
+      "ids": ["steam:70"]
+    },
+    {
+      "name": "every page, the cursor before as",
+      "profile": "a1b2c3d4e5f6",
+      "host": {
+        "/api/v1/library/page?limit=200&hidden=true&as=a1b2c3d4e5f6": {"status": 200, "body": {"items": [
+          {"id": "steam:70", "store": "steam", "title": "Half-Life", "art": {}, "hidden": true}
+        ], "next_cursor": "c2"}},
+        "/api/v1/library/page?limit=200&hidden=true&cursor=c2&as=a1b2c3d4e5f6": {"status": 200, "body": {"items": [
+          {"id": "steam:400", "store": "steam", "title": "Portal", "art": {}, "hidden": true}
+        ]}}
+      },
+      "asked": [
+        "/api/v1/library/page?limit=200&hidden=true&as=a1b2c3d4e5f6",
+        "/api/v1/library/page?limit=200&hidden=true&cursor=c2&as=a1b2c3d4e5f6"
+      ],
+      "ids": ["steam:70", "steam:400"]
+    },
+    {
+      "name": "a row not marked hidden is never listed: a host that ignores the flag lists nothing",
+      "profile": "a1b2c3d4e5f6",
+      "host": {
+        "/api/v1/library/page?limit=200&hidden=true&as=a1b2c3d4e5f6": {"status": 200, "body": {"items": [
+          {"id": "steam:570", "store": "steam", "title": "Dota 2", "art": {}},
+          {"id": "steam:70", "store": "steam", "title": "Half-Life", "art": {}, "hidden": true}
+        ]}}
+      },
+      "asked": ["/api/v1/library/page?limit=200&hidden=true&as=a1b2c3d4e5f6"],
+      "ids": ["steam:70"]
+    },
+    {
+      "name": "nothing hidden",
+      "profile": "a1b2c3d4e5f6",
+      "host": {
+        "/api/v1/library/page?limit=200&hidden=true&as=a1b2c3d4e5f6": {"status": 200, "body": {"items": [], "total": 0, "platforms": []}}
+      },
+      "asked": ["/api/v1/library/page?limit=200&hidden=true&as=a1b2c3d4e5f6"],
+      "ids": []
+    },
+    {
+      "name": "a failed page fails the list: no retry without as, no other route",
+      "profile": "a1b2c3d4e5f6",
+      "host": {
+        "/api/v1/library/page?limit=200&hidden=true&as=a1b2c3d4e5f6": {"status": 404, "body": {"error": "That profile is gone from this host. Pick another one.", "code": "profile_unknown"}}
+      },
+      "asked": ["/api/v1/library/page?limit=200&hidden=true&as=a1b2c3d4e5f6"],
+      "ids": null
+    }
+  ],
+  "$hidden_list": "Fetched when the player opens the hidden games, never cached, never with the catalog. host answers each path, matched as written; a path it does not list answers 404 with no body. asked: every path, in order. ids: the titles shown (dimmed, each offering lib_show_for), or null when the list fails to load."
+}

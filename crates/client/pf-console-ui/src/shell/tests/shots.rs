@@ -397,9 +397,8 @@ fn dump_console_screens() {
 fn dump_profiles() {
     let dir = std::env::var("PF_CONSOLE_DUMP").expect("set PF_CONSOLE_DUMP to an output dir");
     let fonts = crate::theme::build_fonts().unwrap();
-    let (w, h) = (1280, 800);
     let library = LibraryShared::default();
-    let dump = |shell: &mut Shell, frames: usize, name: &str| {
+    let dump_at = |shell: &mut Shell, frames: usize, name: &str, (w, h): (i32, i32)| {
         shell.fake_clock = Some((shell.fake_clock.map_or(0.0, |(t, _)| t), 0.012));
         let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).unwrap();
         for _ in 0..frames {
@@ -413,6 +412,8 @@ fn dump_profiles() {
             .unwrap();
         std::fs::write(format!("{dir}/{name}.png"), png.as_bytes()).unwrap();
     };
+    let dump =
+        |shell: &mut Shell, frames: usize, name: &str| dump_at(shell, frames, name, (1280, 800));
     // Who plays: the saved pick's face on the card, then the picker its connect raises
     // because the box no longer lists it.
     {
@@ -530,7 +531,178 @@ fn dump_profiles() {
         dump(&mut s9, 40, "13b-host-and-profile");
         s9.handle_menu(MenuEvent::Move(MenuDir::Down));
         dump(&mut s9, 40, "13c-host-and-profile-faces");
+
+        // A locked profile's PIN, two digits in, on its number pad; then at 800×600, where the
+        // console's scale bottoms out.
+        let mut opts = test_options();
+        opts.profiles = true;
+        opts.prompts_unlock = true;
+        let home = vec![Screen::Home(HomeScreen::new())];
+        let bus = ConsoleBus::default();
+        let mut s10 = Shell::new(console8.clone(), library.clone(), bus, opts, home).unwrap();
+        s10.start_connect(crate::screens::ConnectIntent::to_host(&rows[0], None));
+        let kid = ListedProfile {
+            unlock: pf_client_core::profiles::UnlockNeed::Pin,
+            ..p("kid", "Kid", Some("#5AC18E"), None)
+        };
+        console8.set_profiles("aa11", ProfilesAnswer::Listed(vec![kid]));
+        dump(&mut s10, 40, "_14-settle");
+        s10.handle_menu(MenuEvent::Confirm);
+        s10.text_input("24");
+        dump(&mut s10, 40, "14-unlock-pin-keyboard");
+        dump_at(&mut s10, 40, "14b-unlock-pin-keyboard-small", (800, 600));
     }
+}
+
+/// Hide for me on a locked profile's device: the game menu with its entry, the shelf once the
+/// host took it, the hidden titles, one shown again, and the list empty.
+/// `PF_CONSOLE_DUMP=<dir> cargo test -p pf-console-ui --lib -- --ignored dump_hide_for_me`.
+#[test]
+#[ignore]
+fn dump_hide_for_me() {
+    use crate::library::LibraryGame;
+    use crate::model::{HiddenAnswer, HideAnswer, ProfilesAnswer, RequestKey};
+    use pf_client_core::hide::Outcome;
+    use pf_client_core::profiles::{ListedProfile, ProfilePick};
+    let dir = std::env::var("PF_CONSOLE_DUMP").expect("set PF_CONSOLE_DUMP to an output dir");
+    fake_home();
+    let fonts = crate::theme::build_fonts().unwrap();
+    let dump = |shell: &mut Shell, frames: usize, name: &str| {
+        shell.fake_clock = Some((shell.fake_clock.map_or(0.0, |(t, _)| t), 1.0 / 60.0));
+        let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
+        for _ in 0..frames {
+            let pad = Some("Xbox Wireless Controller");
+            let pref = Some(GamepadPref::Xbox360);
+            shell.render(surface.canvas(), 1280, 800, &fonts, pad, pref, &[]);
+        }
+        let png = surface
+            .image_snapshot()
+            .encode(None, skia_safe::EncodedImageFormat::PNG, 100)
+            .unwrap();
+        std::fs::write(format!("{dir}/{name}.png"), png.as_bytes()).unwrap();
+    };
+    let game = |i: usize, title: &str| LibraryGame {
+        id: format!("steam:{i}"),
+        title: title.into(),
+        store: "steam".into(),
+        launcher: false,
+        icon: String::new(),
+        platform: None,
+        developer: None,
+        year: None,
+        genres: Vec::new(),
+        stats: None,
+        running: false,
+        endable: false,
+        install: None,
+        overrides: None,
+    };
+    let shelf = [
+        "Hades II",
+        "Celeste",
+        "Hollow Knight",
+        "Tunic",
+        "Portal 2",
+        "Outer Wilds",
+        "Stardew Valley",
+        "Inside",
+    ];
+    let mut rows = hosts();
+    rows[0].profile = Some(ProfilePick {
+        id: "kid".into(),
+        display_name: "Kid".into(),
+        remember: true,
+        ..Default::default()
+    });
+    let console = ConsoleShared::default();
+    console.set_hosts(rows.clone());
+    let library = LibraryShared::default();
+    let req = RequestKey::new("aa11");
+    library.begin_for_test(&req);
+    library.set_games(
+        &req,
+        (shelf.iter().enumerate())
+            .map(|(i, t)| game(i, t))
+            .collect(),
+    );
+    for i in 0..12 {
+        library.push_art(format!("steam:{i}"), poster_png(i));
+    }
+    let mut opts = test_options();
+    opts.store = Some(std::sync::Arc::new(crate::store::SnapshotStore::new(
+        pf_client_core::trust::Settings {
+            library_view: crate::library::LibraryView::Grid.id().to_string(),
+            ..Default::default()
+        },
+        Vec::new(),
+    )));
+    let root = vec![Screen::Library(LibraryScreen::new(&rows[0]))];
+    let mut s = Shell::new(
+        console.clone(),
+        library.clone(),
+        ConsoleBus::default(),
+        opts,
+        root,
+    )
+    .unwrap();
+    let person = |id: &str, name: &str, person| ListedProfile {
+        id: id.into(),
+        display_name: name.into(),
+        owner: id == "own",
+        person,
+        ..Default::default()
+    };
+    let listed = vec![person("own", "Ben", false), person("kid", "Kid", true)];
+    s.profiles.learn("aa11", &ProfilesAnswer::Listed(listed));
+    let press = |s: &mut Shell, evs: &[MenuEvent]| {
+        for ev in evs {
+            s.handle_menu(*ev);
+        }
+    };
+    let (down, up, right) = (
+        MenuEvent::Move(MenuDir::Down),
+        MenuEvent::Move(MenuDir::Up),
+        MenuEvent::Move(MenuDir::Right),
+    );
+    dump(&mut s, 90, "_h-settle");
+    press(&mut s, &[down, right, right, MenuEvent::Secondary]);
+    dump(&mut s, 40, "_h-menu-settle");
+    press(&mut s, &[down, down]);
+    dump(&mut s, 40, "H1-game-menu-hide");
+
+    press(&mut s, &[MenuEvent::Confirm]);
+    dump(&mut s, 30, "_h-menu-gone");
+    let answer = |app_id: &str, title: &str, hidden| HideAnswer {
+        fp_hex: "aa11".into(),
+        profile: "kid".into(),
+        app_id: app_id.into(),
+        hidden,
+        done: true,
+        notice: Outcome::Done.notice(hidden, title, "Kid"),
+    };
+    console.set_hide_answer(answer("steam:2", "Hollow Knight", true));
+    dump(&mut s, 20, "H2-hidden-neighbour-focused");
+
+    press(&mut s, &[up, up, right, right]);
+    dump(&mut s, 40, "H3-hidden-chip");
+    press(&mut s, &[MenuEvent::Confirm]);
+    let hidden = vec![
+        game(2, "Hollow Knight"),
+        game(8, "Dead Space"),
+        game(9, "Doom Eternal"),
+        game(10, "Resident Evil 4"),
+    ];
+    console.set_hidden_list("aa11", "kid", HiddenAnswer::Listed(hidden));
+    dump(&mut s, 90, "H4-hidden-titles");
+    press(&mut s, &[right, MenuEvent::Confirm]);
+    console.set_hide_answer(answer("steam:8", "Dead Space", false));
+    dump(&mut s, 20, "H5-hidden-shown-again");
+
+    press(&mut s, &[MenuEvent::Back]);
+    dump(&mut s, 40, "_h-back");
+    press(&mut s, &[MenuEvent::Confirm]);
+    console.set_hidden_list("aa11", "kid", HiddenAnswer::Listed(Vec::new()));
+    dump(&mut s, 90, "H6-hidden-none");
 }
 
 /// A 2:3 poster, PNG-encoded, colour from `seed`. Real bytes: `LibraryScreen` feeds
@@ -739,12 +911,22 @@ impl Rig {
     }
 }
 
+/// Runs a capture set in `PF_CONSOLE_LANG` (a language tag such as `de`), English without it.
+fn in_shot_language(shots: impl FnOnce()) {
+    let lang = std::env::var("PF_CONSOLE_LANG").unwrap_or_else(|_| "en".into());
+    pf_l10n::with_language(&lang, shots);
+}
+
 /// Play Store TV captures. `PF_CONSOLE_STORE=<dir> cargo test -p pf-console-ui -- --ignored store_shots`.
 /// Android TV passes scale 0 (`SkiaConsoleShell.kt`), so a 1080p panel takes the couch
 /// formula: k = 1080 / 800 = 1.35, the same `render` derives for a plain 1920×1080 viewport.
 #[test]
 #[ignore]
 fn store_shots() {
+    in_shot_language(store_shots_in_language);
+}
+
+fn store_shots_in_language() {
     let rig = Rig::new(
         crate::console::Viewport::plain(1920, 1080),
         crate::platform::Platform::Android,
@@ -823,12 +1005,19 @@ fn store_shots() {
 /// Apple scales are `ConsoleView.designScale`: iOS is screen scale × 0.75 on a phone and × 1
 /// on an iPad; macOS is max(short side px / 800, backing × 0.75). webOS passes none, so a
 /// panel takes the couch k = height / 800: 1.35 at 1080p, 2.7 at 4K. The Deck is twice its
-/// 1280×800 panel: k = 2 draws its 1× layout sharp enough for a close render. No safe-area
+/// 1280×800 panel: k = 2 draws its 1× layout sharp enough for a close render. An Android phone
+/// or tablet passes none either, at 2400×1080 and 2560×1600. No safe-area
 /// insets: the backdrop runs edge to edge.
 #[test]
 #[ignore]
 fn website_shots() {
-    use crate::platform::Platform::{Apple, Desktop, WebOS};
+    in_shot_language(website_shots_in_language);
+}
+
+fn website_shots_in_language() {
+    use crate::platform::Platform::{Android, Apple, Desktop, WebOS};
+    // `PF_CONSOLE_ONLY=phone` draws one device.
+    let only = std::env::var("PF_CONSOLE_ONLY").ok();
     let mut rig = Rig::new(crate::console::Viewport::plain(1920, 1080), WebOS);
     for (device, width, height, scale, platform) in [
         ("iphone", 2868, 1320, Some(3.0 * 0.75), Apple),
@@ -837,7 +1026,12 @@ fn website_shots() {
         ("tv", 1920, 1080, None, WebOS),
         ("tv-4k", 3840, 2160, None, WebOS),
         ("deck", 2560, 1600, None, Desktop),
+        ("phone", 2400, 1080, None, Android),
+        ("tablet", 2560, 1600, None, Android),
     ] {
+        if only.as_deref().is_some_and(|o| o != device) {
+            continue;
+        }
         rig.viewport = crate::console::Viewport {
             width,
             height,

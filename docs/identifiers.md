@@ -12,7 +12,7 @@ convention instead.
 | Apple | Bundle `io.unom.punktfunk`, widgets `io.unom.punktfunk.widgets`, App Group `group.io.unom.punktfunk` | `clients/apple/Punktfunk.xcodeproj` |
 | Android | Application id and package `io.unom.punktfunk` | `clients/android/app/build.gradle.kts` |
 | Linux client | Flatpak, AppStream, GTK and Wayland app id, icon `io.unom.punktfunk`; console window app id `io.unom.punktfunk.console`; launchers `io.unom.punktfunk.desktop` and `io.unom.punktfunk.console.desktop` | `packaging/flatpak/`, `packaging/linux/`, `crates/client/pf-presenter/` |
-| Linux host | KWin grant `io.unom.punktfunk.host.desktop`, launcher `io.unom.punktfunk.starthost.desktop`, tray autostart `io.unom.punktfunk.tray.desktop`, D-Bus `io.unom.punktfunk.shell`, polkit `io.unom.punktfunk.dm-helper` | `packaging/linux/`, `crates/host/` |
+| Linux host | KWin grant `io.unom.punktfunk.host.desktop`, launchers `io.unom.punktfunk.starthost.desktop` and `io.unom.punktfunk.webconsole.desktop`, tray autostart `io.unom.punktfunk.tray.desktop`, D-Bus `io.unom.punktfunk.shell`, polkit `io.unom.punktfunk.dm-helper` | `packaging/linux/`, `crates/host/` |
 | Windows | MSIX `io.unom.punktfunk`, AUMIDs `io.unom.punktfunk.client` and `io.unom.punktfunk.tray` | `clients/windows/`, `crates/install/` |
 
 ## Platform conventions

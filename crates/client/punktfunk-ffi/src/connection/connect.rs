@@ -927,32 +927,80 @@ pub unsafe extern "C" fn punktfunk_profile_unlock_message(
     box_sha256: *const u8,
     out: *mut u8,
 ) -> PunktfunkStatus {
-    guard(|| {
-        if out.is_null() {
-            return PunktfunkStatus::NullPointer;
+    let build = punktfunk_core::quic::v2::msg::unlock_signed_message;
+    // SAFETY: this function's contract is `message_into`'s.
+    guard(|| unsafe { message_into(challenge, seat_id, device_sha256, box_sha256, out, build) })
+}
+
+/// Bytes [`punktfunk_locked_profile_unlock_message`] writes.
+pub const PUNKTFUNK_LOCKED_PROFILE_UNLOCK_MESSAGE_LEN: usize = 187;
+
+/// What a locked profile's unlock key signs, with SHA-256 as the digest, into `out`:
+/// `"punktfunk-profile-unlock-v1" ‖ challenge ‖ profile id, zero-padded to 64 ‖ device
+/// fingerprint ‖ box fingerprint`. `profile_id` is 1 to 64 of `[A-Za-z0-9_-]`; the rest is
+/// [`punktfunk_profile_unlock_message`]'s. `INVALID_ARG` for any other id, `NULL_POINTER` for a
+/// null argument.
+///
+/// # Safety
+/// `challenge`, `device_sha256` and `box_sha256` are readable for 32 bytes; `profile_id` is a
+/// NUL-terminated string; `out` is writable for [`PUNKTFUNK_LOCKED_PROFILE_UNLOCK_MESSAGE_LEN`]
+/// bytes.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_locked_profile_unlock_message(
+    challenge: *const u8,
+    profile_id: *const std::os::raw::c_char,
+    device_sha256: *const u8,
+    box_sha256: *const u8,
+    out: *mut u8,
+) -> PunktfunkStatus {
+    let build = punktfunk_core::quic::v2::msg::profile_unlock_signed_message;
+    // SAFETY: this function's contract is `message_into`'s.
+    guard(|| unsafe { message_into(challenge, profile_id, device_sha256, box_sha256, out, build) })
+}
+
+/// A signed unlock message's builder: challenge, id, device and box fingerprints.
+#[cfg(feature = "quic")]
+type BuildMessage<const N: usize> =
+    fn(&[u8; 32], &str, &[u8; 32], &[u8; 32]) -> punktfunk_core::Result<[u8; N]>;
+
+/// `build`'s message over the three 32-byte inputs and the id, into `out`.
+///
+/// # Safety
+/// As [`punktfunk_profile_unlock_message`], with `out` writable for `N` bytes.
+#[cfg(feature = "quic")]
+unsafe fn message_into<const N: usize>(
+    challenge: *const u8,
+    id: *const std::os::raw::c_char,
+    device_sha256: *const u8,
+    box_sha256: *const u8,
+    out: *mut u8,
+    build: BuildMessage<N>,
+) -> PunktfunkStatus {
+    if out.is_null() {
+        return PunktfunkStatus::NullPointer;
+    }
+    // SAFETY: null or readable for 32 bytes (caller contract).
+    let fp = |p: *const u8| unsafe { in_bytes(p, 32) }.map(<[u8; 32]>::try_from);
+    let (Ok(Ok(c)), Ok(Ok(d)), Ok(Ok(b))) = (fp(challenge), fp(device_sha256), fp(box_sha256))
+    else {
+        return PunktfunkStatus::NullPointer;
+    };
+    // SAFETY: null or NUL-terminated, per this function's contract.
+    let id = match unsafe { opt_cstr(id) } {
+        Ok(Some(s)) => s,
+        Ok(None) => return PunktfunkStatus::NullPointer,
+        Err(()) => return PunktfunkStatus::InvalidArg,
+    };
+    match build(&c, id, &d, &b) {
+        Ok(m) => {
+            // SAFETY: `out` is non-null and writable for the message's length (caller
+            // contract); a byte array has alignment 1.
+            unsafe { put(out.cast(), m) };
+            PunktfunkStatus::Ok
         }
-        // SAFETY: null or readable for 32 bytes (caller contract).
-        let fp = |p: *const u8| unsafe { in_bytes(p, 32) }.map(<[u8; 32]>::try_from);
-        let (Ok(Ok(c)), Ok(Ok(d)), Ok(Ok(b))) = (fp(challenge), fp(device_sha256), fp(box_sha256))
-        else {
-            return PunktfunkStatus::NullPointer;
-        };
-        // SAFETY: null or NUL-terminated, per this function's contract.
-        let seat = match unsafe { opt_cstr(seat_id) } {
-            Ok(Some(s)) => s,
-            Ok(None) => return PunktfunkStatus::NullPointer,
-            Err(()) => return PunktfunkStatus::InvalidArg,
-        };
-        match punktfunk_core::quic::v2::msg::unlock_signed_message(&c, seat, &d, &b) {
-            Ok(m) => {
-                // SAFETY: `out` is non-null and writable for the message's length (caller
-                // contract); a byte array has alignment 1.
-                unsafe { put(out.cast(), m) };
-                PunktfunkStatus::Ok
-            }
-            Err(_) => PunktfunkStatus::InvalidArg,
-        }
-    })
+        Err(_) => PunktfunkStatus::InvalidArg,
+    }
 }
 
 /// [`PunktfunkConnectOpts::reformat`]: this caller rebuilds its decoder on a frame flagged
@@ -2038,6 +2086,34 @@ mod tests {
             )
         };
         assert_eq!(st, PunktfunkStatus::NullPointer);
+    }
+
+    /// The locked profile's builder writes core's message and refuses an id core refuses.
+    #[test]
+    fn the_locked_profile_message_is_cores() {
+        let (challenge, dev, boxed) = ([1u8; 32], [0xaa; 32], [0xbb; 32]);
+        let mut out = [0u8; PUNKTFUNK_LOCKED_PROFILE_UNLOCK_MESSAGE_LEN];
+        let mut write = |id: &std::ffi::CStr| {
+            // SAFETY: each input is a live 32-byte local or a C string; `out` fits the message.
+            let st = unsafe {
+                punktfunk_locked_profile_unlock_message(
+                    challenge.as_ptr(),
+                    id.as_ptr(),
+                    dev.as_ptr(),
+                    boxed.as_ptr(),
+                    out.as_mut_ptr(),
+                )
+            };
+            (st, out)
+        };
+        let want = punktfunk_core::quic::v2::msg::profile_unlock_signed_message(
+            &challenge,
+            "9a3f1c2b7e40",
+            &dev,
+            &boxed,
+        );
+        assert_eq!(write(c"9a3f1c2b7e40"), (PunktfunkStatus::Ok, want.unwrap()));
+        assert_eq!(write(c"kid desk").0, PunktfunkStatus::InvalidArg);
     }
 
     /// Size-prefix guard: null/undersized is a status, not a read.

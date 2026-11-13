@@ -34,6 +34,7 @@ host usr/share/alsa/ucm2/USB-Audio/Punktfunk/DualSense-PS5-Haptic.conf
 host usr/share/alsa/ucm2/USB-Audio/Punktfunk/DualSense-PS5-Haptic-HiFi.conf
 host usr/share/applications/io.unom.punktfunk.host.desktop
 host usr/share/applications/io.unom.punktfunk.starthost.desktop
+host usr/share/applications/io.unom.punktfunk.webconsole.desktop
 host usr/share/icons/hicolor/22x22/apps/punktfunk-tray.png
 host usr/share/icons/hicolor/22x22/apps/punktfunk-tray-degraded.png
 host usr/share/icons/hicolor/22x22/apps/punktfunk-tray-error.png

@@ -33,6 +33,10 @@ enum ShotScenes {
             ShotScene(name: "03-pair", orientation: .natural, colorScheme: .dark) {
                 AnyView(ShotPair())
             },
+            // A locked profile's PIN prompt, with the line a wrong shape leaves.
+            ShotScene(name: "03b-unlock-pin", orientation: .natural, colorScheme: .dark) {
+                AnyView(ShotUnlockPin())
+            },
             ShotScene(name: "04-trust", orientation: .landscape, colorScheme: .dark) {
                 AnyView(ShotTrust())
             },
@@ -152,6 +156,10 @@ enum ShotScenes {
         })
         #endif
         #if os(tvOS)
+        // The PIN pad with three digits in, as dots.
+        scenes.append(ShotScene(name: "03c-unlock-pin-typed", orientation: .natural, colorScheme: .dark) {
+            AnyView(ShotUnlockPin(typed: 3))
+        })
         // The TV's tab bar: the hosts, and the Library tab on the mock catalog.
         scenes.append(ShotScene(name: "20-tv-hosts-tab", orientation: .natural, colorScheme: .dark) {
             AnyView(ShotTVTabs(tab: .hosts))
@@ -236,6 +244,26 @@ enum ShotScenes {
         })
         scenes.append(ShotScene(name: "25g-tv-customize-moved", orientation: .natural, colorScheme: .dark) {
             AnyView(ShotTVCustomizeMoved())
+        })
+        #endif
+        #if os(iOS) || os(tvOS)
+        // Hide for me: a title's menu with its entry, the button to the hidden titles, those
+        // titles, and a shelf without the action, whose toolbar is as it was.
+        scenes.append(ShotScene(name: "15g-library-hide-menu", orientation: .natural, colorScheme: .dark) {
+            AnyView(ShotHideForMe(opensMenu: true))
+        })
+        scenes.append(ShotScene(name: "15h-library-hidden-entry", orientation: .natural, colorScheme: .dark) {
+            AnyView(ShotHideForMe())
+        })
+        scenes.append(ShotScene(name: "15j-library-no-hide", orientation: .natural, colorScheme: .dark) {
+            AnyView(ShotHideForMe(hides: false))
+        })
+        scenes.append(ShotScene(name: "15i-library-hidden", orientation: .natural, colorScheme: .dark) {
+            AnyView(NavigationStack {
+                HiddenTitlesView(
+                    host: ShotMock.host, profile: ShotHideForMe.kid, artLoader: ShotPosterArt.source,
+                    onShown: { _ in }, shotHidden: Array(ShotMock.games.prefix(3)))
+            })
         })
         #endif
         return scenes
@@ -438,17 +466,17 @@ struct ShotTouchTabs<Hosts: View, Library: View>: View {
     var body: some View {
         if #available(iOS 18, *) {
             TabView(selection: .constant(selection)) {
-                Tab("Hosts", systemImage: "desktopcomputer", value: TouchTab.hosts) { hosts }
-                Tab("Library", systemImage: "square.grid.2x2", value: TouchTab.library) { library }
+                Tab(String(localized: L10n.hostsTab), systemImage: "desktopcomputer", value: TouchTab.hosts) { hosts }
+                Tab(String(localized: L10n.hostsTabLibrary), systemImage: "square.grid.2x2", value: TouchTab.library) { library }
             }
             .tabViewStyle(.sidebarAdaptable)
         } else {
             TabView(selection: .constant(selection)) {
                 hosts
-                    .tabItem { Label("Hosts", systemImage: "desktopcomputer") }
+                    .tabItem { Label(L10n.hostsTab, systemImage: "desktopcomputer") }
                     .tag(TouchTab.hosts)
                 library
-                    .tabItem { Label("Library", systemImage: "square.grid.2x2") }
+                    .tabItem { Label(L10n.hostsTabLibrary, systemImage: "square.grid.2x2") }
                     .tag(TouchTab.library)
             }
         }
@@ -471,10 +499,10 @@ private struct ShotTVTabs: View {
                 .tabItem { TouchTab.hostsLabel }
                 .tag(TouchTab.hosts)
             ShotLibraryFilter()
-                .tabItem { Label("Library", systemImage: "square.grid.2x2") }
+                .tabItem { Label(L10n.hostsTabLibrary, systemImage: "square.grid.2x2") }
                 .tag(TouchTab.library)
             NavigationStack { settings }
-                .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tabItem { Label(L10n.hostsTabSettings, systemImage: "gearshape") }
                 .tag(TouchTab.settings)
         }
         .onAppear { ShotMock.installPresets() }
@@ -833,6 +861,39 @@ private struct ShotPair: View {
         // driver's capture of the window's rect takes in.
         ShotHome().sheet(isPresented: .constant(true)) { sheet }
         #endif
+    }
+}
+
+// MARK: - Unlock (a locked profile's PIN)
+
+private struct ShotUnlockPin: View {
+    /// Digits on the TV's pad; with none, the line a wrong shape leaves.
+    var typed = 0
+
+    /// The TV holds no key, so its switch stays signed in.
+    private var switchTitle: String {
+        #if os(tvOS)
+        String(localized: L10n.unlockStaySignedIn)
+        #else
+        L10n.unlockWithBiometry(method: Biometry.faceID.name)
+        #endif
+    }
+
+    private var sheet: some View {
+        let ask = UnlockAsk(
+            hostName: ShotMock.host.displayName, profileName: "Mia", pin: true,
+            error: typed == 0 ? ProfileUnlock.PinProblem.shape.line : nil,
+            switchTitle: switchTitle) { _ in }
+        #if os(tvOS)
+        return UnlockPromptView(ask: ask, shotTyped: typed)
+        #else
+        return UnlockPromptView(ask: ask)
+        #endif
+    }
+
+    /// Presented as the app presents it: a sheet over the hosts.
+    var body: some View {
+        ShotHome().sheet(isPresented: .constant(true)) { sheet }
     }
 }
 

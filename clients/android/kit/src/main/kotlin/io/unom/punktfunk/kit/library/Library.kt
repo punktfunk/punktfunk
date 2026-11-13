@@ -528,17 +528,21 @@ object LibraryClient {
 
     /**
      * The whole catalog, a page at a time, so no answer grows with the library. [get] takes the
-     * cursor of the page before and answers one page's status and body. Any page failing fails
-     * the walk: half a catalog is not one.
+     * cursor of the page before and answers one page's status and body. Only rows [keep] takes
+     * are listed. Any page failing fails the walk: half a catalog is not one.
      */
-    internal fun walkPages(base: String, get: (cursor: String?) -> Pair<Int, String>): Walk {
+    internal fun walkPages(
+        base: String,
+        keep: (JSONObject) -> Boolean = { true },
+        get: (cursor: String?) -> Pair<Int, String>,
+    ): Walk {
         val games = ArrayList<GameEntry>()
         var cursor: String? = null
         repeat(MAX_PAGES) {
             val (code, body) = get(cursor)
             if (code != 200) return Walk.Refused(code)
             val page = JSONObject(body)
-            games += parseItems(page.getJSONArray("items"), base)
+            games += parseItems(page.getJSONArray("items"), base, keep)
             val next = str(page, "next_cursor")
             // A cursor that does not move would ask for the same page forever.
             if (next == null || next == cursor) return Walk.Done(games)
@@ -705,8 +709,7 @@ object LibraryClient {
         if (fpHex.isBlank() || appId.isBlank()) {
             return InstallOutcome.Failed(say(R.string.android_lib_error_host_unpaired))
         }
-        val path = "/api/v1/library/install/" +
-            java.net.URLEncoder.encode(appId, "UTF-8").replace("+", "%20").replace("%3A", ":")
+        val path = "/api/v1/library/install/" + pathSegment(appId)
         val empty = ByteArray(0).toRequestBody(null)
         return when (
             val reply = mgmtCall(id, address, mgmtPort, fpHex, streamPort = streamPort) { base ->
@@ -721,6 +724,10 @@ object LibraryClient {
             MgmtReply.Unreachable -> InstallOutcome.Failed(reply.why)
         }
     }
+
+    /** Title [id] as one path segment: `:` stays, a space is `%20`, `/` and `?` are escaped. */
+    internal fun pathSegment(id: String): String =
+        java.net.URLEncoder.encode(id, "UTF-8").replace("+", "%20").replace("%3A", ":")
 
     /** A non-200 answer. 401 and 403 both mean "not paired", as on desktop and Apple. */
     internal fun refused(code: Int): LibraryResult =
@@ -839,11 +846,12 @@ object LibraryClient {
     private fun parse(json: String, base: String): List<GameEntry> =
         parseItems(JSONArray(json), base).launchersFirst()
 
-    /** The titles of one answer, in the host's order. */
-    private fun parseItems(arr: JSONArray, base: String): List<GameEntry> {
+    /** The titles of one answer that [keep] takes, in the host's order. */
+    private fun parseItems(arr: JSONArray, base: String, keep: (JSONObject) -> Boolean = { true }): List<GameEntry> {
         val out = ArrayList<GameEntry>(arr.length())
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
+            if (!keep(o)) continue
             val art = o.optJSONObject("art") ?: JSONObject()
             out.add(
                 GameEntry(

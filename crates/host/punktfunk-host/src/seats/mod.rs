@@ -502,6 +502,7 @@ pub(crate) fn forward_within(
         &path,
         call.content_type.as_deref(),
         call.device.as_deref(),
+        call.person.as_deref(),
         call.body,
     );
     let (status, content_type, body) = sent.ok()?;
@@ -519,7 +520,14 @@ pub(crate) fn tail(seat: &pf_seats::Seat, path: &str) -> Option<Box<dyn std::io:
         crate::ctl::client::Client::seat(seat_pin(seat)?, &host_dir(seat), seat.mgmt_port, None)
             .ok()?;
     let (status, _, body) = client
-        .send("GET", &format!("/api/v1/{path}"), None, None, Vec::new())
+        .send(
+            "GET",
+            &format!("/api/v1/{path}"),
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
         .ok()?;
     (status == 200).then_some(body)
 }

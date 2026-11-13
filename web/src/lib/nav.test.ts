@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { House } from "lucide-react";
 import {
+	isPersonPage,
 	MANAGE,
 	NAV,
+	PERSON_NAV,
 	PHONE_BAR,
 	PHONE_SHEET,
 	type PinnablePlugin,
 	PRIMARY,
+	personNav,
 	pluginPin,
 	resolvePins,
 	togglePin,
@@ -95,5 +99,36 @@ describe("togglePin", () => {
 		const [a, b] = [pluginPin("a"), pluginPin("b")];
 		expect(togglePin([a], b)).toEqual([a, b]);
 		expect(togglePin([a, b], a)).toEqual([b]);
+	});
+});
+
+describe("a person's own console", () => {
+	test("lists their home, games, hooks and settings, and nothing of the box", () => {
+		expect(PERSON_NAV.map((n) => n.to)).toEqual([
+			"/",
+			"/library",
+			"/automation",
+			"/settings",
+		]);
+		expect(PERSON_NAV[0]?.icon).toBe(House);
+		for (const path of ["/", "/library", "/library/own:0123456789ab"])
+			expect(isPersonPage(path), path).toBe(true);
+		for (const path of ["/profiles", "/host", "/plugins/x/", "/libraryx"])
+			expect(isPersonPage(path), path).toBe(false);
+	});
+
+	test("their plugins are a page only where their host runs some", () => {
+		expect(personNav(true).map((n) => n.to)).toEqual([
+			"/",
+			"/library",
+			"/automation",
+			"/plugins",
+			"/settings",
+		]);
+		expect(personNav(false)).toBe(PERSON_NAV);
+		for (const path of ["/plugins", "/plugins/quest/", "/plugins/quest/a"]) {
+			expect(isPersonPage(path, true), path).toBe(true);
+			expect(isPersonPage(path), path).toBe(false);
+		}
 	});
 });

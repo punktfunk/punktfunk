@@ -54,6 +54,18 @@ object NativeBridge {
     ): ByteArray?
 
     /**
+     * The 187 bytes a locked profile's unlock key signs (SHA-256 digest): [challenge], [profileId]
+     * (1 to 64 of `[A-Za-z0-9_-]`) zero-padded to 64 bytes, then this device's and the pinned box's
+     * certificate SHA-256. The three arrays are 32 bytes each. Null for anything else.
+     */
+    external fun nativeLockedProfileUnlockMessage(
+        challenge: ByteArray,
+        profileId: String,
+        deviceFp: ByteArray,
+        boxFp: ByteArray,
+    ): ByteArray?
+
+    /**
      * True while the dial [nativeConnect] is blocked on has been parked by the host for its
      * operator's approval. The dial then waits for the verdict; show the approval wait.
      */
@@ -114,6 +126,13 @@ object NativeBridge {
      * enforces. Poll ~1 Hz alongside [nativeSessionEnded]. Cheap; safe on the UI thread.
      */
     external fun nativeAccessState(handle: Long): IntArray?
+
+    /**
+     * The host's sentence when it did not start this session's game (refused it, or it closed
+     * again at once), as `{"id", "message", "params"}` for [HostText.launch]; "" otherwise. The
+     * latest verdict wins, so poll it. Cheap; safe on the UI thread.
+     */
+    external fun nativeLaunchRefusal(handle: Long): String
 
     /**
      * Run the SPAKE2 PIN ceremony, presenting [certPem]/[keyPem]. Returns the host's verified
@@ -1119,8 +1138,20 @@ object NativeBridge {
      */
     external fun nativeConsoleSetProfiles(handle: Long, fpHex: String, json: String)
 
+    /**
+     * The answer to `FetchHidden` for [profile] on the host pinned to [fpHex]:
+     * `{"Listed": [LibraryGame]}` or `{"Failed": "why"}`. Posters follow as a shelf's do.
+     */
+    external fun nativeConsoleSetHiddenList(handle: Long, fpHex: String, profile: String, json: String)
+
+    /** What a `SetHidden` came to: `{fp_hex, profile, app_id, hidden, done, notice}`. */
+    external fun nativeConsoleSetHideAnswer(handle: Long, json: String)
+
     /** A one-shot toast from a service worker. */
     external fun nativeConsoleNotice(handle: Long, text: String)
+
+    /** The host's sentence for the held launch it did not start: the hold says it and stops waiting. */
+    external fun nativeConsoleLaunchRefused(handle: Long, text: String)
 
     /** This device's code, once its identity has loaded: shown while a request waits for approval. */
     external fun nativeConsoleSetDeviceCode(handle: Long, code: String)

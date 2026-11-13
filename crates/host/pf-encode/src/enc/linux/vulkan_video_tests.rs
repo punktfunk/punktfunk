@@ -558,6 +558,23 @@ fn vulkan_wave_smoke_av1() {
     run_wave_smoke(Codec::Av1, "obu");
 }
 
+/// The anchor soak ([`crate::smoke_pattern::Soak`], its `PF_WAVE_*` knobs). With
+/// `PF_WAVE_CONFIRM` and a `PF_WAVE_LAG` past the DPB ring, every ask anchors on the kept
+/// picture instead of starting a wave.
+#[test]
+#[ignore = "needs a real VK_KHR_video_encode device"]
+fn vulkan_anchor_soak() {
+    let soak = crate::smoke_pattern::Soak::from_env();
+    let (w, h, fps) = (soak.w, soak.h, soak.fps);
+    let mut enc =
+        VulkanVideoEncoder::open_opts(soak.codec, w, h, fps, soak.mbps * 1_000_000, false)
+            .expect("open");
+    let pts = |i: usize| i as u64 * 1_000_000_000 / u64::from(fps);
+    soak.run("vulkan", &mut enc, |i| {
+        cpu_frame_scroll(w, h, pts(i), i as u32)
+    });
+}
+
 /// Packed 2:10:10:10 (`xRGB_210LE` / `PixelFormat::X2Rgb10`) CPU frame. Channels are 10-bit
 /// code values (PQ container units).
 fn cpu_frame_rgb10(w: u32, h: u32, pts_ns: u64, rgb10: [u16; 3]) -> CapturedFrame {

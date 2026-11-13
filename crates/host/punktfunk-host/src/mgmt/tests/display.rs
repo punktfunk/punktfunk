@@ -56,6 +56,7 @@ async fn host_info_publishes_the_hosts_own_fingerprint() {
         false,
         false,
         None,
+        None,
     ));
     let (status, body) = send(&app, get_req("/api/v1/host")).await;
     assert_eq!(status, StatusCode::OK);

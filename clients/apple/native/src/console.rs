@@ -13,9 +13,9 @@ use pf_console_ui::bridge::{
 };
 use pf_console_ui::console::FrameCost;
 use pf_console_ui::{
-    Console, ConsoleEntry, ConsoleHandles, HostRow, InputSource, Insets, LicenseSection,
-    PadTestState, PairStatus, Platform, ProfilesAnswer, Prompt, SnapshotStore, SpeedPhase,
-    Viewport, WakeStatus,
+    Console, ConsoleEntry, ConsoleHandles, HiddenAnswer, HideAnswer, HostRow, InputSource, Insets,
+    LicenseSection, PadTestState, PairStatus, Platform, ProfilesAnswer, Prompt, SnapshotStore,
+    SpeedPhase, Viewport, WakeStatus,
 };
 use punktfunk_core::quic::v2::msg::{ProfileUnlock, UNLOCK_PASSWORD, UNLOCK_PASSWORD_MAX};
 use skia_safe::gpu::{self, mtl, DirectContext, SurfaceOrigin};
@@ -97,6 +97,11 @@ pub const PUNKTFUNK_CONSOLE_PUSH_PAD_TEST: u8 = 18;
 /// `{"fp_hex": "…", "answer": ProfilesAnswer}` — the answer to the `FetchProfiles` command:
 /// `{"Listed": [rows]}`, `"NoProfiles"` or `{"Failed": "why"}`.
 pub const PUNKTFUNK_CONSOLE_PUSH_PROFILES: u8 = 20;
+/// `{"fp_hex": "…", "profile": "…", "answer": HiddenAnswer}` — the answer to the `FetchHidden`
+/// command: `{"Listed": [LibraryGame]}` or `{"Failed": "why"}`.
+pub const PUNKTFUNK_CONSOLE_PUSH_HIDDEN: u8 = 21;
+/// `HideAnswer` — the answer to the `SetHidden` command, echoing its host, profile and title.
+pub const PUNKTFUNK_CONSOLE_PUSH_HIDE: u8 = 22;
 
 /// The room `punktfunk_console_take_unlock` needs: the longest password the wire takes.
 pub const PUNKTFUNK_CONSOLE_UNLOCK_MAX: usize = 512;
@@ -628,6 +633,13 @@ struct ProfilesJson {
     answer: ProfilesAnswer,
 }
 
+#[derive(serde::Deserialize)]
+struct HiddenJson {
+    fp_hex: String,
+    profile: String,
+    answer: HiddenAnswer,
+}
+
 /// Hand the console a model update; `kind` is a `PUNKTFUNK_CONSOLE_PUSH_*`. A bad kind or bad
 /// JSON is a logged no-op.
 ///
@@ -659,6 +671,11 @@ pub unsafe extern "C" fn punktfunk_console_push(
             }
             PUNKTFUNK_CONSOLE_PUSH_PROFILES => {
                 json::<ProfilesJson>(text).map(|v| console.set_profiles(&v.fp_hex, v.answer))
+            }
+            PUNKTFUNK_CONSOLE_PUSH_HIDDEN => json::<HiddenJson>(text)
+                .map(|v| console.set_hidden_list(&v.fp_hex, &v.profile, v.answer)),
+            PUNKTFUNK_CONSOLE_PUSH_HIDE => {
+                json::<HideAnswer>(text).map(|v| console.set_hide_answer(v))
             }
             PUNKTFUNK_CONSOLE_PUSH_LIBRARY_BEGIN => {
                 library.begin_fetch();
@@ -887,5 +904,23 @@ mod tests {
         assert_eq!(hand_over(proof, &mut small, &mut stay), 0);
         assert_eq!(hand_over(None, &mut small, &mut stay), 0);
         assert_eq!((small, stay), ([0, 0], false));
+    }
+
+    /// The hide pushes read every bridge sample: a `HiddenAnswer` under its host and profile,
+    /// a `HideAnswer` as it stands.
+    #[test]
+    fn hide_pushes_read_the_bridge_samples() {
+        let raw = include_str!("../../../shared/console-bridge-vectors.json");
+        let doc: serde_json::Value = serde_json::from_str(raw).unwrap();
+        for answer in doc["models"]["HiddenAnswer"].as_array().unwrap() {
+            let push = serde_json::json!({"fp_hex": "ab12", "profile": "p", "answer": answer});
+            assert!(json::<HiddenJson>(&push.to_string()).is_some(), "{push}");
+        }
+        for answer in doc["models"]["HideAnswer"].as_array().unwrap() {
+            assert!(
+                json::<HideAnswer>(&answer.to_string()).is_some(),
+                "{answer}"
+            );
+        }
     }
 }

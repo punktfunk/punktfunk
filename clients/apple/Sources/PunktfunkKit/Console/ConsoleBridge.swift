@@ -36,6 +36,8 @@ public final class ConsoleBridge {
         case padTest = 18
         case libraryDownloads = 19
         case profiles = 20
+        case hidden = 21
+        case hide = 22
     }
 
     /// A discrete menu event, as the shell numbers them.
@@ -86,6 +88,7 @@ public final class ConsoleBridge {
         case deletePreset = "DeletePreset", padTest = "PadTest", loadLicenses = "LoadLicenses"
         case promptAnswer = "PromptAnswer", padAction = "PadAction", hostAction = "HostAction"
         case setScreen = "SetScreen", endGame = "EndGame", install = "Install"
+        case setHidden = "SetHidden", fetchHidden = "FetchHidden"
     }
 
     /// Where the session the console asked for stands. `profileLocked` is a failure the host

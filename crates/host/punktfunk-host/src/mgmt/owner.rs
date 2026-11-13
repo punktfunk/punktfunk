@@ -27,6 +27,8 @@ pub(crate) const DOOR: &[(&str, &str)] = &[
     ("*", "health"),
     ("*", "webtransport"),
     ("*", "auth/device/*"),
+    // A person's session is their seat host's: the door opens and checks none.
+    ("*", "auth/person/*"),
     ("*", "local/summary"),
     // The door merges these with the owner's host's.
     ("GET", "host"),
@@ -66,12 +68,18 @@ pub(crate) enum Side {
 
 /// Routes a device may call about its own play, and the host each goes to as that device: its
 /// game, its screen and the compositors on its seat; its installs on the owner's host, whose
-/// plugins download into the box's shared game files. `mgmt::tests::routes` holds every other
-/// device route to the door.
+/// plugins download into the box's shared game files, and a person's routes there too, which
+/// write the library. `mgmt::tests::routes` holds every other device route to the door.
 pub(crate) const DEVICE: &[(&str, &str, Side)] = &[
     ("POST", "game/end", Side::Seat),
     ("POST", "library/install/*", Side::Owner),
     ("DELETE", "library/install/*", Side::Owner),
+    ("PUT", "library/hidden/*", Side::Owner),
+    ("PUT", "library/overrides/games/*", Side::Owner),
+    ("PUT", "library/overrides/sources/*", Side::Owner),
+    ("PUT", "library/scanners/*", Side::Owner),
+    ("PUT", "session/settings", Side::Owner),
+    ("DELETE", "session/settings", Side::Owner),
     ("GET", "display/targets", Side::Seat),
     ("PUT", "display/clients/*", Side::Seat),
     ("GET", "compositors", Side::Seat),
@@ -152,6 +160,8 @@ pub(crate) struct Forwarded {
     pub body: Vec<u8>,
     /// The device the door vouches for: the seat host answers as it would that device.
     pub device: Option<String>,
+    /// The profile the door found `device` is the person of ([`super::person`]).
+    pub person: Option<String>,
     /// Hand the body over as it arrives.
     pub stream: bool,
     /// Start a stopped seat; a check that must not wake anyone passes `false`.
@@ -167,6 +177,7 @@ impl Forwarded {
             content_type: None,
             body: Vec::new(),
             device: None,
+            person: None,
             stream: false,
             start: false,
         }
@@ -279,6 +290,7 @@ impl MgmtState {
                 content_type: json,
                 body: body.unwrap_or_default(),
                 device: None,
+                person: None,
                 stream: false,
                 start,
             },
@@ -340,8 +352,9 @@ impl Answer {
 /// axum's default request limit: a policy, a hook list, a PIN, a plugin page's form.
 const BODY_LIMIT: usize = 2 * 1024 * 1024;
 
-/// The seat a device plays on: where its host lists it now, else its own profile's row. A
-/// person's own Linux account is only ever the first: a device reaches it by unlocking.
+/// The seat a device plays on: where its host lists it now, else its own profile's row while
+/// it opens that profile with nothing asked. A person's own Linux account is only ever the
+/// first: a device reaches it by unlocking.
 fn device_seat(st: &MgmtState, seats: &crate::seats::Snapshot, fp: &str) -> Option<String> {
     let seen = seats.occupants.iter().find(|(_, who)| {
         who.iter()
@@ -350,8 +363,11 @@ fn device_seat(st: &MgmtState, seats: &crate::seats::Snapshot, fp: &str) -> Opti
     if let Some((id, _)) = seen {
         return Some(id.clone());
     }
-    let profile = st.app.profiles.get()?.resolve(Some(fp), None).ok()?;
-    if seats.person_row(&profile.os_account).is_some() {
+    let profiles = st.app.profiles.get()?;
+    let profile = profiles.resolve(Some(fp), None).ok()?;
+    if seats.person_row(&profile.os_account).is_some()
+        || profiles.opens(&profile.id, Some(fp)) != crate::profiles::Opens::Yes
+    {
         return None;
     }
     seats.row_of(&profile.os_account).map(str::to_string)
@@ -359,8 +375,11 @@ fn device_seat(st: &MgmtState, seats: &crate::seats::Snapshot, fp: &str) -> Opti
 
 /// On a door: an admin call the door does not answer itself goes to the owner's host, and a
 /// device's call about its own play to the host [`device_route`] names, carrying the device so
-/// that host answers as it would the device. A device's read wakes no seat: a client asks each
-/// time it shows the host. Every other lane, and every other host, is answered here.
+/// that host answers as it would the device. A person's call carries the profile the door found
+/// the device is the person of, and any other is refused here. A person session goes to the
+/// owner's host as its profile, with no device, where the admin call would. A device's or a
+/// person session's read wakes no seat. Every other lane, and every other host, is answered
+/// here.
 pub(crate) async fn pass_on(
     State(st): State<Arc<MgmtState>>,
     req: Request,
@@ -376,14 +395,31 @@ pub(crate) async fn pass_on(
         .strip_prefix("/api/v1/")
         .unwrap_or_default()
         .to_string();
+    let mut person = None;
     let target = match (lane, device_route(req.method(), &rest)) {
         (Some(AuthLane::Admin), _) if classify(req.method(), &rest) == Verdict::Forward => {
+            Target::Owner
+        }
+        // A person session its seat host vouched for: the owner's host writes the library.
+        (Some(AuthLane::PersonVouched), _) if classify(req.method(), &rest) == Verdict::Forward => {
+            person = req
+                .extensions()
+                .get::<super::person::Vouched>()
+                .map(|v| v.0.clone());
             Target::Owner
         }
         (Some(AuthLane::Cert), Some(side)) => {
             let Some(PairedDevice(fp)) = req.extensions().get::<PairedDevice>().cloned() else {
                 return next.run(req).await;
             };
+            let method = req.method().as_str();
+            if super::person::person_route(method, req.uri().path()) {
+                let named = super::person::named(req.uri());
+                match super::person::check(&st, named.as_deref(), &fp, None).await {
+                    Ok(id) => person = Some(id),
+                    Err(refused) => return refused,
+                }
+            }
             if side == Side::Owner {
                 Target::Owner
             } else {
@@ -420,8 +456,10 @@ pub(crate) async fn pass_on(
             .map(str::to_string),
         body: bytes.to_vec(),
         device: parts.extensions.get::<PairedDevice>().map(|d| d.0.clone()),
+        person,
         stream: tail(&rest),
-        start: lane != Some(AuthLane::Cert) || parts.method != Method::GET,
+        start: !matches!(lane, Some(AuthLane::Cert | AuthLane::PersonVouched))
+            || parts.method != Method::GET,
     };
     let to_owner = target == Target::Owner;
     match tokio::task::spawn_blocking(move || seats.call(&target, call)).await {

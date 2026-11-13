@@ -3,8 +3,8 @@
 //! The schema is the part of `multi-user-profiles.md` §4 the host reads, with one more account
 //! kind, [`OsAccount::Seat`]. A key it doesn't know is dropped on load and gone at the next save.
 //! The owner profile is the box's own session; [`Profiles::ensure_owner`] creates it at start.
-//! A profile is not a trust boundary: the device stays the principal, and any paired device may
-//! name any profile.
+//! The device stays the principal. An open profile is any paired device's to name; a locked one
+//! opens only for the devices on its list ([`Profiles::opens`], [`locks`]).
 //!
 //! Two file rules hold. A file that does not parse keeps its bytes and refuses every mutation, so
 //! a save never overwrites what could not be read. A save that fails is a mutation that failed:
@@ -19,8 +19,12 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use utoipa::ToSchema;
 
+/// Which paired devices may open each profile.
+pub(crate) mod locks;
 /// Take-turns profiles: a profile bound to a Windows account that takes the console in turn.
 pub(crate) mod take_turns;
+
+pub(crate) use pf_seats::locks::Opens;
 
 /// Bumped on a breaking change to a field's meaning; `serde(default)` covers additions.
 pub const PROFILES_SCHEMA_VERSION: u32 = 1;
@@ -282,6 +286,8 @@ pub struct Profiles {
     /// This seat host is the box owner's, behind the door: it also serves the profiles that
     /// share the owner's desktop.
     owner_host: bool,
+    /// `profile-locks.json` beside the file.
+    locks: locks::LockStore,
 }
 
 impl Profiles {
@@ -291,6 +297,7 @@ impl Profiles {
         let (file, unparsed) = read(&path);
         let legacy = legacy_index(&file);
         Profiles {
+            locks: locks::LockStore::open(path.with_file_name(pf_seats::locks::FILE), false),
             state: Mutex::new(State {
                 path,
                 file,
@@ -309,6 +316,7 @@ impl Profiles {
     pub fn load_box(path: PathBuf, seat: Option<String>) -> Profiles {
         let (file, unparsed) = parse(&path, std::fs::read(&path).ok());
         Profiles {
+            locks: locks::LockStore::open(path.with_file_name(pf_seats::locks::FILE), true),
             state: Mutex::new(State {
                 stamp: mtime(&path),
                 legacy: legacy_index(&file),
@@ -427,9 +435,9 @@ impl Profiles {
     }
 
     /// Removes `id`. `erase` also deletes its Steam home and picture ([`Self::erase`]); without it
-    /// the home stays for the console to list. Its library layer goes too, a seat's only in
-    /// [`Self::erase`]: a seat that won't stop is [`Self::restore`]d. Sessions playing as it hear
-    /// [`removed`].
+    /// the home stays for the console to list. Its library layer and its lock go too, a seat's
+    /// only in [`Self::erase`]: a seat that won't stop is [`Self::restore`]d, locked as it was.
+    /// Sessions playing as it hear [`removed`].
     pub fn delete(&self, id: &str, erase: bool) -> Result<Profile, EditError> {
         let mut gone = None;
         self.edit(|file| {
@@ -458,14 +466,17 @@ impl Profiles {
             self.erase(id);
         } else if !matches!(gone.os_account, OsAccount::Seat { seat: Some(_) }) {
             crate::library::forget_profile(id);
+            self.locks.forget(id);
         }
         announce_removed(id);
         Ok(gone)
     }
 
-    /// Deletes the Steam home, picture and library layer of `id`, which the store no longer holds.
+    /// Deletes the Steam home, picture, library layer and lock of `id`, which the store no longer
+    /// holds.
     pub fn erase(&self, id: &str) {
         crate::library::forget_profile(id);
+        self.locks.forget(id);
         if !safe_id(id) {
             return;
         }
@@ -723,6 +734,37 @@ impl Profiles {
             }
             tracing::info!(profile = %id, "light seat now shares the owner's desktop");
         }
+    }
+
+    /// What device `fp` needs to open profile `id`: the one check every way into a profile asks
+    /// ([`locks`]), under [`Self::lock_holder`]'s lock. The owner's stand-in, while
+    /// `profiles.json` doesn't read, opens nothing once any profile is locked: its lock is the
+    /// owner's, under an id this host can't read.
+    pub fn opens(&self, id: &str, fp: Option<&str>) -> Opens {
+        if id == OPERATOR_PROFILE_ID && self.locks.any_locked() {
+            return Opens::No;
+        }
+        self.locks.opens((id, &self.lock_holder(id)), fp)
+    }
+
+    /// The profile whose lock opens `id`: the owner's for one that shares the owner's desktop,
+    /// since one desktop has one lock, else its own.
+    pub(crate) fn lock_holder(&self, id: &str) -> String {
+        let state = self.lock();
+        let mut desktop = state.file.profiles.iter().filter(|p| is_owner(p));
+        match desktop.next() {
+            Some(owner) if owner.id != id && desktop.any(|p| p.id == id) => owner.id.clone(),
+            _ => id.to_string(),
+        }
+    }
+
+    pub(crate) fn locks(&self) -> &locks::LockStore {
+        &self.locks
+    }
+
+    /// Whether this is a seat host's read-only copy of the box's profiles.
+    pub(crate) fn reads_box(&self) -> bool {
+        self.lock().read_only
     }
 
     /// The profile a connect from `fp` asking for `asked` lands in and plays now

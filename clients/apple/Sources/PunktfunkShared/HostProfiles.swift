@@ -108,11 +108,16 @@ public struct ProfileSeat: Codable, Hashable, Sendable {
     }
 }
 
-/// What a profile on a person's own account needs from this device before it opens. An old host
-/// sends none, and a word this build doesn't know reads as `.none`: the host refuses a dial that
-/// needs more.
+/// What a profile on a person's own account, or a locked one, needs from this device before it
+/// opens. An old host sends none: `.none`. A word this build doesn't know reads as `.password`,
+/// the prompt every client has.
 public enum UnlockNeed: String, Codable, Sendable {
-    case none, password, key
+    case none, password, key, pin
+    /// This device's unlock key, else the locked profile's PIN.
+    case pinKey = "pin_key"
+
+    /// The prompt asks for the profile's PIN, not an account password.
+    public var pin: Bool { self == .pin || self == .pinKey }
 }
 
 /// One row of `enumerate`. Every field defaults, so a host that adds one never fails the list.
@@ -128,9 +133,11 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
     /// This device's old seat became this profile.
     public var legacySeat: Bool = false
     public var unlock: UnlockNeed = .none
+    /// This device may hide titles for this profile now (`HideForMe`). An old host omits it.
+    public var person: Bool = false
 
     private enum CodingKeys: String, CodingKey {
-        case id, accent, avatar, owner, seat, unlock
+        case id, accent, avatar, owner, seat, unlock, person
         case displayName = "display_name"
         case legacySeat = "legacy_seat"
     }
@@ -144,13 +151,29 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
         owner = try c.decodeIfPresent(Bool.self, forKey: .owner) ?? false
         seat = try c.decodeIfPresent(ProfileSeat.self, forKey: .seat)
         legacySeat = try c.decodeIfPresent(Bool.self, forKey: .legacySeat) ?? false
-        let word = try c.decodeIfPresent(String.self, forKey: .unlock) ?? ""
-        unlock = UnlockNeed(rawValue: word) ?? .none
+        let word = try c.decodeIfPresent(String.self, forKey: .unlock)
+        unlock = word.map { UnlockNeed(rawValue: $0) ?? .password } ?? .none
+        person = try c.decodeIfPresent(Bool.self, forKey: .person) ?? false
+    }
+
+    /// `person` only when true, as the host writes it: an old host's row crosses the console
+    /// bridge as it did before.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(displayName, forKey: .displayName)
+        try c.encodeIfPresent(accent, forKey: .accent)
+        try c.encodeIfPresent(avatar, forKey: .avatar)
+        try c.encode(owner, forKey: .owner)
+        try c.encodeIfPresent(seat, forKey: .seat)
+        try c.encode(legacySeat, forKey: .legacySeat)
+        try c.encode(unlock, forKey: .unlock)
+        if person { try c.encode(true, forKey: .person) }
     }
 
     public init(id: String, displayName: String, accent: String? = nil, avatar: String? = nil,
                 owner: Bool = false, seat: ProfileSeat? = nil, legacySeat: Bool = false,
-                unlock: UnlockNeed = .none) {
+                unlock: UnlockNeed = .none, person: Bool = false) {
         self.id = id
         self.displayName = displayName
         self.accent = accent
@@ -159,6 +182,7 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
         self.seat = seat
         self.legacySeat = legacySeat
         self.unlock = unlock
+        self.person = person
     }
 
     public var pick: ProfilePick { ProfilePick(id: id, displayName: displayName, avatar: avatar) }

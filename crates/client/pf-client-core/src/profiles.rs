@@ -58,18 +58,29 @@ pub struct Seat {
     pub steam_sign_in: Option<bool>,
 }
 
-/// What this device must send to open a profile on a person's own account, as `enumerate`
-/// says for it ([`crate::unlock`]). An old host omits it: [`UnlockNeed::None`]. A word a later
-/// host adds reads as [`UnlockNeed::Password`], the prompt every client has.
+/// What this device must send to open a profile on a person's own account or a locked one, as
+/// `enumerate` says for it ([`crate::unlock`]). An old host omits it: [`UnlockNeed::None`]. A
+/// word a later host adds reads as [`UnlockNeed::Password`], the prompt every client has.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnlockNeed {
     #[default]
     None,
-    /// A signature from this device's unlock key.
+    /// A signature from this device's unlock key, else the account password.
     Key,
+    /// The locked profile's PIN.
+    Pin,
+    /// A signature from this device's unlock key, else the locked profile's PIN.
+    PinKey,
     #[serde(other)]
     Password,
+}
+
+impl UnlockNeed {
+    /// The prompt asks for the profile's PIN, not an account password.
+    pub fn pin(self) -> bool {
+        matches!(self, UnlockNeed::Pin | UnlockNeed::PinKey)
+    }
 }
 
 /// One row of `enumerate`. Every field defaults, so a host that adds one never fails the list.
@@ -88,6 +99,9 @@ pub struct ListedProfile {
     pub legacy_seat: bool,
     /// What opens the profile from this device.
     pub unlock: UnlockNeed,
+    /// This device may hide titles for this profile now ([`crate::hide`]). An old host omits it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub person: bool,
 }
 
 impl Seat {
@@ -359,30 +373,46 @@ pub fn wake(
         .map_err(|e| LibraryError::Unreachable(format!("bad JSON: {e}")))
 }
 
-/// What `unlock-challenge` answers: 32 fresh bytes, good once for two minutes, and the seat
-/// they are for.
+/// What `unlock-challenge` answers: 32 fresh bytes, good once for two minutes, and what the
+/// signed message names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnlockChallenge {
     pub challenge: [u8; 32],
-    /// The `SeatId`'s 32 lowercase hex characters.
-    pub seat: String,
+    pub names: ChallengeNames,
+}
+
+/// What a key proof's message names besides the challenge and the two certificates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChallengeNames {
+    /// A person's own account: the `SeatId`'s 32 lowercase hex characters.
+    Seat(String),
+    /// A locked profile: its id.
+    Profile(String),
 }
 
 impl UnlockChallenge {
-    /// The host's answer, `{ "challenge": "<64 hex>", "seat": "<32 hex>" }`. `None` for any
-    /// other shape.
+    /// The host's answer, `{ "challenge": "<64 hex>", "seat": "<32 hex>" }` or
+    /// `{ "challenge": "<64 hex>", "profile": "<id>" }`. `None` for any other shape.
     pub fn parse(body: &[u8]) -> Option<UnlockChallenge> {
         #[derive(Deserialize)]
         struct Wire {
             challenge: String,
-            seat: String,
+            seat: Option<String>,
+            profile: Option<String>,
         }
         let w: Wire = serde_json::from_slice(body).ok()?;
         let lower_hex = |s: &str| s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-        (lower_hex(&w.challenge) && w.seat.len() == 32 && lower_hex(&w.seat)).then_some(())?;
+        let names = match (w.seat, w.profile) {
+            (Some(seat), None) if seat.len() == 32 && lower_hex(&seat) => {
+                ChallengeNames::Seat(seat)
+            }
+            (None, Some(id)) if crate::unlock::is_profile_id(&id) => ChallengeNames::Profile(id),
+            _ => return None,
+        };
+        lower_hex(&w.challenge).then_some(())?;
         Some(UnlockChallenge {
             challenge: crate::trust::parse_hex32(&w.challenge)?,
-            seat: w.seat,
+            names,
         })
     }
 }

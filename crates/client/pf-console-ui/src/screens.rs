@@ -70,6 +70,8 @@ pub struct Device {
     /// Host has a fallback UI ([`crate::shell::ConsoleOptions::fallback_ui`]); gates the
     /// console-off row.
     pub fallback_ui: bool,
+    /// The host hides titles for this device ([`crate::shell::ConsoleOptions::hides`]).
+    pub hides: bool,
     /// This device decodes PyroWave ([`crate::shell::ConsoleOptions::pyrowave_ok`]).
     /// False marks the codec row's PyroWave value unsupported.
     pub pyrowave_ok: bool,
@@ -132,6 +134,7 @@ impl Device {
             tv: false,
             spatial: false,
             fallback_ui: false,
+            hides: true,
             pyrowave_ok: true,
             av1_ok: true,
             name: "test".into(),
@@ -229,6 +232,14 @@ impl TextEntry {
         }
     }
 
+    /// [`Self::secret`] for a PIN: the tray is a number pad.
+    pub(crate) fn secret_digits() -> TextEntry {
+        TextEntry {
+            keyboard: Keyboard::pad(),
+            ..TextEntry::secret()
+        }
+    }
+
     /// The device's own keyboard types into this field.
     fn system(&self, device: &Device) -> bool {
         device.system_keyboard && !self.secret
@@ -272,13 +283,14 @@ impl TextEntry {
     /// The height the tray takes from the bottom of the screen: the keys, and the open
     /// field's slot over them, each with its gap.
     pub(crate) fn reserve(&self, k: f64) -> f64 {
-        (Keyboard::tray_height() + 12.0 + ROW_H + 12.0) * k * self.seat
+        (self.keyboard.tray_height() + 12.0 + ROW_H + 12.0) * k * self.seat
     }
 
     /// The open field's slot for [`crate::widgets::MenuList::lift`]: its top, riding the
     /// tray just over the keys, and how far the tray is up. `None` while it is down.
     pub(crate) fn lift(&self, rect: Rect, k: f64) -> Option<(f32, f64)> {
-        let top = f64::from(rect.bottom) - (Keyboard::tray_height() + 12.0 + ROW_H) * k * self.seat;
+        let tray = self.keyboard.tray_height();
+        let top = f64::from(rect.bottom) - (tray + 12.0 + ROW_H) * k * self.seat;
         (self.seat > 0.0).then_some((top as f32, self.seat.min(1.0)))
     }
 

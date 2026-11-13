@@ -240,13 +240,29 @@ session by design, and display activation fails while its session is inactive.
   `?profile=<id>` for a profile with a seat: they read and write that seat account's copies, in
   its profile folder. A seat host answers 409.
 - **The box's library, on Linux.** The box's library is the owner's. A seat other than the
-  owner's runs no plugins and lists and launches only what it can start as its own user:
+  owner's runs none of the box's plugins, and of the box's library lists and launches only what
+  it can start as its own user:
   `steam_appid` with an id that fits 32 bits and `steam_ui`, with its own Steam, and `emulator`,
   with a copy it can run and a game file it can read. The seat answers every change to the box's
   library with 409. The owner's host installs a Flathub emulator box-wide through `install_flatpak`, so every
   seat runs it with its own config and saves in `~/.var/app/<id>`; which emulators stay the
   owner's is in [Profiles](/docs/profiles#on-linux). At a launch the seat installs the RetroArch
   core the entry names into its own RetroArch and places the firmware from its library copy.
+- **Its own runner's titles, on Linux.** What a plugin of the seat account's own runner
+  publishes with `PUT library/provider/{provider}` lands in the seat host's own titles (below),
+  under `own:` ids. On a made seat that runner is the seat account's `punktfunk-scripting` user
+  unit, which reads the seat's config directory, where the package enables the unit for every
+  account. A person's own account runs none: their unit reads their own desk config. A
+  `?store=` claim is dropped there, so no row shadows a title of the box's. The provider's
+  running and download reports read those rows, and the box learns their names and pictures as
+  it learns the others'. On a person's own account every lane is refused
+  (`plugins_own_account`), and a provider row found on their shelf lists nothing.
+- **Its own runner's folders, on Linux.** A plugin installed in the seat's own `plugins/` reads
+  its manifest and grants from the seat's own config directory, never the box's for a plugin of
+  the same id; any other plugin reads the box's copy. The operator decides them on a made seat,
+  the seat's person on both kinds of seat, and a folder the seat's account can't list is refused
+  (`not_readable`). On a person's own account an emulator or core install asked through a grant
+  stays refused (`emulators_own_account_yet`).
 - **One profile.** The seat serves the profile whose seat it is. A connect that names any other
   profile, the owner's included, is refused as an unknown profile; one that names none plays as
   this seat's profile. The owner's row alone also serves the owner and the profiles that share the
@@ -269,17 +285,18 @@ session by design, and display activation fails while its session is inactive.
   drops the profile's own session settings, so its seat takes the Seat defaults again.
 - **A profile's own titles.** A seat host keeps titles of its own, launch and `prep` included, in
   `library.json` in its own config directory. The custom-entry routes write there on a seat host,
-  under `own:<12 hex>` ids the box never mints; a write naming any other id answers 409, and a
-  seat on a person's own account takes none (403 `library_own_account`). Its list carries them on
-  top of its profile's view, marked `own`, and they launch, run `prep` and serve art as the seat's
-  user, past the rules for what a seat lists of the box's. `GET library/own` answers each one's
-  id, title, platform and `http(s)` art, never how it starts. The box asks for that when a seat's
-  host comes up and on each `library.changed` the seat sends, and stores it through
-  `PUT library/own?as=<profile id>` on the host that writes the library: the owner's host behind a
-  door, the box host on Windows. It keeps it as `own-titles.json` in the profile's layer, under
-  the profile the seat belongs to, dropping a row with a bad id or title and a cover or platform
-  it would not store; an answer that isn't a list, lists more than 500 or repeats an id leaves
-  the stored titles as they were. `?as=` and the door's answer to a device list those rows,
+  under `own:<12 hex>` ids the box never mints; a write naming any other id answers 409. On a
+  person's own account only [their own session](#the-persons-own-session) writes one; any other
+  lane answers 403 `library_own_account_person`, or `library_own_account` where that lane is
+  closed. Its list carries them on top of its profile's view, marked `own`, and they launch, run
+  `prep` and serve art as the seat's user, past the rules for what a seat lists of the box's.
+  `GET library/own` answers each one's id, title, platform and `http(s)` art, never how it
+  starts. The box asks for that when a seat's host comes up and on each `library.changed` the
+  seat sends, and stores it through `PUT library/own?as=<profile id>` on the host that writes the
+  library: the owner's host behind a door, the box host on Windows. It keeps it as
+  `own-titles.json` in the profile's layer, under the profile the seat belongs to, dropping a row
+  with a bad id or title and a cover or platform it would not store; an answer that isn't a list,
+  lists more than 500 or repeats an id leaves the stored titles as they were. `?as=` and the door's answer to a device list those rows,
   marked `own`, with no launch: the box refuses to start one with the sentence a title gets that
   this desktop can't start.
 - **Not a host of its own to clients.** A seat host never advertises over mDNS, whatever
@@ -333,6 +350,93 @@ session by design, and display activation fails while its session is inactive.
   `punktfunk-tray.exe --steam "<their steam.exe>" <their arguments>`, which starts the copy for
   an account with `SeatSteam` and the box's Steam for any other. Their targets are kept in the
   Seats key's `SteamLinks` and put back when seats go off.
+
+## A profile's lock
+
+`profile-locks.json` sits beside the box's pairing store. The box's own host, the plain host or
+the door, is its one writer, `0600` on Linux and SYSTEM and Administrators on Windows; it is never
+in `profiles.json`. Its `profiles` map each profile id to `locked`, an optional `pin`
+(`iterations`, `salt`, `hash`: PBKDF2-HMAC-SHA256, 600,000 iterations, a 16-byte salt) and the
+`devices` list of a person's row's `devices.json`, where a device the operator added is `stay` and
+`added`. Removing a profile removes its entry; unlocking keeps the list and the PIN, and locking
+replaces the list with the devices the lock names. One desktop has one lock: the owner is the
+first profile whose `os_account` is `operator`, and any later one shares its desktop, has no
+entry and opens with the owner's lock, list and PIN. A take-turns profile keeps its own.
+
+- **The check.** A device opens a profile when the profile is unlocked, or its list admits the
+  device: `stay`, or present. A device the list holds a key for is asked for the key's proof or
+  the PIN. Any other device is refused, or asked for the PIN when the profile has one. Every host asks it after a connect resolves its profile and before the profile is
+  placed or played, the door and a seat host alike. A wake, the picker (`enumerate`), a
+  device's library read as a profile (`as=`, answered as an unknown id), the door's forwarding
+  of a device's own play, and a GameStream launch or resume (as the owner) ask it too.
+  A session, Punktfunk or GameStream, whose device stops being admitted ends within a second.
+  On a door a Moonlight device is paired with the owner's host: adding one to a list asks that
+  host's `GET /clients`.
+- **A file that doesn't read.** Every profile is refused to every device, every edit is refused,
+  and the host logs it. A missing file locks nothing.
+- **The PIN.** Only the box's own host checks it, sent as `ProfileUnlock` kind 1. A device waits
+  after wrong ones as after a wrong account password; 10 wrong for one profile within 15 minutes,
+  over all devices, close PIN entry for it until the oldest is 15 minutes old. A device's waits
+  live in memory; a profile's count is its `wrong_pins`, unix seconds, in the file, so a restart
+  clears none. A try counts there before its hash runs and is taken back when right. A right PIN
+  makes the device present, or `stay` when the message asks. Each try writes one line under
+  `punktfunk::audit`, never the PIN.
+- **The key.** A right PIN that brings a key to enrol, as a password does, stores it in the
+  device's entry's `keys`, under the profile id it was typed for; one the host can't verify with
+  is left out. Profiles that share a lock keep a key each, at most 8 an entry, and a profile's
+  removal drops its keys. An entry's `key` from before `keys` opens any profile of its lock until
+  a proof makes it that profile's. A device with a key is admitted only while present. Once it
+  left, `enumerate` says `pin_key` on a profile it holds a key for, and
+  `POST /profiles/{id}/unlock-challenge` answers `{challenge, profile}`: 32 bytes as 64 hex,
+  valid 120 seconds and once, the device's only live one for that id. The key signs
+  `"punktfunk-profile-unlock-v1"` ‖ challenge ‖ the profile id, zero bytes after it to 64 ‖ the
+  device fingerprint ‖ the fingerprint of the host the device dialled, 187 bytes, signed as the
+  seat form is, and verified with that profile's key alone;
+  `clients/shared/profile-unlock-vectors.json` holds both. A right proof makes the device
+  present. A failed one costs the device's limit alone and answers `close_lock_key_failed`, or
+  `close_lock_not_allowed` when the profile has no PIN. A device the console adds drops its keys
+  and stays until signed out; signing it out drops them too.
+- **A seat host** reads the box's file, read only, and never takes a PIN or a key proof. A Windows seat reads it
+  from `PUNKTFUNK_TRUST_DIR`. A Linux seat reads the [trust copy](#linux-seats), which holds its
+  profile's lock with no PIN; a locked profile's seat gets only the pairing records its lock
+  admits, as a person's row does, and the owner's row follows the owner's lock. A lock file
+  there that doesn't read gives an empty pairing list.
+- **The person.** A device a locked profile's list admits now, with nothing asked, is that
+  profile's person, unless the profile is the owner or on a person's own account. With
+  `?as=<id>` it may call `mgmt_routes::PERSON`: `PUT library/hidden/{id}`,
+  `PUT library/overrides/games/{id}`, `PUT library/overrides/sources/{source}`,
+  `PUT library/scanners/{id}`, and `PUT` and `DELETE session/settings`, which write that
+  profile's own layer alone. A hide or a game's entry it adds must name a title the profile's
+  library lists, and a source's entry a source with such a title; taking one away needs none. With
+  no `as` a device isn't let in. A device that isn't the person, an open profile, one that needs
+  its PIN and the owner's id answer 403 `profile_change_not_allowed`; an unknown id 404
+  `profile_unknown`. Art picks stay off: the host fetches a pick's URL itself. Asked on every
+  call. The box's own host decides, the door on a door: it passes the call to the owner's host,
+  which writes the library, carrying `X-Punktfunk-Person` beside `X-Punktfunk-Device`. That host
+  honours it only with its admin token, on these routes, for the profile `as` names and never
+  the owner, and needs no pairing record for the device. Any other seat host decides nothing.
+
+## Linux and Windows, side by side
+
+A row with one answer holds on both. Every other row is a difference the sections above state.
+
+| What a profile has | Linux | Windows |
+|---|---|---|
+| Its own layer: hidden titles, sources, game overrides, session settings | Yes | Yes |
+| Its lock, PIN and device key | The door checks | The box host checks |
+| A device as its person, on `mgmt_routes::PERSON` | The door decides, the owner's host writes | The box host decides and writes |
+| Its own titles, with a command and `prep` | On its seat host; the owner's host stores the list | On its seat host; the box host stores the list |
+| [The person's own session](#the-persons-own-session) | On a seat's own host, made or on their own account | None: a seat writes no token and takes no ticket |
+| Hooks on a made seat | The operator and the person | The operator |
+| Hooks on a person's own account | The person, in their session | Refused |
+| Plugins on a made seat | The seat account's own runner | None: an install answers 409 |
+| Plugins on a person's own account | Refused on every lane | None |
+| The box's titles on its seat | Steam and emulator titles it can start as its own user | Every title but those of one account's sources |
+| Emulators | Installed box-wide; config and saves are the account's | The box's copies; saves and firmware through the box host's `?profile=` |
+| A seat on an existing account | Yes, opened by its password or a device key | On Windows Server |
+
+Open on Windows: the person's own session, a seat's own plugin runner, and a plugin's page for a
+seat.
 
 ## Checking a seat can actually stream
 
@@ -427,9 +531,9 @@ the installed unit.
   `punktfunk-games`, so no secret relies on group read.
 - **The trust copy.** The seat reads `trust/<id>/`, not the box directory:
   `punktfunk1-paired.json`, `profiles.json`, `display-settings.json` (from the library copy,
-  the owner's), `seat-defaults.json` and `profiles/`, `root:<seat user>` `0640`. The daemon
-  recopies a file within 2 seconds of its change while the seat runs. The box's key never
-  crosses. A seat other than the owner's also finds the box's library there, its
+  the owner's), `seat-defaults.json` and `profiles/`, `root:<seat user>` `0640`, and the seat's
+  [profile locks](#a-profiles-lock) when the box has any. The daemon recopies a file within 2
+  seconds of its change while the seat runs. The box's key never crosses. A seat other than the owner's also finds the box's library there, its
   `PUNKTFUNK_LIBRARY_DIR`.
 - **The box's library.** The owner's host writes the library; its plugins scan the owner's home.
   From the owner's `~/.config/punktfunk` the daemon copies `library.json`, `library-hidden.json`,
@@ -564,6 +668,7 @@ seat (`game/holds/{token}/release`, below). A device's `game/end`, `GET display/
 `library/install/*` to the owner's host, whose plugins download into the shared game files, each
 as that device: the door's call carries `X-Punktfunk-Device`, which a seat host honours only with
 its admin token and only for a device paired there, and then answers on the device's grants. A
+[person's](#a-profiles-lock) calls go to the owner's host too, once the door found the person. A
 call starts a stopped seat and answers 503, except `host`, `status` and `diagnostics`, which
 wake nobody; a host that doesn't answer is 502, and so is every call while the seat supervisor
 doesn't answer. With no owner row the owner's calls answer 503, and so does a `host/settings`
@@ -580,11 +685,11 @@ that host answers, within two minutes, a supervisor that doesn't answer meanwhil
 any other door event a stopped owner's host misses.
 
 A seat's `game.*` goes to the same route with its `seat` kept: the owner's plugins hear it, and
-no host's hooks run on it. A seat host runs no plugins, so its `game.launching` carries a `hold`
-token, and the launch waits up to 130 seconds for `POST /game/holds/{token}/release`. The door
-sends it once the owner's host has run the plugins that hold the stage, whatever they answered,
-and at once when that host isn't running. An event a seat host lists with a `seat` already is
-one a host relayed there, and is never taken back.
+no host's hooks run on it. A seat's launch is held for the box's plugins, so its
+`game.launching` carries a `hold` token, and the launch waits up to 130 seconds for
+`POST /game/holds/{token}/release`. The door sends it once the owner's host has run the plugins
+that hold the stage, whatever they answered, and at once when that host isn't running. An event
+a seat host lists with a `seat` already is one a host relayed there, and is never taken back.
 
 The door's console also accepts a console handoff signed with the owner's host's token, the one
 the owner's own `ctl console-url` holds: the door keeps it in `owner-handoff-key` in its own
@@ -696,6 +801,57 @@ and it is a contract seat's host, not the owner's.
 - **What it does not take.** The owner's `host.env` and settings, the box's library as its own
   (it plays the box's, from its trust copy), the door, and the owner's user host. The trust copy
   is readable by the person alone.
+
+#### The person's own session
+
+A Linux seat's own host, made or on a person's own account, runs as the seat's account, so what
+it writes into its config folder only that account and root read. The console password never
+reaches this lane.
+
+- **The token.** At start the seat host writes 32 random bytes as hex to `person-token` in
+  `PUNKTFUNK_CONFIG_DIR`, mode `0600`, owned by its uid, in a folder it owns; it refuses a folder
+  that is a link, another uid's, or open to group or others, and the lane stays closed. No copy
+  list of the supervisor names the file. The owner's row, the door, a plain host and a Windows
+  seat write none and take no ticket.
+- **The ticket.** `punktfunk-host ctl console-url`, run as the person in the seat, signs
+  `<unix s>.<32 hex nonce>.<profile id>.<HMAC-SHA256 hex>` over
+  `pf-person-session:v1:<unix s>:<nonce>:<profile id>` with the token, and writes a page opening
+  `https://127.0.0.1:47992/_auth/person?ticket=<ticket>`.
+- **The session.** `POST /api/v1/auth/person/session` with `{"ticket"}`, from loopback, answers
+  `{token, expires_at, profile}`. The host takes a ticket at most 60 s from its stamp, once, for
+  its own profile; otherwise 401 `person_ticket_refused`, and 429 `person_ticket_wait` for a
+  refused one after ten refusals in a minute. A good ticket opens whatever was refused before
+  it. A session lasts 12 hours, 16 at most, and ends with the host or on
+  `DELETE` with its token as the bearer. A call with an expired one answers 401
+  `person_session_ended`.
+- **On the seat host.** `Authorization: Bearer <session>`, from loopback, reaches every route
+  scoped `profile-data` or `profile-exec` and `GET host` and `GET status`; anything else is 403.
+  An `as` naming another profile is 403. `GET auth/person/profile` answers the session's own
+  profile from the seat's trust copy, `{id, display_name, accent?, has_avatar}`, and
+  `GET auth/person/profile/avatar` its picture; any other lane gets 404.
+- **On the box.** The console sends `X-Punktfunk-Person-Session` and `X-Punktfunk-Person-Profile`
+  with no bearer, and `?as=` naming that profile, to the door from loopback. The door asks the
+  profile's seat host `POST /api/v1/auth/person/verify` `{"token"}` with its admin token, and
+  takes the call only when the answer names that profile; any other call answers 401
+  `person_session_ended`. Refusals are not counted, so no other local caller can close a
+  profile to its own person. It reaches
+  `mgmt_routes::PERSON` and the reads `GET library`, `library/page`, `library/art/{id}/{kind}`,
+  `library/scanners`, `library/overrides` and `session/settings`, never for the owner.
+  `library/overrides` carries the box's shared sets as `box_sets`, which the person reads and
+  points at but never changes. The
+  owner's host takes the door's word with `X-Punktfunk-Person` and its admin token, as for a
+  device's person.
+- **What only it writes, on a person's own account.** `PUT hooks` and the custom-entry writes.
+  The host marks each with `person: true`, and runs only hooks and lists only own titles so
+  marked: a file planted without the mark runs nothing. A `prep` step runs only when an own
+  title the person wrote names it. Any other lane is refused, with `hooks_own_account_person` or
+  `library_own_account_person`, reads no hooks there, and reads a marked title as 404.
+- **Their emulators.** The person adopts a copy of their own (`POST emulators/{id}/adopt`) and
+  prepares their emulators (`POST emulators/{id}/prepare`, without a `firmware_dir`); every
+  other lane gets `emulators_own_account`. An install, a removal, content and the save exchange
+  stay refused for the person too, with `emulators_own_account_yet`. Hermir's adoption list is
+  in the account's own data folder, where no other lane writes. Plugins, the store and the
+  runner stay refused on every lane; the person decides only folder grants (above).
 
 #### Who opens a person's seat
 

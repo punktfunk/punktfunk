@@ -428,8 +428,9 @@ fn not_on_this_plane() -> Response {
     )
 }
 
-/// Who may end which launched game. The operator and the plugin runner reach every
-/// launch; a paired device reaches only its own, and nothing once its access expired.
+/// Who may end which launched game. The operator, the plugin runner and a person on their own
+/// seat host reach every launch; a paired device reaches only its own, and nothing once its
+/// access expired.
 pub(crate) struct GameEnder {
     /// `None` = every device's launches.
     owner: Option<String>,
@@ -440,7 +441,8 @@ pub(crate) struct GameEnder {
 impl GameEnder {
     pub(crate) fn of(st: &MgmtState, lane: AuthLane, fp: Option<&str>) -> Self {
         match lane {
-            AuthLane::Admin | AuthLane::Plugin => Self {
+            // A person ends what plays on their own seat host.
+            AuthLane::Admin | AuthLane::Plugin | AuthLane::Person => Self {
                 owner: None,
                 refused: false,
             },
@@ -455,7 +457,7 @@ impl GameEnder {
                     refused: !live,
                 }
             }
-            AuthLane::Public => Self {
+            AuthLane::PersonVouched | AuthLane::Public => Self {
                 owner: None,
                 refused: true,
             },
@@ -662,7 +664,8 @@ pub(crate) async fn get_session_settings(
 ///
 /// Persisted clamped. Takes effect on the next decision, including a session
 /// already streaming — policy is read at session end, not start. With `as`, the settings of
-/// that profile's own seat; a profile on the host's own desktop has none of its own.
+/// that profile's own seat; a profile on the host's own desktop has none of its own. A paired
+/// device that is that locked profile's person may set them too.
 #[utoipa::path(
     put,
     path = "/session/settings",
@@ -675,7 +678,7 @@ pub(crate) async fn get_session_settings(
         (status = BAD_REQUEST, description = "Malformed settings body", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the session settings", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = FORBIDDEN, description = "`as` on a lane other than the operator's", body = ApiError),
+        (status = FORBIDDEN, description = "`as` on a plugin's lane, or a device that isn't the person of the profile `as` names", body = ApiError),
         (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
         (status = CONFLICT, description = "A seat's own host, or `as` names a profile that plays on the host's own desktop", body = ApiError),
     )
@@ -728,7 +731,8 @@ pub(crate) async fn set_session_settings(
 ///
 /// Its seat plays with the box's Seat defaults again; the answer is what `GET` with the same
 /// `as` answers, `configured: false`. Dropping settings a profile never had is the same answer.
-/// `as` is required: the host's own settings are changed with `PUT`, never dropped.
+/// `as` is required: the host's own settings are changed with `PUT`, never dropped. A paired
+/// device that is that locked profile's person may drop them too.
 #[utoipa::path(
     delete,
     path = "/session/settings",
@@ -739,7 +743,7 @@ pub(crate) async fn set_session_settings(
         (status = OK, description = "Dropped; the profile's state", body = SessionSettingsState),
         (status = BAD_REQUEST, description = "No `as`, or `as` names the owner", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = FORBIDDEN, description = "`as` on a lane other than the operator's", body = ApiError),
+        (status = FORBIDDEN, description = "`as` on a plugin's lane, or a device that isn't the person of the profile `as` names", body = ApiError),
         (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
         (status = CONFLICT, description = "A seat's own host, or `as` names a profile that plays on the host's own desktop", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't remove the settings file", body = ApiError),

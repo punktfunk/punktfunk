@@ -14,12 +14,15 @@ import {
 	sendWebResponse,
 	setResponseStatus,
 } from "h3";
+import { personPluginPage, personUiCredential } from "../../util/personPlugins";
 import { pluginPage } from "../../util/pluginPage";
 import { callPlugin, injectThemeReceiver } from "../../util/pluginProxy";
 
 export default defineEventHandler(async (event) => {
 	const { pathname, search } = getRequestURL(event);
-	const page = pluginPage(pathname);
+	// A person's page dials their seat host's plugin with the credential their session reads.
+	const person = pluginPage(pathname) ? null : personPluginPage(pathname);
+	const page = pluginPage(pathname) ?? person;
 	if (!page) {
 		setResponseStatus(event, 401);
 		return { error: "unauthorized" };
@@ -39,12 +42,12 @@ export default defineEventHandler(async (event) => {
 		? ((await readRawBody(event, false)) as Uint8Array | undefined)
 		: undefined;
 
-	let resp = await callPlugin(id, `${rest}${search}`, {
-		method,
-		headers,
-		body,
-		redirect: "manual",
-	});
+	let resp = await callPlugin(
+		id,
+		`${rest}${search}`,
+		{ method, headers, body, redirect: "manual" },
+		person ? (o) => personUiCredential(person.session, id, o) : undefined,
+	);
 	if (!resp) {
 		setResponseStatus(event, 502);
 		return { error: `plugin "${id}" is not running` };

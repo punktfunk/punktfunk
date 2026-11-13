@@ -213,6 +213,7 @@ fn publish_own_titles(seat: &pf_seats::Seat, profile: &str) {
         content_type: Some("application/json".into()),
         body,
         device: None,
+        person: None,
         stream: false,
         start: false,
     };
@@ -277,6 +278,7 @@ fn hand_on(seat: &pf_seats::Seat, ev: &HostEvent) {
         content_type: None,
         body: Vec::new(),
         device: None,
+        person: None,
         stream: false,
         start: false,
     };
@@ -324,6 +326,7 @@ fn post_relay(owner: &pf_seats::Seat, ev: &HostEvent, timeout: Duration) -> bool
         content_type: Some("application/json".into()),
         body,
         device: None,
+        person: None,
         stream: false,
         start: false,
     };

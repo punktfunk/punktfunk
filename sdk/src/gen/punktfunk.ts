@@ -21,6 +21,16 @@ export type TokenRequest = { readonly "device_key": string, readonly "nonce": st
 export const TokenRequest = Schema.StructWithRest(Schema.Struct({ "device_key": Schema.String.annotate({ "description": "Base64 SPKI of the device's P-256 public key — the same bytes it paired with, whose\nSHA-256 the host stored." }), "nonce": Schema.String.annotate({ "description": "The nonce from `challenge`." }), "signature": Schema.String.annotate({ "description": "Base64 ECDSA-P256-SHA256 signature, ASN.1 DER, over the same message the control stream\nuses: context, the host's identity fingerprint, then the nonce." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`POST /auth/device/token` — what a paired browser presents.", "identifier": "TokenRequest" })
 export type TokenGrant = { readonly "expires_at": number, readonly "fingerprint": string, readonly "token": string } & { readonly [x: string]: Schema.Json }
 export const TokenGrant = Schema.StructWithRest(Schema.Struct({ "expires_at": Schema.Number.annotate({ "description": "Unix seconds.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "fingerprint": Schema.String.annotate({ "description": "The device's own fingerprint, so a client can show which identity it is using." }), "token": Schema.String.annotate({ "description": "Present as `Authorization: Bearer <token>`." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "TokenGrant" })
+export type PersonProfile = { readonly "accent"?: string | null, readonly "display_name": string, readonly "has_avatar": boolean, readonly "id": string } & { readonly [x: string]: Schema.Json }
+export const PersonProfile = Schema.StructWithRest(Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB`." })), "display_name": Schema.String, "has_avatar": Schema.Boolean.annotate({ "description": "It has a picture, at `GET /auth/person/profile/avatar`." }), "id": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A person's own profile, as their pages show it.", "identifier": "PersonProfile" })
+export type PersonTicket = { readonly "ticket": string } & { readonly [x: string]: Schema.Json }
+export const PersonTicket = Schema.StructWithRest(Schema.Struct({ "ticket": Schema.String.annotate({ "description": "`<unix seconds>.<nonce>.<profile id>.<HMAC-SHA256>`, as the page's `ticket` carries it." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "The ticket `ctl console-url` wrote into the page it opened.", "identifier": "PersonTicket" })
+export type PersonGrant = { readonly "expires_at": number, readonly "profile": string, readonly "token": string } & { readonly [x: string]: Schema.Json }
+export const PersonGrant = Schema.StructWithRest(Schema.Struct({ "expires_at": Schema.Number.annotate({ "description": "Unix seconds; it ends sooner when this host stops or the session is closed.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "profile": Schema.String.annotate({ "description": "The profile it is for: this seat host's own." }), "token": Schema.String.annotate({ "description": "Present as `Authorization: Bearer <token>` to this seat host, or as\n`X-Punktfunk-Person-Session` to the box. 64 lowercase hex." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A session a ticket opened.", "identifier": "PersonGrant" })
+export type PersonSessionToken = { readonly "token": string } & { readonly [x: string]: Schema.Json }
+export const PersonSessionToken = Schema.StructWithRest(Schema.Struct({ "token": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A session token the box asks about.", "identifier": "PersonSessionToken" })
+export type PersonOf = { readonly "profile": string } & { readonly [x: string]: Schema.Json }
+export const PersonOf = Schema.StructWithRest(Schema.Struct({ "profile": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "Whose a live session is. The person lane stamps it on each of its calls.", "identifier": "PersonOf" })
 export type ClientLogMeta = { readonly "device_name": string, readonly "fingerprint_prefix": string, readonly "id": string, readonly "received_ms": number, readonly "size_bytes": number } & { readonly [x: string]: Schema.Json }
 export const ClientLogMeta = Schema.StructWithRest(Schema.Struct({ "device_name": Schema.String.annotate({ "description": "Paired device name at upload, filesystem-sanitized." }), "fingerprint_prefix": Schema.String.annotate({ "description": "First 16 hex chars of the pairing fingerprint — enough to match the roster\nwithout repeating the full identity in every filename." }), "id": Schema.String.annotate({ "description": "Filename stem; pass to fetch/delete." }), "received_ms": Schema.Number.annotate({ "description": "Upload time (unix ms from the file mtime, not the stem timestamp).", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "size_bytes": Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "ClientLogMeta" })
 export type ClientLogUploaded = { readonly "id": string } & { readonly [x: string]: Schema.Json }
@@ -265,8 +275,10 @@ export type SeatKind = "shared" | "desktop"
 export const SeatKind = Schema.Literals(["shared", "desktop"]).annotate({ "description": "What a profile's seat is. A door places every profile on a seat, so a profile on the box's own\nsession has one too: the owner's.", "identifier": "SeatKind" })
 export type SeatState = "ready" | "starting" | "stopped" | "occupied" | "unavailable"
 export const SeatState = Schema.Literals(["ready", "starting", "stopped", "occupied", "unavailable"]).annotate({ "identifier": "SeatState" })
-export type UnlockNeed = "none" | "password" | "key"
-export const UnlockNeed = Schema.Literals(["none", "password", "key"]).annotate({ "description": "What a device sends with its connect to open a profile on a person's own Linux account.", "identifier": "UnlockNeed" })
+export type UnlockNeed = "none" | "password" | "key" | "pin" | "pin_key"
+export const UnlockNeed = Schema.Literals(["none", "password", "key", "pin", "pin_key"]).annotate({ "description": "What a device sends with its connect to open a profile: a profile on a person's own Linux\naccount, or a locked one. A client that doesn't know a word reads it as `password`.", "identifier": "UnlockNeed" })
+export type LockSummary = { readonly "failed_pins": number, readonly "locked": boolean, readonly "pin": boolean, readonly "shared_with"?: string | null } & { readonly [x: string]: Schema.Json }
+export const LockSummary = Schema.StructWithRest(Schema.Struct({ "failed_pins": Schema.Number.annotate({ "description": "Wrong PINs in the last 15 minutes over all devices. At 10, PIN entry waits.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "locked": Schema.Boolean.annotate({ "description": "Only the devices on its list, and a device that brings its PIN, open it. Also `true` for\nevery profile while the lock file doesn't read." }), "pin": Schema.Boolean.annotate({ "description": "It has a PIN." }), "shared_with": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The owner profile whose lock opens it, for a profile that shares the owner's desktop:\nthe other fields are that lock's." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A profile's lock, as the profile list shows it.", "identifier": "LockSummary" })
 export type DefaultProfile = { readonly "id"?: string | null } & { readonly [x: string]: Schema.Json }
 export const DefaultProfile = Schema.StructWithRest(Schema.Struct({ "id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`null` is the owner." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`PUT /profiles/default`.", "identifier": "DefaultProfile" })
 export type CheckLevel = "info" | "warning" | "error"
@@ -277,10 +289,18 @@ export type SeatingPlatform = "windows" | "linux" | "other"
 export const SeatingPlatform = Schema.Literals(["windows", "linux", "other"]).annotate({ "identifier": "SeatingPlatform" })
 export type SeatingChange = { readonly "allow_rdp_from_network"?: boolean, readonly "enabled": boolean, readonly "prepare"?: boolean } & { readonly [x: string]: Schema.Json }
 export const SeatingChange = Schema.StructWithRest(Schema.Struct({ "allow_rdp_from_network": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Leave Remote Desktop reachable from the network. Off keeps it on this machine." })), "enabled": Schema.Boolean, "prepare": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Windows Server: first install the Remote Desktop Session Host role and set licensing to\nPer User where they are missing. Installing the role can take minutes and asks for a\nrestart." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`PUT /profiles/seating`.", "identifier": "SeatingChange" })
-export type SignedInKind = "for_now" | "stay" | "key"
-export const SignedInKind = Schema.Literals(["for_now", "stay", "key"]).annotate({ "description": "How a signed-in device gets back on.", "identifier": "SignedInKind" })
-export type UnlockChallenge = { readonly "challenge": string, readonly "seat": string } & { readonly [x: string]: Schema.Json }
-export const UnlockChallenge = Schema.StructWithRest(Schema.Struct({ "challenge": Schema.String.annotate({ "description": "32 random bytes, lowercase hex: good for one proof within two minutes.", "examples": ["9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"] }), "seat": Schema.String.annotate({ "description": "The seat's id, 32 lowercase hex characters, as the signed message names it.", "examples": ["0123456789abcdef0123456789abcdef"] }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`POST /profiles/{id}/unlock-challenge`.", "identifier": "UnlockChallenge" })
+export type SignedInKind = "for_now" | "stay" | "added" | "key"
+export const SignedInKind = Schema.Literals(["for_now", "stay", "added", "key"]).annotate({ "description": "How a signed-in device gets back on.", "identifier": "SignedInKind" })
+export type ProfileDeviceAdd = { readonly "fingerprint": string } & { readonly [x: string]: Schema.Json }
+export const ProfileDeviceAdd = Schema.StructWithRest(Schema.Struct({ "fingerprint": Schema.String.annotate({ "description": "SHA-256 of a paired device's certificate, hex: a Punktfunk device or a Moonlight one." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`POST /profiles/{id}/devices`.", "identifier": "ProfileDeviceAdd" })
+export type PlayingDevice = { readonly "fingerprint"?: string | null, readonly "name": string } & { readonly [x: string]: Schema.Json }
+export const PlayingDevice = Schema.StructWithRest(Schema.Struct({ "fingerprint": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "SHA-256 of the device's certificate, lowercase hex. Absent when its session matches no\nsingle paired device: it can't be kept, only warned about." })), "name": Schema.String.annotate({ "description": "The name it paired with, else the name its session gave." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A device playing as a profile now.", "identifier": "PlayingDevice" })
+export type LockProfile = { readonly "devices"?: ReadonlyArray<string>, readonly "pin"?: string | null } & { readonly [x: string]: Schema.Json }
+export const LockProfile = Schema.StructWithRest(Schema.Struct({ "devices": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "description": "Paired devices, by certificate SHA-256 hex: the list it locks with, in place of any an\nearlier lock left. A profile already locked takes only devices it lets in." })), "pin": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "4 to 8 digits: its PIN from now. Absent keeps the PIN it has. A profile already locked\ntakes none.", "examples": ["2468"] })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`POST /profiles/{id}/lock`, optional.", "identifier": "LockProfile" })
+export type ProfilePin = { readonly "pin": string } & { readonly [x: string]: Schema.Json }
+export const ProfilePin = Schema.StructWithRest(Schema.Struct({ "pin": Schema.String.annotate({ "description": "4 to 8 digits.", "examples": ["2468"] }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`PUT /profiles/{id}/lock/pin`.", "identifier": "ProfilePin" })
+export type UnlockChallenge = { readonly "challenge": string, readonly "profile"?: string, readonly "seat"?: string } & { readonly [x: string]: Schema.Json }
+export const UnlockChallenge = Schema.StructWithRest(Schema.Struct({ "challenge": Schema.String.annotate({ "description": "32 random bytes, lowercase hex: good for one proof within two minutes.", "examples": ["9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"] }), "profile": Schema.optionalKey(Schema.String.annotate({ "description": "The locked profile's id, as its signed message names it.", "examples": ["9a3f1c2b7e40"] })), "seat": Schema.optionalKey(Schema.String.annotate({ "description": "The seat's id, 32 lowercase hex characters, as the signed message names it.", "examples": ["0123456789abcdef0123456789abcdef"] })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`POST /profiles/{id}/unlock-challenge`: `seat` for a profile on a person's own Linux account,\n`profile` for a locked one, never both.", "identifier": "UnlockChallenge" })
 export type GameOnNewLaunch = "keep" | "end"
 export const GameOnNewLaunch = Schema.Literals(["keep", "end"]).annotate({ "description": "What to do with a title this client already has running when it launches a\n**different** one.\n\nA third axis, not a fourth [`GameOnSessionEnd`] value: that one is \"this\nsession is over\"; this one is \"the player asked for something else\". An\noperator who wants a game to survive a disconnect can still want it closed\nwhen they pick another title.\n\nScoped to this client's own launches, and only launches this host performed\n([`crate::launchreg`]). A game the player started at the machine was never\nrecorded, so this cannot close it.", "identifier": "GameOnNewLaunch" })
 export type GameOnSessionEnd = "keep" | "on_quit" | "always"
@@ -417,8 +437,8 @@ export type MetadataSourceInfo = { readonly "enabled": boolean, readonly "entrie
 export const MetadataSourceInfo = Schema.StructWithRest(Schema.Struct({ "enabled": Schema.Boolean, "entries": Schema.Number.annotate({ "description": "Entries the source has something for." }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "id": Schema.String.annotate({ "description": "The source's plugin id.", "examples": ["steamgriddb"] }), "matching": Matching, "replace": Schema.Boolean.annotate({ "description": "\"Use for every game\": this source's art beats the entry's own. Art only." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One Art & Metadata source as the console lists it, in the operator's order.", "identifier": "MetadataSourceInfo" })
 export type MetadataEntryInput = { readonly "art"?: Artwork, readonly "id": string, readonly "meta"?: GameMeta } & { readonly [x: string]: Schema.Json }
 export const MetadataEntryInput = Schema.StructWithRest(Schema.Struct({ "art": Schema.optionalKey(Schema.suspend((): Schema.Codec<Artwork> => Artwork).annotate({ "description": "`http(s)` URLs only; the host fetches and keeps them like a provider's CDN art." })), "id": Schema.String.annotate({ "description": "Library id, as `GET /library` lists it (`steam:570`, `custom:3f9a0c1b2d4e`)." }), "meta": Schema.optionalKey(GameMeta) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One entry in a source's push.", "identifier": "MetadataEntryInput" })
-export type OverridesDoc = { readonly "games"?: { readonly [x: string]: OverrideEntry }, readonly "sets"?: { readonly [x: string]: GameOverrides }, readonly "sources"?: { readonly [x: string]: OverrideEntry }, readonly "version"?: number } & { readonly [x: string]: Schema.Json }
-export const OverridesDoc = Schema.StructWithRest(Schema.Struct({ "games": Schema.optionalKey(Schema.Record(Schema.String, OverrideEntry).annotate({ "description": "Library id (`steam:570`) → its entry." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "sets": Schema.optionalKey(Schema.Record(Schema.String, GameOverrides).annotate({ "description": "Shared overrides by id, 12 lowercase hex." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "sources": Schema.optionalKey(Schema.Record(Schema.String, OverrideEntry).annotate({ "description": "Source (`lutris`) → the entry each of its titles takes when it has none of its own." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "version": Schema.optionalKey(Schema.Number.annotate({ "examples": [1], "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`library-overrides.json`, and the body of `GET /library/overrides`.", "identifier": "OverridesDoc" })
+export type OverridesAnswer = { readonly "games"?: { readonly [x: string]: OverrideEntry }, readonly "sets"?: { readonly [x: string]: GameOverrides }, readonly "sources"?: { readonly [x: string]: OverrideEntry }, readonly "version"?: number, readonly "box_sets"?: { readonly [x: string]: GameOverrides } | null } & { readonly [x: string]: Schema.Json }
+export const OverridesAnswer = Schema.StructWithRest(Schema.Struct({ "games": Schema.optionalKey(Schema.Record(Schema.String, OverrideEntry).annotate({ "description": "Library id (`steam:570`) → its entry." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "sets": Schema.optionalKey(Schema.Record(Schema.String, GameOverrides).annotate({ "description": "Shared overrides by id, 12 lowercase hex." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "sources": Schema.optionalKey(Schema.Record(Schema.String, OverrideEntry).annotate({ "description": "Source (`lutris`) → the entry each of its titles takes when it has none of its own." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "version": Schema.optionalKey(Schema.Number.annotate({ "examples": [1], "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))), "box_sets": Schema.optionalKey(Schema.Union([Schema.Record(Schema.String, GameOverrides).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" })), Schema.Null]).annotate({ "description": "With `as` naming a profile with a layer of its own: the box's shared overrides by id,\nwhich that profile's entries may name with `set`. Read only here." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "The body of `GET /library/overrides`.", "identifier": "OverridesAnswer" })
 export type ProviderRunningInput = { readonly "running"?: ReadonlyArray<RunningTitle> } & { readonly [x: string]: Schema.Json }
 export const ProviderRunningInput = Schema.StructWithRest(Schema.Struct({ "running": Schema.optionalKey(Schema.Array(RunningTitle).annotate({ "description": "Complete running set, not a delta: anything absent is reported as stopped." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "ProviderRunningInput" })
 export type ScannerInfo = { readonly "enabled": boolean, readonly "entries"?: number | null, readonly "id": string, readonly "label": string, readonly "off_by"?: null | Layer, readonly "origin": SourceOrigin, readonly "provider"?: string | null } & { readonly [x: string]: Schema.Json }
@@ -445,12 +465,14 @@ export type ProfileCreate = { readonly "accent"?: string | null, readonly "displ
 export const ProfileCreate = Schema.StructWithRest(Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB`." })), "display_name": Schema.String, "home": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<Home> => Home).annotate({ "description": "Defaults to `desktop`." })], { mode: "oneOf" })), "seat": Schema.optionalKey(Schema.Boolean.annotate({ "description": "A desktop of its own (the default), or the box's own session under another name. A\ndesktop of its own needs seats on Windows and the door on Linux. Ignored when\n[`windows_account`](Self::windows_account) is set." })), "seat_account": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "With `seat`, an account that already exists, which the seat runs on instead of one\npunktfunk makes: a local Windows standard account on Windows Server, a person's own login\non a Linux door." })), "seat_password": Schema.optionalKey(Schema.String.annotate({ "description": "That account's password, entered once. Windows seals it; Linux checks it and keeps\nnothing." })), "windows_account": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Bind this profile to a local Windows account that takes the console in turn\n(`design/windows-take-turns.md`). When set, the profile is a take-turns profile and\n`seat` does not apply." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "What a new profile starts as.", "identifier": "ProfileCreate" })
 export type ProfileUpdate = { readonly "accent"?: string | null, readonly "display_name"?: string | null, readonly "home"?: null | Home, readonly "seat_password"?: string } & { readonly [x: string]: Schema.Json }
 export const ProfileUpdate = Schema.StructWithRest(Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB`." })), "display_name": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "home": Schema.optionalKey(Schema.Union([Schema.Null, Home], { mode: "oneOf" })), "seat_password": Schema.optionalKey(Schema.String.annotate({ "description": "The new password of an adopted account, after it changed in Windows." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A change to a profile; absent fields stay.", "identifier": "ProfileUpdate" })
-export type SeatPublic = { readonly "account"?: string | null, readonly "detail"?: string | null, readonly "detail_id"?: string | null, readonly "detail_params"?: { readonly [x: string]: string }, readonly "kind": SeatKind, readonly "occupant"?: string | null, readonly "pin"?: string | null, readonly "port": number, readonly "state": SeatState, readonly "take_turns"?: boolean } & { readonly [x: string]: Schema.Json }
-export const SeatPublic = Schema.StructWithRest(Schema.Struct({ "account": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The account of a seat on an existing one, for the console's card and its Remove\nsentence. Absent for an account punktfunk made, and to a paired device." })), "detail": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The progress line while `starting`, or why while `unavailable`." })), "detail_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The host message `detail` is the English of, worded with `detail_params`." })), "detail_params": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "The values of that message's placeholders, by name." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "kind": Schema.suspend((): Schema.Codec<SeatKind> => SeatKind).annotate({ "description": "Which kind of seat it is." }), "occupant": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The device playing on it while `occupied`." })), "pin": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The certificate fingerprint of the host at `port`, hex, when it is a seat's own: a\nclient dialing `port` directly pins it. Absent: the pin of this host." })), "port": Schema.Number.annotate({ "description": "The port to dial for this profile.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "state": SeatState, "take_turns": Schema.optionalKey(Schema.Boolean.annotate({ "description": "A take-turns profile: its own Windows account on the one console, not a host of its own.\nIt dials this host like the owner does, so it has no per-seat library of its own and\nremoving it leaves the Windows account alone." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A profile's seat right now.", "identifier": "SeatPublic" })
+export type SeatPublic = { readonly "account"?: string | null, readonly "detail"?: string | null, readonly "detail_id"?: string | null, readonly "detail_params"?: { readonly [x: string]: string }, readonly "kind": SeatKind, readonly "mgmt_port"?: number | null, readonly "occupant"?: string | null, readonly "pin"?: string | null, readonly "port": number, readonly "state": SeatState, readonly "take_turns"?: boolean } & { readonly [x: string]: Schema.Json }
+export const SeatPublic = Schema.StructWithRest(Schema.Struct({ "account": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The account of a seat on an existing one, for the console's card and its Remove\nsentence. Absent for an account punktfunk made, and to a paired device." })), "detail": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The progress line while `starting`, or why while `unavailable`." })), "detail_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The host message `detail` is the English of, worded with `detail_params`." })), "detail_params": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "The values of that message's placeholders, by name." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "kind": Schema.suspend((): Schema.Codec<SeatKind> => SeatKind).annotate({ "description": "Which kind of seat it is." }), "mgmt_port": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "The management port of the host on its ledger row, for the console. Absent to a paired\ndevice, and for a profile with no row." })), "occupant": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The device playing on it while `occupied`." })), "pin": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The certificate fingerprint of the host at `port`, hex, when it is a seat's own: a\nclient dialing `port` directly pins it. Absent: the pin of this host." })), "port": Schema.Number.annotate({ "description": "The port to dial for this profile.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "state": SeatState, "take_turns": Schema.optionalKey(Schema.Boolean.annotate({ "description": "A take-turns profile: its own Windows account on the one console, not a host of its own.\nIt dials this host like the owner does, so it has no per-seat library of its own and\nremoving it leaves the Windows account alone." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A profile's seat right now.", "identifier": "SeatPublic" })
 export type SeatCheck = { readonly "code": string, readonly "id"?: string | null, readonly "level": CheckLevel, readonly "message": string, readonly "params"?: { readonly [x: string]: string }, readonly "seat_id"?: string | null, readonly "seat_name"?: string | null } & { readonly [x: string]: Schema.Json }
 export const SeatCheck = Schema.StructWithRest(Schema.Struct({ "code": Schema.String.annotate({ "description": "A stable id such as `rds_role`.", "examples": ["rds_role"] }), "id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The host message `message` is the English of, worded with `params`." })), "level": CheckLevel, "message": Schema.String.annotate({ "description": "One plain sentence for the operator." }), "params": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "The values of that message's placeholders, by name." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "seat_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The seat it is about; absent when it is about the box." })), "seat_name": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The name of the profile that plays on that seat, when one does." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One thing the seat checks found.", "identifier": "SeatCheck" })
-export type SignedInDevice = { readonly "added_unix": number, readonly "fingerprint": string, readonly "kind": SignedInKind, readonly "last_unix": number, readonly "name": string } & { readonly [x: string]: Schema.Json }
-export const SignedInDevice = Schema.StructWithRest(Schema.Struct({ "added_unix": Schema.Number.annotate({ "description": "When it first signed in, unix seconds.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "fingerprint": Schema.String.annotate({ "description": "SHA-256 of the device's certificate, lowercase hex." }), "kind": SignedInKind, "last_unix": Schema.Number.annotate({ "description": "When it last unlocked or rejoined, unix seconds.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "name": Schema.String.annotate({ "description": "The name it paired with." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A device signed in to a profile on a person's own Linux account.", "identifier": "SignedInDevice" })
+export type SignedInDevice = { readonly "added_unix": number, readonly "fingerprint": string, readonly "kind": SignedInKind, readonly "last_unix": number, readonly "moonlight": boolean, readonly "name": string } & { readonly [x: string]: Schema.Json }
+export const SignedInDevice = Schema.StructWithRest(Schema.Struct({ "added_unix": Schema.Number.annotate({ "description": "When it first signed in, unix seconds.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "fingerprint": Schema.String.annotate({ "description": "SHA-256 of the device's certificate, lowercase hex." }), "kind": SignedInKind, "last_unix": Schema.Number.annotate({ "description": "When it last unlocked or rejoined, unix seconds.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "moonlight": Schema.Boolean.annotate({ "description": "A Moonlight pairing rather than a Punktfunk one. Never on a person's own account." }), "name": Schema.String.annotate({ "description": "The name it paired with." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A device signed in to a profile on a person's own Linux account, or on a locked profile's\nlist.", "identifier": "SignedInDevice" })
+export type ProfileLock = { readonly "failed_pins": number, readonly "locked": boolean, readonly "pin": boolean, readonly "shared_with"?: string | null, readonly "playing": ReadonlyArray<PlayingDevice> } & { readonly [x: string]: Schema.Json }
+export const ProfileLock = Schema.StructWithRest(Schema.Struct({ "failed_pins": Schema.Number.annotate({ "description": "Wrong PINs in the last 15 minutes over all devices. At 10, PIN entry waits.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "locked": Schema.Boolean.annotate({ "description": "Only the devices on its list, and a device that brings its PIN, open it. Also `true` for\nevery profile while the lock file doesn't read." }), "pin": Schema.Boolean.annotate({ "description": "It has a PIN." }), "shared_with": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The owner profile whose lock opens it, for a profile that shares the owner's desktop:\nthe other fields are that lock's." })), "playing": Schema.Array(PlayingDevice).annotate({ "description": "The devices playing as it now, on its desktop's other profiles too: the ones a lock would\ncut off unless they are kept." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A profile's lock, as the console shows it.", "identifier": "ProfileLock" })
 export type SessionSettings = { readonly "disconnect_grace_seconds"?: number, readonly "game_on_new_launch"?: GameOnNewLaunch, readonly "game_on_session_end"?: GameOnSessionEnd, readonly "session_on_game_exit"?: boolean, readonly "version"?: number } & { readonly [x: string]: Schema.Json }
 export const SessionSettings = Schema.StructWithRest(Schema.Struct({ "disconnect_grace_seconds": Schema.optionalKey(Schema.Number.annotate({ "description": "Ignored unless `game_on_session_end` is `Always`.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))), "game_on_new_launch": Schema.optionalKey(GameOnNewLaunch), "game_on_session_end": Schema.optionalKey(GameOnSessionEnd), "session_on_game_exit": Schema.optionalKey(Schema.Boolean), "version": Schema.optionalKey(Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "SessionSettings" })
 export type LinkMinute = { readonly "abr_backoffs": number, readonly "abr_max_kbps": number, readonly "abr_min_kbps": number, readonly "acked_p": number, readonly "anchor_p": number, readonly "egress_kbps": number, readonly "fec_max_pct": number, readonly "fec_min_pct": number, readonly "gaps": number, readonly "idr": number, readonly "intra_refresh": number, readonly "keyframe_req": number, readonly "link_kbps": number, readonly "loss_head": number, readonly "loss_max_ppm": number, readonly "loss_mean_ppm": number, readonly "loss_mid": number, readonly "loss_tail": number, readonly "loss_windows": number, readonly "resend_pkts": number, readonly "retargets": number, readonly "rfi": number, readonly "rfi_declined": number, readonly "secs": number, readonly "session_id": number, readonly "shape": LinkShape, readonly "sock_drops": number, readonly "unrecovered": number, readonly "windows": number } & { readonly [x: string]: Schema.Json }
@@ -487,18 +509,18 @@ export type OperatorGameEntry = { readonly "description"?: string | null, readon
 export const OperatorGameEntry = Schema.StructWithRest(Schema.Struct({ "description": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "developer": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "genres": Schema.optionalKey(Schema.Array(Schema.String)), "platform": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`\"PS2\"`, `\"Xbox 360\"`, `\"SNES\"`, … Installed-store scanners stamp `\"PC\"`;\n`GET /library?platform=` filters on it (case-insensitive).", "examples": ["PS2"] })), "players": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null])), "publisher": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "region": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "release_year": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Year of first release — the granularity metadata sources agree on.", "examples": [2001] })), "tags": Schema.optionalKey(Schema.Array(Schema.String)), "art": Artwork, "filled": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "Where each borrowed value came from: art slot or meta field → source id, or `pick`\n([`PICK`]). Values the entry carried itself are absent. Not sent to paired clients." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "icon": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Brand-mark token (`steam`, `heroic`) — never bytes or a URL. See [`is_icon_token`].\n\nThe art proxy serves raster only ([`art::local_art_bytes`] refuses SVG as\nscript-capable XML), so the mark stays a name the client already ships.", "examples": ["steam"] })), "id": Schema.String.annotate({ "description": "Stable, store-qualified id: `steam:<appid>` or `custom:<id>`.", "examples": ["steam:570"] }), "ids": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "Catalog ids a metadata source matches on (`steam`, `gog`, `libretro`, `sgdb` → value),\nset by the plugin that lists the entry. Not sent to paired clients." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "install": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<Install> => Install).annotate({ "description": "Whether the title's files are on this host. Absent means they are." })], { mode: "oneOf" })), "launch": Schema.optionalKey(Schema.Union([Schema.Null, LaunchSpec], { mode: "oneOf" })), "on_window": Schema.optionalKey(Schema.suspend((): Schema.Codec<OnWindow> => OnWindow).annotate({ "description": "Which workspace this title's windows open on, where the compositor can\nplace them ([`OnWindow`])." })), "overrides": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<GameOverrides> => GameOverrides).annotate({ "description": "The stream settings this host sets for the title (`overrides.rs`), resolved: its own, a\nshared override's with that one's `name`, or its source's. Joined at read time." })], { mode: "oneOf" })), "own": Schema.optionalKey(Schema.Boolean.annotate({ "description": "One of the profile in view's own titles (`own:` id). Its seat host keeps how it starts;\nanywhere else it is a name and a picture, and starts nothing." })), "provider": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Plugin that owns this entry. `None` only for operator-typed custom entries.\n`GET /library?provider=` filters on it." })), "role": Schema.optionalKey(GameRole), "stats": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<EntryStats> => EntryStats).annotate({ "description": "Play stats, once this host has launched the title (`stats.rs`). Joined at read\ntime from `library-stats.json`, never stored on the entry." })], { mode: "oneOf" })), "store": Schema.String.annotate({ "description": "Which store surfaced it: `\"steam\"` or `\"custom\"`.", "examples": ["steam"] }), "title": Schema.String, "hidden": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Set by [`set_entry_hidden`]. Omitted when false so the shape only grows for hidden titles.\nWith a profile in view (`as`), the profile hid it: a title the box hides is not listed." })), "profile": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<ProfileValues> => ProfileValues).annotate({ "description": "With a profile in view, the values on this row that are the profile's own." })], { mode: "oneOf" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A library entry plus the operator's view of it — whether they hid it.\n\nA field on [`GameEntry`] would leak onto every lane: `GET /library` returns\n`Vec<GameEntry>` except on the operator's lane, so a hidden flag cannot\nreach a paired client. `flatten` keeps the wire a plain entry plus one key.", "identifier": "OperatorGameEntry" })
 export type CustomInput = { readonly "description"?: string | null, readonly "developer"?: string | null, readonly "genres"?: ReadonlyArray<string>, readonly "platform"?: string | null, readonly "players"?: number | null, readonly "publisher"?: string | null, readonly "region"?: string | null, readonly "release_year"?: number | null, readonly "tags"?: ReadonlyArray<string>, readonly "art"?: Artwork, readonly "audio"?: null | AudioPolicy, readonly "detect"?: null | DetectHint, readonly "icon"?: string | null, readonly "launch"?: null | LaunchSpec, readonly "on_window"?: null | OnWindow, readonly "prep"?: ReadonlyArray<PrepCmd> | null, readonly "role"?: GameRole, readonly "title": string } & { readonly [x: string]: Schema.Json }
 export const CustomInput = Schema.StructWithRest(Schema.Struct({ "description": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "developer": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "genres": Schema.optionalKey(Schema.Array(Schema.String)), "platform": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`\"PS2\"`, `\"Xbox 360\"`, `\"SNES\"`, … Installed-store scanners stamp `\"PC\"`;\n`GET /library?platform=` filters on it (case-insensitive).", "examples": ["PS2"] })), "players": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null])), "publisher": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "region": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "release_year": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Year of first release — the granularity metadata sources agree on.", "examples": [2001] })), "tags": Schema.optionalKey(Schema.Array(Schema.String)), "art": Schema.optionalKey(Artwork), "audio": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<AudioPolicy> => AudioPolicy).annotate({ "description": "Absent on an update keeps the stored policy; `{\"sessions\":\"all\"}` clears it." })], { mode: "oneOf" })), "detect": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<DetectHint> => DetectHint).annotate({ "description": "Absent on an update keeps the stored hint, as with `prep`." })], { mode: "oneOf" })), "icon": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Brand token. A hand-added \"Steam\" tile can look like one. See [`GameEntry::icon`]." })), "launch": Schema.optionalKey(Schema.Union([Schema.Null, LaunchSpec], { mode: "oneOf" })), "on_window": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<OnWindow> => OnWindow).annotate({ "description": "Absent on an update keeps the stored placement, as with `prep`." })], { mode: "oneOf" })), "prep": Schema.optionalKey(Schema.Union([Schema.Array(PrepCmd), Schema.Null]).annotate({ "description": "Run as the host user; operator-privileged. See [`privileged_field`]. Absent on an\nupdate keeps the stored list: a writer that never read it must not clear it." })), "role": Schema.optionalKey(Schema.suspend((): Schema.Codec<GameRole> => GameRole).annotate({ "description": "A hand-added launcher tile is legal without installing the matching plugin." })), "title": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "Flattened [`GameMeta`]. Replaced wholesale on update — an edit must send every field it wants kept.", "identifier": "CustomInput" })
-export type CustomEntry = { readonly "description"?: string | null, readonly "developer"?: string | null, readonly "genres"?: ReadonlyArray<string>, readonly "platform"?: string | null, readonly "players"?: number | null, readonly "publisher"?: string | null, readonly "region"?: string | null, readonly "release_year"?: number | null, readonly "tags"?: ReadonlyArray<string>, readonly "art"?: Artwork, readonly "audio"?: null | AudioPolicy, readonly "detect"?: DetectHint, readonly "external_id"?: string | null, readonly "icon"?: string | null, readonly "id": string, readonly "ids"?: { readonly [x: string]: string }, readonly "install"?: null | Install, readonly "launch"?: null | LaunchSpec, readonly "on_window"?: OnWindow, readonly "prep"?: ReadonlyArray<PrepCmd>, readonly "provider"?: string | null, readonly "role"?: GameRole, readonly "store"?: string | null, readonly "title": string } & { readonly [x: string]: Schema.Json }
-export const CustomEntry = Schema.StructWithRest(Schema.Struct({ "description": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "developer": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "genres": Schema.optionalKey(Schema.Array(Schema.String)), "platform": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`\"PS2\"`, `\"Xbox 360\"`, `\"SNES\"`, … Installed-store scanners stamp `\"PC\"`;\n`GET /library?platform=` filters on it (case-insensitive).", "examples": ["PS2"] })), "players": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null])), "publisher": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "region": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "release_year": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Year of first release — the granularity metadata sources agree on.", "examples": [2001] })), "tags": Schema.optionalKey(Schema.Array(Schema.String)), "art": Schema.optionalKey(Artwork), "audio": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<AudioPolicy> => AudioPolicy).annotate({ "description": "Which sessions hear this title. Absent = every session." })], { mode: "oneOf" })), "detect": Schema.optionalKey(Schema.suspend((): Schema.Codec<DetectHint> => DetectHint).annotate({ "description": "How to find this title after a command that hands off and exits. Without it the\nhost tracks only the child it spawned." })), "external_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Provider's reconcile key. Present iff `provider` is, so the host `id` can stay put." })), "icon": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Brand token (`steam`, `heroic`) a client draws. Never bytes, never a URL. See [`GameEntry::icon`]." })), "id": Schema.String.annotate({ "description": "Host-assigned row id; the `{id}` in the CRUD path. Not the surfaced library id." }), "ids": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "Catalog ids a metadata source matches on. Set only by provider reconcile." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "install": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<Install> => Install).annotate({ "description": "Whether the title's files are on this host. Set only by provider reconcile." })], { mode: "oneOf" })), "launch": Schema.optionalKey(Schema.Union([Schema.Null, LaunchSpec], { mode: "oneOf" })), "on_window": Schema.optionalKey(Schema.suspend((): Schema.Codec<OnWindow> => OnWindow).annotate({ "description": "Which workspace this title opens on ([`crate::library::OnWindow`]).\nAbsent follows the host's display policy." })), "prep": Schema.optionalKey(Schema.Array(PrepCmd).annotate({ "description": "Each `do` runs before launch; each `undo` at session end in reverse ([`crate::hooks::run_prep`])." })), "provider": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Set only by provider reconcile. `None` is a manual row: reconcile never touches it, and\nmanual CRUD refuses provider-owned rows." })), "role": Schema.optionalKey(GameRole), "store": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Store this row was claimed under. `None` surfaces as `custom`. Stamped on the\nrow so id and badge stay correct while [`Catalog::claims`] is being rewritten." })), "title": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One stored row. Same shape the API returns and the console edits.", "identifier": "CustomEntry" })
+export type CustomEntry = { readonly "description"?: string | null, readonly "developer"?: string | null, readonly "genres"?: ReadonlyArray<string>, readonly "platform"?: string | null, readonly "players"?: number | null, readonly "publisher"?: string | null, readonly "region"?: string | null, readonly "release_year"?: number | null, readonly "tags"?: ReadonlyArray<string>, readonly "art"?: Artwork, readonly "audio"?: null | AudioPolicy, readonly "detect"?: DetectHint, readonly "external_id"?: string | null, readonly "icon"?: string | null, readonly "id": string, readonly "ids"?: { readonly [x: string]: string }, readonly "install"?: null | Install, readonly "launch"?: null | LaunchSpec, readonly "on_window"?: OnWindow, readonly "person"?: boolean, readonly "prep"?: ReadonlyArray<PrepCmd>, readonly "provider"?: string | null, readonly "role"?: GameRole, readonly "store"?: string | null, readonly "title": string } & { readonly [x: string]: Schema.Json }
+export const CustomEntry = Schema.StructWithRest(Schema.Struct({ "description": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "developer": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "genres": Schema.optionalKey(Schema.Array(Schema.String)), "platform": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`\"PS2\"`, `\"Xbox 360\"`, `\"SNES\"`, … Installed-store scanners stamp `\"PC\"`;\n`GET /library?platform=` filters on it (case-insensitive).", "examples": ["PS2"] })), "players": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null])), "publisher": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "region": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "release_year": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Year of first release — the granularity metadata sources agree on.", "examples": [2001] })), "tags": Schema.optionalKey(Schema.Array(Schema.String)), "art": Schema.optionalKey(Artwork), "audio": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<AudioPolicy> => AudioPolicy).annotate({ "description": "Which sessions hear this title. Absent = every session." })], { mode: "oneOf" })), "detect": Schema.optionalKey(Schema.suspend((): Schema.Codec<DetectHint> => DetectHint).annotate({ "description": "How to find this title after a command that hands off and exits. Without it the\nhost tracks only the child it spawned." })), "external_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Provider's reconcile key. Present iff `provider` is, so the host `id` can stay put." })), "icon": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Brand token (`steam`, `heroic`) a client draws. Never bytes, never a URL. See [`GameEntry::icon`]." })), "id": Schema.String.annotate({ "description": "Host-assigned row id; the `{id}` in the CRUD path. Not the surfaced library id." }), "ids": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "Catalog ids a metadata source matches on. Set only by provider reconcile." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "install": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<Install> => Install).annotate({ "description": "Whether the title's files are on this host. Set only by provider reconcile." })], { mode: "oneOf" })), "launch": Schema.optionalKey(Schema.Union([Schema.Null, LaunchSpec], { mode: "oneOf" })), "on_window": Schema.optionalKey(Schema.suspend((): Schema.Codec<OnWindow> => OnWindow).annotate({ "description": "Which workspace this title opens on ([`crate::library::OnWindow`]).\nAbsent follows the host's display policy." })), "person": Schema.optionalKey(Schema.Boolean.annotate({ "description": "A seat host's own title its person wrote, in their own session. On a person's own account\na title without it is neither listed nor started. Set by the host, never from a body.", "readOnly": true })), "prep": Schema.optionalKey(Schema.Array(PrepCmd).annotate({ "description": "Each `do` runs before launch; each `undo` at session end in reverse ([`crate::hooks::run_prep`])." })), "provider": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Set only by provider reconcile. `None` is a manual row: reconcile never touches it, and\nmanual CRUD refuses provider-owned rows." })), "role": Schema.optionalKey(GameRole), "store": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Store this row was claimed under. `None` surfaces as `custom`. Stamped on the\nrow so id and badge stay correct while [`Catalog::claims`] is being rewritten." })), "title": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One stored row. Same shape the API returns and the console edits.", "identifier": "CustomEntry" })
 export type ProviderEntryInput = { readonly "description"?: string | null, readonly "developer"?: string | null, readonly "genres"?: ReadonlyArray<string>, readonly "platform"?: string | null, readonly "players"?: number | null, readonly "publisher"?: string | null, readonly "region"?: string | null, readonly "release_year"?: number | null, readonly "tags"?: ReadonlyArray<string>, readonly "art"?: Artwork, readonly "audio"?: null | AudioPolicy, readonly "detect"?: DetectHint, readonly "external_id": string, readonly "icon"?: string | null, readonly "ids"?: { readonly [x: string]: string }, readonly "install"?: null | Install, readonly "launch"?: null | LaunchSpec, readonly "on_window"?: OnWindow, readonly "prep"?: ReadonlyArray<PrepCmd>, readonly "role"?: GameRole, readonly "title": string } & { readonly [x: string]: Schema.Json }
 export const ProviderEntryInput = Schema.StructWithRest(Schema.Struct({ "description": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "developer": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "genres": Schema.optionalKey(Schema.Array(Schema.String)), "platform": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`\"PS2\"`, `\"Xbox 360\"`, `\"SNES\"`, … Installed-store scanners stamp `\"PC\"`;\n`GET /library?platform=` filters on it (case-insensitive).", "examples": ["PS2"] })), "players": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null])), "publisher": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "region": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "release_year": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Year of first release — the granularity metadata sources agree on.", "examples": [2001] })), "tags": Schema.optionalKey(Schema.Array(Schema.String)), "art": Schema.optionalKey(Artwork), "audio": Schema.optionalKey(Schema.Union([Schema.Null, AudioPolicy], { mode: "oneOf" })), "detect": Schema.optionalKey(Schema.suspend((): Schema.Codec<DetectHint> => DetectHint).annotate({ "description": "Install-dir / process hint. Needed when launch goes through the provider's own client." })), "external_id": Schema.String, "icon": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Brand token a plugin sets on its `launchers(cfg)` tiles. See [`GameEntry::icon`]." })), "ids": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "Catalog ids a metadata source matches on: `steam` → appid, `libretro` →\n`<system>/<No-Intro name>`. Keys `[a-z0-9_]{1,16}`, at most eight; a bad pair is dropped." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "install": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<Install> => Install).annotate({ "description": "Whether the title's files are on this host, for a plugin that serves `/__install`.\nAbsent means they are." })], { mode: "oneOf" })), "launch": Schema.optionalKey(Schema.Union([Schema.Null, LaunchSpec], { mode: "oneOf" })), "on_window": Schema.optionalKey(Schema.suspend((): Schema.Codec<OnWindow> => OnWindow).annotate({ "description": "Which workspace the title opens on; absent follows the host's display policy." })), "prep": Schema.optionalKey(Schema.Array(PrepCmd).annotate({ "description": "Run as the host user; operator-privileged. See [`privileged_field`]." })), "role": Schema.optionalKey(Schema.suspend((): Schema.Codec<GameRole> => GameRole).annotate({ "description": "Plugins emit `launchers(cfg)` tiles with `role: \"launcher\"`." })), "title": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One title in a provider reconcile payload: [`CustomInput`] plus the provider's required stable key.", "identifier": "ProviderEntryInput" })
 export type MetadataInput = { readonly "entries"?: ReadonlyArray<MetadataEntryInput>, readonly "matching"?: Matching } & { readonly [x: string]: Schema.Json }
 export const MetadataInput = Schema.StructWithRest(Schema.Struct({ "entries": Schema.optionalKey(Schema.Array(MetadataEntryInput)), "matching": Schema.optionalKey(Matching) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`PUT /library/metadata/{source}`: the source's whole result.", "identifier": "MetadataInput" })
 export type CaptureHealth = { readonly "backend_opened"?: string | null, readonly "class": string, readonly "cooldown_remaining_ms"?: number | null, readonly "current_stage"?: string | null, readonly "detached": number, readonly "dropped_total": number, readonly "encoder_state"?: string | null, readonly "episodes_suppressed": number, readonly "evidence"?: string | null, readonly "last_episode"?: null | CaptureEpisode, readonly "late_frames": boolean, readonly "present_to_arrival_ms"?: number | null, readonly "published_total": number, readonly "source_gap_ms": number, readonly "stall_class"?: string | null } & { readonly [x: string]: Schema.Json }
 export const CaptureHealth = Schema.StructWithRest(Schema.Struct({ "backend_opened": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The backend the driver opened: `nvenc` / `amf` / `qsv` / `pyrowave`. Absent as above." })), "class": Schema.String.annotate({ "description": "`healthy` / `idle` / `suspect` / `stalled` / `recovering` / `rebuilding` / `secure_desktop`.", "examples": ["healthy"] }), "cooldown_remaining_ms": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Time left in the post-failure cooldown, while one is in force." })), "current_stage": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The recovery stage running now, while an episode is open." })), "detached": Schema.Number.annotate({ "description": "Encode threads the driver abandoned after a wedge; two opens the driver cycle.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "dropped_total": Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "encoder_state": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The driver encoder's own state word: `closed` / `open` / `encoding` / `wedged`.\nAbsent until the session's first `SET_ENCODE`." })), "episodes_suppressed": Schema.Number.annotate({ "description": "Stalled verdicts refused for budget or cooldown since the last episode.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "evidence": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Activity evidence behind the verdict: `input` / `canary`." })), "last_episode": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<CaptureEpisode> => CaptureEpisode).annotate({ "description": "The last closed recovery episode." })], { mode: "oneOf" })), "late_frames": Schema.Boolean.annotate({ "description": "`present_to_arrival_ms` is past the classifier's bound: frames come late rather than not\nat all. Reported only — no recovery rung fires on it." }), "present_to_arrival_ms": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "The newest access unit's OS present stamp against the moment the host took it." })), "published_total": Schema.Number.annotate({ "description": "Access units the driver published, and frames it dropped at its encode pool.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "source_gap_ms": Schema.Number.annotate({ "description": "Time since the last real source frame.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "stall_class": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "When `class` is `stalled`: `worker` / `encoder` / `presentation` / `driver`." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "Per-session capture health (Windows IDD-push): the live classifier verdict, the driver\nencoder's self-report and the last staged-recovery episode.", "identifier": "CaptureHealth" })
-export type ProfileAdmin = { readonly "accent"?: string | null, readonly "avatar"?: string | null, readonly "display_name": string, readonly "home": Home, readonly "id": string, readonly "last_used_unix": number, readonly "legacy_seat"?: boolean, readonly "owner": boolean, readonly "seat"?: null | SeatPublic, readonly "unlock"?: null | UnlockNeed, readonly "default": boolean, readonly "legacy_device"?: string | null, readonly "steam_home"?: boolean } & { readonly [x: string]: Schema.Json }
-export const ProfileAdmin = Schema.StructWithRest(Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB` behind the initials when there is no picture." })), "avatar": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Host-relative URL of the picture." })), "display_name": Schema.String, "home": Schema.suspend((): Schema.Codec<Home> => Home).annotate({ "description": "What a bare connect opens." }), "id": Schema.String.annotate({ "examples": ["9a3f1c2b7e40"] }), "last_used_unix": Schema.Number.annotate({ "description": "When a session last played as it; `0`: never.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "legacy_seat": Schema.optionalKey(Schema.Boolean.annotate({ "description": "The asking device's old seat became this profile. A client takes it without a picker." })), "owner": Schema.Boolean.annotate({ "description": "The box's own session." }), "seat": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<SeatPublic> => SeatPublic).annotate({ "description": "Its own seat; absent when it plays on the box's own session." })], { mode: "oneOf" })), "unlock": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<UnlockNeed> => UnlockNeed).annotate({ "description": "What the asking device sends to open it. Every row of `enumerate` has it." })], { mode: "oneOf" })), "default": Schema.Boolean.annotate({ "description": "Where a device that names no profile lands." }), "legacy_device": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The device whose seat became this profile, lowercase hex." })), "steam_home": Schema.optionalKey(Schema.Boolean.annotate({ "description": "This host keeps a Steam home for it, with that Steam's sign-in and saved games. A removal\nwith `erase` deletes it." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One profile as the console manages it.", "identifier": "ProfileAdmin" })
-export type ProfilePublic = { readonly "accent"?: string | null, readonly "avatar"?: string | null, readonly "display_name": string, readonly "home": Home, readonly "id": string, readonly "last_used_unix": number, readonly "legacy_seat"?: boolean, readonly "owner": boolean, readonly "seat"?: null | SeatPublic, readonly "unlock"?: null | UnlockNeed } & { readonly [x: string]: Schema.Json }
-export const ProfilePublic = Schema.StructWithRest(Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB` behind the initials when there is no picture." })), "avatar": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Host-relative URL of the picture." })), "display_name": Schema.String, "home": Schema.suspend((): Schema.Codec<Home> => Home).annotate({ "description": "What a bare connect opens." }), "id": Schema.String.annotate({ "examples": ["9a3f1c2b7e40"] }), "last_used_unix": Schema.Number.annotate({ "description": "When a session last played as it; `0`: never.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "legacy_seat": Schema.optionalKey(Schema.Boolean.annotate({ "description": "The asking device's old seat became this profile. A client takes it without a picker." })), "owner": Schema.Boolean.annotate({ "description": "The box's own session." }), "seat": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<SeatPublic> => SeatPublic).annotate({ "description": "Its own seat; absent when it plays on the box's own session." })], { mode: "oneOf" })), "unlock": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<UnlockNeed> => UnlockNeed).annotate({ "description": "What the asking device sends to open it. Every row of `enumerate` has it." })], { mode: "oneOf" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One profile as a client's picker shows it.", "identifier": "ProfilePublic" })
+export type ProfileAdmin = { readonly "accent"?: string | null, readonly "avatar"?: string | null, readonly "display_name": string, readonly "home": Home, readonly "id": string, readonly "last_used_unix": number, readonly "legacy_seat"?: boolean, readonly "owner": boolean, readonly "person"?: boolean, readonly "seat"?: null | SeatPublic, readonly "unlock"?: null | UnlockNeed, readonly "default": boolean, readonly "legacy_device"?: string | null, readonly "lock"?: null | LockSummary, readonly "steam_home"?: boolean } & { readonly [x: string]: Schema.Json }
+export const ProfileAdmin = Schema.StructWithRest(Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB` behind the initials when there is no picture." })), "avatar": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Host-relative URL of the picture." })), "display_name": Schema.String, "home": Schema.suspend((): Schema.Codec<Home> => Home).annotate({ "description": "What a bare connect opens." }), "id": Schema.String.annotate({ "examples": ["9a3f1c2b7e40"] }), "last_used_unix": Schema.Number.annotate({ "description": "When a session last played as it; `0`: never.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "legacy_seat": Schema.optionalKey(Schema.Boolean.annotate({ "description": "The asking device's old seat became this profile. A client takes it without a picker." })), "owner": Schema.Boolean.annotate({ "description": "The box's own session." }), "person": Schema.optionalKey(Schema.Boolean.annotate({ "description": "The asking device is this locked profile's person now: it may hide a title for it\n(`PUT /library/hidden/{id}?as=`) and list what it hides (`GET /library/page?hidden=true`)." })), "seat": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<SeatPublic> => SeatPublic).annotate({ "description": "Its own seat; absent when it plays on the box's own session." })], { mode: "oneOf" })), "unlock": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<UnlockNeed> => UnlockNeed).annotate({ "description": "What the asking device sends to open it. Every row of `enumerate` has it." })], { mode: "oneOf" })), "default": Schema.Boolean.annotate({ "description": "Where a device that names no profile lands." }), "legacy_device": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The device whose seat became this profile, lowercase hex." })), "lock": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<LockSummary> => LockSummary).annotate({ "description": "Its lock. Absent for a profile on a person's own account, which opens with its password." })], { mode: "oneOf" })), "steam_home": Schema.optionalKey(Schema.Boolean.annotate({ "description": "This host keeps a Steam home for it, with that Steam's sign-in and saved games. A removal\nwith `erase` deletes it." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One profile as the console manages it.", "identifier": "ProfileAdmin" })
+export type ProfilePublic = { readonly "accent"?: string | null, readonly "avatar"?: string | null, readonly "display_name": string, readonly "home": Home, readonly "id": string, readonly "last_used_unix": number, readonly "legacy_seat"?: boolean, readonly "owner": boolean, readonly "person"?: boolean, readonly "seat"?: null | SeatPublic, readonly "unlock"?: null | UnlockNeed } & { readonly [x: string]: Schema.Json }
+export const ProfilePublic = Schema.StructWithRest(Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB` behind the initials when there is no picture." })), "avatar": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Host-relative URL of the picture." })), "display_name": Schema.String, "home": Schema.suspend((): Schema.Codec<Home> => Home).annotate({ "description": "What a bare connect opens." }), "id": Schema.String.annotate({ "examples": ["9a3f1c2b7e40"] }), "last_used_unix": Schema.Number.annotate({ "description": "When a session last played as it; `0`: never.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "legacy_seat": Schema.optionalKey(Schema.Boolean.annotate({ "description": "The asking device's old seat became this profile. A client takes it without a picker." })), "owner": Schema.Boolean.annotate({ "description": "The box's own session." }), "person": Schema.optionalKey(Schema.Boolean.annotate({ "description": "The asking device is this locked profile's person now: it may hide a title for it\n(`PUT /library/hidden/{id}?as=`) and list what it hides (`GET /library/page?hidden=true`)." })), "seat": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<SeatPublic> => SeatPublic).annotate({ "description": "Its own seat; absent when it plays on the box's own session." })], { mode: "oneOf" })), "unlock": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<UnlockNeed> => UnlockNeed).annotate({ "description": "What the asking device sends to open it. Every row of `enumerate` has it." })], { mode: "oneOf" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One profile as a client's picker shows it.", "identifier": "ProfilePublic" })
 export type SeatsDoctor = { readonly "diagnostics": ReadonlyArray<SeatCheck>, readonly "healthy": boolean } & { readonly [x: string]: Schema.Json }
 export const SeatsDoctor = Schema.StructWithRest(Schema.Struct({ "diagnostics": Schema.Array(SeatCheck), "healthy": Schema.Boolean.annotate({ "description": "No check is an `error`." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "The seat supervisor's own checks.", "identifier": "SeatsDoctor" })
 export type Seating = { readonly "allow_rdp_from_network": boolean, readonly "checks": ReadonlyArray<SeatCheck>, readonly "enabled": boolean, readonly "platform": SeatingPlatform } & { readonly [x: string]: Schema.Json }
@@ -554,6 +576,36 @@ export type PostDeviceToken200 = TokenGrant
 export const PostDeviceToken200 = TokenGrant
 export type PostDeviceToken401 = ApiError
 export const PostDeviceToken401 = ApiError
+export type GetPersonProfile200 = PersonProfile
+export const GetPersonProfile200 = PersonProfile
+export type GetPersonProfile401 = ApiError
+export const GetPersonProfile401 = ApiError
+export type GetPersonProfile404 = ApiError
+export const GetPersonProfile404 = ApiError
+export type GetPersonAvatarParams = { readonly "If-None-Match"?: string }
+export const GetPersonAvatarParams = Schema.Struct({ "If-None-Match": Schema.optionalKey(Schema.String) })
+export type GetPersonAvatar401 = ApiError
+export const GetPersonAvatar401 = ApiError
+export type GetPersonAvatar404 = ApiError
+export const GetPersonAvatar404 = ApiError
+export type OpenPersonSessionRequestJson = PersonTicket
+export const OpenPersonSessionRequestJson = PersonTicket
+export type OpenPersonSession200 = PersonGrant
+export const OpenPersonSession200 = PersonGrant
+export type OpenPersonSession401 = ApiError
+export const OpenPersonSession401 = ApiError
+export type OpenPersonSession429 = ApiError
+export const OpenPersonSession429 = ApiError
+export type ClosePersonSession401 = ApiError
+export const ClosePersonSession401 = ApiError
+export type VerifyPersonSessionRequestJson = PersonSessionToken
+export const VerifyPersonSessionRequestJson = PersonSessionToken
+export type VerifyPersonSession200 = PersonOf
+export const VerifyPersonSession200 = PersonOf
+export type VerifyPersonSession401 = ApiError
+export const VerifyPersonSession401 = ApiError
+export type VerifyPersonSession404 = ApiError
+export const VerifyPersonSession404 = ApiError
 export type ClientLogsList200 = ReadonlyArray<ClientLogMeta>
 export const ClientLogsList200 = Schema.Array(ClientLogMeta)
 export type ClientLogsList401 = ApiError
@@ -1006,6 +1058,8 @@ export type SetLibraryEntryHidden400 = ApiError
 export const SetLibraryEntryHidden400 = ApiError
 export type SetLibraryEntryHidden401 = ApiError
 export const SetLibraryEntryHidden401 = ApiError
+export type SetLibraryEntryHidden403 = ApiError
+export const SetLibraryEntryHidden403 = ApiError
 export type SetLibraryEntryHidden404 = ApiError
 export const SetLibraryEntryHidden404 = ApiError
 export type SetLibraryEntryHidden500 = ApiError
@@ -1086,8 +1140,8 @@ export type DeleteLibraryMetadata500 = ApiError
 export const DeleteLibraryMetadata500 = ApiError
 export type GetLibraryOverridesParams = { readonly "as"?: string }
 export const GetLibraryOverridesParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String) })
-export type GetLibraryOverrides200 = OverridesDoc
-export const GetLibraryOverrides200 = OverridesDoc
+export type GetLibraryOverrides200 = OverridesAnswer
+export const GetLibraryOverrides200 = OverridesAnswer
 export type GetLibraryOverrides401 = ApiError
 export const GetLibraryOverrides401 = ApiError
 export type GetLibraryOverrides404 = ApiError
@@ -1102,6 +1156,8 @@ export type SetGameOverrides400 = ApiError
 export const SetGameOverrides400 = ApiError
 export type SetGameOverrides401 = ApiError
 export const SetGameOverrides401 = ApiError
+export type SetGameOverrides403 = ApiError
+export const SetGameOverrides403 = ApiError
 export type SetGameOverrides404 = ApiError
 export const SetGameOverrides404 = ApiError
 export type SetGameOverrides500 = ApiError
@@ -1158,6 +1214,8 @@ export type SetSourceOverrides400 = ApiError
 export const SetSourceOverrides400 = ApiError
 export type SetSourceOverrides401 = ApiError
 export const SetSourceOverrides401 = ApiError
+export type SetSourceOverrides403 = ApiError
+export const SetSourceOverrides403 = ApiError
 export type SetSourceOverrides404 = ApiError
 export const SetSourceOverrides404 = ApiError
 export type SetSourceOverrides500 = ApiError
@@ -1182,8 +1240,8 @@ export type StoreOwnTitles409 = ApiError
 export const StoreOwnTitles409 = ApiError
 export type StoreOwnTitles500 = ApiError
 export const StoreOwnTitles500 = ApiError
-export type GetLibraryPageParams = { readonly "limit"?: number, readonly "cursor"?: string, readonly "q"?: string, readonly "provider"?: string, readonly "platform"?: string, readonly "role"?: string, readonly "id"?: string, readonly "install"?: string, readonly "as"?: string }
-export const GetLibraryPageParams = Schema.Struct({ "limit": Schema.optionalKey(Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))), "cursor": Schema.optionalKey(Schema.String), "q": Schema.optionalKey(Schema.String), "provider": Schema.optionalKey(Schema.String), "platform": Schema.optionalKey(Schema.String), "role": Schema.optionalKey(Schema.String), "id": Schema.optionalKey(Schema.String), "install": Schema.optionalKey(Schema.String), "as": Schema.optionalKey(Schema.String) })
+export type GetLibraryPageParams = { readonly "limit"?: number, readonly "cursor"?: string, readonly "q"?: string, readonly "provider"?: string, readonly "platform"?: string, readonly "role"?: string, readonly "id"?: string, readonly "install"?: string, readonly "hidden"?: string, readonly "as"?: string }
+export const GetLibraryPageParams = Schema.Struct({ "limit": Schema.optionalKey(Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))), "cursor": Schema.optionalKey(Schema.String), "q": Schema.optionalKey(Schema.String), "provider": Schema.optionalKey(Schema.String), "platform": Schema.optionalKey(Schema.String), "role": Schema.optionalKey(Schema.String), "id": Schema.optionalKey(Schema.String), "install": Schema.optionalKey(Schema.String), "hidden": Schema.optionalKey(Schema.String), "as": Schema.optionalKey(Schema.String) })
 export type GetLibraryPage200 = LibraryPage
 export const GetLibraryPage200 = LibraryPage
 export type GetLibraryPage400 = ApiError
@@ -1582,6 +1640,20 @@ export type ListProfileDevices409 = ApiError
 export const ListProfileDevices409 = ApiError
 export type ListProfileDevices503 = ApiError
 export const ListProfileDevices503 = ApiError
+export type AddProfileDeviceRequestJson = ProfileDeviceAdd
+export const AddProfileDeviceRequestJson = ProfileDeviceAdd
+export type AddProfileDevice200 = ReadonlyArray<SignedInDevice>
+export const AddProfileDevice200 = Schema.Array(SignedInDevice)
+export type AddProfileDevice400 = ApiError
+export const AddProfileDevice400 = ApiError
+export type AddProfileDevice401 = ApiError
+export const AddProfileDevice401 = ApiError
+export type AddProfileDevice404 = ApiError
+export const AddProfileDevice404 = ApiError
+export type AddProfileDevice409 = ApiError
+export const AddProfileDevice409 = ApiError
+export type AddProfileDevice422 = ApiError
+export const AddProfileDevice422 = ApiError
 export type SignOutProfileDevices401 = ApiError
 export const SignOutProfileDevices401 = ApiError
 export type SignOutProfileDevices404 = ApiError
@@ -1610,6 +1682,54 @@ export type EndProfileSession409 = ApiError
 export const EndProfileSession409 = ApiError
 export type EndProfileSession503 = ApiError
 export const EndProfileSession503 = ApiError
+export type GetProfileLock200 = ProfileLock
+export const GetProfileLock200 = ProfileLock
+export type GetProfileLock401 = ApiError
+export const GetProfileLock401 = ApiError
+export type GetProfileLock404 = ApiError
+export const GetProfileLock404 = ApiError
+export type GetProfileLock409 = ApiError
+export const GetProfileLock409 = ApiError
+export type LockProfileRequestJson = null | LockProfile
+export const LockProfileRequestJson = Schema.Union([Schema.Null, LockProfile], { mode: "oneOf" })
+export type LockProfile200 = ProfileLock
+export const LockProfile200 = ProfileLock
+export type LockProfile400 = ApiError
+export const LockProfile400 = ApiError
+export type LockProfile401 = ApiError
+export const LockProfile401 = ApiError
+export type LockProfile404 = ApiError
+export const LockProfile404 = ApiError
+export type LockProfile409 = ApiError
+export const LockProfile409 = ApiError
+export type UnlockProfile200 = ProfileLock
+export const UnlockProfile200 = ProfileLock
+export type UnlockProfile401 = ApiError
+export const UnlockProfile401 = ApiError
+export type UnlockProfile404 = ApiError
+export const UnlockProfile404 = ApiError
+export type UnlockProfile409 = ApiError
+export const UnlockProfile409 = ApiError
+export type SetProfilePinRequestJson = ProfilePin
+export const SetProfilePinRequestJson = ProfilePin
+export type SetProfilePin200 = ProfileLock
+export const SetProfilePin200 = ProfileLock
+export type SetProfilePin400 = ApiError
+export const SetProfilePin400 = ApiError
+export type SetProfilePin401 = ApiError
+export const SetProfilePin401 = ApiError
+export type SetProfilePin404 = ApiError
+export const SetProfilePin404 = ApiError
+export type SetProfilePin409 = ApiError
+export const SetProfilePin409 = ApiError
+export type ClearProfilePin200 = ProfileLock
+export const ClearProfilePin200 = ProfileLock
+export type ClearProfilePin401 = ApiError
+export const ClearProfilePin401 = ApiError
+export type ClearProfilePin404 = ApiError
+export const ClearProfilePin404 = ApiError
+export type ClearProfilePin409 = ApiError
+export const ClearProfilePin409 = ApiError
 export type StartProfileSeat200 = ProfileAdmin
 export const StartProfileSeat200 = ProfileAdmin
 export type StartProfileSeat401 = ApiError
@@ -2074,6 +2194,53 @@ export const make = (
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(PostDeviceToken200),
       "401": decodeError("PostDeviceToken401", PostDeviceToken401),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "getPersonProfile": (options: Parameters<Punktfunk["getPersonProfile"]>[0]) => HttpClientRequest.get("/api/v1/auth/person/profile").pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(GetPersonProfile200),
+      "401": decodeError("GetPersonProfile401", GetPersonProfile401),
+      "404": decodeError("GetPersonProfile404", GetPersonProfile404),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "getPersonAvatar": (options: Parameters<Punktfunk["getPersonAvatar"]>[0]) => HttpClientRequest.get("/api/v1/auth/person/profile/avatar").pipe(
+      HttpClientRequest.setHeaders({ "If-None-Match": options?.params?.["If-None-Match"] ?? undefined }),
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "200": decodeBinary,
+      "401": decodeError("GetPersonAvatar401", GetPersonAvatar401),
+      "404": decodeError("GetPersonAvatar404", GetPersonAvatar404),
+      "304": () => Effect.void,
+      orElse: unexpectedStatus
+    }))
+    ),
+    "getPersonAvatarStream": (options) => HttpClientRequest.get("/api/v1/auth/person/profile/avatar").pipe(
+      HttpClientRequest.setHeaders({ "If-None-Match": options?.params?.["If-None-Match"] ?? undefined }),
+      binaryRequest
+    ),
+    "openPersonSession": (options: Parameters<Punktfunk["openPersonSession"]>[0]) => HttpClientRequest.post("/api/v1/auth/person/session").pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(OpenPersonSession200),
+      "401": decodeError("OpenPersonSession401", OpenPersonSession401),
+      "429": decodeError("OpenPersonSession429", OpenPersonSession429),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "closePersonSession": (options: Parameters<Punktfunk["closePersonSession"]>[0]) => HttpClientRequest.delete("/api/v1/auth/person/session").pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "401": decodeError("ClosePersonSession401", ClosePersonSession401),
+      "204": () => Effect.void,
+      orElse: unexpectedStatus
+    }))
+    ),
+    "verifyPersonSession": (options: Parameters<Punktfunk["verifyPersonSession"]>[0]) => HttpClientRequest.post("/api/v1/auth/person/verify").pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(VerifyPersonSession200),
+      "401": decodeError("VerifyPersonSession401", VerifyPersonSession401),
+      "404": decodeError("VerifyPersonSession404", VerifyPersonSession404),
       orElse: unexpectedStatus
     }))
     ),
@@ -2660,6 +2827,7 @@ export const make = (
       "2xx": decodeSuccess(SetLibraryEntryHidden200),
       "400": decodeError("SetLibraryEntryHidden400", SetLibraryEntryHidden400),
       "401": decodeError("SetLibraryEntryHidden401", SetLibraryEntryHidden401),
+      "403": decodeError("SetLibraryEntryHidden403", SetLibraryEntryHidden403),
       "404": decodeError("SetLibraryEntryHidden404", SetLibraryEntryHidden404),
       "500": decodeError("SetLibraryEntryHidden500", SetLibraryEntryHidden500),
       orElse: unexpectedStatus
@@ -2775,6 +2943,7 @@ export const make = (
       "2xx": decodeSuccess(SetGameOverrides200),
       "400": decodeError("SetGameOverrides400", SetGameOverrides400),
       "401": decodeError("SetGameOverrides401", SetGameOverrides401),
+      "403": decodeError("SetGameOverrides403", SetGameOverrides403),
       "404": decodeError("SetGameOverrides404", SetGameOverrides404),
       "500": decodeError("SetGameOverrides500", SetGameOverrides500),
       orElse: unexpectedStatus
@@ -2829,6 +2998,7 @@ export const make = (
       "2xx": decodeSuccess(SetSourceOverrides200),
       "400": decodeError("SetSourceOverrides400", SetSourceOverrides400),
       "401": decodeError("SetSourceOverrides401", SetSourceOverrides401),
+      "403": decodeError("SetSourceOverrides403", SetSourceOverrides403),
       "404": decodeError("SetSourceOverrides404", SetSourceOverrides404),
       "500": decodeError("SetSourceOverrides500", SetSourceOverrides500),
       orElse: unexpectedStatus
@@ -2857,7 +3027,7 @@ export const make = (
     }))
     ),
     "getLibraryPage": (options: Parameters<Punktfunk["getLibraryPage"]>[0]) => HttpClientRequest.get("/api/v1/library/page").pipe(
-      HttpClientRequest.setUrlParams({ "limit": options?.params?.["limit"] as any, "cursor": options?.params?.["cursor"] as any, "q": options?.params?.["q"] as any, "provider": options?.params?.["provider"] as any, "platform": options?.params?.["platform"] as any, "role": options?.params?.["role"] as any, "id": options?.params?.["id"] as any, "install": options?.params?.["install"] as any, "as": options?.params?.["as"] as any }),
+      HttpClientRequest.setUrlParams({ "limit": options?.params?.["limit"] as any, "cursor": options?.params?.["cursor"] as any, "q": options?.params?.["q"] as any, "provider": options?.params?.["provider"] as any, "platform": options?.params?.["platform"] as any, "role": options?.params?.["role"] as any, "id": options?.params?.["id"] as any, "install": options?.params?.["install"] as any, "hidden": options?.params?.["hidden"] as any, "as": options?.params?.["as"] as any }),
       withResponse(options?.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(GetLibraryPage200),
       "400": decodeError("GetLibraryPage400", GetLibraryPage400),
@@ -3362,6 +3532,20 @@ export const make = (
     }))
     ))
   ),
+    "addProfileDevice": (id, options: Parameters<Punktfunk["addProfileDevice"]>[1]) => __makePathRequest(HttpClientRequest.post, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/devices").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(AddProfileDevice200),
+      "400": decodeError("AddProfileDevice400", AddProfileDevice400),
+      "401": decodeError("AddProfileDevice401", AddProfileDevice401),
+      "404": decodeError("AddProfileDevice404", AddProfileDevice404),
+      "409": decodeError("AddProfileDevice409", AddProfileDevice409),
+      "422": decodeError("AddProfileDevice422", AddProfileDevice422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
     "signOutProfileDevices": (id, options: Parameters<Punktfunk["signOutProfileDevices"]>[1]) => __makePathRequest(HttpClientRequest.delete, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/devices").pipe(
     Effect.flatMap((request) => request.pipe(
       withResponse(options?.config)(HttpClientResponse.matchStatus({
@@ -3395,6 +3579,65 @@ export const make = (
       "404": decodeError("EndProfileSession404", EndProfileSession404),
       "409": decodeError("EndProfileSession409", EndProfileSession409),
       "503": decodeError("EndProfileSession503", EndProfileSession503),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "getProfileLock": (id, options: Parameters<Punktfunk["getProfileLock"]>[1]) => __makePathRequest(HttpClientRequest.get, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/lock").pipe(
+    Effect.flatMap((request) => request.pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(GetProfileLock200),
+      "401": decodeError("GetProfileLock401", GetProfileLock401),
+      "404": decodeError("GetProfileLock404", GetProfileLock404),
+      "409": decodeError("GetProfileLock409", GetProfileLock409),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "lockProfile": (id, options: Parameters<Punktfunk["lockProfile"]>[1]) => __makePathRequest(HttpClientRequest.post, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/lock").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(LockProfile200),
+      "400": decodeError("LockProfile400", LockProfile400),
+      "401": decodeError("LockProfile401", LockProfile401),
+      "404": decodeError("LockProfile404", LockProfile404),
+      "409": decodeError("LockProfile409", LockProfile409),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "unlockProfile": (id, options: Parameters<Punktfunk["unlockProfile"]>[1]) => __makePathRequest(HttpClientRequest.delete, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/lock").pipe(
+    Effect.flatMap((request) => request.pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(UnlockProfile200),
+      "401": decodeError("UnlockProfile401", UnlockProfile401),
+      "404": decodeError("UnlockProfile404", UnlockProfile404),
+      "409": decodeError("UnlockProfile409", UnlockProfile409),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "setProfilePin": (id, options: Parameters<Punktfunk["setProfilePin"]>[1]) => __makePathRequest(HttpClientRequest.put, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/lock/pin").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(SetProfilePin200),
+      "400": decodeError("SetProfilePin400", SetProfilePin400),
+      "401": decodeError("SetProfilePin401", SetProfilePin401),
+      "404": decodeError("SetProfilePin404", SetProfilePin404),
+      "409": decodeError("SetProfilePin409", SetProfilePin409),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "clearProfilePin": (id, options: Parameters<Punktfunk["clearProfilePin"]>[1]) => __makePathRequest(HttpClientRequest.delete, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/lock/pin").pipe(
+    Effect.flatMap((request) => request.pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(ClearProfilePin200),
+      "401": decodeError("ClearProfilePin401", ClearProfilePin401),
+      "404": decodeError("ClearProfilePin404", ClearProfilePin404),
+      "409": decodeError("ClearProfilePin409", ClearProfilePin409),
       orElse: unexpectedStatus
     }))
     ))
@@ -3833,6 +4076,53 @@ readonly "postDeviceToken": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof PostDeviceTokenRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof PostDeviceToken200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"PostDeviceToken401", typeof PostDeviceToken401.Type>>;
   }
   /**
+* The person lane on a seat host: the session's profile as the box's `profiles.json` in this
+* host's trust copy has it. Only that profile, and only on that lane; every other caller gets
+* 404.
+*/
+readonly "getPersonProfile": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetPersonProfile200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetPersonProfile401", typeof GetPersonProfile401.Type> | PunktfunkError<"GetPersonProfile404", typeof GetPersonProfile404.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetPersonProfile200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetPersonProfile401", typeof GetPersonProfile401.Type> | PunktfunkError<"GetPersonProfile404", typeof GetPersonProfile404.Type>>;
+  }
+  /**
+* As `GET /profiles/{id}/avatar`, for the person session's own profile alone, from this seat
+* host's trust copy.
+*/
+readonly "getPersonAvatar": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetPersonAvatarParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<Uint8Array | void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetPersonAvatar401", typeof GetPersonAvatar401.Type> | PunktfunkError<"GetPersonAvatar404", typeof GetPersonAvatar404.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetPersonAvatarParams.Encoded | undefined; readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<Uint8Array | void, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetPersonAvatar401", typeof GetPersonAvatar401.Type> | PunktfunkError<"GetPersonAvatar404", typeof GetPersonAvatar404.Type>>;
+  }
+  /**
+* As `GET /profiles/{id}/avatar`, for the person session's own profile alone, from this seat
+* host's trust copy.
+*/
+readonly "getPersonAvatarStream": (options: { readonly params?: typeof GetPersonAvatarParams.Encoded | undefined } | undefined) => Stream.Stream<Uint8Array, HttpClientError.HttpClientError>
+  /**
+* On a seat host, from loopback: trade the one-time ticket `ctl console-url` wrote into the
+* page it opened for a session token. The ticket is signed with this host's person token, at
+* most 60 s old, used once, and for this host's own profile. Every other host refuses it. After
+* ten refused tickets in a minute a refused one answers 429; a good one still opens.
+*/
+readonly "openPersonSession": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof OpenPersonSessionRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof OpenPersonSession200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"OpenPersonSession401", typeof OpenPersonSession401.Type> | PunktfunkError<"OpenPersonSession429", typeof OpenPersonSession429.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof OpenPersonSessionRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof OpenPersonSession200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"OpenPersonSession401", typeof OpenPersonSession401.Type> | PunktfunkError<"OpenPersonSession429", typeof OpenPersonSession429.Type>>;
+  }
+  /**
+* From loopback, the session's own token as the bearer. Answers the same whether it was live.
+*/
+readonly "closePersonSession": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ClosePersonSession401", typeof ClosePersonSession401.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<void, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ClosePersonSession401", typeof ClosePersonSession401.Type>>;
+  }
+  /**
+* Admin lane, on a seat host: whether `token` is a live person session here, and for which
+* profile. The box asks before it takes a person session's word for that profile.
+*/
+readonly "verifyPersonSession": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof VerifyPersonSessionRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof VerifyPersonSession200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"VerifyPersonSession401", typeof VerifyPersonSession401.Type> | PunktfunkError<"VerifyPersonSession404", typeof VerifyPersonSession404.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof VerifyPersonSessionRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof VerifyPersonSession200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"VerifyPersonSession401", typeof VerifyPersonSession401.Type> | PunktfunkError<"VerifyPersonSession404", typeof VerifyPersonSession404.Type>>;
+  }
+  /**
 * List uploaded client log bundles
 */
 readonly "clientLogsList": {
@@ -4063,10 +4353,10 @@ readonly "getEmulatorRegistry": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetEmulatorRegistry200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulatorRegistry401", typeof GetEmulatorRegistry401.Type> | PunktfunkError<"GetEmulatorRegistry500", typeof GetEmulatorRegistry500.Type>>;
   }
   /**
-* Points the host at the operator's own copy, one no rule finds (a portable build unpacked
-* anywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane
-* only. A seat host on a person's own account adopts none: a prepare runs the copy as that
-* person, unasked.
+* Points the host at a copy of the caller's own, one no rule finds (a portable build unpacked
+* anywhere), so it is listed and launched like any other; `forget` drops it again. The
+* operator's lane, and a seat's person on their seat host. On a person's own account only that
+* person adopts one: anyone else's copy would run as them.
 */
 readonly "adoptEmulator": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof AdoptEmulatorRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof AdoptEmulator200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"AdoptEmulator400", typeof AdoptEmulator400.Type> | PunktfunkError<"AdoptEmulator401", typeof AdoptEmulator401.Type> | PunktfunkError<"AdoptEmulator403", typeof AdoptEmulator403.Type> | PunktfunkError<"AdoptEmulator404", typeof AdoptEmulator404.Type> | PunktfunkError<"AdoptEmulator409", typeof AdoptEmulator409.Type>>;
@@ -4217,7 +4507,8 @@ readonly "getHealth": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetHealth200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError>;
   }
   /**
-* Empty document when none is stored.
+* Empty document when none is stored. On a seat host on a person's own account, empty on
+* every lane but that person's own: their hooks may carry their webhooks' secrets.
 */
 readonly "getHooks": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetHooks200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetHooks401", typeof GetHooks401.Type>>;
@@ -4227,7 +4518,8 @@ readonly "getHooks": {
 * Whole-document PUT, not a patch. Applies from the next event. Commands run as the host
 * user (the interactive session on Windows). An `elevated` hook is refused until an
 * administrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A
-* seat host on a person's own account refuses every hook and runs none.
+* seat host on a person's own account takes hooks from that person's own session alone, and
+* runs only those.
 */
 readonly "setHooks": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof SetHooksRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetHooks200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetHooks400", typeof SetHooks400.Type> | PunktfunkError<"SetHooks401", typeof SetHooks401.Type> | PunktfunkError<"SetHooks403", typeof SetHooks403.Type> | PunktfunkError<"SetHooks500", typeof SetHooks500.Type>>;
@@ -4315,8 +4607,8 @@ readonly "getLibraryArtStream": (id: string, kind: string, options: { readonly p
   /**
 * A user-curated entry. The host assigns a stable id, returned in the body. On a seat host it is
 * that host's own title, under an `own:` id, kept in its own config folder and run as its
-* account; the box lists its name and picture for the seat's profile. A profile that uses an
-* existing account takes none.
+* account; the box lists its name and picture for the seat's profile. On a profile that uses an
+* existing account only that person adds one, from their own session.
 */
 readonly "createCustomGame": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof CreateCustomGameRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof CreateCustomGame201.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"CreateCustomGame400", typeof CreateCustomGame400.Type> | PunktfunkError<"CreateCustomGame401", typeof CreateCustomGame401.Type> | PunktfunkError<"CreateCustomGame403", typeof CreateCustomGame403.Type> | PunktfunkError<"CreateCustomGame500", typeof CreateCustomGame500.Type>>;
@@ -4324,7 +4616,8 @@ readonly "createCustomGame": {
   }
   /**
 * Operator lane only: the hint names host paths, which is why the catalog read
-* model leaves it out. The paired-cert allowlist names `GET /library` exactly.
+* model leaves it out. The paired-cert allowlist names `GET /library` exactly. On a person's
+* own account a title of its own is that person's alone to read: any other lane gets the 404.
 */
 readonly "getCustomGame": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetCustomGame200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetCustomGame401", typeof GetCustomGame401.Type> | PunktfunkError<"GetCustomGame404", typeof GetCustomGame404.Type>>;
@@ -4343,11 +4636,13 @@ readonly "getCustomGame": {
 * but is not deleted. The operator console still lists it (`hidden: true`) so it can return.
 * The id is not required to exist now — a plugin mid-sync or an unmounted drive would
 * otherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it
-* cannot bring back a title the box hides. Emits `library.changed` only on a real change.
+* cannot bring back a title the box hides. A paired device that is that locked profile's person
+* may set it too, hiding only a title the profile's library lists. Emits `library.changed` only
+* on a real change.
 */
 readonly "setLibraryEntryHidden": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryEntryHiddenParams.Encoded | undefined; readonly payload: typeof SetLibraryEntryHiddenRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetLibraryEntryHidden200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryEntryHidden400", typeof SetLibraryEntryHidden400.Type> | PunktfunkError<"SetLibraryEntryHidden401", typeof SetLibraryEntryHidden401.Type> | PunktfunkError<"SetLibraryEntryHidden404", typeof SetLibraryEntryHidden404.Type> | PunktfunkError<"SetLibraryEntryHidden500", typeof SetLibraryEntryHidden500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryEntryHiddenParams.Encoded | undefined; readonly payload: typeof SetLibraryEntryHiddenRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetLibraryEntryHidden200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryEntryHidden400", typeof SetLibraryEntryHidden400.Type> | PunktfunkError<"SetLibraryEntryHidden401", typeof SetLibraryEntryHidden401.Type> | PunktfunkError<"SetLibraryEntryHidden404", typeof SetLibraryEntryHidden404.Type> | PunktfunkError<"SetLibraryEntryHidden500", typeof SetLibraryEntryHidden500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryEntryHiddenParams.Encoded | undefined; readonly payload: typeof SetLibraryEntryHiddenRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetLibraryEntryHidden200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryEntryHidden400", typeof SetLibraryEntryHidden400.Type> | PunktfunkError<"SetLibraryEntryHidden401", typeof SetLibraryEntryHidden401.Type> | PunktfunkError<"SetLibraryEntryHidden403", typeof SetLibraryEntryHidden403.Type> | PunktfunkError<"SetLibraryEntryHidden404", typeof SetLibraryEntryHidden404.Type> | PunktfunkError<"SetLibraryEntryHidden500", typeof SetLibraryEntryHidden500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryEntryHiddenParams.Encoded | undefined; readonly payload: typeof SetLibraryEntryHiddenRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetLibraryEntryHidden200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryEntryHidden400", typeof SetLibraryEntryHidden400.Type> | PunktfunkError<"SetLibraryEntryHidden401", typeof SetLibraryEntryHidden401.Type> | PunktfunkError<"SetLibraryEntryHidden403", typeof SetLibraryEntryHidden403.Type> | PunktfunkError<"SetLibraryEntryHidden404", typeof SetLibraryEntryHidden404.Type> | PunktfunkError<"SetLibraryEntryHidden500", typeof SetLibraryEntryHidden500.Type>>;
   }
   /**
 * Asks the plugin that lists the title to download it, or to resume a paused download. The
@@ -4420,7 +4715,8 @@ readonly "deleteLibraryMetadata": {
   /**
 * The shared overrides, each game's entry and each source's, as `library-overrides.json`
 * holds them. `GET /library` carries what each title resolves to. With `as`, the profile's own
-* file: where it has an entry for a game or its source, that entry wins over the box's.
+* file: where it has an entry for a game or its source, that entry wins over the box's. Beside
+* it, `box_sets`: the box's shared overrides it may point at, which only the console changes.
 */
 readonly "getLibraryOverrides": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetLibraryOverridesParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetLibraryOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibraryOverrides401", typeof GetLibraryOverrides401.Type> | PunktfunkError<"GetLibraryOverrides404", typeof GetLibraryOverrides404.Type>>;
@@ -4431,11 +4727,13 @@ readonly "getLibraryOverrides": {
 * `{ "none": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,
 * and the game takes its source's. The id is not required to exist now, as with hiding.
 * With `as`, the entry is that profile's own and `set` may name the box's shared override or
-* the profile's; `{}` hands the game back to the box's entry. Emits `library.changed`.
+* the profile's; `{}` hands the game back to the box's entry. A paired device that is that
+* locked profile's person may set it too, for a title the profile's library lists. Emits
+* `library.changed`.
 */
 readonly "setGameOverrides": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetGameOverridesParams.Encoded | undefined; readonly payload: typeof SetGameOverridesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetGameOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetGameOverrides400", typeof SetGameOverrides400.Type> | PunktfunkError<"SetGameOverrides401", typeof SetGameOverrides401.Type> | PunktfunkError<"SetGameOverrides404", typeof SetGameOverrides404.Type> | PunktfunkError<"SetGameOverrides500", typeof SetGameOverrides500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetGameOverridesParams.Encoded | undefined; readonly payload: typeof SetGameOverridesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetGameOverrides200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetGameOverrides400", typeof SetGameOverrides400.Type> | PunktfunkError<"SetGameOverrides401", typeof SetGameOverrides401.Type> | PunktfunkError<"SetGameOverrides404", typeof SetGameOverrides404.Type> | PunktfunkError<"SetGameOverrides500", typeof SetGameOverrides500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetGameOverridesParams.Encoded | undefined; readonly payload: typeof SetGameOverridesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetGameOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetGameOverrides400", typeof SetGameOverrides400.Type> | PunktfunkError<"SetGameOverrides401", typeof SetGameOverrides401.Type> | PunktfunkError<"SetGameOverrides403", typeof SetGameOverrides403.Type> | PunktfunkError<"SetGameOverrides404", typeof SetGameOverrides404.Type> | PunktfunkError<"SetGameOverrides500", typeof SetGameOverrides500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetGameOverridesParams.Encoded | undefined; readonly payload: typeof SetGameOverridesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetGameOverrides200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetGameOverrides400", typeof SetGameOverrides400.Type> | PunktfunkError<"SetGameOverrides401", typeof SetGameOverrides401.Type> | PunktfunkError<"SetGameOverrides403", typeof SetGameOverrides403.Type> | PunktfunkError<"SetGameOverrides404", typeof SetGameOverrides404.Type> | PunktfunkError<"SetGameOverrides500", typeof SetGameOverrides500.Type>>;
   }
   /**
 * A named set of stream settings that games and sources point at. The host assigns its id.
@@ -4465,12 +4763,14 @@ readonly "deleteOverrideSet": {
   }
   /**
 * The same body as a game's, without `none`: `{}` clears the source's entry. Each title of
-* the source without an entry of its own takes it. With `as`, the entry is that profile's own.
-* Emits `library.changed`.
+* the source without an entry of its own takes it. With `as`, the entry is that profile's own
+* and `set` may name the box's shared override or the profile's. A paired device that is that
+* locked profile's person, and that profile's person session, may set it too, for a source
+* with a title the profile's library lists. Emits `library.changed`.
 */
 readonly "setSourceOverrides": {
-    <Config extends OperationConfig | undefined = undefined>(source: string, options: { readonly params?: typeof SetSourceOverridesParams.Encoded | undefined; readonly payload: typeof SetSourceOverridesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetSourceOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSourceOverrides400", typeof SetSourceOverrides400.Type> | PunktfunkError<"SetSourceOverrides401", typeof SetSourceOverrides401.Type> | PunktfunkError<"SetSourceOverrides404", typeof SetSourceOverrides404.Type> | PunktfunkError<"SetSourceOverrides500", typeof SetSourceOverrides500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(source: string, options: { readonly params?: typeof SetSourceOverridesParams.Encoded | undefined; readonly payload: typeof SetSourceOverridesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetSourceOverrides200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSourceOverrides400", typeof SetSourceOverrides400.Type> | PunktfunkError<"SetSourceOverrides401", typeof SetSourceOverrides401.Type> | PunktfunkError<"SetSourceOverrides404", typeof SetSourceOverrides404.Type> | PunktfunkError<"SetSourceOverrides500", typeof SetSourceOverrides500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(source: string, options: { readonly params?: typeof SetSourceOverridesParams.Encoded | undefined; readonly payload: typeof SetSourceOverridesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetSourceOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSourceOverrides400", typeof SetSourceOverrides400.Type> | PunktfunkError<"SetSourceOverrides401", typeof SetSourceOverrides401.Type> | PunktfunkError<"SetSourceOverrides403", typeof SetSourceOverrides403.Type> | PunktfunkError<"SetSourceOverrides404", typeof SetSourceOverrides404.Type> | PunktfunkError<"SetSourceOverrides500", typeof SetSourceOverrides500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(source: string, options: { readonly params?: typeof SetSourceOverridesParams.Encoded | undefined; readonly payload: typeof SetSourceOverridesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetSourceOverrides200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSourceOverrides400", typeof SetSourceOverrides400.Type> | PunktfunkError<"SetSourceOverrides401", typeof SetSourceOverrides401.Type> | PunktfunkError<"SetSourceOverrides403", typeof SetSourceOverrides403.Type> | PunktfunkError<"SetSourceOverrides404", typeof SetSourceOverrides404.Type> | PunktfunkError<"SetSourceOverrides500", typeof SetSourceOverrides500.Type>>;
   }
   /**
 * The custom entries this seat host keeps in its own config folder, each by its `own:` id,
@@ -4500,7 +4800,9 @@ readonly "storeOwnTitles": {
 * `q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,
 * `launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a
 * caller that needs only that entry. Lanes see what `GET /library` shows them, `as`
-* included.
+* included. `hidden=true` lists only hidden titles: every one on the operator's lane, and to
+* a device that is the person of the profile `as` names, the titles that profile hides. Any
+* other caller gets the page it would get without it.
 */
 readonly "getLibraryPage": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetLibraryPageParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetLibraryPage200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibraryPage400", typeof GetLibraryPage400.Type> | PunktfunkError<"GetLibraryPage401", typeof GetLibraryPage401.Type> | PunktfunkError<"GetLibraryPage404", typeof GetLibraryPage404.Type>>;
@@ -4574,8 +4876,9 @@ readonly "listLibraryScanners": {
   /**
 * Takes effect on the next library read. Disabling hides titles; the plugin may keep
 * reconciling while off. Nothing is deleted. With `as`, the switch is that profile's own: it
-* turns a source off for the profile, and cannot turn on one the box turned off. Emits
-* `library.changed` when the state changes.
+* turns a source off for the profile, and cannot turn on one the box turned off. A paired device
+* that is that locked profile's person may set it too. Emits `library.changed` when the state
+* changes.
 */
 readonly "setLibraryScanner": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryScannerParams.Encoded | undefined; readonly payload: typeof SetLibraryScannerRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetLibraryScanner200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryScanner401", typeof SetLibraryScanner401.Type> | PunktfunkError<"SetLibraryScanner403", typeof SetLibraryScanner403.Type> | PunktfunkError<"SetLibraryScanner404", typeof SetLibraryScanner404.Type> | PunktfunkError<"SetLibraryScanner500", typeof SetLibraryScanner500.Type>>;
@@ -4717,7 +5020,9 @@ readonly "requestPluginAccess": {
 * `allow` turns a pending request into a grant (the platform ACL lands first, so a failed
 * grant stores nothing), or with `write` set grants a path the operator handed over, on
 * behalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.
-* A folder that takes longer answers 202 and lists its walk until the record lands.
+* A folder that takes longer answers 202 and lists its walk until the record lands. On a seat
+* host the grant is for its own runner: a folder the seat's account can't list is refused. On a
+* person's own account only that person decides, and an emulator or core install is refused.
 */
 readonly "decidePluginAccess": {
     <Config extends OperationConfig | undefined = undefined>(plugin: string, options: { readonly payload: typeof DecidePluginAccessRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof DecidePluginAccess200.Type | typeof DecidePluginAccess202.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"DecidePluginAccess400", typeof DecidePluginAccess400.Type> | PunktfunkError<"DecidePluginAccess401", typeof DecidePluginAccess401.Type> | PunktfunkError<"DecidePluginAccess403", typeof DecidePluginAccess403.Type> | PunktfunkError<"DecidePluginAccess404", typeof DecidePluginAccess404.Type> | PunktfunkError<"DecidePluginAccess500", typeof DecidePluginAccess500.Type>>;
@@ -4825,10 +5130,12 @@ readonly "setDoor": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof SetDoorRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<void, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetDoor401", typeof SetDoor401.Type> | PunktfunkError<"SetDoor403", typeof SetDoor403.Type> | PunktfunkError<"SetDoor409", typeof SetDoor409.Type> | PunktfunkError<"SetDoor502", typeof SetDoor502.Type> | PunktfunkError<"SetDoor503", typeof SetDoor503.Type>>;
   }
   /**
-* Every profile on the box, the owner first. A client shows this as its picker. Each row's
-* `unlock` says what the asking device sends with its connect: a profile on a person's own
-* Linux account needs the account's password, or a key proof from a device that enrolled one,
-* until the device is signed in to its running desktop.
+* The profiles the asking device may open, the owner first, and the locked ones that take a
+* PIN; the console lists every profile. A client shows this as its picker. Each row's `unlock`
+* says what the asking device sends with its connect: a profile on a person's own Linux account
+* needs the account's password, or a key proof from a device that enrolled one, until the
+* device is signed in to its running desktop; a locked profile whose list lacks the device
+* needs its PIN. `person` marks the rows whose own library view this device may change now.
 */
 readonly "enumerateProfiles": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof EnumerateProfiles200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"EnumerateProfiles401", typeof EnumerateProfiles401.Type> | PunktfunkError<"EnumerateProfiles404", typeof EnumerateProfiles404.Type>>;
@@ -4912,15 +5219,25 @@ readonly "deleteProfileAvatar": {
   }
   /**
 * For a profile on a person's own Linux account: each device that unlocked it, and how it gets
-* back on. Admin lane only.
+* back on. For any other profile: the devices its lock lets in, the same rows, kept while it is
+* open. Admin lane only.
 */
 readonly "listProfileDevices": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ListProfileDevices200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListProfileDevices401", typeof ListProfileDevices401.Type> | PunktfunkError<"ListProfileDevices404", typeof ListProfileDevices404.Type> | PunktfunkError<"ListProfileDevices409", typeof ListProfileDevices409.Type> | PunktfunkError<"ListProfileDevices503", typeof ListProfileDevices503.Type>>;
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof ListProfileDevices200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListProfileDevices401", typeof ListProfileDevices401.Type> | PunktfunkError<"ListProfileDevices404", typeof ListProfileDevices404.Type> | PunktfunkError<"ListProfileDevices409", typeof ListProfileDevices409.Type> | PunktfunkError<"ListProfileDevices503", typeof ListProfileDevices503.Type>>;
   }
   /**
+* Puts a device paired with this host, Punktfunk or Moonlight, on the profile's list until it
+* is signed out. Answers the list. Admin lane only.
+*/
+readonly "addProfileDevice": {
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof AddProfileDeviceRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof AddProfileDevice200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"AddProfileDevice400", typeof AddProfileDevice400.Type> | PunktfunkError<"AddProfileDevice401", typeof AddProfileDevice401.Type> | PunktfunkError<"AddProfileDevice404", typeof AddProfileDevice404.Type> | PunktfunkError<"AddProfileDevice409", typeof AddProfileDevice409.Type> | PunktfunkError<"AddProfileDevice422", typeof AddProfileDevice422.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof AddProfileDeviceRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof AddProfileDevice200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"AddProfileDevice400", typeof AddProfileDevice400.Type> | PunktfunkError<"AddProfileDevice401", typeof AddProfileDevice401.Type> | PunktfunkError<"AddProfileDevice404", typeof AddProfileDevice404.Type> | PunktfunkError<"AddProfileDevice409", typeof AddProfileDevice409.Type> | PunktfunkError<"AddProfileDevice422", typeof AddProfileDevice422.Type>>;
+  }
+  /**
 * For a profile on a person's own Linux account: every device needs the account's password
-* again and every unlock key is forgotten. Admin lane only.
+* again and every unlock key is forgotten. For any other: its lock's list empties, and every
+* session on it from a device off the list ends. Admin lane only.
 */
 readonly "signOutProfileDevices": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SignOutProfileDevices401", typeof SignOutProfileDevices401.Type> | PunktfunkError<"SignOutProfileDevices404", typeof SignOutProfileDevices404.Type> | PunktfunkError<"SignOutProfileDevices409", typeof SignOutProfileDevices409.Type> | PunktfunkError<"SignOutProfileDevices503", typeof SignOutProfileDevices503.Type>>;
@@ -4928,7 +5245,8 @@ readonly "signOutProfileDevices": {
   }
   /**
 * For a profile on a person's own Linux account: the device needs the account's password again
-* and its unlock key is forgotten. Admin lane only.
+* and its unlock key is forgotten. For any other: the device leaves its lock's list, and a
+* session it plays there ends. Admin lane only.
 */
 readonly "signOutProfileDevice": {
     <Config extends OperationConfig | undefined = undefined>(id: string, fingerprint: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SignOutProfileDevice400", typeof SignOutProfileDevice400.Type> | PunktfunkError<"SignOutProfileDevice401", typeof SignOutProfileDevice401.Type> | PunktfunkError<"SignOutProfileDevice404", typeof SignOutProfileDevice404.Type> | PunktfunkError<"SignOutProfileDevice409", typeof SignOutProfileDevice409.Type> | PunktfunkError<"SignOutProfileDevice503", typeof SignOutProfileDevice503.Type>>;
@@ -4940,6 +5258,48 @@ readonly "signOutProfileDevice": {
 readonly "endProfileSession": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof EndProfileSession200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"EndProfileSession401", typeof EndProfileSession401.Type> | PunktfunkError<"EndProfileSession404", typeof EndProfileSession404.Type> | PunktfunkError<"EndProfileSession409", typeof EndProfileSession409.Type> | PunktfunkError<"EndProfileSession503", typeof EndProfileSession503.Type>>;
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof EndProfileSession200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"EndProfileSession401", typeof EndProfileSession401.Type> | PunktfunkError<"EndProfileSession404", typeof EndProfileSession404.Type> | PunktfunkError<"EndProfileSession409", typeof EndProfileSession409.Type> | PunktfunkError<"EndProfileSession503", typeof EndProfileSession503.Type>>;
+  }
+  /**
+* Whether it is locked, whether it has a PIN, and the wrong PINs counted against it. Its
+* devices are `GET /profiles/{id}/devices`. Admin lane only.
+*/
+readonly "getProfileLock": {
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetProfileLock200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetProfileLock401", typeof GetProfileLock401.Type> | PunktfunkError<"GetProfileLock404", typeof GetProfileLock404.Type> | PunktfunkError<"GetProfileLock409", typeof GetProfileLock409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetProfileLock200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetProfileLock401", typeof GetProfileLock401.Type> | PunktfunkError<"GetProfileLock404", typeof GetProfileLock404.Type> | PunktfunkError<"GetProfileLock409", typeof GetProfileLock409.Type>>;
+  }
+  /**
+* From now its list is exactly `devices`, paired devices, so a lock keeps the ones someone
+* plays on, and with `pin` that is its PIN; a session from any other device ends. One step: on
+* any refusal nothing changed. On a profile already locked it changes nothing and takes only
+* devices the profile lets in and no PIN, so it never widens who opens it: the device and PIN
+* routes change a locked profile. Admin lane only.
+*/
+readonly "lockProfile": {
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof LockProfileRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof LockProfile200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"LockProfile400", typeof LockProfile400.Type> | PunktfunkError<"LockProfile401", typeof LockProfile401.Type> | PunktfunkError<"LockProfile404", typeof LockProfile404.Type> | PunktfunkError<"LockProfile409", typeof LockProfile409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof LockProfileRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof LockProfile200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"LockProfile400", typeof LockProfile400.Type> | PunktfunkError<"LockProfile401", typeof LockProfile401.Type> | PunktfunkError<"LockProfile404", typeof LockProfile404.Type> | PunktfunkError<"LockProfile409", typeof LockProfile409.Type>>;
+  }
+  /**
+* Every paired device opens it again. Its list and its PIN stay for the next lock. Admin lane
+* only.
+*/
+readonly "unlockProfile": {
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof UnlockProfile200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"UnlockProfile401", typeof UnlockProfile401.Type> | PunktfunkError<"UnlockProfile404", typeof UnlockProfile404.Type> | PunktfunkError<"UnlockProfile409", typeof UnlockProfile409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof UnlockProfile200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"UnlockProfile401", typeof UnlockProfile401.Type> | PunktfunkError<"UnlockProfile404", typeof UnlockProfile404.Type> | PunktfunkError<"UnlockProfile409", typeof UnlockProfile409.Type>>;
+  }
+  /**
+* While it is locked, a device off its list opens it with this PIN, and the PIN puts it on the
+* list. Replaces any PIN it had. Admin lane only.
+*/
+readonly "setProfilePin": {
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof SetProfilePinRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetProfilePin200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetProfilePin400", typeof SetProfilePin400.Type> | PunktfunkError<"SetProfilePin401", typeof SetProfilePin401.Type> | PunktfunkError<"SetProfilePin404", typeof SetProfilePin404.Type> | PunktfunkError<"SetProfilePin409", typeof SetProfilePin409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof SetProfilePinRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetProfilePin200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetProfilePin400", typeof SetProfilePin400.Type> | PunktfunkError<"SetProfilePin401", typeof SetProfilePin401.Type> | PunktfunkError<"SetProfilePin404", typeof SetProfilePin404.Type> | PunktfunkError<"SetProfilePin409", typeof SetProfilePin409.Type>>;
+  }
+  /**
+* While it is locked, only the devices on its list open it. Admin lane only.
+*/
+readonly "clearProfilePin": {
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ClearProfilePin200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ClearProfilePin401", typeof ClearProfilePin401.Type> | PunktfunkError<"ClearProfilePin404", typeof ClearProfilePin404.Type> | PunktfunkError<"ClearProfilePin409", typeof ClearProfilePin409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof ClearProfilePin200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ClearProfilePin401", typeof ClearProfilePin401.Type> | PunktfunkError<"ClearProfilePin404", typeof ClearProfilePin404.Type> | PunktfunkError<"ClearProfilePin409", typeof ClearProfilePin409.Type>>;
   }
   /**
 * The console's **Start**: as `wake`, from the console. A profile on a person's own Linux
@@ -4957,10 +5317,11 @@ readonly "stopProfileSeat": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof StopProfileSeat200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"StopProfileSeat401", typeof StopProfileSeat401.Type> | PunktfunkError<"StopProfileSeat404", typeof StopProfileSeat404.Type> | PunktfunkError<"StopProfileSeat409", typeof StopProfileSeat409.Type> | PunktfunkError<"StopProfileSeat503", typeof StopProfileSeat503.Type>>;
   }
   /**
-* For a profile on a person's own Linux account and a device that enrolled an unlock key: 32
-* random bytes for the key to sign, and the seat id the signed message names. It is good for
-* one proof within two minutes, and a new one replaces it. A device without a key is refused;
-* it unlocks with the account's password. Paired devices only.
+* For a device that enrolled an unlock key: 32 random bytes for the key to sign, and what the
+* signed message names, the seat id for a profile on a person's own Linux account or the
+* profile id for a locked profile. It is good for one proof within two minutes, and a new one
+* replaces it. A device without a key is refused; it unlocks with the account's password or the
+* profile's PIN. Paired devices only.
 */
 readonly "unlockChallenge": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof UnlockChallenge200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"UnlockChallenge400", typeof UnlockChallenge400.Type> | PunktfunkError<"UnlockChallenge401", typeof UnlockChallenge401.Type> | PunktfunkError<"UnlockChallenge403", typeof UnlockChallenge403.Type> | PunktfunkError<"UnlockChallenge404", typeof UnlockChallenge404.Type> | PunktfunkError<"UnlockChallenge409", typeof UnlockChallenge409.Type> | PunktfunkError<"UnlockChallenge503", typeof UnlockChallenge503.Type>>;
@@ -4970,8 +5331,9 @@ readonly "unlockChallenge": {
 * Starts a stopped seat so the next connect lands in it, and answers at once with the seat
 * `starting`; poll `enumerate` until it is `ready`. A profile with no seat to start only gets
 * its row back. A paired device wakes the profile it lands in when it names none; any other
-* needs its launch grant. A profile on a person's own Linux account is never woken: its
-* desktop starts when the connect brings the account's password.
+* needs its launch grant, and a locked one a device on its list. A profile on a person's own
+* Linux account is never woken: its desktop starts when the connect brings the account's
+* password.
 */
 readonly "wakeProfile": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof WakeProfile200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"WakeProfile401", typeof WakeProfile401.Type> | PunktfunkError<"WakeProfile403", typeof WakeProfile403.Type> | PunktfunkError<"WakeProfile404", typeof WakeProfile404.Type> | PunktfunkError<"WakeProfile409", typeof WakeProfile409.Type>>;
@@ -5006,7 +5368,8 @@ readonly "getRecentSessions": {
   /**
 * Persisted clamped. Takes effect on the next decision, including a session
 * already streaming — policy is read at session end, not start. With `as`, the settings of
-* that profile's own seat; a profile on the host's own desktop has none of its own.
+* that profile's own seat; a profile on the host's own desktop has none of its own. A paired
+* device that is that locked profile's person may set them too.
 */
 readonly "setSessionSettings": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof SetSessionSettingsParams.Encoded | undefined; readonly payload: typeof SetSessionSettingsRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetSessionSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSessionSettings400", typeof SetSessionSettings400.Type> | PunktfunkError<"SetSessionSettings401", typeof SetSessionSettings401.Type> | PunktfunkError<"SetSessionSettings403", typeof SetSessionSettings403.Type> | PunktfunkError<"SetSessionSettings404", typeof SetSessionSettings404.Type> | PunktfunkError<"SetSessionSettings409", typeof SetSessionSettings409.Type> | PunktfunkError<"SetSessionSettings500", typeof SetSessionSettings500.Type>>;
@@ -5015,7 +5378,8 @@ readonly "setSessionSettings": {
   /**
 * Its seat plays with the box's Seat defaults again; the answer is what `GET` with the same
 * `as` answers, `configured: false`. Dropping settings a profile never had is the same answer.
-* `as` is required: the host's own settings are changed with `PUT`, never dropped.
+* `as` is required: the host's own settings are changed with `PUT`, never dropped. A paired
+* device that is that locked profile's person may drop them too.
 */
 readonly "clearSessionSettings": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly params: typeof ClearSessionSettingsParams.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ClearSessionSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ClearSessionSettings400", typeof ClearSessionSettings400.Type> | PunktfunkError<"ClearSessionSettings401", typeof ClearSessionSettings401.Type> | PunktfunkError<"ClearSessionSettings403", typeof ClearSessionSettings403.Type> | PunktfunkError<"ClearSessionSettings404", typeof ClearSessionSettings404.Type> | PunktfunkError<"ClearSessionSettings409", typeof ClearSessionSettings409.Type> | PunktfunkError<"ClearSessionSettings500", typeof ClearSessionSettings500.Type>>;

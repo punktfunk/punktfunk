@@ -31,6 +31,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
+import { usePerson } from "@/lib/person";
 import { isStringArray, useLocalPref } from "@/lib/prefs";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -47,6 +48,8 @@ export const usePluginAccess = () => {
 	// A large Windows folder outlasts the decision that started it; the count comes from here.
 	const access = useGetPluginAccess({
 		query: {
+			// Folder access is the box's plugins' to ask; a person's console asks none.
+			enabled: !usePerson(),
 			refetchInterval: (query) =>
 				query.state.data?.some((row) => row.walks?.length) ? 1000 : false,
 		},

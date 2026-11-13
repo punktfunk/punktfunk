@@ -6,6 +6,7 @@ import { useGetLibraryPage } from "@/api/gen/library/library";
 import type { HookEntry } from "@/api/gen/model/hookEntry";
 import { useListNativeClients } from "@/api/gen/native/native";
 import { useListProfiles } from "@/api/gen/profiles/profiles";
+import { useProfileView } from "@/api/seat";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
@@ -80,13 +81,16 @@ export const HookForm: FC<{
 		{ id: typed, limit: 1 },
 		{ query: { enabled: filtered && typed.includes(":") } },
 	);
-	const clients = useListNativeClients({ query: { enabled: filtered } });
+	// A person's own hooks are theirs alone: no other player, and no box device list to read.
+	const person = useProfileView()?.person === true;
+	const lists = filtered && !person;
+	const clients = useListNativeClients({ query: { enabled: lists } });
 	// One list of hooks for the box; a profile narrows one to that player (R9: one profile, none).
 	const profiles = useListProfiles({
-		query: { enabled: filtered, retry: false },
+		query: { enabled: lists, retry: false },
 	});
 	const players = profiles.data ?? [];
-	const moonlight = useListPairedClients({ query: { enabled: filtered } });
+	const moonlight = useListPairedClients({ query: { enabled: lists } });
 	const appOptions: ComboboxOption[] = useMemo(
 		() =>
 			[
@@ -254,9 +258,11 @@ export const HookForm: FC<{
 						/>
 					</div>
 					<p className="text-xs text-muted-foreground">
-						{kind === "run"
-							? m.automation_action_run_help()
-							: m.automation_action_webhook_help()}
+						{kind !== "run"
+							? m.automation_action_webhook_help()
+							: person
+								? m.person_automation_run_help()
+								: m.automation_action_run_help()}
 					</p>
 				</fieldset>
 
@@ -287,42 +293,48 @@ export const HookForm: FC<{
 
 				{filtered && (
 					<div className="grid gap-3 sm:grid-cols-2">
-						<div className="space-y-2">
-							<Label htmlFor="hook-client">
-								{m.automation_filter_client()}
-							</Label>
-							<Select
-								value={draft.filter?.fingerprint ?? legacyClient ?? ANY_DEVICE}
-								onValueChange={(v) =>
-									set({
-										filter: {
-											...draft.filter,
-											// One device handle, never both: picking here replaces a
-											// name a previous version of the console stored.
-											client: undefined,
-											fingerprint: v === ANY_DEVICE ? undefined : v,
-										},
-									})
-								}
-							>
-								<SelectTrigger id="hook-client">
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value={ANY_DEVICE}>
-										{m.automation_filter_any_device()}
-									</SelectItem>
-									{legacyClient && (
-										<SelectItem value={legacyClient}>{legacyClient}</SelectItem>
-									)}
-									{deviceOptions.map((d) => (
-										<SelectItem key={d.fingerprint} value={d.fingerprint}>
-											{d.name}
+						{!person && (
+							<div className="space-y-2">
+								<Label htmlFor="hook-client">
+									{m.automation_filter_client()}
+								</Label>
+								<Select
+									value={
+										draft.filter?.fingerprint ?? legacyClient ?? ANY_DEVICE
+									}
+									onValueChange={(v) =>
+										set({
+											filter: {
+												...draft.filter,
+												// One device handle, never both: picking here replaces a
+												// name a previous version of the console stored.
+												client: undefined,
+												fingerprint: v === ANY_DEVICE ? undefined : v,
+											},
+										})
+									}
+								>
+									<SelectTrigger id="hook-client">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value={ANY_DEVICE}>
+											{m.automation_filter_any_device()}
 										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						</div>
+										{legacyClient && (
+											<SelectItem value={legacyClient}>
+												{legacyClient}
+											</SelectItem>
+										)}
+										{deviceOptions.map((d) => (
+											<SelectItem key={d.fingerprint} value={d.fingerprint}>
+												{d.name}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</div>
+						)}
 						{players.length > 1 && (
 							<div className="space-y-2">
 								<Label htmlFor="hook-profile">

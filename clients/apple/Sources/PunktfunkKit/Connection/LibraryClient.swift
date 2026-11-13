@@ -601,8 +601,8 @@ public struct HostAction: Codable, Hashable, Sendable, Identifiable {
 public enum LibraryClient {
     /// One answer of `GET /api/v1/library/page`. `total` and `platforms` stay undecoded: the
     /// library screens collate the whole catalog themselves.
-    struct LibraryPage: Decodable {
-        var items: [GameEntry]
+    struct LibraryPage<Item: Decodable>: Decodable {
+        var items: [Item]
         var nextCursor: String?
 
         private enum CodingKeys: String, CodingKey {
@@ -633,10 +633,17 @@ public enum LibraryClient {
     /// the cursor of the page before and answers one page's body. Any page failing fails the
     /// walk: half a catalog is not one.
     static func walkPages(_ get: (String?) async throws -> Data) async throws -> [GameEntry] {
-        var games: [GameEntry] = []
+        try await walkPages(of: GameEntry.self, get)
+    }
+
+    /// ``walkPages(_:)`` over pages of `Item`.
+    static func walkPages<Item: Decodable>(
+        of _: Item.Type, _ get: (String?) async throws -> Data
+    ) async throws -> [Item] {
+        var games: [Item] = []
         var cursor: String?
         for _ in 0..<maxPages {
-            let page = try JSONDecoder().decode(LibraryPage.self, from: try await get(cursor))
+            let page = try JSONDecoder().decode(LibraryPage<Item>.self, from: try await get(cursor))
             games += page.items
             // A cursor that does not move would ask for the same page forever.
             guard let next = page.nextCursor, !next.isEmpty, next != cursor else { break }

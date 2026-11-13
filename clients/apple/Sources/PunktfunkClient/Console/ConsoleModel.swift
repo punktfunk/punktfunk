@@ -96,6 +96,9 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     var artTask: Task<Void, Never>?
     /// Titles the current list fetch already has a poster for.
     var artShown = Set<String>()
+    /// The titles the last hidden list held: a title shown again joins the cached catalog as
+    /// that list had it.
+    var hiddenSeen: [GameEntry] = []
 
     init?(entry: StoredHost?, pin: StreamPreset?, store: HostStore, discovery: HostDiscovery,
           presets: PresetStore, power: HostPowerStore, nowPlaying: NowPlayingStore,
@@ -265,6 +268,8 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
             // Each `Launch` takes the password the console's prompt typed, and a `ProfileLocked`
             // close goes back to that prompt.
             "prompts_unlock": true,
+            // This app answers `SetHidden` and `FetchHidden`.
+            "hides": true,
             "pyrowave_ok": MetalWaveletDecoder.supported,
             "settings": settings(hosts),
             "presets": presets.map { ["id": $0.id, "name": $0.name, "overrides": [:] as [String: Any]] },

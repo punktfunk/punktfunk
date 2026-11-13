@@ -26,6 +26,9 @@ impl Shell {
         // The keyboard grab exists only while shortcut capture is on, and then Alt+Tab
         // belongs to the host. SDL's default minimizes a grabbed fullscreen window on it.
         sdl3::hint::set("SDL_ALLOW_ALT_TAB_WHILE_GRABBED", "0");
+        // The console draws an input method's text in progress in its field. Unclaimed,
+        // Windows, XIM, IBus and Fcitx draw it in a window of their own and send none.
+        sdl3::hint::set("SDL_IME_IMPLEMENTED_UI", "composition");
         // Wayland `app_id` and X11 WM_CLASS name the desktop entry a task manager groups and
         // pins this window under. The console has its own entry, so it carries that one's id.
         let app_id = if browse {

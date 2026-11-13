@@ -386,6 +386,17 @@ pub fn find_game_for(view: &View, id: &str) -> Option<GameEntry> {
     (!by_box.contains(id) && !by_profile.contains(id)).then_some(game)
 }
 
+/// Whether `view`'s library lists title `id`, hidden or not.
+pub(crate) fn lists(view: &View, id: &str) -> bool {
+    sorted_games_for(view).iter().any(|g| g.id == id)
+}
+
+/// Whether `view`'s library lists a title of `source`, hidden or not.
+pub(crate) fn lists_source(view: &View, source: &str) -> bool {
+    let games = sorted_games_for(view);
+    games.iter().any(|g| hidden::store_of(&g.id) == source)
+}
+
 /// The library in `view` including hidden titles, each flagged.
 ///
 /// Only the console list on the operator lane calls this: a hidden entry has to

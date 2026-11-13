@@ -1040,6 +1040,32 @@ mod tests {
         }
     }
 
+    /// The anchor soak ([`crate::smoke_pattern::Soak`], its `PF_WAVE_*` knobs). With
+    /// `PF_WAVE_CONFIRM` and a `PF_WAVE_LAG` past the slot ring, every ask anchors on the kept
+    /// picture instead of starting a wave.
+    #[test]
+    #[ignore = "needs a real VAAPI device"]
+    fn native_vaapi_anchor_soak() {
+        let soak = crate::smoke_pattern::Soak::from_env();
+        let (w, h) = (soak.w, soak.h);
+        let bps = soak.mbps * 1_000_000;
+        let knobs = Knobs::from_env();
+        let mut enc = NativeVaapiEncoder::open(
+            soak.codec,
+            w,
+            h,
+            soak.fps,
+            bps,
+            8,
+            ChromaFormat::Yuv420,
+            false,
+            true,
+            &knobs,
+        )
+        .expect("open");
+        soak.run("vaapi", &mut enc, |i| scroll_frame(w, h, i as u32));
+    }
+
     #[test]
     #[ignore = "needs a real VAAPI device"]
     fn native_vaapi_wave_h264() {

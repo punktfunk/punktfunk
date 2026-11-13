@@ -195,6 +195,8 @@ pub enum DeviceKind {
     ForNow,
     /// Rejoins a running session without a proof until it is signed out.
     Stay,
+    /// Put on a locked profile's list by the operator; opens it until signed out.
+    Added,
     /// Proves itself with an enrolled key on every connect.
     Key,
 }
@@ -861,7 +863,7 @@ mod tests {
             read_json_frame::<_, Response>(&mut Cursor::new(frame)).unwrap(),
             unlocked
         );
-        for kind in [DeviceKind::Stay, DeviceKind::Key] {
+        for kind in [DeviceKind::Stay, DeviceKind::Added, DeviceKind::Key] {
             let text = serde_json::to_string(&kind).unwrap();
             assert_eq!(serde_json::from_str::<DeviceKind>(&text).unwrap(), kind);
         }

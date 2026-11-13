@@ -64,7 +64,8 @@ pub struct OverrideEntry {
 }
 
 impl OverrideEntry {
-    fn is_empty(&self) -> bool {
+    /// `{}`: no entry, so storing it takes the one there away.
+    pub(crate) fn is_empty(&self) -> bool {
         !self.none && self.set.is_none() && self.values.is_empty()
     }
 }

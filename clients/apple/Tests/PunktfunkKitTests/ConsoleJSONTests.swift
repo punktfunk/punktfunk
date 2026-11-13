@@ -339,6 +339,48 @@ final class ConsoleJSONTests: XCTestCase {
         }
     }
 
+    /// The answers to `FetchHidden` and `SetHidden` match the bridge's `HiddenAnswer` and
+    /// `HideAnswer` samples, each answer under the command sample's host and profile.
+    func testHideAnswersMatchTheSharedVectors() throws {
+        let doc = try sharedVectors("console-bridge-vectors.json")
+        let models = try XCTUnwrap(doc["models"] as? [String: [Any]])
+        let commands = try XCTUnwrap(doc["commands"] as? [Any])
+        let fetch = try XCTUnwrap(
+            commands.lazy.compactMap { ($0 as? [String: Any])?["FetchHidden"] as? [String: Any] }
+                .first)
+        func object(_ written: String) throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(written.utf8)) as? [String: Any])
+        }
+        func same(_ got: Any?, _ model: String, _ i: Int) {
+            let want = models[model]?[i]
+            XCTAssertTrue((got as AnyObject?)?.isEqual(want) ?? false, "\(model)[\(i)] wrote \(String(describing: got))")
+        }
+
+        let (fp, profile) = (fetch["fp_hex"] as? String ?? "", fetch["profile"] as? String ?? "")
+        let wire = #"{"id": "steam:70", "store": "steam", "title": "Half-Life", "art": {}}"#
+        let halfLife = try JSONDecoder().decode(GameEntry.self, from: Data(wire.utf8))
+        let listed = try object(ConsoleJSON.hiddenList(fp: fp, profile: profile, games: [halfLife]))
+        XCTAssertEqual(listed["fp_hex"] as? String, "ab12")
+        XCTAssertEqual(listed["profile"] as? String, "a1b2c3d4e5f6")
+        same(listed["answer"], "HiddenAnswer", 0)
+        same(try object(ConsoleJSON.hiddenList(fp: fp, profile: profile, games: []))["answer"], "HiddenAnswer", 1)
+        let failed = ConsoleJSON.hiddenList(
+            fp: fp, profile: profile, games: nil, why: "Couldn't reach the host.")
+        same(try object(failed)["answer"], "HiddenAnswer", 2)
+
+        let done = HideForMe.Outcome.done.notice(hidden: true, title: "Dota 2", name: "Kid")
+        same(
+            try object(ConsoleJSON.hideAnswer(
+                fp: fp, profile: profile, appID: "steam:570", hidden: true, done: true, notice: done)),
+            "HideAnswer", 0)
+        let said = "This device can't change this profile. Ask the host's owner to change it in the web console."
+        same(
+            try object(ConsoleJSON.hideAnswer(
+                fp: fp, profile: profile, appID: "steam:570", hidden: false, done: false,
+                notice: HideForMe.Outcome.refused(said).notice(hidden: false, title: "Dota 2", name: "Kid"))),
+            "HideAnswer", 1)
+    }
+
     /// One of the `clients/shared` vector files.
     private func sharedVectors(_ file: String) throws -> [String: Any] {
         let url = URL(fileURLWithPath: #filePath)

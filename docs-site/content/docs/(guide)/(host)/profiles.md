@@ -203,9 +203,43 @@ Elsewhere:
 - The [Decky plugin](/docs/steam-deck) shows one chip per profile under the host.
 - [Moonlight](/docs/moonlight) and the other clients play as the owner.
 
-A profile is a name, not a lock: anyone on a paired device may pick any profile, except one on
-[someone's own account](/docs/own-account), which asks for its password. What a
-device may do stays its [access level](/docs/access-levels).
+Anyone on a paired device may pick any profile, except one you [lock](#lock-a-profile) and one on
+[someone's own account](/docs/own-account), which asks for its password. What a device may do
+stays its [access level](/docs/access-levels).
+
+## Lock a profile
+
+A locked profile opens only on the devices you choose. On the profile's card, **Lock** it, then
+**Add a device** from the devices paired with this host, Punktfunk or
+[Moonlight](/docs/moonlight). Unlocking, giving it a PIN and adding a device ask for the console
+password.
+
+- A device on its list opens it as before. Any other device doesn't see it when it picks a
+  profile, and a connect that names it is told `This device can't open this profile. Ask the
+  host's owner to add it.`
+- A **PIN** of 4 to 8 digits lets a device off the list in. A locked profile with a PIN shows in
+  every device's picker, and the right PIN puts that device on its list for the visit, or until
+  you sign it out when the device stays signed in. A device with a fingerprint reader or face
+  unlock can keep that instead, and opens the profile with it from then on. An app that can't
+  ask for a PIN yet says `This profile needs its PIN. Update Punktfunk on this device.`
+- Wrong PINs make a device wait, as a wrong account password does. Ten wrong PINs for one profile
+  within 15 minutes, from any devices, stop PIN entry for it for a while; the devices on its list
+  still open it.
+- Signing a device out ends its session, and so does locking a profile it plays unless you keep
+  that device when you lock.
+- The devices on its list can hide a game from this profile's shelf with **Hide for Kid** in the
+  game's menu, and bring it back from **Hidden for Kid**. The Linux and Windows apps and the
+  controller interface offer it. Changing this profile's own games and game-exit choice waits
+  for the Punktfunk apps to offer it.
+- Locking the owner profile also keeps Moonlight to the Moonlight devices on its list.
+- A profile that shares your desktop opens with your lock, your devices and your PIN: one
+  desktop, one lock. A profile on its own Windows account (take turns) has a lock of its own.
+- **Unlock** keeps the PIN for the next lock. Locking again starts from the devices you choose
+  then.
+
+The locks live in `profile-locks.json` beside the host's pairings, readable by the host alone. A
+file the host can't read keeps every profile locked, and the console says so: fix or remove it.
+Removing it unlocks every profile.
 
 ## Where a profile shows
 

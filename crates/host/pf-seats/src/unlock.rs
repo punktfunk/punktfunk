@@ -15,7 +15,7 @@ use aws_lc_rs::signature::{
     RSA_PKCS1_2048_8192_SHA256, RSA_PSS_2048_8192_SHA256,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::{Duration, Instant};
 
 /// How long a device stays present after it left: a reconnect needs no proof.
@@ -24,6 +24,9 @@ pub const GRACE_SECS: i64 = 600;
 pub const CAP_SECS: i64 = 24 * 60 * 60;
 /// Devices a row lists; the file stays far below its read cap.
 pub const MAX_DEVICES: usize = 64;
+/// Keys one device holds on one profile lock, one per profile it opens: a box holds at most
+/// eight profiles, and only those sharing a desktop share a lock.
+pub const MAX_KEYS: usize = 8;
 /// How long a challenge may be answered.
 pub const CHALLENGE_LIFE: Duration = Duration::from_secs(120);
 const MAX_NAME_CHARS: usize = 64;
@@ -45,8 +48,16 @@ pub struct Entry {
     pub name: String,
     #[serde(default)]
     pub stay: bool,
+    /// The operator put it on a profile's list: it stays until signed out. Never on a person's
+    /// own account.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub added: bool,
+    /// A person's row's key; on a profile lock, a key from before keys named their profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<UnlockKey>,
+    /// A profile lock's keys, each under the profile id it opens. At most [`MAX_KEYS`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub keys: BTreeMap<String, UnlockKey>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub present: Option<Presence>,
     pub added_unix: i64,
@@ -70,14 +81,19 @@ impl Presence {
 
 impl Entry {
     fn admitted(&self) -> bool {
-        self.present.is_some() || (self.stay && self.key.is_none())
+        self.present.is_some() || (self.stay && !self.has_key())
+    }
+
+    fn has_key(&self) -> bool {
+        self.key.is_some() || !self.keys.is_empty()
     }
 
     fn kind(&self) -> DeviceKind {
-        match (&self.key, self.stay) {
-            (Some(_), _) => DeviceKind::Key,
-            (None, true) => DeviceKind::Stay,
-            (None, false) => DeviceKind::ForNow,
+        match (self.has_key(), self.added, self.stay) {
+            (true, ..) => DeviceKind::Key,
+            (false, true, _) => DeviceKind::Added,
+            (false, false, true) => DeviceKind::Stay,
+            (false, false, false) => DeviceKind::ForNow,
         }
     }
 }
@@ -93,6 +109,10 @@ impl DeviceList {
                     && valid_device_name(&e.name)
                     && seen.insert(e.fingerprint.as_str())
                     && e.key.as_ref().is_none_or(|key| key_bytes(key).is_some())
+                    && e.keys.len() <= MAX_KEYS
+                    && e.keys
+                        .iter()
+                        .all(|(id, key)| valid_profile_id(id) && key_bytes(key).is_some())
             })
     }
 
@@ -109,15 +129,28 @@ impl DeviceList {
 
     fn prune(&mut self) {
         self.devices
-            .retain(|e| e.stay || e.key.is_some() || e.present.is_some());
+            .retain(|e| e.stay || e.has_key() || e.present.is_some());
     }
 
     fn get(&self, fingerprint: &str) -> Option<&Entry> {
         self.devices.iter().find(|e| e.fingerprint == fingerprint)
     }
 
+    pub(crate) fn get_mut(&mut self, fingerprint: &str) -> Option<&mut Entry> {
+        self.devices
+            .iter_mut()
+            .find(|e| e.fingerprint == fingerprint)
+    }
+
     pub fn key_of(&self, fingerprint: &str) -> Option<&UnlockKey> {
         self.get(fingerprint)?.key.as_ref()
+    }
+
+    /// The key `fingerprint` enrolled for profile `id` on a profile lock, else its key from
+    /// before keys named their profile, which the first proof claims ([`crate::locks::Lock::proved`]).
+    pub fn key_for(&self, fingerprint: &str, id: &str) -> Option<&UnlockKey> {
+        let entry = self.get(fingerprint)?;
+        entry.keys.get(id).or(entry.key.as_ref())
     }
 
     /// Whether [`Self::grant`] has room for `fingerprint`: it is listed, or the list isn't full.
@@ -155,7 +188,9 @@ impl DeviceList {
                     fingerprint: device.fingerprint.clone(),
                     name: String::new(),
                     stay: false,
+                    added: false,
                     key: None,
+                    keys: BTreeMap::new(),
                     present: None,
                     added_unix: now,
                     last_unix: now,
@@ -267,13 +302,20 @@ impl std::fmt::Display for AuditLine {
     }
 }
 
-/// One live challenge per seat and device, each answerable once within [`CHALLENGE_LIFE`].
-#[derive(Debug, Default)]
-pub(crate) struct Challenges(HashMap<(SeatId, String), ([u8; 32], Instant)>);
+/// One live challenge per seat, or profile, and device, each answerable once within
+/// [`CHALLENGE_LIFE`].
+#[derive(Debug)]
+pub struct Challenges<K = SeatId>(HashMap<(K, String), ([u8; 32], Instant)>);
 
-impl Challenges {
+impl<K> Default for Challenges<K> {
+    fn default() -> Self {
+        Challenges(HashMap::new())
+    }
+}
+
+impl<K: Clone + Eq + std::hash::Hash> Challenges<K> {
     /// `bytes` as `fingerprint`'s challenge on `seat` from `now`, in place of any before it.
-    pub(crate) fn mint(&mut self, seat: &SeatId, fingerprint: &str, bytes: [u8; 32], now: Instant) {
+    pub fn mint(&mut self, seat: &K, fingerprint: &str, bytes: [u8; 32], now: Instant) {
         self.0
             .retain(|_, (_, at)| now.saturating_duration_since(*at) < CHALLENGE_LIFE);
         let key = (seat.clone(), fingerprint.to_owned());
@@ -281,18 +323,13 @@ impl Challenges {
     }
 
     /// `fingerprint`'s challenge on `seat`, used up whether or not it is still live.
-    pub(crate) fn take(
-        &mut self,
-        seat: &SeatId,
-        fingerprint: &str,
-        now: Instant,
-    ) -> Option<[u8; 32]> {
+    pub fn take(&mut self, seat: &K, fingerprint: &str, now: Instant) -> Option<[u8; 32]> {
         let (bytes, at) = self.0.remove(&(seat.clone(), fingerprint.to_owned()))?;
         (now.saturating_duration_since(at) < CHALLENGE_LIFE).then_some(bytes)
     }
 
     /// Drops `seat`'s challenge for `fingerprint`, or all of `seat`'s for `None`.
-    pub(crate) fn forget(&mut self, seat: &SeatId, fingerprint: Option<&str>) {
+    pub fn forget(&mut self, seat: &K, fingerprint: Option<&str>) {
         self.0
             .retain(|(s, fp), _| s != seat || fingerprint.is_some_and(|f| f != fp));
     }
@@ -325,6 +362,14 @@ pub fn fingerprint_bytes(text: &str) -> Option<[u8; 32]> {
     lower_hex(text, 32)?.try_into().ok()
 }
 
+/// A profile id as a host mints it: 1 to 64 of `[A-Za-z0-9_-]`.
+fn valid_profile_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+}
+
 /// 1 to 64 characters, none a control or a bidirectional mark that could reorder what is shown.
 pub fn valid_device_name(name: &str) -> bool {
     let spoofy = |c: char| {
@@ -341,7 +386,7 @@ pub fn signature_bytes(text: &str) -> Option<Vec<u8>> {
 }
 
 /// The bytes of 1 to `max` from lowercase hex; the length is checked before anything is decoded.
-fn lower_hex(text: &str, max: usize) -> Option<Vec<u8>> {
+pub(crate) fn lower_hex(text: &str, max: usize) -> Option<Vec<u8>> {
     let digit = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
     let fits = !text.is_empty() && text.len() <= max * 2 && text.len().is_multiple_of(2);
     (fits && text.bytes().all(digit)).then(|| hex::decode(text).ok())?

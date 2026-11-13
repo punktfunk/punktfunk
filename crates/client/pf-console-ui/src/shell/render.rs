@@ -87,6 +87,11 @@ impl Shell {
         );
         let side = f64::from(viewport.insets.left);
         self.ui = self.ui.next(self.backdrop.ink, reduce, reduced_ui, side);
+        // A field that closed takes its text in progress with it.
+        if !self.editing() {
+            self.preedit.clear();
+        }
+        self.ui.preedit.clone_from(&self.preedit);
         self.pads = pads.to_vec();
         self.glyphs = glyph_style(self.input_source, pad_pref, self.device.platform);
         if let Some(Screen::InputTest(test)) = self.stack.last_mut() {

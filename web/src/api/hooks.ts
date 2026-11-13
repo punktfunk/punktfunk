@@ -7,7 +7,10 @@ import { apiFetch } from "@/api/fetcher";
 import { getGetHooksQueryKey } from "@/api/gen/hooks/hooks";
 import type { HookEntry } from "@/api/gen/model/hookEntry";
 
-/** The whole automation config is written at once — the host has no per-hook route. */
+/**
+ * The whole automation config is written at once — the host has no per-hook route. A person's
+ * own console sends no password: their seat host takes the list on their session.
+ */
 export function useSaveHooks() {
 	const qc = useQueryClient();
 	return useMutation({
@@ -16,12 +19,14 @@ export function useSaveHooks() {
 			password,
 		}: {
 			hooks: HookEntry[];
-			password: string;
+			password?: string;
 		}) =>
 			apiFetch<void>("/api/v1/hooks", {
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ hooks, password }),
+				body: JSON.stringify(
+					password === undefined ? { hooks } : { hooks, password },
+				),
 			}),
 		onSuccess: () => {
 			qc.invalidateQueries({ queryKey: getGetHooksQueryKey() });

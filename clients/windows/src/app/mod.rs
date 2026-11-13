@@ -274,6 +274,7 @@ pub(crate) enum Msg {
     Speed(SpeedState),
     Library(library::LibraryState),
     EndGame(library::EndGameUi),
+    Hide(library::HideEdit),
     LibrarySort(SortKey),
     Forget(Option<HostRef>),
     Rename(Option<HostRef>),
@@ -344,6 +345,7 @@ pub(crate) struct Shell {
     speed: SpeedState,
     library: library::LibraryState,
     end_game: library::EndGameUi,
+    hide: library::HideUi,
     /// The shelf's order: the shared `library_sort`, read at start and written on each pick.
     library_sort: SortKey,
     forget: Option<HostRef>,
@@ -423,6 +425,7 @@ impl Component for Shell {
             speed: SpeedState::Running,
             library: library::LibraryState::default(),
             end_game: library::EndGameUi::default(),
+            hide: library::HideUi::default(),
             library_sort,
             forget: None,
             rename: None,
@@ -496,8 +499,15 @@ impl Component for Shell {
             Msg::Probed(p) => self.probed = p,
             Msg::Hud(h) => self.hud = *h,
             Msg::Speed(s) => self.speed = s,
-            Msg::Library(l) => self.library = l,
+            Msg::Library(l) => {
+                // A fetch starts the shelf afresh: what it lists already says what is hidden.
+                if l.phase == library::LibraryPhase::Loading {
+                    self.hide = library::HideUi::default();
+                }
+                self.library = l;
+            }
             Msg::EndGame(e) => self.end_game = e,
+            Msg::Hide(edit) => edit(&mut self.hide),
             Msg::LibrarySort(k) => self.library_sort = k,
             Msg::Forget(f) => self.forget = f,
             Msg::Rename(r) => self.rename = r,

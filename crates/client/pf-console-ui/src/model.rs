@@ -4,6 +4,7 @@
 //! network or disk rides a [`ConsoleCmd`] — the overlay never blocks. A result that answers
 //! a command carries that command's [`RequestKey`].
 
+use crate::library::LibraryGame;
 use punktfunk_core::quic::v2::msg::ProfileUnlock;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
@@ -312,6 +313,8 @@ struct ConsoleState {
     /// One-shot toast. The shell `take`s it on the next sync — unlike [`PairPhase`]
     /// there is no modal state, so a take-once string is the whole protocol.
     notice: Option<String>,
+    /// The host's sentence for the held launch it did not start, taken on the next sync.
+    launch_refused: Option<String>,
     /// This device's code, from a host whose identity loads after the console is built.
     device_code: Option<String>,
     /// What the host bundles, for the Licences screen. Kept once sent.
@@ -326,6 +329,31 @@ struct ConsoleState {
     avatars: Vec<(String, Arc<[u8]>)>,
     /// The profile unlock the last `Launch` carries, until its dial takes it.
     unlock: Option<ProfileUnlock>,
+    /// Answers to [`ConsoleCmd::FetchHidden`] by fingerprint and profile, each taken once.
+    hidden: Vec<(String, String, HiddenAnswer)>,
+    /// Answers to [`ConsoleCmd::SetHidden`], in order.
+    hide_answers: Vec<HideAnswer>,
+}
+
+/// What a host answered [`ConsoleCmd::FetchHidden`] with.
+#[derive(Clone, Serialize, Deserialize)]
+pub enum HiddenAnswer {
+    Listed(Vec<LibraryGame>),
+    /// The phrase says why.
+    Failed(String),
+}
+
+/// What a [`ConsoleCmd::SetHidden`] came to, echoing the command's host, profile and title.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HideAnswer {
+    pub fp_hex: String,
+    pub profile: String,
+    pub app_id: String,
+    pub hidden: bool,
+    /// The host took it: the title leaves that shelf, or joins it.
+    pub done: bool,
+    /// The line to show ([`pf_client_core::hide::Outcome::notice`]).
+    pub notice: String,
 }
 
 /// What a host answered [`ConsoleCmd::FetchProfiles`] with.
@@ -500,6 +528,28 @@ impl ConsoleShared {
         self.0.lock().unwrap().profiles.remove(fp_hex)
     }
 
+    /// What `profile` hides on the host pinned as `fp_hex`. A newer one replaces an untaken one.
+    pub fn set_hidden_list(&self, fp_hex: &str, profile: &str, answer: HiddenAnswer) {
+        let mut s = self.0.lock().unwrap();
+        s.hidden
+            .retain(|(f, p, _)| (f.as_str(), p.as_str()) != (fp_hex, profile));
+        s.hidden.push((fp_hex.into(), profile.into(), answer));
+    }
+
+    pub(crate) fn take_hidden_list(&self, fp_hex: &str, profile: &str) -> Option<HiddenAnswer> {
+        let mut s = self.0.lock().unwrap();
+        let at = (s.hidden.iter()).position(|(f, p, _)| f == fp_hex && p == profile)?;
+        Some(s.hidden.remove(at).2)
+    }
+
+    pub fn set_hide_answer(&self, answer: HideAnswer) {
+        self.0.lock().unwrap().hide_answers.push(answer);
+    }
+
+    pub(crate) fn take_hide_answers(&self) -> Vec<HideAnswer> {
+        std::mem::take(&mut self.0.lock().unwrap().hide_answers)
+    }
+
     /// The encoded picture at `url`, as [`ConsoleCmd::FetchAvatar`] named it.
     pub fn set_avatar(&self, url: &str, bytes: Vec<u8>) {
         let mut s = self.0.lock().unwrap();
@@ -517,6 +567,16 @@ impl ConsoleShared {
 
     pub(crate) fn take_notice(&self) -> Option<String> {
         self.0.lock().unwrap().notice.take()
+    }
+
+    /// The host did not start the held launch and said why: the hold says this and stops
+    /// waiting. With no hold up it is dropped.
+    pub fn set_launch_refused(&self, text: String) {
+        self.0.lock().unwrap().launch_refused = Some(text);
+    }
+
+    pub(crate) fn take_launch_refused(&self) -> Option<String> {
+        self.0.lock().unwrap().launch_refused.take()
     }
 
     /// This device's code ([`crate::shell::ConsoleOptions::device_code`]), for a host that
@@ -771,6 +831,28 @@ pub enum ConsoleCmd {
         app_id: String,
         title: String,
         action: pf_client_core::library::InstallAction,
+    },
+    /// Hide (`hidden`) or show title `app_id` for `profile`, this device being its person
+    /// ([`pf_client_core::hide::set_hidden`]). Answered as [`ConsoleShared::set_hide_answer`],
+    /// whose notice names `title` and the profile's `name`. Only a host whose options say
+    /// [`crate::ConsoleOptions::hides`] receives one.
+    SetHidden {
+        addr: String,
+        mgmt: u16,
+        fp_hex: String,
+        profile: String,
+        name: String,
+        app_id: String,
+        title: String,
+        hidden: bool,
+    },
+    /// The titles `profile` hides ([`pf_client_core::hide::fetch_hidden`]), answered as
+    /// [`ConsoleShared::set_hidden_list`]; their posters arrive as a shelf's do.
+    FetchHidden {
+        addr: String,
+        mgmt: u16,
+        fp_hex: String,
+        profile: String,
     },
 }
 

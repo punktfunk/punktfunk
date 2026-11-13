@@ -590,3 +590,139 @@ async fn a_relayed_event_joins_the_bus() {
     let (status, _) = send(&app, req).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+/// On a door a Moonlight device is paired with the owner's host, so adding one to a profile's
+/// lock asks that host's list, once, and takes its label; a fingerprint neither lists is refused.
+#[tokio::test]
+async fn a_door_adds_a_moonlight_device_the_owner_s_host_paired() {
+    let moonlight = "ef".repeat(32);
+    let seats = FakeSeats::new(box_snapshot(None)).answering(
+        "clients",
+        200,
+        serde_json::json!([{"fingerprint": moonlight.to_uppercase(), "label": "Living room"}]),
+    );
+    let state = test_state();
+    let path = crate::test_support::scratch().join("profiles.json");
+    let profiles = crate::profiles::Profiles::load_with(Some(path), None);
+    profiles.ensure_owner("box").unwrap();
+    let owner = profiles.owner_id().unwrap();
+    let _ = state.profiles.set(Arc::new(profiles));
+    let app = test_app_door(state, None, seats.clone());
+    let devices = format!("/api/v1/profiles/{owner}/devices");
+    let add = |fp: &str| {
+        json_req(
+            Method::POST,
+            &devices,
+            serde_json::json!({"fingerprint": fp}),
+        )
+    };
+    let (status, body) = send(&app, add(&moonlight)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body[0]["fingerprint"], moonlight.as_str());
+    assert_eq!(body[0]["name"], "Living room");
+    assert_eq!(
+        body[0]["moonlight"], true,
+        "the list tags it from the owner's"
+    );
+    let (status, body) = send(&app, add(&"cd".repeat(32))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "profile_device_not_paired");
+    let asked: Vec<_> = seats
+        .calls()
+        .into_iter()
+        .map(|(t, c)| (t, c.target))
+        .collect();
+    // The add, the list it answers, the refused add.
+    let clients = (Target::Owner, "clients".to_string());
+    assert_eq!(asked, [clients.clone(), clients.clone(), clients]);
+}
+
+/// The door decides who a locked profile's person is, from its own lock file, and passes the
+/// person's call to the owner's host as that device, naming the profile, never as the operator.
+/// A device that isn't the person, the owner's id, an unknown one, no `as`, and a profile on a
+/// person's own account are answered on the door, and nothing leaves it.
+#[tokio::test]
+async fn a_person_s_call_reaches_the_owner_s_host_as_that_device() {
+    const OWNER_P: &str = "0f0f0f0f0f0f";
+    const KID: &str = "a1b2c3d4e5f6";
+    let (listed, other) = ("a7".repeat(32), "b8".repeat(32));
+    for adopted in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let row =
+            |id, account| serde_json::json!({"id": id, "display_name": id, "os_account": account});
+        let profiles = serde_json::json!({"profiles": [
+            row(OWNER_P, serde_json::json!({"kind": "operator"})),
+            row(KID, serde_json::json!({"kind": "seat", "seat": KID_SEAT})),
+        ]});
+        let state = super::profile_view::profiles_state(tmp.path(), profiles);
+        let device = pf_seats::ipc::Device {
+            fingerprint: listed.clone(),
+            name: "Kid's tablet".into(),
+        };
+        let store = state.profiles.get().unwrap().clone();
+        let locked = store.locks().edit(KID, |lock, now| {
+            lock.locked = true;
+            lock.add(&device, now)
+        });
+        assert!(locked.unwrap());
+        let mut snapshot = box_snapshot(None);
+        if adopted {
+            snapshot.seats[1].adopted_uid = Some(1000);
+        }
+        let target = format!("library/hidden/steam:400?as={KID}");
+        let seats = FakeSeats::new(snapshot).answering(
+            &target,
+            200,
+            serde_json::json!({"id": "steam:400", "hidden": true}),
+        );
+        let np = paired(&[listed.as_str(), other.as_str()]);
+        let app = test_app_door(state, Some(np), seats.clone());
+        let hide = |fp: &str, query: &str| {
+            let path = format!("/api/v1/library/hidden/steam:400{query}");
+            let mut req = json_req(Method::PUT, &path, serde_json::json!({"hidden": true}));
+            req.extensions_mut()
+                .insert(PeerCertFingerprint(Some(fp.to_string())));
+            req
+        };
+        for (fp, query, status) in [
+            (other.as_str(), format!("?as={KID}"), StatusCode::FORBIDDEN),
+            (
+                listed.as_str(),
+                format!("?as={OWNER_P}"),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                listed.as_str(),
+                "?as=0123456789ab".into(),
+                StatusCode::NOT_FOUND,
+            ),
+            (listed.as_str(), String::new(), StatusCode::UNAUTHORIZED),
+        ] {
+            let resp = app.clone().oneshot(hide(fp, &query)).await.unwrap();
+            assert_eq!(resp.status(), status, "{query}");
+        }
+        assert!(seats.calls().is_empty(), "nothing left the door");
+        let resp = app
+            .clone()
+            .oneshot(hide(&listed, &format!("?as={KID}")))
+            .await;
+        let status = resp.unwrap().status();
+        if adopted {
+            assert_eq!(status, StatusCode::FORBIDDEN, "a person's own account");
+            assert!(seats.calls().is_empty());
+            continue;
+        }
+        assert_eq!(status, StatusCode::OK);
+        let calls = seats.calls();
+        assert_eq!(calls.len(), 1);
+        let (to, call) = &calls[0];
+        assert_eq!(*to, Target::Owner);
+        assert_eq!(call.target, target);
+        assert_eq!(
+            call.device.as_deref(),
+            Some(listed.as_str()),
+            "as the device"
+        );
+        assert_eq!(call.person.as_deref(), Some(KID));
+    }
+}

@@ -43,9 +43,12 @@ mod gpu;
 mod hooks;
 mod host;
 mod library;
+mod locks;
 mod native;
 mod own_account;
 pub(crate) mod owner;
+pub(crate) mod person;
+mod person_session;
 #[cfg(windows)]
 mod pipes;
 mod plugin_access;
@@ -166,6 +169,9 @@ pub struct Options {
     /// The tray's bearer for `/local/summary` (`mgmt_token::mint_tray_token`). `None` serves
     /// no summary: a seat host, or a token file that did not land.
     pub tray_token: Option<String>,
+    /// This start's person token (`crate::person_token`): a seat host of its own whose token
+    /// landed. `None` opens no person session.
+    pub person_token: Option<String>,
     /// This start minted [`Self::plugin_token`] or moved the published endpoint. A runner
     /// already up predates the token, the TLS pin or the port, so it restarts once the API serves.
     pub restart_runner: bool,
@@ -179,6 +185,7 @@ impl Default for Options {
             plugin_token: None,
             plugin_tokens: std::collections::BTreeMap::new(),
             tray_token: None,
+            person_token: None,
             restart_runner: false,
         }
     }
@@ -218,6 +225,8 @@ pub(crate) struct MgmtState {
     identity_fingerprint: Option<[u8; 32]>,
     /// On a door, the seats it passes calls to ([`owner::pass_on`]). `None` on every other host.
     door: Option<Arc<dyn owner::Seats>>,
+    /// A seat host's person token and the sessions it opened. `None` on every other host.
+    person: Option<person_session::PersonAuth>,
 }
 
 /// `native` is the shared native pairing handle when the unified host
@@ -298,6 +307,11 @@ pub async fn run(
         pf_paths::seat::role()
             .is_door()
             .then(|| Arc::new(owner::LiveSeats) as Arc<dyn owner::Seats>),
+        opts.person_token.map(|token| {
+            person_session::PersonAuth::new(token, || {
+                crate::library::View::here().layer().map(str::to_string)
+            })
+        }),
     );
     // The plane's `/mgmt` tunnel dispatches into this very router. A second `app()` would mint
     // its own `DeviceAuth`, and a token earned on one would be refused by the other.
@@ -368,6 +382,8 @@ fn app(
     // The seats a door passes calls to; `None` on any other host. Passed in so a test can be
     // a door with seats of its choosing.
     door: Option<Arc<dyn owner::Seats>>,
+    // A seat host's person sessions; `None` on any other host.
+    person: Option<person_session::PersonAuth>,
 ) -> Router {
     let shared = Arc::new(MgmtState {
         app: state,
@@ -387,7 +403,9 @@ fn app(
         )),
         config_dir,
         door,
+        person,
     });
+    let person_lane = shared.person.is_some();
     let (api_routes, api) = api_router_parts();
     // Auth, then the door's pass-on, then the library guard and a person's own Linux account: a
     // caller without a credential gets 401, only the lane auth stamped is passed on, and a
@@ -395,7 +413,7 @@ fn app(
     let routed = api_routes
         .route_layer(middleware::from_fn(own_account::gate))
         .route_layer(middleware::from_fn(move |req: Request, next: Next| {
-            library::box_library_is_read_only(box_library, req, next)
+            library::box_library_is_read_only(box_library, person_lane, req, next)
         }))
         .route_layer(middleware::from_fn_with_state(
             shared.clone(),
@@ -486,6 +504,13 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(webtransport::get_webtransport))
         .routes(routes!(device_auth::post_device_challenge))
         .routes(routes!(device_auth::post_device_token))
+        .routes(routes!(
+            person_session::open_person_session,
+            person_session::close_person_session
+        ))
+        .routes(routes!(person_session::verify_person_session))
+        .routes(routes!(person_session::get_person_profile))
+        .routes(routes!(person_session::get_person_avatar))
         .routes(routes!(native::get_native_pairing))
         .routes(routes!(native::arm_native_pairing))
         .routes(routes!(native::disarm_native_pairing))
@@ -643,9 +668,16 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(profiles::unlock_challenge))
         .routes(routes!(
             profiles::list_profile_devices,
+            locks::add_profile_device,
             profiles::sign_out_profile_devices
         ))
         .routes(routes!(profiles::sign_out_profile_device))
+        .routes(routes!(
+            locks::get_profile_lock,
+            locks::lock_profile,
+            locks::unlock_profile
+        ))
+        .routes(routes!(locks::set_profile_pin, locks::clear_profile_pin))
         .routes(routes!(update::get_update_status))
         .routes(routes!(update::force_update_check))
         .routes(routes!(update::apply_update))

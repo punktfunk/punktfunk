@@ -22,7 +22,7 @@
 # The iPad set is landscape throughout, and simctl cannot rotate a device. The iPad simulator runs
 # in Full Screen Apps mode and the capture build is marked full-screen-only (UIRequiresFullScreen,
 # in the built bundle only), so the app may turn itself landscape. The portrait framebuffer then
-# shows it scaled to fit, and the screenshot is cropped to it: 2064×1548.
+# holds it rotated, and the screenshot is turned upright: 2752×2064.
 #
 # Requirements:
 #   • macOS target: full Xcode. No Screen Recording grant: the app only reads its own windows.
@@ -36,6 +36,7 @@
 #   OUT=~/Desktop/shots tools/screenshots.sh all
 #   PUNKTFUNK_SHOT_HERO=~/frame.png tools/screenshots.sh ios   # real captured frame for the hero
 #   PUNKTFUNK_SHOT_FPS=120 tools/screenshots.sh ios ipad       # HUD refresh; Simulators report 60
+#   PF_SHOT_LANG=de OUT=~/shots/de tools/screenshots.sh ios    # one language per run; default en
 #
 # Keep SCENES in sync with ShotScenes.all.
 
@@ -55,6 +56,16 @@ SCENES=(${SCENES:-01-stream 02-hosts 15-library-touch 15f-library-filter 06-cons
 # The Apple Vision Pro listing, in order.
 VISION_SCENES=(01-stream 02-hosts 15f-library-filter 06-console 05-settings)
 SETTLE="${SETTLE:-4}" # seconds to let a scene lay out before capturing
+
+# The language every scene runs in. Without it the app follows the machine's locale ("vor 2 Std.").
+SHOT_LANG="${PF_SHOT_LANG:-en}"
+case "$SHOT_LANG" in
+  en) SHOT_LOCALE=en_US ;;
+  de) SHOT_LOCALE=de_DE ;;
+  es) SHOT_LOCALE=es_ES ;;
+  fr) SHOT_LOCALE=fr_FR ;;
+  *)  SHOT_LOCALE="$SHOT_LANG" ;;
+esac
 
 mkdir -p "$OUT"
 
@@ -77,21 +88,23 @@ shoot_macos() {
   # pixels — SwiftUI has no release-only visuals. xcodebuild, not `swift build`: SwiftPM copies
   # asset catalogs uncompiled, which blanks every OS mark and launcher icon.
   require_xcode
-  log "macOS — building (xcodebuild PunktfunkClient)…"
+  # The app target, not the package's `PunktfunkClient` executable: that one records SDK 14 in
+  # its binary, and macOS then draws it with the window chrome of that release.
+  log "macOS — building (xcodebuild Punktfunk)…"
   local dd="${PF_SHOT_DERIVED_DATA:-$APPLE_DIR/.build/shots-macos}"
-  xcodebuild -project Punktfunk.xcodeproj -scheme PunktfunkClient -configuration Debug \
-    -destination platform=macOS -derivedDataPath "$dd" CODE_SIGNING_ALLOWED=NO build >/dev/null \
+  xcodebuild -project Punktfunk.xcodeproj -scheme Punktfunk -configuration Debug \
+    -destination platform=macOS -derivedDataPath "$dd" -skipMacroValidation \
+    CODE_SIGNING_ALLOWED=NO build >/dev/null \
     || die "macOS: xcodebuild failed"
-  local bin="$dd/Build/Products/Debug/PunktfunkClient"
+  local bin="$dd/Build/Products/Debug/Punktfunk.app/Contents/MacOS/Punktfunk"
   [ -x "$bin" ] || die "build produced no $bin"
 
   for scene in "${SCENES[@]}"; do
     local logf; logf="$(mktemp)"
     # The app captures its own windows once the scene has settled, then exits (MacSelfCapture).
-    # English on every target: the app otherwise follows the machine's locale ("vor 2 Std.").
     PUNKTFUNK_SHOT_SCENE="$scene" PUNKTFUNK_SHOT_SELFCAPTURE="$OUT" \
       PUNKTFUNK_SHOT_DELAY="${PUNKTFUNK_SHOT_DELAY:-$((SETTLE * 1000))}" \
-      "$bin" -AppleLanguages '(en)' -AppleLocale en_US >"$logf" 2>&1 &
+      "$bin" -AppleLanguages "($SHOT_LANG)" -AppleLocale "$SHOT_LOCALE" >"$logf" 2>&1 &
     local pid=$! dest="$OUT/mac-$scene.png"
     for _ in $(seq 1 150); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
     kill -9 "$pid" 2>/dev/null || true
@@ -106,20 +119,14 @@ shoot_macos() {
 
 # ------------------------------------------------------------------ iOS / iPadOS / tvOS
 
-# $1 png  $2 $3 the app's window in pixels. A window whose orientation differs from the
-# framebuffer's is drawn scaled to fit and centred; crop the png to that rect.
-crop_to_window() {
+# $1 png  $2 $3 the app's window in pixels. A window turned against the framebuffer arrives
+# rotated in it: turn the png upright.
+turn_to_window() {
   local png="$1" ww="$2" wh="$3" sw sh
   sw="$(sips -g pixelWidth "$png" | awk '/pixelWidth/ {print $2}')"
   sh="$(sips -g pixelHeight "$png" | awk '/pixelHeight/ {print $2}')"
   [ $(( (ww > wh) != (sw > sh) )) -eq 1 ] || return 0
-  local cw ch
-  if [ $(( ww * sh )) -gt $(( wh * sw )) ]; then
-    cw=$sw; ch=$(( wh * sw / ww ))
-  else
-    ch=$sh; cw=$(( ww * sh / wh ))
-  fi
-  sips --cropOffset $(( (sh - ch) / 2 )) $(( (sw - cw) / 2 )) -c "$ch" "$cw" "$png" >/dev/null
+  sips -r 270 "$png" >/dev/null
 }
 
 # $1 device-type regex (matches both existing device names and the device-type catalog)
@@ -174,8 +181,18 @@ shoot_sim() {
     [ -f "$envprefs" ] || plutil -create xml1 "$envprefs"
     plutil -replace activeSyntheticEnvironment -string LivingRoomNight "$envprefs"
   fi
+  # The device speaks the language too: the status bar's date is the system's, not the app's.
+  xcrun simctl shutdown "$udid" 2>/dev/null || true
+  local gprefs="$HOME/Library/Developer/CoreSimulator/Devices/$udid/data/Library/Preferences/.GlobalPreferences.plist"
+  mkdir -p "$(dirname "$gprefs")"
+  [ -f "$gprefs" ] || plutil -create binary1 "$gprefs"
+  plutil -replace AppleLanguages -json "[\"$SHOT_LANG\"]" "$gprefs"
+  plutil -replace AppleLocale -string "$SHOT_LOCALE" "$gprefs"
   xcrun simctl boot "$udid" 2>/dev/null || true
   xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1 || true
+  # One clock on every capture. tvOS and visionOS have no status bar to override.
+  xcrun simctl status_bar "$udid" override --time "9:41" --batteryState charged --batteryLevel 100 \
+    --wifiBars 3 >/dev/null 2>&1 || true
   # Every scene is a dark-mode scene. The in-app `.environment(\.colorScheme, .dark)` override
   # does NOT cross a presentation boundary — a `.sheet` gets its own environment and follows the
   # DEVICE appearance — so the pairing sheet came out light grey over the dark app. Set the
@@ -197,13 +214,19 @@ shoot_sim() {
   # prebuilt-vs-source swift-syntax makes no difference. Until Xcode fixes the planner, the
   # workaround is temporarily unlinking SwiftUINavigationTransitions from the tvOS target
   # (HomeView's use is canImport-guarded — the push transition degrades to the crossfade).
+  # -skipMacroValidation: nobody is there to approve a package's macros in a headless build.
   xcodebuild -project Punktfunk.xcodeproj -scheme "$scheme" -configuration Debug \
-    -sdk "$sdk" -destination "id=$udid" -derivedDataPath "$dd" \
+    -sdk "$sdk" -destination "id=$udid" -derivedDataPath "$dd" -skipMacroValidation \
     CODE_SIGNING_ALLOWED=NO build >/dev/null \
     || die "$prefix: xcodebuild failed"
   local app; app="$(find "$dd/Build/Products" -maxdepth 2 -name '*.app' -type d | head -1)"
   [ -n "$app" ] || die "$prefix: no .app built"
   if [ "$prefix" = ipad-13 ]; then
+    # The iPad set is landscape and the simulator boots upright. An app that only asks for a
+    # landscape scene leaves the status bar and safe area in portrait: turn the device.
+    xcodebuild test -project tools/sim-rotate/SimRotate.xcodeproj -scheme SimRotate \
+      -destination "id=$udid" -derivedDataPath "$dd/sim-rotate" >/dev/null 2>&1 \
+      || die "$prefix: the simulator did not rotate"
     /usr/libexec/PlistBuddy -c "Add :UIRequiresFullScreen bool true" "$app/Info.plist" 2>/dev/null \
       || /usr/libexec/PlistBuddy -c "Set :UIRequiresFullScreen true" "$app/Info.plist"
   fi
@@ -223,17 +246,14 @@ shoot_sim() {
     local applog="$OUT/.$prefix-$scene.log"
     rm -f "$applog"
     env "${envs[@]}" xcrun simctl launch --stdout="$applog" "$udid" "$BUNDLE_ID" \
-      -AppleLanguages '(en)' -AppleLocale en_US >/dev/null
+      -AppleLanguages "($SHOT_LANG)" -AppleLocale "$SHOT_LOCALE" >/dev/null
     sleep "$SETTLE"
     local dest="$OUT/$prefix-$scene.png"
     xcrun simctl io "$udid" screenshot "$dest" >/dev/null
     if [ "$prefix" = ipad-13 ]; then
+      # The whole iPad set is landscape. A sheet scene reports no window of its own.
       local win; win="$(sed -n 's/^PF_SHOT_WINDOW_PX //p' "$applog" | tail -1)"
-      if [ -n "$win" ]; then
-        crop_to_window "$dest" $win
-      else
-        warn "$prefix/$scene: the app reported no window size — left uncropped"
-      fi
+      turn_to_window "$dest" ${win:-2 1}
     fi
     if [ "$prefix" = visionpro ]; then
       # visionOS restores a window's last size across launches.

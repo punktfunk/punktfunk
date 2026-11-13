@@ -11,13 +11,14 @@ import {
 import "@fontsource-variable/geist";
 import { Toaster } from "@unom/ui/toast";
 import { MotionConfig } from "motion/react";
-import { type CSSProperties, useEffect } from "react";
+import { type CSSProperties, useEffect, useState } from "react";
 import { useUiConfig } from "@/api/uiConfig";
-import { AppShell } from "@/components/app-shell";
+import { AppShell, PersonShell } from "@/components/app-shell";
 import { DialogsProvider } from "@/components/dialogs";
 import { currentAppearance } from "@/lib/appearanceRequest";
 import { DensitySwitch, useDensity } from "@/lib/density";
 import { adoptStoredLocale, useLocale } from "@/lib/i18n";
+import { currentPersonMode } from "@/lib/personRequest";
 import { AccessPrompt } from "@/sections/PluginAccess";
 import appCss from "@/styles.css?url";
 
@@ -59,10 +60,14 @@ function RootComponent() {
 	// reader which pronunciation to use, and it was pinned to "en" while the app switched to German
 	// underneath it. `adoptStoredLocale` also sets it on the live document; this keeps SSR honest.
 	const locale = useLocale();
-	// The login screen renders bare (no sidebar); everything else gets the app shell.
-	const isLogin = useRouterState({
-		select: (s) => s.location.pathname === "/login",
+	// The login screen and a person's closed page render bare (no sidebar); everything else gets
+	// a shell: the person's in their own console, else the operator's. Read once per page load,
+	// so signing out keeps the person's frame until the closed page replaces it.
+	const isBare = useRouterState({
+		select: (s) =>
+			s.location.pathname === "/login" || s.location.pathname === "/closed",
 	});
+	const [person] = useState(currentPersonMode);
 	// Follow the desktop's own theme, and let the operator override it (§7).
 	//
 	// Two attributes, because two kinds of source exist: `data-accent` re-tints the brand from
@@ -127,8 +132,12 @@ function RootComponent() {
 					    at the root because the navigation guard on the Displays page asks for one
 					    while LEAVING that page — see components/dialogs.tsx. */}
 					<DialogsProvider>
-						{isLogin ? (
+						{isBare ? (
 							<Outlet />
+						) : person ? (
+							<PersonShell>
+								<Outlet />
+							</PersonShell>
 						) : (
 							<AppShell>
 								<Outlet />

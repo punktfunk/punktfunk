@@ -11,14 +11,16 @@ import { Label } from "@/components/ui/label";
 import { changeLocale, type Locale, locales, useLocale } from "@/lib/i18n";
 import { languageName } from "@/lib/language-name";
 import { pluginPin, togglePin, usePins } from "@/lib/nav";
+import { usePerson } from "@/lib/person";
 import { m } from "@/paraglide/messages";
 import { AppearanceCard } from "./Appearance";
 
 // Settings owns the console's own preferences — the locale, the sidebar pins, and the way
 // out. Everything here is per browser (design/web-console-overhaul.md D8); nothing reaches
-// the host.
+// the host. A person's own console keeps the language and the look: its way out is in the frame.
 export const SectionSettings: FC = () => {
 	const current = useLocale();
+	const person = usePerson();
 
 	const onLogout = async () => {
 		try {
@@ -62,24 +64,26 @@ export const SectionSettings: FC = () => {
 
 				<AppearanceCard />
 
-				<ReachCard />
+				{!person && <ReachCard />}
 
-				<NavigationCard />
+				{!person && <NavigationCard />}
 
-				<Card className="max-w-lg">
-					<CardHeader>
-						<CardTitle className="flex items-center gap-2">
-							<UserRound className="size-4" />
-							{m.settings_account()}
-						</CardTitle>
-					</CardHeader>
-					<CardContent>
-						<Button variant="outline" onClick={onLogout}>
-							<LogOut className="size-4" />
-							{m.action_logout()}
-						</Button>
-					</CardContent>
-				</Card>
+				{!person && (
+					<Card className="max-w-lg">
+						<CardHeader>
+							<CardTitle className="flex items-center gap-2">
+								<UserRound className="size-4" />
+								{m.settings_account()}
+							</CardTitle>
+						</CardHeader>
+						<CardContent>
+							<Button variant="outline" onClick={onLogout}>
+								<LogOut className="size-4" />
+								{m.action_logout()}
+							</Button>
+						</CardContent>
+					</Card>
+				)}
 			</div>
 		</Section>
 	);

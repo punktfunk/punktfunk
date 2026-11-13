@@ -22,11 +22,11 @@ use pf_client_core::gamepad::{is_steam_deck, PadReading};
 use pf_client_core::orchestrate::{
     self, emit, exit, SessionLine, WakeOutcome, WAKE_RESEND_SECS, WAKE_TIMEOUT_SECS,
 };
-use pf_client_core::{discovery, library, profiles, start, trust, wol};
+use pf_client_core::{discovery, hide, library, profiles, start, trust, wol};
 use pf_console_ui::{
-    ConsoleCmd, ConsoleEntry, ConsoleHandles, ConsoleOptions, ConsoleShared, HostRow, LibraryGame,
-    LibraryPhase, LibraryShared, PadTestState, PairPhase, PairStatus, ProfilesAnswer, RequestKey,
-    SkiaOverlay, SpeedPhase, WakeStatus,
+    ConsoleCmd, ConsoleEntry, ConsoleHandles, ConsoleOptions, ConsoleShared, HiddenAnswer,
+    HideAnswer, HostRow, LibraryGame, LibraryPhase, LibraryShared, PadTestState, PairPhase,
+    PairStatus, ProfilesAnswer, RequestKey, SkiaOverlay, SpeedPhase, WakeStatus,
 };
 use pf_presenter::overlay::OverlayAction;
 use pf_presenter::ActionOutcome;
@@ -503,6 +503,7 @@ impl Service {
                     rescan: None,
                     stores: Stores::default(),
                     learn_due: true,
+                    hidden: Arc::default(),
                 }
                 .run(stop_w)
             })
@@ -546,6 +547,9 @@ struct ServiceState {
     stores: Stores,
     /// The adverts or the saved hosts moved since each saved host last learned from its advert.
     learn_due: bool,
+    /// The titles the last hidden list held: a title shown again joins the cached catalog as
+    /// that list had it.
+    hidden: Arc<Mutex<Vec<library::GameEntry>>>,
 }
 
 /// The saved hosts and the preset catalog as last read. Each is read again only when its file
@@ -727,6 +731,13 @@ impl ServiceState {
             } => {
                 self.change_install(addr, mgmt, fp_hex, app_id, title, action);
             }
+            cmd @ ConsoleCmd::SetHidden { .. } => self.set_hidden(cmd),
+            ConsoleCmd::FetchHidden {
+                addr,
+                mgmt,
+                fp_hex,
+                profile,
+            } => self.fetch_hidden(addr, mgmt, fp_hex, profile),
             ConsoleCmd::Pair {
                 addr,
                 port,
@@ -1153,6 +1164,99 @@ impl ServiceState {
                 }
             })
             .ok()
+    }
+
+    /// Hide or show a title for the profile this device is the person of, off the service
+    /// thread. What the host took, the cached catalog follows at once: a shown title as the
+    /// last hidden list had it. The shell moves the title and shows the line.
+    fn set_hidden(&self, cmd: ConsoleCmd) {
+        let ConsoleCmd::SetHidden {
+            addr,
+            mgmt,
+            fp_hex,
+            profile,
+            name,
+            app_id,
+            title,
+            hidden,
+        } = cmd
+        else {
+            return;
+        };
+        let (console, identity, seen) = (
+            self.console.clone(),
+            self.identity.clone(),
+            self.hidden.clone(),
+        );
+        let pin = trust::parse_hex32(&fp_hex);
+        std::thread::Builder::new()
+            .name("punktfunk-hide".into())
+            .spawn(move || {
+                let api = library::HostApi::new(&addr, mgmt, stream_port(&fp_hex), &identity, pin);
+                let outcome = hide::set_hidden(&api, &profile, &app_id, hidden);
+                tracing::info!(app = %app_id, hidden, ?outcome, "title visibility for a profile");
+                let done = outcome == hide::Outcome::Done;
+                if done {
+                    let seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+                    let back = seen.iter().find(|g| g.id == app_id).filter(|_| !hidden);
+                    pf_client_core::library_cache::note_hidden(
+                        &fp_hex,
+                        Some(&profile),
+                        &app_id,
+                        back,
+                    );
+                }
+                let notice = outcome.notice(hidden, &title, &name);
+                console.set_hide_answer(HideAnswer {
+                    fp_hex,
+                    profile,
+                    app_id,
+                    hidden,
+                    done,
+                    notice,
+                });
+            })
+            .ok();
+    }
+
+    /// What a profile hides, for the shell's hidden shelf, then their posters as a shelf's come.
+    fn fetch_hidden(&self, addr: String, mgmt: u16, fp_hex: String, profile: String) {
+        let (console, identity, seen) = (
+            self.console.clone(),
+            self.identity.clone(),
+            self.hidden.clone(),
+        );
+        let shared = self.library.clone();
+        let pin = trust::parse_hex32(&fp_hex);
+        std::thread::Builder::new()
+            .name("punktfunk-hidden".into())
+            .spawn(move || {
+                let api = library::HostApi::new(&addr, mgmt, stream_port(&fp_hex), &identity, pin);
+                let games = match hide::fetch_hidden_from(&api, &profile) {
+                    Ok(games) => games,
+                    Err(e) => {
+                        tracing::info!(%addr, error = %e, "hidden titles did not load");
+                        let why = HiddenAnswer::Failed(e.to_string());
+                        return console.set_hidden_list(&fp_hex, &profile, why);
+                    }
+                };
+                *seen.lock().unwrap_or_else(|e| e.into_inner()) = games.clone();
+                let listed = HiddenAnswer::Listed(to_model(&games));
+                console.set_hidden_list(&fp_hex, &profile, listed);
+                let base = library::base_url(&addr, mgmt);
+                let jobs: VecDeque<(String, Vec<String>)> = (games.iter())
+                    .map(|g| (g.id.clone(), g.art.poster_candidates(&base)))
+                    .filter(|(_, candidates)| !candidates.is_empty())
+                    .collect();
+                if jobs.is_empty() {
+                    return;
+                }
+                let rx = library::spawn_art_fetch(api, jobs);
+                while let Ok((id, bytes)) = rx.recv_blocking() {
+                    shared.push_art(id, bytes);
+                }
+            })
+            .ok();
     }
 
     /// Run one pairing (`ask`: the PIN ceremony or a request access) on its own thread and

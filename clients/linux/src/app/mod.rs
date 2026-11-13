@@ -193,6 +193,8 @@ pub enum AppMsg {
     /// End this card key's stream the way its window does, or every stream with `None`.
     Disconnect(Option<String>),
     Toast(String),
+    /// A title left the Library's shelf: the line, with Undo for the title's id.
+    Hidden(String, String),
     /// A plain connect the host parked for its operator: show the waiting dialog.
     AwaitingApproval(ConnectRequest),
 }
@@ -349,6 +351,7 @@ impl SimpleComponent for AppModel {
                 LibraryOutput::Connect(req) => AppMsg::Connect(req),
                 LibraryOutput::WakeConnect(req) => AppMsg::WakeConnect(req),
                 LibraryOutput::Toast(msg) => AppMsg::Toast(msg),
+                LibraryOutput::Hidden(msg, id) => AppMsg::Hidden(msg, id),
                 LibraryOutput::ShowHosts => AppMsg::ShowView("hosts"),
                 LibraryOutput::Pair(req) => AppMsg::Pair(req),
             });
@@ -634,6 +637,15 @@ impl SimpleComponent for AppModel {
                 self.show_streams();
             }
             AppMsg::Toast(msg) => self.toast(&msg),
+            AppMsg::Hidden(msg, id) => {
+                let toast = adw::Toast::new(&msg);
+                toast.set_button_label(Some(pf_l10n::common::common_undo()));
+                let library = self.library.sender().clone();
+                toast.connect_button_clicked(move |_| {
+                    library.emit(LibraryMsg::SetHidden(id.clone(), false));
+                });
+                self.toasts.add_toast(toast);
+            }
             AppMsg::AwaitingApproval(req) => {
                 let flight = self.flights.of(&req.card_key());
                 // A request for access already shows it. A dial with an unlock waits for its

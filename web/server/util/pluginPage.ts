@@ -59,6 +59,19 @@ export interface PluginPage {
 	rest: string;
 }
 
+/** A page path's parts, its MAC not yet checked; `null` for a path of another shape or expired. */
+export function pageParts(
+	pathname: string,
+	nowMs: number,
+): (PluginPage & { exp: string; mac: string }) | null {
+	const m = pathname.match(PATH);
+	const seg = m?.[1]?.match(SEGMENT);
+	const [, id, exp, mac] = seg ?? [];
+	if (!m?.[1] || !id || !exp || !mac) return null;
+	if (Number.parseInt(exp, 36) * 1000 <= nowMs) return null;
+	return { id, exp, mac, prefix: `/plugin-ui/${m[1]}`, rest: m[2] ?? "/" };
+}
+
 /** The page `pathname` names, or `null` unless its segment holds for that plugin at `nowMs`. */
 export function parsePluginPage(
 	pathname: string,
@@ -66,13 +79,10 @@ export function parsePluginPage(
 	epoch: number,
 	nowMs: number,
 ): PluginPage | null {
-	const m = pathname.match(PATH);
-	const seg = m?.[1]?.match(SEGMENT);
-	const [, id, exp, mac] = seg ?? [];
-	if (!m?.[1] || !id || !exp || !mac) return null;
-	if (Number.parseInt(exp, 36) * 1000 <= nowMs) return null;
-	if (!safeEqualHex(mac, tag(key, id, epoch, exp))) return null;
-	return { id, prefix: `/plugin-ui/${m[1]}`, rest: m[2] ?? "/" };
+	const page = pageParts(pathname, nowMs);
+	if (!page || !safeEqualHex(page.mac, tag(key, page.id, epoch, page.exp)))
+		return null;
+	return { id: page.id, prefix: page.prefix, rest: page.rest };
 }
 
 /** `/plugin-ui/<segment>/` for plugin `id`, under this console's session key and epoch. */

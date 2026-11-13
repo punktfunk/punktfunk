@@ -317,6 +317,10 @@ impl Overlay for SkiaOverlay {
                 shell.text_input(text);
                 true
             }
+            sdl3::event::Event::TextEditing { text, .. } => {
+                shell.preedit(text);
+                true
+            }
             _ => false,
         }
     }
@@ -389,6 +393,16 @@ impl Overlay for SkiaOverlay {
             && (self.shell.as_ref())
                 .and_then(Shell::edit_field)
                 .is_some_and(|f| f.secure)
+    }
+
+    fn text_input_area(&self) -> Option<(sdl3::rect::Rect, i32)> {
+        if !self.text_input_active() {
+            return None;
+        }
+        let (field, caret) = self.shell.as_ref()?.ui.caret.get()?;
+        let (w, h) = (field.width().round(), field.height().round());
+        let at = sdl3::rect::Rect::new(field.left as i32, field.top as i32, w as u32, h as u32);
+        Some((at, caret.round() as i32))
     }
 
     fn session_phase(&mut self, phase: SessionPhase) {

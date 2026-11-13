@@ -1,12 +1,14 @@
-//! Opening a profile on a person's own account: whether a dial prompts for the account
-//! password, signs with this device's unlock key or goes as it is, what the prompt sends, and
-//! what a refusal reopens. Both desktop shells drive these functions and draw only the prompt.
+//! Opening a profile on a person's own account or a locked one: whether a dial prompts for the
+//! account password or the profile's PIN, signs with this device's unlock key or goes as it is,
+//! what the prompt sends, and what a refusal reopens. Both desktop shells drive these functions
+//! and draw only the prompt; [`UnlockNeed::pin`] picks its form.
 //!
-//! The rules are pure. [`DeviceKeys`] is the platform's key store: Windows Hello on Windows,
-//! none on Linux. An unlock built here reaches the session child through
-//! `orchestrate::spawn_child_with_unlock` and nowhere else.
+//! The rules are pure, and `clients/shared/profile-unlock-vectors.json` pins them for Swift and
+//! Kotlin. [`DeviceKeys`] is the platform's key store: Windows Hello on Windows, none on Linux.
+//! An unlock built here reaches the session child through `orchestrate::spawn_child_with_unlock`
+//! and nowhere else.
 
-use crate::profiles::{UnlockChallenge, UnlockNeed};
+use crate::profiles::{ChallengeNames, UnlockChallenge, UnlockNeed};
 use punktfunk_core::quic::v2::msg::{self, ProfileUnlock, Zeroizing};
 
 /// What a shell does before it dials a profile.
@@ -17,7 +19,8 @@ pub enum Gate {
     /// Sign the host's challenge with this device's key (`key_unlock`). No proof means
     /// [`after_key_failure`].
     Key,
-    /// The password prompt. `error` is the host's sentence for the line under the field.
+    /// The prompt, its form [`UnlockNeed::pin`]'s. `error` is the host's sentence for the line
+    /// under the field.
     Prompt { error: Option<String> },
 }
 
@@ -26,14 +29,15 @@ pub enum Gate {
 pub fn before_dial(need: UnlockNeed, holds_key: bool) -> Gate {
     match need {
         UnlockNeed::None => Gate::Dial,
-        UnlockNeed::Key if holds_key => Gate::Key,
-        UnlockNeed::Key | UnlockNeed::Password => Gate::Prompt { error: None },
+        UnlockNeed::Key | UnlockNeed::PinKey if holds_key => Gate::Key,
+        _ => Gate::Prompt { error: None },
     }
 }
 
-/// The host asks for the password from a device that holds a key: it signed the device out.
+/// The host asks for the password or the PIN from a device that holds a key: it holds none for
+/// the device, which it signed out.
 pub fn stale_key(need: UnlockNeed, holds_key: bool) -> bool {
-    holds_key && need == UnlockNeed::Password
+    holds_key && matches!(need, UnlockNeed::Password | UnlockNeed::Pin)
 }
 
 /// A key unlock gave no proof: no key, a cancelled sheet, a failed signature, no challenge.
@@ -166,6 +170,52 @@ pub fn prompt_unlock(
     if let Some(line) = password_problem(&password) {
         return Err(line);
     }
+    secret_unlock(password, on, key).map_err(|_| pf_l10n::client::unlock_error_bad_char())
+}
+
+/// How many digits a profile's PIN has.
+pub const PIN_LEN: std::ops::RangeInclusive<usize> = 4..=8;
+
+/// `typed` as the PIN the wire carries: [`PIN_LEN`] ASCII digits, a full-width digit read as
+/// its ASCII one. `Err` is the prompt's error line for anything else.
+pub fn pin_digits(typed: &[u8]) -> Result<Zeroizing<Vec<u8>>, &'static str> {
+    let shape = pf_l10n::client::unlock_pin_error_shape();
+    if typed.is_empty() {
+        return Err(pf_l10n::client::unlock_pin_error_empty());
+    }
+    let text = std::str::from_utf8(typed).map_err(|_| shape)?;
+    // Sized for the longest PIN, so a push never moves it and leaves a copy behind.
+    let mut pin = Zeroizing::new(Vec::with_capacity(*PIN_LEN.end()));
+    for c in text.chars() {
+        let digit = match c {
+            '0'..='9' => c as u8,
+            '\u{FF10}'..='\u{FF19}' => b'0' + (u32::from(c) - 0xFF10) as u8,
+            _ => return Err(shape),
+        };
+        if pin.len() == *PIN_LEN.end() {
+            return Err(shape);
+        }
+        pin.push(digit);
+    }
+    PIN_LEN.contains(&pin.len()).then_some(pin).ok_or(shape)
+}
+
+/// The PIN prompt's kind-1 unlock: [`pin_digits`] of `typed`, then [`prompt_unlock`]'s switch.
+pub fn pin_unlock(
+    typed: &[u8],
+    on: bool,
+    key: Option<&DeviceKey>,
+) -> Result<ProfileUnlock, &'static str> {
+    let pin = pin_digits(typed)?;
+    secret_unlock(pin, on, key).map_err(|_| pf_l10n::client::unlock_pin_error_shape())
+}
+
+/// `secret` as a kind-1 unlock, with [`prompt_unlock`]'s switch. `Err` when the wire refuses it.
+fn secret_unlock(
+    secret: Zeroizing<Vec<u8>>,
+    on: bool,
+    key: Option<&DeviceKey>,
+) -> Result<ProfileUnlock, ()> {
     let enrol = match key {
         Some(k) if on => match k.keys.create(&k.name) {
             Some(public) if is_rsa2048(&public) => Some(public),
@@ -182,21 +232,30 @@ pub fn prompt_unlock(
         Some(public) => (msg::ENROLL_RSA2048, public),
         None => (msg::ENROLL_NONE, Vec::new()),
     };
-    ProfileUnlock::new(msg::UNLOCK_PASSWORD, password, stay, alg, public)
-        .map_err(|_| pf_l10n::client::unlock_error_bad_char())
+    ProfileUnlock::new(msg::UNLOCK_PASSWORD, secret, stay, alg, public).map_err(|_| ())
 }
 
-/// The kind-2 unlock for `challenge`: the signed message of the profile-unlock contract,
-/// signed by `key`. `None` sends the shell to [`after_key_failure`].
+/// The kind-2 unlock for `challenge` on profile `profile_id`: the message the challenge names,
+/// a seat's or this profile's, signed by `key`. A challenge named for another profile signs
+/// nothing. `None` sends the shell to [`after_key_failure`].
 pub fn key_proof(
-    challenge: &UnlockChallenge,
+    (challenge, profile_id): (&UnlockChallenge, &str),
     device_fp: &[u8; 32],
     box_fp: &[u8; 32],
     key: &DeviceKey,
 ) -> Option<ProfileUnlock> {
-    let message =
-        msg::unlock_signed_message(&challenge.challenge, &challenge.seat, device_fp, box_fp)
-            .ok()?;
+    let c = &challenge.challenge;
+    let message = match &challenge.names {
+        ChallengeNames::Seat(seat) => msg::unlock_signed_message(c, seat, device_fp, box_fp)
+            .ok()?
+            .to_vec(),
+        ChallengeNames::Profile(id) if id == profile_id => {
+            msg::profile_unlock_signed_message(c, id, device_fp, box_fp)
+                .ok()?
+                .to_vec()
+        }
+        ChallengeNames::Profile(_) => return None,
+    };
     let signature = key.keys.sign(&key.name, &message)?;
     let proof = Zeroizing::new(signature);
     ProfileUnlock::new(
@@ -222,7 +281,7 @@ pub fn key_unlock(
     let challenge = crate::profiles::unlock_challenge(api, profile_id)
         .map_err(|e| tracing::info!(error = %e, "unlock challenge unavailable"))
         .ok()?;
-    key_proof(&challenge, &device_fp, &box_fp, key)
+    key_proof((&challenge, profile_id), &device_fp, &box_fp, key)
 }
 
 /// `der` is one DER `RSAPublicKey` with a 2048-bit modulus and nothing after it. The host
@@ -528,9 +587,10 @@ mod tests {
         };
         let challenge = UnlockChallenge {
             challenge: std::array::from_fn(|i| i as u8 + 1),
-            seat: "0123456789abcdef0123456789abcdef".into(),
+            names: ChallengeNames::Seat("0123456789abcdef0123456789abcdef".into()),
         };
-        let proof = key_proof(&challenge, &[0xaa; 32], &BOX, &key(&keys)).unwrap();
+        let challenge = (&challenge, "9a3f1c2b7e40");
+        let proof = key_proof(challenge, &[0xaa; 32], &BOX, &key(&keys)).unwrap();
         assert_eq!(proof.kind, msg::UNLOCK_KEY_PROOF);
         assert_eq!(proof.secret.as_slice(), &[7; 256][..]);
         let signed = keys.signed.borrow();
@@ -541,12 +601,176 @@ mod tests {
         assert_eq!(calls(&keys), ["sign K"]);
 
         let cancelled = Fake::default();
-        assert!(key_proof(&challenge, &[0xaa; 32], &BOX, &key(&cancelled)).is_none());
+        assert!(key_proof(challenge, &[0xaa; 32], &BOX, &key(&cancelled)).is_none());
         let other_seat = UnlockChallenge {
-            seat: "not a seat".into(),
-            ..challenge
+            names: ChallengeNames::Seat("not a seat".into()),
+            ..challenge.0.clone()
         };
-        assert!(key_proof(&other_seat, &[0xaa; 32], &BOX, &key(&keys)).is_none());
+        let other_seat = (&other_seat, "9a3f1c2b7e40");
+        assert!(key_proof(other_seat, &[0xaa; 32], &BOX, &key(&keys)).is_none());
+    }
+
+    fn vectors() -> serde_json::Value {
+        let raw = include_str!("../../../../clients/shared/profile-unlock-vectors.json");
+        serde_json::from_str(raw).unwrap()
+    }
+
+    fn need(word: &serde_json::Value) -> UnlockNeed {
+        serde_json::from_value(word.clone()).unwrap()
+    }
+
+    fn gate_word(gate: &Gate) -> &'static str {
+        match gate {
+            Gate::Dial => "dial",
+            Gate::Key => "key",
+            Gate::Prompt { .. } => "prompt",
+        }
+    }
+
+    /// `profile-unlock-vectors.json`: each word as its need and the prompt's form, and the gate
+    /// before a dial and after a refusal, through the key store as the shells call it.
+    #[test]
+    fn the_gate_follows_the_shared_vectors() {
+        use crate::profiles::ListedProfile;
+        let v = vectors();
+        for case in v["unlock_words"].as_array().unwrap() {
+            let mut row = serde_json::json!({"id": "kid"});
+            if !case["word"].is_null() {
+                row["unlock"] = case["word"].clone();
+            }
+            let read = serde_json::from_value::<ListedProfile>(row).unwrap().unlock;
+            assert_eq!(read, need(&case["need"]), "{case}");
+            let form = match read {
+                UnlockNeed::None => serde_json::Value::Null,
+                n => (if n.pin() { "pin" } else { "password" }).into(),
+            };
+            assert_eq!(form, case["form"], "{case}");
+        }
+        for case in v["gate"].as_array().unwrap() {
+            let (n, holds) = (need(&case["need"]), case["holds_key"].as_bool().unwrap());
+            assert_eq!(gate_word(&before_dial(n, holds)), case["gate"], "{case}");
+            assert_eq!(stale_key(n, holds), case["delete_key"], "{case}");
+            let keys = Fake {
+                held: holds,
+                ..Fake::default()
+            };
+            assert_eq!(
+                gate_word(&gate(n, Some(&key(&keys)))),
+                case["gate"],
+                "{case}"
+            );
+            let deleted = calls(&keys).iter().any(|c| c == "delete K");
+            assert_eq!(deleted, case["delete_key"], "{case}");
+        }
+        for case in v["after_refusal"].as_array().unwrap() {
+            let (n, holds) = (need(&case["need"]), case["holds_key"].as_bool().unwrap());
+            let keys = Fake {
+                held: holds,
+                ..Fake::default()
+            };
+            let sent = case["sent"].as_bool().unwrap();
+            let got = after_refusal(n, Some(&key(&keys)), sent, None);
+            assert_eq!(gate_word(&got), case["gate"], "{case}");
+        }
+    }
+
+    /// The key signs each message of the vectors, a seat's and a locked profile's, and nothing
+    /// for a challenge named for another profile.
+    #[test]
+    fn a_key_proof_signs_the_shared_vectors() {
+        let b32 = |s: &serde_json::Value| crate::trust::parse_hex32(s.as_str().unwrap()).unwrap();
+        for case in vectors()["messages"].as_array().unwrap() {
+            let keys = Fake {
+                signature: Some(vec![7; 72]),
+                ..Fake::default()
+            };
+            let form = case["form"].as_str().unwrap();
+            let id = case[form].as_str().unwrap().to_string();
+            let (names, profile) = match form {
+                "seat" => (ChallengeNames::Seat(id), "9a3f1c2b7e40".to_string()),
+                _ => (ChallengeNames::Profile(id.clone()), id),
+            };
+            let challenge = UnlockChallenge {
+                challenge: b32(&case["challenge"]),
+                names,
+            };
+            let (device, host) = (b32(&case["device"]), b32(&case["box"]));
+            let proof = key_proof((&challenge, &profile), &device, &host, &key(&keys));
+            assert_eq!(proof.unwrap().kind, msg::UNLOCK_KEY_PROOF);
+            let signed = punktfunk_core::tls::cert_fingerprint(&keys.signed.borrow());
+            assert_eq!(
+                crate::trust::hex(&signed),
+                case["sha256"],
+                "{}",
+                case["name"]
+            );
+        }
+        let keys = Fake {
+            signature: Some(vec![7; 72]),
+            ..Fake::default()
+        };
+        let other = UnlockChallenge {
+            challenge: [1; 32],
+            names: ChallengeNames::Profile("0123456789ab".into()),
+        };
+        let theirs = (&other, "9a3f1c2b7e40");
+        assert!(key_proof(theirs, &[2; 32], &BOX, &key(&keys)).is_none());
+        assert!(
+            calls(&keys).is_empty(),
+            "no sheet for another profile's challenge"
+        );
+    }
+
+    /// The PIN field's text as the wire carries it, or the line the prompt shows; the switch
+    /// stays signed in or enrols as the password prompt's does.
+    #[test]
+    fn a_pin_follows_the_shared_vectors() {
+        for case in vectors()["pins"].as_array().unwrap() {
+            let got = pin_digits(case["typed"].as_str().unwrap().as_bytes());
+            match case["error"].as_str() {
+                None => assert_eq!(
+                    got.unwrap().as_slice(),
+                    case["sent"].as_str().unwrap().as_bytes()
+                ),
+                Some("empty") => assert_eq!(got.err(), Some("Enter the PIN."), "{case}"),
+                Some(_) => assert_eq!(got.err(), Some("A PIN is 4 to 8 digits."), "{case}"),
+            }
+        }
+        let u = pin_unlock("２４６８".as_bytes(), true, None).unwrap();
+        assert_eq!(u.kind, msg::UNLOCK_PASSWORD);
+        assert_eq!(
+            (u.secret.as_slice(), u.stay_signed_in),
+            (&b"2468"[..], true)
+        );
+        let keys = Fake {
+            public: Some(rsa(2048)),
+            ..Fake::default()
+        };
+        assert!(pin_unlock(b"24a8", true, Some(&key(&keys))).is_err());
+        assert!(
+            calls(&keys).is_empty(),
+            "a PIN the prompt refuses makes no key"
+        );
+        let u = pin_unlock(b"2468", true, Some(&key(&keys))).unwrap();
+        assert_eq!(
+            (u.enroll_alg, u.stay_signed_in),
+            (msg::ENROLL_RSA2048, false)
+        );
+        assert_eq!(calls(&keys), ["create K"]);
+    }
+
+    /// Each challenge answer of the vectors names a seat, a profile, or is refused.
+    #[test]
+    fn a_challenge_answer_follows_the_shared_vectors() {
+        for case in vectors()["challenge_answers"].as_array().unwrap() {
+            let parsed = UnlockChallenge::parse(case["body"].to_string().as_bytes());
+            let names = match (case["seat"].as_str(), case["profile"].as_str()) {
+                (Some(seat), _) => Some(ChallengeNames::Seat(seat.into())),
+                (_, Some(id)) => Some(ChallengeNames::Profile(id.into())),
+                _ => None,
+            };
+            assert_eq!(parsed.map(|c| c.names), names, "{case}");
+        }
     }
 
     #[test]
@@ -587,7 +811,7 @@ mod tests {
         );
         let c = UnlockChallenge::parse(ok.as_bytes()).unwrap();
         assert_eq!(c.challenge, [0x0a; 32]);
-        assert_eq!(c.seat, "c".repeat(32));
+        assert_eq!(c.names, ChallengeNames::Seat("c".repeat(32)));
         for bad in [
             format!(
                 r#"{{"challenge":"{}","seat":"{}"}}"#,
@@ -626,7 +850,8 @@ mod tests {
             .unwrap()
         };
         assert_eq!(seat_gate(&row("none")), SeatGate::Wake);
-        assert_eq!(seat_gate(&row("password")), SeatGate::Dial);
-        assert_eq!(seat_gate(&row("key")), SeatGate::Dial);
+        for word in ["password", "key", "pin", "pin_key"] {
+            assert_eq!(seat_gate(&row(word)), SeatGate::Dial, "{word}");
+        }
     }
 }

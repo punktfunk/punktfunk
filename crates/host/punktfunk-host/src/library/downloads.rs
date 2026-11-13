@@ -277,13 +277,11 @@ fn changed(app: &str, title: &str, state: &str) {
 /// `provider`'s titles by `external_id`: library id and title. Only published entries resolve,
 /// so a report can't name a title it doesn't own.
 fn owned_by(provider: &str) -> HashMap<String, (String, String)> {
-    super::catalog()
-        .entries
-        .iter()
-        .filter(|e| e.provider.as_deref() == Some(provider))
+    super::provider_rows(provider)
+        .into_iter()
         .filter_map(|e| {
             let external = e.external_id.clone()?;
-            Some((external, (super::library_id_for(e), e.title.clone())))
+            Some((external, (super::library_id_for(&e), e.title.clone())))
         })
         .collect()
 }
@@ -634,9 +632,9 @@ pub fn call(provider: &str, app: &str, external_id: &str, action: Action) -> Res
 }
 
 /// Fill each entry's `free_bytes` from its `target`, which must lie under one of its plugin's
-/// write grants; a target outside them is dropped. One grant read and one stat per target.
+/// write grants, read where the plugin lives (`manifest::home_of`); a target outside them is
+/// dropped. One grant read and one stat per target.
 pub fn fill_free<'a>(games: impl IntoIterator<Item = &'a mut GameEntry>) {
-    let mut access = None;
     // (provider, target) → free bytes when granted, `None` when not.
     let mut seen: HashMap<(String, String), Option<Option<u64>>> = HashMap::new();
     for g in games {
@@ -651,9 +649,8 @@ pub fn fill_free<'a>(games: impl IntoIterator<Item = &'a mut GameEntry>) {
         let answer = seen
             .entry((provider.clone(), target.clone()))
             .or_insert_with(|| {
-                let access = access.get_or_insert_with(|| {
-                    crate::plugins::access::AccessStore::open(pf_paths::seat::library_dir())
-                });
+                let home = crate::plugins::manifest::home_of(&provider);
+                let access = crate::plugins::access::AccessStore::open(home);
                 (!provider.is_empty() && access.may_write(&provider, Path::new(&target)))
                     .then(|| free_bytes(Path::new(&target)))
             });

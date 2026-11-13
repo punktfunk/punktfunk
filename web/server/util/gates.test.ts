@@ -183,6 +183,11 @@ const BOTH_WAYS: [Route, unknown, unknown][] = [
 		{ expires_in_secs: 0 },
 	],
 	[row("PATCH", "host/settings"), { gamestream: true }, { max_fps: 60 }],
+	[
+		row("POST", "profiles/{id}/lock"),
+		{ devices: ["ab12"], pin: "2468" },
+		{ devices: ["ab12"] },
+	],
 ];
 
 test("each conditional row is pinned both ways", () => {

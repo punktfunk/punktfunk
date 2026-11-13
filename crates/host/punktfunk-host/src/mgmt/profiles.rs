@@ -2,18 +2,19 @@
 //!
 //! Four routes are on the cert lane, for every paired device: the list a client's picker
 //! shows, a profile's picture, waking its seat and a key unlock's challenge. Everything that
-//! changes a profile is the console's, among them turning seats on and signing devices out. Any
-//! paired device may pick any profile, but starting another profile's seat takes the launch
-//! grant. A profile on a person's own Linux account is the exception: only the seat supervisor
-//! lets a device onto it, through the unlock at connect (`native/unlock.rs`), and nothing here
-//! starts it.
+//! changes a profile is the console's, among them turning seats on, locking a profile and
+//! signing devices out. A paired device may pick an open profile, and a locked one whose list
+//! holds it or whose PIN it brings (`profiles/locks.rs`); starting another profile's seat takes
+//! the launch grant. A profile on a person's own Linux account is the exception: only the seat
+//! supervisor lets a device onto it, through the unlock at connect (`native/unlock.rs`), and
+//! nothing here starts it.
 
 use super::auth::{AuthLane, PairedDevice};
 use super::owner::{LiveSeats, Seats};
 use super::shared::*;
 use crate::profiles::take_turns::{self, LocalAccount};
 use crate::profiles::{
-    EditError, Home, OsAccount, Profile, ProfileCreate, ProfileUpdate, Profiles,
+    EditError, Home, Opens, OsAccount, Profile, ProfileCreate, ProfileUpdate, Profiles,
 };
 use crate::seats::Snapshot;
 use axum::http::header;
@@ -51,18 +52,30 @@ pub(crate) struct ProfilePublic {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false)]
     unlock: Option<UnlockNeed>,
+    /// The asking device is this locked profile's person now: it may hide a title for it
+    /// (`PUT /library/hidden/{id}?as=`) and list what it hides (`GET /library/page?hidden=true`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[schema(required = false)]
+    person: bool,
 }
 
-/// What a device sends with its connect to open a profile on a person's own Linux account.
+/// What a device sends with its connect to open a profile: a profile on a person's own Linux
+/// account, or a locked one. A client that doesn't know a word reads it as `password`.
 #[derive(Serialize, ToSchema, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum UnlockNeed {
-    /// Nothing: any other profile, or a device already signed in to a running desktop.
+    /// Nothing: an open profile, a locked one that lists this device, or a device already
+    /// signed in to a running desktop.
     None,
     /// The account's password.
     Password,
     /// A signature from this device's unlock key over a fresh `unlock-challenge`.
     Key,
+    /// A locked profile's PIN, 4 to 8 digits, sent as the unlock's secret.
+    Pin,
+    /// A signature from this device's unlock key over a fresh `unlock-challenge`, or the locked
+    /// profile's PIN.
+    PinKey,
 }
 
 impl From<Needs> for UnlockNeed {
@@ -75,18 +88,25 @@ impl From<Needs> for UnlockNeed {
     }
 }
 
-/// `POST /profiles/{id}/unlock-challenge`.
+/// `POST /profiles/{id}/unlock-challenge`: `seat` for a profile on a person's own Linux account,
+/// `profile` for a locked one, never both.
 #[derive(Serialize, ToSchema)]
 pub(crate) struct UnlockChallenge {
     /// 32 random bytes, lowercase hex: good for one proof within two minutes.
     #[schema(example = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")]
-    challenge: String,
+    pub(super) challenge: String,
     /// The seat's id, 32 lowercase hex characters, as the signed message names it.
-    #[schema(example = "0123456789abcdef0123456789abcdef")]
-    seat: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = String, required = false, example = "0123456789abcdef0123456789abcdef")]
+    pub(super) seat: Option<String>,
+    /// The locked profile's id, as its signed message names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = String, required = false, example = "9a3f1c2b7e40")]
+    pub(super) profile: Option<String>,
 }
 
-/// A device signed in to a profile on a person's own Linux account.
+/// A device signed in to a profile on a person's own Linux account, or on a locked profile's
+/// list.
 #[derive(Serialize, ToSchema)]
 pub(crate) struct SignedInDevice {
     /// SHA-256 of the device's certificate, lowercase hex.
@@ -94,10 +114,36 @@ pub(crate) struct SignedInDevice {
     /// The name it paired with.
     name: String,
     kind: SignedInKind,
+    /// A Moonlight pairing rather than a Punktfunk one. Never on a person's own account.
+    pub(super) moonlight: bool,
     /// When it first signed in, unix seconds.
     added_unix: i64,
     /// When it last unlocked or rejoined, unix seconds.
     last_unix: i64,
+}
+
+impl From<pf_seats::ipc::DeviceEntry> for SignedInDevice {
+    fn from(d: pf_seats::ipc::DeviceEntry) -> Self {
+        SignedInDevice {
+            fingerprint: d.fingerprint,
+            name: d.name,
+            kind: match d.kind {
+                DeviceKind::ForNow => SignedInKind::ForNow,
+                DeviceKind::Stay => SignedInKind::Stay,
+                DeviceKind::Added => SignedInKind::Added,
+                DeviceKind::Key => SignedInKind::Key,
+            },
+            moonlight: false,
+            added_unix: d.added_unix,
+            last_unix: d.last_unix,
+        }
+    }
+}
+
+impl SignedInDevice {
+    pub(super) fn fingerprint(&self) -> &str {
+        &self.fingerprint
+    }
 }
 
 /// How a signed-in device gets back on.
@@ -106,8 +152,10 @@ pub(crate) struct SignedInDevice {
 pub(crate) enum SignedInKind {
     /// Until ten minutes after it left, at most a day.
     ForNow,
-    /// Rejoins a running desktop without the password until it is signed out.
+    /// Gets back on without the password or PIN until it is signed out.
     Stay,
+    /// The operator put it on a locked profile's list: it opens it until signed out.
+    Added,
     /// Proves itself with its unlock key on every connect.
     Key,
 }
@@ -148,6 +196,11 @@ pub(crate) struct SeatPublic {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false)]
     account: Option<String>,
+    /// The management port of the host on its ledger row, for the console. Absent to a paired
+    /// device, and for a profile with no row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    mgmt_port: Option<u16>,
 }
 
 /// What a profile's seat is. A door places every profile on a seat, so a profile on the box's own
@@ -187,6 +240,10 @@ pub(crate) struct ProfileAdmin {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[schema(required = false)]
     steam_home: bool,
+    /// Its lock. Absent for a profile on a person's own account, which opens with its password.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    lock: Option<super::locks::LockSummary>,
 }
 
 /// `PUT /profiles/default`.
@@ -204,7 +261,7 @@ pub(crate) struct DeleteQuery {
     erase: bool,
 }
 
-fn no_profiles() -> Response {
+pub(super) fn no_profiles() -> Response {
     api_error(StatusCode::NOT_FOUND, "this host has no profiles")
 }
 
@@ -232,6 +289,7 @@ fn public(
             .zip(p.legacy_device.as_deref())
             .is_some_and(|(d, l)| d.eq_ignore_ascii_case(l)),
         unlock: None,
+        person: false,
     }
 }
 
@@ -324,6 +382,7 @@ fn take_turns_seat(st: &MgmtState, display_name: &str, account: &str) -> SeatPub
         kind: SeatKind::Desktop,
         take_turns: true,
         account: None,
+        mgmt_port: None,
     }
 }
 
@@ -342,6 +401,7 @@ fn seat_line(st: &MgmtState, p: &Profile, seats: &Snapshot, operator: bool) -> S
         kind: SeatKind::Desktop,
         take_turns: false,
         account: None,
+        mgmt_port: None,
     };
     if let Some(id) = seats.row_of(&p.os_account) {
         let account = seats
@@ -371,6 +431,7 @@ fn seat_line(st: &MgmtState, p: &Profile, seats: &Snapshot, operator: bool) -> S
             kind: SeatKind::Desktop,
             take_turns: false,
             account: None,
+            mgmt_port: None,
         },
         OsAccount::Windows { .. } => unavailable((
             "seatline_account_not_startable",
@@ -393,6 +454,7 @@ fn seated(seats: &Snapshot, id: &str, operator: bool) -> SeatPublic {
         kind: SeatKind::Desktop,
         take_turns: false,
         account: None,
+        mgmt_port: None,
     };
     let Some((seat, _)) = seats.seat(id) else {
         let why = if !seats.on && pf_paths::seat::role().is_door() {
@@ -483,9 +545,12 @@ fn not_a_person() -> Response {
     )
 }
 
-/// The person's own Linux account `id` plays on, from the door's ledger, or the answer for a
-/// profile with none.
-async fn person_of(st: &MgmtState, id: &str) -> Result<pf_seats::SeatId, Response> {
+/// The person's own Linux account `id` plays on, from the door's ledger; `None` for a profile
+/// that is not on a person's own account.
+pub(super) async fn person_seat(
+    st: &MgmtState,
+    id: &str,
+) -> Result<Option<pf_seats::SeatId>, Response> {
     let Some(profiles) = st.app.profiles.get() else {
         return Err(no_profiles());
     };
@@ -496,10 +561,7 @@ async fn person_of(st: &MgmtState, id: &str) -> Result<pf_seats::SeatId, Respons
         Some(door) => blocking("seat_ledger", move || door.ledger()).await?,
         None => Snapshot::default(),
     };
-    match ledger.person_row(&p.os_account) {
-        Some(row) => Ok(row.id.clone()),
-        None => Err(not_a_person()),
-    }
+    Ok(ledger.person_row(&p.os_account).map(|row| row.id.clone()))
 }
 
 /// One request to the door's supervisor about a person's own account. A refusal reads as its
@@ -901,13 +963,22 @@ pub(super) fn start_seat(id: &str) {
     }
 }
 
+/// A profile as the operator reads it: why its seat failed, and its seat host's management port.
 fn admin(st: &MgmtState, profiles: &Profiles, p: &Profile, seats: &Snapshot) -> ProfileAdmin {
     let owner = profiles.owner_id();
+    // As `person_seat` decides it: only a door's ledger names a person's own account.
+    let own_account = st.door.is_some() && seats.person_row(&p.os_account).is_some();
+    let mut public = public(st, p, owner.as_deref(), None, seats, true);
+    if let Some(seat) = public.seat.as_mut() {
+        let row = seats.row_of(&p.os_account).and_then(|id| seats.seat(id));
+        seat.mgmt_port = row.map(|(row, _)| row.mgmt_port);
+    }
     ProfileAdmin {
-        public: public(st, p, owner.as_deref(), None, seats, true),
+        public,
         legacy_device: p.legacy_device.clone(),
         default: profiles.default_profile_id().as_deref() == Some(p.id.as_str()),
         steam_home: keeps_steam_home(&p.id),
+        lock: (!own_account).then(|| super::locks::summary(profiles, &p.id)),
     }
 }
 
@@ -922,7 +993,7 @@ fn keeps_steam_home(id: &str) -> bool {
     }
 }
 
-fn edit_error(e: EditError) -> Response {
+pub(super) fn edit_error(e: EditError) -> Response {
     let text = e.to_string();
     match e {
         EditError::NotFound => api_error(StatusCode::NOT_FOUND, &text),
@@ -943,10 +1014,12 @@ fn edit_error(e: EditError) -> Response {
 
 /// List the profiles a device can pick
 ///
-/// Every profile on the box, the owner first. A client shows this as its picker. Each row's
-/// `unlock` says what the asking device sends with its connect: a profile on a person's own
-/// Linux account needs the account's password, or a key proof from a device that enrolled one,
-/// until the device is signed in to its running desktop.
+/// The profiles the asking device may open, the owner first, and the locked ones that take a
+/// PIN; the console lists every profile. A client shows this as its picker. Each row's `unlock`
+/// says what the asking device sends with its connect: a profile on a person's own Linux account
+/// needs the account's password, or a key proof from a device that enrolled one, until the
+/// device is signed in to its running desktop; a locked profile whose list lacks the device
+/// needs its PIN. `person` marks the rows whose own library view this device may change now.
 #[utoipa::path(
     get,
     path = "/profiles/enumerate",
@@ -972,20 +1045,37 @@ pub(crate) async fn enumerate_profiles(
     let operator = lane == AuthLane::Admin;
     let list = profiles.list();
     let needs = unlock_needs(&st, &seats, &list, device.as_deref()).await;
-    let rows: Vec<ProfilePublic> = list
-        .iter()
-        .map(|p| ProfilePublic {
-            unlock: Some(needs.get(&p.id).copied().unwrap_or(UnlockNeed::None)),
-            ..public(
-                &st,
-                p,
-                owner.as_deref(),
-                device.as_deref(),
-                &seats,
-                operator,
-            )
-        })
-        .collect();
+    let mut rows: Vec<ProfilePublic> = Vec::with_capacity(list.len());
+    for p in &list {
+        let need = needs.get(&p.id).copied().unwrap_or(UnlockNeed::None);
+        let unlock = match profiles.opens(&p.id, device.as_deref()) {
+            _ if operator => need,
+            Opens::Yes => need,
+            Opens::Pin => UnlockNeed::Pin,
+            Opens::Key => UnlockNeed::PinKey,
+            Opens::No => continue,
+        };
+        // The check that accepts the person's writes: a row never offers what a write refuses.
+        let person = match device.as_deref().filter(|_| !operator) {
+            Some(fp) => super::person::check(&st, Some(&p.id), fp, None)
+                .await
+                .is_ok(),
+            None => false,
+        };
+        let row = public(
+            &st,
+            p,
+            owner.as_deref(),
+            device.as_deref(),
+            &seats,
+            operator,
+        );
+        rows.push(ProfilePublic {
+            unlock: Some(unlock),
+            person,
+            ..row
+        });
+    }
     Json(rows).into_response()
 }
 
@@ -1017,6 +1107,15 @@ pub(crate) async fn get_profile_avatar(
     let Some(profiles) = st.app.profiles.get().cloned() else {
         return no_profiles();
     };
+    avatar_of(profiles, id, &headers).await
+}
+
+/// Profile `id`'s picture, or 304 when `headers` name its tag.
+pub(super) async fn avatar_of(
+    profiles: Arc<Profiles>,
+    id: String,
+    headers: &axum::http::HeaderMap,
+) -> Response {
     let found = tokio::task::spawn_blocking(move || profiles.avatar(&id)).await;
     let Ok(Some(avatar)) = found else {
         return api_error(StatusCode::NOT_FOUND, "no picture for that profile");
@@ -1045,8 +1144,9 @@ pub(crate) async fn get_profile_avatar(
 /// Starts a stopped seat so the next connect lands in it, and answers at once with the seat
 /// `starting`; poll `enumerate` until it is `ready`. A profile with no seat to start only gets
 /// its row back. A paired device wakes the profile it lands in when it names none; any other
-/// needs its launch grant. A profile on a person's own Linux account is never woken: its
-/// desktop starts when the connect brings the account's password.
+/// needs its launch grant, and a locked one a device on its list. A profile on a person's own
+/// Linux account is never woken: its desktop starts when the connect brings the account's
+/// password.
 #[utoipa::path(
     post,
     path = "/profiles/{id}/wake",
@@ -1056,7 +1156,7 @@ pub(crate) async fn get_profile_avatar(
     responses(
         (status = OK, description = "The profile, its seat as it is now", body = ProfilePublic),
         (status = UNAUTHORIZED, description = "Missing or invalid credentials", body = ApiError),
-        (status = FORBIDDEN, description = "This device may not start another profile's seat", body = ApiError),
+        (status = FORBIDDEN, description = "This device may not start that profile's seat", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
         (status = CONFLICT, description = "The profile opens with its account password", body = ApiError),
     )
@@ -1117,12 +1217,16 @@ pub(crate) async fn wake_profile(
     Json(row).into_response()
 }
 
-/// A paired device wakes the profile it lands in when it names none, one that can't play yet
-/// included, and another only while its live mask (expiry-aware) carries the launch grant.
+/// A paired device wakes only a profile it opens with nothing asked ([`Profiles::opens`]): the
+/// one it lands in when it names none, one that can't play yet included, and another only while
+/// its live mask (expiry-aware) carries the launch grant.
 fn may_wake(st: &MgmtState, profiles: &Profiles, id: &str, fp: Option<&str>) -> bool {
     let Some(fp) = fp else {
         return false;
     };
+    if profiles.opens(id, Some(fp)) != Opens::Yes {
+        return false;
+    }
     let own = profiles.pick(Some(fp), None).is_ok_and(|r| r.id == id);
     own || st
         .native
@@ -1810,10 +1914,11 @@ pub(crate) async fn end_profile_session(
 
 /// Ask for a key unlock's challenge
 ///
-/// For a profile on a person's own Linux account and a device that enrolled an unlock key: 32
-/// random bytes for the key to sign, and the seat id the signed message names. It is good for
-/// one proof within two minutes, and a new one replaces it. A device without a key is refused;
-/// it unlocks with the account's password. Paired devices only.
+/// For a device that enrolled an unlock key: 32 random bytes for the key to sign, and what the
+/// signed message names, the seat id for a profile on a person's own Linux account or the
+/// profile id for a locked profile. It is good for one proof within two minutes, and a new one
+/// replaces it. A device without a key is refused; it unlocks with the account's password or the
+/// profile's PIN. Paired devices only.
 #[utoipa::path(
     post,
     path = "/profiles/{id}/unlock-challenge",
@@ -1826,7 +1931,7 @@ pub(crate) async fn end_profile_session(
         (status = UNAUTHORIZED, description = "Missing or invalid credentials", body = ApiError),
         (status = FORBIDDEN, description = "Not a paired device", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "The profile doesn't open with an account password, or this device has no unlock key", body = ApiError),
+        (status = CONFLICT, description = "This device has no unlock key for the profile", body = ApiError),
         (status = SERVICE_UNAVAILABLE, description = "The seat supervisor didn't answer", body = ApiError),
     )
 )]
@@ -1841,8 +1946,9 @@ pub(crate) async fn unlock_challenge(
             "Only a paired device asks for its own unlock challenge.",
         );
     };
-    let seat = match person_of(&st, &id).await {
-        Ok(seat) => seat,
+    let seat = match person_seat(&st, &id).await {
+        Ok(Some(seat)) => seat,
+        Ok(None) => return super::locks::challenge(&st, &id, &fp.to_ascii_lowercase()),
         Err(resp) => return resp,
     };
     let command = Command::Challenge {
@@ -1852,7 +1958,8 @@ pub(crate) async fn unlock_challenge(
     match ask_door(&st, command).await {
         Ok(CommandResult::Challenge { challenge, seat }) => Json(UnlockChallenge {
             challenge,
-            seat: seat.as_str().to_string(),
+            seat: Some(seat.as_str().to_string()),
+            profile: None,
         })
         .into_response(),
         Ok(_) => unexpected(),
@@ -1863,7 +1970,8 @@ pub(crate) async fn unlock_challenge(
 /// List the devices signed in to a profile
 ///
 /// For a profile on a person's own Linux account: each device that unlocked it, and how it gets
-/// back on. Admin lane only.
+/// back on. For any other profile: the devices its lock lets in, the same rows, kept while it is
+/// open. Admin lane only.
 #[utoipa::path(
     get,
     path = "/profiles/{id}/devices",
@@ -1874,7 +1982,7 @@ pub(crate) async fn unlock_challenge(
         (status = OK, description = "The signed-in devices", body = Vec<SignedInDevice>),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "The profile doesn't open with an account password", body = ApiError),
+        (status = CONFLICT, description = "A profile on the owner's lock, or a lock file that doesn't read", body = ApiError),
         (status = SERVICE_UNAVAILABLE, description = "The seat supervisor didn't answer", body = ApiError),
     )
 )]
@@ -1882,8 +1990,9 @@ pub(crate) async fn list_profile_devices(
     State(st): State<Arc<MgmtState>>,
     Path(id): Path<String>,
 ) -> Response {
-    let seat = match person_of(&st, &id).await {
-        Ok(seat) => seat,
+    let seat = match person_seat(&st, &id).await {
+        Ok(Some(seat)) => seat,
+        Ok(None) => return super::locks::devices(&st, &id).await,
         Err(resp) => return resp,
     };
     let devices = match ask_door(&st, Command::Devices { id: seat }).await {
@@ -1891,27 +2000,15 @@ pub(crate) async fn list_profile_devices(
         Ok(_) => return unexpected(),
         Err(resp) => return resp,
     };
-    let rows: Vec<SignedInDevice> = devices
-        .into_iter()
-        .map(|d| SignedInDevice {
-            fingerprint: d.fingerprint,
-            name: d.name,
-            kind: match d.kind {
-                DeviceKind::ForNow => SignedInKind::ForNow,
-                DeviceKind::Stay => SignedInKind::Stay,
-                DeviceKind::Key => SignedInKind::Key,
-            },
-            added_unix: d.added_unix,
-            last_unix: d.last_unix,
-        })
-        .collect();
+    let rows: Vec<SignedInDevice> = devices.into_iter().map(SignedInDevice::from).collect();
     Json(rows).into_response()
 }
 
 /// Sign a device out of a profile
 ///
 /// For a profile on a person's own Linux account: the device needs the account's password again
-/// and its unlock key is forgotten. Admin lane only.
+/// and its unlock key is forgotten. For any other: the device leaves its lock's list, and a
+/// session it plays there ends. Admin lane only.
 #[utoipa::path(
     delete,
     path = "/profiles/{id}/devices/{fingerprint}",
@@ -1926,7 +2023,7 @@ pub(crate) async fn list_profile_devices(
         (status = BAD_REQUEST, description = "Not a device fingerprint", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "The profile doesn't open with an account password", body = ApiError),
+        (status = CONFLICT, description = "A profile on the owner's lock, or a lock file that doesn't read", body = ApiError),
         (status = SERVICE_UNAVAILABLE, description = "The seat supervisor didn't answer", body = ApiError),
     )
 )]
@@ -1943,7 +2040,8 @@ pub(crate) async fn sign_out_profile_device(
 /// Sign every device out of a profile
 ///
 /// For a profile on a person's own Linux account: every device needs the account's password
-/// again and every unlock key is forgotten. Admin lane only.
+/// again and every unlock key is forgotten. For any other: its lock's list empties, and every
+/// session on it from a device off the list ends. Admin lane only.
 #[utoipa::path(
     delete,
     path = "/profiles/{id}/devices",
@@ -1954,7 +2052,7 @@ pub(crate) async fn sign_out_profile_device(
         (status = NO_CONTENT, description = "Signed out"),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "The profile doesn't open with an account password", body = ApiError),
+        (status = CONFLICT, description = "A profile on the owner's lock, or a lock file that doesn't read", body = ApiError),
         (status = SERVICE_UNAVAILABLE, description = "The seat supervisor didn't answer", body = ApiError),
     )
 )]
@@ -1965,10 +2063,12 @@ pub(crate) async fn sign_out_profile_devices(
     sign_out(&st, &id, None).await
 }
 
-/// Signs `fingerprint`, or every device, out of profile `id`'s person's own account.
+/// Signs `fingerprint`, or every device, out of profile `id`: its person's own account, else its
+/// lock's list.
 async fn sign_out(st: &MgmtState, id: &str, fingerprint: Option<String>) -> Response {
-    let seat = match person_of(st, id).await {
-        Ok(seat) => seat,
+    let seat = match person_seat(st, id).await {
+        Ok(Some(seat)) => seat,
+        Ok(None) => return super::locks::sign_out(st, id, fingerprint.as_deref()).await,
         Err(resp) => return resp,
     };
     match ask_door(
