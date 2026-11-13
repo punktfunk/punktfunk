@@ -115,18 +115,18 @@ public final class VideoDecoder: @unchecked Sendable {
     /// pump can re-gate on the next IDR.
     private let onDecodeError: @Sendable (OSStatus) -> Void
 
-    /// Whether the negotiated stream is full-chroma 4:4:4 (`connection.isChroma444`), set once at
-    /// session start before any decode. Selects the 4:4:4 decode pixel format (orthogonal to bit
-    /// depth / HDR). Read inside `createSessionLocked` under `lock`.
+    /// Whether the stream is full-chroma 4:4:4 (`connection.isChroma444`). Selects the 4:4:4
+    /// decode pixel format (orthogonal to bit depth / HDR). Read inside `createSessionLocked`
+    /// under `lock`.
     private var chroma444 = false
 
-    /// The negotiated codec (`connection.videoCodec`), set once at session start. Drives the
-    /// bitstream framing (H.264/HEVC NAL parsing vs AV1 OBU repack). Read under `lock`.
+    /// The stream's codec (`connection.videoCodec`). Drives the bitstream framing (H.264/HEVC NAL
+    /// parsing vs AV1 OBU repack). Read under `lock`.
     private var codec: VideoCodec = .hevc
 
-    /// The negotiated encode depth (`connection.bitDepth`), set once at session start. 10 asks
-    /// the decoder for a 10-bit buffer whether or not the stream is HDR: 10-bit SDR is Main10
-    /// under BT.709. Read inside `createSessionLocked` under `lock`.
+    /// The stream's encode depth (`connection.bitDepth`). 10 asks the decoder for a 10-bit buffer
+    /// whether or not the stream is HDR: 10-bit SDR is Main10 under BT.709. Read inside
+    /// `createSessionLocked` under `lock`.
     private var bitDepth: UInt8 = 8
 
     /// Where the core assembles the AUs, for samples over the AU itself. PUMP THREAD, which is
@@ -143,26 +143,25 @@ public final class VideoDecoder: @unchecked Sendable {
 
     deinit { teardown() }
 
-    /// Select the chroma subsampling of the decode output (4:2:0 vs full-chroma 4:4:4). Call once at
-    /// session start, before decoding, from `connection.isChroma444`. Takes effect on the next
-    /// session (re)build. Thread-safe.
+    /// Select the chroma subsampling of the decode output (4:2:0 vs full-chroma 4:4:4) from
+    /// `connection.isChroma444`, at session start and on each new-format AU. Takes effect on the
+    /// next session (re)build. Thread-safe.
     public func setChroma444(_ on: Bool) {
         lock.lock()
         chroma444 = on
         lock.unlock()
     }
 
-    /// Select the negotiated codec (H.264 / HEVC / AV1). Call once at session start, before
-    /// decoding, from `connection.videoCodec`. Thread-safe.
+    /// Select the codec (H.264 / HEVC / AV1) from `connection.videoCodec`, at session start and on
+    /// each new-format AU. Thread-safe.
     public func setCodec(_ c: VideoCodec) {
         lock.lock()
         codec = c
         lock.unlock()
     }
 
-    /// Select the decode bit depth from the session's negotiated depth (`connection.bitDepth`,
-    /// 8 or 10). Call once at session start, before decoding. Takes effect on the next session
-    /// (re)build. Thread-safe.
+    /// Select the decode bit depth from `connection.bitDepth` (8 or 10), at session start and on
+    /// each new-format AU. Takes effect on the next session (re)build. Thread-safe.
     public func setBitDepth(_ bits: UInt8) {
         lock.lock()
         bitDepth = bits
