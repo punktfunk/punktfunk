@@ -407,7 +407,7 @@ fn app(
     });
     let person_lane = shared.person.is_some();
     let (api_routes, api) = api_router_parts();
-    // Auth, then the door's pass-on, then the library guard and a person's own Linux account: a
+    // Auth, then the door's pass-on, then the library guard and a person's own account: a
     // caller without a credential gets 401, only the lane auth stamped is passed on, and a
     // library write a door passes to the owner never meets the 409 of the box copy.
     let routed = api_routes

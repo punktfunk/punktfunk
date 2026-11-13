@@ -91,28 +91,20 @@ async fn a_person_s_own_account_refuses_what_would_run_code_as_them() {
 
     let raw = serde_json::json!({"spec": "punktfunk-plugin-x", "accept_unverified": true});
     let (s, body) = send(&app, json_req(Method::POST, "/api/v1/store/install", raw)).await;
-    if cfg!(windows) {
-        // A Windows seat runs no plugin of its own, so it refuses every install first.
-        assert_eq!(s, StatusCode::CONFLICT, "{body}");
-        assert_eq!(body["code"], "seat_runs_no_plugins", "{body}");
-    } else {
-        assert_eq!(s, StatusCode::FORBIDDEN, "{body}");
-    }
+    assert_eq!(s, StatusCode::FORBIDDEN, "{body}");
 
     let copy = serde_json::json!({"exe": "/bin/sh"});
     let adopt = "/api/v1/emulators/rpcs3/adopt";
     let (s, body) = send(&app, json_req(Method::POST, adopt, copy)).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "{body}");
 
-    // On Linux the console manages no plugin at all there, and the runner reads as absent.
-    if cfg!(target_os = "linux") {
-        let on = serde_json::json!({"enabled": true});
-        let (s, body) = send(&app, json_req(Method::POST, "/api/v1/store/runtime", on)).await;
-        assert_eq!(s, StatusCode::FORBIDDEN, "{body}");
-        let (s, body) = send(&app, get_req("/api/v1/store/runtime")).await;
-        assert_eq!(s, StatusCode::OK, "{body}");
-        assert_eq!(body["installed"], false, "{body}");
-    }
+    // The operator's console manages no plugin there, and the runner reads as absent.
+    let on = serde_json::json!({"enabled": true});
+    let (s, body) = send(&app, json_req(Method::POST, "/api/v1/store/runtime", on)).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{body}");
+    let (s, body) = send(&app, get_req("/api/v1/store/runtime")).await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    assert_eq!(body["installed"], false, "{body}");
 }
 
 /// Set on the child only: the box's library dir it reads.

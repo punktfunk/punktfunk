@@ -51,9 +51,11 @@ pub(crate) const BOX_READS: &[(&str, &str)] = &[
     ("GET", "/api/v1/session/settings"),
 ];
 
-/// What the person lane reaches on a Windows seat host beside [`SEAT_READS`]: their hooks and own
-/// titles, which run as them. That host is SYSTEM, so every other profile route there would act
-/// as SYSTEM on what the call names.
+/// What the person lane reaches on a Windows seat host beside [`SEAT_READS`]. That host is
+/// SYSTEM, so each route here acts as the person or names no path: their hooks and own titles
+/// run as them; the store installs a reviewed plugin into the seat's own `plugins` alone; the
+/// runner runs as the seat's account; a folder decision opens a folder as that account. Every
+/// other profile route there would act as SYSTEM on what the call names.
 pub(crate) const WINDOWS_SEAT: &[(&str, &str)] = &[
     ("GET", "/api/v1/hooks"),
     ("PUT", "/api/v1/hooks"),
@@ -62,6 +64,20 @@ pub(crate) const WINDOWS_SEAT: &[(&str, &str)] = &[
     ("PUT", "/api/v1/library/custom/{id}"),
     ("DELETE", "/api/v1/library/custom/{id}"),
     ("GET", "/api/v1/library/art/{id}/{kind}"),
+    ("GET", "/api/v1/store/catalog"),
+    ("POST", "/api/v1/store/refresh"),
+    ("GET", "/api/v1/store/installed"),
+    ("POST", "/api/v1/store/install"),
+    ("POST", "/api/v1/store/uninstall"),
+    ("GET", "/api/v1/store/jobs"),
+    ("GET", "/api/v1/store/jobs/{id}"),
+    ("GET", "/api/v1/store/runtime"),
+    ("POST", "/api/v1/store/runtime"),
+    ("GET", "/api/v1/plugins"),
+    ("GET", "/api/v1/plugins/{id}/ui-credential"),
+    ("GET", "/api/v1/plugin-access"),
+    ("POST", "/api/v1/plugin-access/{plugin}/decide"),
+    ("POST", "/api/v1/plugin-access/{plugin}/release"),
 ];
 
 /// Whether the person lane reaches `method` `path` on its seat host: a profile's data or

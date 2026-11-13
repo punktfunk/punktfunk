@@ -335,8 +335,9 @@ pub(crate) async fn get_plugin_access(State(st): State<Arc<MgmtState>>) -> Respo
 /// grant stores nothing), or with `write` set grants a path the operator handed over, on
 /// behalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.
 /// A folder that takes longer answers 202 and lists its walk until the record lands. On a seat
-/// host the grant is for its own runner: a folder the seat's account can't list is refused. On a
-/// person's own account only that person decides, and an emulator or core install is refused.
+/// host the grant is for its own runner: a folder the seat's account can't list is refused, and
+/// on Windows that account places the folder's access. On a person's own account only that person
+/// decides, and an emulator or core install is refused, as it is to a Windows seat's person.
 #[utoipa::path(
     post,
     path = "/plugin-access/{plugin}/decide",
@@ -356,6 +357,7 @@ pub(crate) async fn get_plugin_access(State(st): State<Arc<MgmtState>>) -> Respo
 )]
 pub(crate) async fn decide_plugin_access(
     State(st): State<Arc<MgmtState>>,
+    Extension(lane): Extension<super::auth::AuthLane>,
     Path(plugin): Path<String>,
     ApiJson(req): ApiJson<DecideRequest>,
 ) -> Response {
@@ -394,9 +396,13 @@ pub(crate) async fn decide_plugin_access(
         }
         (Decision::Allow, None) => {
             // On a person's own account installs stay the box's: only a folder is theirs to grant.
+            // A Windows seat host installs as SYSTEM, so its person gets the same answer.
             let installs = st.access.pending_emulator(&plugin, &req.path).is_some()
                 || !st.access.pending_cores(&plugin, &req.path).is_empty();
-            if installs && pf_paths::seat::own_account() {
+            let windows_person = cfg!(windows)
+                && pf_paths::seat::role().is_seat_host()
+                && lane == super::auth::AuthLane::Person;
+            if installs && (pf_paths::seat::own_account() || windows_person) {
                 let (code, why) = super::own_account::EMULATORS_YET;
                 return api_error_coded(StatusCode::FORBIDDEN, code, why);
             }

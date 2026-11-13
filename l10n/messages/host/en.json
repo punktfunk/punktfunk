@@ -154,6 +154,7 @@
 	"apierr_plugin_needs_newer_host": "This plugin can't run on this host — needs Punktfunk {version} or newer",
 	"apierr_plugin_needs_platform": "This plugin can't run on this host — requires {platforms}",
 	"apierr_plugin_own_account_unreviewed": "Only plugins reviewed for the Punktfunk store install on a profile that uses an existing account, because they run as that person.",
+	"apierr_plugin_seat_unreviewed": "Only plugins reviewed for the Punktfunk store install from your own Punktfunk.",
 	"apierr_plugins_own_account": "Plugins don't run on a profile that uses an existing Linux account yet.",
 	"apierr_plugins_own_account_person": "Plugins on a profile that uses an existing account are installed by that person, from their own desktop.",
 	"apierr_profile_has_no_seat": "This profile plays on the host's own desktop; it has no seat to start or stop.",

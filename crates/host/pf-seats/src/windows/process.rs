@@ -545,7 +545,7 @@ pub(super) fn seat_environment(
             "PUNKTFUNK_TRUST_DIR",
             pf_paths::config_dir().into_os_string(),
         ),
-        // The box's catalog, read only: a Windows seat runs no plugins of its own.
+        // The box's catalog, read only: the seat's own plugins live in its config dir.
         (
             "PUNKTFUNK_LIBRARY_DIR",
             pf_paths::config_dir().into_os_string(),

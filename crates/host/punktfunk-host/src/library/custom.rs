@@ -911,8 +911,8 @@ fn reconcile_on(
     result
 }
 
-/// The shelf a provider's rows go on: a Linux seat host's own, as its runner is the seat
-/// account's; else the box's. A Windows seat runs no runner of its own.
+/// The shelf a provider's rows go on: a seat host's own, as its runner is the seat account's;
+/// else the box's.
 fn provider_shelf() -> Shelf {
     if crate::plugins::manifest::seat_runs_its_own() {
         Shelf::Own

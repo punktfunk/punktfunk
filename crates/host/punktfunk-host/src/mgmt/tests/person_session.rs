@@ -224,7 +224,8 @@ fn the_person_lane_reaches_what_is_pinned() {
         ("PUT", "/api/v1/session/settings"),
         ("DELETE", "/api/v1/session/settings"),
     ];
-    // A Windows seat host is SYSTEM: its hooks and own titles, which run as the person.
+    // A Windows seat host is SYSTEM: its hooks and own titles, which run as the person, and its
+    // own plugins, which run as the seat's account. No catalog source, no plugin's own routes.
     const WINDOWS_REACH: &[(&str, &str)] = &[
         ("GET", "/api/v1/host"),
         ("GET", "/api/v1/status"),
@@ -237,6 +238,20 @@ fn the_person_lane_reaches_what_is_pinned() {
         ("PUT", "/api/v1/library/custom/{id}"),
         ("DELETE", "/api/v1/library/custom/{id}"),
         ("GET", "/api/v1/library/art/{id}/{kind}"),
+        ("GET", "/api/v1/store/catalog"),
+        ("POST", "/api/v1/store/refresh"),
+        ("GET", "/api/v1/store/installed"),
+        ("POST", "/api/v1/store/install"),
+        ("POST", "/api/v1/store/uninstall"),
+        ("GET", "/api/v1/store/jobs"),
+        ("GET", "/api/v1/store/jobs/{id}"),
+        ("GET", "/api/v1/store/runtime"),
+        ("POST", "/api/v1/store/runtime"),
+        ("GET", "/api/v1/plugins"),
+        ("GET", "/api/v1/plugins/{id}/ui-credential"),
+        ("GET", "/api/v1/plugin-access"),
+        ("POST", "/api/v1/plugin-access/{plugin}/decide"),
+        ("POST", "/api/v1/plugin-access/{plugin}/release"),
     ];
     let doc: serde_json::Value = serde_json::from_str(&openapi_json()).unwrap();
     let (mut seat, mut windows, mut boxed) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
