@@ -419,7 +419,7 @@ public final class Sc2Capture {
             let shouldClaim = isState && !src.claimPending
             if shouldClaim { src.claimPending = true }
             lock.unlock()
-            if shouldClaim { claimSlot(source: source) }
+            if shouldClaim { claimSlot(source: source, for: src) }
             return
         }
         if !isState {
@@ -527,10 +527,10 @@ public final class Sc2Capture {
     /// Reserve a wire index on the main actor and finish `source`'s claim under the lock. On
     /// success sends `gamepadArrival` (pref 9, or 10 for a Puck slot) — the declaration the
     /// host builds the virtual SC2 from — before any input can flow on that index.
-    private func claimSlot(source: UInt64) {
+    private func claimSlot(source: UInt64, for src: PadSource) {
         // The host builds the virtual pad from the identity, so it is read before the arrival.
         readIdentity(source: source) { [weak self] identity in
-            self?.finishClaim(source: source, identity: identity)
+            self?.finishClaim(source: source, src: src, identity: identity)
         }
     }
 
@@ -548,7 +548,9 @@ public final class Sc2Capture {
         link.readIdentity(done)
     }
 
-    private func finishClaim(source: UInt64, identity: PunktfunkConnection.PadIdentity?) {
+    private func finishClaim(
+        source: UInt64, src: PadSource, identity: PunktfunkConnection.PadIdentity?
+    ) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             MainActor.assumeIsolated {
@@ -571,13 +573,11 @@ public final class Sc2Capture {
                 let serial: String? = nil
                 #endif
                 self.lock.lock()
-                guard let src = self.sources[source], src.claimPending else {
-                    // The source went away between the report that scheduled this claim and
-                    // the hop landing: `releaseSource` cleared the pending token (it is set
-                    // nowhere else while a claim is in flight). Completing now would arm a
-                    // virtual pad — and announce a badge — for a dead source, with no
-                    // `.released` ever coming. Hand the index straight back instead; a live
-                    // source's next state report simply schedules a fresh claim.
+                guard self.sources[source] === src, src.claimPending else {
+                    // The entry that asked was released, and a later report may have made a
+                    // fresh one with its own claim. Completing here would arm a dead source,
+                    // or the fresh one under this read's identity. A live source's next state
+                    // report schedules its own claim.
                     self.lock.unlock()
                     if let index { self.manager.releaseExternalPadIndex(index) }
                     return
