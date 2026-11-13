@@ -693,20 +693,17 @@ public final class StreamLayerView: NSView {
             streamInputLog.info("mouse mode ignored: gamescope host is relative-only")
             return
         }
-        setDesktopMouse(!desktopMouse, reappearAt: nil)
+        setDesktopMouse(!desktopMouse)
         streamInputLog.info("mouse mode \(self.desktopMouse ? "desktop" : "capture", privacy: .public)")
     }
 
-    private func setDesktopMouse(_ on: Bool, reappearAt: (x: Int32, y: Int32)?) {
+    private func setDesktopMouse(_ on: Bool) {
         guard desktopMouse != on else { return }
         let wasCaptured = captured
         if wasCaptured { releaseCapture() }
         desktopMouse = on
         if wasCaptured { engageCapture(fromClick: false) }
         window?.invalidateCursorRects(for: self)
-        if on, let p = reappearAt, let sp = cgScreenPoint(forHostX: p.x, p.y) {
-            CGWarpMouseCursorPosition(sp)
-        }
         reconcileCursorRender()
     }
 
@@ -808,11 +805,9 @@ public final class StreamLayerView: NSView {
         return (mode.width, mode.height)
     }
 
-    /// Where the picture sits in `bounds`: the presenter's placement in backing pixels, the
-    /// points→pixels scale, and the frame size. Every pointer mapping reads this, so a click lands on
-    /// the pixel drawn there.
-    private func videoPlacement()
-        -> (placement: VideoPlacement, box: CGRect, scale: CGFloat, width: UInt32, height: UInt32)? {
+    /// Where the picture sits in `bounds`: the presenter's placement in backing pixels, and the
+    /// points→pixels scale. nil before a size is known.
+    private func videoPlacement() -> (placement: VideoPlacement, scale: CGFloat)? {
         guard let connection else { return nil }
         let content = hostContentSize()
         let box = bounds
@@ -821,7 +816,7 @@ public final class StreamLayerView: NSView {
         let p = VideoFit(name: connection.settings.videoFit).place(
             view: (Int((box.width * scale).rounded()), Int((box.height * scale).rounded())),
             frame: (Int(content.width), Int(content.height)))
-        return p.isEmpty ? nil : (p, box, scale, content.width, content.height)
+        return p.isEmpty ? nil : (p, scale)
     }
 
     /// Points per host pixel at the placement's scale. Stretch keeps the cursor's own shape.
@@ -841,22 +836,6 @@ public final class StreamLayerView: NSView {
             x: min(CGFloat(shape.hotX) * scale, sw - 1),
             y: min(CGFloat(shape.hotY) * scale, sh - 1))
         return NSCursor(image: image, hotSpot: hot)
-    }
-
-    /// Host video px → CG GLOBAL screen coordinates (top-left origin, the
-    /// `CGWarpMouseCursorPosition` convention `CursorCapture` established) through the placement —
-    /// the inverse direction of `hostPoint(from:)`. A host point cropped away lands on the edge.
-    private func cgScreenPoint(forHostX hx: Int32, _ hy: Int32) -> CGPoint? {
-        guard let window, let v = videoPlacement() else { return nil }
-        let px = v.placement.view(fromFrame: CGPoint(x: Int(hx), y: Int(hy)))
-        // The placement counts rows from the box's top; AppKit's box origin is its bottom.
-        let boxTop = bounds.height - v.box.maxY
-        let pTop = CGPoint(x: v.box.minX + px.x / v.scale, y: boxTop + px.y / v.scale)
-        let inView = CGPoint(x: pTop.x, y: bounds.height - pTop.y)
-        let inWindow = convert(inView, to: nil)
-        let onScreen = window.convertPoint(toScreen: inWindow)
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        return CGPoint(x: onScreen.x, y: primaryHeight - onScreen.y)
     }
 
     /// One local monitor for motion + buttons, installed only while captured. A monitor needs
