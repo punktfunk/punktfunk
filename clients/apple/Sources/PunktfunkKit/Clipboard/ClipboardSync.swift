@@ -371,8 +371,8 @@ public final class ClipboardSync: NSObject {
     /// Pull the host's offer down to concrete bytes, replacing the promise on the pasteboard.
     ///
     /// A lazy promise is only as good as the ability to answer it, and on iOS that ability ends
-    /// with the session: backgrounding the app disconnects it. Without this, "copy on the host,
-    /// then paste into Safari on the iPad" would hand Safari an empty promise. Everything else
+    /// with the session, which backgrounding ends (`BackgroundPolicy`). Without this, "copy on the
+    /// host, then paste into Safari on the iPad" would hand Safari an empty promise. Everything else
     /// about the design stays lazy — a user who copies on the host, pastes nothing, and stays in
     /// the app moves no clipboard bytes at all; this runs once, at the end, for content that is
     /// still on the pasteboard and still unclaimed.

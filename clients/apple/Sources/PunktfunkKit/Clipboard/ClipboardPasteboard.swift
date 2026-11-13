@@ -55,10 +55,11 @@ protocol ClipboardPasteboard: AnyObject {
     ///
     /// This is the difference between the two platforms' idea of how long a promise lives. A Mac
     /// keeps running long after a session ends, but the promise dies with the sync either way, so
-    /// AppKit clears it and the user loses nothing they had before. On iOS the teardown IS the
-    /// user leaving — backgrounding ends the session — and "copy on the host, then paste into
-    /// Safari" is the whole point of the feature on a tablet, so those bytes have to be made real
-    /// while the connection that can still supply them is open.
+    /// AppKit clears it and the user loses nothing they had before. On iOS the teardown is mostly
+    /// the user leaving — backgrounding ends the session, at once or when the keep-alive runs
+    /// out — and "copy on the host, then paste into Safari" is the whole point of the feature on a
+    /// tablet, so those bytes have to be made real while the connection that can still supply them
+    /// is open.
     var resolvesPendingOfferOnTeardown: Bool { get }
 
     /// Start watching for the user coming back to the app. The case that matters is "copied
