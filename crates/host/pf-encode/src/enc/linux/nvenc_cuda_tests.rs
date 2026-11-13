@@ -317,6 +317,47 @@ fn nvenc_cuda_wave_soak() {
     );
 }
 
+/// The anchor soak ([`crate::smoke_pattern::Soak`], its `PF_WAVE_*` knobs) on the CUDA
+/// session. With `PF_WAVE_CONFIRM` and a `PF_WAVE_LAG` past the short-term window, every ask
+/// anchors on a kept long-term picture instead of starting a wave.
+///
+/// `cargo test -p pf-encode --features nvenc --release nvenc_cuda_anchor_soak -- --ignored --nocapture`
+#[test]
+#[ignore = "requires an NVIDIA GPU + driver — run manually on an NVIDIA Linux box"]
+fn nvenc_cuda_anchor_soak() {
+    let soak = crate::smoke_pattern::Soak::from_env();
+    let (w, h, fps) = (soak.w, soak.h, soak.fps);
+    pf_zerocopy::cuda::make_current().expect("shared CUDA context current");
+    let mut enc = NvencCudaEncoder::open(
+        soak.codec,
+        PixelFormat::Bgra,
+        w,
+        h,
+        fps,
+        soak.mbps * 1_000_000,
+        true,
+        8,
+        false,
+        ChromaFormat::Yuv420,
+        false,
+        1,
+        true,
+        &Knobs::from_env(),
+    )
+    .expect("open NVENC CUDA session");
+    soak.run("nvenc-cuda", &mut enc, |i| CapturedFrame {
+        provenance: Default::default(),
+        width: w,
+        height: h,
+        pts_ns: i as u64 * 1_000_000_000 / u64::from(fps),
+        format: PixelFormat::Bgra,
+        payload: FramePayload::Cpu(crate::smoke_pattern::scroll_pattern(
+            w as usize, h as usize, i,
+        )),
+        cursor: None,
+    });
+}
+
 /// Packed `X2Rgb10` (NVENC `ARGB10`, no host CSC). Uninit VRAM: session machinery, not
 /// picture fidelity.
 fn rgb10_frame(w: u32, h: u32, i: u32) -> CapturedFrame {
