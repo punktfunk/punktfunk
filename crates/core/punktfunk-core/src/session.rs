@@ -214,7 +214,7 @@ use seal::{
     hand_chunk, parity_beside, seal_staged, seal_wire_slice, ParityLane, SealLane,
     SEAL_CHUNK_SHARDS,
 };
-pub use seal::{SealSink, SendFn};
+pub use seal::{set_lane_boost, SealSink, SendFn};
 
 /// Batches [`Session::flush_backlog`] discards at most: a line-rate sender cannot pin it.
 const FLUSH_BATCHES: usize = 128 * 1024;
@@ -2689,6 +2689,22 @@ mod wire_equivalence_tests {
         whole.next_seq = piped.next_seq;
         let want = whole.seal_frame_at(&frame, 1, 0, 1).unwrap();
         assert_eq!(chunked(&mut piped, &frame, 1).unwrap(), want);
+    }
+
+    /// Each lane runs the embedder's boost on its own thread before its first job.
+    #[test]
+    fn both_lanes_run_the_boost_hook() {
+        static BOOSTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        set_lane_boost(|| {
+            let name = std::thread::current().name().unwrap_or_default().to_owned();
+            BOOSTED.lock().unwrap().push(name);
+        });
+        let mut host = host_session(host_cfg(FecScheme::Gf16, 20), true);
+        chunked(&mut host, &pattern(20000), 0).unwrap();
+        let boosted = BOOSTED.lock().unwrap();
+        for lane in ["punktfunk-seal2", "punktfunk-fec"] {
+            assert!(boosted.iter().any(|n| n == lane), "{lane} in {boosted:?}");
+        }
     }
 
     /// A packetizer refusal leaves the counters, the packet number and the frame index alone.

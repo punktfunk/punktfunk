@@ -37,15 +37,26 @@ pub(super) type SealLane = Lane<SealJob>;
 /// Computes a pipelined frame's parity ([`parity_beside`]).
 pub(super) type ParityLane = Lane<ParityJob>;
 
+static LANE_BOOST: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+/// Install the call every seal and parity lane makes first, to raise its own priority: the
+/// send thread waits on them. First caller wins; later calls are ignored.
+pub fn set_lane_boost(boost: fn()) {
+    let _ = LANE_BOOST.set(boost);
+}
+
 impl<J: Send + 'static> Lane<J> {
-    /// Thread `name` runs `work` on each job and hands it back, until the lane drops.
-    /// `None` if the thread can't start.
+    /// Thread `name` runs the [`set_lane_boost`] hook, then `work` on each job, handing it
+    /// back, until the lane drops. `None` if the thread can't start.
     fn start(name: &str, mut work: impl FnMut(&mut J) + Send + 'static) -> Option<Self> {
         let (to_worker, jobs) = std::sync::mpsc::sync_channel::<J>(1);
         let (done_tx, from_worker) = std::sync::mpsc::sync_channel::<J>(1);
         std::thread::Builder::new()
             .name(name.into())
             .spawn(move || {
+                if let Some(boost) = LANE_BOOST.get() {
+                    boost();
+                }
                 while let Ok(mut job) = jobs.recv() {
                     work(&mut job);
                     if done_tx.send(job).is_err() {
