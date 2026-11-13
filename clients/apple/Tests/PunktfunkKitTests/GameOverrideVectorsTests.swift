@@ -37,6 +37,17 @@ final class GameOverrideVectorsTests: XCTestCase {
         }
     }
 
+    /// `lines` comes off the wire as any `UInt32`; the sizes saturate at the largest even value
+    /// instead of trapping on the doubling in `even`.
+    func testAHugeLinesValueSaturatesInsteadOfTrapping() {
+        let o = GameOverrides(lines: .max, beyondScreen: true)
+        let got = o.fit(
+            (2752, 2064, 120), native: (2752, 2064, 120), codecMax: Int(UInt32.max))
+        XCTAssertEqual(got.height, UInt32.max - 1)
+        XCTAssertEqual(got.width, UInt32.max - 1)
+        XCTAssertEqual(got.hz, 120)
+    }
+
     func testEmptyMeansNothingSet() {
         XCTAssertTrue(GameOverrides().isEmpty)
         XCTAssertTrue(GameOverrides(name: "4K").isEmpty, "a name alone sets nothing")
