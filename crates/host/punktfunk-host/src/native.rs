@@ -389,6 +389,7 @@ pub(crate) async fn serve(
         profiles: profiles.clone(),
         stats: stats.clone(),
         knobs: HostKnobs::get(),
+        host_fp: fingerprint,
     };
     // Secondary tier: a port it cannot bind must not take the streaming host down. Loud, though.
     if let Some(plane) = web {
@@ -1073,6 +1074,7 @@ async fn serve_session(
         profiles: profiles.clone(),
         stats,
         knobs: HostKnobs::get(),
+        host_fp: *host_fp,
     };
     let data_plane = DataPlane::Shared(
         conn.v2()
@@ -1202,6 +1204,8 @@ pub(crate) struct SessionHost {
     pub(crate) profiles: Arc<crate::profiles::Profiles>,
     pub(crate) stats: Arc<StatsRecorder>,
     pub(crate) knobs: &'static HostKnobs,
+    /// SHA-256 of this host's certificate, as a client pins it: a key proof signs it.
+    pub(crate) host_fp: [u8; 32],
 }
 
 impl SessionHost {
@@ -1234,6 +1238,7 @@ impl SessionHost {
             profiles,
             stats: StatsRecorder::new(crate::stats_recorder::default_dir()),
             knobs: HostKnobs::get(),
+            host_fp: [0; 32],
         }
     }
 }

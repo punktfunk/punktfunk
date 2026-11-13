@@ -6,7 +6,8 @@ import org.json.JSONObject
 /**
  * Profiles on a box: what `GET /api/v1/profiles/enumerate` lists, when a client shows the picker,
  * and which id its hello carries. A port of `pf-client-core`'s `profiles.rs`;
- * `clients/shared/profile-picker-vectors.json` pins [pickerDecision] in both.
+ * `clients/shared/profile-picker-vectors.json` pins [pickerDecision] in both, and
+ * `profile-unlock-vectors.json` pins [UnlockNeed.of].
  */
 
 /**
@@ -55,18 +56,24 @@ enum class SeatState {
 }
 
 /**
- * What a profile on a person's own account needs from this device before it plays: nothing, the
- * account password, or a proof from this device's unlock key. An old host sends none: [NONE].
+ * What a profile on a person's own account or a locked one needs from this device before it
+ * plays: nothing, the account password, the profile's PIN, or a proof from this device's unlock
+ * key ([KEY] else the password, [PIN_KEY] else the PIN). An old host sends none: [NONE]. A word a
+ * newer host adds reads as [PASSWORD], the prompt every client has.
  */
 enum class UnlockNeed {
-    NONE, PASSWORD, KEY;
+    NONE, PASSWORD, KEY, PIN, PIN_KEY;
+
+    /** The prompt asks for the profile's PIN, not an account password. */
+    val pin: Boolean get() = this == PIN || this == PIN_KEY
 
     companion object {
         fun of(word: String?): UnlockNeed = when (word) {
-            "password" -> PASSWORD
+            null, "none" -> NONE
             "key" -> KEY
-            // A word a newer host adds dials bare; the host refuses what it can't admit.
-            else -> NONE
+            "pin" -> PIN
+            "pin_key" -> PIN_KEY
+            else -> PASSWORD
         }
     }
 }

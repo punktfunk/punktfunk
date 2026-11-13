@@ -13,6 +13,7 @@ mod clipboard;
 mod connect;
 mod cursor;
 mod input;
+mod launch;
 mod planes;
 mod probe;
 mod slot;

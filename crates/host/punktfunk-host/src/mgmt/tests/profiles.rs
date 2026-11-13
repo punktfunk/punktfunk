@@ -943,6 +943,85 @@ async fn the_picker_lists_what_the_device_may_open() {
     );
 }
 
+/// A device a lock lists with an unlock key, once it left, is asked for the key's proof or the
+/// PIN, `pin_key`, on the profile it enrolled the key for, here the one sharing the owner's
+/// desktop, and for the PIN on the owner. Its challenge names the profile it asks for; a device
+/// with no key for it, and the console, get none.
+#[tokio::test]
+async fn a_device_with_a_key_gets_its_profile_s_challenge() {
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-lock-challenge.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let (keyed, bare) = ("ab".repeat(32), "cd".repeat(32));
+    np.add("keyed", &keyed).unwrap();
+    np.add("bare", &bare).unwrap();
+    let state = test_state();
+    let profiles = locked_family(&state);
+    let app = test_app_native(state, np);
+    let device = pf_seats::ipc::Device {
+        fingerprint: keyed.clone(),
+        name: "keyed".into(),
+    };
+    let key = pf_seats::ipc::UnlockKey {
+        alg: pf_seats::ipc::KeyAlg::P256,
+        public: "04".repeat(65),
+    };
+    let enrolled = profiles.locks().edit(FAMILY_OWNER, |lock, now| {
+        lock.locked = true;
+        lock.pin = pf_seats::locks::PinHash::new("2468");
+        assert!(lock.enrol(&device, now - 700, (FAMILY_GUEST, key)));
+        lock.list.left(&keyed, now - 700);
+    });
+    enrolled.unwrap();
+    let as_device = |req: axum::http::Request<Body>, fp: &str| {
+        let (app, fp) = (app.clone(), fp.to_string());
+        async move {
+            let mut req = req;
+            req.extensions_mut().insert(PeerCertFingerprint(Some(fp)));
+            let resp = app.oneshot(req).await.unwrap();
+            let status = resp.status();
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            )
+        }
+    };
+    let (_, rows) = as_device(get_req("/api/v1/profiles/enumerate"), &keyed).await;
+    let words: Vec<_> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["unlock"].clone())
+        .collect();
+    assert_eq!(words, ["pin", "none", "none", "pin_key"]);
+    let ask = |id: &str| {
+        let path = format!("/api/v1/profiles/{id}/unlock-challenge");
+        json_req(Method::POST, &path, serde_json::Value::Null)
+    };
+    let (status, body) = as_device(ask(FAMILY_GUEST), &keyed).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["profile"], FAMILY_GUEST);
+    assert!(body.get("seat").is_none());
+    let hex = body["challenge"].as_str().unwrap();
+    assert!(hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()));
+    for (id, fp) in [(FAMILY_OWNER, &bare), (FAMILY_OWNER, &keyed)] {
+        let (status, body) = as_device(ask(id), fp).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["code"], "profile_no_unlock_key");
+    }
+    let (status, _) = as_device(ask(FAMILY_KID), &keyed).await;
+    assert_eq!(status, StatusCode::CONFLICT, "an open profile holds no key");
+    assert_eq!(send(&app, ask(FAMILY_OWNER)).await.0, StatusCode::FORBIDDEN);
+}
+
 /// A profile sharing the owner's desktop has no lock of its own: each lock route on it names
 /// whose lock it opens with.
 #[tokio::test]

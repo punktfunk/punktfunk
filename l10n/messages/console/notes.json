@@ -25,6 +25,8 @@
 	"console_profile_title_games": "Title of the picker opened from the library: choose whose games to show.",
 	"console_unlock_password_empty_a11y": "Screen reader: the empty password field.",
 	"console_unlock_password_entered_a11y": "Screen reader: the password field holds text (never read out).",
+	"console_unlock_pin_empty_a11y": "Screen reader: the empty PIN field.",
+	"console_unlock_pin_entered_a11y": "Screen reader: the PIN field holds digits (never read out).",
 	"console_unlock_stay_signed_in_off_a11y": "Screen reader: the switch and its state.",
 	"console_unlock_stay_signed_in_on_a11y": "Screen reader: the switch and its state.",
 	"console_home_title": "Title of the controller interface's host list.",

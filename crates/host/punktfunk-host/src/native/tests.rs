@@ -2373,9 +2373,15 @@ fn a_session_that_fails_after_its_planes_start() {
     assert_eq!(life.phase(), Phase::Done, "the teardown joined its threads");
 }
 
+/// Makes a key proof from the host's profiles, the device's fingerprint and the host's.
+type Signer = dyn FnOnce(&crate::profiles::Profiles, &str, &[u8; 32]) -> v2msg::ProfileUnlock;
+
 /// What a raw client dialling a person's own account sends after its hello.
 enum Sends {
     Unlock(v2msg::ProfileUnlock),
+    /// The unlock made once the host's certificate is known, from the host's profiles, the
+    /// device's fingerprint and the host's.
+    Signed(Box<Signer>),
     /// Announces an unlock, then sends another frame in its place.
     Garbled,
     Nothing,
@@ -2395,12 +2401,12 @@ enum Heard {
 async fn dial_person(
     port: u16,
     identity: (&str, &str),
-    profile: &str,
+    (profile, profiles): (&str, Option<&crate::profiles::Profiles>),
     features: punktfunk_core::quic::v2::features::FeatureSet,
     sends: Sends,
 ) -> (usize, Heard) {
     use punktfunk_core::quic::v2::{io as v2io, msg, registry};
-    let (ep, _observed) = endpoint::client_shared(None, Some(identity), &[registry::ALPN], None);
+    let (ep, observed) = endpoint::client_shared(None, Some(identity), &[registry::ALPN], None);
     let (ep, _media) = ep.expect("client endpoint");
     let conn = ep
         .connect(format!("127.0.0.1:{port}").parse().unwrap(), "punktfunk")
@@ -2423,6 +2429,14 @@ async fn dial_person(
         Sends::Unlock(unlock) => v2io::write_frame(&mut send, &unlock.encode())
             .await
             .unwrap(),
+        Sends::Signed(sign) => {
+            let host = observed.lock().unwrap().expect("the host's certificate");
+            let device = hex::encode(endpoint::fingerprint_of_pem(identity.0).unwrap());
+            let unlock = sign(profiles.expect("the host's profiles"), &device, &host);
+            v2io::write_frame(&mut send, &unlock.encode())
+                .await
+                .unwrap()
+        }
         Sends::Garbled => v2io::send(&mut send, &Ready {}).await.unwrap(),
         Sends::Nothing => {}
     }
@@ -2716,7 +2730,7 @@ fn a_person_s_own_account_opens_only_on_the_supervisor_s_word() {
         sup.unlock_takes = Duration::from_millis(takes);
         let sup = Arc::new(sup);
         let _armed = fake::arm(&fp, sup.clone());
-        let dialled = dial_person(19797, (&cert, &key), profile, features, sends);
+        let dialled = dial_person(19797, (&cert, &key), (profile, None), features, sends);
         let (pendings, got) = rt.block_on(dialled);
         assert_eq!(got, heard, "{what}");
         if takes > 0 {
@@ -2806,7 +2820,8 @@ fn a_wrong_password_never_reaches_a_log_or_an_error() {
         .build()
         .unwrap();
     let unlock = Sends::Unlock(password(secret, false, None));
-    let (_, heard) = rt.block_on(dial_person(19798, (&cert, &key), PERSON, features, unlock));
+    let dialled = dial_person(19798, (&cert, &key), (PERSON, None), features, unlock);
+    let (_, heard) = rt.block_on(dialled);
     host.join().unwrap().unwrap();
     let _ = std::fs::remove_file(&store);
 
@@ -2902,7 +2917,8 @@ fn dial_host(
     };
     let sup = Fake::new(vec![seat], |_| Ok(pf_seats::ipc::CommandResult::Left));
     let _armed = fake::arm(&fp, Arc::new(sup));
-    let host = spawn_profile_host(port, dials.len() as u32, np, Arc::new(profiles));
+    let profiles = Arc::new(profiles);
+    let host = spawn_profile_host(port, dials.len() as u32, np, Arc::clone(&profiles));
     std::thread::sleep(std::time::Duration::from_millis(500));
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -2911,7 +2927,8 @@ fn dial_host(
     let heard = dials
         .into_iter()
         .map(|(profile, features, sends)| {
-            let dialled = dial_person(port, (&cert, &key), profile, features, sends);
+            let asked = (profile, Some(&*profiles));
+            let dialled = dial_person(port, (&cert, &key), asked, features, sends);
             rt.block_on(dialled).1
         })
         .collect();
@@ -3051,8 +3068,9 @@ fn a_seat_host_checks_the_box_s_lock_file() {
 
 /// A locked profile's PIN, sent as the hello's `ProfileUnlock`, opens it for a device off its
 /// list. With none the client is sent to its prompt, or told to update when it has none; a key
-/// proof is turned back to the prompt; a wrong PIN is refused and the device waits before the
-/// next. A right one puts the device on the list, so its next connect needs nothing.
+/// proof from a device with no key is turned back to the prompt with the sentence that says so;
+/// a wrong PIN is refused and the device waits before the next. A right one puts the device on
+/// the list, so its next connect needs nothing.
 #[test]
 fn a_locked_profile_opens_with_its_pin() {
     use punktfunk_core::reject::RejectReason::{ProfileLocked, SeatUnavailable};
@@ -3085,7 +3103,10 @@ fn a_locked_profile_opens_with_its_pin() {
                 SeatUnavailable,
                 "This profile needs its PIN. Update Punktfunk on this device."
             ),
-            closed(ProfileLocked, ""),
+            closed(
+                ProfileLocked,
+                "Couldn't confirm it's you on this device. Type this profile's PIN."
+            ),
             closed(ProfileLocked, "That isn't this profile's PIN."),
         ]
     );
@@ -3108,6 +3129,63 @@ fn a_locked_profile_opens_with_its_pin() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].kind, pf_seats::ipc::DeviceKind::Stay);
     assert_eq!(entries[0].name, "Kid's tablet", "its pairing name");
+}
+
+/// A device whose PIN enrolled a key opens the profile with the key's proof once it left: a
+/// signature over a fresh challenge for this profile, this device and the host it pinned. Then
+/// it is present and needs nothing. A proof for another profile is turned back to the PIN
+/// prompt with the sentence that says so; with no PIN to fall back on, the device is refused.
+#[test]
+fn a_locked_profile_opens_with_an_enrolled_key() {
+    use aws_lc_rs::rand::SystemRandom;
+    use aws_lc_rs::signature::{EcdsaKeyPair, KeyPair as _, ECDSA_P256_SHA256_ASN1_SIGNING};
+    use punktfunk_core::reject::RejectReason::ProfileLocked;
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let pair = Arc::new(EcdsaKeyPair::generate(&ECDSA_P256_SHA256_ASN1_SIGNING).unwrap());
+    let public = hex::encode(pair.public_key().as_ref());
+    let pin = serde_json::to_value(pf_seats::locks::PinHash::new("2468").unwrap()).unwrap();
+    let keyed = |pin: serde_json::Value| {
+        let public = public.clone();
+        move |fp: &str| {
+            let device = serde_json::json!({"fingerprint": fp, "name": "Kid's tablet",
+                "key": {"alg": "p256", "public": public}, "added_unix": 1, "last_unix": 1});
+            let lock = serde_json::json!({"locked": true, "pin": pin, "devices": [device]});
+            serde_json::json!({"version": 1, "profiles": {KID_PROFILE: lock}})
+        }
+    };
+    let proof = |signed_for: &'static str| {
+        let pair = Arc::clone(&pair);
+        let sign = move |profiles: &crate::profiles::Profiles, device: &str, host: &[u8; 32]| {
+            let locks = profiles.locks();
+            let challenge = locks.challenge(KID_PROFILE, KID_PROFILE, device).unwrap();
+            let d = pf_seats::unlock::fingerprint_bytes(device).unwrap();
+            let m = v2msg::profile_unlock_signed_message(&challenge, signed_for, &d, host).unwrap();
+            let signature = pair
+                .sign(&SystemRandom::new(), &m)
+                .unwrap()
+                .as_ref()
+                .to_vec();
+            let secret = v2msg::Zeroizing::new(signature);
+            v2msg::ProfileUnlock::new(v2msg::UNLOCK_KEY_PROOF, secret, false, 0, Vec::new())
+                .unwrap()
+        };
+        Sends::Signed(Box::new(sign))
+    };
+    let dials = vec![
+        (KID_PROFILE, offers(true), proof(KID_PROFILE)),
+        (KID_PROFILE, offers(true), Sends::Nothing),
+    ];
+    let (heard, _) = dial_host(19813, false, keyed(pin.clone()), dials);
+    assert_eq!(heard, [kid_seat(19813), kid_seat(19813)]);
+
+    let failed = "Couldn't confirm it's you on this device. Type this profile's PIN.";
+    let dials = vec![(KID_PROFILE, offers(true), proof("0123456789ab"))];
+    let (heard, _) = dial_host(19814, false, keyed(pin), dials);
+    assert_eq!(heard, [Heard::Closed(ProfileLocked, failed.into())]);
+    let dials = vec![(KID_PROFILE, offers(true), proof("0123456789ab"))];
+    let (heard, _) = dial_host(19815, false, keyed(serde_json::Value::Null), dials);
+    assert_eq!(heard, [not_allowed()]);
 }
 
 /// A session on a locked profile ends once its device is signed out, with the sentence that says

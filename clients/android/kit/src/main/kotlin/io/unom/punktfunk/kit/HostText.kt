@@ -63,6 +63,16 @@ object HostText {
         }
     }
 
+    /**
+     * The host's sentence for a launch it did not start, from [NativeBridge.nativeLaunchRefusal]'s
+     * `{"id", "message", "params"}`. Null for "" or a body that says nothing.
+     */
+    fun launch(json: String): Say? {
+        val j = runCatching { JSONObject(json) }.getOrNull() ?: return null
+        val english = j.optString("message").takeIf { it.isNotBlank() } ?: return null
+        return Say.Host(j.optString("id"), paramsOf(j.optJSONObject("params")), english)
+    }
+
     /** The values of a message's placeholders, by name; a value that is not a string is left out. */
     fun paramsOf(json: JSONObject?): Map<String, String> {
         if (json == null) return emptyMap()

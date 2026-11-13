@@ -594,6 +594,28 @@ fn local_moonlight(st: &MgmtState) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
+/// `POST /profiles/{id}/unlock-challenge` for any profile not on a person's own account: a
+/// challenge for the key `id`'s lock lists for device `fp`, named for `id`.
+pub(super) fn challenge(st: &MgmtState, id: &str, fp: &str) -> Response {
+    let Some(profiles) = st.app.profiles.get() else {
+        return no_profiles();
+    };
+    let holder = profiles.lock_holder(id);
+    match profiles.locks().challenge(id, &holder, fp) {
+        Some(bytes) => Json(super::profiles::UnlockChallenge {
+            challenge: hex::encode(bytes),
+            seat: None,
+            profile: Some(id.to_string()),
+        })
+        .into_response(),
+        None => api_error_coded(
+            StatusCode::CONFLICT,
+            "profile_no_unlock_key",
+            "This device has no unlock key for this profile.",
+        ),
+    }
+}
+
 /// `GET /profiles/{id}/devices` for a profile that takes a lock: its list, each tagged when it
 /// is a Moonlight pairing here or, on a door, on the owner's host.
 pub(super) async fn devices(st: &MgmtState, id: &str) -> Response {

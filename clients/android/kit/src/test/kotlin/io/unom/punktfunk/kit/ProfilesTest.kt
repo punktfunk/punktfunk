@@ -104,12 +104,12 @@ class ProfilesTest {
         assertEquals(UnlockNeed.PASSWORD, row("password").unlock)
         assertEquals(UnlockNeed.KEY, row("key").unlock)
         assertEquals(UnlockNeed.NONE, row("none").unlock)
-        assertEquals(UnlockNeed.NONE, row("retina").unlock)
+        // A word a newer host adds asks for the password, the prompt every client has.
+        assertEquals(UnlockNeed.PASSWORD, row("retina").unlock)
         assertEquals(UnlockNeed.NONE, row(JSONObject.NULL).unlock)
         assertEquals(UnlockNeed.NONE, ListedProfile.parse(JSONObject().put("id", "old")).unlock)
         // Never a wake for a locked seat: the host refuses it, and the unlock on the dial starts it.
-        assertEquals(SeatGate.Dial, seatGate(row("password")))
-        assertEquals(SeatGate.Dial, seatGate(row("key")))
+        for (word in listOf("password", "key", "pin", "pin_key")) assertEquals(word, SeatGate.Dial, seatGate(row(word)))
         assertEquals(SeatGate.Wake, seatGate(row("none")))
         assertEquals(SeatGate.Wait(null), seatGate(row("password", "starting")))
     }

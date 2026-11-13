@@ -1,16 +1,17 @@
 //! A locked profile at connect (`profiles::locks`): a device on its list goes on, any other
-//! gives the profile's PIN or is refused. Every host asks, right after the profile resolved and
-//! before anything places or plays it, so a profile that plays here and one sent to its seat
-//! pass the same check.
+//! gives the profile's PIN, or its enrolled key's proof, or is refused. Every host asks, right
+//! after the profile resolved and before anything places or plays it, so a profile that plays
+//! here and one sent to its seat pass the same check.
 //!
-//! The PIN is the `ProfileUnlock` the hello announced, kind 1; the box's own host checks it. A
-//! refusal never tells a device that may not see the profile whether it has a PIN, and nothing
-//! logged or answered holds the PIN.
+//! The proof is the `ProfileUnlock` the hello announced: kind 1 the PIN, kind 2 a signature over
+//! the profile's message; the box's own host checks it. A refusal never tells a device that may
+//! not see the profile whether it has a PIN, and nothing logged or answered holds the PIN.
 
 use super::{link, Said, SessionHost};
 use crate::profiles::locks::{PinAnswer, Presence};
 use crate::profiles::{Opens, Resolved};
 use anyhow::{bail, Result};
+use pf_seats::ipc::{KeyAlg, UnlockKey};
 use punktfunk_core::quic::v2::hello::ClientHello;
 use punktfunk_core::quic::v2::msg::{self as v2msg, ProfileUnlock};
 use punktfunk_core::quic::v2::registry::FEATURE_PROFILE_UNLOCK;
@@ -48,14 +49,18 @@ pub(super) const SIGNED_OUT: Words = (
     "close_lock_signed_out",
     "This device was signed out of this profile.",
 );
+const KEY_FAILED: Words = (
+    "close_lock_key_failed",
+    "Couldn't confirm it's you on this device. Type this profile's PIN.",
+);
 
 fn said((id, text): Words) -> Said {
     Said::new(id, text)
 }
 
-/// Whether device `fp` may open `resolved` here, with the PIN the hello announced when it
-/// needs one, and its hold on the profile's list when it is on one. Any other answer closes the
-/// connect, typed, and errs.
+/// Whether device `fp` may open `resolved` here, with the PIN or key proof the hello announced
+/// when it needs one, and its hold on the profile's list when it is on one. Any other answer
+/// closes the connect, typed, and errs.
 pub(super) async fn admit(
     host: &SessionHost,
     conn: &link::SessionLink,
@@ -67,12 +72,13 @@ pub(super) async fn admit(
     let profiles = &host.profiles;
     let id = resolved.id.as_str();
     let opens = profiles.opens(id, fp);
-    let (Opens::Pin, Some(fp)) = (opens, fp) else {
-        if opens == Opens::Yes {
-            return Ok(fp.and_then(|fp| Presence::join(profiles, id, fp)));
+    let fp = match (opens, fp) {
+        (Opens::Yes, fp) => return Ok(fp.and_then(|fp| Presence::join(profiles, id, fp))),
+        (Opens::Pin | Opens::Key, Some(fp)) => fp,
+        _ => {
+            refuse(conn, RejectReason::SeatUnavailable, said(NOT_ALLOWED)).await;
+            bail!("profile {id} is locked to other devices")
         }
-        refuse(conn, RejectReason::SeatUnavailable, said(NOT_ALLOWED)).await;
-        bail!("profile {id} is locked to other devices")
     };
     let offered = first.features.has(FEATURE_PROFILE_UNLOCK);
     if !offered || !first.unlock_follows() {
@@ -81,17 +87,9 @@ pub(super) async fn admit(
         bail!("profile {id} needs its PIN")
     }
     let deadline = tokio::time::Instant::now() + PROOF_WAIT;
-    let unlock = match recv.read_profile_unlock(deadline).await {
-        Ok(unlock) if unlock.kind == v2msg::UNLOCK_PASSWORD => unlock,
-        // A key opens a PIN's profile only once the key message names a profile.
-        Ok(_) => {
-            refuse(conn, RejectReason::ProfileLocked, Said::default()).await;
-            bail!("a key proof for profile {id}, which takes a PIN")
-        }
-        Err(_) => {
-            refuse(conn, RejectReason::ProfileLocked, said(PIN_UNREADABLE)).await;
-            bail!("the PIN the hello announced didn't arrive whole")
-        }
+    let Ok(unlock) = recv.read_profile_unlock(deadline).await else {
+        refuse(conn, RejectReason::ProfileLocked, said(PIN_UNREADABLE)).await;
+        bail!("the PIN the hello announced didn't arrive whole")
     };
     // The check is slow by design: the client hears the host is still deciding.
     let pending = punktfunk_core::quic::v2::io::send(&mut *send, &v2msg::Pending {});
@@ -103,36 +101,64 @@ pub(super) async fn admit(
         .next();
     let device = super::unlock::device(fp, label.as_deref());
     let checking = std::sync::Arc::clone(profiles);
-    let owned = id.to_string();
-    let answer = tokio::task::spawn_blocking(move || try_pin(&checking, &owned, &device, unlock))
-        .await
-        .unwrap_or(PinAnswer::NotSaved);
+    let (owned, host_fp) = (id.to_string(), host.host_fp);
+    let answer = tokio::task::spawn_blocking(move || {
+        try_unlock(&checking, &owned, &device, unlock, &host_fp)
+    })
+    .await
+    .unwrap_or(PinAnswer::NotSaved);
+    // A device the list holds a key for, on a profile with no PIN to fall back on.
+    let holder = profiles.lock_holder(id);
+    let key_only = opens == Opens::Key && profiles.locks().get(&holder).pin.is_none();
     let (reason, words) = match answer {
         PinAnswer::Opened => return Ok(Presence::join(profiles, id, fp)),
+        PinAnswer::NoPin | PinAnswer::KeyFailed if key_only => {
+            (RejectReason::SeatUnavailable, said(NOT_ALLOWED))
+        }
         PinAnswer::Wrong => (RejectReason::ProfileLocked, said(PIN_WRONG)),
         PinAnswer::Wait(wait) => (RejectReason::ProfileLocked, wait_words(wait)),
         PinAnswer::NoPin => (RejectReason::ProfileLocked, Said::default()),
+        PinAnswer::KeyFailed => (RejectReason::ProfileLocked, said(KEY_FAILED)),
         PinAnswer::Full => (RejectReason::ProfileLocked, said(FULL)),
         PinAnswer::NotSaved => (RejectReason::SeatUnavailable, said(NOT_SAVED)),
     };
     refuse(conn, reason, words).await;
-    bail!("profile {id}'s PIN didn't open it: {answer:?}")
+    bail!("profile {id}'s unlock didn't open it: {answer:?}")
 }
 
-/// `unlock`'s secret as the PIN of `id`'s lock
-/// ([`crate::profiles::Profiles::lock_holder`]); the wire's copy wipes as `unlock` drops.
-/// Blocking.
-fn try_pin(
+/// `unlock` for `id`'s lock ([`crate::profiles::Profiles::lock_holder`]): kind 1 its secret as
+/// the PIN, with any key it enrols for `id`; kind 2 a key proof over `id`'s challenge and
+/// `host_fp`, from the key enrolled for `id`. The wire's copy wipes as `unlock` drops. Blocking.
+fn try_unlock(
     profiles: &crate::profiles::Profiles,
     id: &str,
     device: &pf_seats::ipc::Device,
     unlock: ProfileUnlock,
+    host_fp: &[u8; 32],
 ) -> PinAnswer {
-    let pin = std::str::from_utf8(&unlock.secret[..]).unwrap_or("");
     let holder = profiles.lock_holder(id);
-    profiles
-        .locks()
-        .try_pin(&holder, device, pin, unlock.stay_signed_in)
+    let locks = profiles.locks();
+    if unlock.kind == v2msg::UNLOCK_KEY_PROOF {
+        return locks.try_key((id, &holder), device, &unlock.secret, host_fp);
+    }
+    let pin = std::str::from_utf8(&unlock.secret[..]).unwrap_or("");
+    let enroll = enrolled(&unlock).map(|key| (id, key));
+    locks.try_pin(&holder, device, pin, (unlock.stay_signed_in, enroll))
+}
+
+/// The key a PIN brings to enrol. One this host wouldn't verify with is left out, and the PIN
+/// alone lets the device in.
+fn enrolled(unlock: &ProfileUnlock) -> Option<UnlockKey> {
+    let alg = match unlock.enroll_alg {
+        v2msg::ENROLL_P256 => KeyAlg::P256,
+        v2msg::ENROLL_RSA2048 => KeyAlg::Rsa2048,
+        _ => return None,
+    };
+    let key = UnlockKey {
+        alg,
+        public: hex::encode(&unlock.enroll_key),
+    };
+    pf_seats::unlock::key_bytes(&key).map(|_| key)
 }
 
 /// The refusal for wrong PINs that lasts `wait`: seconds under a minute, else minutes, rounded

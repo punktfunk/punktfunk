@@ -1,7 +1,8 @@
-//! The password prompt before a dial to a profile on a person's own account, with Windows Hello
-//! beside it: a Hello proof when this device holds the profile's key, a new key from the
-//! prompt's switch. The rules are `pf_client_core::unlock`; this file runs them off the UI
-//! thread and draws the prompt as a root sheet, like the picker.
+//! The prompt before a dial to a profile on a person's own account, which asks for its
+//! password, or to a locked profile, which asks for its PIN; with Windows Hello beside it: a
+//! Hello proof when this device holds the profile's key, a new key from the prompt's switch.
+//! The rules are `pf_client_core::unlock`; this file runs them off the UI thread and draws the
+//! prompt as a root sheet, like the picker.
 
 use super::style::*;
 use super::{AppCtx, AsyncSetState, Screen, Target};
@@ -34,7 +35,9 @@ pub(crate) struct UnlockAsk {
     error: Option<String>,
     /// The switch enrols a Windows Hello key instead of staying signed in.
     hello: bool,
-    /// The typed password: the one copy this shell keeps, in a buffer that wipes.
+    /// It asks for the profile's PIN, not an account password.
+    pin: bool,
+    /// The typed password or PIN: the one copy this shell keeps, in a buffer that wipes.
     password: Arc<Mutex<Zeroizing<Vec<u8>>>>,
     on: Arc<AtomicBool>,
     submit: Submit,
@@ -197,8 +200,9 @@ fn api(ctx: &AppCtx, target: &Target, box_fp: [u8; 32]) -> HostApi {
     HostApi::new(addr, mgmt, port, &ctx.identity, Some(box_fp))
 }
 
-/// Raises the prompt for `row`. Sign in builds the unlock on a worker (a new Hello key shows
-/// Hello's own prompt) and hands it to `go`; a password the wire refuses reopens the prompt.
+/// Raises the prompt for `row`, its PIN form for a locked profile. Sign in builds the unlock on
+/// a worker (a new Hello key shows Hello's own prompt) and hands it to `go`, and what was typed
+/// is wiped as the worker ends; a password or PIN the wire refuses reopens the prompt.
 #[allow(clippy::too_many_arguments)]
 fn prompt(
     ctx: &Arc<AppCtx>,
@@ -214,8 +218,9 @@ fn prompt(
         return set_screen.call(Screen::Hosts);
     };
     let (name, host) = (row.display_name.clone(), target.host.name.clone());
+    let pin = row.unlock.pin();
     let (ctx2, ss) = (ctx.clone(), set_screen.clone());
-    let submit = move |password: Zeroizing<Vec<u8>>, on: bool| {
+    let submit = move |typed: Zeroizing<Vec<u8>>, on: bool| {
         let _ = std::thread::Builder::new()
             .name("pf-unlock".into())
             .spawn(move || {
@@ -223,7 +228,11 @@ fn prompt(
                 let key = keys
                     .as_ref()
                     .and_then(|h| DeviceKey::new(h, &box_fp, &row.id));
-                match unlock::prompt_unlock(password, on, key.as_ref()) {
+                let made = match pin {
+                    true => unlock::pin_unlock(&typed, on, key.as_ref()),
+                    false => unlock::prompt_unlock(typed, on, key.as_ref()),
+                };
+                match made {
                     Ok(u) => go(Some(u)),
                     Err(line) => {
                         let error = Some(line.to_string());
@@ -238,6 +247,7 @@ fn prompt(
         host,
         error,
         hello,
+        pin,
         password: Arc::new(Mutex::new(Zeroizing::new(Vec::new()))),
         on: Arc::new(AtomicBool::new(false)),
         submit: Arc::new(Mutex::new(Some(Box::new(submit)))),
@@ -246,7 +256,7 @@ fn prompt(
 }
 
 /// The prompt overlay, in its own root slot: the profile's name, the host's sentence, the
-/// masked field, the one switch (off), Cancel and Sign in.
+/// masked field for the password or the PIN, the one switch (off), Cancel and Sign in.
 pub(crate) fn unlock_slot(
     pal: &Palette,
     ask: &Option<UnlockAsk>,
@@ -255,13 +265,17 @@ pub(crate) fn unlock_slot(
     let Some(a) = ask else {
         return Border::new().into();
     };
+    let intro = match a.pin {
+        true => client::unlock_pin_intro(&a.host),
+        false => client::unlock_intro(&a.host),
+    };
     let mut body: Vec<View> = vec![
         text(client::unlock_title(&a.name))
             .font_size(20.0)
             .font_weight(FontWeight::BOLD)
             .text_wrapping(TextWrapping::Wrap)
             .into(),
-        muted(pal, client::unlock_intro(&a.host))
+        muted(pal, intro)
             .font_size(13.0)
             .text_wrapping(TextWrapping::Wrap)
             .into(),
@@ -278,9 +292,14 @@ pub(crate) fn unlock_slot(
     }
     // Each change replaces the copy, and the replaced one wipes as it drops.
     let typed = a.password.clone();
+    let field = match a.pin {
+        true => PasswordBox::new()
+            .header(client::unlock_pin())
+            .placeholder_text(client::unlock_pin_placeholder()),
+        false => PasswordBox::new().header(client::unlock_password()),
+    };
     body.push(
-        PasswordBox::new()
-            .header(client::unlock_password())
+        field
             .password_reveal_mode(PasswordRevealMode::Peek)
             .on_password_changed(move |p: Rc<str>| {
                 *typed.lock().unwrap() = Zeroizing::new(p.as_bytes().to_vec());
