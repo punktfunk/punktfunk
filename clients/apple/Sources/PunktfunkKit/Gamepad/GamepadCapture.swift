@@ -146,7 +146,7 @@ public final class GamepadCapture {
     /// be decoded and dropped. The argument is the kind this pad declared, so the UI can name it.
     ///
     /// It fires at open rather than on the first sample precisely because nothing is sampled: the
-    /// IMU is never powered in this case (see `openSlot`), which is also what stops the pad
+    /// IMU is never powered in this case (see `attach`), which is also what stops the pad
     /// burning battery streaming gyro nobody reads.
     public var onMotionUnreachable: ((PunktfunkConnection.GamepadType) -> Void)?
 
@@ -740,7 +740,7 @@ public final class GamepadCapture {
         if g.leftShoulder.isPressed { b |= GamepadWire.leftShoulder }
         if g.rightShoulder.isPressed { b |= GamepadWire.rightShoulder }
         // guide (Home/PS) is NOT read here — it's forwarded directly by the Home button's
-        // pressedChangedHandler (the legacy `buttonHome` element is unreliable). See `openSlot`.
+        // pressedChangedHandler (the legacy `buttonHome` element is unreliable). See `attach`.
         if g.buttonA.isPressed { b |= GamepadWire.a }
         if g.buttonB.isPressed { b |= GamepadWire.b }
         if g.buttonX.isPressed { b |= GamepadWire.x }
