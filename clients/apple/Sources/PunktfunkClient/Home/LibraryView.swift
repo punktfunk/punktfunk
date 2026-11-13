@@ -95,6 +95,8 @@ struct LibraryView: View {
     var shotFavorites: [String]?
     /// Shot harness: opens Customize.
     var shotCustomize = false
+    /// Shot harness: the profile this shelf may hide titles for, by name.
+    var shotHides: String?
     #endif
     /// The touch grid's sort (the shared `library_sort` key, the same one the console's bar
     /// writes) and its grouping (touch-only — sections are the touch analogue of the console's
@@ -123,8 +125,21 @@ struct LibraryView: View {
     @State private var endGameNotice: String?
     /// The title Remove Download is asking about.
     @State private var removingGame: GameEntry?
-    /// The shelf went behind a full-screen details page with its catalog loaded (tvOS).
+    /// The shelf went behind a full-screen details page (tvOS) or the hidden titles with its
+    /// catalog loaded.
     @State private var keptForDetail = false
+    /// The profile this shelf plays as, while the host lets this device hide its titles
+    /// (`HideForMe.offer`). nil offers nothing.
+    @State private var hidesFor: ListedProfile?
+    /// The hidden titles are pushed over the shelf.
+    @State private var showHidden = false
+    /// What a hide, or its undo, came to: a moment over the shelf.
+    @State private var doneLine: String?
+    @Environment(\.undoManager) private var undoManager
+    #if os(tvOS)
+    /// The focused tile's key: a hidden title hands focus to its neighbour.
+    @FocusState private var focusedTile: String?
+    #endif
 
     /// The host this shelf belongs to — every fetch, every poster URL and the launch itself address
     /// it, and a pinned shelf is the same host seen through one of its cards.
@@ -192,6 +207,14 @@ struct LibraryView: View {
                 isPresented: Binding(get: { endGameNotice != nil }, set: { if !$0 { endGameNotice = nil } })
             ) {
                 Button(L10n.commonOk, role: .cancel) {}
+            }
+            .modifier(DoneLine(line: $doneLine))
+            .navigationDestination(isPresented: $showHidden) {
+                if let hidesFor {
+                    HiddenTitlesView(
+                        host: host, profile: hidesFor, artLoader: artLoader,
+                        onShown: { moved($0, hidden: false) })
+                }
             }
             // Percentages move while a download runs and the shelf is up.
             .task(id: shelf.polls) {
@@ -267,9 +290,10 @@ struct LibraryView: View {
                 spinnerDue = shelf.loading
             }
             .onDisappear {
-                // tvOS's full-screen details hide the shelf without leaving it: keep the loader
-                // they draw with, and skip the reload on return unless a load was cut short.
-                if detailGame != nil {
+                // tvOS's full-screen details and the hidden titles hide the shelf without leaving
+                // it: keep the loader they draw with, and skip the reload on return unless a load
+                // was cut short. A reload would bring back a title the host has not yet dropped.
+                if detailGame != nil || showHidden {
                     keptForDetail = !shelf.loading
                     return
                 }
@@ -618,11 +642,18 @@ struct LibraryView: View {
         }
     }
 
+    /// The rows that copy a title out of the games grid, each scoping its tiles' keys.
+    private static let rowScopes = ["recent", "favorites", "launchers"]
+
+    /// A tile's scroll id, rect and focus key: `scope` keeps a row's copy of a title from
+    /// sharing the grid's, so the launch flies out of the copy that was pressed.
+    private static func tileKey(_ id: String, scope: String) -> String {
+        scope.isEmpty ? id : "\(scope):\(id)"
+    }
+
     /// One poster: a tap launches it, a long-press or right-click offers the title's own acts.
-    /// `scope` keeps a row's copy of a title from sharing the grid's scroll id or its tile rect,
-    /// so the launch flies out of the copy that was pressed.
     private func tile(_ game: GameEntry, caption: String? = nil, scope: String = "") -> some View {
-        let key = scope.isEmpty ? game.id : "\(scope):\(game.id)"
+        let key = Self.tileKey(game.id, scope: scope)
         return Group {
             if launchAndRemember != nil {
                 Button { launch(game.id, frameID: key) } label: {
@@ -640,6 +671,9 @@ struct LibraryView: View {
                     .cardHover(
                         RoundedRectangle(cornerRadius: GameCard.coverRadius, style: .continuous)
                             .inset(by: -6))
+                    #endif
+                    #if os(tvOS)
+                    .focused($focusedTile, equals: key)
                     #endif
             } else {
                 card(game, caption: caption, frameID: key)
@@ -672,13 +706,14 @@ struct LibraryView: View {
             game, running: shelf.running[game.id], download: shelf.downloads[game.id],
             grants: shelf.grants, canLaunch: onLaunch != nil,
             favorite: inTab ? favoriteIDs.contains(game.id) : nil,
-            canCopyLink: LinkClipboard.isAvailable)
+            canCopyLink: LinkClipboard.isAvailable, hides: hidesFor?.displayName)
     }
 
     private func perform(_ act: LibraryShelf.Act, on game: GameEntry) {
         switch act {
         case .play, .resume, .desktop: launch(game.id)
         case .favorite, .unfavorite: favorites.toggle(game.id, host: host.id.uuidString)
+        case .hide: setHidden(game, true)
         case .details: detailGame = game
         case .copyLink: copyLink(game)
         case .files(.remove): removingGame = game
@@ -700,6 +735,79 @@ struct LibraryView: View {
             }
             if outcome != .done { endGameNotice = outcome.notice(action, title: game.title) }
             await refreshStatus()
+        }
+    }
+
+    /// Ask the host to hide (`hidden`) or show `game` for this shelf's profile. What it took
+    /// moves at once, its line shows and Undo takes it back; a refusal, or no way to ask, says why.
+    private func setHidden(_ game: GameEntry, _ hidden: Bool) {
+        guard let profile = hidesFor,
+              let target = MgmtTarget.make(host: host).target(orSay: { endGameNotice = $0 })
+        else { return }
+        Task {
+            let outcome = await HideForMe.setHidden(
+                game.id, hidden: hidden, profile: profile.id, on: target)
+            let line = outcome.notice(hidden: hidden, title: game.title, name: profile.displayName)
+            guard outcome == .done else {
+                endGameNotice = line
+                return
+            }
+            moved(game, hidden: hidden)
+            doneLine = line
+            undoManager?.registerUndo(withTarget: store) { _ in setHidden(game, !hidden) }
+            undoManager?.setActionName(hidden
+                ? L10n.libHideFor(name: profile.displayName) : L10n.libShowFor(name: profile.displayName))
+        }
+    }
+
+    /// The host took `game` off this shelf (`hidden`) or gave it back. The shelf and the cached
+    /// catalog follow with no new fetch; focus and the keyboard cursor take the tile in its place.
+    private func moved(_ game: GameEntry, hidden: Bool) {
+        if hidden {
+            let lists = tileKeys()
+            let leaving = Set(([""] + Self.rowScopes).map { Self.tileKey(game.id, scope: $0) })
+            #if os(tvOS)
+            if let key = focusedTile, leaving.contains(key) {
+                focusedTile = LibraryShelf.neighbour(of: key, in: lists, leaving: leaving)
+            }
+            #else
+            if keyCursor == game.id {
+                keyCursor = LibraryShelf.neighbour(of: game.id, in: lists, leaving: leaving)
+            }
+            #endif
+            shelf.games.removeAll { $0.id == game.id }
+        } else if !shelf.games.contains(where: { $0.id == game.id }) {
+            shelf.games.append(game)
+        }
+        Self.shown[host.id.uuidString] = shelf.games
+        let (hostID, profile) = (host.id.uuidString, hidesFor?.id)
+        Task {
+            await LibraryCache.shared?.noteHidden(
+                game.id, back: hidden ? nil : game, hostID: hostID, profile: profile)
+        }
+    }
+
+    /// Every tile key on screen, by row and section in order, as `tile` names them.
+    private func tileKeys() -> [[String]] {
+        let running = Set(shelf.running.keys)
+        guard inTab else {
+            return LibraryShelf.grid(shelf.games, sort: sort, groupBy: groupBy, running: running)
+                .map { $0.games.map(\.id) }
+        }
+        let rows = LibraryShelf.rows(
+            shelf.games, sort: sort, groupBy: groupBy, running: running,
+            favorites: Set(favoriteIDs), search: search)
+        func keys(_ games: [GameEntry], _ scope: String) -> [[String]] {
+            [games.map { Self.tileKey($0.id, scope: scope) }]
+        }
+        return sectionLayout.visible.flatMap { section -> [[String]] in
+            switch section {
+            case .desktops: []
+            case .recent: keys(rows.recent, "recent")
+            case .favorites: keys(rows.favorites, "favorites")
+            case .launchers: keys(rows.launchers, "launchers")
+            case .games: rows.games.map { $0.games.map(\.id) }
+            }
         }
     }
 
@@ -872,7 +980,8 @@ struct LibraryView: View {
     /// Sort and group for the plain grid — the console's bar, as a menu. The sort is the shared
     /// key (Default · A–Z · Platform · Store); the grouping is this grid's own (sections stand in
     /// for the console's Collections place). Each list sits under its heading (`MenuChoices`): a
-    /// menu lists a picker's options without its title.
+    /// menu lists a picker's options without its title. Where this device may hide the profile's
+    /// titles, the last entry opens the hidden ones.
     private var sortMenu: some View {
         Menu {
             MenuChoices(
@@ -887,6 +996,13 @@ struct LibraryView: View {
                     MenuChoice(label: String(localized: L10n.libGroupStore), tag: "store"),
                 ],
                 selection: $groupByRaw)
+            if let hidesFor {
+                Section {
+                    Button(L10n.libHiddenFor(name: hidesFor.displayName), systemImage: "eye.slash") {
+                        showHidden = true
+                    }
+                }
+            }
         } label: {
             Label(L10n.libSortGroup, systemImage: "line.3.horizontal.decrease.circle")
         }
@@ -954,11 +1070,18 @@ struct LibraryView: View {
             case .waking, .failed, .status(nil): break
             }
         }
+        // The profile's own enumerate row says whether this device may hide its titles; with no
+        // saved pick nothing is asked.
+        var listed: [ListedProfile]?
+        let pick = current.pickedProfile?.id
+        if pick != nil { listed = (try? await LibraryClient.profiles(target)) ?? nil }
+        if !Task.isCancelled { hidesFor = HideForMe.offer(listed: listed, pick: pick) }
     }
 
     #if DEBUG
     private func applyShot(_ phase: ShotLibraryPhase) {
         artLoader = ShotPosterArt.source
+        hidesFor = shotHides.map { ListedProfile(id: "shot", displayName: $0, person: true) }
         switch phase {
         case .loading:
             shelf.loading = true
