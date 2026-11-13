@@ -258,7 +258,8 @@ public enum AnnexB {
     /// The AVCC form written over the AU in its pool slot: each start code becomes its NAL's
     /// length, and the sample's block is the slot. Needs every start code 4 bytes long (a NAL
     /// behind a 3-byte code has no room for its length) and no parameter-set NAL (those stay
-    /// out of the sample, which only the repack can do). nil = repack.
+    /// out of the sample, which only the repack can do). nil = repack, over the AU as it came: the
+    /// sample is made before a byte changes.
     private static func sampleInPlace(
         au: AccessUnit, placed: AccessUnit.InPlace, pool: AccessUnitSlotPool,
         format: CMVideoFormatDescription, codec: VideoCodec
@@ -282,7 +283,11 @@ public enum AnnexB {
             previousEnd = range.upperBound
             return true
         }
-        guard fits, !nals.isEmpty, previousEnd == placed.count else { return nil }
+        guard fits, !nals.isEmpty, previousEnd == placed.count,
+              let sample = SamplePack.sample(
+                  in: pool, token: placed.token, offset: placed.offset, length: placed.count,
+                  ptsNs: au.ptsNs, format: format)
+        else { return nil }
         let base = pool.pointer(placed.offset)
         for range in nals {
             var len = UInt32(range.count).bigEndian
@@ -290,8 +295,6 @@ public enum AnnexB {
                 base.advanced(by: range.lowerBound - 4).copyMemory(from: $0.baseAddress!, byteCount: 4)
             }
         }
-        return SamplePack.sample(
-            in: pool, token: placed.token, offset: placed.offset, length: placed.count,
-            ptsNs: au.ptsNs, format: format)
+        return sample
     }
 }
