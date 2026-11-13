@@ -16,6 +16,7 @@ import {
 	superviseUnit,
 } from "../src/runner.js";
 import { adoptNestedState, writePluginToken } from "../src/runner-linux.js";
+import { pipeName } from "../src/runner-windows.js";
 
 const TOKEN = "runner-token";
 // Fixtures live under sdk/ so the generated plugin files can resolve "effect" and the SDK.
@@ -894,4 +895,11 @@ describe("supervision", () => {
 			server.stop(true);
 		}
 	});
+});
+
+test("a seat's runner dials its seat's pipe, never the box's", () => {
+	const seat = "0123456789abcdef0123456789abcdef";
+	expect(pipeName("steam", seat)).toBe(`\\\\.\\pipe\\punktfunk-seat-${seat}-plugin-steam`);
+	expect(pipeName("steam", undefined)).toBe("\\\\.\\pipe\\punktfunk-plugin-steam");
+	expect(pipeName("steam", "../x")).toBe("\\\\.\\pipe\\punktfunk-plugin-steam");
 });

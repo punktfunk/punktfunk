@@ -63,13 +63,23 @@ export const runInContainer = (
 	});
 
 /**
+ * The pipe a seat host serves for plugin `id`, or the box's when `seat` is no seat id. The host
+ * derives the same name (`mgmt/pipes.rs`).
+ */
+export const pipeName = (id: string, seat: string | undefined): string =>
+	seat && /^[0-9a-f]{32}$/.test(seat)
+		? `\\\\.\\pipe\\punktfunk-seat-${seat}-plugin-${id}`
+		: `\\\\.\\pipe\\punktfunk-plugin-${id}`;
+
+/**
  * Where a Windows plugin reaches the host: the pipe the host serves for its id, plain HTTP, no
- * port. A host without the pipe leaves this empty and the child dials the port.
+ * port. A seat's runner has its seat's id from its host. A host without the pipe leaves this
+ * empty and the child dials the port.
  */
 const pipeEnv = (unit: Unit): Record<string, string> => {
 	const id = unit.manifest?.id;
 	if (process.platform !== "win32" || !id) return {};
-	const pipe = `\\\\.\\pipe\\punktfunk-plugin-${id}`;
+	const pipe = pipeName(id, process.env.PUNKTFUNK_SEAT_ID);
 	if (!fs.existsSync(pipe)) return {};
 	return { PUNKTFUNK_MGMT_URL: "http://punktfunk.host", PUNKTFUNK_MGMT_UNIX: pipe };
 };

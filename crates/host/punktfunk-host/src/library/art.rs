@@ -241,8 +241,8 @@ fn percent_decode(s: &str) -> String {
 ///
 /// The proxy runs in the host process (LocalSystem on Windows) and the plugin lane supplies the
 /// path, so a missing root would make "serve this cover" equal "read any file as SYSTEM". Default
-/// is the users base — `%PUBLIC%`'s parent, because SYSTEM's `%USERPROFILE%` is
-/// `…\config\systemprofile` and is not where launchers live — plus [`steam_art_roots`] and
+/// is the [`users_base`] — SYSTEM's `%USERPROFILE%` is `…\config\systemprofile` and is not where
+/// launchers live — plus [`steam_art_roots`] and
 /// [`super::launch::playnite_art_roots`] (a portable Playnite keeps covers beside the exe).
 /// `PUNKTFUNK_LIBRARY_ART_ROOTS` (`;`-separated) replaces the whole default. [`art_store_dir`]
 /// is a root on top of either: its files are named `sha256(url)`, so nothing a plugin publishes
@@ -255,21 +255,23 @@ fn art_roots() -> Vec<PathBuf> {
         roots.push(art_store_dir());
         return roots;
     }
-    let mut roots = Vec::new();
-    // `%PUBLIC%` is `C:\Users\Public` on every supported Windows; its parent is the users base.
-    if let Some(public) = std::env::var_os("PUBLIC") {
-        if let Some(base) = PathBuf::from(public).parent() {
-            roots.push(base.to_path_buf());
-        }
-    }
-    if roots.is_empty() {
-        if let Some(drive) = std::env::var_os("SystemDrive") {
-            roots.push(PathBuf::from(drive).join("Users"));
-        }
-    }
+    let mut roots: Vec<PathBuf> = users_base().into_iter().collect();
     roots.extend(plat::extra_roots());
     roots.push(art_store_dir());
     roots
+}
+
+/// The Windows users base: `%PUBLIC%`'s parent (`C:\Users\Public` on every supported Windows),
+/// else `%SystemDrive%\Users`, which a seat host's environment falls back to. `None` off Windows.
+pub(crate) fn users_base() -> Option<PathBuf> {
+    if let Some(base) =
+        std::env::var_os("PUBLIC").and_then(|p| Path::new(&p).parent().map(Path::to_path_buf))
+    {
+        return Some(base);
+    }
+    // Not `PathBuf::from("C:").join("Users")`: that is the drive-relative `C:Users`.
+    std::env::var_os("SystemDrive")
+        .map(|drive| PathBuf::from(format!(r"{}\Users", drive.to_string_lossy())))
 }
 
 /// Canonicalize first so a junction out of the root is resolved before the containment test.
@@ -381,7 +383,7 @@ pub fn validate_art_paths(art: &Artwork) -> Result<(), String> {
         ("header", &art.header),
     ] {
         let Some(v) = value.as_deref() else { continue };
-        if is_local_art_path(v) && !art_path_is_servable(v) {
+        if is_local_art_path(v) && !seat_may_serve(v) {
             return Err(format!(
                 "art.{field}: local art must be an image file (jpg/png/webp/gif/bmp/ico/tga) inside \
                  an allowed art root — set PUNKTFUNK_LIBRARY_ART_ROOTS if the library lives \
@@ -408,7 +410,7 @@ pub fn sanitize_art_paths(art: &mut Artwork) -> Vec<(&'static str, String)> {
     ] {
         let unservable = value
             .as_deref()
-            .is_some_and(|v| is_local_art_path(v) && !art_path_is_servable(v));
+            .is_some_and(|v| is_local_art_path(v) && !seat_may_serve(v));
         if unservable {
             if let Some(v) = value.take() {
                 dropped.push((field, v));
@@ -727,15 +729,33 @@ fn stored_remote_art(url: &str) -> Option<(Vec<u8>, String)> {
 
 /// Bytes for one art value: a confined local file, or a remote URL the host stores on first
 /// use. The two shapes [`proxy_art`] advertises and no other, so what the catalog points at is
-/// what this resolves. Blocking — call off the async runtime.
+/// what this resolves. A local file is read with the seat account's rights alone on a Windows
+/// seat host ([`crate::plugins::as_seat_account`]); the store is this host's own. Blocking —
+/// call off the async runtime.
 pub(crate) fn resolve_art_bytes(v: &str) -> Option<(Vec<u8>, String)> {
+    resolve_art_as(v, |read| {
+        crate::plugins::as_seat_account(read).ok().flatten()
+    })
+}
+
+/// [`resolve_art_bytes`] with `as_seat` running a local read.
+fn resolve_art_as(
+    v: &str,
+    as_seat: impl FnOnce(&dyn Fn() -> Option<(Vec<u8>, String)>) -> Option<(Vec<u8>, String)>,
+) -> Option<(Vec<u8>, String)> {
     if is_local_art_path(v) {
-        local_art_bytes(v)
+        as_seat(&|| local_art_bytes(v))
     } else if is_remote_art_url(v) {
         stored_remote_art(v)
     } else {
         None
     }
+}
+
+/// [`art_path_is_servable`] as [`resolve_art_bytes`] reads: a catalog keeps no path the seat's
+/// account couldn't serve.
+fn seat_may_serve(v: &str) -> bool {
+    crate::plugins::as_seat_account(|| art_path_is_servable(v)).unwrap_or(false)
 }
 
 /// Advertise the host's art proxy for every cover it can serve on `GET /library`: a local path
@@ -1025,6 +1045,33 @@ mod tests {
 
     fn confine_art_to(dir: &Path) -> ArtRootsEnv {
         ArtRootsEnv::set(&[("PUNKTFUNK_LIBRARY_ART_ROOTS", Some(dir))])
+    }
+
+    /// A seat host's environment has `SystemDrive` and no `PUBLIC`: its base is still rooted.
+    #[test]
+    fn the_users_base_without_public_is_rooted() {
+        let _env = ArtRootsEnv::set(&[("PUBLIC", None), ("SystemDrive", Some(Path::new("C:")))]);
+        assert_eq!(users_base(), Some(PathBuf::from(r"C:\Users")));
+    }
+
+    /// A local cover is read through the seat's hand alone, so a Windows seat host serves what the
+    /// seat's account reads: its refusal is no cover, whatever this host could read.
+    #[test]
+    fn a_local_cover_is_read_through_the_seat_s_hand() {
+        let dir = std::env::temp_dir().join(format!("pf-art-seat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _env = confine_art_to(&dir);
+        let cover = dir.join("cover.png");
+        std::fs::write(&cover, PNG).unwrap();
+        let mut asked = 0;
+        let served = resolve_art_as(cover.to_str().unwrap(), |read| {
+            asked += 1;
+            read()
+        });
+        assert_eq!(served.expect("the seat reads its cover").0, PNG);
+        assert_eq!(asked, 1);
+        assert!(resolve_art_as(&file_url(&cover), |_| None).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Confinement, extension, and content sniff are all load-bearing: the proxy reads in the

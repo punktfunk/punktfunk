@@ -705,16 +705,9 @@ pub(crate) fn playnite_art_roots() -> Vec<std::path::PathBuf> {
         .collect()
 }
 
-/// User profiles (`C:\Users\*`), minus `Public`. Users base is `%PUBLIC%`'s
-/// parent ([`super::art::art_roots`]); `%SystemDrive%\Users` if the var is missing.
+/// User profiles (`C:\Users\*`) under [`crate::library::users_base`], minus `Public`.
 fn windows_user_profiles() -> Vec<std::path::PathBuf> {
-    let base = std::env::var_os("PUBLIC")
-        .map(std::path::PathBuf::from)
-        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
-        .or_else(|| {
-            std::env::var_os("SystemDrive").map(|d| std::path::PathBuf::from(d).join("Users"))
-        });
-    let Some(base) = base else {
+    let Some(base) = crate::library::users_base() else {
         return Vec::new();
     };
     let Ok(entries) = std::fs::read_dir(&base) else {

@@ -1926,7 +1926,7 @@
           "emulators"
         ],
         "summary": "Install a game's update or DLC",
-        "description": "Hands the files to the best copy of the emulator the way it takes them: a folder it scans,\nits own installer, or a registration file. One step per file. An emulator with no way says\nwhy.",
+        "description": "Hands the files to the best copy of the emulator the way it takes them: a folder it scans,\nits own installer, or a registration file. One step per file. An emulator with no way says\nwhy. A Windows seat host takes it from the operator alone.",
         "operationId": "installEmulatorContent",
         "parameters": [
           {
@@ -1984,7 +1984,7 @@
             }
           },
           "403": {
-            "description": "A file outside the plugin's reach",
+            "description": "A file outside the plugin's reach, or a Windows seat host's plugin asks",
             "content": {
               "application/json": {
                 "schema": {
@@ -2206,7 +2206,7 @@
           "emulators"
         ],
         "summary": "Prepare an emulator for a launch",
-        "description": "Every copy of the emulator on this host answers its first-run questions (a setup wizard, a\nwelcome box) the way clicking through would, gets the platform's firmware — copied into\nits firmware folder, or installed by the emulator itself — and has this session's pads\nbound in seat order, which the host undoes when the game exits. Idempotent; each step says\nwhat it did, and a platform still missing its firmware says so.",
+        "description": "Every copy of the emulator on this host answers its first-run questions (a setup wizard, a\nwelcome box) the way clicking through would, gets the platform's firmware — copied into\nits firmware folder, or installed by the emulator itself — and has this session's pads\nbound in seat order, which the host undoes when the game exits. Idempotent; each step says\nwhat it did, and a platform still missing its firmware says so. A Windows seat host takes it\nfrom the operator alone.",
         "operationId": "prepareEmulator",
         "parameters": [
           {
@@ -2264,7 +2264,7 @@
             }
           },
           "403": {
-            "description": "The firmware folder is outside the calling plugin's state directory",
+            "description": "The firmware folder is outside the calling plugin's state directory, or a Windows seat host's plugin asks",
             "content": {
               "application/json": {
                 "schema": {
@@ -2380,7 +2380,7 @@
           "emulators"
         ],
         "summary": "List a platform's saves",
-        "description": "The save units of the platform on the best copy of the emulator: name, kind, size and a\nstamp that changes with the save. A plugin needs the operator's save grant. With `profile`,\nthat seat's units; a Linux seat's are what its host exported at its last launch or exit.",
+        "description": "The save units of the platform on the best copy of the emulator: name, kind, size and a\nstamp that changes with the save. A plugin needs the operator's save grant. With `profile`,\nthat seat's units; a Linux seat's are what its host exported at its last launch or exit. A\nWindows seat host lists them for the operator alone.",
         "operationId": "getEmulatorSaves",
         "parameters": [
           {
@@ -2455,7 +2455,7 @@
             }
           },
           "403": {
-            "description": "No save grant, or a game folder outside the plugin's reach",
+            "description": "No save grant, a game folder outside the plugin's reach, or a Windows seat host's plugin asks",
             "content": {
               "application/json": {
                 "schema": {
@@ -2494,7 +2494,7 @@
           "emulators"
         ],
         "summary": "Copy saves out",
-        "description": "Writes each named unit into `dir`: the save file, or a tar of a save folder with nothing in\nits headers that differs between machines. A plugin's `dir` is inside its own state folder.\nWith `profile`, that seat's units; a Linux seat's files are its host's last export, and a\nunit it didn't export is left out.",
+        "description": "Writes each named unit into `dir`: the save file, or a tar of a save folder with nothing in\nits headers that differs between machines. A plugin's `dir` is inside its own state folder.\nWith `profile`, that seat's units; a Linux seat's files are its host's last export, and a\nunit it didn't export is left out. A Windows seat host takes it from the operator alone.",
         "operationId": "exportEmulatorSaves",
         "parameters": [
           {
@@ -2561,7 +2561,7 @@
             }
           },
           "403": {
-            "description": "No save grant, or a folder outside the plugin's reach",
+            "description": "No save grant, a folder outside the plugin's reach, or a Windows seat host's plugin asks",
             "content": {
               "application/json": {
                 "schema": {
@@ -2600,7 +2600,7 @@
           "emulators"
         ],
         "summary": "Put saves back",
-        "description": "Each unit goes where the emulator keeps it, in the first of its kinds with a place for its\nname; what was there is kept in hermir's save backups. A unit with no place yet is a step\nthat says so. A plugin's files are inside its own state folder. With `profile`, into that\nseat's copies; a Linux seat's host puts each back before its next game starts, and the step\nsays so.",
+        "description": "Each unit goes where the emulator keeps it, in the first of its kinds with a place for its\nname; what was there is kept in hermir's save backups. A unit with no place yet is a step\nthat says so. A plugin's files are inside its own state folder. With `profile`, into that\nseat's copies; a Linux seat's host puts each back before its next game starts, and the step\nsays so. A Windows seat host takes it from the operator alone.",
         "operationId": "importEmulatorSaves",
         "parameters": [
           {
@@ -2667,7 +2667,7 @@
             }
           },
           "403": {
-            "description": "No save grant, or a file outside the plugin's reach",
+            "description": "No save grant, a file outside the plugin's reach, or a Windows seat host's plugin asks",
             "content": {
               "application/json": {
                 "schema": {
@@ -6775,7 +6775,7 @@
           "plugin-access"
         ],
         "summary": "Grant, deny, or forget an access request",
-        "description": "`allow` turns a pending request into a grant (the platform ACL lands first, so a failed\ngrant stores nothing), or with `write` set grants a path the operator handed over, on\nbehalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.\nA folder that takes longer answers 202 and lists its walk until the record lands. On a seat\nhost the grant is for its own runner: a folder the seat's account can't list is refused. On a\nperson's own account only that person decides, and an emulator or core install is refused.",
+        "description": "`allow` turns a pending request into a grant (the platform ACL lands first, so a failed\ngrant stores nothing), or with `write` set grants a path the operator handed over, on\nbehalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.\nA folder that takes longer answers 202 and lists its walk until the record lands. On a seat\nhost the grant is for its own runner: a folder the seat's account can't list is refused, and\non Windows that account places the folder's access. On a person's own account only that person\ndecides, and an emulator or core install is refused, as it is to a Windows seat's person.",
         "operationId": "decidePluginAccess",
         "parameters": [
           {
@@ -10282,7 +10282,7 @@
           "store"
         ],
         "summary": "Install a plugin",
-        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A Windows seat host installs none: the box's runner, which it shares,\nnever reads them. A seat host on a person's own account installs for that person's own\nsession, from the built-in source alone: what it installs runs as them.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
+        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A seat host installs into the seat's own plugins, which its own runner\nruns as the seat's account. On a person's own account it installs for that person's own\nsession, from the built-in source alone: what it installs runs as them. A Windows seat's\nperson installs from the built-in source alone too.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
         "operationId": "installPlugin",
         "requestBody": {
           "content": {
@@ -10326,7 +10326,7 @@
             }
           },
           "403": {
-            "description": "Not authorized for the plugin token, or a plugin from outside the built-in source on a seat host on a person's own account",
+            "description": "Not authorized for the plugin token, or a plugin from outside the built-in source on a seat host on a person's own account or for a Windows seat's person",
             "content": {
               "application/json": {
                 "schema": {
@@ -10336,7 +10336,7 @@
             }
           },
           "409": {
-            "description": "Another package operation is in flight, or a Windows seat host",
+            "description": "Another package operation is in flight",
             "content": {
               "application/json": {
                 "schema": {

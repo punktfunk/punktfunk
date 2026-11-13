@@ -229,9 +229,9 @@ session by design, and display activation fails while its session is inactive.
   it as `seat.pin`, so a client pins the seat through the box it already trusts. A seat whose pin
   the box doesn't hold yet is unavailable. Sleep, restart and shut down are refused: the box's own
   host is the one that does them, and it ends the sessions on every seat first.
-- **The box's library, on Windows.** A Windows seat runs no plugins and answers a plugin install
-  with 409. It lists and launches the box's titles as its own user, and answers every library
-  change with 409. Titles from sources
+- **The box's library, on Windows.** A Windows seat runs none of the box's plugins. It lists and
+  launches the box's titles as its own user, and answers every change to the box's library with
+  409. Titles from sources
   that belong to one account (Playnite, Game Bar, Amazon, itch, Hydra) are left out. It runs the
   box's emulators from `%ProgramData%\punktfunk\emulators` with the firmware the box's plugins
   staged. The box host tails each running seat's `game.*` into its own bus, with `seat` naming
@@ -248,21 +248,25 @@ session by design, and display activation fails while its session is inactive.
   seat runs it with its own config and saves in `~/.var/app/<id>`; which emulators stay the
   owner's is in [Profiles](/docs/profiles#on-linux). At a launch the seat installs the RetroArch
   core the entry names into its own RetroArch and places the firmware from its library copy.
-- **Its own runner's titles, on Linux.** What a plugin of the seat account's own runner
+- **Its own runner's titles.** What a plugin of the seat account's own runner
   publishes with `PUT library/provider/{provider}` lands in the seat host's own titles (below),
-  under `own:` ids. On a made seat that runner is the seat account's `punktfunk-scripting` user
-  unit, which reads the seat's config directory, where the package enables the unit for every
-  account. On a person's own account it is [their seat's own runner](#a-seat-on-a-persons-own-account). A
+  under `own:` ids. On a made Linux seat that runner is the seat account's `punktfunk-scripting`
+  user unit, which reads the seat's config directory, where the package enables the unit for
+  every account. On a person's own Linux account it is
+  [their seat's own runner](#a-seat-on-a-persons-own-account), and on Windows
+  [the seat's runner](#a-windows-seats-runner). A
   `?store=` claim is dropped there, so no row shadows a title of the box's. The provider's
   running and download reports read those rows, and the box learns their names and pictures as
   it learns the others'. On a person's own account only their session and their plugins write
   them, and a provider row neither wrote lists nothing.
-- **Its own runner's folders, on Linux.** A plugin installed in the seat's own `plugins/` reads
+- **Its own runner's folders.** A plugin installed in the seat's own `plugins/` reads
   its manifest and grants from the seat's own config directory, never the box's for a plugin of
   the same id; any other plugin reads the box's copy. The operator decides them on a made seat,
   the seat's person on both kinds of seat, and a folder the seat's account can't list is refused
-  (`not_readable`). On a person's own account an emulator or core install asked through a grant
-  stays refused (`emulators_own_account_yet`).
+  (`not_readable`). On a person's own account, and to a Windows seat's person, an emulator or
+  core install asked through a grant stays refused (`emulators_own_account_yet`). On Windows the
+  seat's account lists the folder and places its access itself, so a grant opens only a folder
+  whose permissions that account may change.
 - **One profile.** The seat serves the profile whose seat it is. A connect that names any other
   profile, the owner's included, is refused as an unknown profile; one that names none plays as
   this seat's profile. The owner's row alone also serves the owner and the profiles that share the
@@ -427,16 +431,16 @@ A row with one answer holds on both. Every other row is a difference the section
 | A device as its person, on `mgmt_routes::PERSON` | The door decides, the owner's host writes | The box host decides and writes |
 | Its own titles, with a command and `prep` | On its seat host; the owner's host stores the list | On its seat host; the box host stores the list |
 | [The person's own session](#the-persons-own-session) | On a seat's own host, made or on their own account; the ticket from a `0600` file | The same; the ticket from the seat host's person pipe |
-| What that session reaches on the seat host | Every `profile-data` and `profile-exec` route | Their hooks and their own titles |
+| What that session reaches on the seat host | Every `profile-data` and `profile-exec` route | Their hooks, their own titles, the store, their runner and folder decisions |
 | Hooks on a made seat | The operator and the person | The operator and the person |
 | Hooks on a person's own account | The person, in their session | The person, in their session |
-| Plugins on a made seat | The seat account's own runner | None: an install answers 409 |
-| Plugins on a person's own account | Their seat's own runner, which the person alone switches and installs into, in their session | None |
+| Plugins on a made seat | The seat account's own runner | The seat's own runner, as the seat's account; its person installs from the built-in source alone |
+| Plugins on a person's own account | Their seat's own runner, which the person alone switches and installs into, in their session | The same |
 | The box's titles on its seat | Steam and emulator titles it can start as its own user | Every title but those of one account's sources |
 | Emulators | Installed box-wide; config and saves are the account's | The box's copies; saves and firmware through the box host's `?profile=` |
 | A seat on an existing account | Yes, opened by its password or a device key | On Windows Server |
 
-Open on Windows: a seat's own plugin runner, and a plugin's page for a seat.
+Open on Windows: a plugin's page for a seat.
 
 ## Checking a seat can actually stream
 
@@ -892,10 +896,33 @@ the marks above are the same; on Windows the box host checks with the seat host 
   doesn't own, and prints `https://127.0.0.1:47992/_auth/person?ticket=<ticket>`; `--open` opens
   it, or `/closed?why=refused` when no ticket came. The status tray's Open console runs that in
   a session whose person pipe exists.
-- **What it reaches there.** `GET host`, `GET status`, their profile and picture, their hooks and
-  their own titles (`library/custom` and its art). Every other profile route is 403: that host
-  would act as SYSTEM on what the call names. A hook the person saves names no
-  `hmac_secret_file` (`hooks_secret_file_person`). Plugins and emulators stay the box's.
+- **What it reaches there.** `GET host`, `GET status`, their profile and picture, their hooks,
+  their own titles (`library/custom` and its art), the store but its sources, `store/runtime`,
+  `GET plugins`, a plugin page's `ui-credential` and folder decisions (`plugin-access`). Every
+  other profile route is 403: that host would act as SYSTEM on what the call names. A hook the
+  person saves names no `hmac_secret_file` (`hooks_secret_file_person`). An install from outside
+  the built-in source is refused (`plugin_seat_unreviewed`): that store runs as SYSTEM, and it
+  writes into the seat's own `plugins/` alone. Emulators stay the box's.
+
+#### A Windows seat's runner
+
+- **Who runs it.** The seat's host starts `scripting-run.cmd` as the account signed in to the
+  seat's session, with no window, in a job only the host holds. It does so at each of its own
+  starts and when the runner is switched on, while `plugin-runner-on` is in its config directory.
+  It ends when it is switched off, when the host ends, and at the seat's sign-out. No scheduled
+  task and no stored password. A run that ends with an error starts again within a minute.
+- **What that account reads.** Each start gives it read on `plugin-token`,
+  `plugin-run/plugin-tokens.json`, the TLS pin, `mgmt-endpoint` and `plugin-run`, read and
+  `FILE_WRITE_ATTRIBUTES` on `plugins` and the runner bundle, and Modify on `plugin-state`, where
+  `runner.log` lands. Switching off takes them back. It gets no ACE on any other folder.
+- **Its sandbox.** Each plugin runs in AppContainer `punktfunk.plugin.<id>.<first 8 of the seat
+  id>` and reaches the host on `\\.\pipe\punktfunk-seat-<seat id>-plugin-<id>`, open to the
+  seat's account and that container, so nothing of it is the box's plugin's of the same id. `~`
+  in a manifest is that account's profile. On a person's own account it runs the packages their
+  session installed alone (`PUNKTFUNK_PERSON_PLUGINS=1`).
+- **Who installs.** On a made seat the operator and the person install, switch and decide
+  folders. On a person's own account the person alone does; any other lane gets
+  `plugins_own_account_person` and reads `store/runtime` as not installed.
 
 #### Who opens a person's seat
 

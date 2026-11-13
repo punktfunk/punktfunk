@@ -10,6 +10,7 @@
 //! console session when it starts the ordinary host.
 
 use anyhow::{bail, Context, Result};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use windows::core::{Owned, HSTRING, PCWSTR, PWSTR};
@@ -20,10 +21,13 @@ use windows::Win32::Security::{
     TOKEN_ELEVATION, TOKEN_LINKED_TOKEN,
 };
 use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
+use windows::Win32::System::JobObjects::{
+    AssignProcessToJobObject, TerminateJobObject, JOB_OBJECT_LIMIT,
+};
 use windows::Win32::System::RemoteDesktop::{ProcessIdToSessionId, WTSQueryUserToken};
 use windows::Win32::System::Threading::{
-    CreateProcessAsUserW, GetExitCodeProcess, TerminateProcess, WaitForSingleObject,
-    CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT,
+    CreateProcessAsUserW, GetExitCodeProcess, ResumeThread, TerminateProcess, WaitForSingleObject,
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
     PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTUPINFOW,
 };
 
@@ -84,8 +88,71 @@ fn exe_dir(cmdline: &str) -> Option<PathBuf> {
 /// process's session has no signed-in user. `workdir` defaults to the
 /// executable's own directory ([`exe_dir`]) — never this process's.
 pub fn spawn_as_current_session_user(cmdline: &str, workdir: Option<&Path>) -> Result<u32> {
-    let (_process, pid) = launch(cmdline, workdir, PROCESS_CREATION_FLAGS(0), &[], false)?;
+    let (_process, _thread, pid) = launch(cmdline, workdir, PROCESS_CREATION_FLAGS(0), &[], false)?;
     Ok(pid)
+}
+
+/// A process tree [`spawn_tree_as_current_session_user`] started. It ends when this value drops
+/// or this host exits: the job holding it is kill-on-close, and only this value holds the job.
+pub struct SessionTree {
+    process: OwnedHandle,
+    job: OwnedHandle,
+}
+
+impl SessionTree {
+    /// The first process's exit code, `None` while it runs.
+    pub fn exit_code(&self) -> Option<u32> {
+        let process = HANDLE(self.process.as_raw_handle());
+        // SAFETY: a live process handle this value owns; a zero wait returns at once.
+        if unsafe { WaitForSingleObject(process, 0) } != WAIT_OBJECT_0 {
+            return None;
+        }
+        let mut code = 0u32;
+        // SAFETY: as above, and `code` is a live out-param.
+        unsafe { GetExitCodeProcess(process, &mut code) }.ok()?;
+        Some(code)
+    }
+
+    /// Ends every process in the tree and waits up to `timeout` for the first to be gone, so
+    /// what it held open is free.
+    pub fn end(self, timeout: Duration) {
+        let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
+        // SAFETY: live job and process handles this value owns; both calls are synchronous.
+        unsafe {
+            let _ = TerminateJobObject(HANDLE(self.job.as_raw_handle()), 1);
+            let _ = WaitForSingleObject(HANDLE(self.process.as_raw_handle()), millis);
+        }
+    }
+}
+
+/// [`spawn_as_current_session_user`] with no window, in `workdir`, with `env` added, and every
+/// process it starts in one job ([`SessionTree`]).
+pub fn spawn_tree_as_current_session_user(
+    cmdline: &str,
+    workdir: &Path,
+    env: &[(String, String)],
+) -> Result<SessionTree> {
+    let job = pf_paths_win::kill_on_close_job(JOB_OBJECT_LIMIT(0))
+        .context("create the kill-on-close job")?;
+    let flags = CREATE_SUSPENDED | CREATE_NO_WINDOW;
+    let (process, thread, _) = launch(cmdline, Some(workdir), flags, env, false)?;
+    let (child, main) = (*process, *thread);
+    // Suspended until it is in the job: a child it started first would stay outside.
+    // SAFETY: a live job handle and a live process handle with the rights its creator holds.
+    let joined = unsafe { AssignProcessToJobObject(HANDLE(job.as_raw_handle()), child) };
+    if let Err(e) = joined {
+        // SAFETY: `process` is a live owned handle with the terminate right its creator holds.
+        let _ = unsafe { TerminateProcess(child, 1) };
+        return Err(e).context("AssignProcessToJobObject");
+    }
+    // SAFETY: the live handle of the suspended primary thread `launch` created.
+    if unsafe { ResumeThread(main) } == u32::MAX {
+        return Err(std::io::Error::last_os_error()).context("ResumeThread");
+    }
+    let raw: HANDLE = **std::mem::ManuallyDrop::new(process);
+    // SAFETY: `process` gave its handle up above without closing it, so this closes it once.
+    let process = unsafe { OwnedHandle::from_raw_handle(raw.0) };
+    Ok(SessionTree { process, job })
 }
 
 /// [`spawn_as_current_session_user`] with `env` added, waited on for up to `timeout`. `admin`
@@ -97,7 +164,7 @@ pub fn run_as_current_session_user(
     admin: bool,
     timeout: Duration,
 ) -> Result<Option<u32>> {
-    let (process, _) = launch(cmdline, None, PROCESS_CREATION_FLAGS(0), env, admin)?;
+    let (process, _, _) = launch(cmdline, None, PROCESS_CREATION_FLAGS(0), env, admin)?;
     let code = wait_exit(&process, timeout)?;
     if code.is_none() {
         // SAFETY: `process` is a live owned handle with the terminate right its creator holds.
@@ -110,7 +177,7 @@ pub fn run_as_current_session_user(
 /// user's desktop, and the caller learns the exit code. Errs when the helper is still
 /// running after `timeout`; it keeps running on its own then.
 pub fn run_hidden_as_current_session_user(cmdline: &str, timeout: Duration) -> Result<u32> {
-    let (process, _) = launch(cmdline, None, CREATE_NO_WINDOW, &[], false)?;
+    let (process, _, _) = launch(cmdline, None, CREATE_NO_WINDOW, &[], false)?;
     match wait_exit(&process, timeout)? {
         Some(code) => Ok(code),
         None => bail!("helper still running after {timeout:?}"),
@@ -134,25 +201,44 @@ fn wait_exit(process: &Owned<HANDLE>, timeout: Duration) -> Result<Option<u32>> 
     Ok(Some(code))
 }
 
-/// Runs `f` on the session user's `TEMP`, impersonating that user. A file there stays readable
-/// to a process launched as them; SYSTEM's own temp does not. The path comes from the user's
-/// environment, so the file work must not carry this host's rights.
+/// Runs `f` on the session user's `TEMP`, as that user ([`as_session_user`]). A file there stays
+/// readable to a process launched as them; SYSTEM's own temp does not. The path comes from the
+/// user's environment, so the file work must not carry this host's rights.
 pub fn in_session_user_temp<R>(f: impl FnOnce(&Path) -> R) -> Result<R> {
-    let primary = session_user_token()?;
-    let temp = user_env_block(&primary, &[])
+    let temp = session_user_var("TEMP").context("the session user has no TEMP")?;
+    as_session_user(|| f(Path::new(&temp)))
+}
+
+/// Variable `name` of the session user's own environment (`USERPROFILE`, `USERNAME`).
+pub(crate) fn session_user_var(name: &str) -> Option<String> {
+    let primary = session_user_token().ok()?;
+    user_env_block(&primary, &[])
         .split(|&u| u == 0)
         .map(String::from_utf16_lossy)
         .find_map(|e| {
             let (k, v) = e.split_once('=')?;
-            k.eq_ignore_ascii_case("TEMP").then(|| PathBuf::from(v))
+            k.eq_ignore_ascii_case(name).then(|| v.to_string())
         })
-        .context("the session user has no TEMP")?;
-    // SAFETY: `primary` is the live token above; this thread reverts before returning.
+}
+
+/// Runs `f` on this thread as the session user: a file it opens is checked against their rights,
+/// never this host's. A process `f` starts is still this host's.
+pub fn as_session_user<R>(f: impl FnOnce() -> R) -> Result<R> {
+    let primary = session_user_token()?;
+    // SAFETY: `primary` is the live token above; `_revert` ends the impersonation on every path.
     unsafe { ImpersonateLoggedOnUser(*primary) }.context("ImpersonateLoggedOnUser")?;
-    let out = f(&temp);
-    // SAFETY: ends the impersonation this thread began above.
-    unsafe { RevertToSelf() }.context("RevertToSelf")?;
-    Ok(out)
+    let _revert = Revert;
+    Ok(f())
+}
+
+/// Ends this thread's impersonation when dropped.
+struct Revert;
+
+impl Drop for Revert {
+    fn drop(&mut self) {
+        // SAFETY: ends the impersonation this thread began; without one it changes nothing.
+        let _ = unsafe { RevertToSelf() };
+    }
 }
 
 /// A primary token for the signed-in user of this process's WTS session. Needs SYSTEM.
@@ -240,14 +326,14 @@ pub(super) fn user_env_block(primary: &Owned<HANDLE>, extra: &[(String, String)]
 
 /// The `CreateProcessAsUserW` core the launchers share. `extra` joins the creation flags, `env`
 /// joins the user's environment, and `admin` picks [`admin_session_user_token`].
-/// Returns the child's process handle and pid; its thread handle closes here.
+/// Returns the child's process and primary thread handles, and its pid.
 fn launch(
     cmdline: &str,
     workdir: Option<&Path>,
     extra: PROCESS_CREATION_FLAGS,
     env: &[(String, String)],
     admin: bool,
-) -> Result<(Owned<HANDLE>, u32)> {
+) -> Result<(Owned<HANDLE>, Owned<HANDLE>, u32)> {
     let primary = match admin {
         true => admin_session_user_token()?,
         false => session_user_token()?,
@@ -301,10 +387,10 @@ fn launch(
         flags &= !CREATE_BREAKAWAY_FROM_JOB;
     };
     created.context("CreateProcessAsUserW (current-session user launch)")?;
-    // SAFETY: the launch succeeded, so both handles in `pi` are ours alone; the thread's closes
-    // here, and closing either never ends the child.
-    let (process, _thread) = unsafe { (Owned::new(pi.hProcess), Owned::new(pi.hThread)) };
-    Ok((process, pi.dwProcessId))
+    // SAFETY: the launch succeeded, so both handles in `pi` are ours alone; closing either never
+    // ends the child.
+    let (process, thread) = unsafe { (Owned::new(pi.hProcess), Owned::new(pi.hThread)) };
+    Ok((process, thread, pi.dwProcessId))
 }
 
 /// UTF-16, double-null-terminated block for `CREATE_UNICODE_ENVIRONMENT`:

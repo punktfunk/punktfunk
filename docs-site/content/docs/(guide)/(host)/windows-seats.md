@@ -76,6 +76,11 @@ On **Profiles**, a seat's card has **Start**, **Stop** and **End session**. A se
 stops after **Stop an idle seat after** under **Host** → **Seats**. The rest a seat shares with
 Linux seats is under [What a seat can do](/docs/profiles#what-a-seat-can-do).
 
+A seat's player opens their own Punktfunk from the seat's desktop with the tray's **Open
+console**. On its **Plugins** page they install plugins from the Punktfunk store and turn them on.
+Those run as the seat's account, each in its own sandbox, while the seat runs. On a seat on an
+existing account only the player installs them.
+
 ## Steam on a seat
 
 Steam runs once per Windows PC under its usual name, and a second start closes the first. So each

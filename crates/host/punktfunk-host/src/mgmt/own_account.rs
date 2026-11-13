@@ -1,6 +1,6 @@
-//! What a seat host on a person's own Linux account keeps out of their account: the console
-//! manages no plugin and no emulator there. Their own lane installs and runs their plugins, and
-//! those plugins write their own. Reads stay, so the console can show the profile.
+//! What a seat host on a person's own account keeps out of their account: the console manages
+//! no plugin there, and on Linux no emulator. Their own lane installs and runs their plugins,
+//! and those plugins write their own. Reads stay, so the console can show the profile.
 
 use super::auth::AuthLane;
 use super::scope::{row_of, Scope};
@@ -66,12 +66,13 @@ fn their_plugins(lane: Option<AuthLane>, path: &str) -> bool {
 /// a read of their lane alone.
 const THEIR_PAGES: &str = "/api/v1/plugins/{}/ui-credential";
 
-/// [`refusal`] on a seat host on a person's own Linux account, on every lane but theirs for
+/// [`refusal`] on a seat host on a person's own account, on every lane but theirs for
 /// [`their_plugins`], [`THEIR_PAGES`] and [`THEIR_EMULATORS`]; every other host passes. The
 /// person is told a catalog source would bring unreviewed plugins; while their lane is open any
-/// other lane is told the plugins are theirs.
+/// other lane is told the plugins are theirs. A Windows seat's emulators are the box's copies,
+/// and their routes answer for themselves there.
 pub(super) async fn gate(State(st): State<Arc<MgmtState>>, req: Request, next: Next) -> Response {
-    let here = cfg!(target_os = "linux") && pf_paths::seat::own_account();
+    let here = pf_paths::seat::own_account();
     let lane = req.extensions().get::<AuthLane>().copied();
     let person = lane == Some(AuthLane::Person);
     let path = req.uri().path();
@@ -92,6 +93,7 @@ pub(super) async fn gate(State(st): State<Arc<MgmtState>>, req: Request, next: N
             PLUGINS_BY_PERSON.0,
             PLUGINS_BY_PERSON.1,
         ),
+        Some(EMULATORS) if !cfg!(target_os = "linux") => next.run(req).await,
         Some(EMULATORS) if person && theirs => next.run(req).await,
         Some(EMULATORS) if person => {
             api_error_coded(StatusCode::FORBIDDEN, EMULATORS_YET.0, EMULATORS_YET.1)

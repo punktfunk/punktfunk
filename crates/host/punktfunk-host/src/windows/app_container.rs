@@ -1,7 +1,8 @@
-//! One AppContainer per plugin, `punktfunk.plugin.<id>`. The package SID is a function of the
-//! name, so the host (SYSTEM) derives it for a pipe's DACL while the runner's account creates
-//! the profile and spawns inside it; a token's package SID says who dialed a pipe. Folder and
-//! key ACEs name the plugin's files capability instead ([`files_capability_sid`]).
+//! One AppContainer per plugin, `punktfunk.plugin.<id>` and a seat's tag ([`profile_name`]).
+//! The package SID is a function of the name, so the host (SYSTEM) derives it for a pipe's DACL
+//! while the runner's account creates the profile and spawns inside it; a token's package SID
+//! says who dialed a pipe. Folder and key ACEs name the plugin's files capability instead
+//! ([`files_capability_sid`]).
 //!
 //! The spawned process inherits this one's stdio and dies with it: the job is kill-on-close
 //! and this process holds the only handle, so a runner that kills the helper kills the plugin.
@@ -40,9 +41,19 @@ const CAP_PRIVATE_NETWORK: &str = "S-1-15-3-3";
 /// `SE_GROUP_ENABLED` on a capability SID.
 const CAPABILITY_ENABLED: u32 = 0x4;
 
-/// The profile a plugin runs under.
+/// The profile a plugin runs under: on a seat host, one of that seat's own, so its package and
+/// capability SIDs are never the box's plugin's of the same id.
 pub(crate) fn profile_name(id: &str) -> String {
-    format!("punktfunk.plugin.{id}")
+    profile_name_on(id, pf_paths::seat::seat_id().ok().flatten().as_deref())
+}
+
+/// [`profile_name`] on seat `seat`. Eight hex digits of its id keep the name inside the 64
+/// characters an AppContainer name may have.
+fn profile_name_on(id: &str, seat: Option<&str>) -> String {
+    match seat.and_then(|s| s.get(..8)) {
+        Some(tag) => format!("punktfunk.plugin.{id}.{tag}"),
+        None => format!("punktfunk.plugin.{id}"),
+    }
 }
 
 /// The capability SIDs a manifest earns.
@@ -314,7 +325,7 @@ fn wide(s: &str) -> Vec<u16> {
 }
 
 /// A command line `CommandLineToArgvW` reads back as `program` then `args`.
-fn command_line(program: &Path, args: &[String]) -> String {
+pub(crate) fn command_line(program: &Path, args: &[String]) -> String {
     std::iter::once(program.to_string_lossy().into_owned())
         .chain(args.iter().cloned())
         .map(|a| quote_arg(&a))
@@ -363,6 +374,20 @@ mod tests {
         assert_ne!(
             super::files_capability_sid("steam"),
             super::files_capability_sid("epic")
+        );
+    }
+
+    /// A seat's container is its own, never the box's plugin's of the same id.
+    #[test]
+    fn a_seat_s_container_carries_its_seat() {
+        let seat = "0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            super::profile_name_on("steam", Some(seat)),
+            "punktfunk.plugin.steam.01234567"
+        );
+        assert_eq!(
+            super::profile_name_on("steam", None),
+            "punktfunk.plugin.steam"
         );
     }
 

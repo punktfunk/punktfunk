@@ -357,6 +357,47 @@ pub(super) const REVIEWED_ONLY: (&str, &str) = (
      account, because they run as that person.",
 );
 
+/// What a Windows seat host answers its person for a plugin from outside the built-in source.
+const SEAT_REVIEWED_ONLY: (&str, &str) = (
+    "plugin_seat_unreviewed",
+    "Only plugins reviewed for the Punktfunk store install from your own Punktfunk.",
+);
+
+/// Why a plan of `tier` doesn't install, if it doesn't: a person's own account takes reviewed
+/// plugins alone on any lane, and so does a Windows seat's `person` lane. That store runs as
+/// SYSTEM, and a raw spec names what it fetches.
+fn unreviewed(
+    tier: manifest::Tier,
+    own_account: bool,
+    windows_seat: bool,
+    person: bool,
+) -> Option<(&'static str, &'static str)> {
+    match (tier, own_account, windows_seat && person) {
+        (manifest::Tier::Verified, ..) => None,
+        (_, true, _) => Some(REVIEWED_ONLY),
+        (_, false, true) => Some(SEAT_REVIEWED_ONLY),
+        (_, false, false) => None,
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn a_windows_seat_s_person_installs_reviewed_plugins_alone() {
+    use manifest::Tier;
+    let seat = Some(SEAT_REVIEWED_ONLY);
+    let rows = [
+        (Tier::Verified, true, true, true, None),
+        (Tier::Unverified, true, false, false, Some(REVIEWED_ONLY)),
+        (Tier::Unverified, false, true, true, seat),
+        (Tier::External, false, true, true, seat),
+        (Tier::Unverified, false, true, false, None),
+        (Tier::Unverified, false, false, true, None),
+    ];
+    for (tier, own, windows, person, want) in rows {
+        assert_eq!(unreviewed(tier, own, windows, person), want);
+    }
+}
+
 /// Browse the plugin catalog
 ///
 /// Merged view across sources, annotated with what this host has and can run. A source past its
@@ -432,9 +473,10 @@ pub(crate) async fn list_installed() -> Response {
 ///
 /// `{source, id}` installs the catalog pin after re-checking integrity, or `{spec,
 /// accept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at
-/// `GET /store/jobs/{id}`. A Windows seat host installs none: the box's runner, which it shares,
-/// never reads them. A seat host on a person's own account installs for that person's own
-/// session, from the built-in source alone: what it installs runs as them.
+/// `GET /store/jobs/{id}`. A seat host installs into the seat's own plugins, which its own runner
+/// runs as the seat's account. On a person's own account it installs for that person's own
+/// session, from the built-in source alone: what it installs runs as them. A Windows seat's
+/// person installs from the built-in source alone too.
 ///
 /// One package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.
 #[utoipa::path(
@@ -446,24 +488,16 @@ pub(crate) async fn list_installed() -> Response {
     responses(
         (status = ACCEPTED, description = "Install job started", body = JobRef),
         (status = BAD_REQUEST, description = "Unknown entry, bad spec, or missing acknowledgement", body = ApiError),
-        (status = CONFLICT, description = "Another package operation is in flight, or a Windows seat host", body = ApiError),
+        (status = CONFLICT, description = "Another package operation is in flight", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = FORBIDDEN, description = "Not authorized for the plugin token, or a plugin from outside the built-in source on a seat host on a person's own account", body = ApiError),
+        (status = FORBIDDEN, description = "Not authorized for the plugin token, or a plugin from outside the built-in source on a seat host on a person's own account or for a Windows seat's person", body = ApiError),
     )
 )]
 pub(crate) async fn install_plugin(
     State(st): State<Arc<MgmtState>>,
+    Extension(lane): Extension<AuthLane>,
     ApiJson(req): ApiJson<InstallRequest>,
 ) -> Response {
-    // A Windows seat host shares the box's runner, which never reads this host's plugins.
-    if cfg!(windows) && pf_paths::seat::role().is_seat_host() {
-        return api_error_coded(
-            StatusCode::CONFLICT,
-            "seat_runs_no_plugins",
-            "This seat uses the host's plugins, so none can be installed here. Install them on \
-             the host.",
-        );
-    }
     let plan =
         match (
             req.source.as_deref(),
@@ -530,8 +564,10 @@ pub(crate) async fn install_plugin(
             ),
         };
 
-    if pf_paths::seat::own_account() && plan.tier != manifest::Tier::Verified {
-        return api_error_coded(StatusCode::FORBIDDEN, REVIEWED_ONLY.0, REVIEWED_ONLY.1);
+    let windows_seat = cfg!(windows) && pf_paths::seat::role().is_seat_host();
+    let own = pf_paths::seat::own_account();
+    if let Some((code, why)) = unreviewed(plan.tier, own, windows_seat, lane == AuthLane::Person) {
+        return api_error_coded(StatusCode::FORBIDDEN, code, why);
     }
     match jobs::spawn_install(plan, st.plugin_tokens.clone()) {
         Ok(job) => (StatusCode::ACCEPTED, Json(JobRef { job })).into_response(),

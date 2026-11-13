@@ -230,8 +230,9 @@ fn path_facts(canonical: &Path) -> PathFacts {
 }
 
 /// Why a seat host refuses to grant `path`: its runner runs as the seat's account, so a folder
-/// that account can't list would promise more than the system gives. Only a seat host asks.
-/// A pattern grant is judged by its base, the part before `*`.
+/// that account can't list would promise more than the system gives. Only a seat host asks, and
+/// it lists as that account ([`super::as_seat_account`]). A pattern grant is judged by its
+/// base, the part before `*`.
 fn seat_refusal(path: &Path) -> Option<io::Error> {
     if !pf_paths::seat::role().is_seat_host() {
         return None;
@@ -240,8 +241,10 @@ fn seat_refusal(path: &Path) -> Option<io::Error> {
         .components()
         .take_while(|c| c.as_os_str() != "*")
         .collect();
-    let listed = std::fs::read_dir(&base).is_ok() && std::fs::metadata(base.join(".")).is_ok();
-    (!listed).then(|| {
+    let listed = super::as_seat_account(|| {
+        std::fs::read_dir(&base).is_ok() && std::fs::metadata(base.join(".")).is_ok()
+    });
+    (!listed.unwrap_or(false)).then(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("'{}' can't be granted (not_readable)", base.display()),
@@ -378,25 +381,30 @@ fn pattern_of(p: &Path) -> Option<Pattern> {
 }
 
 impl Pattern {
-    /// The folders the pattern names today, sorted. A missing base names none.
+    /// The folders the pattern names today, sorted, listed as the seat's account on a seat host
+    /// ([`super::as_seat_account`]): a link the seat made names nothing that account can't see.
+    /// A missing base names none.
     fn expand(&self) -> Vec<PathBuf> {
-        let Ok(listed) = std::fs::read_dir(&self.base) else {
-            return Vec::new();
+        let listed = || {
+            let Ok(listed) = std::fs::read_dir(&self.base) else {
+                return Vec::new();
+            };
+            let mut out: Vec<PathBuf> = listed
+                .flatten()
+                .map(|entry| {
+                    let dir = entry.path();
+                    if self.tail.as_os_str().is_empty() {
+                        dir
+                    } else {
+                        dir.join(&self.tail)
+                    }
+                })
+                .filter(|p| p.is_dir())
+                .collect();
+            out.sort();
+            out
         };
-        let mut out: Vec<PathBuf> = listed
-            .flatten()
-            .map(|entry| {
-                let dir = entry.path();
-                if self.tail.as_os_str().is_empty() {
-                    dir
-                } else {
-                    dir.join(&self.tail)
-                }
-            })
-            .filter(|p| p.is_dir())
-            .collect();
-        out.sort();
-        out
+        super::as_seat_account(listed).unwrap_or_default()
     }
 
     /// Is `canonical` one of the folders this pattern names: the canonical base, or one
@@ -994,11 +1002,20 @@ impl AccessStore {
         // as written.
         let pattern = pattern_of(raw_path).filter(|_| !write);
         let files = files || pattern.is_some();
-        let resolved = match &pattern {
-            Some(pattern) => pattern.base.canonicalize(),
-            None => raw_path.canonicalize(),
-        };
-        let canonical = match resolved {
+        // A seat host looks as the seat's account: a plugin learns nothing of a path its runner
+        // can't reach.
+        let resolved = super::as_seat_account(|| {
+            match &pattern {
+                Some(pattern) => pattern.base.canonicalize(),
+                None => raw_path.canonicalize(),
+            }
+            .map(|c| {
+                let facts = path_facts(&c);
+                (c, facts)
+            })
+        })
+        .and_then(|r| r);
+        let (canonical, facts) = match resolved {
             Ok(c) => c,
             Err(_) if raw_path.is_absolute() => {
                 // The refusal rule still applies its string checks; a path that does not
@@ -1016,7 +1033,6 @@ impl AccessStore {
         };
         // The rules judge `canonical`; the row and the grant carry `stored`, a pattern's base
         // with its `*` and tail put back.
-        let facts = path_facts(&canonical);
         let stored = match &pattern {
             Some(pattern) => canonical.join("*").join(&pattern.tail),
             None => canonical.clone(),
@@ -1438,6 +1454,12 @@ impl AccessStore {
         )
     }
 
+    /// What `manifest` declares, resolved as [`Self::plugin_roots`] resolves it, without grants.
+    #[cfg(windows)]
+    pub fn declared_roots(&self, manifest: &PluginManifest) -> Vec<RunnerRoot> {
+        self.resolve_roots(declared_entries(manifest), std::iter::empty())
+    }
+
     /// May the runner see `real`, asked for as `spelled`? A missing root is the drop-in's `-`
     /// prefix's business, and a root may be a file.
     fn may_bind(&self, spelled: &Path, real: &Path, write: bool, operator: bool) -> bool {
@@ -1621,6 +1643,10 @@ impl AccessStore {
         by: &str,
         form: Option<&str>,
     ) -> io::Result<Vec<Grant>> {
+        // First, so a seat host says nothing of a folder its account can't see.
+        if let Some(refused) = seat_refusal(dir) {
+            return Err(refused);
+        }
         if !dir.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -1807,6 +1833,23 @@ fn snapshot_of(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pattern's folders are listed through the seat's hand, so a Windows seat host names only
+    /// what the seat's account can list.
+    #[test]
+    fn a_pattern_lists_its_folders_through_the_seat_s_hand() {
+        let base = tempfile::tempdir().unwrap();
+        for dir in ["a/covers", "b"] {
+            std::fs::create_dir_all(base.path().join(dir)).unwrap();
+        }
+        let pattern = pattern_of(&base.path().join("*").join("covers")).expect("a pattern");
+        let before = crate::plugins::SEAT_HAND.with(std::cell::Cell::get);
+        assert_eq!(pattern.expand(), [base.path().join("a").join("covers")]);
+        assert_eq!(
+            crate::plugins::SEAT_HAND.with(std::cell::Cell::get),
+            before + 1
+        );
+    }
 
     /// A sandboxed view of the host: temp home/config/runtime so the real ones never match.
     struct Fixture {
