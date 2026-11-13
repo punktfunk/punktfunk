@@ -1275,15 +1275,19 @@ public final class SessionAudio: @unchecked Sendable {
     /// reads now. Runs on `engineQueue`, like every rebuild.
     private func audioFormatChanged() {
         engineQueue.async { [weak self] in
-            guard let self, !self.flag.isStopped else { return }
-            // The ended drain's signal, so `stop()` waits for the new one.
-            _ = self.drainDone.wait(timeout: .now() + .milliseconds(400))
+            guard let self else { return }
+            // The ended drain signals once. Decided under the lock `stop()` reads `drainStarted`
+            // under: either `stop()` waits for that signal, or this rebuild takes it.
             self.stateLock.lock()
-            let config = self.startConfig
-            self.drainStarted = false
-            self.ring = nil
+            let config = self.flag.isStopped ? nil : self.startConfig
+            if config != nil {
+                self.drainStarted = false
+                self.ring = nil
+            }
             self.stateLock.unlock()
             guard let config else { return }
+            _ = self.drainDone.wait(timeout: .now() + .milliseconds(400))
+            guard !self.flag.isStopped else { return }
             self.tearDownEngines()
             self.startEngines(
                 speakerUID: config.speakerUID, micUID: config.micUID,
