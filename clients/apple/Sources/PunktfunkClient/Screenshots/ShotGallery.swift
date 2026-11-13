@@ -267,20 +267,27 @@ extension ShotMock {
         ]
     }
 
-    /// A plausible burst: a quick ramp, then around 900 Mbps with one dip, polled every 200 ms.
+    /// The check's rounds as the page polls them, every 50 ms: a clean round at half of what the
+    /// link carries with one dip, then two shaped rounds. `seconds` counts test traffic.
     static func speedTrace(until seconds: Double) -> PunktfunkConnection.ProbeTrace {
-        let rates: [Double] = [
-            310, 620, 840, 905, 890, 912, 930, 870, 760, 880, 915, 925, 900, 910, 895, 920,
-            905, 890, 912, 908, 900, 915, 898, 910, 905,
-        ]
-        var trace = PunktfunkConnection.ProbeTrace()
-        var bytes: UInt64 = 0
-        for (i, mbps) in rates.enumerated() where Double(i + 1) * 0.2 <= seconds + 0.001 {
-            bytes += UInt64(mbps * 25_000) // 200 ms at `mbps`
-            let ms = UInt32((i + 1) * 200)
-            trace.add(.init(
+        func report(_ ms: Int, _ bytes: UInt64) -> PunktfunkConnection.ProbeResult {
+            .init(
                 done: false, recvBytes: bytes, recvPackets: 0, hostBytes: bytes, hostPackets: 0,
-                elapsedMs: ms, throughputKbps: UInt32(Double(bytes) * 8 / Double(ms)), lossPct: 0))
+                elapsedMs: UInt32(ms), throughputKbps: 0, lossPct: 0)
+        }
+        var trace = PunktfunkConnection.ProbeTrace()
+        var before = 0.0
+        for (round, length) in [2000, 1000, 1000].enumerated() {
+            var bytes: UInt64 = 0
+            trace.add(report(0, 0)) // a round's counters start from zero
+            for ms in stride(from: 50, through: length, by: 50)
+            where before + Double(ms) / 1000 <= seconds + 0.001 {
+                let dip = round == 0 && (900...1100).contains(ms) ? 38.0 : 0
+                let mbps = 438 + 9 * sin(Double(ms) / 130 + Double(round)) - dip
+                bytes += UInt64(mbps * 6_250) // 50 ms at `mbps`
+                trace.add(report(ms, bytes))
+            }
+            before += Double(length) / 1000
         }
         return trace
     }

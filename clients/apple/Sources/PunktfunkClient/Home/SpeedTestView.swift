@@ -8,11 +8,9 @@ import Foundation
 import PunktfunkKit
 import SwiftUI
 
-/// What the host is asked to burst: far more than any link carries (it clamps to ≤ 10 Gbit/s), so the
-/// measurement finds where delivery falls off rather than an artificial cap. Five seconds lets the
-/// host's send and this device's receive settle; a short probe swings wildly on the same link.
-private let probeTargetKbps: UInt32 = 3_000_000
-private let probeDurationMs: UInt32 = 5_000
+/// How often the page reads the check's counters while it runs: twenty points a second, each
+/// smoothed over `ProbeTrace.windowMs`.
+private let pollInterval: Duration = .milliseconds(50)
 
 struct SpeedTestView: View {
     let host: StoredHost
@@ -104,8 +102,8 @@ struct SpeedTestView: View {
     private var headline: String {
         switch phase {
         case .done(let result): Self.mbpsLabel(kbps: Int(result.throughputKbps))
-        case .probing:
-            trace.points.last.map { Self.mbpsLabel(kbps: Int($0.mbps.rounded()) * 1_000) } ?? "…"
+        // The rounds run below what the link carries, so their live rate is not the answer.
+        case .probing: "…"
         case .idle, .connecting, .failed: "—"
         }
     }
@@ -125,8 +123,10 @@ struct SpeedTestView: View {
         return false
     }
 
-    /// Goodput per poll as it lands, with the average, the recommendation and this host's
-    /// current bitrate drawn across it once there is something to compare.
+    /// The check's test traffic as it lands, on a time axis that lays its rounds end to end:
+    /// each ends on a whole second, so the grid marks them. Once there is an answer: what the link carries, the recommendation
+    /// and this host's current bitrate, drawn across it. The rounds run below what the link
+    /// carries on purpose, so the curve sits under that line.
     private var chart: some View {
         Chart {
             ForEach(trace.points, id: \.seconds) { point in
@@ -142,14 +142,14 @@ struct SpeedTestView: View {
                     x: .value(String(localized: L10n.appleSpeedtestChartTimeA11y), point.seconds),
                     y: .value(String(localized: L10n.appleSpeedtestChartGoodputA11y), point.mbps))
                     .foregroundStyle(Color.brand)
-                    .lineStyle(StrokeStyle(lineWidth: 2))
+                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     .interpolationMethod(.monotone)
             }
             if case .done(let result) = phase {
                 rule(
-                    String(localized: L10n.appleSpeedtestAverageA11y),
+                    L10n.speedtestMeasured(rate: Self.mbpsLabel(kbps: Int(result.throughputKbps))),
                     kbps: Int(result.throughputKbps),
-                    annotation: { L10n.appleSpeedtestChartAverage(rate: $0) },
+                    annotation: { L10n.speedtestMeasured(rate: $0) },
                     color: .secondary, dash: [])
                 if let recommended = Self.recommendedKbps(result) {
                     rule(
@@ -165,7 +165,7 @@ struct SpeedTestView: View {
                     color: .orange, dash: [2, 3])
             }
         }
-        .chartXScale(domain: 0...Double(probeDurationMs) / 1000)
+        .chartXScale(domain: 0...max(2, (trace.points.last?.seconds ?? 0).rounded(.up)))
         .chartXAxis {
             AxisMarks(values: .stride(by: 1)) { value in
                 AxisGridLine()
@@ -426,6 +426,17 @@ struct SpeedTestView: View {
             defer { conn.close() }
 
             await MainActor.run { send(.connected) }
+            // The check answers once, at its end. Its rounds' counters are read meanwhile, so
+            // the chart draws the traffic as it lands.
+            let poll = Task.detached(priority: .utility) {
+                while !Task.isCancelled {
+                    if let now = conn.probeResult() {
+                        await MainActor.run { if phase == .probing { trace.add(now) } }
+                    }
+                    try? await Task.sleep(for: pollInterval)
+                }
+            }
+            defer { poll.cancel() }
             // The whole check, reported once: the ceiling the bring-up ramp proved, a clean round
             // at half of it, two shaped legs, both ends' facts, and the findings. It blocks this
             // detached task for ten to twenty seconds.
