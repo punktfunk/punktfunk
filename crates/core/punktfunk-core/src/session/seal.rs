@@ -117,11 +117,7 @@ pub(super) fn seal_wire_slice(
     wires: &mut [Vec<u8>],
     seq_base: u64,
 ) -> Result<()> {
-    for (i, wire) in wires.iter_mut().enumerate() {
-        let seq = seq_base.wrapping_add(i as u64);
-        c.seal_wire(seq, wire)?;
-    }
-    Ok(())
+    c.seal_wires(seq_base, wires)
 }
 
 /// Where the back half starts when a frame of `used` packets seals across the lane: `None`
