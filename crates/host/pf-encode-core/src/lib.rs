@@ -13,7 +13,7 @@ mod codec;
 pub mod knobs;
 pub use codec::*;
 mod au_wake;
-pub use au_wake::AuWake;
+pub use au_wake::{AuWake, DoneWaiter};
 
 // `NVENCSTATUS` → cause for both direct-NVENC backends. Splits the two
 // opposite failures the driver reports as the same `INVALID_VERSION`.
