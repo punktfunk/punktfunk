@@ -423,9 +423,9 @@ public final class MetalVideoPresenter {
     private let pipelinePlanarSDR10: MTLRenderPipelineState
     /// PyroWave planar HDR passthrough (pf_frag_planar → `hdrDrawable`; the layer's PQ colour
     /// space + EDR interpret the samples) and the planar PQ→SDR tone-map (pf_frag_planar_tm →
-    /// bgra8; tvOS without HDR headroom).
+    /// bgra8; tvOS without HDR headroom, nil elsewhere).
     private let pipelinePlanarHDR: MTLRenderPipelineState
-    private let pipelinePlanarToneMap: MTLRenderPipelineState
+    private let pipelinePlanarToneMap: MTLRenderPipelineState?
     private let textureCache: CVMetalTextureCache
     /// Apple's Lanczos scaler for luma whenever the render target is smaller than the frame; nil
     /// without MPS or under `PUNKTFUNK_DOWNSCALE=bicubic` (the shader's Catmull-Rom scales then).
@@ -524,7 +524,8 @@ public final class MetalVideoPresenter {
         let device: MTLDevice
         let sdr, sdr10, hdr: MTLRenderPipelineState
         let hdrToneMap: MTLRenderPipelineState?
-        let planar, planarSDR10, planarHDR, planarToneMap: MTLRenderPipelineState
+        let planar, planarSDR10, planarHDR: MTLRenderPipelineState
+        let planarToneMap: MTLRenderPipelineState?
         /// The late-latch twins of `sdr`, `sdr10` and `hdr`; the tone-map variants have none.
         let latchedSDR, latchedSDR10, latchedHDR: MTLRenderPipelineState
     }
@@ -540,7 +541,7 @@ public final class MetalVideoPresenter {
         let pipelinePlanar: MTLRenderPipelineState
         let pipelinePlanarSDR10: MTLRenderPipelineState
         let pipelinePlanarHDR: MTLRenderPipelineState
-        let pipelinePlanarToneMap: MTLRenderPipelineState
+        let pipelinePlanarToneMap: MTLRenderPipelineState?
         let latchedSDR: MTLRenderPipelineState
         let latchedSDR10: MTLRenderPipelineState
         let latchedHDR: MTLRenderPipelineState
@@ -598,11 +599,15 @@ public final class MetalVideoPresenter {
                 name: linear ? "pf_frag_planar_hdr_linear" : "pf_frag_planar")
             planarHdr.colorAttachments[0].pixelFormat = hdrDrawable
             pipelinePlanarHDR = try device.makeRenderPipelineState(descriptor: planarHdr)
+            #if os(tvOS)
             let planarTm = MTLRenderPipelineDescriptor()
             planarTm.vertexFunction = vtx
             planarTm.fragmentFunction = library.makeFunction(name: "pf_frag_planar_tm")
             planarTm.colorAttachments[0].pixelFormat = .bgra8Unorm
             pipelinePlanarToneMap = try device.makeRenderPipelineState(descriptor: planarTm)
+            #else
+            pipelinePlanarToneMap = nil
+            #endif
             // The latched twins: the pool-indexed fragment on the same three attachments.
             func latched(_ name: String, _ format: MTLPixelFormat) throws -> MTLRenderPipelineState {
                 let d = MTLRenderPipelineDescriptor()
@@ -678,7 +683,7 @@ public final class MetalVideoPresenter {
         pipelinePlanar: MTLRenderPipelineState,
         pipelinePlanarSDR10: MTLRenderPipelineState,
         pipelinePlanarHDR: MTLRenderPipelineState,
-        pipelinePlanarToneMap: MTLRenderPipelineState,
+        pipelinePlanarToneMap: MTLRenderPipelineState?,
         textureCache: CVMetalTextureCache, layer: CAMetalLayer
     ) {
         self.device = device
@@ -1289,9 +1294,9 @@ public final class MetalVideoPresenter {
         applyStagedHdrMeta()
         var csc = planes.csc
         var target = hdrTarget()
-        // PQ passthrough needs the HDR drawable; a PQ frame while the drawable is (still)
-        // 8-bit — tvOS without display headroom, or a not-yet-flipped layer — tone-maps
-        // in-shader instead (the pipeline must match the drawable's pixel format).
+        // PQ passthrough needs the HDR drawable. On tvOS without display headroom the drawable
+        // stays 8-bit, so a PQ frame tone-maps in-shader (the pipeline must match the
+        // drawable's pixel format).
         #if os(tvOS)
         let planarPassthrough = hdrActive && hdrPassthroughActive
         #else
@@ -1299,7 +1304,7 @@ public final class MetalVideoPresenter {
         #endif
         let planarPipeline: MTLRenderPipelineState =
             planes.pq
-                ? (planarPassthrough ? pipelinePlanarHDR : pipelinePlanarToneMap)
+                ? (planarPassthrough ? pipelinePlanarHDR : (pipelinePlanarToneMap ?? pipelinePlanarHDR))
                 : (tenBitSDRActive ? pipelinePlanarSDR10 : pipelinePlanar)
         return encodePresent(
             decodedSize: CGSize(width: planes.width, height: planes.height),
