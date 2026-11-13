@@ -1953,7 +1953,7 @@ public final class Stage2Pipeline {
     /// ever touched there — the frame-rate hint crosses via `FrameRateHint`); the link thread's
     /// runloop iterations each drain an autorelease pool (a vended CAMetalDrawable is
     /// autoreleased like a `nextDrawable()` one — see the render loop's identical rule); the
-    /// 100 ms runloop horizon is the stop-flag poll, so teardown is bounded without a join.
+    /// 100 ms runloop horizon is the stop-flag poll, and the exiting render thread joins it.
     private func startDeadlinePresenter(debugStats: PresentDebugStats?) {
         let token = token
         let ring = ring
@@ -2300,6 +2300,9 @@ public final class Stage2Pipeline {
                 }
                 debugStats?.flushIfDue(ring: ring, gate: nil)
             } }
+            // The link goes with this thread, so `stop()`'s join covers it.
+            linkStop?.stop()
+            _ = linkGone?.wait(timeout: .now() + 0.2)
             presenter.flushParked()
         }
         renderThread.name = "punktfunk-stage2-render"
