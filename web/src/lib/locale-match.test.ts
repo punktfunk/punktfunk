@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { matchLocale } from "./locale-match";
+import { localeFallback, matchLocale } from "./locale-match";
 
 const shipped = ["en", "de", "es", "fr", "ja", "ko", "zh-Hans", "zh-Hant"];
 
@@ -45,6 +45,17 @@ describe("matchLocale", () => {
 	test("case and underscores do not matter, and the shipped spelling comes back", () => {
 		expect(matchLocale(["ZH_tw"], shipped)).toBe("zh-Hant");
 		expect(matchLocale([" DE-at "], shipped)).toBe("de");
+	});
+
+	test("every other Portuguese reads the one that ships", () => {
+		const web = resolve(import.meta.dir, "../..");
+		const locales = JSON.parse(
+			readFileSync(join(web, "../l10n/locales.json"), "utf8"),
+		) as { shipped: string[]; fallback: Record<string, string> };
+		expect(localeFallback).toEqual(locales.fallback);
+		for (const tag of ["pt", "pt-PT", "pt_PT.UTF-8", "pt-BR"]) {
+			expect(matchLocale([tag], locales.shipped, localeFallback)).toBe("pt-BR");
+		}
 	});
 
 	test("replays the shared pick cases", () => {
