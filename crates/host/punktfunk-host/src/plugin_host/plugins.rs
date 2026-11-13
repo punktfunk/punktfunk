@@ -521,11 +521,19 @@ pub(crate) fn runner_sid() -> Option<String> {
 /// for. An error is a seat account this host couldn't act as.
 pub(crate) fn as_seat_account<R>(f: impl FnOnce() -> R) -> std::io::Result<R> {
     #[cfg(windows)]
-    if seat_runner() && crate::hooks::running_as_system() {
+    if system_seat_host() {
         return crate::windows::interactive::as_session_user(f)
             .map_err(|e| std::io::Error::other(format!("{e:#}")));
     }
     Ok(f())
+}
+
+/// A Windows seat host: SYSTEM, for a runner that runs as the seat's account.
+pub(crate) fn system_seat_host() -> bool {
+    #[cfg(windows)]
+    return seat_runner() && crate::hooks::running_as_system();
+    #[cfg(not(windows))]
+    false
 }
 
 /// The runner's state, which tokens, roots and restarts follow.

@@ -4365,7 +4365,7 @@ readonly "adoptEmulator": {
   /**
 * Hands the files to the best copy of the emulator the way it takes them: a folder it scans,
 * its own installer, or a registration file. One step per file. An emulator with no way says
-* why.
+* why. A Windows seat host takes it from the operator alone.
 */
 readonly "installEmulatorContent": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof InstallEmulatorContentRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof InstallEmulatorContent200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"InstallEmulatorContent400", typeof InstallEmulatorContent400.Type> | PunktfunkError<"InstallEmulatorContent401", typeof InstallEmulatorContent401.Type> | PunktfunkError<"InstallEmulatorContent403", typeof InstallEmulatorContent403.Type> | PunktfunkError<"InstallEmulatorContent404", typeof InstallEmulatorContent404.Type>>;
@@ -4394,7 +4394,8 @@ readonly "installEmulator": {
 * welcome box) the way clicking through would, gets the platform's firmware — copied into
 * its firmware folder, or installed by the emulator itself — and has this session's pads
 * bound in seat order, which the host undoes when the game exits. Idempotent; each step says
-* what it did, and a platform still missing its firmware says so.
+* what it did, and a platform still missing its firmware says so. A Windows seat host takes it
+* from the operator alone.
 */
 readonly "prepareEmulator": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof PrepareEmulatorRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof PrepareEmulator200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"PrepareEmulator400", typeof PrepareEmulator400.Type> | PunktfunkError<"PrepareEmulator401", typeof PrepareEmulator401.Type> | PunktfunkError<"PrepareEmulator403", typeof PrepareEmulator403.Type> | PunktfunkError<"PrepareEmulator404", typeof PrepareEmulator404.Type> | PunktfunkError<"PrepareEmulator500", typeof PrepareEmulator500.Type>>;
@@ -4421,7 +4422,7 @@ readonly "getEmulatorSaves": {
 * Writes each named unit into `dir`: the save file, or a tar of a save folder with nothing in
 * its headers that differs between machines. A plugin's `dir` is inside its own state folder.
 * With `profile`, that seat's units; a Linux seat's files are its host's last export, and a
-* unit it didn't export is left out.
+* unit it didn't export is left out. A Windows seat host takes it from the operator alone.
 */
 readonly "exportEmulatorSaves": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof ExportEmulatorSavesParams.Encoded | undefined; readonly payload: typeof ExportEmulatorSavesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ExportEmulatorSaves200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ExportEmulatorSaves400", typeof ExportEmulatorSaves400.Type> | PunktfunkError<"ExportEmulatorSaves401", typeof ExportEmulatorSaves401.Type> | PunktfunkError<"ExportEmulatorSaves403", typeof ExportEmulatorSaves403.Type> | PunktfunkError<"ExportEmulatorSaves404", typeof ExportEmulatorSaves404.Type> | PunktfunkError<"ExportEmulatorSaves409", typeof ExportEmulatorSaves409.Type>>;
@@ -4432,7 +4433,7 @@ readonly "exportEmulatorSaves": {
 * name; what was there is kept in hermir's save backups. A unit with no place yet is a step
 * that says so. A plugin's files are inside its own state folder. With `profile`, into that
 * seat's copies; a Linux seat's host puts each back before its next game starts, and the step
-* says so.
+* says so. A Windows seat host takes it from the operator alone.
 */
 readonly "importEmulatorSaves": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof ImportEmulatorSavesParams.Encoded | undefined; readonly payload: typeof ImportEmulatorSavesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ImportEmulatorSaves200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ImportEmulatorSaves400", typeof ImportEmulatorSaves400.Type> | PunktfunkError<"ImportEmulatorSaves401", typeof ImportEmulatorSaves401.Type> | PunktfunkError<"ImportEmulatorSaves403", typeof ImportEmulatorSaves403.Type> | PunktfunkError<"ImportEmulatorSaves404", typeof ImportEmulatorSaves404.Type> | PunktfunkError<"ImportEmulatorSaves409", typeof ImportEmulatorSaves409.Type>>;
