@@ -329,7 +329,7 @@ struct ShotLibrarySections: View {
     var body: some View {
         TabView(selection: .constant(TouchTab.library)) {
             Color.clear
-                .tabItem { Label("Hosts", systemImage: "desktopcomputer") }
+                .tabItem { Label(L10n.hostsTab, systemImage: "desktopcomputer") }
                 .tag(TouchTab.hosts)
             NavigationStack {
                 LibraryView(
@@ -338,7 +338,7 @@ struct ShotLibrarySections: View {
                     shotPhase: .catalog(ShotMock.games, running: ["steam:starfall"]),
                     shotLayout: "", shotFavorites: ["custom:aurora", "gog:ember"])
             }
-            .tabItem { Label("Library", systemImage: "square.grid.2x2") }
+            .tabItem { Label(L10n.hostsTabLibrary, systemImage: "square.grid.2x2") }
             .tag(TouchTab.library)
         }
     }
