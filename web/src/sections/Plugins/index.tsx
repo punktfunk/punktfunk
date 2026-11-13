@@ -18,6 +18,7 @@ import { DocsLink } from "@/components/docs-link";
 import { Button } from "@/components/ui/button";
 import { useLocale } from "@/lib/i18n";
 import { pluginPin, togglePin, usePins } from "@/lib/nav";
+import { usePerson } from "@/lib/person";
 import { m } from "@/paraglide/messages";
 import { TierBadge } from "@/sections/Store/TierBadge";
 import {
@@ -78,6 +79,7 @@ export const SectionPlugin: FC = () => {
 	const pin = pluginPin(pluginId);
 	const isPinned = pins.includes(pin);
 	const pinLabel = isPinned ? m.nav_unpin() : m.nav_pin();
+	const person = usePerson() !== null;
 	const iframeRef = useRef<HTMLIFrameElement>(null);
 
 	// Header metadata (title/version/icon) from the directory; falls back to the id.
@@ -196,22 +198,25 @@ export const SectionPlugin: FC = () => {
 				{provenance && (
 					<TierBadge tier={provenance.tier} className="shrink-0" />
 				)}
-				<Button
-					variant="ghost"
-					size="sm"
-					className="ml-auto shrink-0"
-					aria-pressed={isPinned}
-					aria-label={pinLabel}
-					title={pinLabel}
-					onClick={() => setPins(togglePin(pins, pin))}
-				>
-					{isPinned ? (
-						<PinOff className="size-4" />
-					) : (
-						<Pin className="size-4" />
-					)}
-					<span className="hidden sm:inline">{pinLabel}</span>
-				</Button>
+				{/* A person's sidebar holds their pages alone, so it takes no pin. */}
+				{!person && (
+					<Button
+						variant="ghost"
+						size="sm"
+						className="ml-auto shrink-0"
+						aria-pressed={isPinned}
+						aria-label={pinLabel}
+						title={pinLabel}
+						onClick={() => setPins(togglePin(pins, pin))}
+					>
+						{isPinned ? (
+							<PinOff className="size-4" />
+						) : (
+							<Pin className="size-4" />
+						)}
+						<span className="hidden sm:inline">{pinLabel}</span>
+					</Button>
+				)}
 				{/* Full-window, on the plugin origin: never a top-level page on the console's. */}
 				{pluginOrigin != null && (
 					<a

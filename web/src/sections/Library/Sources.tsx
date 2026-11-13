@@ -20,7 +20,7 @@ import type { PluginAccessSnapshot } from "@/api/gen/model/pluginAccessSnapshot"
 import type { ScannerInfo } from "@/api/gen/model/scannerInfo";
 import { useGetPluginCatalog } from "@/api/gen/store/store";
 import { usePlugins } from "@/api/plugins";
-import { useAs, usePluginsReachable, useProfileView } from "@/api/seat";
+import { useAs, usePluginsReachable, useProfileView, whose } from "@/api/seat";
 import { installable, useInstallPlugin } from "@/api/store";
 import { useDialogs } from "@/components/dialogs";
 import { ROW_GAP, Stagger } from "@/components/stagger";
@@ -60,7 +60,7 @@ export const SourcesSection: FC<{
 	const toggle = useSetLibraryScanner();
 	const purge = useDeleteProviderEntries();
 	const plugins = usePlugins();
-	const catalog = useGetPluginCatalog();
+	const catalog = useGetPluginCatalog({ query: { enabled: !view?.person } });
 	const install = useInstallPlugin();
 	const access = usePluginAccess();
 	const [settingsFor, setSettingsFor] = useState<ScannerInfo | null>(null);
@@ -197,7 +197,13 @@ export const SourcesSection: FC<{
 						onFilter={onFilter}
 						onSettings={setSettingsFor}
 						{...(view
-							? { profile: { name: view.name, ownerName: view.ownerName } }
+							? {
+									profile: {
+										name: view.name,
+										ownerName: view.ownerName,
+										person: view.person,
+									},
+								}
 							: {
 									onPurge,
 									access: access.access.data,
@@ -206,7 +212,7 @@ export const SourcesSection: FC<{
 								})}
 						onInstall={onInstall}
 					/>
-					{!view && <EmulatorsCard />}
+					{(!view || view.person) && <EmulatorsCard />}
 					{metadata}
 				</CardContent>
 			</Card>
@@ -270,6 +276,8 @@ export const MigrationBanner: FC<{
 export interface SourcesProfile {
 	name: string;
 	ownerName: string;
+	/** The person's own console: no plugin is theirs to see running, and no source settings. */
+	person?: boolean;
 }
 
 /** Presentational source list, including deterministic pending-access states for Storybook. A
@@ -356,9 +364,11 @@ export const SourcesCard: FC<{
 				))}
 			</Stagger>
 			<p className="max-w-prose text-xs text-muted-foreground">
-				{profile
-					? m.profile_view_sources_help({ name: profile.name })
-					: m.library_sources_help()}
+				{profile?.person
+					? m.person_sources_help()
+					: profile
+						? m.profile_view_sources_help({ name: profile.name })
+						: m.library_sources_help()}
 			</p>
 
 			<AddSourceRail
@@ -417,6 +427,7 @@ const SourceRow: FC<{
 	const [accessOpen, setAccessOpen] = useState(accessInitiallyOpen);
 	const meta = [
 		isPlugin &&
+			!profile?.person &&
 			(running ? m.library_source_running() : m.library_source_stopped()),
 		absent && !source.entries
 			? m.library_source_absent({ title: source.label })
@@ -431,7 +442,7 @@ const SourceRow: FC<{
 		: source.off_by === "box"
 			? m.profile_view_source_off_owner({ owner: profile.ownerName })
 			: source.off_by === "profile"
-				? m.profile_view_source_off_own({ name: profile.name })
+				? whose(profile.name, profile.person === true).sourceOff
 				: undefined;
 	return (
 		<SourceItem
@@ -462,7 +473,8 @@ const SourceRow: FC<{
 								onSelect: onFilter,
 							},
 							// The form is a plugin the console reaches; another seat's is not. A
-							// profile's view has only the stream settings, which are its own.
+							// profile's view, the person's own included, has only the stream
+							// settings, which are its own.
 							(reachable || profile !== undefined) && {
 								label: m.library_source_settings(),
 								icon: <Settings2 />,

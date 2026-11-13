@@ -51,8 +51,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiErrorMessage } from "@/lib/errors";
 import { seatDetail } from "@/lib/host-messages";
 import { useLocale } from "@/lib/i18n";
+import { usePerson } from "@/lib/person";
 import { m } from "@/paraglide/messages";
 import { ActivityCard } from "@/sections/Activity";
+import { PersonHome } from "@/sections/Person/Home";
 import { Attention } from "./Attention";
 import {
 	GameRowView,
@@ -260,8 +262,14 @@ const SeatSessions: FC<{
 	);
 };
 
-/** Home: what needs attention, every session on every desktop, and what happened lately. */
+/** Home: the operator's, or in a person's own console, their own page. */
 export const SectionHome: FC = () => {
+	const me = usePerson();
+	return me ? <PersonHome me={me} /> : <OperatorHome />;
+};
+
+/** The operator's home: what needs attention, every session on every desktop, and what happened lately. */
+const OperatorHome: FC = () => {
 	useLocale();
 	const qc = useQueryClient();
 	const { confirm } = useDialogs();

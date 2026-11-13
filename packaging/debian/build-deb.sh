@@ -149,6 +149,9 @@ install -Dm0644 packaging/linux/io.unom.punktfunk.host.desktop \
 install -Dm0755 "$TRAY_BIN"                        "$STAGE/usr/bin/punktfunk-tray"
 install -Dm0644 packaging/linux/io.unom.punktfunk.starthost.desktop \
     "$STAGE/usr/share/applications/io.unom.punktfunk.starthost.desktop"
+# Opens the web console signed in: a person's own inside their seat, the operator's elsewhere.
+install -Dm0644 packaging/linux/io.unom.punktfunk.webconsole.desktop \
+    "$STAGE/usr/share/applications/io.unom.punktfunk.webconsole.desktop"
 for sz in 22x22 48x48; do
   for png in packaging/linux/icons/hicolor/$sz/apps/*.png; do
     install -Dm0644 "$png" "$STAGE/usr/share/icons/hicolor/$sz/apps/$(basename "$png")"

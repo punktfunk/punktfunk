@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Punktfunk Settings
+GenericName=Game streaming settings
+Comment=Your games and streaming settings on this computer
+# `ctl console-url` opens a person's own Punktfunk inside their seat and the signed-in console on
+# the owner's desktop. When it fails, the page says so: neither one may land on a password prompt.
+Exec=sh -c "{ /usr/bin/punktfunk-host ctl console-url || echo https://127.0.0.1:47992/closed?why=refused; } | xargs xdg-open"
+Icon=punktfunk-tray
+Terminal=false
+StartupNotify=false
+Categories=Network;RemoteAccess;
+Keywords=streaming;games;library;settings;console;

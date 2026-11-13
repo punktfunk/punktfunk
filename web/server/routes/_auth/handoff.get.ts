@@ -10,6 +10,7 @@ import {
 import { type SessionData, sessionConfig, sessionEpoch } from "../../util/auth";
 import { ownerHandoffKeys, verifyHandoff } from "../../util/handoff";
 import { mgmtToken } from "../../util/mgmt";
+import { endSession } from "../../util/person";
 
 /** Tickets already redeemed, so a captured one cannot be replayed inside its TTL. Process-lifetime
  * on purpose: a console restart invalidates everything outstanding, which fails closed. Entries
@@ -44,6 +45,8 @@ export default defineEventHandler(async (event) => {
 
 	const session = await useSession<SessionData>(event, sessionConfig());
 	await session.update({ authenticated: true, epoch: sessionEpoch() });
+	// The operator signed in: a person's console in this browser ends rather than outranking them.
+	await endSession(event);
 	// Land on the console proper rather than returning JSON: a browser the desktop just launched is
 	// behind this request, and the person driving it wants the page.
 	return sendRedirect(event, "/", 302);

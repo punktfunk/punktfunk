@@ -471,6 +471,9 @@ install -Dm0644 packaging/linux/50-punktfunk-nice.conf \
 install -Dm0755 target/release/punktfunk-tray %{buildroot}%{_bindir}/punktfunk-tray
 install -Dm0644 packaging/linux/io.unom.punktfunk.starthost.desktop \
                 %{buildroot}%{_datadir}/applications/io.unom.punktfunk.starthost.desktop
+# Opens the web console signed in: a person's own inside their seat, the operator's elsewhere.
+install -Dm0644 packaging/linux/io.unom.punktfunk.webconsole.desktop \
+                %{buildroot}%{_datadir}/applications/io.unom.punktfunk.webconsole.desktop
 for sz in 22x22 48x48; do
   for png in packaging/linux/icons/hicolor/$sz/apps/*.png; do
     install -Dm0644 "$png" %{buildroot}%{_datadir}/icons/hicolor/$sz/apps/"$(basename "$png")"
@@ -701,6 +704,7 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %{_userunitdir}/punktfunk-kde-session.service
 %{_datadir}/applications/io.unom.punktfunk.host.desktop
 %{_datadir}/applications/io.unom.punktfunk.starthost.desktop
+%{_datadir}/applications/io.unom.punktfunk.webconsole.desktop
 %{_datadir}/icons/hicolor/*/apps/punktfunk-tray*.png
 %dir /etc/gamescope-session-plus
 %dir /etc/gamescope-session-plus/sessions.d

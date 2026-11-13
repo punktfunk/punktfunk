@@ -1,7 +1,8 @@
 // The single server-side gate. Runs for EVERY request to the deployed Bun/Nitro server
 // (pages, the /api proxy, everything) before routing. Unauthenticated requests are
 // redirected to /login (page navigations) or rejected 401 (/api); the plugin listener takes a
-// page path instead of the session. Fails CLOSED when no password is configured either way.
+// page path instead of the session, and a person's cookie its own gate (`personGate`). Fails
+// CLOSED when no password is configured either way.
 import {
 	defineEventHandler,
 	getCookie,
@@ -19,12 +20,16 @@ import {
 	authConfigured,
 	csrfRequestOrigin,
 	isCrossSiteMutation,
+	peerAddress,
 	SESSION_NAME,
 	type SessionData,
 	sessionConfig,
 	sessionEpoch,
 } from "../util/auth";
 import { isPublicPath, safeNextPath } from "../util/paths";
+import { forgetSession, isLoopbackPeer, personCookie } from "../util/person";
+import { ended, personApi } from "../util/personApi";
+import { personPluginPage } from "../util/personPlugins";
 import {
 	consoleOriginPort,
 	consoleOriginScheme,
@@ -112,6 +117,9 @@ export default defineEventHandler(async (event) => {
 		return { error: "cross-site request refused" };
 	}
 
+	const person = await personGate(event, pathname);
+	if (person !== undefined) return person === PASS ? undefined : person;
+
 	// A signed-in visitor on the login page is sent on to `next`. This is also what makes a login
 	// land when the browser lost the client's redirect: Firefox aborts in-flight chunk imports on
 	// navigation, and the stale-chunk recovery then reloads /login over the target.
@@ -160,18 +168,65 @@ export default defineEventHandler(async (event) => {
 	);
 });
 
+/** `personGate`'s word for "a person's request, let it through to its page or `/_auth/` route". */
+const PASS = Symbol("pass");
+
 /**
- * The plugin listener's gate: a page path minted for that plugin, and never the session cookie,
- * which a sandboxed page sends to some requests and not others. Every refusal is the same 401.
- * Requests come from `Origin: null`, so a valid path answers CORS and its preflight, and needs
- * no CSRF check: a page that cannot name the path cannot reach it.
+ * A browser holding a person's cookie is a person's console. Their `/api/**` is answered here by
+ * personApi, so no route file ever runs for them, and the operator's session is not read. A
+ * person cookie that ended gives way to an operator signed in on the same browser; without one,
+ * the person sees that it ended. `undefined`: no person cookie, the operator's gate decides.
+ */
+async function personGate(
+	event: H3Event,
+	pathname: string,
+): Promise<unknown | typeof PASS> {
+	const person = personCookie(event);
+	if (!person) return undefined;
+	const api = pathname === "/api" || pathname.startsWith("/api/");
+	if (person.session && isLoopbackPeer(peerAddress(event))) {
+		event.context.person = person.session;
+		if (api) return personApi(event, person.session);
+		return PASS;
+	}
+	if (await operatorSignedIn(event)) {
+		forgetSession(event);
+		return undefined;
+	}
+	if (api) return ended(event, "person_session_ended");
+	if (isPublicPath(pathname)) return PASS;
+	forgetSession(event);
+	return new Response(null, {
+		status: 302,
+		headers: { location: "/closed?why=ended" },
+	});
+}
+
+/** A live operator session, read only when its cookie exists: `useSession` would mint one. */
+async function operatorSignedIn(event: H3Event): Promise<boolean> {
+	if (!authConfigured() || !getCookie(event, SESSION_NAME)) return false;
+	const session = await useSession<SessionData>(event, sessionConfig());
+	return (
+		session.data.authenticated === true && session.data.epoch === sessionEpoch()
+	);
+}
+
+/**
+ * The plugin listener's gate: a page path minted for that plugin, by the operator's session or a
+ * person's live one, and never a cookie, which a sandboxed page sends to some requests and not
+ * others. Every refusal is the same 401. Requests come from `Origin: null`, so a valid path
+ * answers CORS and its preflight, and needs no CSRF check: a page that cannot name the path
+ * cannot reach it.
  */
 function pluginGate(event: H3Event, pathname: string, method: string) {
 	if (!authConfigured()) {
 		setResponseStatus(event, 503);
 		return { error: "auth not configured: set PUNKTFUNK_UI_PASSWORD_HASH" };
 	}
-	if (!pluginPage(pathname)) {
+	// A person's pages, like their console, answer this computer alone.
+	const person = () =>
+		isLoopbackPeer(peerAddress(event)) && personPluginPage(pathname) !== null;
+	if (!pluginPage(pathname) && !person()) {
 		setResponseStatus(event, 401);
 		return { error: "unauthorized" };
 	}

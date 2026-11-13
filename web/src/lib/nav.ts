@@ -8,6 +8,7 @@
 // read it.
 import {
 	Activity,
+	House,
 	LibraryBig,
 	type LucideIcon,
 	MonitorPlay,
@@ -118,6 +119,43 @@ export const NAV: readonly NavEntry[] = [
 		group: "manage",
 	},
 ];
+
+const personPages = (pages: string[]): readonly NavEntry[] =>
+	NAV.filter((n) => pages.includes(n.to)).map((n) =>
+		n.to === "/" ? { ...n, icon: House } : n,
+	);
+
+/**
+ * A person's own console: their home, games, hooks and the browser's settings. Four fit the phone
+ * bar. Their home is a house, not the operator's activity feed.
+ */
+export const PERSON_NAV = personPages([
+	"/",
+	"/library",
+	"/automation",
+	"/settings",
+]);
+/** The same, with their own plugins, on a desktop whose host runs some for them. */
+const PERSON_NAV_PLUGINS = personPages([
+	"/",
+	"/library",
+	"/automation",
+	"/plugins",
+	"/settings",
+]);
+
+/** The person's pages; `plugins` when their seat host runs plugins of theirs. */
+export const personNav = (plugins: boolean): readonly NavEntry[] =>
+	plugins ? PERSON_NAV_PLUGINS : PERSON_NAV;
+
+/** Whether `pathname` is a page of a person's own console; a plugin's own page with `plugins`. */
+export const isPersonPage = (pathname: string, plugins = false): boolean =>
+	(plugins && pathname.startsWith("/plugins/")) ||
+	personNav(plugins).some((n) =>
+		n.exact
+			? pathname === n.to
+			: pathname === n.to || pathname.startsWith(`${n.to}/`),
+	);
 
 export const PRIMARY = NAV.filter((n) => n.group === "primary");
 export const MANAGE = NAV.filter((n) => n.group === "manage");

@@ -252,7 +252,8 @@ const EntryEditor: FC<{
 	const readOnly = entry !== null && !owned;
 	const dirty = !readOnly && JSON.stringify(draft) !== JSON.stringify(baseline);
 	const input = toInput(draft);
-	const gated = !readOnly && carriesCommandExecution(input);
+	// A person's own console has no password to ask: their seat host takes the command as theirs.
+	const gated = !readOnly && carriesCommandExecution(input) && !view?.person;
 
 	useBlocker({
 		shouldBlockFn: async ({ current, next }) => {
@@ -280,7 +281,7 @@ const EntryEditor: FC<{
 
 	const save = async () => {
 		if (!input.title) return;
-		const body = withPassword(input, password);
+		const body = view?.person ? input : withPassword(input, password);
 		try {
 			if (entry === null) {
 				const row = await create.mutateAsync({ data: body });

@@ -6,6 +6,7 @@ import type { SeatPublic } from "@/api/gen/model/seatPublic";
 import { listProfiles, startProfileSeat } from "@/api/gen/profiles/profiles";
 import { apiErrorCode } from "@/lib/errors";
 import { seatDetail } from "@/lib/host-messages";
+import { personBrowser } from "@/lib/person";
 import { m } from "@/paraglide/messages";
 
 /** A cold desktop takes about 20 s; past this it counts as not starting. */
@@ -50,16 +51,22 @@ const sleep = (ms: number, signal: AbortSignal) =>
 		);
 	});
 
-/** The box's answers for profile `id`, whatever cache the caller runs in. */
-export const liveDeps = (id: string): DesktopDeps => ({
-	seat: (signal) =>
-		inSeat(null, () => listProfiles({ signal })).then(
-			(list) => list.find((p) => p.id === id)?.seat,
-		),
-	start: () => inSeat(null, () => startProfileSeat(id)),
-	sleep,
-	now: Date.now,
-});
+/**
+ * The box's answers for profile `id`, whatever cache the caller runs in. In a person's own
+ * console their desktop is the one they are using: nothing to start, every call goes at once.
+ */
+export const liveDeps = (id: string): DesktopDeps =>
+	personBrowser()
+		? { seat: async () => null, start: async () => {}, sleep, now: Date.now }
+		: {
+				seat: (signal) =>
+					inSeat(null, () => listProfiles({ signal })).then(
+						(list) => list.find((p) => p.id === id)?.seat,
+					),
+				start: () => inSeat(null, () => startProfileSeat(id)),
+				sleep,
+				now: Date.now,
+			};
 
 export interface DesktopCall<T> {
 	/** The profile's name, for the sentence when its desktop doesn't start. */

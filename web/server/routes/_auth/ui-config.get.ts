@@ -43,10 +43,11 @@ export interface UiConfig {
 	reachableFromNetwork: boolean;
 }
 
-export default defineEventHandler(async (): Promise<UiConfig> => {
+export default defineEventHandler(async (event): Promise<UiConfig> => {
 	// Read per request: `omarchy-theme-set` rewrites the file whenever the user switches theme,
-	// and the client refetches on navigation, so the console follows without a restart.
-	const theme = await resolveTheme();
+	// and the client refetches on navigation, so the console follows without a restart. A
+	// person's console takes neither: those are the owner's desktop, read with the admin token.
+	const theme = event.context.person ? null : await resolveTheme();
 	const reachableFromNetwork = !isLoopbackBind(boundAddress());
 	const port = pluginOriginPort();
 	if (port)

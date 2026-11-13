@@ -343,12 +343,18 @@ export function sessionConfig(): SessionConfig {
 			// then also send over a plain-http downgrade. The env var still forces it on for a
 			// deploy terminating TLS in front of us (a reverse proxy), where this process sees no
 			// cert of its own.
-			secure:
-				(!!process.env.PUNKTFUNK_UI_TLS_CERT &&
-					!!process.env.PUNKTFUNK_UI_TLS_KEY) ||
-				/^(1|true)$/i.test(process.env.PUNKTFUNK_UI_SECURE ?? ""),
+			secure: cookieSecure(),
 		},
 	};
+}
+
+/** Whether the console's cookies carry `Secure`: TLS configured here, or `PUNKTFUNK_UI_SECURE`. */
+export function cookieSecure(): boolean {
+	return (
+		(!!process.env.PUNKTFUNK_UI_TLS_CERT &&
+			!!process.env.PUNKTFUNK_UI_TLS_KEY) ||
+		/^(1|true)$/i.test(process.env.PUNKTFUNK_UI_SECURE ?? "")
+	);
 }
 
 /** Constant-time string comparison (avoids leaking the password via timing). */
