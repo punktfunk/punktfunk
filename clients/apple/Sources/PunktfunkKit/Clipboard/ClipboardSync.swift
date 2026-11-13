@@ -46,9 +46,6 @@ public final class ClipboardSync: NSObject {
 
     private let connection: PunktfunkConnection
     private let pasteboard: any ClipboardPasteboard
-    /// `CLIP_FLAG_*` sent with the enable (`CLIP_FLAG_FILES` when the session permits files —
-    /// always 0 in Phase 1).
-    private let controlFlags: UInt8
 
     /// Host `.state` updates, delivered on the main queue — drives the toggle/footnote UI.
     public var onState: ((_ enabled: Bool, _ policy: UInt8, _ reason: UInt8) -> Void)?
@@ -120,21 +117,9 @@ public final class ClipboardSync: NSObject {
     private let drainDone = DispatchSemaphore(value: 0)
     private var started = false
 
-    /// - Parameter allowFiles: reserved for Phase 2; `CLIP_FLAG_FILES` is never set yet.
-    public convenience init(connection: PunktfunkConnection, allowFiles: Bool = false) {
-        self.init(connection: connection, pasteboard: SystemPasteboard(), allowFiles: allowFiles)
-    }
-
-    /// Designated init, taking the pasteboard so tests can drive the whole state machine against a
-    /// stub without an AppKit/UIKit pasteboard in the way.
-    init(
-        connection: PunktfunkConnection, pasteboard: any ClipboardPasteboard,
-        allowFiles: Bool = false
-    ) {
+    public init(connection: PunktfunkConnection) {
         self.connection = connection
-        self.pasteboard = pasteboard
-        self.controlFlags = 0 // CLIP_FLAG_FILES rides Phase 2
-        _ = allowFiles
+        self.pasteboard = SystemPasteboard()
         super.init()
     }
 
@@ -145,7 +130,7 @@ public final class ClipboardSync: NSObject {
     public func start() {
         guard !started else { return }
         started = true
-        connection.clipControl(enabled: true, flags: controlFlags)
+        connection.clipControl(enabled: true)
         // Baseline: whatever is on the pasteboard when sync starts is announced immediately — the
         // "copy first, then connect and paste" flow must work.
         stateLock.lock()
