@@ -528,6 +528,14 @@ final class LibraryClientTests: XCTestCase {
         XCTAssertEqual(status(500), "http(500)")
     }
 
+    /// A cancelled caller is not an unreachable host.
+    func testACancelledRequestStaysCancelled() {
+        XCTAssertTrue(LibraryClient.transportFailure(CancellationError()) is CancellationError)
+        XCTAssertEqual(
+            "\(LibraryClient.transportFailure(MgmtTransportError.timedOut))",
+            #"unreachable("timed out")"#)
+    }
+
     /// The host refuses an install in its `ApiError` envelope; the player reads its sentence.
     func testInstallRefusalCarriesTheHostSentence() {
         let body = Data(#"{"error":"Not enough space on the host."}"#.utf8)

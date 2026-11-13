@@ -956,7 +956,7 @@ public enum LibraryClient {
     }
 
     /// One request against `target`: over the stream port when it is known, which needs no TCP
-    /// 47990, then over HTTPS, with transport failures mapped onto `LibraryError`. The stream
+    /// 47990, then over HTTPS, with failures mapped by ``transportFailure(_:)``. The stream
     /// port's answer stands, except 401 and 403: a host that predates stamping the client
     /// certificate on its tunnel refuses the paired lane there. That refusal stands only when
     /// HTTPS can't be reached either.
@@ -986,11 +986,18 @@ public enum LibraryClient {
             throw LibraryError.pinMismatch
         } catch {
             if let refused { return refused }
-            if case MgmtTransportError.timedOut = error { throw LibraryError.unreachable("timed out") }
-            if let error = error as? MgmtTransportError {
-                throw LibraryError.unreachable(String(describing: error))
-            }
-            throw LibraryError.unreachable(error.localizedDescription)
+            throw transportFailure(error)
+        }
+    }
+
+    /// An HTTPS failure as ``send(_:to:method:body:)`` throws it: `unreachable`, except that a
+    /// cancelled caller's `CancellationError` stays one. The host was never asked.
+    static func transportFailure(_ error: Error) -> Error {
+        switch error {
+        case is CancellationError: return error
+        case MgmtTransportError.timedOut: return LibraryError.unreachable("timed out")
+        case let error as MgmtTransportError: return LibraryError.unreachable(String(describing: error))
+        default: return LibraryError.unreachable(error.localizedDescription)
         }
     }
 }
