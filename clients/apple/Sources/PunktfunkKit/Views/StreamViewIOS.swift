@@ -453,6 +453,91 @@ public final class StreamViewController: StreamViewControllerBase {
         // prior session (stop() doesn't clear it). Otherwise a stale `true` could later
         // re-engage capture on a foreground that the new session never asked for.
         wasCapturedOnResign = false
+        wireTouchSurface(connection)
+
+        let capture = InputCapture(connection: connection)
+        capture.onToggleCapture = { [weak self] in
+            guard let self else { return }
+            self.setCaptured(!self.captured)
+        }
+        // The keyboard shortcuts, detected from the HID stream in InputCapture (no NSEvent
+        // monitor on iOS), go to the session, which runs them as the dial does.
+        capture.onShortcut = { [weak self] action, phase in self?.onShortcut?(action, phase) }
+        capture.onPreempted = { [weak self] in
+            self?.setCaptured(false)
+        }
+        capture.start()
+        inputCapture = capture
+        // Match window: follow the picture's own pixel size, so a resized scene, a fold or the
+        // upright half of a half-open one streams 1:1. `viewDidLayoutSubviews` feeds it. Off by
+        // default, like the Settings toggle.
+        let follower = MatchWindowFollower(
+            connection: connection,
+            enabled: connection.settings.matchWindow,
+            renderScale: connection.settings.renderScale,
+            maxDimension: RenderScale.maxDimension(codec: connection.settings.codec))
+        follower.onResizeTarget = onResizeTarget
+        #if os(iOS)
+        // A native rate follows the screen the picture is on.
+        follower.refreshHz = { [weak self] in
+            guard let self, self.connection?.settings.refreshHz == 0 else { return nil }
+            return UInt32(clamping: max(self.nativeMode.hz, 30))
+        }
+        // What the connect asked for: a session that starts on a half-open fold differs at once.
+        lastNativeMode = NativeDisplay.mode
+        #endif
+        matchFollower = follower
+        #endif
+        #if os(iOS)
+        // A monitor attached before the session starts shows the picture from the first frame.
+        onExternal = ExternalDisplay.shared.screen != nil
+        if onExternal { ExternalDisplay.shared.show(externalVideo) }
+        // iOS 27 connects the monitor's scene only for this; `routeVideo` takes it when it lands.
+        if #available(iOS 27, *) {
+            let config = UISceneConfiguration(
+                name: nil, sessionRole: .windowExternalDisplayNonInteractive)
+            config.delegateClass = ExternalDisplaySceneDelegate.self
+            let accessory = UISceneAccessory.externalNonInteractive(sceneConfiguration: config)
+            monitorAccessory = registerSceneAccessory(accessory)
+        }
+        #endif
+
+        // SessionPresenter picks stage 2 or the stage-1 fallback and owns their lifecycle. The
+        // coded-dims hop re-fits the metal sublayer to the real content aspect on main before the
+        // owner's overlay END signal; it fires only on a size change, never per frame.
+        let overlayDecodedSize = onDecodedSize
+        presenter.start(
+            connection: connection,
+            baseLayer: videoLayer,
+            endToEndMeter: endToEndMeter,
+            makeDisplayLink: { CADisplayLink(target: $0, selector: $1) },
+            onFrame: onFrame,
+            onSessionEnd: onSessionEnd,
+            onDecodedSize: { [weak self] w, h in
+                DispatchQueue.main.async { self?.noteDecodedContentSize(width: w, height: h) }
+                overlayDecodedSize?(w, h)
+            },
+            onFrameHDR: { [weak self] hdr in
+                DispatchQueue.main.async { self?.noteFrameHDR(hdr) }
+            })
+        layoutMetalLayer()
+
+        #if os(iOS) || os(visionOS)
+        observeScene(connection)
+
+        if captureEnabled {
+            setCaptured(true) // entering a session is the deliberate "capture me" moment
+        }
+        #endif
+
+        #if os(tvOS)
+        startTV(connection)
+        #endif
+    }
+
+    #if os(iOS) || os(visionOS)
+    /// The stream view's touch, Pencil, pointer and scroll sinks for `connection`'s session.
+    private func wireTouchSurface(_ connection: PunktfunkConnection) {
         streamView.settings = connection.settings
         // The letterbox must follow an accepted requestMode() mid-stream, so this stays a live
         // read — but behind a short TTL: the pencil path maps every coalesced sample through
@@ -534,78 +619,10 @@ public final class StreamViewController: StreamViewControllerBase {
         streamView.onScroll = { [weak self] dx, dy, source, phase in
             self?.inputCapture?.sendScroll(dx: dx, dy: dy, source: source, phase: phase)
         }
+    }
 
-        let capture = InputCapture(connection: connection)
-        capture.onToggleCapture = { [weak self] in
-            guard let self else { return }
-            self.setCaptured(!self.captured)
-        }
-        // The keyboard shortcuts, detected from the HID stream in InputCapture (no NSEvent
-        // monitor on iOS), go to the session, which runs them as the dial does.
-        capture.onShortcut = { [weak self] action, phase in self?.onShortcut?(action, phase) }
-        capture.onPreempted = { [weak self] in
-            self?.setCaptured(false)
-        }
-        capture.start()
-        inputCapture = capture
-        // Match window: follow the picture's own pixel size, so a resized scene, a fold or the
-        // upright half of a half-open one streams 1:1. `viewDidLayoutSubviews` feeds it. Off by
-        // default, like the Settings toggle.
-        let follower = MatchWindowFollower(
-            connection: connection,
-            enabled: connection.settings.matchWindow,
-            renderScale: connection.settings.renderScale,
-            maxDimension: RenderScale.maxDimension(codec: connection.settings.codec))
-        follower.onResizeTarget = onResizeTarget
-        #if os(iOS)
-        // A native rate follows the screen the picture is on.
-        follower.refreshHz = { [weak self] in
-            guard let self, self.connection?.settings.refreshHz == 0 else { return nil }
-            return UInt32(clamping: max(self.nativeMode.hz, 30))
-        }
-        // What the connect asked for: a session that starts on a half-open fold differs at once.
-        lastNativeMode = NativeDisplay.mode
-        #endif
-        matchFollower = follower
-        #endif
-        #if os(iOS)
-        // A monitor attached before the session starts shows the picture from the first frame.
-        onExternal = ExternalDisplay.shared.screen != nil
-        if onExternal { ExternalDisplay.shared.show(externalVideo) }
-        // iOS 27 connects the monitor's scene only for this; `routeVideo` takes it when it lands.
-        if #available(iOS 27, *) {
-            let config = UISceneConfiguration(
-                name: nil, sessionRole: .windowExternalDisplayNonInteractive)
-            config.delegateClass = ExternalDisplaySceneDelegate.self
-            let accessory = UISceneAccessory.externalNonInteractive(sceneConfiguration: config)
-            monitorAccessory = registerSceneAccessory(accessory)
-        }
-        #endif
-
-        // Presenter choice + lifecycle live in SessionPresenter (shared with macOS): stage-2
-        // (explicit VTDecompressionSession decode + a CAMetalLayer/display-link present) by
-        // default, the stage-1 pump as the Metal-missing / DEBUG fallback.
-        // Intercept the pump's coded-dims callback: re-fit the metal sublayer to the real content
-        // aspect (main thread) BEFORE forwarding to the owner's overlay END-signal. Fires only on a
-        // size CHANGE (first frame + each resolved resize), so this is rare, not per-frame.
-        let overlayDecodedSize = onDecodedSize
-        presenter.start(
-            connection: connection,
-            baseLayer: videoLayer,
-            endToEndMeter: endToEndMeter,
-            makeDisplayLink: { CADisplayLink(target: $0, selector: $1) },
-            onFrame: onFrame,
-            onSessionEnd: onSessionEnd,
-            onDecodedSize: { [weak self] w, h in
-                DispatchQueue.main.async { self?.noteDecodedContentSize(width: w, height: h) }
-                overlayDecodedSize?(w, h)
-            },
-            onFrameHDR: { [weak self] hdr in
-                DispatchQueue.main.async { self?.noteFrameHDR(hdr) }
-            })
-        layoutMetalLayer()
-
-        #if os(iOS) || os(visionOS)
+    /// The app, scene, pointer-lock, ring and keyboard notifications a session follows.
+    private func observeScene(_ connection: PunktfunkConnection) {
         // GC only delivers while active; everything held is flushed by InputCapture's
         // own resign observer — here we just mirror the capture state for the HUD and
         // the pointer lock.
@@ -727,13 +744,12 @@ public final class StreamViewController: StreamViewControllerBase {
             }
         })
         #endif
+    }
+    #endif
 
-        if captureEnabled {
-            setCaptured(true) // entering a session is the deliberate "capture me" moment
-        }
-        #endif
-
-        #if os(tvOS)
+    #if os(tvOS)
+    /// tvOS's part of `start`: input capture, and the observers around the TV's display mode.
+    private func startTV(_ connection: PunktfunkConnection) {
         // No click-to-capture and no pointer lock here: a session IS the capture, so an attached
         // Bluetooth mouse or keyboard forwards for as long as one runs — once it is trusted.
         let capture = InputCapture(connection: connection)
@@ -776,8 +792,8 @@ public final class StreamViewController: StreamViewControllerBase {
                 sceneLog.info("scene \(short, privacy: .public) — \(self.surfaceLine(), privacy: .public)")
             })
         }
-        #endif
     }
+    #endif
 
     func stop() {
         observers.forEach(NotificationCenter.default.removeObserver(_:))
