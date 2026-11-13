@@ -896,8 +896,8 @@ public final class StreamViewController: StreamViewControllerBase {
     /// Settings → Video and Audio → Match Content); the presenter reads the RESULT off UIScreen's
     /// EDR headroom (pushed in SessionPresenter.layout) and keeps the in-shader tone-map whenever
     /// the switch never lands, so an SDR-composited display can't show blown-out PQ either way.
-    /// Applied once per session, as soon as the window and the negotiated mode both exist; the
-    /// stop() teardown clears it.
+    /// Requested while the decoded frames are HDR and withdrawn when they turn SDR, so a session
+    /// can apply it more than once; the stop() teardown clears it.
     ///
     /// ⚠️ Keyed on the decoded frames being HDR (`frameHDR`), not the Welcome or the setting alone.
     /// The criteria hardcode BT.2020 PQ, and in its HDR modes the Apple TV sends limited-range
@@ -1671,7 +1671,7 @@ final class StreamLayerUIView: UIView {
     }
 
     /// Trackpad / wheel scroll → host scroll deltas. The translation is consumed each callback so
-    /// the next is a fresh delta, and scales at ≈ one WHEEL notch per 10 pt of pan.
+    /// the next is a fresh delta, sent in points and unscaled.
     ///
     /// Both axes pass through with their sign intact, which is what makes the stream follow the
     /// system's Natural Scrolling switch: UIKit has already applied that preference by the time it
