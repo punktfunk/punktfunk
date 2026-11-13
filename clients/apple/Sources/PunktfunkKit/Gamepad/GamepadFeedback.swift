@@ -1,6 +1,6 @@
 // Host→client gamepad feedback rendering: one drain thread polls the rumble (0xCA) and
-// HID-output (0xCD) planes and replays each update on the forwarded physical controller it is
-// ADDRESSED TO by wire pad index —
+// HID-output (0xCD) planes and replays each update on the forwarded physical controller its
+// wire pad index names —
 //
 //   rumble        → CHHapticEngine players (per-handle localities when the pad has them,
 //                   one combined engine otherwise), a RumbleRenderer per pad,
@@ -9,20 +9,15 @@
 //   trigger FX    → DualSenseTriggerEffect.parse → GCDualSenseAdaptiveTrigger.
 //
 // Every forwarded controller gets a per-pad feedback slot (its RumbleRenderer + last light /
-// player-LED / trigger state) keyed on the same wire index GamepadCapture streams it on, so a
-// rumble the host aimed at pad 1 drives pad 1's actuator and nothing else. An update for a pad
-// with no live slot (one that just closed) is dropped. HID-output traffic exists only on
-// PlayStation-pad sessions (a DualSense, or a DualShock 4 = lightbar only); the drain always
-// polls both planes with short timeouts and never spins, so an Xbox pad just renders rumble.
-// GameController profile mutation happens on main; CHHapticEngine work on the renderer's serial
-// queue; the drain thread itself touches neither (it routes rumble to the pad's renderer under a
-// lock and hops HID to main). When a controller leaves the forwarded set the old pad is reset
-// (triggers off, player index unset) and its renderer silenced.
+// player-LED / trigger state) keyed on the wire index GamepadCapture streams it on; an update for
+// a pad with no live slot is dropped. The drain waits only on the rumble pull (8 ms with a pad
+// to drive, 50 ms without) and takes HID output without waiting, so it never spins.
+// GameController profile mutation happens on main, CHHapticEngine work on the renderer's serial
+// queue; the drain routes rumble under a lock and hops HID to main. A controller that leaves the
+// forwarded set is reset (triggers off, player index unset) and its renderer silenced.
 //
-// One 0xCD kind never reaches main at all: `.hidRaw` — Steam's raw writes to an as-is Steam
-// Controller 2 passthrough pad — routes on the drain thread straight to the registered
-// `setHidRawSink` (the SC2 capture's replay entry point), because no GameController profile is
-// involved and the rumble replay cadence (25–40 ms) should not queue behind main.
+// `.hidRaw` (Steam's raw writes to an as-is Steam Controller 2) never reaches main: the drain
+// hands it to `setHidRawSink`'s sink, as no GameController profile is involved.
 
 import Combine
 import CoreHaptics
@@ -164,9 +159,6 @@ public final class GamepadFeedback {
     public func start() {
         guard !drainStarted else { return }
         drainStarted = true
-        // Hidout traffic (lightbar / player LEDs / triggers) only exists on a PlayStation-pad
-        // session — a DualSense or a DualShock 4 (lightbar only). Block briefly on it there and
-        // let rumble own the wait elsewhere; on an Xbox session it stays nonblocking.
         let thread = Thread { [connection, flag, drainDone, weak self] in
             // Per-iteration autorelease pool: no runloop on this thread, and the haptics/HID
             // rendering below autoreleases ObjC temporaries. `false` = session over.
