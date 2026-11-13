@@ -343,9 +343,6 @@ public enum AudioFormatChoice: String, CaseIterable, Sendable {
         case .lossless1764: return (176_400, 24)
         }
     }
-
-    /// True for the lossless plane — the gate for anything that spends the extra bandwidth.
-    public var isLossless: Bool { self != .opus }
 }
 
 public extension EffectiveSettings {
