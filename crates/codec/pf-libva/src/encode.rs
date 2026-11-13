@@ -439,16 +439,10 @@ impl Encoder {
         self.kept = wires;
     }
 
-    /// The slot a P-frame's picture replaces: round robin from its `wire`, past `reference`
-    /// and the kept pictures.
+    /// The slot a P-frame's picture replaces ([`pick_slot`]).
     fn next_slot(&self, reference: Option<usize>) -> u8 {
-        let n = self.slots.len();
-        let kept = |s: usize| self.slots[s].is_some_and(|x| self.kept.contains(&Some(x.wire)));
-        let slot = (0..n)
-            .map(|k| (self.wire as usize + k) % n)
-            .find(|&s| Some(s) != reference && !kept(s))
-            .expect("more slots than the reference and the two kept pictures");
-        slot as u8
+        let held = self.slots.iter().map(|s| s.map(|s| s.wire));
+        pick_slot(held, self.kept, reference, self.wire) as u8
     }
 
     /// Whether the session runs on the driver's low-power entrypoint.
@@ -721,10 +715,29 @@ impl Encoder {
             .ok_or_else(|| anyhow!("no coded buffer free after a collect"))
     }
 
+    /// What an `encode_with` that queued nothing returns to the pools: the coded buffer,
+    /// the reconstruction surface if one was taken and not already freed, and a
+    /// direct import, which is destroyed.
+    fn give_back(
+        &mut self,
+        coded: VaBufferId,
+        recon: Option<VaSurfaceId>,
+        direct: Option<VaSurfaceId>,
+    ) {
+        if let Some(recon) = recon.filter(|r| !self.free.contains(r)) {
+            self.free.push(recon);
+        }
+        self.coded_free.push(coded);
+        if let Some(direct) = direct {
+            self.display.destroy_surface(direct);
+        }
+    }
+
     /// Queue one picture: parameter buffers rendered, the encode submitted, the
     /// slot bookkeeping done — the queue is in-order, so a later picture may
     /// already name this one as its reference. [`Self::collect`] owes only the
-    /// sync, the read-back and the per-picture releases.
+    /// sync, the read-back and the per-picture releases. An error queues nothing and
+    /// hands back the coded buffer, the reconstruction surface and a direct import.
     fn encode_with(
         &mut self,
         reference: Option<usize>,
@@ -758,10 +771,10 @@ impl Encoder {
         };
         let direct = self.direct.take();
         let surface = direct.unwrap_or(self.input[self.next_surface]);
-        let recon = self
-            .free
-            .pop()
-            .ok_or_else(|| anyhow!("no free reconstruction surface"))?;
+        let Some(recon) = self.free.pop() else {
+            self.give_back(coded, None, direct);
+            bail!("no free reconstruction surface");
+        };
         let sps = self.params.sps();
         let pps = self.params.pps(std::rc::Rc::clone(&sps));
 
@@ -769,7 +782,10 @@ impl Encoder {
         // both by value and starts a picture that `end_picture` below closes.
         let status =
             unsafe { (self.display.va.begin_picture)(self.display.display, self.context, surface) };
-        self.display.va.check("vaBeginPicture", status)?;
+        if let Err(e) = self.display.va.check("vaBeginPicture", status) {
+            self.give_back(coded, Some(recon), direct);
+            return Err(e);
+        }
 
         let mut owned: Vec<VaBufferId> = Vec::new();
         let result = match self.codec {
@@ -793,13 +809,7 @@ impl Encoder {
             unsafe { (self.display.va.destroy_buffer)(self.display.display, buf) };
         }
         if let Err(e) = result.and_then(|()| self.display.va.check("vaEndPicture", end)) {
-            if !self.free.contains(&recon) {
-                self.free.push(recon);
-            }
-            self.coded_free.push(coded);
-            if let Some(direct) = direct {
-                self.display.destroy_surface(direct);
-            }
+            self.give_back(coded, Some(recon), direct);
             return Err(e);
         }
 
@@ -1346,6 +1356,36 @@ pub fn open(params: SessionParams, codec: CodecParams) -> Result<Encoder> {
     Encoder::new(display, params, codec).map_err(|e| anyhow!("{e:#}"))
 }
 
+/// The slot the next P-frame's picture replaces, given the wire each slot holds. Round robin
+/// from `wire`, taking the first slot of the cheapest class: empty or unkept, then the
+/// candidate, then the pin, then `reference`. A ring under four slots cannot hold the
+/// reference, both kept pictures and a free slot, so the candidate gives way, then the pin.
+/// The reference goes only in a ring of one, where the new picture's long-term marking
+/// retires it. Total for any slot count.
+fn pick_slot(
+    held: impl ExactSizeIterator<Item = Option<i64>>,
+    kept: [Option<i64>; 2],
+    reference: Option<usize>,
+    wire: i64,
+) -> usize {
+    let n = held.len().max(1);
+    let start = wire as usize % n;
+    let [pin, candidate] = kept;
+    let is = |w: Option<i64>, kept: Option<i64>| w.is_some() && w == kept;
+    held.enumerate()
+        .min_by_key(|&(s, w)| {
+            let class = if Some(s) == reference {
+                3
+            } else if is(w, pin) {
+                2
+            } else {
+                u8::from(is(w, candidate))
+            };
+            (class, (s + n - start) % n)
+        })
+        .map_or(0, |(s, _)| s)
+}
+
 /// A dmabuf already in the session's format and size needs no VPP pass. A crop (a
 /// mirrored head) still needs one: the encoder reads the whole surface.
 fn direct_ingest(
@@ -1383,5 +1423,101 @@ mod direct_ingest_tests {
         ));
         assert!(!direct_ingest(VA_RT_FORMAT_RGB32, s, s, false, false));
         assert!(!direct_ingest(VA_RT_FORMAT_YUV420, s, s, false, true));
+    }
+}
+
+#[cfg(test)]
+mod pick_slot_tests {
+    use super::*;
+
+    fn pick(
+        held: &[Option<i64>],
+        kept: [Option<i64>; 2],
+        reference: Option<usize>,
+        wire: i64,
+    ) -> usize {
+        pick_slot(held.iter().copied(), kept, reference, wire)
+    }
+
+    /// An H.264 1080p60 ring of three slots, no acks: wire 0 is the candidate, rotates to the
+    /// pin at wire 8, and wire 10 finds the reference, the pin and the candidate in all three.
+    #[test]
+    fn three_slots_give_up_the_candidate_and_keep_the_pin() {
+        let mut ring = vec![Some(0), None, None];
+        for wire in 1..=10 {
+            let kept = if wire <= 8 {
+                [None, Some(0)]
+            } else {
+                [Some(0), Some(8)]
+            };
+            let newest = ring
+                .iter()
+                .enumerate()
+                .max_by_key(|&(_, w)| *w)
+                .map(|(s, _)| s);
+            let slot = pick(&ring, kept, newest, wire);
+            assert_ne!(Some(slot), newest, "wire {wire} replaced its reference");
+            ring[slot] = Some(wire);
+            if wire == 9 {
+                assert_eq!(ring, [Some(0), Some(9), Some(8)]);
+            }
+        }
+        // Wire 10 took the candidate's slot; the pin stayed.
+        assert_eq!(ring, [Some(0), Some(9), Some(10)]);
+    }
+
+    #[test]
+    fn two_slots_always_replace_the_one_that_is_not_the_reference() {
+        let ring = [Some(5), Some(6)];
+        // Both kept: the pin gives way when it is the only slot left.
+        assert_eq!(pick(&ring, [Some(5), Some(6)], Some(1), 7), 0);
+        assert_eq!(pick(&ring, [Some(6), Some(5)], Some(0), 7), 1);
+        // The candidate goes before the pin.
+        assert_eq!(
+            pick(&[Some(5), Some(6), Some(7)], [Some(5), Some(6)], Some(2), 8),
+            1
+        );
+    }
+
+    #[test]
+    fn one_slot_replaces_its_reference_rather_than_panic() {
+        assert_eq!(pick(&[Some(3)], [Some(3), None], Some(0), 4), 0);
+    }
+
+    #[test]
+    fn a_free_slot_wins_and_the_reference_is_a_last_resort() {
+        const WIRES: usize = 5; // empty, or wire 0..=3
+        let wire_of = |d: usize| d.checked_sub(1).map(|w| w as i64);
+        for n in 1..=4usize {
+            for code in 0..WIRES.pow(n as u32) {
+                let ring: Vec<Option<i64>> = (0..n)
+                    .map(|s| wire_of(code / WIRES.pow(s as u32) % WIRES))
+                    .collect();
+                for pin in (0..WIRES).map(wire_of) {
+                    for candidate in (0..WIRES).map(wire_of) {
+                        let kept = [pin, candidate];
+                        for reference in std::iter::once(None).chain((0..n).map(Some)) {
+                            for wire in 0..n as i64 {
+                                let slot = pick(&ring, kept, reference, wire);
+                                assert!(slot < n);
+                                if n > 1 {
+                                    assert_ne!(Some(slot), reference);
+                                }
+                                let free = |s: usize| {
+                                    Some(s) != reference
+                                        && !ring[s].is_some_and(|w| kept.contains(&Some(w)))
+                                };
+                                if (0..n).any(free) {
+                                    assert!(
+                                        free(slot),
+                                        "{ring:?} {kept:?} {reference:?} -> {slot}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
