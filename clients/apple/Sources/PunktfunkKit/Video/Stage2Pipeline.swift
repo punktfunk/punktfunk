@@ -1249,13 +1249,12 @@ struct LinkWatchdog {
 
 /// Stage-3's present gate: admits `capacity` in-flight (presented, not yet on glass) drawables.
 /// The render thread `tryAcquire`s before taking a frame; the drawable's presented handler
-/// `release`s and re-signals the render thread. Depth 1 fully serializes presents on the on-glass
-/// callback — which costs a refresh whenever the callback's own latency pushes the next present
-/// past a vsync; depth 2 keeps one flip queued behind the one scanning out, so a decoded frame
-/// presents immediately and latches the very next vsync while the queue still can't build (see
-/// `SessionPresenter.gateDepth` for the per-platform choice). `staleAfter` is insurance against a
-/// present whose handler never fires (the macOS "out-of-band presents aren't damage" hazard class
-/// — see MetalVideoPresenter's init post-mortem): rather than freezing the stream, a full gate
+/// `release`s and re-signals the render thread. Depth 1 serializes presents on the on-glass
+/// callback, which costs a refresh whenever the callback's own latency pushes the next present
+/// past a vsync; a deeper gate builds a standing queue (`SessionPresenter.gateDepth` picks the
+/// depth). `staleAfter` is insurance against a present whose handler never fires (the macOS
+/// "out-of-band presents aren't damage" hazard class — see MetalVideoPresenter's init
+/// post-mortem): rather than freezing the stream, a full gate
 /// force-opens a slot 100 ms after its oldest present, a visible ~10 fps degradation that
 /// PUNKTFUNK_PRESENT_DEBUG's `forced` counter exposes (it reads 0 on healthy systems). Internal
 /// (not private) for unit tests. Sendable; lock-guarded — the releaser runs on a Metal callback
@@ -1531,7 +1530,7 @@ public final class Stage2Pipeline {
     /// SessionPresenter. See PresentPacing for each path's ownership and cadence.
     private let pacing: PresentPacing
     /// The glass gate's in-flight present budget (`PresentGate` capacity) — meaningful only under
-    /// `.glass`; SessionPresenter resolves it per platform (see `SessionPresenter.gateDepth`).
+    /// `.glass`; `SessionPresenter.gateDepth` picks it.
     private let gateDepth: Int
     /// macOS smoothness: schedule at most one present on each display-link target so the FIFO
     /// store drains at display cadence. Deadline pacing has its own link and ignores this policy.
