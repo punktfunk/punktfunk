@@ -4519,7 +4519,7 @@ readonly "getHooks": {
 * user (the interactive session on Windows). An `elevated` hook is refused until an
 * administrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A
 * seat host on a person's own account takes hooks from that person's own session alone, and
-* runs only those.
+* runs only those. On a Windows seat that session names no `hmac_secret_file`.
 */
 readonly "setHooks": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof SetHooksRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetHooks200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetHooks400", typeof SetHooks400.Type> | PunktfunkError<"SetHooks401", typeof SetHooks401.Type> | PunktfunkError<"SetHooks403", typeof SetHooks403.Type> | PunktfunkError<"SetHooks500", typeof SetHooks500.Type>>;

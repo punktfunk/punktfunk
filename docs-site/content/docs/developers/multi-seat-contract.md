@@ -426,17 +426,17 @@ A row with one answer holds on both. Every other row is a difference the section
 | Its lock, PIN and device key | The door checks | The box host checks |
 | A device as its person, on `mgmt_routes::PERSON` | The door decides, the owner's host writes | The box host decides and writes |
 | Its own titles, with a command and `prep` | On its seat host; the owner's host stores the list | On its seat host; the box host stores the list |
-| [The person's own session](#the-persons-own-session) | On a seat's own host, made or on their own account | None: a seat writes no token and takes no ticket |
-| Hooks on a made seat | The operator and the person | The operator |
-| Hooks on a person's own account | The person, in their session | Refused |
+| [The person's own session](#the-persons-own-session) | On a seat's own host, made or on their own account; the ticket from a `0600` file | The same; the ticket from the seat host's person pipe |
+| What that session reaches on the seat host | Every `profile-data` and `profile-exec` route | Their hooks and their own titles |
+| Hooks on a made seat | The operator and the person | The operator and the person |
+| Hooks on a person's own account | The person, in their session | The person, in their session |
 | Plugins on a made seat | The seat account's own runner | None: an install answers 409 |
 | Plugins on a person's own account | Their seat's own runner, which the person alone switches and installs into, in their session | None |
 | The box's titles on its seat | Steam and emulator titles it can start as its own user | Every title but those of one account's sources |
 | Emulators | Installed box-wide; config and saves are the account's | The box's copies; saves and firmware through the box host's `?profile=` |
 | A seat on an existing account | Yes, opened by its password or a device key | On Windows Server |
 
-Open on Windows: the person's own session, a seat's own plugin runner, and a plugin's page for a
-seat.
+Open on Windows: a seat's own plugin runner, and a plugin's page for a seat.
 
 ## Checking a seat can actually stream
 
@@ -822,8 +822,8 @@ reaches this lane.
 - **The token.** At start the seat host writes 32 random bytes as hex to `person-token` in
   `PUNKTFUNK_CONFIG_DIR`, mode `0600`, owned by its uid, in a folder it owns; it refuses a folder
   that is a link, another uid's, or open to group or others, and the lane stays closed. No copy
-  list of the supervisor names the file. The owner's row, the door, a plain host and a Windows
-  seat write none and take no ticket.
+  list of the supervisor names the file. The owner's row, the door and a plain host write none
+  and take no ticket. A Windows seat keeps its token in memory ([below](#a-windows-seats-person)).
 - **The ticket.** `punktfunk-host ctl console-url`, run as the person in the seat, signs
   `<unix s>.<32 hex nonce>.<profile id>.<HMAC-SHA256 hex>` over
   `pf-person-session:v1:<unix s>:<nonce>:<profile id>` with the token, and writes a page opening
@@ -841,7 +841,8 @@ reaches this lane.
   profile from the seat's trust copy, `{id, display_name, accent?, has_avatar}`, and
   `GET auth/person/profile/avatar` its picture; any other lane gets 404.
 - **On the box.** The console sends `X-Punktfunk-Person-Session` and `X-Punktfunk-Person-Profile`
-  with no bearer, and `?as=` naming that profile, to the door from loopback. The door asks the
+  with no bearer, and `?as=` naming that profile, to the door (on Windows the box host) from
+  loopback. The door asks the
   profile's seat host `POST /api/v1/auth/person/verify` `{"token"}` with its admin token, and
   takes the call only when the answer names that profile; any other call answers 401
   `person_session_ended`. Refusals are not counted, so no other local caller can close a
@@ -874,6 +875,27 @@ reaches this lane.
   (`plugins_own_account` while the person lane is closed) and reads `store/runtime` as not
   installed; a catalog source is refused to the person too, with
   `plugin_own_account_unreviewed`. The `plugins` CLI there only reads.
+
+#### A Windows seat's person
+
+A Windows seat host is SYSTEM, so no file is the seat account's alone. It keeps its person token
+in memory and hands out tickets in the same form through a pipe. The session, the box's half and
+the marks above are the same; on Windows the box host checks with the seat host itself.
+
+- **The pipe.** `\\.\pipe\punktfunk-person-<WTS session id>`, owned by SYSTEM, open to SYSTEM
+  and to the account signed in to the seat's session, labelled medium integrity with no read or
+  write up, refusing remote clients. A caller writes
+  `ticket\n`. The host reads the caller's token and answers one ticket line only when its user is
+  that account, its session the seat's, its integrity medium or higher and it runs in no
+  AppContainer; anyone else is hung up on.
+- **The way in.** `punktfunk-host ctl console-url` in the seat asks there, refuses a pipe SYSTEM
+  doesn't own, and prints `https://127.0.0.1:47992/_auth/person?ticket=<ticket>`; `--open` opens
+  it, or `/closed?why=refused` when no ticket came. The status tray's Open console runs that in
+  a session whose person pipe exists.
+- **What it reaches there.** `GET host`, `GET status`, their profile and picture, their hooks and
+  their own titles (`library/custom` and its art). Every other profile route is 403: that host
+  would act as SYSTEM on what the call names. A hook the person saves names no
+  `hmac_secret_file` (`hooks_secret_file_person`). Plugins and emulators stay the box's.
 
 #### Who opens a person's seat
 
