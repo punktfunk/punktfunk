@@ -32,7 +32,8 @@ let consoleDrawable: MTLPixelFormat = {
 /// What the view hands back to its owner. The view itself knows nothing about hosts.
 @MainActor
 public protocol ConsoleViewDelegate: AnyObject {
-    /// A frame is about to be drawn: the moment to drain what the shell raised.
+    /// The frame call returned, drawn or idle: the moment to drain what the shell raised. Not
+    /// called on a tick with no drawable.
     func consoleDidDrawFrame()
     /// The console asked to quit — a Back the shell did not take (tvOS Menu at the root).
     func consoleDidRequestQuit()
