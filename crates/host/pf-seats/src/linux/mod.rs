@@ -27,6 +27,7 @@ mod devices;
 #[cfg(test)]
 mod fake;
 pub mod fence;
+mod firefox;
 mod flatpak;
 pub mod handover;
 mod libraries;
@@ -1534,20 +1535,30 @@ impl LinuxBackend {
 }
 
 /// Keeps every running seat level with the box, every [`TRUST_TICK`], one job after another: the
-/// box's library, each seat's copies and the desk yield of a row on a person's own account, a made
-/// seat's missed libraries every [`REACH_EVERY`], the games folder's ACL mask. Each job's memory
-/// is a local here, handed to it. The owner's row stays listed while its host is the owner's own,
-/// which reads the same copy. Ends when the backend is dropped.
+/// box's library, the console's certificate in Firefox, each seat's copies and the desk yield of a
+/// row on a person's own account, a made seat's missed libraries every [`REACH_EVERY`], the games
+/// folder's ACL mask. Each job's memory is a local here, handed to it. The owner's row stays listed
+/// while its host is the owner's own, which reads the same copy. Ends when the backend is dropped.
 fn keep_level(inner: Weak<Inner>) {
     let mut acl_at = Instant::now();
     let mut reach_at = Instant::now();
     let mut failing: HashSet<SeatId> = HashSet::new();
     let mut explained: HashMap<SeatId, String> = HashMap::new();
     let mut library_failing = false;
+    let mut firefox_failing = false;
     loop {
         std::thread::sleep(TRUST_TICK);
         let Some(inner) = inner.upgrade() else { return };
-        level_box_library(&inner, &mut library_failing);
+        once_per_outage(
+            refresh_box_library(&inner),
+            &mut library_failing,
+            "box library not copied",
+        );
+        once_per_outage(
+            firefox::level(&inner.box_dir),
+            &mut firefox_failing,
+            "console certificate not installed for Firefox",
+        );
         let seats: Vec<(SeatId, Tracked)> = inner
             .running
             .lock()
@@ -1571,14 +1582,13 @@ fn keep_level(inner: Weak<Inner>) {
     }
 }
 
-/// Brings the box's library level with the owner's own. A failure is logged once per outage:
-/// `failing` says whether the last one failed.
-fn level_box_library(inner: &Inner, failing: &mut bool) {
-    match refresh_box_library(inner) {
+/// Logs `result`'s error as `what` once per outage: `failing` says whether the last one failed.
+fn once_per_outage<T, E: std::fmt::Display>(result: Result<T, E>, failing: &mut bool, what: &str) {
+    match result {
         Ok(_) => *failing = false,
         Err(error) if !*failing => {
             *failing = true;
-            tracing::warn!(%error, "box library not copied");
+            tracing::warn!(%error, "{what}");
         }
         Err(_) => {}
     }
