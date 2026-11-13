@@ -8,7 +8,8 @@
 //! [`super::au_assembly`].
 
 use std::mem::offset_of;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -143,25 +144,47 @@ fn clock_hold(backend_opened: u32) -> Option<super::clock_boost::ClockBoost> {
         .and_then(|gpu| super::clock_boost::ClockBoost::hold(gpu.info.luid()))
 }
 
+/// A source's poke for the proxy it opened last: the flag that proxy's
+/// [`Encoder::ready_aus`] takes, and the signal of its AU event.
+#[derive(Default)]
+pub(crate) struct Poke {
+    flag: Arc<AtomicBool>,
+    signal: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+}
+
+impl Poke {
+    /// Raise the flag, then wake the proxy's wait.
+    pub(crate) fn fire(&self) {
+        self.flag.store(true, Ordering::Relaxed);
+        let signal = self.signal.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(signal) = signal.as_ref() {
+            signal();
+        }
+    }
+}
+
 /// Open the far side's encoder for `params` and hand back the stream loop's [`Encoder`]: plant
 /// a section in its process, stamp the header, send `SET_ENCODE`. Structured failure:
 /// [`DriverEncodeOpenError`] when the far side walked the list and none opened, else the
-/// delivery error. There is no fallback.
+/// delivery error. There is no fallback. An open that succeeds takes `poke` over.
 ///
-/// The framing rides the request's v10 tail, after the surface size a far side that reads no
-/// framing opens at; caps say whether it framed ([`caps_from_wire`]).
+/// The heap holds the session's peak rate, so an IDR after a climb still fits. The framing
+/// rides the request's v10 tail, after the surface size a far side that reads no framing
+/// opens at; caps say whether it framed ([`caps_from_wire`]).
 pub(crate) fn open(
     t: &dyn Transport,
     params: &DriverEncodeParams,
     clocks: Clocks,
+    poke: &Poke,
 ) -> Result<Box<dyn Encoder>> {
     let target_id = t.endpoint().target_id;
-    let heap = au::heap_bytes_for(params.bitrate_kbps, params.fps);
+    let heap = au::heap_bytes_for(params.peak_kbps.max(params.bitrate_kbps), params.fps);
     let Planted {
         memory,
         section: section_v,
         event: event_v,
     } = t.handles().plant(au::section_bytes(heap) as usize)?;
+    let signal = memory.signal();
     // SAFETY: the reader built over this view lives in the proxy beside `memory`, declared
     // ahead of it, so it drops first; every earlier return drops `memory` after the view's
     // last use.
@@ -258,7 +281,9 @@ pub(crate) fn open(
         wire_seq_base = params.wire_seq_base,
         "driver encode: encoder open, AU section adopted"
     );
+    *poke.signal.lock().unwrap_or_else(|e| e.into_inner()) = Some(signal);
     Ok(Box::new(EncoderProxy {
+        poked: poke.flag.clone(),
         au: AuAssembly::new(
             AuReader::new(view, params.wire_seq_base),
             clocks,
@@ -298,6 +323,8 @@ const HDR_META_RETRY: Duration = Duration::from_secs(1);
 pub struct EncoderProxy {
     au: AuAssembly<'static>,
     section: Box<dyn AuMemory>,
+    /// The source's [`Poke`] flag: set, it ends a [`Encoder::ready_aus`] wait with nothing owed.
+    poked: Arc<AtomicBool>,
     target_id: u32,
     ctl: EncodeCtlSender,
     caps: EncoderCaps,
@@ -545,10 +572,13 @@ impl Encoder for EncoderProxy {
         })
     }
 
+    /// Owed access units, waited for until `deadline`. A poke ends the wait with `Some(0)` and
+    /// is taken, so the loop's next tick carries a recovery ask; one that finds AUs waiting
+    /// stays for the wait after them.
     fn ready_aus(&mut self, deadline: Instant) -> Option<usize> {
         loop {
             let n = self.au.reader.ready_aus();
-            if n > 0 {
+            if n > 0 || self.poked.swap(false, Ordering::Relaxed) {
                 return Some(n);
             }
             let left = deadline.saturating_duration_since(Instant::now());
@@ -663,7 +693,7 @@ mod tests {
             let (t, far) = fake::transport(EncoderSite::Driver);
             far.lock().unwrap().refuse = Some(refusal);
             let params = fake::params(1920, 1080, false, 0);
-            let err = open(&t, &params, fake::clock::CLOCKS)
+            let err = open(&t, &params, fake::clock::CLOCKS, &Poke::default())
                 .err()
                 .expect("a refused open");
             let far = far.lock().unwrap();
@@ -696,7 +726,8 @@ mod tests {
                 src_rect: crop,
                 ..fake::params(3840, 2160, false, 0)
             };
-            let mut enc = open(&t, &params, fake::clock::CLOCKS).expect("an encoder");
+            let mut enc =
+                open(&t, &params, fake::clock::CLOCKS, &Poke::default()).expect("an encoder");
             let req = far.lock().unwrap().set_encodes[0];
             assert_eq!((req.width, req.height), (3840, 2160));
             assert_eq!((req.encode_width, req.encode_height), (1920, 960));
@@ -709,7 +740,7 @@ mod tests {
         // Unframed, the tail is zero: the request a v9 host sent.
         let (t, far) = fake::transport(EncoderSite::Driver);
         let params = fake::params(1920, 1080, false, 0);
-        let _enc = open(&t, &params, fake::clock::CLOCKS).expect("an encoder");
+        let _enc = open(&t, &params, fake::clock::CLOCKS, &Poke::default()).expect("an encoder");
         let req = far.lock().unwrap().set_encodes[0];
         assert_eq!((req.width, req.height), (1920, 1080));
         assert_eq!(
@@ -726,5 +757,63 @@ mod tests {
             include_str!("encoder.rs"),
             "impl Encoder for EncoderProxy {",
         );
+    }
+
+    /// The section's heap holds the session's peak rate, not the rate it opens at.
+    #[test]
+    fn the_heap_is_sized_for_the_peak_rate() {
+        let (t, far) = fake::transport(EncoderSite::Driver);
+        let params = DriverEncodeParams {
+            peak_kbps: 200_000,
+            ..fake::params(1920, 1080, false, 0)
+        };
+        let _enc = open(&t, &params, fake::clock::CLOCKS, &Poke::default()).expect("an encoder");
+        let heap = au::heap_bytes_for(200_000, 60);
+        assert!(heap > au::heap_bytes_for(20_000, 60));
+        let req = far.lock().unwrap().set_encodes[0];
+        assert_eq!(req.section_bytes, au::section_bytes(heap));
+    }
+
+    /// A poke ends the loop's access-unit wait at once with nothing owed, and is taken; with
+    /// none the wait runs to its deadline. One that finds an AU waiting stays for the next wait.
+    #[test]
+    fn a_poke_ends_the_access_unit_wait() {
+        let (t, far) = fake::transport(EncoderSite::Driver);
+        let poke = Poke::default();
+        let params = fake::params(1920, 1080, false, 0);
+        let mut enc = open(&t, &params, fake::clock::CLOCKS, &poke).expect("an encoder");
+        let quiet = Duration::from_millis(50);
+        let t0 = Instant::now();
+        assert_eq!(enc.ready_aus(t0 + quiet), Some(0));
+        let unpoked = t0.elapsed();
+        assert!(unpoked >= quiet, "{unpoked:?}");
+        let t0 = Instant::now();
+        let (woke, poked) = std::thread::scope(|s| {
+            let fired = s.spawn(|| {
+                std::thread::sleep(Duration::from_millis(20));
+                let at = Instant::now();
+                poke.fire();
+                at
+            });
+            let woke = enc.ready_aus(t0 + Duration::from_secs(2));
+            let back = Instant::now();
+            (woke, back - fired.join().unwrap())
+        });
+        assert_eq!(woke, Some(0));
+        assert!(poked < Duration::from_millis(500), "{poked:?}");
+        let t0 = Instant::now();
+        assert_eq!(enc.ready_aus(t0 + quiet), Some(0));
+        assert!(t0.elapsed() >= quiet, "the poke was taken");
+        far.lock().unwrap().frame(true);
+        poke.fire();
+        assert_eq!(enc.ready_aus(Instant::now()), Some(1), "the AU first");
+        assert!(enc.poll_chunk().unwrap().is_some());
+        let t0 = Instant::now();
+        assert_eq!(enc.ready_aus(t0 + Duration::from_secs(2)), Some(0));
+        assert!(
+            t0.elapsed() < Duration::from_secs(1),
+            "the poke ended the next wait"
+        );
+        println!("ready_aus: {unpoked:?} unpoked, to its deadline; {poked:?} from a poke");
     }
 }

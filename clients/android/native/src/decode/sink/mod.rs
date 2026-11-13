@@ -40,8 +40,8 @@ pub(super) struct Routed {
 
 /// One present backend, as the decode loop drives it.
 pub(super) trait Sink {
-    /// The ASurfaceControl sink: the rate vote, the render callback, the decode-stage meter and
-    /// the completion sender follow from it.
+    /// The ASurfaceControl sink: the rate vote, the render callback and the completion sender
+    /// follow from it.
     fn is_asc(&self) -> bool;
 
     /// The sink paces against the vsync clock (every sink but the SurfaceView arrival path).

@@ -192,9 +192,10 @@ fn capture_external_output(
 }
 
 /// Open a remote-encoder source's encoder (the driver's, or a capture worker's) at the depth the
-/// display composes now, and record it under the name of what opened. The heap is sized from
-/// the opening rate; ABR climbs past twice it eat the burst margin. `client_hdr` replaces the
-/// capturer's HDR baseline, as the stream loop does, so the first IDR carries the client's panel.
+/// display composes now, and record it under the name of what opened. The heap is sized for the
+/// most the client's ABR climbs to on this stream, so a later IDR still fits. `client_hdr`
+/// replaces the capturer's HDR baseline, as the stream loop does, so the first IDR carries the
+/// client's panel.
 /// `framing` is the picture asked of each surface, sent with the open: a far side that frames
 /// takes the crop and scales to `framing.out`, any other opens at `framing.source`, and the caps
 /// say which happened.
@@ -220,6 +221,19 @@ pub(crate) fn open_driver_encoder(
         EncoderBackend::MediaFoundation => Some(be::MEDIA_FOUNDATION),
         EncoderBackend::Software | EncoderBackend::PlatformAuto => None,
     };
+    // The client's ABR climbs no higher than the stream's shape can use; PyroWave keeps its pin.
+    let peak_bitrate_bps = match plan.codec {
+        crate::encode::Codec::PyroWave => bitrate_bps,
+        codec => {
+            let (w, h) = framing.out;
+            let (wire, chroma) = (
+                crate::encode::codec_to_wire(codec),
+                crate::encode::chroma_idc(plan.chroma),
+            );
+            let kbps = punktfunk_core::abr::stream_ceiling_kbps(w, h, fps, wire, bit_depth, chroma);
+            u64::from(kbps) * 1000
+        }
+    };
     // The capturer reports HDR metadata exactly while the display composes FP16.
     let colour = capturer.colour();
     let (hdr, bit_depth) =
@@ -238,6 +252,7 @@ pub(crate) fn open_driver_encoder(
         out: framing.out,
         fps,
         bitrate_bps,
+        peak_bitrate_bps,
         slices: plan.slices,
         wire_chunk: plan.wire_chunk,
         wire_seq_base,

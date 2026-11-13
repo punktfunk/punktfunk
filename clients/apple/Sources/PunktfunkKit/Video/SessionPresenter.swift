@@ -585,8 +585,8 @@ final class SessionPresenter {
         restartPresentation()
     }
 
-    /// Whether the window can scan out Direct — fullscreen, nothing of the app's own over the
-    /// video. Kept for each pipeline this presenter builds. Main thread.
+    /// Whether the window is fullscreen, so can scan out Direct. Kept for each pipeline this
+    /// presenter builds. Main thread.
     func setDirectPossible(_ possible: Bool) {
         directPossible = possible
         stage2?.setDirectPossible(possible)

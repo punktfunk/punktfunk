@@ -504,20 +504,21 @@ final class DeadlineSelectorTests: XCTestCase {
     func testTheHostRateSetsTheCarryBoundOnceEveryWindow() {
         let p = 1.0 / 120
         var selector = DeadlineSelector(latePick: true, now: 10)
-        selector.noteRate(at: 11.9, period: p) { XCTFail("the window is not up"); return 0 }
-        selector.noteRate(at: 12, period: 0) { XCTFail("no period yet"); return 0 }
+        let w = DeadlineSelector.rateWindow
+        selector.noteRate(at: 10 + w - 0.1, period: p) { XCTFail("the window is not up"); return 0 }
+        selector.noteRate(at: 10 + w, period: 0) { XCTFail("no period yet"); return 0 }
         XCTAssertTrue(
             selector.endWindow(report: true) { "x" }!.contains("carryBound=24 hostHz=0.0 "),
             "unmeasured: the base bound")
-        // 238 frames in 2 s: 119 fps under a 120 Hz panel, so a hold ends within a beat.
-        selector.noteRate(at: 12, period: p) { 238 }
+        // 952 frames in 8 s: 119 fps under a 120 Hz panel, so a hold ends within a beat.
+        selector.noteRate(at: 10 + w, period: p) { 952 }
         let bound = Carry.run(forSlowBy: 1 / p - 119, period: p)
         XCTAssertGreaterThan(bound, Carry.maxRun)
         XCTAssertTrue(
             selector.endWindow(report: true) { "x" }!.contains("carryBound=\(bound) hostHz=119.0 "))
-        selector.noteRate(at: 13, period: p) { XCTFail("a new window opened at 12"); return 0 }
+        selector.noteRate(at: 11 + w, period: p) { XCTFail("a new window opened at 10 + w"); return 0 }
         // A host at the panel's rate keeps the base bound.
-        selector.noteRate(at: 14, period: p) { 238 + 240 }
+        selector.noteRate(at: 10 + 2 * w, period: p) { 952 + 960 }
         XCTAssertTrue(
             selector.endWindow(report: true) { "x" }!.contains("carryBound=24 hostHz=120.0 "))
     }

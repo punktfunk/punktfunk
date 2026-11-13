@@ -209,10 +209,13 @@ impl StreamState {
         self.publish_arrival_poke();
     }
 
-    /// The running capturer's arrival poke, for the control task. A stale handle after a
-    /// swap only pokes a capturer that is gone.
+    /// The running capturer's poke, for the control task: its feed's, or its remote encoder's,
+    /// which reaches every proxy the capturer opens. A stale handle after a swap only pokes a
+    /// capturer that is gone.
     pub(super) fn publish_arrival_poke(&mut self) {
-        let poke = self.live.capturer.feed().and_then(|f| f.arrival_poke());
+        let capturer = &mut self.live.capturer;
+        let poke = (capturer.feed().and_then(|f| f.arrival_poke()))
+            .or_else(|| capturer.remote_encoder().and_then(|r| r.arrival_poke()));
         *self
             .shared
             .arrival_poke
@@ -601,6 +604,7 @@ pub(super) mod tests {
                 driver_dropped: Default::default(),
                 screen_wire: Arc::new(crate::native::wiring::ScreenWire::new()),
                 send_spread_us: Default::default(),
+                keyframe_left: Default::default(),
                 wire_rekeys: Default::default(),
                 live_mode: Arc::new(AtomicU64::new(0)),
                 force_idr: Default::default(),

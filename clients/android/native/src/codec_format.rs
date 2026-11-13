@@ -229,6 +229,18 @@ pub(crate) fn p50_max_ms(mut v: Vec<u64>) -> (f64, f64) {
     )
 }
 
+/// p50, p95 and max of µs samples, in ms, ranked as every client stat is
+/// ([`punktfunk_core::hud::rank`]). Zeros when empty.
+pub(crate) fn p50_p95_max_ms(mut v: Vec<u64>) -> (f64, f64, f64) {
+    if v.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    v.sort_unstable();
+    let ms = |us: u64| us as f64 / 1000.0;
+    let rank = punktfunk_core::hud::rank;
+    (ms(rank(&v, 50)), ms(rank(&v, 95)), ms(v[v.len() - 1]))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -438,6 +450,29 @@ mod tests {
         ];
         for (name, samples, want) in rows {
             assert_eq!(p50_max_ms(samples.to_vec()), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn p50_p95_max_ms_ranks_like_every_client_stat() {
+        let twenty: Vec<u64> = (1..=20).map(|k| k * 1000).collect();
+        // (name, samples in µs, (p50, p95, max) in ms)
+        let rows = [
+            ("no samples", vec![], (0.0, 0.0, 0.0)),
+            ("one sample", vec![1500], (1.5, 1.5, 1.5)),
+            (
+                "p95 of twenty is the last",
+                twenty.clone(),
+                (11.0, 20.0, 20.0),
+            ),
+            (
+                "one spike in forty-one, unsorted",
+                [twenty.clone(), twenty, vec![9_000_000]].concat(),
+                (11.0, 20.0, 9000.0),
+            ),
+        ];
+        for (name, samples, want) in rows {
+            assert_eq!(p50_p95_max_ms(samples), want, "{name}");
         }
     }
 

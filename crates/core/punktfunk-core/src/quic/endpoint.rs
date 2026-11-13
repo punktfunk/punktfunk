@@ -138,6 +138,7 @@ fn server_from_der(
 /// A host endpoint answering `alpns`, and a clone of its socket for
 /// [`MediaSender`](crate::transport::shared::MediaSender). TLS takes the first of the host's
 /// ALPNs the client offers, so listing `pkf2` first picks it wherever both ends speak it.
+/// Its QUIC packets carry the video mark, as the media does.
 pub fn server_shared(
     addr: std::net::SocketAddr,
     cert_pem: &str,
@@ -156,7 +157,8 @@ pub fn server_shared(
     let media = socket.try_clone()?;
     let runtime = quinn::default_runtime()
         .ok_or_else(|| anyhow_result::Error::msg("no async runtime found".into()))?;
-    let ep = quinn::Endpoint::new(
+    let socket = crate::transport::shared::host_socket(socket, &*runtime)?;
+    let ep = quinn::Endpoint::new_with_abstract_socket(
         quinn::EndpointConfig::default(),
         Some(server_config),
         socket,

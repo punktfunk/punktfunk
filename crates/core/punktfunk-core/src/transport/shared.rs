@@ -502,19 +502,103 @@ fn send_connected(
     Ok(())
 }
 
+/// Sends `t` with `class`'s DSCP in its own TOS byte toward a peer the mark applies to
+/// ([`super::set_media_qos_to`]). quinn-udp gives every packet a TOS of its ECN bits, which
+/// Linux reads over the socket's mark. Unmarked or refused, `t` goes through `quinn_send`,
+/// which owns `WouldBlock`, GSO and error handling.
+fn send_marked(
+    socket: &UdpSocket,
+    t: &Transmit,
+    class: super::MediaClass,
+    quinn_send: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    if super::qos::dscp_enabled_for(Some(t.destination)) {
+        let tos = (class.dscp() << 2) as u8 | t.ecn.map_or(0, |e| e as u8);
+        if super::udp::send_with_tos(socket, t, tos).is_ok() {
+            return Ok(());
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let _ = (socket, t, class);
+    quinn_send()
+}
+
+/// The host endpoint's socket: quinn's own, its packets marked as video ([`send_marked`]).
+#[derive(Debug)]
+struct HostSocket {
+    inner: Arc<dyn quinn::AsyncUdpSocket>,
+    /// The same socket, for the marked send.
+    socket: UdpSocket,
+}
+
+/// quinn's socket for the host endpoint, wrapped by `runtime`, with marked sends.
+pub(crate) fn host_socket(
+    socket: UdpSocket,
+    runtime: &dyn quinn::Runtime,
+) -> std::io::Result<Arc<dyn quinn::AsyncUdpSocket>> {
+    let marked = socket.try_clone()?;
+    Ok(Arc::new(HostSocket {
+        inner: runtime.wrap_udp_socket(socket)?,
+        socket: marked,
+    }))
+}
+
+impl quinn::AsyncUdpSocket for HostSocket {
+    fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn quinn::UdpPoller>> {
+        self.inner.clone().create_io_poller()
+    }
+
+    /// A refused marked send goes through quinn's own, which clears the readiness a
+    /// `WouldBlock` leaves set.
+    fn try_send(&self, transmit: &Transmit) -> std::io::Result<()> {
+        send_marked(&self.socket, transmit, super::MediaClass::Video, || {
+            self.inner.try_send(transmit)
+        })
+    }
+
+    fn poll_recv(
+        &self,
+        cx: &mut Context,
+        bufs: &mut [IoSliceMut<'_>],
+        meta: &mut [RecvMeta],
+    ) -> Poll<std::io::Result<usize>> {
+        self.inner.poll_recv(cx, bufs, meta)
+    }
+
+    fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.inner.local_addr()
+    }
+
+    fn max_transmit_segments(&self) -> usize {
+        self.inner.max_transmit_segments()
+    }
+
+    fn max_receive_segments(&self) -> usize {
+        self.inner.max_receive_segments()
+    }
+
+    fn may_fragment(&self) -> bool {
+        self.inner.may_fragment()
+    }
+}
+
 impl quinn::AsyncUdpSocket for ClientSocket {
     fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn quinn::UdpPoller>> {
         Box::pin(RetrySoon(None))
     }
 
-    /// Held across the send: [`ClientMedia::set_host`] connects under the same lock.
+    /// Held across the send: [`ClientMedia::set_host`] connects under the same lock. An
+    /// unconnected send carries the audio mark (`send_marked`).
     fn try_send(&self, transmit: &Transmit) -> std::io::Result<()> {
         let peer = self.peer.lock().unwrap_or_else(|e| e.into_inner());
         match *peer {
             Some(p) if canonical(transmit.destination) == p => {
                 send_connected(&self.socket, p, transmit, &self.stats)
             }
-            _ => self.state.send((&*self.socket).into(), transmit),
+            _ => send_marked(&self.socket, transmit, super::MediaClass::Audio, || {
+                self.state.send((&*self.socket).into(), transmit)
+            }),
         }
     }
 
@@ -742,25 +826,66 @@ impl MediaSender {
         Some((r.to, self.conn.local_ip()))
     }
 
+    /// One send of the packets in `run`, cut at `segment`, marked as video as [`send_marked`]
+    /// marks. Where the mark applies the kernel gathers the run from the packets themselves.
+    /// quinn-udp's send takes one buffer, so a run of more than one is copied into `staging`.
     fn transmit(
         &self,
         to: SocketAddr,
         from: Option<IpAddr>,
-        contents: &[u8],
+        run: &[&[u8]],
         segment: Option<usize>,
     ) -> std::io::Result<()> {
-        self.state.send(
-            (&self.socket).into(),
-            &Transmit {
-                destination: to,
-                ecn: None,
-                contents,
-                segment_size: segment,
-                src_ip: from,
-            },
-        )
+        // Whether the gathered send went out, where the mark applies.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        let marked =
+            (run.len() <= GATHER_MAX && super::qos::dscp_enabled_for(Some(to))).then(|| {
+                let mut iov = [std::io::IoSlice::new(&[]); GATHER_MAX];
+                for (slot, p) in iov.iter_mut().zip(run) {
+                    *slot = std::io::IoSlice::new(p);
+                }
+                let tos = (super::MediaClass::Video.dscp() << 2) as u8;
+                let iov = &iov[..run.len()];
+                super::udp::send_gathered_with_tos(&self.socket, to, from, iov, segment, tos)
+                    .is_ok()
+            });
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        let marked = None;
+        if marked == Some(true) {
+            return Ok(());
+        }
+        let mut staging = None;
+        let contents = match run {
+            [p] => *p,
+            _ => {
+                let s = staging.insert(self.staging.lock().unwrap_or_else(|e| e.into_inner()));
+                s.clear();
+                for p in run {
+                    s.extend_from_slice(p);
+                }
+                &s[..]
+            }
+        };
+        let t = Transmit {
+            destination: to,
+            ecn: None,
+            contents,
+            segment_size: segment,
+            src_ip: from,
+        };
+        let quinn = || self.state.send((&self.socket).into(), &t);
+        match marked {
+            // Refused marked, the run leaves through quinn-udp as `send_marked` falls back.
+            Some(_) => quinn(),
+            None => send_marked(&self.socket, &t, super::MediaClass::Video, quinn),
+        }
     }
 }
+
+/// Packets one gathered send takes at most: quinn-udp's GSO segment limit, far under the
+/// kernel's 1024 buffers a call (`UIO_MAXIOV`).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const GATHER_MAX: usize = 64;
 
 /// A held packet counts as sent: it is lost on the way, as on a link that dropped it.
 impl Transport for MediaSender {
@@ -768,7 +893,7 @@ impl Transport for MediaSender {
         let Some((to, from)) = self.path() else {
             return Ok(true);
         };
-        match self.transmit(to, from, packet, None) {
+        match self.transmit(to, from, &[packet], None) {
             Ok(()) => Ok(true),
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
             Err(e) => Err(e),
@@ -780,7 +905,7 @@ impl Transport for MediaSender {
             return Ok(packets.len());
         };
         for (i, p) in packets.iter().enumerate() {
-            match self.transmit(to, from, p, None) {
+            match self.transmit(to, from, std::slice::from_ref(p), None) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(i),
                 Err(e) => return Err(e),
@@ -789,11 +914,11 @@ impl Transport for MediaSender {
         Ok(packets.len())
     }
 
-    /// Runs of equal-size packets leave as one offloaded send, each run within the platform's
-    /// segment limit and under the UDP payload bound of either IP family; the last packet of a
-    /// run may be shorter. An oversize run is `EMSGSIZE`, which quinn-udp reports as sent.
-    /// With `PUNKTFUNK_GSO=0`, or once the session's loss guard cleared the switch, packets
-    /// leave one by one.
+    /// Runs of equal-size packets leave as one offloaded send ([`Self::transmit`]), each run
+    /// within the platform's segment limit and under the UDP payload bound of either IP family;
+    /// the last packet of a run may be shorter. An oversize run is `EMSGSIZE`, which quinn-udp
+    /// reports as sent. With `PUNKTFUNK_GSO=0`, or once the session's loss guard cleared the
+    /// switch, packets leave one by one.
     fn send_gso(&self, packets: &[&[u8]]) -> std::io::Result<usize> {
         const GSO_MAX_PAYLOAD: usize = 65535 - 40 - 8;
         let max = self.state.max_gso_segments();
@@ -803,7 +928,6 @@ impl Transport for MediaSender {
         let Some((to, from)) = self.path() else {
             return Ok(packets.len());
         };
-        let mut staging = self.staging.lock().unwrap_or_else(|e| e.into_inner());
         let mut sent = 0;
         while sent < packets.len() {
             let size = packets[sent].len();
@@ -816,12 +940,8 @@ impl Transport for MediaSender {
             {
                 end += 1;
             }
-            staging.clear();
-            for p in &packets[sent..end] {
-                staging.extend_from_slice(p);
-            }
             let segment = (end - sent > 1).then_some(size);
-            match self.transmit(to, from, &staging, segment) {
+            match self.transmit(to, from, &packets[sent..end], segment) {
                 Ok(()) => sent = end,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(sent),
                 Err(e) => return Err(e),
@@ -1273,5 +1393,388 @@ mod tests {
             pool.take().is_none(),
             "a buffer dropped outside a batch is gone for good"
         );
+    }
+
+    /// The DSCP mark as it arrives, read where Linux reports it.
+    #[cfg(target_os = "linux")]
+    mod marks {
+        use super::*;
+        use crate::transport::{qos::dscp_enabled_for, udp::send_with_tos, MediaClass};
+        use quinn::udp::EcnCodepoint;
+
+        /// One datagram from `socket`, which has `IP_RECVTOS` or `IPV6_RECVTCLASS` on: its
+        /// length and the TOS byte or traffic class the kernel reports beside it.
+        #[allow(unsafe_code)]
+        fn recv_tos(socket: &UdpSocket, buf: &mut [u8]) -> std::io::Result<(usize, u8)> {
+            use std::os::fd::AsRawFd;
+            let mut ctrl = [0u8; 64];
+            let mut iov = libc::iovec {
+                iov_base: buf.as_mut_ptr().cast(),
+                iov_len: buf.len(),
+            };
+            let mut msg = libc::msghdr {
+                msg_name: std::ptr::null_mut(),
+                msg_namelen: 0,
+                msg_iov: &mut iov,
+                msg_iovlen: 1,
+                msg_control: ctrl.as_mut_ptr().cast(),
+                msg_controllen: ctrl.len() as _,
+                msg_flags: 0,
+            };
+            // SAFETY: `msg` names `iov`, `buf` and `ctrl` with their real lengths, all three
+            // outlive the call, and `socket` keeps the fd open across it.
+            let n = unsafe { libc::recvmsg(socket.as_raw_fd(), &mut msg, 0) };
+            if n < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // One control message: a word of length, level and type, then the value.
+            let word = std::mem::size_of::<usize>();
+            let head = std::mem::size_of::<libc::cmsghdr>();
+            let len = usize::from_ne_bytes(ctrl[..word].try_into().unwrap());
+            let value = match &ctrl[head..len] {
+                [tos] => *tos,
+                class => i32::from_ne_bytes(class.try_into().unwrap()) as u8,
+            };
+            Ok((n as usize, value))
+        }
+
+        /// Each datagram one way through a [`TosProxy`]: first byte, length, TOS.
+        type Seen = Arc<Mutex<Vec<(u8, usize, u8)>>>;
+
+        /// A relay between client and host that notes every datagram both ways.
+        struct TosProxy {
+            front: SocketAddr,
+            up: Seen,
+            down: Seen,
+            stop: Arc<AtomicBool>,
+        }
+
+        impl TosProxy {
+            fn start(host: SocketAddr) -> TosProxy {
+                let bind = || {
+                    let s = UdpSocket::bind("127.0.0.1:0").unwrap();
+                    s.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+                    socket2::SockRef::from(&s).set_recv_tos_v4(true).unwrap();
+                    Arc::new(s)
+                };
+                let (front, back) = (bind(), bind());
+                let client: Arc<Mutex<Option<SocketAddr>>> = Arc::default();
+                let (up, down) = (Seen::default(), Seen::default());
+                let stop = Arc::new(AtomicBool::new(false));
+                let (f, b, seen, s, c) = (
+                    front.clone(),
+                    back.clone(),
+                    up.clone(),
+                    stop.clone(),
+                    client.clone(),
+                );
+                std::thread::spawn(move || {
+                    let mut buf = vec![0u8; 65536];
+                    while !s.load(Ordering::Relaxed) {
+                        let Ok((_, from)) = f.peek_from(&mut buf) else {
+                            continue;
+                        };
+                        let Ok((n, tos)) = recv_tos(&f, &mut buf) else {
+                            continue;
+                        };
+                        *c.lock().unwrap() = Some(from);
+                        seen.lock().unwrap().push((buf[0], n, tos));
+                        let _ = b.send_to(&buf[..n], host);
+                    }
+                });
+                let (f, b, seen, s) = (front.clone(), back, down.clone(), stop.clone());
+                std::thread::spawn(move || {
+                    let mut buf = vec![0u8; 65536];
+                    while !s.load(Ordering::Relaxed) {
+                        let Ok((n, tos)) = recv_tos(&b, &mut buf) else {
+                            continue;
+                        };
+                        seen.lock().unwrap().push((buf[0], n, tos));
+                        if let Some(to) = *client.lock().unwrap() {
+                            let _ = f.send_to(&buf[..n], to);
+                        }
+                    }
+                });
+                TosProxy {
+                    front: front.local_addr().unwrap(),
+                    up,
+                    down,
+                    stop,
+                }
+            }
+        }
+
+        impl Drop for TosProxy {
+            fn drop(&mut self) {
+                self.stop.store(true, Ordering::Relaxed);
+            }
+        }
+
+        /// Toward a private peer, media and the host's QUIC leave marked CS5 and the client's
+        /// QUIC CS6, with their ECN bits kept. A GSO group arrives as the datagrams it was
+        /// built from, in order. With DSCP off for the peer every packet leaves bare
+        /// ([`the_kill_switch_unmarks_the_wire`]).
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn marks_reach_the_wire() {
+            let mut proxy = None;
+            let (_server, socket, _client, media, host_conn, client_conn) = pair_with(|host| {
+                let p = TosProxy::start(host);
+                let front = p.front;
+                proxy = Some(p);
+                front
+            })
+            .await;
+            let proxy = proxy.unwrap();
+            let on = dscp_enabled_for(Some(proxy.front));
+            let (video, uplink) = if on { (0xA0, 0xC0) } else { (0, 0) };
+            let sender = MediaSender::new(&socket, host_conn.clone()).unwrap();
+            let singles: Vec<Vec<u8>> = (1..=3).map(|i| vec![i; 1100]).collect();
+            let group: Vec<Vec<u8>> = (4..=13)
+                .map(|i| vec![i; if i == 13 { 700 } else { 1100 }])
+                .collect();
+            for p in &singles {
+                assert!(sender.send(p).unwrap());
+            }
+            let refs: Vec<&[u8]> = group.iter().map(Vec::as_slice).collect();
+            assert_eq!(sender.send_gso(&refs).unwrap(), group.len());
+            client_conn.send_datagram(vec![7u8; 8].into()).unwrap();
+            host_conn.send_datagram(vec![9u8; 8].into()).unwrap();
+
+            let sent: Vec<Vec<u8>> = singles.into_iter().chain(group).collect();
+            let mut got = Vec::new();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while got.len() < sent.len() && Instant::now() < deadline {
+                let Some(batch) = media.recv_owned().unwrap() else {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                    continue;
+                };
+                let mut off = 0;
+                while let Some(r) = batch.at(off) {
+                    off = r.end;
+                    got.push(batch.bytes(r).to_vec());
+                }
+            }
+            assert_eq!(got, sent, "the client reads what the host sent");
+            let wait = Duration::from_secs(2);
+            assert!(tokio::time::timeout(wait, host_conn.read_datagram())
+                .await
+                .is_ok());
+            assert!(tokio::time::timeout(wait, client_conn.read_datagram())
+                .await
+                .is_ok());
+
+            let down = proxy.down.lock().unwrap().clone();
+            let up = proxy.up.lock().unwrap().clone();
+            let media_down: Vec<_> = down.iter().filter(|d| is_media(d.0)).copied().collect();
+            let expect: Vec<_> = sent.iter().map(|p| (p[0], p.len(), video)).collect();
+            assert_eq!(media_down, expect, "one datagram each, TOS {video:#x}");
+            for (who, seen, mark) in [("host", &down, video), ("client", &up, uplink)] {
+                let quic: Vec<u8> = seen
+                    .iter()
+                    .filter(|d| !is_media(d.0))
+                    .map(|d| d.2)
+                    .collect();
+                assert!(
+                    quic.iter().all(|tos| tos & 0xFC == mark),
+                    "{who} QUIC carries {mark:#x}: {quic:x?}"
+                );
+                assert!(
+                    quic.iter().any(|tos| tos & 3 == EcnCodepoint::Ect0 as u8),
+                    "{who} QUIC keeps ECT(0): {quic:x?}"
+                );
+            }
+        }
+
+        /// `PUNKTFUNK_DSCP=0` leaves every packet bare: [`marks_reach_the_wire`] in a process
+        /// started with it.
+        #[test]
+        fn the_kill_switch_unmarks_the_wire() {
+            if std::env::var_os("PUNKTFUNK_DSCP").is_some() {
+                return;
+            }
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "transport::shared::tests::marks::marks_reach_the_wire",
+                ])
+                .env("PUNKTFUNK_DSCP", "0")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success() && stdout.contains("1 passed"),
+                "{stdout}{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+
+        /// The marked send's TOS (IPv4) and traffic class (IPv6) arrive as sent, from the
+        /// source it names, singly and as a GSO group cut at its segment size.
+        #[test]
+        fn a_marked_send_keeps_its_tos_on_both_families() {
+            let mut buf = vec![0u8; 65536];
+            let mut families = 0;
+            for ip in ["127.0.0.1", "::1"] {
+                // A box without IPv6 loopback checks IPv4 only.
+                let Ok(rx) = UdpSocket::bind((ip, 0)) else {
+                    continue;
+                };
+                let to = rx.local_addr().unwrap();
+                let opt = socket2::SockRef::from(&rx);
+                if to.is_ipv4() {
+                    opt.set_recv_tos_v4(true).unwrap();
+                } else {
+                    opt.set_recv_tclass_v6(true).unwrap();
+                }
+                rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                let tx = UdpSocket::bind((ip, 0)).unwrap();
+                let payload = [0x01u8; 2500];
+                for (segment, lens) in [(None, &[2500][..]), (Some(1000), &[1000, 1000, 500])] {
+                    let t = Transmit {
+                        destination: to,
+                        ecn: Some(EcnCodepoint::Ect0),
+                        contents: &payload,
+                        segment_size: segment,
+                        src_ip: Some(to.ip()),
+                    };
+                    send_with_tos(&tx, &t, 0xA2).unwrap();
+                    for &len in lens {
+                        let got = recv_tos(&rx, &mut buf).unwrap();
+                        assert_eq!(got, (len, 0xA2), "{ip}, segment {segment:?}");
+                    }
+                }
+                families += 1;
+            }
+            assert!(families > 0);
+        }
+
+        /// A gathered send leaves the datagrams the send of the same packets in one buffer
+        /// does, byte for byte: a run with a short last packet, a run of equal packets, and a
+        /// single packet, on both families.
+        #[test]
+        fn a_gathered_send_matches_the_contiguous_one() {
+            use crate::transport::udp::send_gathered_with_tos;
+            let mut buf = vec![0u8; 65536];
+            let mut families = 0;
+            for ip in ["127.0.0.1", "::1"] {
+                let Ok(rx) = UdpSocket::bind((ip, 0)) else {
+                    continue;
+                };
+                let to = rx.local_addr().unwrap();
+                let opt = socket2::SockRef::from(&rx);
+                if to.is_ipv4() {
+                    opt.set_recv_tos_v4(true).unwrap();
+                } else {
+                    opt.set_recv_tclass_v6(true).unwrap();
+                }
+                rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                let tx = UdpSocket::bind((ip, 0)).unwrap();
+                let mut recv = |n: usize| -> Vec<(Vec<u8>, u8)> {
+                    (0..n)
+                        .map(|_| {
+                            let (len, tos) = recv_tos(&rx, &mut buf).unwrap();
+                            (buf[..len].to_vec(), tos)
+                        })
+                        .collect()
+                };
+                for lens in [&[1472, 1472, 1472, 300][..], &[1472; 4], &[1472]] {
+                    let packets: Vec<Vec<u8>> = lens
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &n)| (0..n).map(|b| (i * 31 + b) as u8).collect())
+                        .collect();
+                    let segment = (packets.len() > 1).then_some(1472);
+                    let whole = packets.concat();
+                    let t = Transmit {
+                        destination: to,
+                        ecn: None,
+                        contents: &whole,
+                        segment_size: segment,
+                        src_ip: Some(to.ip()),
+                    };
+                    send_with_tos(&tx, &t, 0xA0).unwrap();
+                    let contiguous = recv(packets.len());
+                    let iov: Vec<std::io::IoSlice> =
+                        packets.iter().map(|p| std::io::IoSlice::new(p)).collect();
+                    send_gathered_with_tos(&tx, to, Some(to.ip()), &iov, segment, 0xA0).unwrap();
+                    let gathered = recv(packets.len());
+                    let sent: Vec<_> = packets.into_iter().map(|p| (p, 0xA0)).collect();
+                    assert_eq!(contiguous, sent, "{ip}, {lens:?}: one datagram a packet");
+                    assert_eq!(gathered, contiguous, "{ip}, {lens:?}");
+                }
+                rx.set_nonblocking(true).unwrap();
+                assert!(
+                    rx.recv(&mut buf).is_err(),
+                    "{ip}: no datagram beyond the packets"
+                );
+                families += 1;
+            }
+            assert!(families > 0);
+        }
+
+        /// ns per GSO group of 11 and 44 × 1472 B packets on loopback: the run copied into one
+        /// buffer and sent by quinn-udp or marked, against the marked send the kernel gathers
+        /// from the packets: `cargo test -p punktfunk-core --features quic --release
+        /// gso_send_cost -- --ignored --nocapture`.
+        #[test]
+        #[ignore = "a timing that only prints"]
+        fn gso_send_cost() {
+            use crate::transport::udp::send_gathered_with_tos;
+            use std::io::IoSlice;
+            let sink = UdpSocket::bind("127.0.0.1:0").unwrap();
+            let tx = UdpSocket::bind("127.0.0.1:0").unwrap();
+            let state = UdpSocketState::new((&tx).into()).unwrap();
+            let to = sink.local_addr().unwrap();
+            const N: u32 = 20_000;
+            let time = |send: &mut dyn FnMut()| {
+                let start = Instant::now();
+                for _ in 0..N {
+                    send();
+                }
+                start.elapsed().as_nanos() / u128::from(N)
+            };
+            for n in [11, 44] {
+                let packets = vec![vec![0x01u8; 1472]; n];
+                let mut staging = Vec::new();
+                let mut copied = |marked: bool| {
+                    staging.clear();
+                    for p in &packets {
+                        staging.extend_from_slice(p);
+                    }
+                    let t = Transmit {
+                        destination: to,
+                        ecn: None,
+                        contents: &staging,
+                        segment_size: Some(1472),
+                        src_ip: Some(to.ip()),
+                    };
+                    if marked {
+                        send_marked(&tx, &t, MediaClass::Video, || {
+                            unreachable!("a loopback peer is marked")
+                        })
+                        .unwrap()
+                    } else {
+                        state.send((&tx).into(), &t).unwrap()
+                    }
+                };
+                let mut gathered = || {
+                    let mut iov = [IoSlice::new(&[]); 64];
+                    for (slot, p) in iov.iter_mut().zip(&packets) {
+                        *slot = IoSlice::new(p);
+                    }
+                    send_gathered_with_tos(&tx, to, Some(to.ip()), &iov[..n], Some(1472), 0xA0)
+                        .unwrap()
+                };
+                for _ in 0..3 {
+                    let quinn = time(&mut || copied(false));
+                    let marked = time(&mut || copied(true));
+                    let gathered = time(&mut gathered);
+                    println!(
+                        "{n} x 1472 B, ns per GSO group: copied quinn-udp {quinn}, \
+                         copied marked {marked}, gathered marked {gathered}"
+                    );
+                }
+            }
+        }
     }
 }

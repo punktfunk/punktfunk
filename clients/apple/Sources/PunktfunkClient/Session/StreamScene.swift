@@ -72,7 +72,6 @@ struct StreamScene: View {
         StreamView(
             connection: conn,
             captureEnabled: captureEnabled,
-            overlayShown: captureEnabled && statsVerbosity != .off,
             onCaptureChange: { [weak model] captured in
                 model?.mouseCaptured = captured
                 #if os(visionOS)

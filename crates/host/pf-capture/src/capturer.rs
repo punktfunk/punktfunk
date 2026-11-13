@@ -208,7 +208,16 @@ pub trait Feed {
     /// consumes the frame; an error surfaces at the following `try_latest`.
     fn wait_arrival(&mut self, deadline: Instant);
 
-    /// A handle that ends a running [`Self::wait_arrival`] now, with no frame, so a recovery
+    /// [`Self::wait_arrival`] that no frame ends before `not_before` and a poke ends at any
+    /// point: `true` when the poke did, which it takes. The loop's credit gate runs here, so a
+    /// recovery ask need not wait it out. Default: sleep to `not_before`, then wait.
+    fn wait_paced(&mut self, not_before: Instant, deadline: Instant) -> bool {
+        std::thread::sleep(not_before.saturating_duration_since(Instant::now()));
+        self.wait_arrival(deadline);
+        false
+    }
+
+    /// A handle that ends a running [`Self::wait_paced`] now, with no frame, so a recovery
     /// ask from the control task goes out at once. `None`: the ask waits for the next tick.
     fn arrival_poke(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
         None
@@ -297,6 +306,12 @@ pub trait RemoteEncoder {
     /// Open the encoder for `params` and hand back the loop's proxy. No fallback follows: a
     /// refused open ends the session (the driver's own refusal is `DriverEncodeOpenError`).
     fn open(&self, params: &DriverEncodeParams) -> Result<Box<dyn pf_encode_core::Encoder>>;
+
+    /// A handle that ends the proxy's running `ready_aus` wait now with nothing owed, so a
+    /// recovery ask from the control task goes out at once. It reaches each proxy opened after.
+    fn arrival_poke(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        None
+    }
 }
 
 /// The process a [`RemoteEncoder`] encodes in.
@@ -351,6 +366,8 @@ pub struct SessionFacts {
     pub out: (u32, u32),
     pub fps: u32,
     pub bitrate_bps: u64,
+    /// The most the session's rate can climb to without a re-open: it sizes the AU heap.
+    pub peak_bitrate_bps: u64,
     pub slices: u32,
     /// Slice-chunk target in bytes; `None` sends whole access units.
     pub wire_chunk: Option<usize>,
@@ -375,6 +392,9 @@ pub struct DriverEncodeParams {
     pub src_rect: [u32; 4],
     pub fps: u32,
     pub bitrate_kbps: u32,
+    /// The rate the AU heap is sized for, never under `bitrate_kbps`. `SET_ENCODE` carries
+    /// only the heap it sizes.
+    pub peak_kbps: u32,
     pub hdr: bool,
     pub hdr_meta: Option<HdrMeta>,
     /// The display composes FP16 for this SDR stream (SDR wide colour):
@@ -398,7 +418,8 @@ impl DriverEncodeParams {
     /// missing `amfrt64.dll` or a declined native open does not end an H.26x session. MF only
     /// inside its 8-bit 4:2:0 ceiling: the plan is negotiated, so a wider one would open and
     /// then refuse every frame. PyroWave pairs only with itself; software is refused. The
-    /// whole surface at its own size sends no framing, so that request is a v9 host's.
+    /// whole surface at its own size sends no framing, so that request is a v9 host's. The
+    /// heap's rate is the peak, or the opening rate when that is higher.
     pub fn for_session(facts: SessionFacts) -> Result<Self> {
         use pf_driver_proto::encode::{backend as be, codec as cc};
         let backend = match (facts.codec, facts.backend) {
@@ -419,6 +440,7 @@ impl DriverEncodeParams {
         } else {
             (facts.out, facts.crop)
         };
+        let kbps = |bps: u64| (bps / 1000).min(u64::from(u32::MAX)) as u32;
         Ok(DriverEncodeParams {
             codec: match facts.codec {
                 Codec::H264 => cc::H264,
@@ -434,7 +456,8 @@ impl DriverEncodeParams {
             encode_height: encode.1,
             src_rect,
             fps: facts.fps,
-            bitrate_kbps: (facts.bitrate_bps / 1000).min(u64::from(u32::MAX)) as u32,
+            bitrate_kbps: kbps(facts.bitrate_bps),
+            peak_kbps: kbps(facts.bitrate_bps.max(facts.peak_bitrate_bps)),
             hdr: facts.hdr,
             hdr_meta: facts.colour.hdr_meta.map(|m| facts.client_hdr.unwrap_or(m)),
             sdr_fp16: !facts.hdr && facts.colour.sdr_fp16,
@@ -513,10 +536,23 @@ mod tests {
             out: (1920, 1080),
             fps: 60,
             bitrate_bps: 20_000_000,
+            peak_bitrate_bps: 0,
             slices: 1,
             wire_chunk: None,
             wire_seq_base: 7,
         }
+    }
+
+    /// The heap's rate is the session's peak, and never under the rate it opens at.
+    #[test]
+    fn the_heap_rate_is_the_peak_or_the_opening_rate() {
+        let mut f = facts(Codec::H265, Some(be::NVENC), false, 8);
+        f.peak_bitrate_bps = 200_000_000;
+        let p = DriverEncodeParams::for_session(f).unwrap();
+        assert_eq!((p.bitrate_kbps, p.peak_kbps), (20_000, 200_000));
+        f.peak_bitrate_bps = 5_000_000;
+        let p = DriverEncodeParams::for_session(f).unwrap();
+        assert_eq!((p.bitrate_kbps, p.peak_kbps), (20_000, 20_000));
     }
 
     /// The whole surface at its own size sends no framing; anything else sends the surface's

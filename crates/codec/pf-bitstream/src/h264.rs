@@ -44,7 +44,7 @@ use cros_codecs::codec::h264::picture::PictureData;
 use cros_codecs::codec::h264::picture::RcPictureData;
 use cros_codecs::codec::h264::picture::Reference;
 use cros_codecs::Resolution;
-use tracing::trace;
+use tracing::{info, trace};
 
 pub use cros_codecs::codec::h264::parser::Level;
 pub use cros_codecs::codec::h264::parser::SliceHeader;
@@ -310,6 +310,21 @@ fn dpb_limit(sps: &Sps) -> usize {
     // A.3.1 cap, VUI override, and `max_num_ref_frames` floor live in the parser.
     // This is the named place the result is interpreted.
     sps.max_dpb_frames()
+}
+
+/// Pictures held before output, and whether the stream stated the bound.
+///
+/// 0 for `pic_order_cnt_type` 2 (8.2.1.3: output order is decoding order, whatever
+/// the VUI says). Otherwise the VUI `max_num_reorder_frames`, or the DPB depth when
+/// none is stated (E.2.1). A stated bound above the DPB reads as 0.
+fn reorder_bound(sps: &Sps, max_dpb_frames: usize) -> (usize, bool) {
+    let bound = sps.max_num_order_frames() as usize;
+    let frames = if sps.pic_order_cnt_type == 2 || bound > max_dpb_frames {
+        0
+    } else {
+        bound
+    };
+    (frames, !dpb_is_level_derived(sps))
 }
 
 /// True when [`dpb_limit`] used A.3.1's level ceiling, not a VUI `bitstream_restriction`.
@@ -1266,15 +1281,13 @@ impl H264Planner {
             });
         }
         let interlaced = !sps.frame_mbs_only_flag;
-        let max_num_order_frames = sps.max_num_order_frames() as usize;
-        // 8.2.1.3: `pic_order_cnt_type` 2 makes output order the decoding order,
-        // whatever the VUI states. NVENC codes it and states no bound.
-        let max_num_reorder_frames =
-            if sps.pic_order_cnt_type == 2 || max_num_order_frames > max_dpb_frames {
-                0
-            } else {
-                max_num_order_frames
-            };
+        let (max_num_reorder_frames, reorder_stated) = reorder_bound(sps, max_dpb_frames);
+        // Once per applied SPS. A stream with no stated bound holds each picture for
+        // the DPB depth.
+        info!(
+            poc_type = sps.pic_order_cnt_type,
+            reorder_stated, max_num_reorder_frames, max_dpb_frames, "h264 output reorder bound"
+        );
 
         self.dpb.set_limits(max_dpb_frames, max_num_reorder_frames);
         self.dpb.set_interlaced(interlaced);
@@ -2930,6 +2943,22 @@ mod tests {
         let sps = base_sps().resolution(64, 64).build();
         let depth = sps.max_dpb_frames();
         assert_eq!(output_lags(sps), vec![depth; 40 - depth]);
+    }
+
+    /// The bound the planner applies and the `reorder_stated` flag its log carries.
+    #[test]
+    fn the_reorder_bound_says_whether_the_stream_stated_it() {
+        let bound = |sps: Rc<Sps>| reorder_bound(&sps, sps.max_dpb_frames());
+        let stated = base_sps()
+            .resolution(64, 64)
+            .bitstream_restriction(0)
+            .build();
+        assert_eq!(bound(stated), (0, true));
+        let poc2 = base_sps().resolution(64, 64).pic_order_cnt_type(2).build();
+        assert_eq!(bound(poc2), (0, false));
+        let unstated = base_sps().resolution(64, 64).build();
+        let depth = unstated.max_dpb_frames();
+        assert_eq!(bound(unstated), (depth, false));
     }
 
     // 8.2.1 tables. MaxPicOrderCntLsb and MaxFrameNum are both 16.

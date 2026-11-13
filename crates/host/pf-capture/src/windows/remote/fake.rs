@@ -308,6 +308,10 @@ impl AuMemory for FakeMemory {
     }
 
     fn wait(&self, _timeout_ms: u32) {}
+
+    fn signal(&self) -> Box<dyn Fn() + Send + Sync> {
+        Box::new(|| {})
+    }
 }
 
 /// What the loop asks a fake encoder to open: HEVC at `width`×`height`, 60 fps.
@@ -320,6 +324,7 @@ pub(crate) fn params(width: u32, height: u32, hdr: bool, wire_seq_base: u32) -> 
         height,
         fps: 60,
         bitrate_kbps: 20_000,
+        peak_kbps: 20_000,
         hdr,
         hdr_meta: None,
         sdr_fp16: false,

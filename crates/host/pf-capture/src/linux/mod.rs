@@ -16,7 +16,7 @@ use super::{CapturedFrame, PixelFormat, ZeroCopyPolicy};
 
 mod xfixes_cursor;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::sync::{Arc, Mutex};
 
 /// One-deep overwriting mailbox: producer drops oldest. `sync_channel` is
@@ -25,27 +25,40 @@ use std::sync::{Arc, Mutex};
 /// pins compositor buffers.
 type FrameSlot = Arc<std::sync::Mutex<Option<CapturedFrame>>>;
 
-/// `wait_arrival` for the direct capturer: returns once `slot` holds a frame,
-/// `deadline` passes, or the producer is broken or gone. Never consumes: the
-/// frame stays for `try_latest`, which also classifies a dead producer.
+/// `wait_paced` for the direct capturer: `true` when a poke (`poked`, taken here) ended it.
+/// Otherwise it returns once `slot` holds a frame and `not_before` has passed, `deadline`
+/// passes, or the producer is gone; a broken one only sits out `not_before`. Before then an
+/// arrival edge re-arms the wait. Never consumes: the frame stays for `try_latest`, which
+/// also classifies a dead producer.
 fn wait_for_frame(
     slot: &FrameSlot,
     wake: &Receiver<()>,
     shared: &StreamShared,
+    poked: &AtomicBool,
+    not_before: std::time::Instant,
     deadline: std::time::Instant,
-) {
+) -> bool {
     if shared.status() == StreamStatus::Broken {
-        return;
+        std::thread::sleep(not_before.saturating_duration_since(std::time::Instant::now()));
+        return false;
     }
     loop {
-        if slot.lock().is_ok_and(|s| s.is_some()) {
-            return;
+        if poked.swap(false, Ordering::Relaxed) {
+            return true;
         }
-        let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) else {
-            return;
+        let now = std::time::Instant::now();
+        let until = if now < not_before {
+            not_before
+        } else if slot.lock().is_ok_and(|s| s.is_some()) {
+            return false;
+        } else {
+            deadline
         };
-        if wake.recv_timeout(left).is_err() {
-            return;
+        let Some(left) = until.checked_duration_since(now) else {
+            return false;
+        };
+        if let Err(RecvTimeoutError::Disconnected) = wake.recv_timeout(left) {
+            return false;
         }
     }
 }
