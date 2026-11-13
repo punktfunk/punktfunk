@@ -59,6 +59,10 @@ pub struct CreateOptions {
     /// means a locked profile dials as it stands.
     #[serde(default)]
     pub prompts_unlock: bool,
+    /// The host answers `SetHidden` and `FetchHidden`. Absent means it doesn't, and no title
+    /// offers Hide for me.
+    #[serde(default)]
+    pub hides: bool,
     /// The settings snapshot the shell starts from.
     pub settings: Settings,
     /// The preset catalog as `[{id, name, overrides}, …]`.
@@ -118,6 +122,7 @@ impl CreateOptions {
             }),
             profiles: self.profiles,
             prompts_unlock: self.prompts_unlock,
+            hides: self.hides,
             languages: self.languages,
         };
         (opts, self.entry.into_entry(), store)
@@ -830,6 +835,8 @@ mod tests {
                     "WakeStatus" => read_back::<crate::WakeStatus>(s),
                     "SpeedPhase" => read_back::<crate::SpeedPhase>(s),
                     "ProfilesAnswer" => read_back::<crate::ProfilesAnswer>(s),
+                    "HiddenAnswer" => read_back::<crate::HiddenAnswer>(s),
+                    "HideAnswer" => read_back::<crate::HideAnswer>(s),
                     "PhasePush" => read_back::<PhasePush>(s),
                     "GamesPush" => read_back::<GamesPush>(s),
                     "DownloadsPush" => read_back::<crate::DownloadsPush>(s),

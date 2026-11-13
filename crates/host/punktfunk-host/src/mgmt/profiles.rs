@@ -52,6 +52,11 @@ pub(crate) struct ProfilePublic {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false)]
     unlock: Option<UnlockNeed>,
+    /// The asking device is this locked profile's person now: it may hide a title for it
+    /// (`PUT /library/hidden/{id}?as=`) and list what it hides (`GET /library/page?hidden=true`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[schema(required = false)]
+    person: bool,
 }
 
 /// What a device sends with its connect to open a profile: a profile on a person's own Linux
@@ -279,6 +284,7 @@ fn public(
             .zip(p.legacy_device.as_deref())
             .is_some_and(|(d, l)| d.eq_ignore_ascii_case(l)),
         unlock: None,
+        person: false,
     }
 }
 
@@ -998,7 +1004,7 @@ pub(super) fn edit_error(e: EditError) -> Response {
 /// says what the asking device sends with its connect: a profile on a person's own Linux account
 /// needs the account's password, or a key proof from a device that enrolled one, until the
 /// device is signed in to its running desktop; a locked profile whose list lacks the device
-/// needs its PIN.
+/// needs its PIN. `person` marks the rows whose own library view this device may change now.
 #[utoipa::path(
     get,
     path = "/profiles/enumerate",
@@ -1024,31 +1030,37 @@ pub(crate) async fn enumerate_profiles(
     let operator = lane == AuthLane::Admin;
     let list = profiles.list();
     let needs = unlock_needs(&st, &seats, &list, device.as_deref()).await;
-    let rows: Vec<ProfilePublic> = list
-        .iter()
-        .filter_map(|p| {
-            let need = needs.get(&p.id).copied().unwrap_or(UnlockNeed::None);
-            let unlock = match profiles.opens(&p.id, device.as_deref()) {
-                _ if operator => need,
-                Opens::Yes => need,
-                Opens::Pin => UnlockNeed::Pin,
-                Opens::Key => UnlockNeed::PinKey,
-                Opens::No => return None,
-            };
-            let row = public(
-                &st,
-                p,
-                owner.as_deref(),
-                device.as_deref(),
-                &seats,
-                operator,
-            );
-            Some(ProfilePublic {
-                unlock: Some(unlock),
-                ..row
-            })
-        })
-        .collect();
+    let mut rows: Vec<ProfilePublic> = Vec::with_capacity(list.len());
+    for p in &list {
+        let need = needs.get(&p.id).copied().unwrap_or(UnlockNeed::None);
+        let unlock = match profiles.opens(&p.id, device.as_deref()) {
+            _ if operator => need,
+            Opens::Yes => need,
+            Opens::Pin => UnlockNeed::Pin,
+            Opens::Key => UnlockNeed::PinKey,
+            Opens::No => continue,
+        };
+        // The check that accepts the person's writes: a row never offers what a write refuses.
+        let person = match device.as_deref().filter(|_| !operator) {
+            Some(fp) => super::person::check(&st, Some(&p.id), fp, None)
+                .await
+                .is_ok(),
+            None => false,
+        };
+        let row = public(
+            &st,
+            p,
+            owner.as_deref(),
+            device.as_deref(),
+            &seats,
+            operator,
+        );
+        rows.push(ProfilePublic {
+            unlock: Some(unlock),
+            person,
+            ..row
+        });
+    }
     Json(rows).into_response()
 }
 

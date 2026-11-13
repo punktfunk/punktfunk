@@ -18,7 +18,8 @@ use super::lucide;
 use super::style::*;
 use super::{AppCtx, AsyncSetState, Msg, Screen, Shell, Svc, Target};
 use pf_client_core::collate::{self, Collatable, SortKey};
-use pf_client_core::library::{self, initials, store_label, DESKTOP_ID};
+use pf_client_core::hide;
+use pf_client_core::library::{self, initials, store_label, GameEntry, DESKTOP_ID};
 use pf_client_core::trust::Settings;
 use pf_fluent::{Palette, Token};
 use pf_l10n::{client, common};
@@ -107,6 +108,80 @@ pub(crate) struct LibraryState {
     /// What the host has up (`/status`), by game id: `true` when this device launched it and
     /// may end it.
     pub(crate) running: HashMap<String, bool>,
+    /// The profile the shelf plays as, where the box lets this device hide its titles.
+    pub(crate) hides: Option<Hides>,
+}
+
+/// A profile this device may hide titles for ([`hide::offer`]): its id and its name.
+#[derive(Clone, PartialEq)]
+pub(crate) struct Hides {
+    profile: String,
+    name: String,
+}
+
+/// Hide for me on the open shelf: what the host took since the shelf loaded, and the hidden
+/// titles while they show in its place. Every fetch starts it afresh.
+#[derive(Clone, PartialEq, Default)]
+pub(crate) struct HideUi {
+    /// Hidden from the shelf since it loaded.
+    gone: Vec<String>,
+    /// Shown again since it loaded, and not on the list it loaded.
+    back: Vec<Game>,
+    view: Option<HiddenView>,
+}
+
+/// The hidden titles in the shelf's place.
+#[derive(Clone, PartialEq)]
+pub(crate) enum HiddenView {
+    Loading,
+    Failed(String),
+    Listed(Vec<Hidden>),
+}
+
+/// One hidden title: as the grid draws it, its cached poster, and the entry the cached catalog
+/// takes back when it is shown again.
+#[derive(Clone)]
+pub(crate) struct Hidden {
+    game: Game,
+    art: Option<String>,
+    entry: GameEntry,
+}
+
+impl PartialEq for Hidden {
+    fn eq(&self, other: &Self) -> bool {
+        (&self.game, &self.art) == (&other.game, &other.art)
+    }
+}
+
+/// A change to [`HideUi`], made on the UI thread.
+pub(crate) type HideEdit = Box<dyn FnOnce(&mut HideUi) + Send>;
+
+impl HideUi {
+    /// The host hid (`hidden`) or showed `game`.
+    fn took(&mut self, game: Game, hidden: bool) {
+        if hidden {
+            self.back.retain(|g| g.id != game.id);
+            self.gone.push(game.id);
+            return;
+        }
+        if let Some(HiddenView::Listed(list)) = &mut self.view {
+            list.retain(|h| h.game.id != game.id);
+        }
+        let len = self.gone.len();
+        self.gone.retain(|id| *id != game.id);
+        if self.gone.len() == len && !self.back.iter().any(|g| g.id == game.id) {
+            self.back.push(game);
+        }
+    }
+
+    /// `loaded` as it stands now: without what left it, with what came back.
+    fn shelf(&self, loaded: &[Game]) -> Vec<Game> {
+        (loaded.iter())
+            .filter(|g| !self.gone.contains(&g.id))
+            .chain(&self.back)
+            .cloned()
+            .collect()
+    }
 }
 
 /// End game's two moments: the title awaiting a yes, and what the host said. Root state: a
@@ -159,24 +234,34 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
                 &target.host.addr,
                 target.host.port,
             );
-            let (games, served) = match library::fetch_games(
-                &target.host.addr,
-                target.host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
-                target.host.port,
-                &identity,
-                pin,
-                saved
-                    .and_then(|h| h.profile.as_ref())
-                    .map(|p| p.id.as_str()),
-            ) {
-                Ok(fetched) => fetched,
-                Err(e) => {
-                    state.phase = LibraryPhase::Failed(e.to_string());
-                    return publish(&state);
-                }
+            let pick = saved
+                .and_then(|h| h.profile.as_ref())
+                .map(|p| p.id.as_str());
+            let mgmt = target.host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT);
+            let port = target.host.port;
+            let (games, served) =
+                match library::fetch_games(&target.host.addr, mgmt, port, &identity, pin, pick) {
+                    Ok(fetched) => fetched,
+                    Err(e) => {
+                        state.phase = LibraryPhase::Failed(e.to_string());
+                        return publish(&state);
+                    }
+                };
+            // The pick's own enumerate row says whether this device may hide its titles.
+            let hides = || -> Option<Hides> {
+                let addr = &target.host.addr;
+                let listed =
+                    pf_client_core::profiles::fetch_enumerate(addr, mgmt, port, &identity, pin);
+                let listed = listed.ok().flatten();
+                let row = hide::offer(listed.as_deref(), pick)?;
+                Some(Hides {
+                    profile: row.id.clone(),
+                    name: row.display_name.clone(),
+                })
             };
             if games.is_empty() {
                 state.phase = LibraryPhase::Empty;
+                state.hides = pick.and_then(|_| hides());
                 return publish(&state);
             }
             // The connect that launches a title reads its game overrides from here, under the
@@ -186,10 +271,7 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
             }
 
             // Seed cached posters; queue the art pipeline for the rest.
-            let base = library::base_url(
-                &target.host.addr,
-                target.host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
-            );
+            let base = library::base_url(&target.host.addr, mgmt);
             let cache = art_cache_dir();
             let mut jobs: VecDeque<(String, Vec<String>)> = VecDeque::new();
             for g in &games {
@@ -205,31 +287,17 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
                     }
                 }
             }
-            state.phase = LibraryPhase::Ready(
-                games
-                    .iter()
-                    .map(|g| Game {
-                        id: g.id.clone(),
-                        title: g.title.clone(),
-                        store: g.store.clone(),
-                        launcher: g.is_launcher(),
-                        platform: g.platform.clone(),
-                        icon: super::launcher_icons::image(g.icon_token()),
-                        host: g.overrides.as_ref().and_then(library::host_line),
-                    })
-                    .collect(),
-            );
+            state.phase = LibraryPhase::Ready(games.iter().map(game_of).collect());
             publish(&state);
 
             // After the titles: a slow `/status` must not hold the shelf back.
-            let mgmt = target.host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT);
-            let port = target.host.port;
             for g in library::fetch_running(&target.host.addr, mgmt, port, &identity, pin) {
                 if let Some(id) = g.app_id.clone().filter(|_| g.is_up()) {
                     *state.running.entry(id).or_default() |= g.endable;
                 }
             }
-            if !state.running.is_empty() {
+            state.hides = pick.and_then(|_| hides());
+            if !state.running.is_empty() || state.hides.is_some() {
                 publish(&state);
             }
 
@@ -249,6 +317,96 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
             }
         })
         .ok();
+}
+
+/// A catalog entry as the grid draws it.
+fn game_of(g: &GameEntry) -> Game {
+    Game {
+        id: g.id.clone(),
+        title: g.title.clone(),
+        store: g.store.clone(),
+        launcher: g.is_launcher(),
+        platform: g.platform.clone(),
+        icon: super::launcher_icons::image(g.icon_token()),
+        host: g.overrides.as_ref().and_then(library::host_line),
+    }
+}
+
+/// The open shelf's host as this device reaches its management lane, its pin, and the
+/// shelf's generation: a worker's answer for an older shelf changes nothing.
+fn shelf_api(ctx: &AppCtx) -> (library::HostApi, Option<String>, u64) {
+    let target = ctx.shared.target.lock().unwrap().clone();
+    let pin = (target.host.fp_hex.as_deref()).and_then(crate::trust::parse_hex32);
+    let mgmt = target.host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT);
+    let (addr, port) = (&target.host.addr, target.host.port);
+    let api = library::HostApi::new(addr, mgmt, port, &ctx.identity, pin);
+    let generation = ctx.shared.library_gen.load(Ordering::SeqCst);
+    (api, target.host.fp_hex, generation)
+}
+
+/// Hide (`hidden`) or show `game` for the shelf's profile on a worker. The status line says
+/// what the host answered; where it took it, the page and the cached catalog follow.
+fn set_hidden(
+    svc: &Svc,
+    set_hide: &AsyncSetState<HideEdit>,
+    hides: &Hides,
+    game: Game,
+    entry: Option<GameEntry>,
+    hidden: bool,
+) {
+    let (api, fp, generation) = shelf_api(&svc.ctx);
+    let (svc, set_hide, hides) = (svc.clone(), set_hide.clone(), hides.clone());
+    let _ = std::thread::Builder::new()
+        .name("punktfunk-hide".into())
+        .spawn(move || {
+            let outcome = hide::set_hidden(&api, &hides.profile, &game.id, hidden);
+            let notice = outcome.notice(hidden, &game.title, &hides.name);
+            if outcome != hide::Outcome::Done {
+                return svc.report(Err(notice));
+            }
+            if let Some(fp) = fp {
+                let (id, back) = (&game.id, entry.as_ref());
+                pf_client_core::library_cache::note_hidden(&fp, Some(&hides.profile), id, back);
+            }
+            if svc.ctx.shared.library_gen.load(Ordering::SeqCst) == generation {
+                set_hide.call(Box::new(move |h: &mut HideUi| h.took(game, hidden)));
+            }
+            svc.report(Ok(notice));
+        });
+}
+
+/// Show what the shelf's profile hides in its place, asked of the host now.
+fn open_hidden(svc: &Svc, set_hide: &AsyncSetState<HideEdit>, hides: &Hides) {
+    set_hide.call(Box::new(|h: &mut HideUi| {
+        h.view = Some(HiddenView::Loading)
+    }));
+    let (api, _, generation) = shelf_api(&svc.ctx);
+    let (ctx, set_hide, profile) = (svc.ctx.clone(), set_hide.clone(), hides.profile.clone());
+    let _ = std::thread::Builder::new()
+        .name("punktfunk-hidden".into())
+        .spawn(move || {
+            let cache = art_cache_dir();
+            let view = match hide::fetch_hidden_from(&api, &profile) {
+                Ok(entries) => HiddenView::Listed(
+                    (entries.into_iter())
+                        .map(|entry| Hidden {
+                            game: game_of(&entry),
+                            art: cache.as_deref().and_then(|d| cached_art(d, &entry.id)),
+                            entry,
+                        })
+                        .collect(),
+                ),
+                Err(e) => HiddenView::Failed(e.to_string()),
+            };
+            // A view closed meanwhile stays closed.
+            if ctx.shared.library_gen.load(Ordering::SeqCst) == generation {
+                set_hide.call(Box::new(move |h: &mut HideUi| {
+                    if h.view.is_some() {
+                        h.view = Some(view);
+                    }
+                }));
+            }
+        });
 }
 
 /// `%LOCALAPPDATA%\punktfunk\art-cache` — poster bytes by game id, so revisits skip the
@@ -340,20 +498,22 @@ fn group_heading(pal: &Palette, label: &str) -> View {
         .into()
 }
 
+/// One row of a title's overflow menu: its key, its words, what it does.
+type MenuRow = (&'static str, String, Box<dyn Fn()>);
+
 /// One poster tile: the artwork (or a monogram placeholder while it loads) with the store
 /// badge overlaid top-left, the title below, then one line of what the host sets for it,
-/// tap-to-launch across the whole tile.
-#[allow(clippy::too_many_arguments)]
+/// tap across the whole tile, and its `menu` behind the overflow button. A hidden title's
+/// tile is dimmed (`dim`).
 fn poster_tile(
     pal: &Palette,
     game: &Game,
-    art: Option<&str>,
-    poster_h: f64,
+    (art, poster_h): (Option<&str>, f64),
     tap: Box<dyn Fn()>,
-    on_copy_link: Box<dyn Fn()>,
-    // `Some` while the host runs it; `Some(true)` when this device may end it.
+    // `Some` while the host runs it.
     up: Option<bool>,
-    on_end_game: Box<dyn Fn()>,
+    menu: Vec<MenuRow>,
+    dim: bool,
 ) -> View {
     let placeholder = |face: View| -> View {
         Border::new()
@@ -362,7 +522,7 @@ fn poster_tile(
             .height(poster_h)
             .into()
     };
-    let cached = art.and_then(|path| {
+    let cached = art.and_then(|path: &str| {
         Image::new()
             .source_file(path)
             .ok()
@@ -471,15 +631,13 @@ fn poster_tile(
     // This entry's own actions, opposite the store badge: a button, because a menu a mouse user
     // cannot see is one they never find. A SIBLING of the tappable area, as on the host tiles,
     // so a click on the overflow never also launches the title underneath it.
-    let mut items = vec![MenuItem::item("copy", client::hostcard_copy_link())];
-    // Only on a title this device launched and the host still runs.
-    if up == Some(true) {
-        items.push(MenuItem::item("end", client::lib_end_game()));
-    }
-    let menu = Menu::new(items, move |key: Key| match key.as_str() {
-        Some("copy") => on_copy_link(),
-        Some("end") => on_end_game(),
-        _ => {}
+    let items: Vec<MenuItem> = (menu.iter())
+        .map(|(key, label, _)| MenuItem::item(*key, label.as_str()))
+        .collect();
+    let menu = Menu::new(items, move |key: Key| {
+        if let Some((_, _, run)) = menu.iter().find(|(k, _, _)| key.as_str() == Some(*k)) {
+            run();
+        }
     });
     let more = client::lib_title_more_a11y(&game.title);
     Grid::new()
@@ -493,8 +651,12 @@ fn poster_tile(
                 .menu(menu)
                 .tooltip(client::lib_title_more()),
         ))
+        .opacity(if dim { HIDDEN_OPACITY } else { 1.0 })
         .into()
 }
+
+/// A hidden title's tile: there to bring back, not to play.
+const HIDDEN_OPACITY: f64 = 0.55;
 
 pub(crate) fn library_page(shell: &Shell) -> View {
     let svc = shell.svc();
@@ -503,6 +665,9 @@ pub(crate) fn library_page(shell: &Shell) -> View {
     let target = ctx.shared.target.lock().unwrap().clone();
     let (ss, st) = (svc.set_screen.clone(), svc.set_status.clone());
     let set_end_game = shell.set(Msg::EndGame);
+    let set_hide = shell.set(Msg::Hide);
+    // What the shelf's profile hides, while it shows in the shelf's place.
+    let hidden = state.hides.as_ref().zip(shell.hide.view.as_ref());
 
     // Responsive poster columns from the window width (the hosts page's pattern).
     let content_w = (shell.width - 64.0).clamp(POSTER_MIN_WIDTH, 1120.0);
@@ -511,17 +676,30 @@ pub(crate) fn library_page(shell: &Shell) -> View {
     let tile_w = (content_w - POSTER_GAP * (cols as f64 - 1.0)) / cols as f64;
     let poster_h = tile_w * POSTER_RATIO;
 
+    // Back from the hidden titles is the shelf; back from the shelf, the hosts.
     let back_btn = icon_button("arrow-left", common::common_back()).on_click({
-        let (ss, se) = (ss.clone(), set_end_game.clone());
+        let (ss, se, sh) = (ss.clone(), set_end_game.clone(), set_hide.clone());
+        let viewing = hidden.is_some();
         move || {
+            if viewing {
+                return sh.call(Box::new(|h: &mut HideUi| h.view = None));
+            }
             se.call(EndGameUi::default());
             ss.call(Screen::Hosts)
         }
     });
-    let title = if target.host.name.is_empty() {
-        client::lib_title().to_string()
-    } else {
-        client::lib_title_host(&target.host.name)
+    let title = match hidden {
+        Some((hides, _)) => client::lib_hidden_for(&hides.name),
+        None if target.host.name.is_empty() => client::lib_title().to_string(),
+        None => client::lib_title_host(&target.host.name),
+    };
+    // Opens the hidden titles, where this device may hide them.
+    let hidden_button = |hides: &Hides| -> View {
+        let (svc, sh, hides) = (svc.clone(), set_hide.clone(), hides.clone());
+        icon_button("eye-off", text(client::lib_hidden_for(&hides.name)))
+            .style(ButtonStyle::Subtle)
+            .on_click(move || open_hidden(&svc, &sh, &hides))
+            .into()
     };
     let mut body: Vec<View> = vec![page_header(&title, back_btn)];
     if let Some(said) = &shell.end_game.said {
@@ -535,42 +713,17 @@ pub(crate) fn library_page(shell: &Shell) -> View {
         );
     }
 
-    match &state.phase {
-        LibraryPhase::Loading => body.push(
-            card(
-                hstack((
-                    ProgressRing::new()
-                        .is_indeterminate(true)
-                        .width(18.0)
-                        .height(18.0),
-                    muted(pal, client::lib_loading()),
-                ))
-                .spacing(12.0),
-            )
-            .into(),
-        ),
-        LibraryPhase::Failed(msg) => {
-            body.push(
-                InfoBar::new()
-                    .title(client::lib_load_failed())
-                    .message(msg)
-                    .severity(InfoBarSeverity::Error)
-                    .is_open(true)
-                    .is_closable(false)
-                    .into(),
-            );
-            let (ctx2, set_library) = (ctx.clone(), svc.set_library.clone());
-            body.push(
-                icon_button("refresh-cw", common::common_retry())
-                    .style(ButtonStyle::Accent)
-                    .on_click(move || start_fetch(&ctx2, &set_library))
-                    .horizontal_alignment(HorizontalAlignment::Left)
-                    .into(),
-            );
+    let shelf = match &state.phase {
+        LibraryPhase::Ready(loaded) => Some(shell.hide.shelf(loaded)),
+        // Everything hidden, then one shown again: the shelf has that one.
+        LibraryPhase::Empty if !shell.hide.back.is_empty() => Some(shell.hide.shelf(&[])),
+        _ => None,
+    };
+    match (hidden, &state.phase, shelf) {
+        (Some((hides, view)), _, _) => {
+            hidden_view(&svc, &set_hide, hides, view, (cols, poster_h), &mut body)
         }
-        LibraryPhase::Empty => body
-            .push(card(muted(pal, client::lib_empty()).text_wrapping(TextWrapping::Wrap)).into()),
-        LibraryPhase::Ready(games) => {
+        (None, _, Some(games)) => {
             let tile = |g: &Game| -> View {
                 let (ctx2, ss, st) = (ctx.clone(), ss.clone(), st.clone());
                 let (target, id) = (target.clone(), g.id.clone());
@@ -579,33 +732,41 @@ pub(crate) fn library_page(shell: &Shell) -> View {
                 // The desktop tile is the host, not one of its titles: it streams with no
                 // launch id, and wakes first because it is often the first dial of the day.
                 let desktop = g.id == DESKTOP_ID;
-                poster_tile(
-                    pal,
-                    g,
-                    state.art.get(&g.id).map(String::as_str),
-                    poster_h,
-                    Box::new(move || {
-                        if desktop {
-                            initiate_waking(&ctx2, target.clone(), &ss, &st);
-                        } else {
-                            initiate_launch(&ctx2, target.clone(), id.clone(), &ss, &st);
-                        }
-                    }),
-                    // Silent on success, exactly like the host tile's "Copy link" on the
-                    // hosts page — this shell has no toast, and the two must not disagree
-                    // about what copying a link looks like.
-                    Box::new(move || match game_link(&link_target, &link_id) {
-                        Some(url) => pf_client_core::clipboard::set_text(&url),
-                        None => tracing::warn!(id = %link_id, "no saved host to build a link from"),
-                    }),
-                    state.running.get(&g.id).copied(),
-                    Box::new(move || {
+                let up = state.running.get(&g.id).copied();
+                // Silent on success, exactly like the host tile's "Copy link" on the hosts
+                // page: the two must not disagree about what copying a link looks like.
+                let copy = move || match game_link(&link_target, &link_id) {
+                    Some(url) => pf_client_core::clipboard::set_text(&url),
+                    None => tracing::warn!(id = %link_id, "no saved host to build a link from"),
+                };
+                let mut menu: Vec<MenuRow> = Vec::new();
+                if let Some(hides) = state.hides.as_ref().filter(|_| !desktop) {
+                    let label = client::lib_hide_for(&hides.name);
+                    let (svc, sh, hides, game) =
+                        (svc.clone(), set_hide.clone(), hides.clone(), g.clone());
+                    let hide = move || set_hidden(&svc, &sh, &hides, game.clone(), None, true);
+                    menu.push(("hide", label, Box::new(hide)));
+                }
+                menu.push(("copy", client::hostcard_copy_link().into(), Box::new(copy)));
+                // Only on a title this device launched and the host still runs.
+                if up == Some(true) {
+                    let end = move || {
                         se.call(EndGameUi {
                             ask: Some(ask.clone()),
                             said: None,
                         })
-                    }),
-                )
+                    };
+                    menu.push(("end", client::lib_end_game().into(), Box::new(end)));
+                }
+                let play = move || {
+                    if desktop {
+                        initiate_waking(&ctx2, target.clone(), &ss, &st);
+                    } else {
+                        initiate_launch(&ctx2, target.clone(), id.clone(), &ss, &st);
+                    }
+                };
+                let art = state.art.get(&g.id).map(String::as_str);
+                poster_tile(pal, g, (art, poster_h), Box::new(play), up, menu, false)
             };
             // Design D4: launcher entries get their own shelf above the titles, never
             // interleaved. `collate` is the shared policy — launchers lead as their own group
@@ -625,11 +786,11 @@ pub(crate) fn library_page(shell: &Shell) -> View {
             // title, and it means the shelf is never a dead end for the desktop-only user.
             let desktop = desktop_entry();
             let leading: Vec<&Game> = std::iter::once(&desktop).chain(launchers).collect();
-            body.push(sort_row(
-                pal,
-                shell.library_sort,
-                shell.set(Msg::LibrarySort),
-            ));
+            let sort = sort_row(pal, shell.library_sort, shell.set(Msg::LibrarySort));
+            body.push(match state.hides.as_ref() {
+                Some(hides) => hstack((sort, hidden_button(hides))).spacing(12.0).into(),
+                None => sort,
+            });
             body.push(group_heading(
                 pal,
                 if leading.len() == 1 {
@@ -652,9 +813,95 @@ pub(crate) fn library_page(shell: &Shell) -> View {
                 ));
             }
         }
+        (None, LibraryPhase::Loading, _) => body.push(loading(pal)),
+        (None, LibraryPhase::Failed(msg), _) => {
+            let (ctx2, set_library) = (ctx.clone(), svc.set_library.clone());
+            failed(msg, move || start_fetch(&ctx2, &set_library), &mut body);
+        }
+        (None, _, _) => {
+            body.push(note(pal, client::lib_empty()));
+            // Everything hidden still leaves the way back.
+            body.extend(state.hides.as_ref().map(hidden_button));
+        }
     }
 
     page_wide(body).content_dialog(end_game_dialog(&svc, &shell.end_game, set_end_game))
+}
+
+/// The hidden titles in the shelf's place: dimmed, and a click on one shows it again.
+fn hidden_view(
+    svc: &Svc,
+    set_hide: &AsyncSetState<HideEdit>,
+    hides: &Hides,
+    view: &HiddenView,
+    (cols, poster_h): (usize, f64),
+    body: &mut Vec<View>,
+) {
+    let pal = &svc.pal;
+    match view {
+        HiddenView::Loading => body.push(loading(pal)),
+        HiddenView::Failed(msg) => {
+            let (svc, sh, hides) = (svc.clone(), set_hide.clone(), hides.clone());
+            failed(msg, move || open_hidden(&svc, &sh, &hides), body);
+        }
+        HiddenView::Listed(list) if list.is_empty() => {
+            body.push(note(pal, &client::lib_hidden_none(&hides.name)))
+        }
+        HiddenView::Listed(list) => {
+            let tile = |h: &Hidden| -> View {
+                let (svc, sh, hides) = (svc.clone(), set_hide.clone(), hides.clone());
+                let (game, entry, label) = (
+                    h.game.clone(),
+                    h.entry.clone(),
+                    client::lib_show_for(&hides.name),
+                );
+                let show =
+                    move || set_hidden(&svc, &sh, &hides, game.clone(), Some(entry.clone()), false);
+                let menu: Vec<MenuRow> = vec![("show", label, Box::new(show.clone()))];
+                let art = (h.art.as_deref(), poster_h);
+                poster_tile(pal, &h.game, art, Box::new(show), None, menu, true)
+            };
+            body.push(tile_grid(list.iter().map(tile).collect(), cols, POSTER_GAP));
+        }
+    }
+}
+
+fn loading(pal: &Palette) -> View {
+    card(
+        hstack((
+            ProgressRing::new()
+                .is_indeterminate(true)
+                .width(18.0)
+                .height(18.0),
+            muted(pal, client::lib_loading()),
+        ))
+        .spacing(12.0),
+    )
+    .into()
+}
+
+fn note(pal: &Palette, line: &str) -> View {
+    card(muted(pal, line).text_wrapping(TextWrapping::Wrap)).into()
+}
+
+/// A list that did not load: the cause, and Retry.
+fn failed(msg: &str, retry: impl Fn() + 'static, body: &mut Vec<View>) {
+    body.push(
+        InfoBar::new()
+            .title(client::lib_load_failed())
+            .message(msg)
+            .severity(InfoBarSeverity::Error)
+            .is_open(true)
+            .is_closable(false)
+            .into(),
+    );
+    body.push(
+        icon_button("refresh-cw", common::common_retry())
+            .style(ButtonStyle::Accent)
+            .on_click(retry)
+            .horizontal_alignment(HorizontalAlignment::Left)
+            .into(),
+    );
 }
 
 /// The End game confirmation, armed by `is_open`. A yes ends the title on a worker thread,

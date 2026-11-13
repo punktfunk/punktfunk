@@ -57,16 +57,16 @@ class LibraryCache(private val directory: File) {
     }
 
     /**
-     * Remember this host's catalog as fetched for [profile]. Best-effort: a cache that can't write
-     * is a slower app, not a broken one, so every failure here is swallowed.
+     * Remember this host's catalog as fetched for [profile] at [fetchedAt]. Best-effort: a cache
+     * that can't write is a slower app, not a broken one, so every failure here is swallowed.
      */
-    fun store(hostKey: String, profile: String?, games: List<GameEntry>) {
+    fun store(hostKey: String, profile: String?, games: List<GameEntry>, fetchedAt: Long = System.currentTimeMillis()) {
         // An empty catalog is not worth remembering: it is indistinguishable from "never fetched"
         // when read back, and caching it would pin a blank library over a host that has titles.
         if (games.isEmpty()) return
         try {
             val root = JSONObject()
-                .put("fetchedAt", System.currentTimeMillis())
+                .put("fetchedAt", fetchedAt)
                 .put("games", JSONArray().apply { games.forEach { put(encode(it)) } })
             // Write-then-rename: an app killed mid-write must not leave a half-file that the next
             // launch reads as a corrupt catalog.
@@ -80,6 +80,18 @@ class LibraryCache(private val directory: File) {
         } catch (_: Exception) {
             // a cache that can't write is a slower app, not a broken one
         }
+    }
+
+    /**
+     * The catalog cached for [profile] once title [id] left it ([back] null) or came back as
+     * [back], keeping its age: the Rust `library_cache::note_hidden`. No cache, nothing written;
+     * the last title gone, no cache.
+     */
+    fun noteHidden(hostKey: String, profile: String?, id: String, back: GameEntry?) {
+        val cached = load(hostKey, profile) ?: return
+        val games = cached.games.filter { it.id != id } + listOfNotNull(back)
+        if (games.isEmpty()) runCatching { pathFor(hostKey, profile).delete() }
+        else store(hostKey, profile, games, cached.fetchedAt)
     }
 
     /**

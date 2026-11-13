@@ -402,6 +402,7 @@ fn service(library: &LibraryShared) -> ServiceState {
         rescan: None,
         stores: Stores::default(),
         learn_due: false,
+        hidden: Arc::default(),
     }
 }
 

@@ -99,6 +99,9 @@ pub struct ListedProfile {
     pub legacy_seat: bool,
     /// What opens the profile from this device.
     pub unlock: UnlockNeed,
+    /// This device may hide titles for this profile now ([`crate::hide`]). An old host omits it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub person: bool,
 }
 
 impl Seat {

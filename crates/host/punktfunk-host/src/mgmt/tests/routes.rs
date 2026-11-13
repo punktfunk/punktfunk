@@ -173,10 +173,11 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         // for a 250 Hz input tap.
         ("GET", "/api/v1/session/{id}/pads", false, false),
         ("GET", "/api/v1/session/settings", true, false),
-        ("PUT", "/api/v1/session/settings", true, false),
+        // A locked profile's person sets and drops that profile's own game-exit choice.
+        ("PUT", "/api/v1/session/settings", true, true),
         // Drops a profile's own settings. The plugin gate admits it as `session/{id}`; the
         // handler refuses a plugin's `as` (`only_the_operator_writes_a_profile_s_layer`).
-        ("DELETE", "/api/v1/session/settings", true, false),
+        ("DELETE", "/api/v1/session/settings", true, true),
         // A device ends only games it launched; the handler scopes it.
         ("POST", "/api/v1/game/end", true, true),
         // A seat's held launch: only the host with the plugins lets it go.
@@ -187,9 +188,11 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("GET", "/api/v1/library/page", true, true),
         ("GET", "/api/v1/library/art/{id}/{kind}", true, true),
         ("GET", "/api/v1/library/scanners", true, false),
-        ("PUT", "/api/v1/library/scanners/{id}", true, false),
-        // Hide is operator curation; neither lane, unlike the scanner toggle.
-        ("PUT", "/api/v1/library/hidden/{id}", false, false),
+        // A device turns a source off or on for the locked profile it is the person of.
+        ("PUT", "/api/v1/library/scanners/{id}", true, true),
+        // Hide is curation: the operator's, or a locked profile's person's for that profile alone
+        // (`mgmt::tests::person`). Never the plugin lane, unlike the scanner toggle.
+        ("PUT", "/api/v1/library/hidden/{id}", false, true),
         ("POST", "/api/v1/library/custom", true, false),
         // The stored row names host paths (`detect`): operator only, like hide.
         ("GET", "/api/v1/library/custom/{id}", false, false),
@@ -220,7 +223,8 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
             false,
             false,
         ),
-        ("PUT", "/api/v1/library/overrides/games/{id}", false, false),
+        // A game's entry in a locked profile's own overrides: its person's too.
+        ("PUT", "/api/v1/library/overrides/games/{id}", false, true),
         (
             "PUT",
             "/api/v1/library/overrides/sources/{source}",
@@ -446,9 +450,10 @@ async fn a_plugin_changes_only_its_own_library_rows() {
     assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
-/// A write naming a profile (`?as=`) changes that profile's own layer: the operator's alone. On
-/// every write route that takes `as`, the plugin lane gets 403 (coded where it reaches the route)
-/// and the cert lane reaches none. Reads with `as` stay open where the lane reaches them.
+/// A write naming a profile (`?as=`) changes that profile's own layer: the operator's, and on the
+/// person's routes alone a locked profile's device (`mgmt::tests::person`). On every write route
+/// that takes `as`, the plugin lane gets 403 (coded where it reaches the route) and the cert lane
+/// reaches the person's routes and no other. Reads with `as` stay open where the lane reaches them.
 #[tokio::test]
 async fn only_the_operator_writes_a_profile_s_layer() {
     use axum::http::Method;
@@ -492,8 +497,10 @@ async fn only_the_operator_writes_a_profile_s_layer() {
             }
             if m != Method::GET {
                 writes += 1;
-                assert!(
-                    !auth::cert_may_access(&m, &concrete),
+                let person = crate::mgmt::person::person_route(m.as_str(), &concrete);
+                assert_eq!(
+                    auth::cert_may_access(&m, &concrete),
+                    person,
                     "cert lane: {m} {path}"
                 );
             }
@@ -950,12 +957,16 @@ fn every_device_route_has_a_side_on_the_door() {
         ("GET", "/api/v1/library/page"),
         ("GET", "/api/v1/library/art/{id}/{kind}"),
     ];
-    // What the owner's host answers as the device: installs land in the box's shared game files.
-    const OWNER: &[(&str, &str)] = &[
+    // What the owner's host answers as the device: installs land in the box's shared game files,
+    // and a person's writes in the library that host writes.
+    let owner: Vec<(&str, &str)> = [
         ("POST", "/api/v1/library/install/{id}"),
         ("DELETE", "/api/v1/library/install/{id}"),
         ("POST", "/api/v1/library/install/{id}/pause"),
-    ];
+    ]
+    .into_iter()
+    .chain(punktfunk_core::mgmt_routes::PERSON.iter().copied())
+    .collect();
 
     let doc: serde_json::Value = serde_json::from_str(&openapi_json()).unwrap();
     let mut device: Vec<(Method, &str)> = Vec::new();
@@ -969,7 +980,7 @@ fn every_device_route_has_a_side_on_the_door() {
             let row = (method.as_str(), path.as_str());
             let want = if DOOR_OWN.contains(&row) {
                 None
-            } else if OWNER.contains(&row) {
+            } else if owner.contains(&row) {
                 Some(Side::Owner)
             } else {
                 Some(Side::Seat)
@@ -982,7 +993,7 @@ fn every_device_route_has_a_side_on_the_door() {
             device.push((method, rest));
         }
     }
-    for (method, path) in DOOR_OWN.iter().chain(OWNER) {
+    for (method, path) in DOOR_OWN.iter().chain(&owner) {
         let rest = path.strip_prefix("/api/v1/").unwrap();
         assert!(
             device.iter().any(|(m, p)| m == method && *p == rest),

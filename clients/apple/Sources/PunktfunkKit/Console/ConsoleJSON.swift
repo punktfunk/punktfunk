@@ -413,38 +413,58 @@ public enum ConsoleJSON {
 
     // MARK: - library
 
-    /// `{"req", "games": [LibraryGame]}` from this client's catalog — the desktop service's
-    /// `to_model` mapping, under the `FetchLibrary` command's `req`. Without `stats` the Recent
-    /// and Most played sorts fall back to host order. `overrides` only when the host set some.
+    /// `{"req", "games": [LibraryGame]}` from this client's catalog, under the `FetchLibrary`
+    /// command's `req`.
     public static func libraryGames(_ req: Any, _ games: [GameEntry]) -> String {
-        string([
-            "req": req,
-            "games": games.map { g -> [String: Any] in
-                var row: [String: Any] = [
-                    "id": g.id, "title": g.title, "store": g.store,
-                    "launcher": g.role == "launcher",
-                    "icon": g.icon.flatMap { validIconToken($0) ? $0 : nil } ?? "",
-                    "platform": g.platform ?? NSNull(), "developer": g.developer ?? NSNull(),
-                    "year": g.releaseYear ?? NSNull(), "genres": g.genres ?? [],
-                    "stats": g.stats.map { s -> [String: Any] in
-                        [
-                            "last_played_unix_ms": s.lastPlayedUnixMs, "play_time_ms": s.playTimeMs,
-                            "last_run_ms": s.lastRunMs, "launch_count": s.launchCount,
-                        ]
-                    } ?? NSNull(),
-                    "running": false,
-                    "install": g.install.map { i -> [String: Any] in
-                        var o: [String: Any] = ["state": i.state]
-                        if let size = i.sizeBytes { o["size_bytes"] = size }
-                        if let free = i.freeBytes { o["free_bytes"] = free }
-                        return o
-                    } ?? NSNull(),
+        string(["req": req, "games": games.map(libraryGame)])
+    }
+
+    /// One `LibraryGame` — the desktop service's `to_model` mapping. Without `stats` the Recent
+    /// and Most played sorts fall back to host order. `overrides` only when the host set some.
+    private static func libraryGame(_ g: GameEntry) -> [String: Any] {
+        var row: [String: Any] = [
+            "id": g.id, "title": g.title, "store": g.store,
+            "launcher": g.role == "launcher",
+            "icon": g.icon.flatMap { validIconToken($0) ? $0 : nil } ?? "",
+            "platform": g.platform ?? NSNull(), "developer": g.developer ?? NSNull(),
+            "year": g.releaseYear ?? NSNull(), "genres": g.genres ?? [],
+            "stats": g.stats.map { s -> [String: Any] in
+                [
+                    "last_played_unix_ms": s.lastPlayedUnixMs, "play_time_ms": s.playTimeMs,
+                    "last_run_ms": s.lastRunMs, "launch_count": s.launchCount,
                 ]
-                if let o = g.overrides, let data = try? JSONEncoder().encode(o) {
-                    row["overrides"] = try? JSONSerialization.jsonObject(with: data)
-                }
-                return row
-            },
+            } ?? NSNull(),
+            "running": false,
+            "install": g.install.map { i -> [String: Any] in
+                var o: [String: Any] = ["state": i.state]
+                if let size = i.sizeBytes { o["size_bytes"] = size }
+                if let free = i.freeBytes { o["free_bytes"] = free }
+                return o
+            } ?? NSNull(),
+        ]
+        if let o = g.overrides, let data = try? JSONEncoder().encode(o) {
+            row["overrides"] = try? JSONSerialization.jsonObject(with: data)
+        }
+        return row
+    }
+
+    /// The `FetchHidden` answer for `profile` on host `fp`: `{"fp_hex", "profile", "answer"}`,
+    /// `answer` a `HiddenAnswer` — `{"Listed": [LibraryGame]}`, or `{"Failed": why}` when
+    /// `games` is nil.
+    public static func hiddenList(
+        fp: String, profile: String, games: [GameEntry]?, why: String = ""
+    ) -> String {
+        let answer: [String: Any] = games.map { ["Listed": $0.map(libraryGame)] } ?? ["Failed": why]
+        return string(["fp_hex": fp, "profile": profile, "answer": answer])
+    }
+
+    /// `HideAnswer`: what a `SetHidden` came to, echoing its host, profile, title and `hidden`.
+    public static func hideAnswer(
+        fp: String, profile: String, appID: String, hidden: Bool, done: Bool, notice: String
+    ) -> String {
+        string([
+            "fp_hex": fp, "profile": profile, "app_id": appID, "hidden": hidden, "done": done,
+            "notice": notice,
         ])
     }
 

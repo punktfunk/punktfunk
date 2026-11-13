@@ -47,6 +47,7 @@ mod locks;
 mod native;
 mod own_account;
 pub(crate) mod owner;
+pub(crate) mod person;
 #[cfg(windows)]
 mod pipes;
 mod plugin_access;

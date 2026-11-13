@@ -113,9 +113,6 @@ pub fn store(fp_hex: &str, profile: Option<&str>, games: &[GameEntry]) {
     if games.is_empty() {
         return;
     }
-    let Some(path) = path_for(fp_hex, profile) else {
-        return;
-    };
     let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
         return;
     };
@@ -123,7 +120,28 @@ pub fn store(fp_hex: &str, profile: Option<&str>, games: &[GameEntry]) {
         games: games.to_vec(),
         fetched_at: now.as_secs(),
     };
-    let Ok(json) = serde_json::to_vec(&snapshot) else {
+    write(fp_hex, profile, &snapshot);
+}
+
+/// The catalog cached for `profile` once title `id` left it (`back: None`) or came back as
+/// `back`, keeping its age. No cache, nothing written; the last title gone, no cache.
+pub fn note_hidden(fp_hex: &str, profile: Option<&str>, id: &str, back: Option<&GameEntry>) {
+    let Some(mut cached) = load(fp_hex, profile) else {
+        return;
+    };
+    cached.games.retain(|g| g.id != id);
+    cached.games.extend(back.cloned());
+    match (cached.games.is_empty(), path_for(fp_hex, profile)) {
+        (true, Some(path)) => drop(std::fs::remove_file(path)),
+        _ => write(fp_hex, profile, &cached),
+    }
+}
+
+fn write(fp_hex: &str, profile: Option<&str>, snapshot: &CachedLibrary) {
+    let Some(path) = path_for(fp_hex, profile) else {
+        return;
+    };
+    let Ok(json) = serde_json::to_vec(snapshot) else {
         return;
     };
     let Some(dir) = path.parent() else { return };

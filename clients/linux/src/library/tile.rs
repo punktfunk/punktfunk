@@ -65,10 +65,10 @@ fn reuse<W: IsA<gtk::Widget>>(holder: &gtk::Box, name: &str, make: impl FnOnce()
 
 fn show(poster: &Poster, view: &View, tile: Tile, caption: Caption) {
     match tile {
-        Tile::Game(i) => match view.games.borrow().get(i) {
+        Tile::Game(i) => view.with_titles(|games| match games.get(i) {
             Some(g) => poster.show_game(view, g, caption),
             None => poster.show_nothing(),
-        },
+        }),
         Tile::Desktop => poster.show_desktop(),
     }
 }

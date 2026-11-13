@@ -723,8 +723,9 @@ async fn the_console_locks_a_profile_for_the_devices_it_chooses() {
     assert_eq!(profiles.opens(&owner, Some(&tv)), Opens::Pin);
     let file = dir.join(pf_seats::locks::FILE);
     let text = std::fs::read_to_string(&file).unwrap();
+    // The PIN as a value of its own: the salt and hash are hex and may hold these digits.
     assert!(
-        !text.contains("2468") && text.contains("\"salt\""),
+        !text.contains("\"2468\"") && text.contains("\"salt\""),
         "{text}"
     );
     #[cfg(unix)]

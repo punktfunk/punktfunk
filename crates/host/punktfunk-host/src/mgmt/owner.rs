@@ -66,12 +66,17 @@ pub(crate) enum Side {
 
 /// Routes a device may call about its own play, and the host each goes to as that device: its
 /// game, its screen and the compositors on its seat; its installs on the owner's host, whose
-/// plugins download into the box's shared game files. `mgmt::tests::routes` holds every other
-/// device route to the door.
+/// plugins download into the box's shared game files, and a person's routes there too, which
+/// write the library. `mgmt::tests::routes` holds every other device route to the door.
 pub(crate) const DEVICE: &[(&str, &str, Side)] = &[
     ("POST", "game/end", Side::Seat),
     ("POST", "library/install/*", Side::Owner),
     ("DELETE", "library/install/*", Side::Owner),
+    ("PUT", "library/hidden/*", Side::Owner),
+    ("PUT", "library/overrides/games/*", Side::Owner),
+    ("PUT", "library/scanners/*", Side::Owner),
+    ("PUT", "session/settings", Side::Owner),
+    ("DELETE", "session/settings", Side::Owner),
     ("GET", "display/targets", Side::Seat),
     ("PUT", "display/clients/*", Side::Seat),
     ("GET", "compositors", Side::Seat),
@@ -152,6 +157,8 @@ pub(crate) struct Forwarded {
     pub body: Vec<u8>,
     /// The device the door vouches for: the seat host answers as it would that device.
     pub device: Option<String>,
+    /// The profile the door found `device` is the person of ([`super::person`]).
+    pub person: Option<String>,
     /// Hand the body over as it arrives.
     pub stream: bool,
     /// Start a stopped seat; a check that must not wake anyone passes `false`.
@@ -167,6 +174,7 @@ impl Forwarded {
             content_type: None,
             body: Vec::new(),
             device: None,
+            person: None,
             stream: false,
             start: false,
         }
@@ -279,6 +287,7 @@ impl MgmtState {
                 content_type: json,
                 body: body.unwrap_or_default(),
                 device: None,
+                person: None,
                 stream: false,
                 start,
             },
@@ -363,8 +372,10 @@ fn device_seat(st: &MgmtState, seats: &crate::seats::Snapshot, fp: &str) -> Opti
 
 /// On a door: an admin call the door does not answer itself goes to the owner's host, and a
 /// device's call about its own play to the host [`device_route`] names, carrying the device so
-/// that host answers as it would the device. A device's read wakes no seat: a client asks each
-/// time it shows the host. Every other lane, and every other host, is answered here.
+/// that host answers as it would the device. A person's call carries the profile the door found
+/// the device is the person of, and any other is refused here. A device's read wakes no seat: a
+/// client asks each time it shows the host. Every other lane, and every other host, is answered
+/// here.
 pub(crate) async fn pass_on(
     State(st): State<Arc<MgmtState>>,
     req: Request,
@@ -380,6 +391,7 @@ pub(crate) async fn pass_on(
         .strip_prefix("/api/v1/")
         .unwrap_or_default()
         .to_string();
+    let mut person = None;
     let target = match (lane, device_route(req.method(), &rest)) {
         (Some(AuthLane::Admin), _) if classify(req.method(), &rest) == Verdict::Forward => {
             Target::Owner
@@ -388,6 +400,14 @@ pub(crate) async fn pass_on(
             let Some(PairedDevice(fp)) = req.extensions().get::<PairedDevice>().cloned() else {
                 return next.run(req).await;
             };
+            let method = req.method().as_str();
+            if super::person::person_route(method, req.uri().path()) {
+                let named = super::person::named(req.uri());
+                match super::person::check(&st, named.as_deref(), &fp, None).await {
+                    Ok(id) => person = Some(id),
+                    Err(refused) => return refused,
+                }
+            }
             if side == Side::Owner {
                 Target::Owner
             } else {
@@ -424,6 +444,7 @@ pub(crate) async fn pass_on(
             .map(str::to_string),
         body: bytes.to_vec(),
         device: parts.extensions.get::<PairedDevice>().map(|d| d.0.clone()),
+        person,
         stream: tail(&rest),
         start: lane != Some(AuthLane::Cert) || parts.method != Method::GET,
     };

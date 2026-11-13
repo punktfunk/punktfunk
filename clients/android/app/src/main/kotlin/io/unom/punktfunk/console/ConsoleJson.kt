@@ -211,8 +211,12 @@ internal object ConsoleJson {
             .put("profile", profileJson(h))
     }
 
-    /** One `enumerate` row, as the console's `ListedProfile` reads it; the seat line in [res]'s language. */
+    /**
+     * One `enumerate` row, as the console's `ListedProfile` reads it; the seat line in [res]'s
+     * language. `person` rides only when true, as the Rust row writes it.
+     */
     fun profileRow(p: io.unom.punktfunk.kit.ListedProfile, res: Resources): JSONObject = JSONObject()
+        .apply { if (p.person) put("person", true) }
         .put("id", p.id)
         .put("display_name", p.displayName)
         .put("accent", p.accent ?: JSONObject.NULL)
@@ -355,28 +359,40 @@ internal object ConsoleJson {
      * and Most played sorts fall back to host order. `overrides` rides only when the host set
      * some, for the launch hold's "Host: …" line.
      */
-    fun libraryGames(req: JSONObject, games: List<GameEntry>): String {
-        val out = JSONArray()
-        for (g in games) {
-            out.put(
-                JSONObject()
-                    .put("id", g.id)
-                    .put("title", g.title)
-                    .put("store", g.store)
-                    .put("launcher", g.isLauncher)
-                    .put("icon", g.icon?.takeIf(::validIconToken) ?: "")
-                    .put("platform", g.platform ?: JSONObject.NULL)
-                    .put("developer", g.developer ?: JSONObject.NULL)
-                    .put("year", g.releaseYear ?: JSONObject.NULL)
-                    .put("genres", JSONArray(g.genres))
-                    .put("stats", g.stats?.toJson() ?: JSONObject.NULL)
-                    .put("running", false)
-                    .put("install", g.install?.let(::installJson) ?: JSONObject.NULL)
-                    .apply { g.overrides?.let { put("overrides", it.toJson()) } },
-            )
-        }
-        return JSONObject().put("req", req).put("games", out).toString()
-    }
+    fun libraryGames(req: JSONObject, games: List<GameEntry>): String =
+        JSONObject().put("req", req).put("games", JSONArray(games.map(::libraryGame))).toString()
+
+    /** One `LibraryGame`, as [libraryGames] writes each. */
+    private fun libraryGame(g: GameEntry): JSONObject = JSONObject()
+        .put("id", g.id)
+        .put("title", g.title)
+        .put("store", g.store)
+        .put("launcher", g.isLauncher)
+        .put("icon", g.icon?.takeIf(::validIconToken) ?: "")
+        .put("platform", g.platform ?: JSONObject.NULL)
+        .put("developer", g.developer ?: JSONObject.NULL)
+        .put("year", g.releaseYear ?: JSONObject.NULL)
+        .put("genres", JSONArray(g.genres))
+        .put("stats", g.stats?.toJson() ?: JSONObject.NULL)
+        .put("running", false)
+        .put("install", g.install?.let(::installJson) ?: JSONObject.NULL)
+        .apply { g.overrides?.let { put("overrides", it.toJson()) } }
+
+    /** The answer to `ConsoleCmd::FetchHidden`, as the console's `HiddenAnswer`: the titles, or [why] it failed. */
+    fun hiddenAnswer(games: List<GameEntry>?, why: String = ""): String =
+        if (games != null) JSONObject().put("Listed", JSONArray(games.map(::libraryGame))).toString()
+        else JSONObject().put("Failed", why).toString()
+
+    /** The answer to `ConsoleCmd::SetHidden`, as the console's `HideAnswer`. */
+    fun hideAnswer(fp: String, profile: String, appId: String, hidden: Boolean, done: Boolean, notice: String): String =
+        JSONObject()
+            .put("fp_hex", fp)
+            .put("profile", profile)
+            .put("app_id", appId)
+            .put("hidden", hidden)
+            .put("done", done)
+            .put("notice", notice)
+            .toString()
 
     private fun installJson(i: TitleInstall): JSONObject = JSONObject().put("state", i.state).apply {
         i.sizeBytes?.let { put("size_bytes", it) }

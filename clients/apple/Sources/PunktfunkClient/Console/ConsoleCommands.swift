@@ -137,6 +137,16 @@ extension ConsoleModel {
             padTest(a["on"] as? Bool ?? false)
         case .promptAnswer:
             answerPrompt(id: a["id"] as? String ?? "", choice: a["choice"] as? Int)
+        case .setHidden:
+            setHidden(
+                addr: a["addr"] as? String ?? "", mgmt: port(a["mgmt"]),
+                fp: a["fp_hex"] as? String ?? "", profile: a["profile"] as? String ?? "",
+                name: a["name"] as? String ?? "", appID: a["app_id"] as? String ?? "",
+                title: a["title"] as? String ?? "", hidden: a["hidden"] as? Bool ?? false)
+        case .fetchHidden:
+            fetchHidden(
+                addr: a["addr"] as? String ?? "", mgmt: port(a["mgmt"]),
+                fp: a["fp_hex"] as? String ?? "", profile: a["profile"] as? String ?? "")
         case .speedTest:
             speedTest(
                 key: a["key"] as? String ?? "", addr: a["addr"] as? String ?? "",
@@ -365,23 +375,93 @@ extension ConsoleModel {
         }
     }
 
-    /// Each title's first poster that loads, in the order the touch grid takes them. A title
-    /// this fetch already has a poster for is skipped.
+    /// Each title's first poster that loads. A title this fetch already has a poster for is
+    /// skipped.
     private func pushArt(_ games: [GameEntry], poster: @escaping @Sendable (URL) async -> Data?) {
         artTask?.cancel()
         artTask = Task { [weak self] in
             for game in games {
                 guard let self, !Task.isCancelled else { return }
                 if artShown.contains(game.id) { continue }
-                // The capsule first, then the header: the same order the touch grid takes.
-                for url in game.art.posterCandidates {
-                    guard let bytes = await poster(url) else { continue }
-                    // A newer fetch owns the shelf and its `artShown` by now.
-                    if Task.isCancelled { return }
-                    bridge.art(id: game.id, bytes: bytes)
-                    artShown.insert(game.id)
-                    break
-                }
+                guard let bytes = await Self.firstPoster(game, poster) else { continue }
+                // A newer fetch owns the shelf and its `artShown` by now.
+                if Task.isCancelled { return }
+                bridge.art(id: game.id, bytes: bytes)
+                artShown.insert(game.id)
+            }
+        }
+    }
+
+    /// The capsule first, then the header: the same order the touch grid takes.
+    private static func firstPoster(
+        _ game: GameEntry, _ poster: (URL) async -> Data?
+    ) async -> Data? {
+        for url in game.art.posterCandidates {
+            if let bytes = await poster(url) { return bytes }
+        }
+        return nil
+    }
+
+    // MARK: - hide for me
+
+    /// Hide or show a title for the profile this device is the person of. What the host took,
+    /// the cached catalog follows at once: a shown title as the last hidden list had it. The
+    /// shell moves the title and shows the line.
+    private func setHidden(
+        addr: String, mgmt: UInt16, fp: String, profile: String, name: String, appID: String,
+        title: String, hidden: Bool
+    ) {
+        let answer: (Bool, String) -> Void = { [weak self] done, notice in
+            self?.bridge.push(
+                .hide,
+                ConsoleJSON.hideAnswer(
+                    fp: fp, profile: profile, appID: appID, hidden: hidden, done: done,
+                    notice: notice))
+        }
+        guard let host = host(fp: fp, addr: addr, port: 0) else {
+            return answer(false, String(localized: L10n.appleHostNotSaved))
+        }
+        guard let target = MgmtTarget.make(host: host, port: mgmt)
+            .target(orSay: { answer(false, $0) })
+        else { return }
+        Task { [weak self] in
+            let outcome = await HideForMe.setHidden(
+                appID, hidden: hidden, profile: profile, on: target)
+            if outcome == .done {
+                let back = hidden ? nil : self?.hiddenSeen.first { $0.id == appID }
+                await LibraryCache.shared?.noteHidden(
+                    appID, back: back, hostID: host.id.uuidString, profile: profile)
+            }
+            answer(outcome == .done, outcome.notice(hidden: hidden, title: title, name: name))
+        }
+    }
+
+    /// What a profile hides, for the shell's hidden shelf, then their posters as a shelf's come.
+    private func fetchHidden(addr: String, mgmt: UInt16, fp: String, profile: String) {
+        let answer: ([GameEntry]?, String) -> Void = { [weak self] games, why in
+            self?.bridge.push(
+                .hidden, ConsoleJSON.hiddenList(fp: fp, profile: profile, games: games, why: why))
+        }
+        guard let host = host(fp: fp, addr: addr, port: 0) else {
+            return answer(nil, String(localized: L10n.appleHostNotSaved))
+        }
+        guard let target = MgmtTarget.make(host: host, port: mgmt)
+            .target(orSay: { answer(nil, $0) })
+        else { return }
+        Task { [weak self] in
+            let games: [GameEntry]
+            do {
+                games = try await HideForMe.hidden(profile: profile, on: target)
+            } catch {
+                return answer(nil, (error as? LocalizedError)?.errorDescription ?? "\(error)")
+            }
+            self?.hiddenSeen = games
+            answer(games, "")
+            let loader = LibraryArtLoader(target)
+            for game in games {
+                guard let bytes = await Self.firstPoster(game, { try? await loader.data(for: $0) })
+                else { continue }
+                self?.bridge.art(id: game.id, bytes: bytes)
             }
         }
     }

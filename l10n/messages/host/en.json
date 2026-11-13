@@ -165,6 +165,7 @@
 			}
 		}
 	],
+	"apierr_profile_change_not_allowed": "This device can't change this profile. Ask the host's owner to change it in the web console.",
 	"apierr_profile_device_not_paired": "That device isn't paired with this host.",
 	"apierr_profile_devices_full": "This profile has all the devices it can take. Sign one out first.",
 	"apierr_profile_lock_shared": "This profile shares {owner}'s desktop, so it opens with that profile's lock. Change the lock there.",

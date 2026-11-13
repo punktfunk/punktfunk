@@ -150,6 +150,32 @@ class ConsoleBridgeVectorTest {
         assertWrites("DownloadsPush", 0, ConsoleJson.downloads(downloads, 255))
     }
 
+    /** `FetchHidden` and `SetHidden` answer with the samples, each echoing its command. */
+    @Test
+    fun hideAnswersWriteTheSamples() {
+        val halfLife = GameEntry("steam:70", "steam", "Half-Life", Artwork(null, null, null))
+        assertWrites("HiddenAnswer", 0, ConsoleJson.hiddenAnswer(listOf(halfLife)))
+        assertWrites("HiddenAnswer", 1, ConsoleJson.hiddenAnswer(emptyList()))
+        assertWrites("HiddenAnswer", 2, ConsoleJson.hiddenAnswer(null, "Couldn't reach the host."))
+        assertWrites(
+            "HideAnswer", 0,
+            ConsoleJson.hideAnswer("ab12", "a1b2c3d4e5f6", "steam:570", true, true, "Dota 2 is hidden for Kid"),
+        )
+        val refused = "This device can't change this profile. Ask the host's owner to change it in the web console."
+        assertWrites(
+            "HideAnswer", 1,
+            ConsoleJson.hideAnswer("ab12", "a1b2c3d4e5f6", "steam:570", false, false, refused),
+        )
+    }
+
+    /** A row the host marks `person` tells the console so; an old host's row stays as it was. */
+    @Test
+    fun aPersonRowCarriesItsMark() {
+        val res = RuntimeEnvironment.getApplication().resources
+        assertTrue(ConsoleJson.profileRow(ListedProfile(id = "kid", person = true), res).getBoolean("person"))
+        assertTrue(!ConsoleJson.profileRow(ListedProfile(id = "kid"), res).has("person"))
+    }
+
     /** The second sample's battery reads an `InputDevice`, which a JVM test cannot build. */
     @Test
     fun padsWriteTheSample() {
