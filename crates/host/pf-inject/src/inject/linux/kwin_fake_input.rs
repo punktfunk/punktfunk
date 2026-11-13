@@ -7,11 +7,12 @@
 //! raw Linux evdev codes; KWin maps them through the session keymap (no keymap upload).
 //! Committed text goes as keysyms (v6, Plasma 6.5+), which KWin types in the session layout;
 //! the modifiers a character needs go down as real keys around it ([`text_modifiers`]).
-//! Absolute pointer/touch use *logical* compositor pixels (post scale). At scale ≠ 1 the
-//! logical edge is `physical / scale`; a streamed pixel coordinate then lands `scale×`
-//! too far toward the bottom-right. Track each output's logical rectangle via
-//! `xdg-output` and map the normalized client position into it. The target is the head
-//! [`crate::head_pick::pick`] names; a miss maps `w×h` pixels at the origin.
+//! What the layout lacks goes over KWin's text device while an input method is active
+//! ([`crate::kwin_text`]). Absolute pointer/touch use *logical* compositor pixels (post
+//! scale). At scale ≠ 1 the logical edge is `physical / scale`; a streamed pixel coordinate
+//! then lands `scale×` too far toward the bottom-right. Track each output's logical
+//! rectangle via `xdg-output` and map the normalized client position into it. The target is
+//! the head [`crate::head_pick::pick`] names; a miss maps `w×h` pixels at the origin.
 //!
 //! Pin: install the host `.desktop` and re-login (KWin caches the grant per-exe).
 //! Same path as `krdpserver`. See `docs-site/content/docs/(guide)/(desktops)/kde.md`.
@@ -20,6 +21,7 @@
 
 use super::{InputEvent, InputInjector};
 use crate::head_pick::{self, HeadFacts};
+use crate::kwin_text::TextPipe;
 use crate::plan::{Abs, Op, Plan};
 use crate::scroll::{ScrollBackend, ScrollMapper, ScrollOp};
 use anyhow::{Context, Result};
@@ -325,8 +327,27 @@ pub struct KwinFakeInjector {
     scroll: ScrollMapper,
     /// What this device holds, released before it goes ([`Drop`]).
     plan: Plan,
-    /// The session bus, opened for the first [`active_layout`] ask.
+    /// The session bus, opened for the first [`session_bus`] ask. KWin keeps the text
+    /// pipe's EIS context only while this connection lives.
     bus: Option<zbus::blocking::Connection>,
+    /// KWin's text device, tried on the first character that needs it.
+    pipe: Pipe,
+    /// The last event went out on the pipe, and KWin has not confirmed it yet.
+    piped: bool,
+    /// When the last key or keysym went out.
+    keyed: Instant,
+}
+
+/// How long an application gets to take a key before text follows on the text device. It
+/// applies a text commit ahead of a key that arrived just before it; an idle one has taken
+/// the key within 2 ms.
+const KEY_LEAD: Duration = Duration::from_millis(10);
+
+/// Whether this KWin has a text device ([`TextPipe`]).
+enum Pipe {
+    Untried,
+    Open(TextPipe),
+    Absent,
 }
 
 /// Cap geometry roundtrips at 2 Hz. A roundtrip on every mouse-move would stall the control path.
@@ -385,15 +406,12 @@ fn text_keysym(cp: u32) -> Option<u32> {
 /// Right Alt, Right Ctrl, Left Alt, both Meta keys, Menu, Caps Lock and the 102nd key.
 const LEVEL_KEYS: [u16; 9] = [42, 100, 97, 56, 125, 126, 127, 58, 86];
 
-/// The evdev keys to hold so `sym` types in `layout`: the modifier keys of the level KWin's
-/// keysym request picks, its first key and level carrying `sym`. KWin sets that level's
-/// modifiers in its state only, and an input method holding the keyboard grab then sees the key
-/// before them and hands back a stuck Shift. Held as real keys they reach it first.
-/// Empty for a level that needs none, a keysym the layout lacks (KWin types those from a
-/// scratch keymap), and modifiers no [`LEVEL_KEYS`] key sets.
-fn text_modifiers(keymap: &xkb::Keymap, layout: u32, sym: u32) -> Vec<u16> {
+/// The modifier mask of the level KWin's keysym request picks for `sym` in `layout`: its
+/// first key and level carrying `sym`. `None` when the layout lacks `sym`; KWin then types it
+/// from a scratch keymap.
+fn text_level(keymap: &xkb::Keymap, layout: u32, sym: u32) -> Option<u32> {
     let codes = keymap.min_keycode().raw()..keymap.max_keycode().raw();
-    let level_mods = codes.into_iter().find_map(|code| {
+    codes.into_iter().find_map(|code| {
         let key = xkb::Keycode::new(code);
         (0..keymap.num_levels_for_key(key, layout)).find_map(|level| {
             let syms = keymap.key_get_syms_by_level(key, layout, level);
@@ -402,8 +420,16 @@ fn text_modifiers(keymap: &xkb::Keymap, layout: u32, sym: u32) -> Vec<u16> {
             let _ = keymap.key_get_mods_for_level(key, layout, level, &mut masks);
             syms.iter().any(|s| s.raw() == sym).then_some(masks[0])
         })
-    });
-    let mut need = level_mods.unwrap_or(0);
+    })
+}
+
+/// The evdev keys to hold so `sym` types in `layout`: the modifier keys of its
+/// [`text_level`]. KWin sets that level's modifiers in its state only, and an input method
+/// holding the keyboard grab then sees the key before them and hands back a stuck Shift.
+/// Held as real keys they reach it first. Empty for a level that needs none, a keysym the
+/// layout lacks, and modifiers no [`LEVEL_KEYS`] key sets.
+fn text_modifiers(keymap: &xkb::Keymap, layout: u32, sym: u32) -> Vec<u16> {
+    let mut need = text_level(keymap, layout, sym).unwrap_or(0);
     let mut keys = Vec::new();
     for key in LEVEL_KEYS {
         if need == 0 {
@@ -432,6 +458,33 @@ fn text_modifiers(keymap: &xkb::Keymap, layout: u32, sym: u32) -> Vec<u16> {
     }
 }
 
+/// The session bus, connected on the first ask.
+fn session_bus(
+    bus: &mut Option<zbus::blocking::Connection>,
+) -> Option<&zbus::blocking::Connection> {
+    if bus.is_none() {
+        *bus = zbus::blocking::Connection::session().ok();
+    }
+    bus.as_ref()
+}
+
+/// Whether an input method runs for the focused text field. It may then hold KWin's keyboard
+/// grab, and every key passes through it.
+fn input_method_active(bus: &mut Option<zbus::blocking::Connection>) -> bool {
+    let mut property = |name: &str| -> Option<bool> {
+        let reply = session_bus(bus)?.call_method(
+            Some("org.kde.KWin"),
+            "/VirtualKeyboard",
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &("org.kde.kwin.VirtualKeyboard", name),
+        );
+        let value: zbus::zvariant::OwnedValue = reply.ok()?.body().deserialize().ok()?;
+        bool::try_from(value).ok()
+    };
+    property("available") == Some(true) && property("active") == Some(true)
+}
+
 /// The index of KWin's active layout in `keymap`. A client without focus hears of no layout
 /// switch, so a keymap with several asks KWin's `org.kde.keyboard` service. `None` when KWin
 /// gives no usable answer.
@@ -442,10 +495,7 @@ fn active_layout(
     if keymap.num_layouts() <= 1 {
         return Some(0);
     }
-    if bus.is_none() {
-        *bus = zbus::blocking::Connection::session().ok();
-    }
-    let reply = bus.as_ref()?.call_method(
+    let reply = session_bus(bus)?.call_method(
         Some("org.kde.keyboard"),
         "/Layouts",
         Some("org.kde.KeyboardLayouts"),
@@ -490,6 +540,9 @@ impl KwinFakeInjector {
             scroll: ScrollMapper::new(ScrollBackend::Kwin),
             plan: Plan::default(),
             bus: None,
+            pipe: Pipe::Untried,
+            piped: false,
+            keyed: Instant::now(),
         };
         injector.refresh_geometry();
         tracing::info!(
@@ -548,24 +601,73 @@ impl KwinFakeInjector {
         (lx + nx * lw, ly + ny * lh)
     }
 
-    /// The modifier keys to hold around `sym`'s tap ([`text_modifiers`]), less those the
-    /// client holds itself: lifting one of those would end the client's own hold. None when
-    /// the keymap or the active layout is unknown.
-    fn text_hold(&mut self, sym: u32) -> Vec<u16> {
+    /// The session keymap and KWin's active layout in it. `None` while either is unknown.
+    fn layout(&mut self) -> Option<(xkb::Keymap, u32)> {
         self.refresh_geometry();
-        let Some(keymap) = self.state.keymap.clone() else {
-            return Vec::new();
+        let keymap = self.state.keymap.clone()?;
+        let layout = active_layout(&mut self.bus, &keymap)?;
+        Some((keymap, layout))
+    }
+
+    /// Type `c` on KWin's text device ([`TextPipe`]), opened on its first character. False
+    /// with no input method in the way, on a KWin without the device, or when the device
+    /// just failed: the keysym tap types `c` then.
+    fn pipe_text(&mut self, c: char) -> bool {
+        if !input_method_active(&mut self.bus) {
+            return false;
+        }
+        if matches!(self.pipe, Pipe::Untried) {
+            let opened = session_bus(&mut self.bus)
+                .context("connect to the session bus")
+                .and_then(TextPipe::open);
+            self.pipe = match opened {
+                Ok(pipe) => {
+                    tracing::info!("KWin text device ready");
+                    Pipe::Open(pipe)
+                }
+                Err(e) => {
+                    tracing::debug!(error = %format!("{e:#}"), "no KWin text device, typing keysyms");
+                    Pipe::Absent
+                }
+            };
+        }
+        let Pipe::Open(pipe) = &mut self.pipe else {
+            return false;
         };
-        let Some(layout) = active_layout(&mut self.bus, &keymap) else {
-            return Vec::new();
+        // The keys sent here come first: KWin reads them, then the application gets
+        // [`KEY_LEAD`] to take them.
+        if !self.piped {
+            let _ = self.queue.roundtrip(&mut self.state);
+            std::thread::sleep((self.keyed + KEY_LEAD).saturating_duration_since(Instant::now()));
+        }
+        self.piped = match pipe.send(c) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(error = %format!("{e:#}"), "KWin text device lost, typing keysyms");
+                self.pipe = Pipe::Absent;
+                false
+            }
         };
-        let mut keys = text_modifiers(&keymap, layout, sym);
-        keys.retain(|&key| !self.plan.holds(key));
-        keys
+        self.piped
+    }
+
+    /// Before anything goes out on the fake-input connection, let KWin take the text sent on
+    /// the pipe: it reads the two connections in no fixed order.
+    fn settle_pipe(&mut self) {
+        if !std::mem::take(&mut self.piped) {
+            return;
+        }
+        if let Pipe::Open(pipe) = &mut self.pipe {
+            if let Err(e) = pipe.settle() {
+                tracing::warn!(error = %format!("{e:#}"), "KWin text device lost, typing keysyms");
+                self.pipe = Pipe::Absent;
+            }
+        }
     }
 
     /// Emit one planned op. Keys are evdev codes; KWin owns the keymap and modifier state, so
-    /// there is no modifiers request. Text is a keysym tap inside the modifier keys it needs.
+    /// there is no modifiers request. Text is a keysym tap inside the modifier keys it needs;
+    /// a character the layout lacks goes over the text device while an input method is active.
     /// A touch is one frame per event.
     fn emit(&mut self, op: Op) {
         match op {
@@ -575,7 +677,10 @@ impl KwinFakeInjector {
                 self.fake.pointer_motion_absolute(x, y);
             }
             Op::Button { evdev, down } => self.fake.button(evdev, down.into()),
-            Op::Key { evdev, down } => self.fake.keyboard_key(evdev.into(), down.into()),
+            Op::Key { evdev, down } => {
+                self.fake.keyboard_key(evdev.into(), down.into());
+                self.keyed = Instant::now();
+            }
             Op::TouchDown { id, at } => {
                 let (x, y) = self.place(&at);
                 self.fake.touch_down(id, x, y);
@@ -592,17 +697,34 @@ impl KwinFakeInjector {
             }
             // Below v6 there is no keysym request, and the host offers no text.
             Op::Text(cp) => {
-                if let Some(sym) = text_keysym(cp).filter(|_| self.fake.version() >= MAX_VERSION) {
-                    let held = self.text_hold(sym);
-                    for &key in &held {
-                        self.fake.keyboard_key(key.into(), 1);
-                    }
-                    self.fake.keyboard_keysym(sym, 1);
-                    self.fake.keyboard_keysym(sym, 0);
-                    for &key in held.iter().rev() {
-                        self.fake.keyboard_key(key.into(), 0);
-                    }
+                let sym = text_keysym(cp).filter(|_| self.fake.version() >= MAX_VERSION);
+                let Some((sym, c)) = sym.zip(char::from_u32(cp)) else {
+                    return;
+                };
+                let layout = self.layout();
+                // KWin's scratch keymap is gone again before an input method hands the key
+                // on, so a character the layout lacks reaches the application as nothing.
+                let lacks = |(keymap, layout): &(xkb::Keymap, u32)| {
+                    text_level(keymap, *layout, sym).is_none()
+                };
+                if layout.as_ref().is_some_and(lacks) && self.pipe_text(c) {
+                    return;
                 }
+                self.settle_pipe();
+                // Not the client's own modifiers: lifting one would end the client's hold.
+                let mut held = layout.map_or_else(Vec::new, |(keymap, layout)| {
+                    text_modifiers(&keymap, layout, sym)
+                });
+                held.retain(|&key| !self.plan.holds(key));
+                for &key in &held {
+                    self.fake.keyboard_key(key.into(), 1);
+                }
+                self.fake.keyboard_keysym(sym, 1);
+                self.fake.keyboard_keysym(sym, 0);
+                for &key in held.iter().rev() {
+                    self.fake.keyboard_key(key.into(), 0);
+                }
+                self.keyed = Instant::now();
             }
         }
     }
@@ -637,6 +759,9 @@ impl Drop for KwinFakeInjector {
 
 impl InputInjector for KwinFakeInjector {
     fn inject(&mut self, event: &InputEvent) -> Result<()> {
+        if event.kind != InputKind::TextInput {
+            self.settle_pipe();
+        }
         if matches!(event.kind, InputKind::MouseScroll | InputKind::Scroll) {
             // Legacy and normalized scroll lower through the shared mapper onto the bare axis;
             // the plan carries click-priced units and the Wayland vertical sign already applied.
@@ -654,7 +779,7 @@ impl InputInjector for KwinFakeInjector {
 
 #[cfg(test)]
 mod tests {
-    use super::{text_keysym, text_modifiers};
+    use super::{text_keysym, text_level, text_modifiers};
     use xkbcommon::xkb;
 
     /// Each character holds the real modifier keys of its level in the active layout, and
@@ -705,6 +830,15 @@ mod tests {
             let sym = text_keysym(c as u32).unwrap();
             assert_eq!(text_modifiers(keymap, layout, sym), want, "{name}");
         }
+        // What decides the text device: the layout lacks the character, not that its level
+        // needs no modifier.
+        let level =
+            |keymap, layout, c: char| text_level(keymap, layout, text_keysym(c as u32).unwrap());
+        assert_eq!(level(&us, 0, 'a'), Some(0));
+        assert_eq!(level(&us, 0, 'ñ'), None);
+        assert_eq!(level(&us, 0, '😀'), None);
+        assert_eq!(level(&us_ru, 1, 'A'), None);
+        assert!(level(&us_ru, 1, 'Ж').is_some_and(|mask| mask != 0));
     }
 
     #[test]
