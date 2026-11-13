@@ -973,7 +973,7 @@ public final class MetalVideoPresenter {
     /// without Metal 3 — no latching there. Typed `AnyObject` because a stored property
     /// cannot be conditionally available; the readers cast under the same check.
     private lazy var latchResidency: AnyObject? = {
-        guard #available(iOS 18, tvOS 18, macOS 15, visionOS 2, *),
+        guard #available(iOS 18, tvOS 18, macOS 15, *),
               device.supportsFamily(.metal3), let queue = latchQueue
         else { return nil }
         let desc = MTLResidencySetDescriptor()
@@ -1001,7 +1001,7 @@ public final class MetalVideoPresenter {
     private func latchTextures(
         for pixelBuffer: CVPixelBuffer, tenBit: Bool
     ) -> (luma: MTLTexture, chroma: MTLTexture)? {
-        guard #available(iOS 18, tvOS 18, macOS 15, visionOS 2, *),
+        guard #available(iOS 18, tvOS 18, macOS 15, *),
               let residency = latchResidency as? MTLResidencySet,
               let surface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue()
         else { return nil }
