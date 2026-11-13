@@ -157,7 +157,23 @@ pub struct RetrieveDone {
 }
 
 /// A backend's retrieve loop: take jobs until the channel closes, send each result back.
-pub type RetrieveLoop = fn(usize, mpsc::Receiver<RetrieveJob>, mpsc::Sender<RetrieveDone>);
+pub type RetrieveLoop = fn(usize, mpsc::Receiver<RetrieveJob>, DoneTx);
+
+/// The retrieve thread's end of the completion channel. Each result goes to the encode thread
+/// first, then rings the session loop's [`crate::AuWake`], so the loop polls it at once.
+pub struct DoneTx {
+    tx: mpsc::Sender<RetrieveDone>,
+    wake: crate::AuWake,
+}
+
+impl DoneTx {
+    /// `Err` once the encode thread dropped the receiver: teardown.
+    pub fn send(&self, done: RetrieveDone) -> Result<(), mpsc::SendError<RetrieveDone>> {
+        self.tx.send(done)?;
+        self.wake.ring();
+        Ok(())
+    }
+}
 
 /// Two-thread retrieve: job/done channels, the thread, and AUs backpressure absorbed that
 /// `poll` hands out first.
@@ -534,6 +550,8 @@ pub struct NvSession {
     pub reference_floor: Option<crate::codec::Acked>,
     /// What the client confirmed it decoded clean, whatever the link.
     pub confirmed: Option<crate::codec::Acked>,
+    /// The loop's AU wake, which every retrieve thread rings. Outlives each session.
+    pub au_wake: crate::AuWake,
 }
 
 impl std::ops::Deref for NvSession {
@@ -600,6 +618,7 @@ impl NvSession {
             ltr_frames: 0,
             reference_floor: None,
             confirmed: None,
+            au_wake: Default::default(),
         }
     }
 
@@ -984,11 +1003,16 @@ impl NvSession {
         Ok(())
     }
 
-    /// Run `run` on thread `name` as this session's two-thread retrieve.
+    /// Run `run` on thread `name` as this session's two-thread retrieve. Each completion it
+    /// sends rings [`Self::au_wake`].
     pub fn start_retrieve(&mut self, name: &str, run: RetrieveLoop) -> Result<()> {
         ensure_open(self.encoder)?;
         let (work_tx, work_rx) = mpsc::sync_channel::<RetrieveJob>(POOL);
-        let (done_tx, done_rx) = mpsc::channel::<RetrieveDone>();
+        let (tx, done_rx) = mpsc::channel::<RetrieveDone>();
+        let done_tx = DoneTx {
+            tx,
+            wake: self.au_wake.clone(),
+        };
         let enc = self.encoder as usize;
         let join = std::thread::Builder::new()
             .name(name.into())
@@ -2334,18 +2358,37 @@ mod recovery_tests {
     }
 
     /// A retrieve loop that takes a job and never answers: the blocking lock on a wedged driver.
-    fn stuck(_: usize, jobs: mpsc::Receiver<RetrieveJob>, _done: mpsc::Sender<RetrieveDone>) {
+    fn stuck(_: usize, jobs: mpsc::Receiver<RetrieveJob>, _done: DoneTx) {
         let _job = jobs.recv();
         loop {
             std::thread::park();
         }
     }
 
-    fn answers(_: usize, jobs: mpsc::Receiver<RetrieveJob>, done: mpsc::Sender<RetrieveDone>) {
+    fn answers(_: usize, jobs: mpsc::Receiver<RetrieveJob>, done: DoneTx) {
         for job in jobs {
             let result = Ok((Vec::new(), false));
             let _ = done.send(RetrieveDone { bs: job.bs, result });
         }
+    }
+
+    /// Each completion the retrieve thread sends rings the loop's wake, and `poll` has the AU
+    /// by then. The wake set before the thread started reaches it.
+    #[test]
+    fn a_retrieve_completion_rings_the_loop() {
+        let mut s = stub_session(Codec::H265, 128);
+        let (tx, rang) = mpsc::channel::<()>();
+        s.au_wake.set(Some(std::sync::Arc::new(move || {
+            let _ = tx.send(());
+        })));
+        s.start_retrieve("pf-test-answers", answers).expect("spawn");
+        for _ in 0..3 {
+            encode(&mut s).expect("queued");
+            rang.recv_timeout(Duration::from_secs(5)).expect("it rang");
+            assert!(s.poll().expect("polled").is_some(), "the AU is there");
+        }
+        assert!(rang.try_recv().is_err(), "one ring per AU");
+        assert!(s.stop_within(Duration::from_secs(5)));
     }
 
     /// A stuck retrieve thread costs the stop its limit, not the encode thread: the session
