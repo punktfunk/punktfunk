@@ -329,5 +329,44 @@ final class PyroWaveGoldenTests: XCTestCase {
         let db = psnr(decoded.y, [UInt8](ref))
         XCTAssertGreaterThan(db, 25.0, "lossy frame should still resemble the source (\(db) dB)")
     }
+
+    /// A frame's planes stay its own while it is held: the ring steps past its slot. Decoded
+    /// into again, a frame waiting in the present store would show a later picture. With
+    /// every slot held, the next frame is dropped.
+    func testAHeldFramesSlotIsNotDecodedInto() throws {
+        try XCTSkipIf(!MetalWaveletDecoder.supported, "no capable Metal device")
+        let au = try fixture("au-dense")
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let decoder = try XCTUnwrap(MetalWaveletDecoder(device: device, queue: queue, ringDepth: 4))
+        // One decode, waited for; nil when the decoder dropped the frame.
+        func decodeOne() -> WaveletPlanes? {
+            let done = DispatchSemaphore(value: 0)
+            let box = ResultBox()
+            guard decoder.decode(au: au, chunkAligned: false, windowSize: 0, completion: { planes in
+                box.lock.lock()
+                box.planes = planes
+                box.lock.unlock()
+                done.signal()
+            }) else { return nil }
+            XCTAssertEqual(done.wait(timeout: .now() + 10), .success, "the decode completes")
+            box.lock.lock()
+            defer { box.lock.unlock() }
+            return box.planes
+        }
+
+        let first = try XCTUnwrap(decodeOne())
+        for _ in 0..<6 {
+            let next = try XCTUnwrap(decodeOne())
+            XCTAssertFalse(next.y === first.y, "the held frame's slot was decoded into")
+        }
+        // Metal lets go of a completed decode's handler a moment after it ran: retry.
+        var held = [first]
+        for _ in 0..<50 where held.count < 4 {
+            if let planes = decodeOne() { held.append(planes) } else { usleep(5_000) }
+        }
+        XCTAssertEqual(Set(held.map { ObjectIdentifier($0.y) }).count, 4, "one slot per held frame")
+        XCTAssertNil(decodeOne(), "no slot is free")
+    }
 }
 #endif

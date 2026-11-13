@@ -405,8 +405,9 @@ public final class WaveletAccessUnitPool: AccessUnitMemory {
 }
 
 /// One decoded frame's output planes, handed to the presenter's planar render path. The
-/// textures belong to the decoder's ring — ring depth (4) plus same-queue hazard tracking keep
-/// them valid while referenced. Public because it rides inside `ReadyImage`.
+/// textures belong to a slot of the decoder's ring. While a copy of this value lives, `lease`
+/// keeps the decoder out of that slot; a render already committed is ordered ahead of the
+/// next decode by the queue they share. Public because it rides inside `ReadyImage`.
 public struct WaveletPlanes: @unchecked Sendable {
     public let y: MTLTexture
     public let cb: MTLTexture
@@ -414,6 +415,9 @@ public struct WaveletPlanes: @unchecked Sendable {
     public let csc: CscUniform
     /// PQ (HDR) stream: the presenter picks the HDR/tone-map planar pipeline + EDR config.
     public let pq: Bool
+    /// The ring slot's lease, nil for planes no decoder owns. Only its reference count
+    /// matters: the decoder reuses a slot once nothing else holds this.
+    var lease: AnyObject?
     /// 10-bit without PQ: the planes are 16-bit, and the presenter takes the 10-bit drawable.
     public var tenBitSDR: Bool { !pq && y.pixelFormat == .r16Unorm }
     public var width: Int { y.width }
@@ -467,11 +471,16 @@ public final class MetalWaveletDecoder {
     /// output target chaining level L+1 into level L.
     private var llViews: [[MTLTexture]] = []
 
+    private final class SlotLease {}
+
     private struct Slot {
         var y: MTLTexture
         var cb: MTLTexture
         var cr: MTLTexture
         var offsets: MTLBuffer
+        /// Held by every `WaveletPlanes` of this slot: a decode in flight, a frame in the
+        /// present store, one the render thread is drawing. Free when only the ring holds it.
+        var lease = SlotLease()
     }
 
     private var slots: [Slot] = []
@@ -590,7 +599,19 @@ public final class MetalWaveletDecoder {
         var submitted = false
         defer { if !submitted { ringSlots.signal() } }
 
-        let slot = slots[nextSlot]
+        // The next slot no frame still holds. A slot rewritten while its frame waits in the
+        // store or with the render thread shows that frame with a later picture. None free
+        // drops this frame: the GPU or the presenter is several frames behind.
+        var free: Int?
+        for step in 0..<slots.count {
+            let index = (nextSlot + step) % slots.count
+            if isKnownUniquelyReferenced(&slots[index].lease) {
+                free = index
+                break
+            }
+        }
+        guard let free else { return false }
+        let slot = slots[free]
         frame.offsets.withUnsafeBytes { src in
             slot.offsets.contents().copyMemory(
                 from: src.baseAddress!, byteCount: min(src.count, slot.offsets.length))
@@ -679,7 +700,7 @@ public final class MetalWaveletDecoder {
         let planes = WaveletPlanes(
             y: slot.y, cb: slot.cb, cr: slot.cr,
             csc: CscRows.rows(frame.cscSignal, depth: wide ? 10 : 8, msbPacked: wide),
-            pq: frame.pq)
+            pq: frame.pq, lease: slot.lease)
         // Captured directly: the handler must not retain the decoder.
         let slotReleased = ringSlots
         let token = placed.token
@@ -691,7 +712,7 @@ public final class MetalWaveletDecoder {
         cmd.commit()
         submitted = true
         committed = true
-        nextSlot = (nextSlot + 1) % ringDepth
+        nextSlot = (free + 1) % slots.count
         return true
     }
 
