@@ -554,6 +554,157 @@ fn dump_profiles() {
     }
 }
 
+/// Hide for me on a locked profile's device: the game menu with its entry, the shelf once the
+/// host took it, the hidden titles, one shown again, and the list empty.
+/// `PF_CONSOLE_DUMP=<dir> cargo test -p pf-console-ui --lib -- --ignored dump_hide_for_me`.
+#[test]
+#[ignore]
+fn dump_hide_for_me() {
+    use crate::library::LibraryGame;
+    use crate::model::{HiddenAnswer, HideAnswer, ProfilesAnswer, RequestKey};
+    use pf_client_core::hide::Outcome;
+    use pf_client_core::profiles::{ListedProfile, ProfilePick};
+    let dir = std::env::var("PF_CONSOLE_DUMP").expect("set PF_CONSOLE_DUMP to an output dir");
+    fake_home();
+    let fonts = crate::theme::build_fonts().unwrap();
+    let dump = |shell: &mut Shell, frames: usize, name: &str| {
+        shell.fake_clock = Some((shell.fake_clock.map_or(0.0, |(t, _)| t), 1.0 / 60.0));
+        let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
+        for _ in 0..frames {
+            let pad = Some("Xbox Wireless Controller");
+            let pref = Some(GamepadPref::Xbox360);
+            shell.render(surface.canvas(), 1280, 800, &fonts, pad, pref, &[]);
+        }
+        let png = surface
+            .image_snapshot()
+            .encode(None, skia_safe::EncodedImageFormat::PNG, 100)
+            .unwrap();
+        std::fs::write(format!("{dir}/{name}.png"), png.as_bytes()).unwrap();
+    };
+    let game = |i: usize, title: &str| LibraryGame {
+        id: format!("steam:{i}"),
+        title: title.into(),
+        store: "steam".into(),
+        launcher: false,
+        icon: String::new(),
+        platform: None,
+        developer: None,
+        year: None,
+        genres: Vec::new(),
+        stats: None,
+        running: false,
+        endable: false,
+        install: None,
+        overrides: None,
+    };
+    let shelf = [
+        "Hades II",
+        "Celeste",
+        "Hollow Knight",
+        "Tunic",
+        "Portal 2",
+        "Outer Wilds",
+        "Stardew Valley",
+        "Inside",
+    ];
+    let mut rows = hosts();
+    rows[0].profile = Some(ProfilePick {
+        id: "kid".into(),
+        display_name: "Kid".into(),
+        remember: true,
+        ..Default::default()
+    });
+    let console = ConsoleShared::default();
+    console.set_hosts(rows.clone());
+    let library = LibraryShared::default();
+    let req = RequestKey::new("aa11");
+    library.begin_for_test(&req);
+    library.set_games(
+        &req,
+        (shelf.iter().enumerate())
+            .map(|(i, t)| game(i, t))
+            .collect(),
+    );
+    for i in 0..12 {
+        library.push_art(format!("steam:{i}"), poster_png(i));
+    }
+    let mut opts = test_options();
+    opts.store = Some(std::sync::Arc::new(crate::store::SnapshotStore::new(
+        pf_client_core::trust::Settings {
+            library_view: crate::library::LibraryView::Grid.id().to_string(),
+            ..Default::default()
+        },
+        Vec::new(),
+    )));
+    let root = vec![Screen::Library(LibraryScreen::new(&rows[0]))];
+    let mut s = Shell::new(
+        console.clone(),
+        library.clone(),
+        ConsoleBus::default(),
+        opts,
+        root,
+    )
+    .unwrap();
+    let person = |id: &str, name: &str, person| ListedProfile {
+        id: id.into(),
+        display_name: name.into(),
+        owner: id == "own",
+        person,
+        ..Default::default()
+    };
+    let listed = vec![person("own", "Ben", false), person("kid", "Kid", true)];
+    s.profiles.learn("aa11", &ProfilesAnswer::Listed(listed));
+    let press = |s: &mut Shell, evs: &[MenuEvent]| {
+        for ev in evs {
+            s.handle_menu(*ev);
+        }
+    };
+    let (down, up, right) = (
+        MenuEvent::Move(MenuDir::Down),
+        MenuEvent::Move(MenuDir::Up),
+        MenuEvent::Move(MenuDir::Right),
+    );
+    dump(&mut s, 90, "_h-settle");
+    press(&mut s, &[down, right, right, MenuEvent::Secondary]);
+    dump(&mut s, 40, "_h-menu-settle");
+    press(&mut s, &[down, down]);
+    dump(&mut s, 40, "H1-game-menu-hide");
+
+    press(&mut s, &[MenuEvent::Confirm]);
+    dump(&mut s, 30, "_h-menu-gone");
+    let answer = |app_id: &str, title: &str, hidden| HideAnswer {
+        fp_hex: "aa11".into(),
+        profile: "kid".into(),
+        app_id: app_id.into(),
+        hidden,
+        done: true,
+        notice: Outcome::Done.notice(hidden, title, "Kid"),
+    };
+    console.set_hide_answer(answer("steam:2", "Hollow Knight", true));
+    dump(&mut s, 20, "H2-hidden-neighbour-focused");
+
+    press(&mut s, &[up, up, right, right]);
+    dump(&mut s, 40, "H3-hidden-chip");
+    press(&mut s, &[MenuEvent::Confirm]);
+    let hidden = vec![
+        game(2, "Hollow Knight"),
+        game(8, "Dead Space"),
+        game(9, "Doom Eternal"),
+        game(10, "Resident Evil 4"),
+    ];
+    console.set_hidden_list("aa11", "kid", HiddenAnswer::Listed(hidden));
+    dump(&mut s, 90, "H4-hidden-titles");
+    press(&mut s, &[right, MenuEvent::Confirm]);
+    console.set_hide_answer(answer("steam:8", "Dead Space", false));
+    dump(&mut s, 20, "H5-hidden-shown-again");
+
+    press(&mut s, &[MenuEvent::Back]);
+    dump(&mut s, 40, "_h-back");
+    press(&mut s, &[MenuEvent::Confirm]);
+    console.set_hidden_list("aa11", "kid", HiddenAnswer::Listed(Vec::new()));
+    dump(&mut s, 90, "H6-hidden-none");
+}
+
 /// A 2:3 poster, PNG-encoded, colour from `seed`. Real bytes: `LibraryScreen` feeds
 /// these to `Image::from_encoded`, and a decode miss looks like a tile with no cover.
 fn poster_png(seed: usize) -> Vec<u8> {

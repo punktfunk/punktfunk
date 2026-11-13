@@ -205,6 +205,9 @@ struct Shared {
     art_scale: Option<f64>,
     /// Bumped on phase/games changes so the renderer re-syncs its snapshot.
     generation: u64,
+    /// Bumped when a title leaves or joins the list in place ([`LibraryShared::drop_title`]):
+    /// the shelf keeps its place rather than arriving afresh.
+    edits: u64,
     /// The fetch the list answers, set as the shell sends it. Its host says whose list this
     /// is; a list or phase written under another key is dropped.
     req: RequestKey,
@@ -226,6 +229,7 @@ pub(crate) struct LibrarySnapshot {
     pub games: Vec<LibraryGame>,
     pub stale: Stale,
     pub generation: u64,
+    pub edits: u64,
 }
 
 /// One poster, decoded and ready to draw, on its way from a worker thread to the shell.
@@ -272,6 +276,7 @@ impl Default for LibraryShared {
             decoded_in: VecDeque::new(),
             art_scale: None,
             generation: 0,
+            edits: 0,
             req: RequestKey::default(),
             states: std::collections::HashMap::new(),
             downloads: std::collections::HashMap::new(),
@@ -466,6 +471,40 @@ impl LibraryShared {
         s.generation += 1;
     }
 
+    /// Title `id` left the shelf of `host`'s fetch: hidden for the profile it is for. The title
+    /// it was, when this shelf listed it.
+    pub(crate) fn drop_title(&self, host: &str, id: &str) -> Option<LibraryGame> {
+        let mut s = self.0.lock().unwrap();
+        let at = (s.games.iter())
+            .position(|g| g.id == id)
+            .filter(|_| s.req.host == host)?;
+        let gone = s.games.remove(at);
+        if !s.games.iter().any(|g| g.id != DESKTOP_ID) {
+            s.phase = LibraryPhase::Empty;
+        }
+        s.edits += 1;
+        s.generation += 1;
+        Some(gone)
+    }
+
+    /// A hidden title back on the shelf of `host`'s fetch.
+    pub(crate) fn put_title(&self, host: &str, game: LibraryGame) {
+        let mut s = self.0.lock().unwrap();
+        if s.req.host != host || s.games.iter().any(|g| g.id == game.id) {
+            return;
+        }
+        s.games.push(game);
+        let mut games = std::mem::take(&mut s.games);
+        order(&mut games);
+        s.games = games;
+        apply_downloads(&mut s);
+        if s.phase == LibraryPhase::Empty {
+            s.phase = LibraryPhase::Ready;
+        }
+        s.edits += 1;
+        s.generation += 1;
+    }
+
     /// A launched title's download from the last `/status` read, if the host is fetching it.
     pub(crate) fn launch_download(
         &self,
@@ -536,6 +575,7 @@ impl LibraryShared {
             games: s.games.clone(),
             stale: s.stale,
             generation: s.generation,
+            edits: s.edits,
         }
     }
 

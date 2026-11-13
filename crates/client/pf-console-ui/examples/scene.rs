@@ -320,6 +320,7 @@ mod scene {
             pyrowave_ok: true,
             profiles: false,
             prompts_unlock: false,
+            hides: false,
             settings: Settings::default(),
             presets: Vec::new(),
             known_hosts: Default::default(),

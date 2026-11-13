@@ -227,8 +227,10 @@ password.
   still open it.
 - Signing a device out ends its session, and so does locking a profile it plays unless you keep
   that device when you lock.
-- The devices on its list can also change this profile's own games and game-exit choice, once
-  the Punktfunk apps offer it.
+- The devices on its list can hide a game from this profile's shelf with **Hide for Kid** in the
+  game's menu, and bring it back from **Hidden for Kid**. The Linux and Windows apps and the
+  controller interface offer it. Changing this profile's own games and game-exit choice waits
+  for the Punktfunk apps to offer it.
 - Locking the owner profile also keeps Moonlight to the Moonlight devices on its list.
 - A profile that shares your desktop opens with your lock, your devices and your PIN: one
   desktop, one lock. A profile on its own Windows account (take turns) has a lock of its own.

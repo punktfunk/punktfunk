@@ -61,6 +61,9 @@
 /* The Library's rows are plain rows, and a poster tile is its art: no padding, so a row of n
    tiles is n·150 plus the gaps. */
 .pf-tile { padding: 0; }
+/* A title its profile hides, dimmed; it lifts under the pointer or focus. */
+.pf-hidden-title > * { opacity: 0.45; }
+.pf-hidden-title:hover > *, .pf-hidden-title:focus-visible > * { opacity: 0.8; }
 .pf-desktop-tile { padding: 12px; }
 /* Launcher entries (design D4) open the launcher itself. They rarely have poster art, so an
    art-less one must not read as a game whose cover failed to load: accent face, the launcher

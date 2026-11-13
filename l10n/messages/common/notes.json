@@ -22,5 +22,6 @@
 	"common_disconnect": "Button verb: ends the stream and leaves the host.",
 	"common_dismiss": "Button verb: closes a notice for now.",
 	"common_next": "Button verb: goes to the next step.",
-	"common_retry": "Button that tries a failed action again."
+	"common_retry": "Button that tries a failed action again.",
+	"common_undo": "A button on a notice that takes back what was just done."
 }
