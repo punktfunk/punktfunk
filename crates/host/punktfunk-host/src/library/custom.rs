@@ -60,6 +60,11 @@ pub struct CustomEntry {
     /// Whether the title's files are on this host. Set only by provider reconcile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub install: Option<super::downloads::Install>,
+    /// A seat host's own title its person wrote, in their own session. On a person's own account
+    /// a title without it is neither listed nor started. Set by the host, never from a body.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[schema(read_only)]
+    pub person: bool,
     #[serde(flatten)]
     pub meta: GameMeta,
 }
@@ -193,12 +198,10 @@ pub(crate) fn is_own_id(id: &str) -> bool {
 }
 
 /// Whether this host keeps entries of its own beside the box's: a seat host reading the box's
-/// library, on an account made for its seat. Their recipes stay in its own config folder. A
-/// person's own account keeps none: its config folder is that person's.
+/// library. Their recipes stay in its own config folder. On a person's own account only that
+/// person writes them ([`own_entries`]).
 pub(crate) fn keeps_own_titles() -> bool {
-    pf_paths::seat::role().is_seat_host()
-        && pf_paths::seat::box_library_dir().is_some()
-        && !pf_paths::seat::own_account()
+    pf_paths::seat::role().is_seat_host() && pf_paths::seat::box_library_dir().is_some()
 }
 
 /// One `library.json`: the box's, or a seat host's own.
@@ -239,15 +242,14 @@ impl Shelf {
     }
 
     /// Whether `e` may sit on this shelf. An own row claims no store, so it lists under its id
-    /// and never under one of the box's.
+    /// and never under one of the box's. A provider's own row names its title in that provider.
     fn holds(self, e: &CustomEntry) -> bool {
         match self {
             Shelf::Box => !is_own_id(&e.id),
             Shelf::Own => {
                 is_own_id(&e.id)
-                    && e.provider.is_none()
                     && e.store.is_none()
-                    && e.external_id.is_none()
+                    && e.provider.is_some() == e.external_id.is_some()
             }
         }
     }
@@ -351,10 +353,18 @@ pub fn get_custom(id: &str) -> Option<CustomEntry> {
 }
 
 /// The profile in view's own titles: on a seat host its own rows, on any other host the names
-/// its seat published ([`own_titles`]), which start nothing there.
+/// its seat published ([`own_titles`]), which start nothing there. On a person's own account a
+/// row that person didn't write is left out.
 pub(crate) fn own_entries(view: &View) -> Vec<CustomEntry> {
     if keeps_own_titles() {
-        return catalog_of(Shelf::Own).entries.clone();
+        let own = pf_paths::seat::own_account();
+        let rows = catalog_of(Shelf::Own);
+        return rows
+            .entries
+            .iter()
+            .filter(|e| e.person || !own)
+            .cloned()
+            .collect();
     }
     own_titles(view)
         .into_iter()
@@ -503,8 +513,8 @@ pub enum MutateOutcome<T> {
 }
 
 /// Add a manual row: to this seat host's own shelf on a seat host ([`keeps_own_titles`]), else to
-/// the box's.
-pub fn add_custom(input: CustomInput) -> Result<CustomEntry> {
+/// the box's. `person`: written in the seat's person's own session.
+pub fn add_custom(input: CustomInput, person: bool) -> Result<CustomEntry> {
     let shelf = Shelf::here();
     let _serial = catalog_lock();
     let mut catalog = load_catalog(shelf);
@@ -524,6 +534,7 @@ pub fn add_custom(input: CustomInput) -> Result<CustomEntry> {
         audio: audio_policy(input.audio),
         ids: BTreeMap::new(),
         install: None,
+        person,
         meta: input.meta,
     };
     catalog.entries.push(entry.clone());
@@ -533,8 +544,12 @@ pub fn add_custom(input: CustomInput) -> Result<CustomEntry> {
 }
 
 /// Replace a manual row (id kept), on the shelf its id names ([`Shelf::of`]). Provider-owned rows
-/// are refused — they belong to reconcile.
-pub fn update_custom(id: &str, input: CustomInput) -> Result<MutateOutcome<CustomEntry>> {
+/// are refused — they belong to reconcile. `person` as [`add_custom`]'s: the last writer's.
+pub fn update_custom(
+    id: &str,
+    input: CustomInput,
+    person: bool,
+) -> Result<MutateOutcome<CustomEntry>> {
     let shelf = Shelf::of(id);
     let _serial = catalog_lock();
     let mut catalog = load_catalog(shelf);
@@ -563,6 +578,7 @@ pub fn update_custom(id: &str, input: CustomInput) -> Result<MutateOutcome<Custo
         slot.audio = audio_policy(input.audio);
     }
     slot.meta = input.meta;
+    slot.person = person;
     let updated = slot.clone();
     save_catalog(shelf, &catalog)?;
     emit_changed("manual");
@@ -820,10 +836,23 @@ fn entry_fault(
         .then(|| format!("`detect.env_marker.value` must be at most {MAX_ENV_VALUE} chars"))
 }
 
-/// Replace `provider`'s rows with `inputs`. Surviving titles keep their host id (keyed on
-/// `external_id`); orphans drop; manual rows and other providers are untouched. Returns the
-/// provider's resulting rows, payload order. Pure — no filesystem.
+/// [`reconcile_on`] the box's shelf.
+#[cfg(test)]
 fn reconcile_entries(
+    entries: &mut Vec<CustomEntry>,
+    provider: &str,
+    store: Option<&str>,
+    inputs: Vec<ProviderEntryInput>,
+) -> Vec<CustomEntry> {
+    reconcile_on(Shelf::Box, entries, provider, store, inputs)
+}
+
+/// Replace `provider`'s rows on `shelf` with `inputs`. Surviving titles keep their host id
+/// (keyed on `external_id`); a new one gets an id of `shelf`'s; orphans drop; manual rows and
+/// other providers are untouched. Returns the provider's resulting rows, payload order. Pure —
+/// no filesystem.
+fn reconcile_on(
+    shelf: Shelf,
     entries: &mut Vec<CustomEntry>,
     provider: &str,
     store: Option<&str>,
@@ -840,7 +869,7 @@ fn reconcile_entries(
         let id = existing
             .remove(&input.external_id)
             .map(|prev| prev.id) // keep the host id from last sync
-            .unwrap_or_else(|| new_id(&format!("{provider}:{}", input.external_id)));
+            .unwrap_or_else(|| new_id_on(shelf, &format!("{provider}:{}", input.external_id)));
         result.push(CustomEntry {
             id,
             title: input.title,
@@ -861,6 +890,7 @@ fn reconcile_entries(
                 free_bytes: None,
                 ..i
             }),
+            person: false,
             meta: input.meta,
         });
     }
@@ -869,18 +899,45 @@ fn reconcile_entries(
     result
 }
 
+/// The shelf a provider's rows go on: a Linux seat host's own, as its runner is the seat
+/// account's ([`keeps_own_titles`]); else the box's. A Windows seat runs no runner of its own.
+fn provider_shelf() -> Shelf {
+    if cfg!(target_os = "linux") && keeps_own_titles() {
+        Shelf::Own
+    } else {
+        Shelf::Box
+    }
+}
+
+/// Whether this host keeps its plugins' rows on its own shelf ([`provider_shelf`]).
+pub(crate) fn keeps_provider_rows() -> bool {
+    provider_shelf() == Shelf::Own
+}
+
+/// `provider`'s rows, on the shelf it writes ([`provider_shelf`]).
+pub(crate) fn provider_rows(provider: &str) -> Vec<CustomEntry> {
+    let catalog = catalog_of(provider_shelf());
+    let rows = catalog.entries.iter();
+    rows.filter(|e| e.provider.as_deref() == Some(provider))
+        .cloned()
+        .collect()
+}
+
 /// Replace `provider`'s rows (`PUT /library/provider/{provider}`), optionally under a store
 /// claim (`?store=steam`). Caller validates name and payload. Saves and emits
 /// `library.changed` only when the provider's rows or claims change: plugins re-send their
 /// whole set on a timer. Claiming is idempotent for the holder and 409 for anyone else. A
-/// provider holds at most one store: claiming a new one releases the old.
+/// provider holds at most one store: claiming a new one releases the old. On a seat host's own
+/// shelf a claim is dropped: its rows keep `own:` ids, which never shadow a title of the box's.
 pub fn reconcile_provider(
     provider: &str,
     store: Option<&str>,
     inputs: Vec<ProviderEntryInput>,
 ) -> Result<MutateOutcome<Vec<CustomEntry>>> {
+    let shelf = provider_shelf();
+    let store = store.filter(|_| shelf == Shelf::Box);
     let _serial = catalog_lock();
-    let mut catalog = load_catalog(Shelf::Box);
+    let mut catalog = load_catalog(shelf);
     // The provider's rows in its own order: a reconcile moves them to the end of the list.
     let rows = |c: &Catalog| {
         serde_json::to_value(
@@ -919,20 +976,21 @@ pub fn reconcile_provider(
             tracing::info!(provider, store, "library: store claimed by a provider");
         }
     }
-    let result = reconcile_entries(&mut catalog.entries, provider, store, inputs);
+    let result = reconcile_on(shelf, &mut catalog.entries, provider, store, inputs);
     if (rows(&catalog), catalog.claims.clone()) != before {
-        save_catalog(Shelf::Box, &catalog)?;
+        save_catalog(shelf, &catalog)?;
         emit_changed(provider);
     }
     Ok(MutateOutcome::Done(result))
 }
 
-/// Releases the store claim as well (`DELETE /library/provider/{provider}`). No event when
-/// nothing changed. This is the only release path, so uninstalling a library plugin restores
-/// the built-in scanner without a restart.
+/// Releases the store claim as well (`DELETE /library/provider/{provider}`), on the shelf the
+/// provider writes. No event when nothing changed. This is the only release path, so
+/// uninstalling a library plugin restores the built-in scanner without a restart.
 pub fn delete_provider(provider: &str) -> Result<usize> {
+    let shelf = provider_shelf();
     let _serial = catalog_lock();
-    let mut catalog = load_catalog(Shelf::Box);
+    let mut catalog = load_catalog(shelf);
     let before = catalog.entries.len();
     catalog
         .entries
@@ -945,10 +1003,23 @@ pub fn delete_provider(provider: &str) -> Result<usize> {
         if released > 0 {
             tracing::info!(provider, released, "library: store claim released");
         }
-        save_catalog(Shelf::Box, &catalog)?;
+        save_catalog(shelf, &catalog)?;
         emit_changed(provider);
     }
     Ok(removed)
+}
+
+/// Every prep step of this seat host's own titles its person wrote ([`CustomEntry::person`]):
+/// on a person's own account, the only steps that run (`hooks::run_prep`).
+pub(crate) fn person_prep() -> Vec<crate::hooks::PrepCmd> {
+    if !keeps_own_titles() {
+        return Vec::new();
+    }
+    let rows = catalog_of(Shelf::Own).entries.clone();
+    rows.into_iter()
+        .filter(|e| e.person)
+        .flat_map(|e| e.prep)
+        .collect()
 }
 
 /// Prep/undo for a stored library id. In-host scanners have no per-title config; GameStream
@@ -1027,6 +1098,7 @@ mod tests {
             audio: None,
             ids: BTreeMap::new(),
             install: None,
+            person: false,
             meta: GameMeta::default(),
         }
     }

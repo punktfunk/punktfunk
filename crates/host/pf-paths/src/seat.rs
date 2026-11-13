@@ -341,6 +341,10 @@ pub fn pairing_refused() -> bool {
     current().pairing_refused
 }
 
+/// The person token a seat host writes into its own config folder, `0600`. The supervisor
+/// copies, reads and logs nothing of that name.
+pub const PERSON_TOKEN: &str = "person-token";
+
 /// The seat supervisor's pad broker: a seat host asks here for the pads it cannot make itself.
 pub const PADS_SOCKET: &str = "/run/punktfunk/pads.sock";
 

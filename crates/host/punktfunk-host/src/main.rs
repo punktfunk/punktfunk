@@ -147,6 +147,8 @@ mod message_ids;
 mod mgmt;
 #[forbid(unsafe_code)]
 mod mgmt_token;
+#[forbid(unsafe_code)]
+mod person_token;
 // Loopback client of the surfaces above; same `forbid` (holds the operator token and cert pin).
 #[forbid(unsafe_code)]
 mod ctl;

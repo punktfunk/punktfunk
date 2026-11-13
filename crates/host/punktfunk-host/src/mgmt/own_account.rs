@@ -35,13 +35,35 @@ pub(super) fn refusal(method: &Method, path: &str) -> Option<(&'static str, &'st
     })
 }
 
-/// [`refusal`] on a seat host on a person's own Linux account; every other host passes.
+/// What the person reads in their own session: emulators there come in a later version.
+pub(super) const EMULATORS_YET: (&str, &str) = (
+    "emulators_own_account_yet",
+    "Emulators can't be managed here yet.",
+);
+
+/// What the person does with their own emulators: point at a copy of their own, and answer its
+/// first-run questions. Installs stay the box's, and the save exchange stays off.
+const THEIR_EMULATORS: &[&str] = &["/api/v1/emulators/{}/adopt", "/api/v1/emulators/{}/prepare"];
+
+/// [`refusal`] on a seat host on a person's own Linux account, on every lane, that person's
+/// included but for their folder grants and [`THEIR_EMULATORS`]; every other host passes.
 pub(super) async fn gate(req: Request, next: Next) -> Response {
     let here = cfg!(target_os = "linux") && pf_paths::seat::own_account();
+    let person =
+        req.extensions().get::<super::auth::AuthLane>() == Some(&super::auth::AuthLane::Person);
+    let path = req.uri().path();
+    let grants = path.starts_with("/api/v1/plugin-access/");
+    let matches = punktfunk_core::mgmt_routes::path_matches;
+    let theirs = THEIR_EMULATORS.iter().any(|p| matches(p, path));
     match here
         .then(|| refusal(req.method(), req.uri().path()))
         .flatten()
     {
+        Some(PLUGINS) if person && grants => next.run(req).await,
+        Some(EMULATORS) if person && theirs => next.run(req).await,
+        Some(EMULATORS) if person => {
+            api_error_coded(StatusCode::FORBIDDEN, EMULATORS_YET.0, EMULATORS_YET.1)
+        }
         Some((code, why)) => api_error_coded(StatusCode::FORBIDDEN, code, why),
         None => next.run(req).await,
     }

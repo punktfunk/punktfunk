@@ -77,21 +77,24 @@ async fn hide_route_matches_ids_containing_colons() {
 #[allow(clippy::await_holding_lock)]
 /// Seeds one custom title on a platform.
 fn seed_title(title: &str, platform: &str) {
-    crate::library::add_custom(crate::library::CustomInput {
-        title: title.into(),
-        art: Default::default(),
-        launch: None,
-        prep: None,
-        role: Default::default(),
-        icon: None,
-        detect: None,
-        on_window: None,
-        audio: None,
-        meta: crate::library::GameMeta {
-            platform: Some(platform.into()),
-            ..Default::default()
+    crate::library::add_custom(
+        crate::library::CustomInput {
+            title: title.into(),
+            art: Default::default(),
+            launch: None,
+            prep: None,
+            role: Default::default(),
+            icon: None,
+            detect: None,
+            on_window: None,
+            audio: None,
+            meta: crate::library::GameMeta {
+                platform: Some(platform.into()),
+                ..Default::default()
+            },
         },
-    })
+        false,
+    )
     .expect("seed a title");
 }
 
@@ -534,18 +537,21 @@ async fn library_stats_ride_on_the_entry() {
         super::profile_view::profiles_state(tmp.path(), profiles),
         None,
     );
-    let added = crate::library::add_custom(crate::library::CustomInput {
-        title: "Chrono Trigger".into(),
-        art: Default::default(),
-        launch: None,
-        prep: None,
-        role: Default::default(),
-        icon: None,
-        detect: None,
-        on_window: None,
-        audio: None,
-        meta: Default::default(),
-    })
+    let added = crate::library::add_custom(
+        crate::library::CustomInput {
+            title: "Chrono Trigger".into(),
+            art: Default::default(),
+            launch: None,
+            prep: None,
+            role: Default::default(),
+            icon: None,
+            detect: None,
+            on_window: None,
+            audio: None,
+            meta: Default::default(),
+        },
+        false,
+    )
     .expect("seed one custom title");
     let id = crate::library::library_id_for(&added);
 
@@ -681,21 +687,24 @@ async fn metadata_sources_fill_pick_replace_and_forget() {
             .body(Body::from(body.to_string()))
             .unwrap()
     };
-    let added = crate::library::add_custom(crate::library::CustomInput {
-        title: "Hades".into(),
-        art: crate::library::Artwork {
-            portrait: Some("https://own/p.png".into()),
-            ..Default::default()
+    let added = crate::library::add_custom(
+        crate::library::CustomInput {
+            title: "Hades".into(),
+            art: crate::library::Artwork {
+                portrait: Some("https://own/p.png".into()),
+                ..Default::default()
+            },
+            launch: None,
+            prep: None,
+            role: Default::default(),
+            icon: None,
+            detect: None,
+            on_window: None,
+            audio: None,
+            meta: Default::default(),
         },
-        launch: None,
-        prep: None,
-        role: Default::default(),
-        icon: None,
-        detect: None,
-        on_window: None,
-        audio: None,
-        meta: Default::default(),
-    })
+        false,
+    )
     .expect("seed one custom title");
     let id = crate::library::library_id_for(&added);
 
@@ -798,25 +807,28 @@ async fn metadata_sources_fill_pick_replace_and_forget() {
 async fn custom_entry_hints_round_trip_and_survive_an_update() {
     let _tmp = ConfigDirOverride::new();
     let app = test_app(test_state(), None);
-    let added = crate::library::add_custom(crate::library::CustomInput {
-        title: "Eden".into(),
-        art: Default::default(),
-        launch: None,
-        prep: Some(vec![crate::hooks::PrepCmd {
-            run: "true".into(),
-            undo: None,
-            elevated: false,
-        }]),
-        role: Default::default(),
-        icon: None,
-        detect: Some(crate::library::DetectHint {
-            exe: Some("/usr/bin/eden".into()),
-            ..Default::default()
-        }),
-        on_window: None,
-        audio: None,
-        meta: Default::default(),
-    })
+    let added = crate::library::add_custom(
+        crate::library::CustomInput {
+            title: "Eden".into(),
+            art: Default::default(),
+            launch: None,
+            prep: Some(vec![crate::hooks::PrepCmd {
+                run: "true".into(),
+                undo: None,
+                elevated: false,
+            }]),
+            role: Default::default(),
+            icon: None,
+            detect: Some(crate::library::DetectHint {
+                exe: Some("/usr/bin/eden".into()),
+                ..Default::default()
+            }),
+            on_window: None,
+            audio: None,
+            meta: Default::default(),
+        },
+        false,
+    )
     .expect("seed one custom title");
     let path = format!("/api/v1/library/custom/{}", added.id);
 

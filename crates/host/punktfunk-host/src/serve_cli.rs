@@ -186,8 +186,8 @@ pub(crate) fn parse_serve_args(args: &[String]) -> Result<ServeArgs> {
     })
 }
 
-/// Everything `serve` writes before the planes start: the management, tray and plugin tokens,
-/// the plugin ACLs and grants, the endpoint file and the flag pins. Returns
+/// Everything `serve` writes before the planes start: the management, tray, person and plugin
+/// tokens, the plugin ACLs and grants, the endpoint file and the flag pins. Returns
 /// `(mgmt, native, gamestream)`.
 ///
 /// The token exists before the endpoint file names it, and the config-dir ACLs converge before
@@ -216,6 +216,15 @@ pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::N
     } else if role.is_door() {
         // Every seat account can reach the door's directory: no bearer stays there.
         let _ = std::fs::remove_file(pf_paths::config_dir().join(crate::mgmt_token::TRAY_FILE));
+    }
+    // A seat host of its own: a fresh person token each start, in its own config folder. A
+    // folder or file that isn't the account's alone keeps the person lane closed.
+    #[cfg(unix)]
+    if crate::person_token::mints(role) {
+        match crate::person_token::mint_in(&pf_paths::config_dir()) {
+            Ok(token) => opts.person_token = Some(token),
+            Err(reason) => tracing::warn!(%reason, "person lane closed"),
+        }
     }
     // Mint only if the runner is installed — otherwise a second admin-adjacent credential sits
     // on disk for a subsystem that is not running. Scope: `plugin_may_access`, not pairing/hooks.

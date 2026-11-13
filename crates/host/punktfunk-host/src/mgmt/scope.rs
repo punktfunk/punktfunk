@@ -43,6 +43,13 @@ pub(crate) const SCOPES: &[(&str, &str, Scope)] = &[
     // A device proving its pairing to the box.
     ("POST", "/api/v1/auth/device/challenge", Scope::Box),
     ("POST", "/api/v1/auth/device/token", Scope::Box),
+    // A person proving themselves to their own seat host, reading their own profile there, and
+    // the box asking it whose a session is. Never through a seat's proxy.
+    ("POST", "/api/v1/auth/person/session", Scope::Box),
+    ("DELETE", "/api/v1/auth/person/session", Scope::Box),
+    ("GET", "/api/v1/auth/person/profile", Scope::Box),
+    ("GET", "/api/v1/auth/person/profile/avatar", Scope::Box),
+    ("POST", "/api/v1/auth/person/verify", Scope::Box),
     // The bundles devices send the box.
     ("GET", "/api/v1/client-logs", Scope::Box),
     ("POST", "/api/v1/client-logs", Scope::Box),

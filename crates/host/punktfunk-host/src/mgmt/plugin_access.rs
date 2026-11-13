@@ -2,7 +2,8 @@
 //!
 //! The request lanes take a per-plugin token — the shared runner token carries no identity
 //! and gets 403 — and only ever touch the caller's own rows. The overview and the decision
-//! are admin-only, enforced by the lane allowlist rather than a check here. Every store
+//! are the operator's, and on a seat host also its person's, enforced by the lane allowlists
+//! rather than a check here. Every store
 //! mutation emits `plugins.changed` so the console re-reads.
 
 use super::shared::*;
@@ -333,7 +334,9 @@ pub(crate) async fn get_plugin_access(State(st): State<Arc<MgmtState>>) -> Respo
 /// `allow` turns a pending request into a grant (the platform ACL lands first, so a failed
 /// grant stores nothing), or with `write` set grants a path the operator handed over, on
 /// behalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.
-/// A folder that takes longer answers 202 and lists its walk until the record lands.
+/// A folder that takes longer answers 202 and lists its walk until the record lands. On a seat
+/// host the grant is for its own runner: a folder the seat's account can't list is refused. On a
+/// person's own account only that person decides, and an emulator or core install is refused.
 #[utoipa::path(
     post,
     path = "/plugin-access/{plugin}/decide",
@@ -347,7 +350,7 @@ pub(crate) async fn get_plugin_access(State(st): State<Arc<MgmtState>>) -> Respo
         (status = BAD_REQUEST, description = "Invalid path or a limit reached", body = ApiError),
         (status = NOT_FOUND, description = "No pending request for that path", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = FORBIDDEN, description = "Not reachable on the plugin or device lane", body = ApiError),
+        (status = FORBIDDEN, description = "Not reachable on the plugin or device lane, or an install on a person's own account", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "The decision could not be recorded", body = ApiError),
     )
 )]
@@ -390,6 +393,13 @@ pub(crate) async fn decide_plugin_access(
             }))
         }
         (Decision::Allow, None) => {
+            // On a person's own account installs stay the box's: only a folder is theirs to grant.
+            let installs = st.access.pending_emulator(&plugin, &req.path).is_some()
+                || !st.access.pending_cores(&plugin, &req.path).is_empty();
+            if installs && pf_paths::seat::own_account() {
+                let (code, why) = super::own_account::EMULATORS_YET;
+                return api_error_coded(StatusCode::FORBIDDEN, code, why);
+            }
             // An emulator request: the install lands first, so the grant has a folder and a
             // failed download leaves the row for another try.
             if let Some(emulator) = st.access.pending_emulator(&plugin, &req.path) {

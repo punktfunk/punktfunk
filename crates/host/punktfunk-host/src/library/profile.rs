@@ -255,6 +255,7 @@ impl From<OwnTitle> for CustomEntry {
             audio: None,
             ids: BTreeMap::new(),
             install: None,
+            person: false,
             meta: GameMeta {
                 platform: t.platform,
                 ..GameMeta::default()

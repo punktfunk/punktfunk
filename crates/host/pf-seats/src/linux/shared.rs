@@ -2791,6 +2791,53 @@ mod tests {
         assert_eq!(mode(&pin.join("native-cert.pem")), 0o600);
     }
 
+    /// The person token stays the person's: no copy list names it, and a person's row hands the
+    /// box the certificate alone from the folder that holds it.
+    #[test]
+    fn no_copy_takes_the_person_token() {
+        let token = pf_paths::seat::PERSON_TOKEN;
+        let named = TRUST_FILES
+            .iter()
+            .chain(&LIBRARY_FILES)
+            .chain(&PROFILE_FILES)
+            .chain(&[
+                AVATARS,
+                LIBRARY_METADATA,
+                LIBRARY_PROFILES,
+                OWNER_POLICY,
+                PLUGIN_RUN,
+                PLUGIN_GRANTS,
+                PLUGIN_STATE,
+                FIRMWARE,
+            ]);
+        for name in named {
+            assert!(!name.contains(token), "{name}");
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let (state, pin) = (temp.path().join("state"), temp.path().join("pin"));
+        // The folder the token lands in is the person's, and closed to the door's user.
+        let me = std::fs::metadata(temp.path()).unwrap();
+        let person = Passwd {
+            name: "jane".into(),
+            uid: me.uid(),
+            gid: me.gid(),
+            gecos: String::new(),
+            home: temp.path().join("home"),
+        };
+        ensure_person_dirs(&state, &id(), &person).unwrap();
+        let config = person_config_dir(&state, &id());
+        let made = std::fs::metadata(&config).unwrap();
+        assert_eq!((made.uid(), mode(&config)), (me.uid(), 0o700));
+        std::fs::write(config.join("native-cert.pem"), "pem").unwrap();
+        std::fs::write(config.join(token), "secret").unwrap();
+        copy_person_pin(&state, &id(), &pin).unwrap();
+        let copied: Vec<_> = std::fs::read_dir(&pin)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(copied, ["native-cert.pem"]);
+    }
+
     /// The supervisor refuses a ledger root another uid owns or may write. Giving a directory
     /// away needs root, so elsewhere this checks nothing.
     #[test]
