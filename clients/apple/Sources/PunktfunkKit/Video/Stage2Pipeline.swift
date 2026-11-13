@@ -2676,8 +2676,9 @@ public final class Stage2Pipeline {
     }
 
     /// A frame's present reached glass, or its drawable was dropped (`presentedNs` nil: "now" on
-    /// the Metal callback). End-to-end is capture→on-glass, skew-corrected by the connect-time
-    /// clock offset; the display stage is decoded→on-glass, both CLOCK_REALTIME, with no offset.
+    /// the Metal callback). End-to-end is capture→on-glass, skew-corrected by the live clock
+    /// offset `clockOffset` reads per call; the display stage is decoded→on-glass, both
+    /// CLOCK_REALTIME, with no offset.
     nonisolated static func stampPresented(
         _ frame: ReadyFrame, presentedNs: Int64?, issuedNs: Int64,
         endToEnd: LatencyMeter?, clockOffset: () -> Int64, hud: HudSink, stats: PresentDebugStats?
