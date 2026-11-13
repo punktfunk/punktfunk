@@ -458,6 +458,9 @@ pub struct NvSession {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    /// [`session_wave_cycle`] as the session opened. The recovery policy reads it every frame,
+    /// and the open and every reconfigure present the same `intraRefreshCnt`.
+    cycle: u32,
     /// Post-clamp target: the open ladder and reconfigure both write what the session runs at.
     pub bitrate_bps: u64,
     pub buffer_fmt: nv::NV_ENC_BUFFER_FORMAT,
@@ -554,6 +557,7 @@ impl NvSession {
             width,
             height,
             fps,
+            cycle: session_wave_cycle(codec, height, fps),
             bitrate_bps,
             buffer_fmt: nv::NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_NV12,
             bit_depth: 8,
@@ -621,9 +625,10 @@ impl NvSession {
         self.next == 0
     }
 
-    /// Frames a forced intra refresh wave takes on this session ([`session_wave_cycle`]).
+    /// Frames a forced intra refresh wave takes on this session ([`session_wave_cycle`]),
+    /// latched when it opens.
     pub fn wave_cycle(&self) -> u32 {
-        session_wave_cycle(self.codec, self.height, self.fps)
+        self.cycle
     }
 
     /// How this session recovers. The driver owns the sweep: it ignores a re-force mid-sweep,
@@ -925,6 +930,7 @@ impl NvSession {
     /// The session is closed, and `target.device` is a live device of `target.device_type`
     /// for the call.
     pub unsafe fn open(&mut self, target: OpenTarget, split_mode: u32) -> Result<()> {
+        self.cycle = session_wave_cycle(self.codec, self.height, self.fps);
         // Sized per session, never per frame: the doNotWait sampler hands it to the driver.
         self.slice_offsets
             .resize(slice_offsets_len(self.width, self.height), 0);
