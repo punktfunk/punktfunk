@@ -925,9 +925,9 @@ public enum LibraryClient {
 
     /// One request against `target`: over the stream port when it is known, which needs no TCP
     /// 47990, then over HTTPS, with failures mapped by ``transportFailure(_:)``. The stream
-    /// port's answer stands, except 401 and 403: a host that predates stamping the client
-    /// certificate on its tunnel refuses the paired lane there. That refusal stands only when
-    /// HTTPS can't be reached either.
+    /// port's answer stands, except 401, 403 and 405: a host that predates stamping the client
+    /// certificate on its tunnel refuses the paired lane there, and one before 0.47 carries no
+    /// `PUT` or `PATCH`. That refusal stands only when HTTPS can't be reached either.
     static func send(
         _ path: String, to target: MgmtTarget, method: String = "GET",
         body: (data: Data, contentType: String)? = nil
@@ -937,7 +937,7 @@ public enum LibraryClient {
             do {
                 let response = try await MgmtTransport.tunnel(
                     method, path, body: body?.data, contentType: body?.contentType, to: target)
-                guard response.status == 401 || response.status == 403 else { return response }
+                guard [401, 403, 405].contains(response.status) else { return response }
                 refused = response
             } catch MgmtTransportError.pinMismatch {
                 throw LibraryError.pinMismatch
