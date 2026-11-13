@@ -275,7 +275,7 @@ public struct EffectiveSettings: Equatable, Sendable {
 /// has to FIT one QUIC datagram, which the top of the ladder barely does — 176 400/24-bit stereo
 /// is 8.5 Mbps and fits only the shortest rung (1 ms, ~1 069 B), and surround above 48 kHz fits
 /// none. What a session got is `PunktfunkConnection`'s `resolvedAudioRateHz`/`resolvedAudioBits`/
-/// `resolvedAudioChannels`/`isLosslessAudio`, which the HUD shows.
+/// `resolvedAudioChannels`, which the HUD shows.
 ///
 /// Lossless at the DEFAULT 48 kHz/16-bit is deliberately not offered: it spends ~1.5 Mbps to sound
 /// like the transparent 256 kbps Opus it replaces, and it is the one lossless request whose wire

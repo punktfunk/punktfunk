@@ -877,13 +877,6 @@ public final class PunktfunkConnection: @unchecked Sendable {
         }
     }
 
-    /// True when this session resolved the LOSSLESS `0xD3` plane (`HOST_CAP_AUDIO_HIRES`) rather
-    /// than Opus — the one honest answer to "is this bit-exact?", which the rate and depth alone
-    /// cannot give (48 kHz/16-bit is a legal resolution on both planes).
-    public var isLosslessAudio: Bool {
-        hostCaps & UInt8(PUNKTFUNK_HOST_CAP_AUDIO_HIRES) != 0
-    }
-
     /// The video codec the host encodes now (`PUNKTFUNK_CODEC_*`): `2` = HEVC (default / older
     /// host), `1` = H.264, `4` = AV1, `8` = PyroWave (see `codecPyroWave`). Build the
     /// decoder from THIS. It honours the client's `preferredCodec` when the host could emit it,
