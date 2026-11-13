@@ -13,7 +13,7 @@
     "crates/codec/pf-v4l2": 4,
     "crates/codec/pf-vkdecode": 5,
     "crates/core/pf-dmabuf": 3,
-    "crates/core/punktfunk-core": 13,
+    "crates/core/punktfunk-core": 14,
     "crates/host/pf-audio": 23,
     "crates/host/pf-capture": 68,
     "crates/host/pf-clipboard": 6,

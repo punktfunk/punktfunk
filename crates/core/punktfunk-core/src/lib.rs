@@ -12,9 +12,9 @@
 //! the optional control plane.
 
 // `unsafe` is crate-denied. Parsers of network bytes stay safe Rust. Carve-outs are
-// only `client` (thread ids, QoS pins, hostname), `crash_windows`, and the transport
-// syscall shims (`udp`, `qos_windows`, `ifinfo`, `sockstat`). A wire parser may not add
-// a carve-out; SAFETY proofs sit next to each `unsafe`.
+// only `client` (thread ids, QoS pins, hostname), `crash_windows`, the transport syscall
+// shims (`udp`, `qos_windows`, `ifinfo`, `sockstat`) and the parity lane's frame borrow
+// (`session::seal`). A wire parser may not add one; SAFETY proofs sit next to each `unsafe`.
 #![deny(unsafe_code)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 
