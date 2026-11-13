@@ -63,7 +63,7 @@ public enum HideForMe {
                 path, to: target, method: "PUT", body: (body, "application/json"))
             return .from(status: response.status, body: response.body)
         } catch {
-            return .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            return .failed(error.localizedDescription)
         }
     }
 

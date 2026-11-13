@@ -824,7 +824,7 @@ public enum LibraryClient {
             }
             return .from(status: response.status, message: hostReason(response.body))
         } catch {
-            return .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            return .failed(error.localizedDescription)
         }
     }
 
@@ -862,7 +862,7 @@ public enum LibraryClient {
                 "/api/v1/game/end", to: target, method: "POST", body: (body, "application/json"))
             return .from(status: response.status)
         } catch {
-            return .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            return .failed(error.localizedDescription)
         }
     }
 
