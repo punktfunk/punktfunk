@@ -188,6 +188,33 @@ final class AV1Tests: XCTestCase {
         XCTAssertEqual(CMSampleBufferGetPresentationTimeStamp(sample).value, 7)
     }
 
+    /// A torn OBU after the frame ends the walk early: the slot would carry the torn bytes into
+    /// the sample, so the AU goes to the repack, which keeps only the whole OBUs.
+    func testATornTailLeavesTheSlotToTheRepack() throws {
+        let format = try XCTUnwrap(AV1.formatDescription(fromKeyframe: Data(Self.keyframeTU)))
+        let tu = Self.keyframeTU + [0x0A, 0x7F, 0x01] // a sequence header claiming 127 bytes
+        let pool = AccessUnitSlotPool(capacity: 4096)
+        let slot = try XCTUnwrap(pool.take(tu.count))
+        tu.withUnsafeBytes { slot.base.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
+        let at = try XCTUnwrap(pool.locate(UnsafeRawPointer(slot.base)))
+        let au = AccessUnit(
+            data: Data(bytesNoCopy: slot.base, count: tu.count, deallocator: .none),
+            ptsNs: 0, frameIndex: 0, flags: 0, receivedNs: 0,
+            inPlace: AccessUnit.InPlace(token: at.token, offset: at.offset, count: tu.count))
+        let sample = try XCTUnwrap(AV1.sampleBuffer(au: au, format: format, in: pool))
+        let block = try XCTUnwrap(CMSampleBufferGetDataBuffer(sample))
+        var length = 0
+        var ptr: UnsafeMutablePointer<CChar>?
+        XCTAssertEqual(CMBlockBufferGetDataPointer(
+            block, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length,
+            dataPointerOut: &ptr), noErr)
+        XCTAssertNotEqual(UnsafeMutableRawPointer(try XCTUnwrap(ptr)), slot.base + 2)
+        XCTAssertEqual(
+            [UInt8](UnsafeRawBufferPointer(start: ptr, count: length)),
+            [UInt8](Self.keyframeTU[2...]))
+        pool.release(slot.token)
+    }
+
     func testSampleRepackDelimiterOnlyIsDropped() throws {
         let format = try XCTUnwrap(AV1.formatDescription(fromKeyframe: Data(Self.keyframeTU)))
         let au = AccessUnit(
