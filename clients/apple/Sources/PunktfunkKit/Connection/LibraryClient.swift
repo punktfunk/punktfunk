@@ -101,8 +101,6 @@ public struct GameEntry: Codable, Hashable, Identifiable, Sendable {
         case releaseYear = "release_year"
     }
 
-    public var isCustom: Bool { store == "custom" }
-
     /// Whether this entry opens a launcher rather than a game.
     public var isLauncher: Bool { role == "launcher" }
 

@@ -112,15 +112,6 @@ public enum LibraryGroupKey: Hashable, Sendable {
         case .platform(let name), .store(let name): return name
         }
     }
-
-    /// The kind caption a collection tile wears (Launchers / Platform / Store).
-    public var kindCaption: String {
-        switch self {
-        case .launchers: return String(localized: L10n.libCollectionKindLaunchers)
-        case .platform: return String(localized: L10n.libCollectionKindPlatform)
-        case .store: return String(localized: L10n.libCollectionKindStore)
-        }
-    }
 }
 
 /// One collated bucket: what it is, what to call it, and which games are in it.

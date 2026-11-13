@@ -38,11 +38,10 @@ final class LibraryClientTests: XCTestCase {
 
         let steam = games[0]
         XCTAssertEqual(steam.id, "steam:570")
-        XCTAssertFalse(steam.isCustom)
         XCTAssertEqual(steam.art.posterCandidates.count, 3)
 
         let custom = games[1]
-        XCTAssertTrue(custom.isCustom)
+        XCTAssertEqual(custom.store, "custom")
         XCTAssertNil(custom.art.portrait)
         // `platform` is the host's flattened `GameMeta.platform`: present on a rom-manager entry,
         // absent (nil) on a store-front title — the field the library's collections group by.
