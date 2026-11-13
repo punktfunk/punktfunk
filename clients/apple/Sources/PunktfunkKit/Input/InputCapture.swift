@@ -354,7 +354,7 @@ public final class InputCapture {
             // Every OTHER ⌘ chord is the HOST's while captured, or the menu takes ⌘Q first. It is
             // sent from here, since returning nil also skips StreamLayerView's keyDown; a chord
             // with no host VK is swallowed. The ⌘ itself already went out as a flagsChanged.
-            if self.forwarding, flags.contains(.command), Self.forwardsCommandChord(
+            if Self.forwardsCommandChord(
                 keyCode: event.keyCode, flags: flags, forwarding: self.forwarding,
                 inhibitShortcuts: self.connection.settings.inhibitShortcuts
             ) {
@@ -779,27 +779,8 @@ public final class InputCapture {
         else { return }
         mice.append(mouse)
         input.mouseMovedHandler = { [weak self] _, dx, dy in
-            guard let self, self.forwarding, self.gcMouseForwarding else { return }
-            // GC gives +y up; the host expects screen-space (+y down).
-            let fx = dx + self.residualX
-            let fy = -dy + self.residualY
-            let ix = fx.rounded(.towardZero)
-            let iy = fy.rounded(.towardZero)
-            self.residualX = fx - ix
-            self.residualY = fy - iy
-            if ix != 0 || iy != 0 {
-                self.connection.send(.mouseMove(dx: Int32(ix), dy: Int32(iy)))
-                if inputDebug {
-                    self.motionDebugCount += 1
-                    let now = Date()
-                    if now.timeIntervalSince(self.motionDebugTick) >= 1 {
-                        inputLog.debug(
-                            "motion forwarded: \(self.motionDebugCount, privacy: .public) events, last dx \(Int(ix), privacy: .public) dy \(Int(iy), privacy: .public)")
-                        self.motionDebugCount = 0
-                        self.motionDebugTick = now
-                    }
-                }
-            }
+            guard let self, self.gcMouseForwarding else { return }
+            self.sendMotion(dx: dx, dy: -dy) // GC gives +y up; the host expects +y down
         }
         // Buttons take the GCMouse path only while the scene is pointer-locked; when it
         // isn't, the UIKit indirect-pointer path carries them (gcMouseForwarding gates here
@@ -840,10 +821,10 @@ public final class InputCapture {
     }
     #endif
 
-    /// Forward relative mouse motion (macOS), fed by StreamLayerView's NSEvent monitor while
-    /// the cursor is disassociated: the mouse's own counts, +y down as the host expects, so
-    /// unlike the iOS GCMouse path they are not y-negated. Fractional remainders accumulate
-    /// so slow, sub-pixel motion isn't truncated away.
+    /// Forward relative mouse motion, +y down as the host expects: macOS StreamLayerView's
+    /// NSEvent monitor while the cursor is disassociated (the mouse's own counts), and the
+    /// GCMouse handler off macOS. Fractional remainders accumulate so slow, sub-pixel motion
+    /// isn't truncated away.
     public func sendMotion(dx: Float, dy: Float) {
         guard forwarding else { return }
         let fx = dx + residualX
