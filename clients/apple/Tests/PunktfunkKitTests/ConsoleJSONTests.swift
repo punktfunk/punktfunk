@@ -223,6 +223,26 @@ final class ConsoleJSONTests: XCTestCase {
         XCTAssertTrue(ConsoleSettings.document(defaults)["default_host"] is NSNull)
     }
 
+    /// A JSON null is no property-list value, and storing one raises: the base document is
+    /// kept without them, at any depth.
+    func testASavedDocumentIsStoredWithoutItsNulls() throws {
+        let suite = "console-null-tests"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        ConsoleSettings.apply(
+            ["decoder": NSNull(), "vsync": true,
+             "pads": ["a": ["speaker_volume": NSNull(), "name": "couch"]]],
+            defaults)
+        let stored = try XCTUnwrap(defaults.dictionary(forKey: ConsoleSettings.documentKey))
+        XCTAssertNil(stored["decoder"])
+        XCTAssertEqual(stored["vsync"] as? Bool, true)
+        let pad = (stored["pads"] as? [String: [String: Any]])?["a"]
+        XCTAssertEqual(pad?["name"] as? String, "couch")
+        XCTAssertNil(pad?["speaker_volume"])
+    }
+
     /// A preset the console saved lands on this app's copy: the console's keys set or clear,
     /// the compositor comes back as its wire number, and an override only this app edits stays.
     func testAConsoleSaveKeepsWhatOnlyThisAppEdits() {

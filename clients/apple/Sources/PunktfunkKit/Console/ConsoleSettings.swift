@@ -43,7 +43,7 @@ public enum ConsoleSettings {
     /// The console saved a document: keep it whole as the next base, and fold every key this
     /// app owns back into its own defaults. An unknown value is left alone rather than stored.
     public static func apply(_ j: [String: Any], _ defaults: UserDefaults = .standard) {
-        defaults.set(j, forKey: documentKey)
+        defaults.set(j.compactMapValues(plist), forKey: documentKey)
         for field in fields { field.read(j, defaults) }
         if let name = j["compositor"] as? String, let tag = compositorTag(name) {
             defaults.set(tag, forKey: DefaultsKey.compositor)
@@ -53,6 +53,17 @@ public enum ConsoleSettings {
         }
         // The console leaves the key out when no host is the default.
         defaults.set(j["default_host"] as? String ?? "", forKey: DefaultsKey.defaultHost)
+    }
+
+    /// `value` without its JSON nulls. A property list has none, and `UserDefaults` raises
+    /// when handed one.
+    private static func plist(_ value: Any) -> Any? {
+        switch value {
+        case is NSNull: return nil
+        case let d as [String: Any]: return d.compactMapValues(plist)
+        case let a as [Any]: return a.compactMap(plist)
+        default: return value
+        }
     }
 
     private static func base(_ defaults: UserDefaults) -> [String: Any] {
