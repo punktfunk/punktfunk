@@ -9,8 +9,10 @@
 //! Handlers hop to `spawn_blocking`: catalog scans, fetches, and package-manager spawns
 //! would stall the runtime.
 
+use super::auth::AuthLane;
 use super::shared::*;
 use crate::store::{self, index, jobs, manifest, sources};
+use axum::Extension;
 
 // ---------------------------------------------------------------- wire shapes
 
@@ -177,8 +179,9 @@ pub(crate) struct RuntimeRequest {
 
 // ---------------------------------------------------------------- assembly
 
-fn runtime_view() -> RuntimeView {
-    let st = crate::plugins::runtime_status();
+/// The runner as `lane` reads it ([`crate::plugins::runtime_status_as`]).
+fn runtime_view(lane: AuthLane) -> RuntimeView {
+    let st = crate::plugins::runtime_status_as(lane == AuthLane::Person);
     RuntimeView {
         installed: st.installed,
         enabled: st.enabled,
@@ -346,6 +349,14 @@ fn an_update_is_only_ever_newer() {
 
 // ---------------------------------------------------------------- handlers
 
+/// What a seat host on a person's own account answers a plugin from outside the built-in source,
+/// and a catalog source: the code of its host message `apierr_<code>`, and its English.
+pub(super) const REVIEWED_ONLY: (&str, &str) = (
+    "plugin_own_account_unreviewed",
+    "Only plugins reviewed for the Punktfunk store install on a profile that uses an existing \
+     account, because they run as that person.",
+);
+
 /// Browse the plugin catalog
 ///
 /// Merged view across sources, annotated with what this host has and can run. A source past its
@@ -422,8 +433,8 @@ pub(crate) async fn list_installed() -> Response {
 /// `{source, id}` installs the catalog pin after re-checking integrity, or `{spec,
 /// accept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at
 /// `GET /store/jobs/{id}`. A Windows seat host installs none: the box's runner, which it shares,
-/// never reads them. A seat host on a person's own account installs from the built-in source
-/// alone: anything else would run code the box chose as that person.
+/// never reads them. A seat host on a person's own account installs for that person's own
+/// session, from the built-in source alone: what it installs runs as them.
 ///
 /// One package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.
 #[utoipa::path(
@@ -520,12 +531,7 @@ pub(crate) async fn install_plugin(
         };
 
     if pf_paths::seat::own_account() && plan.tier != manifest::Tier::Verified {
-        return api_error_coded(
-            StatusCode::FORBIDDEN,
-            "plugin_own_account_unreviewed",
-            "Only plugins reviewed for the Punktfunk store install on a profile that uses an \
-             existing account, because they run as that person.",
-        );
+        return api_error_coded(StatusCode::FORBIDDEN, REVIEWED_ONLY.0, REVIEWED_ONLY.1);
     }
     match jobs::spawn_install(plan, st.plugin_tokens.clone()) {
         Ok(job) => (StatusCode::ACCEPTED, Json(JobRef { job })).into_response(),
@@ -760,7 +766,8 @@ pub(crate) async fn delete_source(Path(name): Path<String>) -> Response {
 /// Plugin runner state
 ///
 /// Plugins run only while the runner is on. The runner discovers units at startup, so a freshly
-/// installed plugin may not have appeared yet.
+/// installed plugin may not have appeared yet. On a seat host on a person's own account the
+/// runner is theirs: any lane but their own session reads it as not installed.
 #[utoipa::path(
     get,
     path = "/store/runtime",
@@ -772,14 +779,16 @@ pub(crate) async fn delete_source(Path(name): Path<String>) -> Response {
         (status = FORBIDDEN, description = "Not authorized for the plugin token", body = ApiError),
     )
 )]
-pub(crate) async fn get_runtime() -> Response {
-    match blocking("plugin_store", runtime_view).await {
+pub(crate) async fn get_runtime(Extension(lane): Extension<AuthLane>) -> Response {
+    match blocking("plugin_store", move || runtime_view(lane)).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => e,
     }
 }
 
 /// Turn the plugin runner on or off
+///
+/// On a seat host on a person's own account only their own session switches it.
 #[utoipa::path(
     post,
     path = "/store/runtime",
@@ -793,9 +802,12 @@ pub(crate) async fn get_runtime() -> Response {
         (status = FORBIDDEN, description = "Not authorized for the plugin token", body = ApiError),
     )
 )]
-pub(crate) async fn set_runtime(ApiJson(req): ApiJson<RuntimeRequest>) -> Response {
+pub(crate) async fn set_runtime(
+    Extension(lane): Extension<AuthLane>,
+    ApiJson(req): ApiJson<RuntimeRequest>,
+) -> Response {
     let switched = blocking("plugin_store", move || {
-        crate::plugins::set_runtime_enabled(req.enabled).map(|()| runtime_view())
+        crate::plugins::set_runtime_enabled(req.enabled).map(|()| runtime_view(lane))
     })
     .await;
     match switched {

@@ -43,8 +43,9 @@ async fn person_session(app: &Router) -> String {
 
 /// A Linux seat's plugins publish into its own titles. On a made seat the operator, the seat's
 /// person and the plugin under its own id write them, under `own:` ids with no store claim, and
-/// the box learns their names and pictures alone. On a person's own account every lane is
-/// refused until their own runner exists, and a provider row planted there lists nothing.
+/// the box learns their names and pictures alone. On a person's own account the person and their
+/// plugin write them and the operator is told they are the person's; a provider row planted
+/// there lists nothing.
 #[tokio::test]
 async fn a_seat_s_plugins_publish_on_its_own_shelf() {
     if std::env::var_os(CHILD).is_some() {
@@ -86,8 +87,7 @@ async fn a_seat_s_plugins_publish_on_its_own_shelf() {
 async fn seat_half() {
     let library = std::path::PathBuf::from(std::env::var_os(CHILD).unwrap());
     let own = pf_paths::seat::own_account();
-    let gated = own && cfg!(target_os = "linux");
-    let publishes = cfg!(target_os = "linux") && !own;
+    let publishes = cfg!(target_os = "linux");
     let app = test_app_seat(test_state(), TOKEN, MINE);
     let person = person_session(&app).await;
     let rows = json!([{"external_id": "q1", "title": "Quake",
@@ -97,11 +97,8 @@ async fn seat_half() {
         let path = format!("/api/v1/library/provider/{provider}?store=steam");
         json_req(Method::PUT, &path, rows.clone())
     };
-    let refused = if gated {
-        (StatusCode::FORBIDDEN, json!("plugins_own_account"))
-    } else {
-        (StatusCode::CONFLICT, json!("seat_library_read_only"))
-    };
+    let refused = (StatusCode::CONFLICT, json!("seat_library_read_only"));
+    let theirs = (StatusCode::FORBIDDEN, json!("plugins_own_account_person"));
     let lanes = [
         ("admin", send(&app, put("demo")).await),
         (
@@ -114,10 +111,11 @@ async fn seat_half() {
         ),
     ];
     for (lane, (status, why)) in lanes {
-        if publishes {
-            assert_eq!(status, StatusCode::OK, "{lane}: {why}");
-        } else {
-            assert_eq!((status, &why["code"]), (refused.0, &refused.1), "{lane}");
+        let code = &why["code"];
+        match (publishes, own && lane == "admin") {
+            (true, true) => assert_eq!((status, code), (theirs.0, &theirs.1), "{lane}"),
+            (true, false) => assert_eq!(status, StatusCode::OK, "{lane}: {why}"),
+            (false, _) => assert_eq!((status, code), (refused.0, &refused.1), "{lane}"),
         }
     }
     let (status, _) = send(&app, with_bearer(put("other"), "demo-secret")).await;
@@ -151,7 +149,7 @@ async fn seat_half() {
     }
     let (_, answer) = send(&app, get_req("/api/v1/library/own")).await;
     println!("{ANSWER}{answer}");
-    if publishes {
+    if publishes && !own {
         return;
     }
 
@@ -167,9 +165,9 @@ async fn seat_half() {
     assert_eq!(listed, !own, "a planted row's listing");
 }
 
-/// A seat's own plugin UI is its seat host's to hand out: on a made seat its plugin registers
-/// it, and the operator and the seat's person read its credential there, a device never. On a
-/// person's own account nothing registers one on any lane, so nothing hands one out.
+/// A seat's own plugin UI is its seat host's to hand out: its plugin registers it, and the
+/// seat's person reads its credential there, a device never. The operator reads it on a made
+/// seat; on a person's own account the page and its sign-ins are the person's alone.
 #[tokio::test]
 async fn a_seat_s_plugin_ui_stays_on_its_seat_host() {
     if std::env::var_os(CHILD).is_none() {
@@ -182,24 +180,18 @@ async fn a_seat_s_plugin_ui_stays_on_its_seat_host() {
     let ui = json!({"title": "Demo", "ui": {"port": 49321, "secret": "s3cr3t-s3cr3t-s3cr3t"}});
     let register = json_req(Method::PUT, "/api/v1/plugins/demo", ui);
     let (status, why) = send(&app, with_bearer(register, "demo-secret")).await;
-    let want = if gated {
-        StatusCode::FORBIDDEN
-    } else {
-        StatusCode::NO_CONTENT
-    };
-    assert_eq!(status, want, "{why}");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{why}");
     let credential = || get_req("/api/v1/plugins/demo/ui-credential");
-    let found = if gated {
-        StatusCode::NOT_FOUND
+    let (status, why) = send(&app, credential()).await;
+    if gated {
+        assert_eq!(status, StatusCode::FORBIDDEN, "admin");
+        assert_eq!(why["code"], "plugins_own_account_person");
     } else {
-        StatusCode::OK
-    };
-    assert_eq!(send(&app, credential()).await.0, found, "admin");
-    let (status, body) = send(&app, with_bearer(credential(), &person)).await;
-    assert_eq!(status, found, "person");
-    if !gated {
-        assert_eq!(body["port"], 49321);
+        assert_eq!(status, StatusCode::OK, "admin");
     }
+    let (status, body) = send(&app, with_bearer(credential(), &person)).await;
+    assert_eq!(status, StatusCode::OK, "person");
+    assert_eq!(body["port"], 49321);
     let device = send_cert(&app, credential(), DEVICE).await;
     assert_eq!(device, StatusCode::UNAUTHORIZED);
 }
@@ -236,6 +228,10 @@ async fn a_seat_s_own_plugin_reads_its_own_grants() {
     let config = pf_paths::config_dir();
     let linux = cfg!(target_os = "linux");
     install(&config.join("plugins"), "demo", "/seat/reads");
+    // On a person's own account the seat's plugin is one their own lane installed.
+    if pf_paths::seat::own_account() {
+        crate::plugins::manifest::mark_person(&config, "plugin-demo", true).unwrap();
+    }
     install(&library.join("plugins"), "demo", "/box/reads");
     install(&library.join("plugins"), "boxonly", "/box/only");
     let folders = tempfile::tempdir().unwrap();
@@ -285,7 +281,7 @@ async fn a_seat_s_own_plugin_reads_its_own_grants() {
     if gated {
         assert_eq!(
             (status, &why["code"]),
-            (StatusCode::FORBIDDEN, &json!("plugins_own_account"))
+            (StatusCode::FORBIDDEN, &json!("plugins_own_account_person"))
         );
     } else {
         assert_eq!(status, StatusCode::OK, "admin: {why}");
@@ -362,4 +358,75 @@ async fn a_person_adopts_and_prepares_their_own_emulators() {
         send_cert(&app, adopt(), DEVICE).await,
         StatusCode::UNAUTHORIZED
     );
+}
+
+/// On a person's own Linux account the store and the runner's switch answer their own lane: the
+/// operator is told they are the person's and reads no runner, a plugin and a device reach
+/// neither, and a catalog source stays closed to the person too. Only a package their lane
+/// installed is the runner's: a planted one gets no manifest and no credential.
+#[tokio::test]
+async fn a_person_s_own_store_answers_their_lane_alone() {
+    if std::env::var_os(CHILD).is_none() {
+        let module = module_path!().split_once("::").expect("crate::module").1;
+        let path = format!("{module}::a_person_s_own_store_answers_their_lane_alone");
+        super::own_account::on_seat(&path, CHILD, true);
+        return;
+    }
+    let linux = cfg!(target_os = "linux");
+    let app = test_app_seat(test_state(), TOKEN, MINE);
+    let person = person_session(&app).await;
+    // Bodies every handler refuses, so what differs by lane is the gate's answer.
+    let calls = [
+        (Method::POST, "/api/v1/store/install", json!({})),
+        (
+            Method::POST,
+            "/api/v1/store/uninstall",
+            json!({"pkg": "@punktfunk/plugin-none"}),
+        ),
+        (Method::POST, "/api/v1/store/runtime", json!({})),
+    ];
+    let theirs = (StatusCode::FORBIDDEN, json!("plugins_own_account_person"));
+    for (method, path, body) in calls {
+        let req = || json_req(method.clone(), path, body.clone());
+        let (status, why) = send(&app, req()).await;
+        if linux {
+            assert_eq!(
+                (status, &why["code"]),
+                (theirs.0, &theirs.1),
+                "admin {path}"
+            );
+        }
+        let (status, why) = send(&app, with_bearer(req(), &person)).await;
+        assert!(
+            status.is_client_error() && status != StatusCode::FORBIDDEN,
+            "person {path}: {status} {why}"
+        );
+        for token in ["plugin-secret", "demo-secret"] {
+            let status = send(&app, with_bearer(req(), token)).await.0;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{token} {path}");
+        }
+        let device = send_cert(&app, req(), DEVICE).await;
+        assert_eq!(device, StatusCode::UNAUTHORIZED, "device {path}");
+    }
+    if linux {
+        let url = json!({"url": "https://retro.example/index.json"});
+        let source = json_req(Method::PUT, "/api/v1/store/sources/retro", url);
+        let (status, why) = send(&app, with_bearer(source, &person)).await;
+        let unreviewed = json!("plugin_own_account_unreviewed");
+        assert_eq!((status, &why["code"]), (StatusCode::FORBIDDEN, &unreviewed));
+        let (status, runner) = send(&app, get_req("/api/v1/store/runtime")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(runner["installed"], false, "the operator read their runner");
+    }
+
+    let config = pf_paths::config_dir();
+    install(&config.join("plugins"), "planted", "/srv/planted");
+    install(&config.join("plugins"), "theirs", "/srv/theirs");
+    crate::plugins::manifest::mark_person(&config, "plugin-theirs", true).unwrap();
+    let runs: Vec<String> = crate::plugins::manifest::runner_plugins()
+        .into_keys()
+        .collect();
+    assert_eq!(runs, ["theirs"]);
+    let tokens = crate::mgmt_token::load_or_generate_per_plugin().unwrap();
+    assert_eq!(tokens.into_keys().collect::<Vec<_>>(), ["theirs"]);
 }

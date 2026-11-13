@@ -610,6 +610,8 @@ chmod 0755 %{buildroot}%{_bindir}/punktfunk-scripting
 # systemd --user unit — installed but NOT auto-enabled (opt-in; the runner is inert until you add
 # scripts/plugins). Enable with `systemctl --user enable --now punktfunk-scripting`.
 install -Dm0644 scripts/punktfunk-scripting.service %{buildroot}%{_userunitdir}/punktfunk-scripting.service
+install -Dm0644 scripts/punktfunk-scripting-seat@.service \
+  %{buildroot}%{_userunitdir}/punktfunk-scripting-seat@.service
 # Where AppArmor restricts unprivileged user namespaces, the generator trades the unit's namespace
 # sandbox for this profile.
 install -Dm0644 packaging/linux/apparmor/punktfunk-scripting %{buildroot}%{_sysconfdir}/apparmor.d/punktfunk-scripting
@@ -779,6 +781,7 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %dir %{_datadir}/punktfunk-scripting
 %{_datadir}/punktfunk-scripting/runner-cli.js
 %{_userunitdir}/punktfunk-scripting.service
+%{_userunitdir}/punktfunk-scripting-seat@.service
 %dir %{_sysconfdir}/apparmor.d
 %config(noreplace) %{_sysconfdir}/apparmor.d/punktfunk-scripting
 %{_prefix}/lib/systemd/user-generators/punktfunk-scripting-apparmor

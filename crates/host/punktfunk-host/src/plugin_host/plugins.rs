@@ -112,9 +112,14 @@ fn plugins_dir_of(args: &[String]) -> std::path::PathBuf {
         .unwrap_or_else(crate::store::plugins_dir)
 }
 
-/// Run `plugins <args…>`. `delete_titles` clears a removed plugin's library titles.
+/// Run `plugins <args…>`. `delete_titles` clears a removed plugin's library titles. On a person's
+/// own Linux account it only reads: their own console changes their plugins.
 pub fn main(args: &[String], delete_titles: super::DeleteTitles) -> Result<()> {
-    match parse(args)? {
+    let action = parse(args)?;
+    if person_runner() && changes(&action) {
+        bail!("change plugins here: on a person's own account only their own console does");
+    }
+    match action {
         Action::Package { listing, removing } => {
             package_op(args, listing, &removing, delete_titles)
         }
@@ -135,6 +140,16 @@ pub fn main(args: &[String], delete_titles: super::DeleteTitles) -> Result<()> {
             print_usage();
             Ok(())
         }
+    }
+}
+
+/// Whether `action` installs, removes, switches or grants: what [`main`] leaves to a person's own
+/// console on their own account.
+fn changes(action: &Action<'_>) -> bool {
+    match action {
+        Action::Package { listing, .. } => !listing,
+        Action::Enable | Action::Disable | Action::Grant(..) | Action::Revoke(..) => true,
+        Action::Status | Action::Spawn(_) | Action::Access(_) | Action::Help => false,
     }
 }
 
@@ -431,12 +446,8 @@ fn forward_to_runner(args: &[String]) -> Result<()> {
 }
 
 /// The runner's launch line. Also the store job executor ([`crate::store::jobs`]): console
-/// installs use this same invocation so the box has one "install a plugin" path. None where no
-/// runner is driven ([`runner_here`]).
+/// installs use this same invocation so the box has one "install a plugin" path.
 pub(crate) fn runner_command() -> Result<(std::path::PathBuf, Vec<String>)> {
-    if !runner_here() {
-        bail!("run the plugin runner: not on a person's own Linux account");
-    }
     plat::runner_command()
 }
 
@@ -482,33 +493,39 @@ pub(crate) struct RuntimeStatus {
     pub detail: String,
 }
 
-/// Whether this host drives a plugin runner. Not a seat on a person's own Linux account: the
-/// runner there is their own user unit, which the host never queries, writes or restarts.
-fn runner_here() -> bool {
-    !(cfg!(target_os = "linux") && pf_paths::seat::own_account())
+/// Whether this host's runner is a person's own: a seat on their own Linux account, whose runner
+/// is that seat's instance of their user manager's `punktfunk-scripting-seat@`. Only their own
+/// lane switches it, installs into it or reads its state.
+pub(crate) fn person_runner() -> bool {
+    cfg!(target_os = "linux") && pf_paths::seat::own_account()
 }
 
-/// The runner's state. Where no runner is driven ([`runner_here`]) it reads as not installed,
-/// so nothing mints its tokens, converges its roots or restarts it.
+/// The runner's state, which tokens, roots and restarts follow.
 pub(crate) fn runtime_status() -> RuntimeStatus {
-    if !runner_here() {
+    plat::runtime_status()
+}
+
+/// [`runtime_status`] as a caller reads it, `person` when on the seat's person lane. Any other
+/// lane reads a person's own runner ([`person_runner`]) as not installed.
+pub(crate) fn runtime_status_as(person: bool) -> RuntimeStatus {
+    if person_runner() && !person {
         return RuntimeStatus {
             installed: false,
             enabled: false,
             running: false,
             unit: "punktfunk-scripting",
             principal: None,
-            detail: "Plugins don't run on a profile that uses an existing Linux account.".into(),
+            detail: "This profile's plugins are installed by its person, from their own desktop."
+                .into(),
         };
     }
-    plat::runtime_status()
+    runtime_status()
 }
 
-/// Has the operator turned the per-plugin sandbox off for the runner? Never where no runner is
-/// driven ([`runner_here`]).
+/// Has the operator turned the per-plugin sandbox off for the runner?
 #[cfg(any(target_os = "linux", windows))]
 pub(crate) fn runner_sandbox_off() -> bool {
-    runner_here() && plat::runner_sandbox_off()
+    plat::runner_sandbox_off()
 }
 
 /// Why the runner stopped at its last start instead of running a plugin unsandboxed, in its own
@@ -530,11 +547,9 @@ fn sandbox_refusal_in(config_dir: &std::path::Path) -> Option<String> {
 }
 
 /// [`enable`]/[`disable`], also `POST /store/runtime`. Windows: the SYSTEM service
-/// already clears the elevation bar the CLI checks. Refused where no runner is driven.
+/// already clears the elevation bar the CLI checks. On a person's own account the route's gate
+/// admits their lane alone.
 pub(crate) fn set_runtime_enabled(enabled: bool) -> Result<()> {
-    if !runner_here() {
-        bail!("switch the plugin runner: not on a person's own Linux account");
-    }
     if enabled {
         plat::enable()
     } else {
@@ -872,6 +887,27 @@ mod tests {
                 removing: removing.to_vec(),
             };
             assert_eq!(parse(&args).unwrap(), want, "{args:?}");
+        }
+    }
+
+    /// What the CLI leaves to a person's own console on their own account: every change.
+    #[test]
+    fn a_person_s_own_account_leaves_the_cli_its_reads() {
+        let rows: [(&[&str], bool); 10] = [
+            (&["add", "x"], true),
+            (&["remove", "x"], true),
+            (&["enable"], true),
+            (&["disable"], true),
+            (&["grant", "p", "d"], true),
+            (&["revoke", "p", "d"], true),
+            (&["list"], false),
+            (&["status"], false),
+            (&["access"], false),
+            (&["help"], false),
+        ];
+        for (args, want) in rows {
+            let args = argv(args);
+            assert_eq!(changes(&parse(&args).unwrap()), want, "{args:?}");
         }
     }
 

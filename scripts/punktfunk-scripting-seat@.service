@@ -1,0 +1,49 @@
+# punktfunk plugin runner for a seat on a person's own account — systemd USER template unit.
+#
+# The instance is the seat's id. That seat's host, which runs as the person, starts it in their
+# own user manager while their seat runs and their console has the runner on; nothing enables it,
+# and seat-session stops it with the seat. The host makes plugin-run and plugin-state first: a
+# `+` ExecStartPre here fails at NAMESPACE. It reads the seat's config directory alone, never the
+# person's own ~/.config/punktfunk, and runs only the plugins their own console installed
+# (PUNKTFUNK_PERSON_PLUGINS). Otherwise it is punktfunk-scripting.service, whose comments explain
+# each directive.
+[Unit]
+Description=punktfunk plugin runner for seat %i
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/punktfunk-scripting
+Environment=PUNKTFUNK_CONFIG_DIR=/var/lib/punktfunk-seats/seats/%i/config
+Environment=PUNKTFUNK_PERSON_PLUGINS=1
+Restart=on-failure
+RestartSec=2
+RestartPreventExitStatus=78
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+NoNewPrivileges=yes
+PrivateTmp=no
+ProtectSystem=strict
+ProtectHome=tmpfs
+# The seats' state is empty here but for the binds below: the seat's own tokens, identity key and
+# person token sit beside them, and so do other seats' files.
+TemporaryFileSystem=/var/lib/punktfunk-seats:ro
+# The person's own desk config, which a granted ~/.config would otherwise carry in.
+InaccessiblePaths=-%h/.config/punktfunk
+BindPaths=-/var/lib/punktfunk-seats/seats/%i/config/plugins -/var/lib/punktfunk-seats/seats/%i/config/plugin-state
+BindPaths=-%h/.bun
+BindReadOnlyPaths=-/var/lib/punktfunk-seats/seats/%i/config/ingest
+BindReadOnlyPaths=-/var/lib/punktfunk-seats/seats/%i/config/plugin-token -/var/lib/punktfunk-seats/seats/%i/config/mgmt-endpoint
+BindReadOnlyPaths=-/var/lib/punktfunk-seats/seats/%i/config/native-cert.pem -/var/lib/punktfunk-seats/seats/%i/config/cert.pem
+BindReadOnlyPaths=/var/lib/punktfunk-seats/seats/%i/config/plugin-run
+BindPaths=%t
+# What the plugins read — manifest paths and folder grants — the seat's host writes into
+# $XDG_RUNTIME_DIR/systemd/user/punktfunk-scripting-seat@<id>.service.d/50-plugin-roots.conf.
+BindReadOnlyPaths=-%h/.local/bin/punktfunk-scripting -%h/.local/lib/punktfunk-scripting
+BindReadOnlyPaths=-%h/.local/share/punktfunk-scripting
+ReadWritePaths=/tmp
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ProtectControlGroups=yes
+RestrictNamespaces=user mnt pid net ipc uts cgroup
+SystemCallArchitectures=native
+CapabilityBoundingSet=

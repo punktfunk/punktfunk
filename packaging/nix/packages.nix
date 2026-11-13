@@ -597,8 +597,13 @@ in
       # The user unit every channel ships, sandbox included. NixOS has no /bin/mkdir.
       install -Dm0644 scripts/punktfunk-scripting.service \
         $out/lib/systemd/user/punktfunk-scripting.service
+      install -Dm0644 scripts/punktfunk-scripting-seat@.service \
+        $out/lib/systemd/user/punktfunk-scripting-seat@.service
+      for unit in punktfunk-scripting.service punktfunk-scripting-seat@.service; do
+        substituteInPlace $out/lib/systemd/user/$unit \
+          --replace-fail /usr/bin/punktfunk-scripting $out/bin/punktfunk-scripting
+      done
       substituteInPlace $out/lib/systemd/user/punktfunk-scripting.service \
-        --replace-fail /usr/bin/punktfunk-scripting $out/bin/punktfunk-scripting \
         --replace-fail =+/bin/mkdir =+${coreutils}/bin/mkdir
       runHook postInstall
     '';

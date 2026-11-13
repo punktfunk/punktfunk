@@ -252,11 +252,11 @@ session by design, and display activation fails while its session is inactive.
   publishes with `PUT library/provider/{provider}` lands in the seat host's own titles (below),
   under `own:` ids. On a made seat that runner is the seat account's `punktfunk-scripting` user
   unit, which reads the seat's config directory, where the package enables the unit for every
-  account. A person's own account runs none: their unit reads their own desk config. A
+  account. On a person's own account it is [their seat's own runner](#a-seat-on-a-persons-own-account). A
   `?store=` claim is dropped there, so no row shadows a title of the box's. The provider's
   running and download reports read those rows, and the box learns their names and pictures as
-  it learns the others'. On a person's own account every lane is refused
-  (`plugins_own_account`), and a provider row found on their shelf lists nothing.
+  it learns the others'. On a person's own account only their session and their plugins write
+  them, and a provider row neither wrote lists nothing.
 - **Its own runner's folders, on Linux.** A plugin installed in the seat's own `plugins/` reads
   its manifest and grants from the seat's own config directory, never the box's for a plugin of
   the same id; any other plugin reads the box's copy. The operator decides them on a made seat,
@@ -430,7 +430,7 @@ A row with one answer holds on both. Every other row is a difference the section
 | Hooks on a made seat | The operator and the person | The operator |
 | Hooks on a person's own account | The person, in their session | Refused |
 | Plugins on a made seat | The seat account's own runner | None: an install answers 409 |
-| Plugins on a person's own account | Refused on every lane | None |
+| Plugins on a person's own account | Their seat's own runner, which the person alone switches and installs into, in their session | None |
 | The box's titles on its seat | Steam and emulator titles it can start as its own user | Every title but those of one account's sources |
 | Emulators | Installed box-wide; config and saves are the account's | The box's copies; saves and firmware through the box host's `?profile=` |
 | A seat on an existing account | Yes, opened by its password or a device key | On Windows Server |
@@ -801,6 +801,17 @@ and it is a contract seat's host, not the owner's.
 - **What it does not take.** The owner's `host.env` and settings, the box's library as its own
   (it plays the box's, from its trust copy), the door, and the owner's user host. The trust copy
   is readable by the person alone.
+- **Their runner.** The seat's plugin runner is `punktfunk-scripting-seat@<seat id>.service`, a
+  user unit the scripting package ships, in the person's own user manager, which the seat's
+  login session starts. The seat's host starts it while `plugin-runner-on` is in its config
+  directory, at each of its own starts and when the person switches it on, and stops it when
+  they switch it off; `seat-session` stops it with the seat. Nothing enables it, and its roots
+  drop-in is in `$XDG_RUNTIME_DIR/systemd/user`, so nothing of it lands in their home. It reads
+  the seat's config directory, sees none of `/var/lib/punktfunk-seats` but what it binds and
+  none of `~/.config/punktfunk`, runs no loose script, and starts only the packages their
+  session installed (`PUNKTFUNK_PERSON_PLUGINS=1`). Where AppArmor restricts user namespaces it
+  runs under the profile `punktfunk-scripting-seat`. The seat's host never names their own
+  `punktfunk-scripting`.
 
 #### The person's own session
 
@@ -850,8 +861,19 @@ reaches this lane.
   prepares their emulators (`POST emulators/{id}/prepare`, without a `firmware_dir`); every
   other lane gets `emulators_own_account`. An install, a removal, content and the save exchange
   stay refused for the person too, with `emulators_own_account_yet`. Hermir's adoption list is
-  in the account's own data folder, where no other lane writes. Plugins, the store and the
-  runner stay refused on every lane; the person decides only folder grants (above).
+  in the account's own data folder, where no other lane writes.
+- **Their plugins.** The person installs and removes plugins (`store/install` from the built-in
+  source alone, `store/uninstall`), switches [their runner](#a-seat-on-a-persons-own-account)
+  (`store/runtime`), reads a plugin page's `ui-credential` and decides folder grants. Their
+  plugins, on their own tokens, register, publish their titles (`library/provider/*`), ship
+  logs and ask for folders. A store install puts the package on `plugin-run/person-plugins.json`,
+  which the host writes and the runner reads; a removal takes it off. The runner starts only
+  those, and the host reads manifests and mints credentials for those alone: a package dropped
+  into the seat's `plugins/` any other way runs nothing. A provider's rows on the seat's shelf
+  are marked `person: true`. Any other lane is refused with `plugins_own_account_person`
+  (`plugins_own_account` while the person lane is closed) and reads `store/runtime` as not
+  installed; a catalog source is refused to the person too, with
+  `plugin_own_account_unreviewed`. The `plugins` CLI there only reads.
 
 #### Who opens a person's seat
 

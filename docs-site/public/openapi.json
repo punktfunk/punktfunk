@@ -10282,7 +10282,7 @@
           "store"
         ],
         "summary": "Install a plugin",
-        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A Windows seat host installs none: the box's runner, which it shares,\nnever reads them. A seat host on a person's own account installs from the built-in source\nalone: anything else would run code the box chose as that person.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
+        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A Windows seat host installs none: the box's runner, which it shares,\nnever reads them. A seat host on a person's own account installs for that person's own\nsession, from the built-in source alone: what it installs runs as them.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
         "operationId": "installPlugin",
         "requestBody": {
           "content": {
@@ -10553,7 +10553,7 @@
           "store"
         ],
         "summary": "Plugin runner state",
-        "description": "Plugins run only while the runner is on. The runner discovers units at startup, so a freshly\ninstalled plugin may not have appeared yet.",
+        "description": "Plugins run only while the runner is on. The runner discovers units at startup, so a freshly\ninstalled plugin may not have appeared yet. On a seat host on a person's own account the\nrunner is theirs: any lane but their own session reads it as not installed.",
         "operationId": "getPluginRuntime",
         "responses": {
           "200": {
@@ -10594,6 +10594,7 @@
           "store"
         ],
         "summary": "Turn the plugin runner on or off",
+        "description": "On a seat host on a person's own account only their own session switches it.",
         "operationId": "setPluginRuntime",
         "requestBody": {
           "content": {
@@ -12703,7 +12704,7 @@
               },
               "person": {
                 "type": "boolean",
-                "description": "A seat host's own title its person wrote, in their own session. On a person's own account\na title without it is neither listed nor started. Set by the host, never from a body.",
+                "description": "A seat host's own title its person wrote, in their own session, or one of their plugins\npublished. On a person's own account a title without it is neither listed nor started.\nSet by the host, never from a body.",
                 "readOnly": true
               },
               "prep": {

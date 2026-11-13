@@ -60,8 +60,9 @@ pub struct CustomEntry {
     /// Whether the title's files are on this host. Set only by provider reconcile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub install: Option<super::downloads::Install>,
-    /// A seat host's own title its person wrote, in their own session. On a person's own account
-    /// a title without it is neither listed nor started. Set by the host, never from a body.
+    /// A seat host's own title its person wrote, in their own session, or one of their plugins
+    /// published. On a person's own account a title without it is neither listed nor started.
+    /// Set by the host, never from a body.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[schema(read_only)]
     pub person: bool,
@@ -859,7 +860,8 @@ fn reconcile_entries(
 /// Replace `provider`'s rows on `shelf` with `inputs`. Surviving titles keep their host id
 /// (keyed on `external_id`); a new one gets an id of `shelf`'s; orphans drop; manual rows and
 /// other providers are untouched. Returns the provider's resulting rows, payload order. Pure —
-/// no filesystem.
+/// no filesystem. On a person's own account a row on the seat's own shelf is theirs
+/// ([`CustomEntry::person`]): only their lane and their plugins write a provider there.
 fn reconcile_on(
     shelf: Shelf,
     entries: &mut Vec<CustomEntry>,
@@ -873,6 +875,7 @@ fn reconcile_on(
         .filter_map(|e| e.external_id.clone().map(|x| (x, e.clone())))
         .collect();
     entries.retain(|e| e.provider.as_deref() != Some(provider));
+    let person = shelf == Shelf::Own && pf_paths::seat::own_account();
     let mut result = Vec::with_capacity(inputs.len());
     for input in inputs {
         let id = existing
@@ -899,7 +902,7 @@ fn reconcile_on(
                 free_bytes: None,
                 ..i
             }),
-            person: false,
+            person,
             meta: input.meta,
         });
     }

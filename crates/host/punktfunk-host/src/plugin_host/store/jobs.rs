@@ -456,6 +456,11 @@ fn run_install(id: &str, plan: Plan, plugin_tokens: &PluginTokens) -> Result<()>
         },
     )
     .context("record install provenance")?;
+    // On a person's own account the store answers their lane alone: what it installs is theirs.
+    if pf_paths::seat::own_account() {
+        crate::plugins::manifest::mark_person(&pf_paths::config_dir(), &pkg, true)
+            .context("mark the plugin as the person's")?;
+    }
 
     refresh_plugin_tokens(id, plugin_tokens)?;
     start_runner(id);
@@ -499,6 +504,10 @@ fn run_uninstall(
     )?;
     set_phase(id, "recording");
     manifest::forget(&dir, pkg).context("update install provenance")?;
+    if pf_paths::seat::own_account() {
+        crate::plugins::manifest::mark_person(&pf_paths::config_dir(), pkg, false)
+            .context("unmark the person's plugin")?;
+    }
     if let Some(provider) = provider {
         match delete_titles(&provider) {
             Ok(n) if n > 0 => log_line(id, format!("removed {n} library titles of {provider}")),
