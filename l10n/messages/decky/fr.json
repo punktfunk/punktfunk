@@ -101,6 +101,7 @@
 		}
 	}],
 	"decky_host_asleep": "en veille",
+	"decky_host_awake": "L’hôte {host} est réveillé",
 	"decky_play_stream": "Diffuser",
 	"decky_play_stop": "Arrêter",
 	"decky_update_server_unreachable": "Impossible de joindre le serveur de mises à jour — êtes-vous en ligne ?",

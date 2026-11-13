@@ -256,6 +256,8 @@
 		}
 	}],
 	"setup_win_app_runtime_failed": "No se pudo instalar Windows App Runtime — instálalo manualmente: {url}",
+	"setup_win_data_dir_failed": "No se pudo limitar la escritura en {dir} a los administradores. Si otra cuenta puso allí archivos antes de instalar Punktfunk, elimina esa carpeta y vuelve a ejecutar el instalador — {cause}",
+	"setup_win_install_dir_failed": "No se pudo limitar la escritura en {dir} a los administradores. Elige otra carpeta y vuelve a ejecutar el instalador — {cause}",
 	"wizard_step_welcome": "Bienvenida",
 	"wizard_step_configure": "Configurar",
 	"wizard_step_network": "Red",

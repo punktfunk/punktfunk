@@ -100,6 +100,7 @@
 	"apierr_emulator_saves_not_listed": "Não foi possível listar os jogos salvos",
 	"apierr_emulators_not_listed": "Não foi possível listar os emuladores",
 	"apierr_emulators_own_account": "O console web não gerencia emuladores em um perfil que usa uma conta Linux existente.",
+	"apierr_emulators_own_account_yet": "Ainda não é possível gerenciar emuladores aqui.",
 	"apierr_existing_account_needs_desktop": "Uma conta existente precisa de uma área de trabalho própria.",
 	"apierr_existing_account_seat_platforms": "Um posto em uma conta existente só está disponível no Windows Server e no Linux.",
 	"apierr_gpu_choice_not_saved": "Não foi possível salvar a escolha da GPU",
@@ -107,6 +108,8 @@
 	"apierr_hooks_elevated_windows_only": "Comandos são executados como administrador somente em hosts Windows.",
 	"apierr_hooks_not_saved": "Não foi possível salvar os hooks",
 	"apierr_hooks_own_account": "Hooks não podem ser executados em um perfil que usa uma conta existente, pois seriam executados como essa pessoa.",
+	"apierr_hooks_own_account_person": "Os hooks de um perfil que usa uma conta existente são definidos por essa pessoa, na própria área de trabalho.",
+	"apierr_hooks_secret_file_person": "Hooks que você mesmo define não podem assinar um webhook com um arquivo de segredo neste PC. Remova o arquivo de segredo e salve novamente.",
 	"apierr_host_action_in_flight": "Outra ação do host já está em andamento",
 	"apierr_host_error": "O host encontrou um erro",
 	"apierr_host_power_busy_other_device": "Outro dispositivo está transmitindo deste host, ou pode ser um posto que não está respondendo. Tente novamente em instantes.",
@@ -122,6 +125,8 @@
 	"apierr_library_entry_not_deleted": "A entrada não foi excluída — o host encontrou um estado inesperado",
 	"apierr_library_entry_not_updated": "A entrada não foi atualizada — o host encontrou um estado inesperado",
 	"apierr_library_not_updated": "A biblioteca não foi atualizada — o host encontrou um estado inesperado",
+	"apierr_library_own_account": "Não é possível adicionar jogos a um perfil que usa uma conta existente, pois eles seriam executados como essa pessoa.",
+	"apierr_library_own_account_person": "Jogos só para um perfil que usa uma conta existente são adicionados por essa pessoa, na própria área de trabalho.",
 	"apierr_library_override_name_taken": "Já existe outra substituição compartilhada com este nome. Escolha um nome diferente.",
 	"apierr_library_page_marker_invalid": "Esse marcador de página não é válido. Carregue a lista novamente desde o início",
 	"apierr_log_bundle_not_deleted": "Não foi possível excluir o pacote de logs",
@@ -135,6 +140,9 @@
 	"apierr_pairing_request_gone": "Essa solicitação de pareamento não está mais em espera — atualize a página e tente novamente",
 	"apierr_pam_unavailable": "Não foi possível verificar a senha: o serviço de login deste host não respondeu.",
 	"apierr_pending_request_expired": "Essa solicitação expirou — peça ao dispositivo que solicite o acesso novamente",
+	"apierr_person_session_ended": "Sua sessão do Punktfunk terminou. Abra-o novamente pela sua área de trabalho.",
+	"apierr_person_ticket_refused": "Seu Punktfunk não abriu. Abra-o novamente pela sua área de trabalho.",
+	"apierr_person_ticket_wait": "Seu Punktfunk não abriu após muitas tentativas. Aguarde um minuto e abra-o novamente pela sua área de trabalho.",
 	"apierr_player_number_too_high": "Esse número de jogador é maior que o número de controles disponíveis neste host.",
 	"apierr_plugin_access_decision_not_recorded": "Não foi possível registrar a decisão",
 	"apierr_plugin_access_not_read": "Não foi possível ler o acesso do plugin",
@@ -146,7 +154,9 @@
 	"apierr_plugin_needs_newer_host": "Este plugin não pode ser executado neste host — exige o Punktfunk {version} ou mais recente",
 	"apierr_plugin_needs_platform": "Este plugin não pode ser executado neste host — requer {platforms}",
 	"apierr_plugin_own_account_unreviewed": "Somente plugins revisados para a loja do Punktfunk são instalados em um perfil que usa uma conta existente, pois são executados como essa pessoa.",
+	"apierr_plugin_seat_unreviewed": "Somente plugins revisados para a loja do Punktfunk são instalados a partir do seu próprio Punktfunk.",
 	"apierr_plugins_own_account": "Plugins ainda não são executados em um perfil que usa uma conta Linux existente.",
+	"apierr_plugins_own_account_person": "Os plugins de um perfil que usa uma conta existente são instalados por essa pessoa, na própria área de trabalho.",
 	"apierr_profile_has_no_seat": "Este perfil joga na área de trabalho do próprio host; não tem um posto para iniciar ou parar.",
 	"apierr_profile_layer_console_only": "Não foi possível alterar as configurações próprias deste perfil. Altere-as no console web do host.",
 	"apierr_profile_limit": [{
@@ -158,12 +168,21 @@
 			"n=other": "Um host comporta no máximo {count} perfis"
 		}
 	}],
+	"apierr_profile_change_not_allowed": "Este dispositivo não pode alterar este perfil. Peça ao proprietário do host que o altere no console web.",
+	"apierr_profile_device_not_paired": "Esse dispositivo não está pareado com este host.",
+	"apierr_profile_devices_full": "Este perfil já tem todos os dispositivos que comporta. Encerre primeiro o login de um deles.",
+	"apierr_profile_lock_shared": "Este perfil compartilha a área de trabalho de {owner}, então abre com o bloqueio desse perfil. Altere o bloqueio lá.",
+	"apierr_profile_lock_own_account": "Este perfil abre com a senha da conta, então não pode ser bloqueado.",
+	"apierr_profile_locked_already": "Este perfil já está bloqueado. Adicione um dispositivo para deixar outro entrar.",
+	"apierr_profile_locks_unreadable": "Este host não conseguiu ler os bloqueios de perfil, então todos os perfis continuam bloqueados. Corrija ou remova profile-locks.json e tente novamente.",
 	"apierr_profile_name_missing": "Um perfil precisa de um nome",
 	"apierr_profile_name_taken": "Outro perfil já tem esse nome",
 	"apierr_profile_no_password_to_update": "Somente um perfil com área de trabalho própria em uma conta existente do Windows tem uma senha para atualizar.",
+	"apierr_profile_no_unlock_key": "Este dispositivo não tem uma chave de desbloqueio para este perfil.",
 	"apierr_profile_not_password": "Este perfil não abre com a senha de uma conta.",
 	"apierr_profile_opens_with_password": "Este perfil abre com a senha da conta dele.",
 	"apierr_profile_owner_not_removable": "O perfil do proprietário não pode ser removido",
+	"apierr_profile_pin_invalid": "O PIN tem de 4 a 8 dígitos.",
 	"apierr_profile_picture_invalid": "Não foi possível salvar a imagem. Use um PNG ou JPEG com menos de 1 MB.",
 	"apierr_profile_seat_needs_door": "Ative “Acessível sem login” antes de adicionar um perfil com área de trabalho própria.",
 	"apierr_profile_session_settings_host": "Este perfil joga na área de trabalho do próprio host, então usa as configurações de sessão do host.",
@@ -182,6 +201,7 @@
 	"apierr_recording_not_deleted": "Não foi possível excluir a gravação",
 	"apierr_recording_not_read": "Não foi possível ler a gravação",
 	"apierr_recording_not_saved": "Não foi possível salvar a gravação",
+	"apierr_screen_choice_not_granted": "Este host decide a tela deste dispositivo.",
 	"apierr_seat_display_driver": "O driver de tela do posto não está neste computador. Reinstale o Punktfunk e tente novamente.",
 	"apierr_seat_display_read_only": "A tela de um posto não pode ser alterada aqui. Altere as configurações de tela no host.",
 	"apierr_seat_gone": "O posto deste perfil não existe mais.",
@@ -284,6 +304,41 @@
 	"close_join_needs_hdr": "Não foi possível entrar na tela compartilhada — ela está em HDR e este dispositivo não está transmitindo em HDR. Ative o HDR nas configurações deste app ou peça a quem conectou primeiro que o desative.",
 	"close_join_other_codec": "Não foi possível entrar na tela compartilhada — este dispositivo transmite com um codec de vídeo que não permite o compartilhamento. Defina o mesmo codec de vídeo nos dois dispositivos e entre novamente.",
 	"close_join_range": "Não foi possível entrar na tela compartilhada — a faixa de cores dela não pode ser exibida por este dispositivo. Conecte este dispositivo primeiro e deixe o outro entrar nela.",
+	"close_lock_full": "Este perfil já tem todos os dispositivos que comporta. Peça ao proprietário do host que encerre o login de um deles.",
+	"close_lock_key_failed": "Não foi possível confirmar que é você neste dispositivo. Digite o PIN deste perfil.",
+	"close_lock_not_allowed": "Este dispositivo não pode abrir este perfil. Peça ao proprietário do host que o adicione.",
+	"close_lock_not_saved": "Este host não conseguiu salvar isso. Tente novamente em instantes.",
+	"close_lock_pin_unreadable": "Não foi possível ler o PIN enviado por este dispositivo. Tente novamente.",
+	"close_lock_pin_update": "Este perfil precisa do PIN. Atualize o Punktfunk neste dispositivo.",
+	"close_lock_pin_wait_hours": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Muitas tentativas com PIN incorreto. Tente novamente em {count} hora.",
+			"n=many": "Muitas tentativas com PIN incorreto. Tente novamente em {count} horas.",
+			"n=other": "Muitas tentativas com PIN incorreto. Tente novamente em {count} horas."
+		}
+	}],
+	"close_lock_pin_wait_minutes": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Muitas tentativas com PIN incorreto. Tente novamente em {count} minuto.",
+			"n=many": "Muitas tentativas com PIN incorreto. Tente novamente em {count} minutos.",
+			"n=other": "Muitas tentativas com PIN incorreto. Tente novamente em {count} minutos."
+		}
+	}],
+	"close_lock_pin_wait_seconds": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Muitas tentativas com PIN incorreto. Tente novamente em {count} segundo.",
+			"n=many": "Muitas tentativas com PIN incorreto. Tente novamente em {count} segundos.",
+			"n=other": "Muitas tentativas com PIN incorreto. Tente novamente em {count} segundos."
+		}
+	}],
+	"close_lock_pin_wrong": "Esse não é o PIN deste perfil.",
+	"close_lock_signed_out": "O login deste dispositivo neste perfil foi encerrado.",
 	"close_monitor_missing": "O host está configurado para transmitir “{monitor}”, que não está conectado. Escolha outra tela no console web dele, em Telas.",
 	"close_monitor_none": "O host está configurado para capturar um monitor chamado \"{monitor}\" e não informa nenhum monitor. Limpe isso nas configurações de tela do host para transmitir uma tela virtual.",
 	"close_niri_no_outputs": "O niri do host não consegue criar uma tela para esta transmissão. O proprietário dele pode instalar o biri; o console web mostra como.",
