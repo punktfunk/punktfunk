@@ -102,8 +102,8 @@ struct ParsedWaveletFrame {
     var decodedBlocks: Int
     /// VUI bits from the sequence header (BitstreamSequenceHeader).
     var bt2020: Bool
-    /// PQ transfer ⇒ HDR session: 16-bit studio-code planes + EDR present (the host stamps
-    /// this bit iff the session negotiated 10-bit — the depth is coupled to the transfer).
+    /// PQ transfer ⇒ HDR session: 16-bit studio-code planes + EDR present. The host stamps it
+    /// only on a 10-bit session; 10-bit without it is SDR (`WaveletPlanes.tenBitSDR`).
     var pq: Bool
     var fullRange: Bool
 
