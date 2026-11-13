@@ -2,9 +2,9 @@
 //! (design §2.5). The Games grid is cut into rows of `columns` posters, so one
 //! virtualized list scrolls a library of thousands without building a widget per title.
 
-use pf_client_core::collate::{self, GroupBy, GroupKey, SortKey};
-use pf_client_core::library::{GameEntry, DESKTOP_ID};
-use pf_client_core::library_layout::Section;
+use crate::collate::{self, GroupBy, GroupKey, SortKey};
+use crate::library::{GameEntry, DESKTOP_ID};
+use crate::library_layout::Section;
 use pf_l10n::client;
 
 /// Recently played shows at most this many titles (design D6).
@@ -239,8 +239,8 @@ fn last_played(g: &GameEntry) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pf_client_core::library::GameStats;
-    use pf_client_core::library_layout::sections;
+    use crate::library::GameStats;
+    use crate::library_layout::sections;
 
     fn game(id: &str, title: &str, played: u64) -> GameEntry {
         GameEntry {
