@@ -75,6 +75,50 @@ impl Drop for ReadMap {
     }
 }
 
+// linux/dma-buf.h: `DMA_BUF_IOCTL_SYNC` is `_IOW('b', 0, struct dma_buf_sync)`, a `__u64 flags`.
+const DMA_BUF_IOCTL_SYNC: u64 = 0x4008_6200;
+const DMA_BUF_SYNC_READ: u64 = 1 << 0;
+const DMA_BUF_SYNC_START: u64 = 0;
+const DMA_BUF_SYNC_END: u64 = 1 << 2;
+/// The kernel says to restart a sync that fails with `EINTR` or `EAGAIN`; a few tries bound it.
+const SYNC_TRIES: usize = 8;
+
+/// A CPU read of a dma-buf's mapped pages, bracketed with `DMA_BUF_IOCTL_SYNC` as the kernel
+/// requires. An exporter whose CPU mapping is cached and not coherent invalidates its stale
+/// lines at the start. Best effort: a kernel or fd without the ioctl (a memfd) reads on.
+pub struct CpuRead<'fd>(BorrowedFd<'fd>);
+
+impl<'fd> CpuRead<'fd> {
+    /// Start the access; it ends when the guard drops. Call after the producer's fence waited.
+    pub fn begin(dmabuf: BorrowedFd<'fd>) -> CpuRead<'fd> {
+        sync_read(dmabuf, DMA_BUF_SYNC_START);
+        CpuRead(dmabuf)
+    }
+}
+
+impl Drop for CpuRead<'_> {
+    fn drop(&mut self) {
+        sync_read(self.0, DMA_BUF_SYNC_END);
+    }
+}
+
+fn sync_read(fd: BorrowedFd<'_>, edge: u64) {
+    let flags = edge | DMA_BUF_SYNC_READ;
+    for _ in 0..SYNC_TRIES {
+        // SAFETY: `fd` is open for the borrow. `&flags` is a live `__u64` the kernel reads (the
+        // whole of `struct dma_buf_sync`); it outlives the call and nothing writes it.
+        let r = unsafe { libc::ioctl(fd.as_raw_fd(), DMA_BUF_IOCTL_SYNC as _, &flags) };
+        let restart = r < 0
+            && matches!(
+                io::Error::last_os_error().raw_os_error(),
+                Some(libc::EINTR | libc::EAGAIN)
+            );
+        if !restart {
+            return;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,6 +142,16 @@ mod tests {
             drop(f);
             assert_eq!(map.bytes(), b"punk");
         }
+    }
+
+    /// The request number is `_IOW('b', 0, struct dma_buf_sync)`; a memfd refuses the ioctl and
+    /// the bracket reads on.
+    #[test]
+    fn the_bracket_is_best_effort_on_a_non_dmabuf() {
+        assert_eq!(DMA_BUF_IOCTL_SYNC, 0x4008_6200);
+        assert_eq!(DMA_BUF_SYNC_END, 4);
+        let f = memfd(b"punktfunk");
+        let _read = CpuRead::begin(f.as_fd());
     }
 
     /// A length past the end would SIGBUS on touch, so it never maps.
