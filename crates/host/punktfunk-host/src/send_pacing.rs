@@ -591,6 +591,8 @@ pub(crate) struct CaptureCredit {
     last: Instant,
     /// Repeat ticks since the last fresh frame; past [`IDLE_REPEATS`] the keep-alive backs off.
     idle: u32,
+    /// The last fresh tick, grab to wait: how long a repeat tick holds the loop.
+    busy: Duration,
 }
 
 impl CaptureCredit {
@@ -603,7 +605,19 @@ impl CaptureCredit {
             credit: Self::CAP,
             last: now,
             idle: 0,
+            busy: Duration::ZERO,
         }
+    }
+
+    /// How long a poke at `now` waits for the next fresh frame to carry the ask; `None` ticks a
+    /// repeat at once. The frame is due a source `period` after the last grab and taken no
+    /// sooner than `not_before`. Taken within [`Self::busy`], a repeat now would only make it
+    /// wait; overdue by more, nothing is coming.
+    fn ask_waits(&self, now: Instant, not_before: Instant, period: Duration) -> Option<Instant> {
+        let due = self.last + period;
+        let take = due.max(not_before);
+        (now < due + self.busy && take.saturating_duration_since(now) <= self.busy)
+            .then_some(take + self.busy)
     }
 
     /// Spend one frame for the grab at `t_cap` and return the earliest next grab: the 0.9×
@@ -681,7 +695,8 @@ pub(crate) fn owed_aus(
 ///
 /// `fresh` is a new frame's capture instant. A repeat (`None`) spends no credit and holds no
 /// slot: the real frame after it goes out on arrival. An arrival or an AU restarts the grid
-/// at `next`.
+/// at `next`. A poke (a recovery ask) ends a feed's wait, the credit gate included, unless
+/// the next fresh frame carries the ask sooner ([`CaptureCredit::ask_waits`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn wait_next_tick(
     capturer: &mut dyn crate::capture::Capturer,
@@ -697,15 +712,24 @@ pub(crate) fn wait_next_tick(
         return sleep_to_grid(next);
     }
     if let Some(feed) = capturer.feed() {
-        if let Some(t_cap) = fresh {
-            let earliest = credit.next_grab(t_cap, interval);
-            if let Some(d) = earliest.checked_duration_since(Instant::now()) {
-                std::thread::sleep(d);
+        let not_before = match fresh {
+            Some(t_cap) => {
+                credit.busy = t_cap.elapsed();
+                credit.next_grab(t_cap, interval)
             }
-        } else {
-            credit.note_repeat();
+            None => {
+                credit.note_repeat();
+                Instant::now()
+            }
+        };
+        let period = src_period_ns.map_or(interval, Duration::from_nanos);
+        let mut deadline = *next + keepalive_wait(interval, src_period_ns, credit.idle);
+        while feed.wait_paced(not_before, deadline) {
+            match credit.ask_waits(Instant::now(), not_before, period) {
+                Some(latest) => deadline = deadline.min(latest),
+                None => break,
+            }
         }
-        feed.wait_arrival(*next + keepalive_wait(interval, src_period_ns, credit.idle));
     } else if owed_aus(frame, enc, *next).is_none() {
         return sleep_to_grid(next);
     }
@@ -1376,6 +1400,296 @@ mod tests {
         assert_eq!(credit.idle, IDLE_REPEATS);
         credit.charge();
         assert_eq!(credit.idle, 0);
+    }
+
+    /// A feed whose `wait_paced` answers from `pokes` at once, recording what it was asked.
+    struct Scripted {
+        pokes: std::collections::VecDeque<bool>,
+        waits: Vec<(Instant, Instant)>,
+    }
+
+    impl pf_capture::Feed for Scripted {
+        fn wait_arrival(&mut self, _deadline: Instant) {}
+
+        fn wait_paced(&mut self, not_before: Instant, deadline: Instant) -> bool {
+            self.waits.push((not_before, deadline));
+            self.pokes.pop_front().unwrap_or(false)
+        }
+    }
+
+    impl crate::capture::Capturer for Scripted {
+        fn next_frame(
+            &mut self,
+            _budget: pf_capture::FirstFrame,
+        ) -> anyhow::Result<crate::capture::CapturedFrame> {
+            anyhow::bail!("scripted feed only")
+        }
+
+        fn feed(&mut self) -> Option<&mut dyn pf_capture::Feed> {
+            Some(self)
+        }
+    }
+
+    /// A fresh tick that grabbed `ago` before the wait, on a 100 ms source at the rate: the
+    /// waits it asked of a feed that pokes once.
+    fn poked_tick(ago: Duration) -> (Instant, Vec<(Instant, Instant)>) {
+        let interval = Duration::from_millis(100);
+        let t_cap = Instant::now() - ago;
+        let mut feed = Scripted {
+            pokes: [true].into(),
+            waits: Vec::new(),
+        };
+        let mut credit = CaptureCredit::new(t_cap - interval * 4);
+        let mut next = Instant::now() + interval * 2;
+        let frame = crate::capture::CapturedFrame {
+            width: 4,
+            height: 4,
+            pts_ns: 0,
+            format: crate::capture::PixelFormat::Bgrx,
+            payload: pf_frame::FramePayload::Cpu(vec![0; 64]),
+            cursor: None,
+            provenance: Default::default(),
+        };
+        let mut enc = Owes {
+            owes: None,
+            asks: 0,
+        };
+        let period = Some(interval.as_nanos() as u64);
+        let fresh = Some(t_cap);
+        wait_next_tick(
+            &mut feed,
+            &mut enc,
+            &frame,
+            &mut credit,
+            &mut next,
+            fresh,
+            interval,
+            period,
+        );
+        (t_cap, feed.waits)
+    }
+
+    /// A poke far from the next frame ends the credit gate at once; one landing inside the
+    /// loop's own busy time of it waits for that frame, no longer than that time past it.
+    #[test]
+    fn a_poke_ends_the_gate_unless_the_next_frame_is_closer() {
+        let interval = Duration::from_millis(100);
+        let (t_cap, waits) = poked_tick(Duration::ZERO);
+        assert_eq!(waits.len(), 1, "the poke ended the wait");
+        assert_eq!(
+            waits[0].0,
+            t_cap + interval.mul_f32(0.9),
+            "the gate it ended"
+        );
+        let busy = Duration::from_millis(95);
+        let (t_cap, waits) = poked_tick(busy);
+        assert_eq!(waits.len(), 2, "the wait went on after the poke");
+        let latest = waits[1].1.duration_since(t_cap + interval);
+        assert!(waits[1].1 < waits[0].1, "bounded past the frame");
+        assert!(latest >= busy && latest < busy * 2, "{latest:?}");
+    }
+
+    /// How the arrival wait meets a poke: today's sleeps out the credit gate, direct Wayland
+    /// had none, the poke-aware one asks [`CaptureCredit::ask_waits`].
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Gate {
+        Asleep,
+        Deaf,
+        PokeAware,
+    }
+
+    /// One tick of [`simulate`]: its start, the arrival it took (`None`: a repeat), and
+    /// whether it carried an ask.
+    struct SimTick {
+        at: Instant,
+        took: Option<Instant>,
+        ask: bool,
+    }
+
+    /// The tick loop on a virtual clock over a mailbox: frames at `arrivals`, asks (each
+    /// with its poke) at `asks`, every tick `busy` long. Each wait is `wait_next_tick`'s,
+    /// over the real [`CaptureCredit`], computed instead of slept.
+    fn simulate(
+        gate: Gate,
+        interval: Duration,
+        arrivals: &[Instant],
+        asks: &[Instant],
+        busy: Duration,
+    ) -> Vec<SimTick> {
+        let (period, period_ns) = (interval, Some(interval.as_nanos() as u64));
+        let end = *arrivals.last().unwrap();
+        let mut credit = CaptureCredit::new(arrivals[0]);
+        credit.busy = busy;
+        let (mut a, mut carried, mut poked) = (0, 0, 0);
+        let mut t = arrivals[0];
+        let mut ticks = Vec::new();
+        while t < end {
+            let reached = asks[carried..].iter().take_while(|&&q| q <= t).count();
+            carried += reached;
+            poked = poked.max(carried);
+            while a + 1 < arrivals.len() && arrivals[a + 1] <= t {
+                a += 1;
+            }
+            let took = (arrivals[a] <= t).then(|| {
+                a += 1;
+                arrivals[a - 1]
+            });
+            ticks.push(SimTick {
+                at: t,
+                took,
+                ask: reached > 0,
+            });
+            let start = t + busy;
+            let not_before = match took {
+                Some(_) => credit.next_grab(t, interval),
+                None => {
+                    credit.note_repeat();
+                    start
+                }
+            };
+            let mut deadline = start + interval + keepalive_wait(interval, period_ns, credit.idle);
+            t = loop {
+                let arrival = arrivals.get(a).copied().unwrap_or(end + interval * 9);
+                let natural = not_before.max(arrival.min(deadline));
+                let Some(&q) = asks
+                    .get(poked)
+                    .filter(|&&q| q < natural && gate != Gate::Deaf)
+                else {
+                    break natural;
+                };
+                let seen = q.max(start);
+                poked += asks[poked..].iter().take_while(|&&x| x <= seen).count();
+                match gate {
+                    Gate::PokeAware => match credit.ask_waits(seen, not_before, period) {
+                        Some(latest) => deadline = deadline.min(latest),
+                        None => break seen,
+                    },
+                    _ => break seen.max(not_before),
+                }
+            };
+        }
+        ticks
+    }
+
+    /// A source at the rate and one ask `x` after a fresh grab: ask to the tick that carries
+    /// it, whether that tick took a fresh frame, and the longest any fresh frame waited.
+    fn one_ask(gate: Gate, hz: u32, busy: Duration, x: Duration) -> (Duration, bool, Duration) {
+        let interval = Duration::from_secs(1) / hz;
+        let t0 = Instant::now();
+        let arrivals: Vec<Instant> = (0..40).map(|k| t0 + interval * k).collect();
+        let ask = arrivals[20] + x;
+        let ticks = simulate(gate, interval, &arrivals, &[ask], busy);
+        let acted = ticks.iter().find(|t| t.ask).expect("the ask is carried");
+        let late = ticks.iter().filter_map(|t| t.took.map(|a| t.at - a)).max();
+        (acted.at - ask, acted.took.is_some(), late.unwrap())
+    }
+
+    /// Every phase of an ask against a source at the rate, 3 ms ticks: the poke-aware wait
+    /// acts no later than today's sleep unless a fresh frame carries the ask on time, and no
+    /// fresh frame ever waits on its arrival. `--nocapture` prints the before/after table.
+    #[test]
+    fn an_ask_ends_the_gate_without_delaying_a_fresh_frame() {
+        let busy = Duration::from_millis(3);
+        let ms = |d: Duration| d.as_secs_f64() * 1e3;
+        for hz in [60, 120] {
+            let interval = Duration::from_secs(1) / hz;
+            let mut rows = Vec::new();
+            for step in 0..200 {
+                let x = interval * step / 200;
+                let row =
+                    [Gate::Asleep, Gate::Deaf, Gate::PokeAware].map(|g| one_ask(g, hz, busy, x));
+                let (act, fresh, late) = row[2];
+                assert!(
+                    act <= row[0].0 || fresh,
+                    "{hz} Hz at {x:?}: {act:?} after {:?}",
+                    row[0].0
+                );
+                assert!(
+                    act <= row[1].0,
+                    "{hz} Hz at {x:?}: later than no poke at all"
+                );
+                assert_eq!(
+                    late,
+                    Duration::ZERO,
+                    "{hz} Hz at {x:?}: a fresh frame waited"
+                );
+                rows.push(row);
+            }
+            let short_tail = Duration::from_micros(4_450);
+            let at_tail = [Gate::Asleep, Gate::Deaf, Gate::PokeAware]
+                .map(|g| ms(one_ask(g, hz, busy, short_tail).0));
+            for (i, name) in ["pipewire today", "direct today", "poke-aware"]
+                .iter()
+                .enumerate()
+            {
+                let acts: Vec<f64> = rows.iter().map(|r| ms(r[i].0)).collect();
+                let late: Vec<f64> = rows.iter().map(|r| ms(r[i].2)).collect();
+                println!(
+                    "{hz} Hz {name}: ask->act mean {:.2} max {:.2} ms, short tail {:.2} ms; \
+                     fresh frames late {} of {}, max {:.2} ms",
+                    acts.iter().sum::<f64>() / acts.len() as f64,
+                    acts.iter().cloned().fold(0.0, f64::max),
+                    at_tail[i],
+                    late.iter().filter(|&&l| l > 0.0).count(),
+                    late.len(),
+                    late.iter().cloned().fold(0.0, f64::max),
+                );
+            }
+            assert_eq!(
+                at_tail[2], 0.0,
+                "{hz} Hz: the short-tail ask acts on landing"
+            );
+        }
+    }
+
+    /// Ten asks a second change neither how many fresh frames the loop takes nor when, past
+    /// one repeat tick each: a source at the rate, and one at twice it the gate holds back.
+    #[test]
+    fn asks_add_one_tick_each_and_keep_the_rate() {
+        let busy = Duration::from_millis(3);
+        for (hz, per_interval) in [(120u32, 1u32), (60, 1), (120, 2)] {
+            let interval = Duration::from_secs(1) / hz;
+            let t0 = Instant::now();
+            let arrivals: Vec<Instant> = (0..hz * 10 * per_interval)
+                .map(|k| t0 + interval * k / per_interval)
+                .collect();
+            let asks: Vec<Instant> = (1..100u32)
+                .map(|k| {
+                    let drift = Duration::from_micros(u64::from(k * 1_370 % 8_000));
+                    t0 + Duration::from_millis(100) * k + drift
+                })
+                .collect();
+            let fresh = |ticks: &[SimTick]| ticks.iter().filter(|t| t.took.is_some()).count();
+            let quiet = simulate(Gate::PokeAware, interval, &arrivals, &[], busy);
+            let today = simulate(Gate::Asleep, interval, &arrivals, &asks, busy);
+            let asked = simulate(Gate::PokeAware, interval, &arrivals, &asks, busy);
+            let (f0, f1) = (fresh(&quiet), fresh(&asked));
+            assert!(
+                f1.abs_diff(f0) <= 1,
+                "{hz}x{per_interval}: {f0} fresh, {f1} with asks"
+            );
+            assert!(
+                fresh(&today).abs_diff(f0) <= 1,
+                "{hz}x{per_interval}: today"
+            );
+            assert!(
+                asked.len() <= quiet.len() + asks.len(),
+                "{hz}x{per_interval}: ticks"
+            );
+            if per_interval == 1 {
+                let late = asked.iter().filter_map(|t| t.took.map(|a| t.at - a)).max();
+                assert_eq!(late, Some(Duration::ZERO), "{hz}: a fresh frame waited");
+            }
+            println!(
+                "{hz} Hz, source x{per_interval}: fresh {f0} quiet, {} today, {f1} poke-aware; \
+                 ticks {} quiet, {} today, {} poke-aware, {} asks",
+                fresh(&today),
+                quiet.len(),
+                today.len(),
+                asked.len(),
+                asks.len()
+            );
+        }
     }
 
     #[test]

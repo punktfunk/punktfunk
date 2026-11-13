@@ -8,6 +8,7 @@
 //! ladder for the driver and only classifies the worker's mirror. Evidence:
 //! `design/pf-capture-overhaul.md` §4.4.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
@@ -90,6 +91,8 @@ pub(crate) struct RemoteSource<T: Transport> {
     pending_stage: Option<Stage>,
     recovered_outage: Option<Duration>,
     pending_fault: Option<anyhow::Error>,
+    /// Reaches whichever encoder this source opened last.
+    poke: Arc<encoder::Poke>,
     /// Held for the source's life, dropped last.
     _keepalive: Box<dyn Send>,
 }
@@ -117,6 +120,7 @@ impl<T: Transport> RemoteSource<T> {
             pending_stage: None,
             recovered_outage: None,
             pending_fault: None,
+            poke: Arc::default(),
             _keepalive: keepalive,
         }
     }
@@ -429,6 +433,11 @@ impl<T: Transport> RemoteEncoder for RemoteSource<T> {
     }
 
     fn open(&self, params: &DriverEncodeParams) -> Result<Box<dyn pf_encode_core::Encoder>> {
-        encoder::open(&self.transport, params, self.clocks)
+        encoder::open(&self.transport, params, self.clocks, &self.poke)
+    }
+
+    fn arrival_poke(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        let poke = self.poke.clone();
+        Some(Arc::new(move || poke.fire()))
     }
 }
