@@ -39,6 +39,7 @@ pub fn path_matches(pattern: &str, path: &str) -> bool {
 pub const PERSON: &[(&str, &str)] = &[
     ("PUT", "/api/v1/library/hidden/{id}"),
     ("PUT", "/api/v1/library/overrides/games/{id}"),
+    ("PUT", "/api/v1/library/overrides/sources/{source}"),
     ("PUT", "/api/v1/library/scanners/{id}"),
     ("PUT", "/api/v1/session/settings"),
     ("DELETE", "/api/v1/session/settings"),
@@ -128,6 +129,8 @@ mod tests {
         let reached = [
             ("PUT", "/api/v1/library/hidden/steam:70"),
             ("PUT", "/api/v1/library/overrides/games/steam:70"),
+            // A source's stream values: the same kind as a game's, bounded the same way.
+            ("PUT", "/api/v1/library/overrides/sources/steam"),
             ("PUT", "/api/v1/library/scanners/steam"),
             ("PUT", "/api/v1/session/settings"),
             ("DELETE", "/api/v1/session/settings"),
@@ -142,7 +145,7 @@ mod tests {
             ("PUT", "/api/v1/library/picks/steam:70"),
             ("DELETE", "/api/v1/library/hidden/steam:70"),
             ("PUT", "/api/v1/library/hidden/a/b"),
-            ("PUT", "/api/v1/library/overrides/sources/steam"),
+            ("PUT", "/api/v1/library/overrides/sources/a/b"),
             ("PUT", "/api/v1/library/overrides/sets/x"),
             ("POST", "/api/v1/library/overrides/sets"),
             ("PUT", "/api/v1/library/custom/x"),

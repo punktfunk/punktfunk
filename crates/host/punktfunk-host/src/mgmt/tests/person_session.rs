@@ -219,6 +219,7 @@ fn the_person_lane_reaches_what_is_pinned() {
         ("GET", "/api/v1/session/settings"),
         ("PUT", "/api/v1/library/hidden/{id}"),
         ("PUT", "/api/v1/library/overrides/games/{id}"),
+        ("PUT", "/api/v1/library/overrides/sources/{source}"),
         ("PUT", "/api/v1/library/scanners/{id}"),
         ("PUT", "/api/v1/session/settings"),
         ("DELETE", "/api/v1/session/settings"),
@@ -655,13 +656,28 @@ async fn the_owner_s_host_takes_a_vouched_session_as_that_profile() {
     assert_eq!(outside(&after, SEAT_P), outside(&before, SEAT_P));
     assert_ne!(after, before);
     // What it adds stays bounded by the profile's library, as a device's does.
-    let ghost = json_req(
-        Method::PUT,
-        &format!("/api/v1/library/hidden/steam:999999?as={SEAT_P}"),
-        serde_json::json!({"hidden": true}),
-    );
-    assert_eq!(
-        send(&app, vouch(ghost, SEAT_P)).await.0,
-        StatusCode::NOT_FOUND
-    );
+    let put = |path: &str, body| json_req(Method::PUT, &format!("{path}?as={SEAT_P}"), body);
+    let hz = serde_json::json!({"hz": 50});
+    for (req, listed) in [
+        (
+            put(
+                "/api/v1/library/hidden/steam:999999",
+                serde_json::json!({"hidden": true}),
+            ),
+            false,
+        ),
+        (
+            put("/api/v1/library/overrides/sources/nosuchstore", hz.clone()),
+            false,
+        ),
+        (put("/api/v1/library/overrides/sources/steam", hz), true),
+    ] {
+        let path = req.uri().to_string();
+        let want = if listed {
+            StatusCode::OK
+        } else {
+            StatusCode::NOT_FOUND
+        };
+        assert_eq!(send(&app, vouch(req, SEAT_P)).await.0, want, "{path}");
+    }
 }

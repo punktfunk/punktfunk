@@ -404,9 +404,10 @@ entry and opens with the owner's lock, list and PIN. A take-turns profile keeps 
 - **The person.** A device a locked profile's list admits now, with nothing asked, is that
   profile's person, unless the profile is the owner or on a person's own account. With
   `?as=<id>` it may call `mgmt_routes::PERSON`: `PUT library/hidden/{id}`,
-  `PUT library/overrides/games/{id}`, `PUT library/scanners/{id}`, and `PUT` and
-  `DELETE session/settings`, which write that profile's own layer alone. A hide or a game's
-  entry it adds must name a title the profile's library lists; taking one away needs none. With
+  `PUT library/overrides/games/{id}`, `PUT library/overrides/sources/{source}`,
+  `PUT library/scanners/{id}`, and `PUT` and `DELETE session/settings`, which write that
+  profile's own layer alone. A hide or a game's entry it adds must name a title the profile's
+  library lists, and a source's entry a source with such a title; taking one away needs none. With
   no `as` a device isn't let in. A device that isn't the person, an open profile, one that needs
   its PIN and the owner's id answer 403 `profile_change_not_allowed`; an unknown id 404
   `profile_unknown`. Art picks stay off: the host fetches a pick's URL itself. Asked on every

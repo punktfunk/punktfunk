@@ -236,21 +236,16 @@ pub(crate) struct Scoped {
     mine: Option<String>,
 }
 
-/// The 404 for a device's or a person session's write that `adds` an entry for title `id` when
-/// `view`'s library lists no such title: what they write stays bounded by the library. Taking an
-/// entry away needs none.
-fn unlisted(
-    who: &AsProfile,
-    view: &crate::library::View,
-    id: &str,
-    adds: bool,
-) -> Option<Response> {
+/// The 404 for a device's or a person session's write that `adds` an entry for a title or a
+/// source the profile's library doesn't list, by `listed`: what they write stays bounded by the
+/// library. Taking an entry away needs none.
+fn unlisted(who: &AsProfile, adds: bool, listed: impl FnOnce() -> bool) -> Option<Response> {
     let bounded = who.device.is_some() || who.person;
-    let refused = adds && bounded && !crate::library::lists(view, id);
+    let refused = adds && bounded && !listed();
     refused.then(|| {
         api_error(
             StatusCode::NOT_FOUND,
-            "this profile's library lists no such title",
+            "this profile's library lists no such title or source",
         )
     })
 }
@@ -718,7 +713,8 @@ pub(crate) async fn set_library_entry_hidden(
         return api_error(StatusCode::BAD_REQUEST, "entry id must not be empty");
     }
     let scoped = scoped!(who, st);
-    if let Some(refused) = unlisted(&who, &scoped.view, &id, toggle.hidden) {
+    let listed = || crate::library::lists(&scoped.view, &id);
+    if let Some(refused) = unlisted(&who, toggle.hidden, listed) {
         return refused;
     }
     match crate::library::set_entry_hidden(&scoped.view, &id, toggle.hidden) {
@@ -1748,7 +1744,8 @@ pub(crate) async fn set_game_overrides(
         return api_error(StatusCode::BAD_REQUEST, "entry id must not be empty");
     }
     let scoped = scoped!(who, st);
-    if let Some(refused) = unlisted(&who, &scoped.view, &id, !entry.is_empty()) {
+    let listed = || crate::library::lists(&scoped.view, &id);
+    if let Some(refused) = unlisted(&who, !entry.is_empty(), listed) {
         return refused;
     }
     match crate::library::set_game_overrides(&scoped.view, &id, entry) {
@@ -1763,8 +1760,10 @@ pub(crate) async fn set_game_overrides(
 /// Set one source's overrides
 ///
 /// The same body as a game's, without `none`: `{}` clears the source's entry. Each title of
-/// the source without an entry of its own takes it. With `as`, the entry is that profile's own.
-/// Emits `library.changed`.
+/// the source without an entry of its own takes it. With `as`, the entry is that profile's own
+/// and `set` may name the box's shared override or the profile's. A paired device that is that
+/// locked profile's person, and that profile's person session, may set it too, for a source
+/// with a title the profile's library lists. Emits `library.changed`.
 #[utoipa::path(
     put,
     path = "/library/overrides/sources/{source}",
@@ -1779,7 +1778,8 @@ pub(crate) async fn set_game_overrides(
         (status = OK, description = "Stored; the source's entry after the call", body = crate::library::OverrideEntry),
         (status = BAD_REQUEST, description = "Empty source, a value out of range, `set` beside values, or `none`", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = NOT_FOUND, description = "`set` names no shared override, or `as` names no profile on this host", body = ApiError),
+        (status = FORBIDDEN, description = "A device that isn't the person of the profile `as` names, or a plugin", body = ApiError),
+        (status = NOT_FOUND, description = "`set` names no shared override, `as` names no profile on this host, or a device or person names a source with no title in the profile's library", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
     )
 )]
@@ -1796,6 +1796,10 @@ pub(crate) async fn set_source_overrides(
         );
     }
     let scoped = scoped!(who, st);
+    let listed = || crate::library::lists_source(&scoped.view, &source);
+    if let Some(refused) = unlisted(&who, !entry.is_empty(), listed) {
+        return refused;
+    }
     match crate::library::set_source_overrides(&scoped.view, &source, entry) {
         Ok(entry) => {
             tracing::info!(source = %source, "management API: source overrides set");

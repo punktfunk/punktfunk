@@ -1210,6 +1210,8 @@ export type SetSourceOverrides400 = ApiError
 export const SetSourceOverrides400 = ApiError
 export type SetSourceOverrides401 = ApiError
 export const SetSourceOverrides401 = ApiError
+export type SetSourceOverrides403 = ApiError
+export const SetSourceOverrides403 = ApiError
 export type SetSourceOverrides404 = ApiError
 export const SetSourceOverrides404 = ApiError
 export type SetSourceOverrides500 = ApiError
@@ -2992,6 +2994,7 @@ export const make = (
       "2xx": decodeSuccess(SetSourceOverrides200),
       "400": decodeError("SetSourceOverrides400", SetSourceOverrides400),
       "401": decodeError("SetSourceOverrides401", SetSourceOverrides401),
+      "403": decodeError("SetSourceOverrides403", SetSourceOverrides403),
       "404": decodeError("SetSourceOverrides404", SetSourceOverrides404),
       "500": decodeError("SetSourceOverrides500", SetSourceOverrides500),
       orElse: unexpectedStatus
@@ -4750,12 +4753,14 @@ readonly "deleteOverrideSet": {
   }
   /**
 * The same body as a game's, without `none`: `{}` clears the source's entry. Each title of
-* the source without an entry of its own takes it. With `as`, the entry is that profile's own.
-* Emits `library.changed`.
+* the source without an entry of its own takes it. With `as`, the entry is that profile's own
+* and `set` may name the box's shared override or the profile's. A paired device that is that
+* locked profile's person, and that profile's person session, may set it too, for a source
+* with a title the profile's library lists. Emits `library.changed`.
 */
 readonly "setSourceOverrides": {
-    <Config extends OperationConfig | undefined = undefined>(source: string, options: { readonly params?: typeof SetSourceOverridesParams.Encoded | undefined; readonly payload: typeof SetSourceOverridesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetSourceOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSourceOverrides400", typeof SetSourceOverrides400.Type> | PunktfunkError<"SetSourceOverrides401", typeof SetSourceOverrides401.Type> | PunktfunkError<"SetSourceOverrides404", typeof SetSourceOverrides404.Type> | PunktfunkError<"SetSourceOverrides500", typeof SetSourceOverrides500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(source: string, options: { readonly params?: typeof SetSourceOverridesParams.Encoded | undefined; readonly payload: typeof SetSourceOverridesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetSourceOverrides200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSourceOverrides400", typeof SetSourceOverrides400.Type> | PunktfunkError<"SetSourceOverrides401", typeof SetSourceOverrides401.Type> | PunktfunkError<"SetSourceOverrides404", typeof SetSourceOverrides404.Type> | PunktfunkError<"SetSourceOverrides500", typeof SetSourceOverrides500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(source: string, options: { readonly params?: typeof SetSourceOverridesParams.Encoded | undefined; readonly payload: typeof SetSourceOverridesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetSourceOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSourceOverrides400", typeof SetSourceOverrides400.Type> | PunktfunkError<"SetSourceOverrides401", typeof SetSourceOverrides401.Type> | PunktfunkError<"SetSourceOverrides403", typeof SetSourceOverrides403.Type> | PunktfunkError<"SetSourceOverrides404", typeof SetSourceOverrides404.Type> | PunktfunkError<"SetSourceOverrides500", typeof SetSourceOverrides500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(source: string, options: { readonly params?: typeof SetSourceOverridesParams.Encoded | undefined; readonly payload: typeof SetSourceOverridesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetSourceOverrides200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSourceOverrides400", typeof SetSourceOverrides400.Type> | PunktfunkError<"SetSourceOverrides401", typeof SetSourceOverrides401.Type> | PunktfunkError<"SetSourceOverrides403", typeof SetSourceOverrides403.Type> | PunktfunkError<"SetSourceOverrides404", typeof SetSourceOverrides404.Type> | PunktfunkError<"SetSourceOverrides500", typeof SetSourceOverrides500.Type>>;
   }
   /**
 * The custom entries this seat host keeps in its own config folder, each by its `own:` id,

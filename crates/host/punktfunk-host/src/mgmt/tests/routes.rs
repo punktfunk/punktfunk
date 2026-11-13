@@ -231,13 +231,13 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
             false,
             false,
         ),
-        // A game's entry in a locked profile's own overrides: its person's too.
+        // A game's or a source's entry in a locked profile's own overrides: its person's too.
         ("PUT", "/api/v1/library/overrides/games/{id}", false, true),
         (
             "PUT",
             "/api/v1/library/overrides/sources/{source}",
             false,
-            false,
+            true,
         ),
         // A plugin reports its own downloads; the host maps them through the catalog.
         (

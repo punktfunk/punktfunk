@@ -4897,7 +4897,7 @@
           "library"
         ],
         "summary": "Set one source's overrides",
-        "description": "The same body as a game's, without `none`: `{}` clears the source's entry. Each title of\nthe source without an entry of its own takes it. With `as`, the entry is that profile's own.\nEmits `library.changed`.",
+        "description": "The same body as a game's, without `none`: `{}` clears the source's entry. Each title of\nthe source without an entry of its own takes it. With `as`, the entry is that profile's own\nand `set` may name the box's shared override or the profile's. A paired device that is that\nlocked profile's person, and that profile's person session, may set it too, for a source\nwith a title the profile's library lists. Emits `library.changed`.",
         "operationId": "setSourceOverrides",
         "parameters": [
           {
@@ -4960,8 +4960,18 @@
               }
             }
           },
+          "403": {
+            "description": "A device that isn't the person of the profile `as` names, or a plugin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "404": {
-            "description": "`set` names no shared override, or `as` names no profile on this host",
+            "description": "`set` names no shared override, `as` names no profile on this host, or a device or person names a source with no title in the profile's library",
             "content": {
               "application/json": {
                 "schema": {
