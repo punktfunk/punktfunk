@@ -1,6 +1,7 @@
 //! What the media path still needs from raw UDP: [`wait_readable`] for the shared socket's
 //! reader, which quinn-udp keeps non-blocking, and on Linux [`send_with_tos`], a quinn-udp send
-//! that carries a DSCP mark. The shared socket batches through quinn-udp itself.
+//! that carries a DSCP mark, also from one buffer per packet ([`send_gathered_with_tos`]). The
+//! shared socket batches through quinn-udp itself.
 
 /// Block until `socket` has a datagram to read or `timeout` passes; `true` when readable. An
 /// interrupted wait reads as a timeout: the caller loops anyway.
@@ -64,26 +65,42 @@ pub(crate) fn send_with_tos(
     t: &quinn::udp::Transmit,
     tos: u8,
 ) -> std::io::Result<()> {
+    let bufs = [std::io::IoSlice::new(t.contents)];
+    send_gathered_with_tos(socket, t.destination, t.src_ip, &bufs, t.segment_size, tos)
+}
+
+/// [`send_with_tos`] of the payload `bufs` form together, toward `to` from `src_ip`, cut at
+/// `segment`. The kernel gathers the buffers, so a GSO run needs no copy into one first.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(crate) fn send_gathered_with_tos(
+    socket: &std::net::UdpSocket,
+    to: std::net::SocketAddr,
+    src_ip: Option<std::net::IpAddr>,
+    bufs: &[std::io::IoSlice<'_>],
+    segment: Option<usize>,
+    tos: u8,
+) -> std::io::Result<()> {
     use std::net::IpAddr;
     let mut ctrl = Control {
         buf: [0; CONTROL],
         len: 0,
     };
     let tos = libc::c_int::from(tos).to_ne_bytes();
-    match t.destination.ip() {
+    match to.ip() {
         IpAddr::V6(ip) if ip.to_ipv4_mapped().is_none() => {
             ctrl.push(libc::IPPROTO_IPV6, libc::IPV6_TCLASS, &tos)
         }
         _ => ctrl.push(libc::IPPROTO_IP, libc::IP_TOS, &tos),
     }
-    if let Some(segment) = t.segment_size.filter(|&s| s < t.contents.len()) {
+    let len: usize = bufs.iter().map(|b| b.len()).sum();
+    if let Some(segment) = segment.filter(|&s| s < len) {
         ctrl.push(
             libc::SOL_UDP,
             libc::UDP_SEGMENT,
             &(segment as u16).to_ne_bytes(),
         );
     }
-    match t.src_ip {
+    match src_ip {
         // `in_pktinfo`: interface, source, destination.
         Some(IpAddr::V4(ip)) => {
             let mut info = [0; 12];
@@ -98,11 +115,10 @@ pub(crate) fn send_with_tos(
         }
         None => {}
     }
-    let to = socket2::SockAddr::from(t.destination);
-    let bufs = [std::io::IoSlice::new(t.contents)];
+    let to = socket2::SockAddr::from(to);
     let msg = socket2::MsgHdr::new()
         .with_addr(&to)
-        .with_buffers(&bufs)
+        .with_buffers(bufs)
         .with_control(&ctrl.buf[..ctrl.len]);
     loop {
         match socket2::SockRef::from(socket).sendmsg(&msg, 0) {
@@ -112,7 +128,7 @@ pub(crate) fn send_with_tos(
     }
 }
 
-/// Room for the three control messages [`send_with_tos`] writes: the mark, a segment size and
+/// Room for the three control messages [`send_gathered_with_tos`] writes: the mark, a segment size and
 /// an IPv6 source, 88 bytes on a 64-bit target.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const CONTROL: usize = 88;
