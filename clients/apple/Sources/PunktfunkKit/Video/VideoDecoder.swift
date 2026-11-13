@@ -54,17 +54,17 @@ public struct ReadyFrame: @unchecked Sendable {
     public var dueMediaTime: CFTimeInterval?
 }
 
-/// Per-frame context threaded through the VideoToolbox frame refcon: the AU's receipt instant (for
+/// Per-frame context threaded through the VideoToolbox frame refcon: the AU's pull instant (for
 /// the decode-stage meter) and its wire `user_flags` (for the re-anchor gate). Retained across the
 /// async decode and reclaimed exactly once — by the output callback for every frame VideoToolbox
 /// accepts, or by `decode`'s error branch for a frame `DecodeFrame` rejected outright (the callback
 /// then never fires). A tiny per-frame allocation, the price of smuggling two values (a 64-bit
 /// instant plus the flags) through the single `void*` a bit-pattern scalar can't hold.
 private final class FrameContext {
-    let receivedNs: Int64
+    let pulledNs: Int64
     let flags: UInt32
-    init(receivedNs: Int64, flags: UInt32) {
-        self.receivedNs = receivedNs
+    init(pulledNs: Int64, flags: UInt32) {
+        self.pulledNs = pulledNs
         self.flags = flags
     }
 }
@@ -72,7 +72,7 @@ private final class FrameContext {
 /// The C output callback can't capture context, so VideoToolbox hands it the refcon we set at
 /// session creation — a pointer back to the owning `VideoDecoder`. The per-frame refcon is the
 /// retained `FrameContext` set at submit; reclaim it here (balancing `passRetained`) and unpack the
-/// AU's receipt instant (for the decode stage) and wire flags (for the re-anchor gate).
+/// AU's pull instant (for the decode stage) and wire flags (for the re-anchor gate).
 private let decoderOutputCallback: VTDecompressionOutputCallback = {
     refcon, frameRefcon, status, infoFlags, imageBuffer, pts, _ in
     guard let refcon else { return }
@@ -81,7 +81,7 @@ private let decoderOutputCallback: VTDecompressionOutputCallback = {
         .takeUnretainedValue()
         .handleDecoded(
             status: status, imageBuffer: imageBuffer, pts: pts,
-            receivedNs: ctx?.receivedNs ?? 0, flags: ctx?.flags ?? 0,
+            pulledNs: ctx?.pulledNs ?? 0, flags: ctx?.flags ?? 0,
             dropped: infoFlags.contains(.frameDropped))
 }
 
@@ -184,13 +184,11 @@ public final class VideoDecoder: @unchecked Sendable {
               let sample = codec.sampleBuffer(au: au, format: newFormat, in: accessUnitMemory)
         else { lock.unlock(); return false }
         var infoOut = VTDecodeInfoFlags()
-        // The AU's receipt instant + wire flags ride through as a retained context; the output
-        // callback reclaims it. Retain immediately before submit so no early return can leak it.
-        // The decode stage starts at the PULL (the AU leaving nextAU), not the reassembly
-        // receipt: both consumers — the decode-stage meter and the ABR decode signal — are
-        // specified from the pull, and the receipt→pull wait is the HUD's separate client-queue
+        // The AU's pull instant + wire flags ride through as a retained context, which the output
+        // callback reclaims; retained immediately before submit so no early return can leak it.
+        // The decode stage starts at the pull: the receipt→pull wait is the HUD's client-queue
         // term (see AccessUnit.pulledNs).
-        let ctx = FrameContext(receivedNs: au.pulledNs, flags: au.flags)
+        let ctx = FrameContext(pulledNs: au.pulledNs, flags: au.flags)
         let refcon = Unmanaged.passRetained(ctx).toOpaque()
         let status = VTDecompressionSessionDecodeFrame(
             session,
@@ -326,11 +324,11 @@ public final class VideoDecoder: @unchecked Sendable {
         return true
     }
 
-    /// VT thread. Stamp decode-completion and enqueue, or report the error. `receivedNs` is the
-    /// AU's receipt instant and `flags` its wire `user_flags`, both threaded through the frame refcon
-    /// (0 = unknown).
+    /// VT thread. Stamp decode-completion and enqueue, or report the error. `pulledNs` is the AU's
+    /// pull instant and `flags` its wire `user_flags`, both threaded through the frame refcon
+    /// (0 = unknown). `ReadyFrame.receivedNs` carries the pull instant on.
     fileprivate func handleDecoded(
-        status: OSStatus, imageBuffer: CVImageBuffer?, pts: CMTime, receivedNs: Int64,
+        status: OSStatus, imageBuffer: CVImageBuffer?, pts: CMTime, pulledNs: Int64,
         flags: UInt32, dropped: Bool
     ) {
         guard status == noErr, let imageBuffer else {
@@ -357,7 +355,7 @@ public final class VideoDecoder: @unchecked Sendable {
         let isHDR = Self.transferIsHDR(imageBuffer) ?? tenBitBuffer
         onDecoded(
             ReadyFrame(
-                ptsNs: ptsNs, receivedNs: receivedNs, decodedNs: decodedNs,
+                ptsNs: ptsNs, receivedNs: pulledNs, decodedNs: decodedNs,
                 image: .video(imageBuffer, isHDR: isHDR), flags: flags))
     }
 }
