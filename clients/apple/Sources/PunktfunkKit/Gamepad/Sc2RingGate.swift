@@ -6,9 +6,10 @@
 // `Shortcuts.Engine`, off the hardware buttons and before any gating: the exit hold's contract
 // is that no client-side gate can hide the way out.
 //
-// The typed plane carries what the engine forwards; core gates the raw plane by its own fixed
-// rule (`PunktfunkConnection.setSc2Gate`), which only knows Select then A. While the ring is up a
-// button held now stays off the typed plane until the hardware releases it.
+// The typed plane carries what the engine forwards. Core gates the raw plane as
+// `Sc2Capture.pushGateLocked` sets it (`PunktfunkConnection.setSc2Gate`): the open ring, and
+// Select then A when that opens it; no other chord. While the ring is up a button held now
+// stays off the typed plane until the hardware releases it.
 //
 // Call order per state report is `read` then `apply` — `read` sees the hardware, `apply` decides
 // what is left of it. Every report ticks the engine, so no timer runs here.
