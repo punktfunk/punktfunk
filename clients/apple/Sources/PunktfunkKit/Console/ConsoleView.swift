@@ -466,12 +466,13 @@ public final class ConsoleMetalView: ConsolePlatformView {
             rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
     }
 
+    /// The shell takes one scroll step per wheel event, in the sign of its delta (+ = up).
     public override func scrollWheel(with event: NSEvent) {
         let scale = window?.backingScaleFactor ?? 2
         let p = convert(event.locationInWindow, from: nil)
         bridge.pointer(
             .wheel, x: Float(p.x * scale), y: Float((bounds.height - p.y) * scale),
-            wheel: Float(event.scrollingDeltaY / 10))
+            wheel: Float(event.scrollingDeltaY))
     }
 
     private func send(_ kind: ConsoleBridge.Pointer, _ event: NSEvent) {
