@@ -380,9 +380,10 @@ entry and opens with the owner's lock, list and PIN. A take-turns profile keeps 
   and the host logs it. A missing file locks nothing.
 - **The PIN.** Only the box's own host checks it, sent as `ProfileUnlock` kind 1. A device waits
   after wrong ones as after a wrong account password; 10 wrong for one profile within 15 minutes,
-  over all devices, close PIN entry for it until the oldest is 15 minutes old. A device's waits
-  live in memory; a profile's count is its `wrong_pins`, unix seconds, in the file, so a restart
-  clears none. A try counts there before its hash runs and is taken back when right. A right PIN
+  over all devices, close PIN entry for it until the oldest is 15 minutes old. Every further
+  ten wrong PINs double that window, up to a day (`pin_misses` in the file counts them); a right
+  PIN or a new PIN puts it back. A device's waits live in memory; a profile's count is its
+  `wrong_pins`, unix seconds, in the file, so a restart clears none. A try counts there before its hash runs and is taken back when right. A right PIN
   makes the device present, or `stay` when the message asks. Each try writes one line under
   `punktfunk::audit`, never the PIN.
 - **The key.** A right PIN that brings a key to enrol, as a password does, stores it in the
