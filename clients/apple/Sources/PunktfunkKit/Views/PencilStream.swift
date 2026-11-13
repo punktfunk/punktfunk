@@ -23,10 +23,6 @@ final class PencilStream: NSObject {
 
     /// One assembled batch (≤ `PUNKTFUNK_PEN_BATCH_MAX` samples) ready for the connection.
     var send: (([PunktfunkPenSample]) -> Void)?
-    /// Proximity transitions (in-range ∪ touching) — drives the panel-rate boost while the
-    /// Pencil is near the glass. Fired from emit(), the choke point every state change exits
-    /// through.
-    var onProximity: ((Bool) -> Void)?
     /// View-space point → normalized [0,1] video coordinates (the letterbox mapping the
     /// touch path already uses). nil until a mode is negotiated — samples are dropped then.
     var videoNorm: ((CGPoint) -> (Float, Float)?)?
@@ -43,8 +39,6 @@ final class PencilStream: NSObject {
     private var heartbeat: Timer?
     /// When the last batch (event or keepalive) went out — the heartbeat tick's idle test.
     private var lastSendTs: TimeInterval = 0
-    /// The last proximity state surfaced through `onProximity` (transition detection).
-    private var lastProximity = false
 
     // MARK: - Contact path (UITouch, `.pencil` only)
 
@@ -183,11 +177,6 @@ final class PencilStream: NSObject {
         }
         lastSendTs = CACurrentMediaTime()
         syncHeartbeat()
-        let near = inRange || touching
-        if near != lastProximity {
-            lastProximity = near
-            onProximity?(near)
-        }
     }
 
     /// The ≤100 ms keepalive while in range (see the file header): ONE long-lived 50 ms timer

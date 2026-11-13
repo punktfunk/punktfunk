@@ -2358,15 +2358,6 @@ public final class Stage2Pipeline {
         frameRateHint.stage(hz: hz)
     }
 
-    /// Pen-proximity rate boost (drawing workloads): drive the deadline link — and with it the
-    /// panel, whose cadence paces UIKit's touch/Pencil event delivery — at the range ceiling
-    /// while a Pencil is in range, so a sub-panel-rate stream stops halving pencil sampling.
-    /// Staged like the rate hint; no-op under arrival/glass pacing. MAIN thread.
-    public func setInteractionBoost(_ on: Bool) {
-        frameRateHint.setBoost(on)
-        presentLog.info("pen boost \(on ? "engaged" : "released", privacy: .public)")
-    }
-
     /// Whether the window can scan out Direct — fullscreen, nothing of the app's own over the
     /// video; the Direct gate probes only then (MAIN).
     public func setDirectPossible(_ possible: Bool) {

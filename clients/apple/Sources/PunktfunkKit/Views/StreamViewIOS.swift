@@ -174,9 +174,6 @@ public final class StreamViewController: StreamViewControllerBase {
     /// The shared presenter stack: stage-2 (CAMetalLayer sublayer + display link) with the
     /// stage-1 StreamPump → displayLayer path as the Metal-unavailable / DEBUG fallback.
     private let presenter = SessionPresenter()
-    /// Pending pen-boost release — 2 s of hysteresis so hover flicker at the glass edge
-    /// doesn't thrash the deadline link's rate range (see `setInteractionBoost`).
-    private var penBoostRelease: DispatchWorkItem?
     #if os(tvOS)
     /// The window's display manager the session's mode request was set on — held weakly so
     /// stop() can clear the request even after the view has left the window.
@@ -518,26 +515,6 @@ public final class StreamViewController: StreamViewControllerBase {
             guard self?.captureEnabled == true else { return }
             connection?.sendPen(batch)
         }
-        // Pencil near the glass ⇒ pin the panel (and with it UIKit's event cadence) at the
-        // link range's ceiling, so a sub-panel-rate stream stops halving pencil sampling.
-        // Engage is immediate; release waits 2 s so edge-of-canvas hover flicker can't
-        // thrash the link. MAIN thread (UIKit events + main-queue work item).
-        streamView.onPenProximity = { [weak self] near in
-            guard let self else { return }
-            self.penBoostRelease?.cancel()
-            self.penBoostRelease = nil
-            if near {
-                self.presenter.setInteractionBoost(true)
-            } else {
-                let release = DispatchWorkItem { [weak self] in
-                    guard let self else { return }
-                    self.penBoostRelease = nil
-                    self.presenter.setInteractionBoost(false)
-                }
-                self.penBoostRelease = release
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: release)
-            }
-        }
         // Indirect pointer WITHOUT a lock → absolute cursor + buttons. Under lock a mouse or trackpad
         // also emits UIKit indirect events pinned at the lock point while GCMouse owns motion and
         // buttons, so this path is gated off (`gcMouseForwarding`). Otherwise a click sends twice.
@@ -832,9 +809,6 @@ public final class StreamViewController: StreamViewControllerBase {
         streamView.onDial = nil
         TouchInputMode.sessionOverride = nil // the ring's mid-stream switch dies with the session
         streamView.onPenBatch = nil // after reset — the pen's leave-range sample rides it
-        streamView.onPenProximity = nil // after reset — its leave-range transition fired above
-        penBoostRelease?.cancel()
-        penBoostRelease = nil
         streamView.penEnabled = false
         streamView.onPointerMoveAbs = nil
         streamView.onPointerButton = nil
@@ -1352,8 +1326,6 @@ final class StreamLayerUIView: UIView {
     /// The host types committed text (`HOST_CAP_TEXT_INPUT`), so the soft keyboard sends
     /// characters instead of US key positions.
     var textInputEnabled = false
-    /// Pencil proximity transitions (hover or contact) — the presenter's panel-rate boost.
-    var onPenProximity: ((Bool) -> Void)?
     /// Indirect pointer (mouse/trackpad with no lock) → absolute cursor moves.
     var onPointerMoveAbs: ((HostPoint) -> Void)?
     /// Indirect-pointer buttons (GameStream ids: 1=left 3=right); `down` = press.
@@ -1404,7 +1376,6 @@ final class StreamLayerUIView: UIView {
     private lazy var pencil: PencilStream = {
         let stream = PencilStream()
         stream.send = { [weak self] batch in self?.onPenBatch?(batch) }
-        stream.onProximity = { [weak self] near in self?.onPenProximity?(near) }
         stream.videoNorm = { [weak self] point in
             guard let h = self?.hostPoint(from: point) else { return nil }
             return (Float(h.x) / Float(max(h.w - 1, 1)), Float(h.y) / Float(max(h.h - 1, 1)))

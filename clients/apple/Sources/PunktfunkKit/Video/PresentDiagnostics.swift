@@ -110,15 +110,13 @@ public struct PanelInfo: Equatable, Sendable {
 /// interval (`sourceIntervalNs`) and the hosting panel. SessionPresenter pushes the stream rate from the
 /// MAIN thread (session start + every layout/Reconfigure); the link's own thread drains and
 /// applies it, so the CAMetalDisplayLink is only ever touched from the thread that runs it. The
-/// floor is PINNED at the stream rate — no idle ramp-down: with a low floor the link idles toward
+/// range is pinned (`range(hz:)`), with no idle ramp-down: a link with a low floor idles toward
 /// it on a static scene (infinite GOP ⇒ no frames), and the first damage frame after idle would
-/// wait out a slow tick before it could present. Empty wakes at stream rate are near-free; the
-/// PANEL still idles via VRR because no presents happen. Sendable; lock-guarded.
+/// wait out a slow tick before it could present. Sendable; lock-guarded.
 final class FrameRateHint: @unchecked Sendable {
     private let lock = NSLock()
     private var pending: CAFrameRateRange?
     private var streamHz: Float = 0
-    private var boosted = false
     private var panelInfo = PanelInfo(minHz: 0, maxHz: 0)
     private var paceName = "starting"
     /// The hosting panel, staged from main on start and every layout (a window can move screens).
@@ -147,21 +145,7 @@ final class FrameRateHint: @unchecked Sendable {
         guard hz > 0 else { return }
         lock.lock()
         streamHz = hz
-        pending = Self.range(hz: hz, boosted: boosted)
-        lock.unlock()
-    }
-    /// Pen-proximity boost: pin `minimum = preferred` at the range's CEILING instead of the
-    /// stream rate. UIKit delivers touch/Pencil events at the PANEL's cadence, and the panel
-    /// follows this link's vote — so a 60 fps stream on a 120 Hz iPad halves pencil sampling
-    /// unless a boost lifts the panel while the Pencil is in range. Presents still pace at
-    /// stream rate (extra link updates just vend into the newest-wins stash), so the cost is
-    /// empty wakes, scoped to pen proximity.
-    func setBoost(_ on: Bool) {
-        lock.lock()
-        if boosted != on {
-            boosted = on
-            if streamHz > 0 { pending = Self.range(hz: streamHz, boosted: on) }
-        }
+        pending = Self.range(hz: hz)
         lock.unlock()
     }
     func drain() -> CAFrameRateRange? {
@@ -176,7 +160,7 @@ final class FrameRateHint: @unchecked Sendable {
     func current() -> CAFrameRateRange? {
         lock.lock()
         defer { lock.unlock() }
-        return streamHz > 0 ? Self.range(hz: streamHz, boosted: boosted) : nil
+        return streamHz > 0 ? Self.range(hz: streamHz) : nil
     }
     /// The nominal SOURCE interval in nanoseconds — the cadence clock's cushion ceiling. Read on
     /// every pacing, not just deadline: this box is where the negotiated stream rate already
@@ -188,17 +172,16 @@ final class FrameRateHint: @unchecked Sendable {
         defer { lock.unlock() }
         return streamHz > 0 ? Int64(1_000_000_000.0 / Double(streamHz)) : 0
     }
-    private static func range(hz: Float, boosted: Bool) -> CAFrameRateRange {
+    private static func range(hz: Float) -> CAFrameRateRange {
         #if os(tvOS)
         // A TV is fixed-rate, so all three bounds pin to the stream rate: a range is a promise
         // about how variable our cadence may be, and a scheduler handed 60…120 on a 60 Hz panel
-        // keeps a refresh of slack in hand. `boosted` is for pen proximity, which tvOS lacks.
-        _ = boosted
+        // keeps a refresh of slack in hand.
         return CAFrameRateRange(minimum: hz, maximum: hz, preferred: hz)
         #else
         // Pinned at the panel's top rate: a frame shows at the first refresh after its pick, and
-        // a lower minimum lets the system drop the panel mid-stream (judder). `boosted` is moot.
-        _ = boosted
+        // a lower minimum lets the system drop the panel mid-stream (judder). UIKit samples
+        // touch and Pencil at the panel's cadence, so the pin also keeps their full rate.
         let cap = max(hz, 120)
         return CAFrameRateRange(minimum: cap, maximum: cap, preferred: cap)
         #endif

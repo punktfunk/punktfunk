@@ -316,14 +316,11 @@ final class SessionPresenter {
         builtAdaptive = adaptiveSync()
         restart = { [weak self] layer in
             guard let self else { return }
-            // The Pencil reports proximity on its edges only, so the new pipeline is told here.
-            let boost = interactionBoost
             start(
                 connection: connection, baseLayer: layer, endToEndMeter: endToEndMeter,
                 makeDisplayLink: makeDisplayLink,
                 onFrame: onFrame, onSessionEnd: onSessionEnd, onDecodedSize: onDecodedSize,
                 onFrameHDR: onFrameHDR, adaptiveSync: adaptiveSync, screen: screen)
-            setInteractionBoost(boost)
         }
 
         // Explicit decode stays default so loss recovery and decode metering survive. The pacing
@@ -425,16 +422,6 @@ final class SessionPresenter {
             self.pump = pump
         }
     }
-
-    /// Pen-proximity panel-rate boost pass-through (Stage2Pipeline.setInteractionBoost):
-    /// deadline pacing only — under arrival/glass the staged hint feeds no link, so this
-    /// is a no-op there. Kept here so a rebuilt pipeline starts boosted. MAIN thread.
-    func setInteractionBoost(_ on: Bool) {
-        interactionBoost = on
-        stage2?.setInteractionBoost(on)
-    }
-
-    private var interactionBoost = false
 
     /// Hint the display link with the stream's cadence. On iOS/tvOS a range is always required:
     /// without one, ProMotion devices cap CADisplayLink at 60 Hz (iPhones additionally need
@@ -640,7 +627,6 @@ final class SessionPresenter {
         restart = nil
         baseLayer = nil
         contentSize = nil // a new session re-derives it from its first frame
-        interactionBoost = false
         pump?.stop()
         pump = nil
         stage2Link?.invalidate()
