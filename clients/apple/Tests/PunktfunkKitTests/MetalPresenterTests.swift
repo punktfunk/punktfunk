@@ -20,6 +20,21 @@ final class MetalPresenterTests: XCTestCase {
             "stage-2 Metal shaders failed to compile (presenter init returned nil)")
     }
 
+    /// The launch warm-up builds the shared pipelines off the main thread; `make()` then uses them.
+    func testWarmBuildsThePipelinesOffTheMainThread() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else {
+            throw XCTSkip("no Metal device available in this environment")
+        }
+        let warmed = expectation(description: "warmed")
+        DispatchQueue.global(qos: .utility).async {
+            XCTAssertFalse(Thread.isMainThread)
+            MetalVideoPresenter.warm()
+            warmed.fulfill()
+        }
+        wait(for: [warmed], timeout: 60)
+        XCTAssertNotNil(MetalVideoPresenter.make(), "the warmed pipelines build a presenter")
+    }
+
     /// Linear always takes half-float; the env lever picks the PQ drawable over the device rule.
     func testHDRDrawableFormat() {
         XCTAssertEqual(hdrDrawableFormat(linear: true, env: "10", halfFloatPQ: false), .rgba16Float)

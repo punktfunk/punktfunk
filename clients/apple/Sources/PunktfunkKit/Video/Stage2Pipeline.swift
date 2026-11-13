@@ -1087,8 +1087,9 @@ struct DeadlineSelector {
         case present(at: CFTimeInterval, switched: Bool)
     }
 
-    /// The host's rate is re-measured over this long.
-    static let rateWindow: CFTimeInterval = 2
+    /// The host's rate is re-measured over this long: one frame of count noise is 0.125 Hz, under
+    /// `Carry`'s 0.3 Hz slow threshold.
+    static let rateWindow: CFTimeInterval = 8
 
     let latePick: Bool
     private var phase = PhaseTracker()
@@ -2359,8 +2360,8 @@ public final class Stage2Pipeline {
         frameRateHint.stage(hz: hz)
     }
 
-    /// Whether the window can scan out Direct — fullscreen, nothing of the app's own over the
-    /// video; the Direct gate probes only then (MAIN).
+    /// Whether the window is fullscreen, so can scan out Direct; the Direct gate probes only
+    /// then (MAIN).
     public func setDirectPossible(_ possible: Bool) {
         scanout.setDirectPossible(possible)
     }

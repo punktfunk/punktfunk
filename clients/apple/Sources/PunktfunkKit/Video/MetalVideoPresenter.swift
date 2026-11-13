@@ -634,6 +634,10 @@ public final class MetalVideoPresenter {
             latchedSDR: latchedSDR, latchedSDR10: latchedSDR10, latchedHDR: latchedHDR)
     }()
 
+    /// Compiles the shader library and pipelines on the calling thread. Run at launch, off the
+    /// main actor, it leaves the first session's `make()` nothing to build.
+    public static func warm() { _ = pipelines }
+
     /// nil if Metal is unavailable (no GPU / a headless CI) or a shader fails to compile — the caller
     /// falls back to stage-1.
     public static func make() -> MetalVideoPresenter? {
