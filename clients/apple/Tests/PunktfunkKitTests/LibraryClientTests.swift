@@ -39,12 +39,10 @@ final class LibraryClientTests: XCTestCase {
         let steam = games[0]
         XCTAssertEqual(steam.id, "steam:570")
         XCTAssertFalse(steam.isCustom)
-        XCTAssertEqual(steam.launch?.kind, "steam_appid")
-        XCTAssertEqual(steam.launch?.value, "570")
+        XCTAssertEqual(steam.art.posterCandidates.count, 3)
 
         let custom = games[1]
         XCTAssertTrue(custom.isCustom)
-        XCTAssertNil(custom.launch)
         XCTAssertNil(custom.art.portrait)
         // `platform` is the host's flattened `GameMeta.platform`: present on a rom-manager entry,
         // absent (nil) on a store-front title — the field the library's collections group by.
@@ -141,13 +139,12 @@ final class LibraryClientTests: XCTestCase {
 
     func testPosterCandidatesPreferPortraitThenHeader() {
         let full = Artwork(
-            portrait: "https://x/p.jpg", hero: "https://x/hero.jpg",
-            logo: "https://x/logo.png", header: "https://x/h.jpg")
+            portrait: "https://x/p.jpg", hero: "https://x/hero.jpg", header: "https://x/h.jpg")
         XCTAssertEqual(full.posterCandidates.map(\.absoluteString),
                        ["https://x/p.jpg", "https://x/h.jpg", "https://x/hero.jpg"])
 
         // No portrait → header leads; absent fields are skipped, not nil-padded.
-        let sparse = Artwork(portrait: nil, hero: nil, logo: nil, header: "https://x/h.jpg")
+        let sparse = Artwork(portrait: nil, hero: nil, header: "https://x/h.jpg")
         XCTAssertEqual(sparse.posterCandidates.map(\.absoluteString), ["https://x/h.jpg"])
 
         XCTAssertTrue(Artwork().posterCandidates.isEmpty)

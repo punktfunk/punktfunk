@@ -7,8 +7,8 @@
 // 47990, also advertised in the host's mDNS `mgmt` TXT). A paired client is authorized for the
 // read-only library route by its **mTLS certificate** — no bearer token. The host binds this read
 // surface to the LAN by DEFAULT (the bearer-gated admin surface stays loopback-only), so a paired
-// client browses a host's library with no operator step. This mirrors the GameEntry/Artwork/
-// LaunchSpec schema in `crates/host/punktfunk-host/src/library.rs`.
+// client browses a host's library with no operator step. GameEntry and Artwork decode the part
+// of `crates/host/punktfunk-host/src/library.rs`'s schema a client shows.
 
 import Foundation
 import PunktfunkShared
@@ -17,7 +17,6 @@ import PunktfunkShared
 public struct Artwork: Codable, Hashable, Sendable {
     public var portrait: String?
     public var hero: String?
-    public var logo: String?
     public var header: String?
 
     /// Preferred order for a poster grid: the 600×900 capsule, falling back to the header
@@ -25,12 +24,6 @@ public struct Artwork: Codable, Hashable, Sendable {
     public var posterCandidates: [URL] {
         [portrait, header, hero].compactMap { $0 }.compactMap { URL(string: $0) }
     }
-}
-
-/// How the host would launch a title (carried for a later step; the client only displays it).
-public struct LaunchSpec: Codable, Hashable, Sendable {
-    public var kind: String // "steam_appid" | "command"
-    public var value: String
 }
 
 /// One title's play numbers as the host keeps them (`GameEntry.stats`).
@@ -66,7 +59,6 @@ public struct GameEntry: Codable, Hashable, Identifiable, Sendable {
     public var store: String // "steam" | "custom" | "lutris" | "heroic" | "epic" | "gog" | "xbox"
     public var title: String
     public var art: Artwork
-    public var launch: LaunchSpec?
     /// `"game"` (the default, and what an older host omits) or `"launcher"` — an entry that opens
     /// the launcher itself (Steam Big Picture, Heroic) rather than a title. Deliberately a plain
     /// optional String: the host owns the vocabulary, and an unknown future value must never fail
@@ -104,7 +96,7 @@ public struct GameEntry: Codable, Hashable, Identifiable, Sendable {
     public var overrides: GameOverrides?
 
     private enum CodingKeys: String, CodingKey {
-        case id, store, title, art, launch, role, icon, platform
+        case id, store, title, art, role, icon, platform
         case developer, publisher, genres, description, tags, players, stats, install, overrides
         case releaseYear = "release_year"
     }
