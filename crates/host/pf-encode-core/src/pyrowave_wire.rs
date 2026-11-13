@@ -239,11 +239,10 @@ impl AuLayout {
         let head = head.clamp(packets.len().min(1), packets.len());
         let mut fit = BestFit::new(payload);
         let mut order = Vec::with_capacity(packets.len());
+        let mut counts = Vec::new();
         for region in [0..head, head..packets.len()] {
             fit.clear();
-            order.clear();
-            order.extend(region);
-            order.sort_unstable_by_key(|&i| (i != 0, std::cmp::Reverse(packets[i].1), i));
+            placement_order(packets, region, payload, &mut counts, &mut order);
             for &i in &order {
                 let size = packets[i].1;
                 if size == 0 {
@@ -327,6 +326,46 @@ impl AuLayout {
             }
         }
         Some(len)
+    }
+}
+
+/// `region`'s packet indices in placement order: packet 0 first, then largest block first,
+/// ties by index. A stable counting sort over the sizes a window holds, so O(n); a block past
+/// `payload` is a FRAG chain, rare, and leads the rest in a comparison sort of its own.
+fn placement_order(
+    packets: &[(usize, usize)],
+    region: std::ops::Range<usize>,
+    payload: usize,
+    counts: &mut Vec<usize>,
+    order: &mut Vec<usize>,
+) {
+    order.clear();
+    let mut rest = region;
+    if rest.start == 0 && !rest.is_empty() {
+        order.push(0);
+        rest.start = 1;
+    }
+    counts.clear();
+    counts.resize(payload + 1, 0);
+    let lead = order.len();
+    for i in rest.clone() {
+        match packets[i].1 {
+            size if size > payload => order.push(i),
+            size => counts[size] += 1,
+        }
+    }
+    order[lead..].sort_unstable_by_key(|&i| (std::cmp::Reverse(packets[i].1), i));
+    let mut at = order.len();
+    for count in counts.iter_mut().rev() {
+        (*count, at) = (at, at + *count);
+    }
+    order.resize(at, 0);
+    for i in rest {
+        let size = packets[i].1;
+        if size <= payload {
+            order[counts[size]] = i;
+            counts[size] += 1;
+        }
     }
 }
 
@@ -730,6 +769,58 @@ mod tests {
             "{} B AU for {raw} B of blocks",
             au.len()
         );
+    }
+
+    /// The oracle for [`placement_order`]: a comparison sort on `(i != 0, Reverse(size), i)`.
+    fn comparison_order(packets: &[(usize, usize)], region: std::ops::Range<usize>) -> Vec<usize> {
+        let mut order: Vec<usize> = region.collect();
+        order.sort_unstable_by_key(|&i| (i != 0, std::cmp::Reverse(packets[i].1), i));
+        order
+    }
+
+    /// The counting sort places every region in the order the comparison sort did, so the AU
+    /// is the same bytes: random sizes with many ties, a single block, all-equal sizes, the
+    /// window bound, FRAG chains and empty blocks. Index 0 is any size.
+    #[test]
+    fn counting_order_matches_the_comparison_sort() {
+        let mut seed = 0x9e37_79b9_u32;
+        let mut rand = move |n: usize| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (seed >> 8) as usize % n
+        };
+        let payload = 1404;
+        let mut cases: Vec<(usize, Vec<usize>)> = vec![
+            (payload, vec![]),
+            (payload, vec![8]),
+            (payload, vec![payload]),
+            (payload, vec![0]),
+            (payload, vec![141; 500]),
+            (payload, vec![payload; 50]),
+            (payload, vec![payload + 1; 50]),
+            (payload, vec![0; 20]),
+            (payload, [0, 8, 140, 141, payload].repeat(80)),
+            (
+                payload,
+                [payload - 1, payload, payload + 1, 3 * payload].repeat(30),
+            ),
+            (60, (0..400).map(|_| rand(500)).collect()),
+        ];
+        cases.push((payload, (0..3000).map(|_| rand(payload + 1)).collect()));
+        cases.push((payload, (0..3000).map(|_| rand(40) * 4).collect()));
+        cases.push((payload, (0..3000).map(|_| rand(2 * payload)).collect()));
+        let (mut counts, mut order) = (Vec::new(), Vec::new());
+        for (payload, sizes) in cases {
+            let packets: Vec<(usize, usize)> = sizes.iter().map(|&size| (0, size)).collect();
+            let n = packets.len();
+            for region in [0..n, 0..n.min(1), 1.min(n)..n, n / 2..n, 0..n / 2, n..n] {
+                placement_order(&packets, region.clone(), payload, &mut counts, &mut order);
+                assert_eq!(
+                    order,
+                    comparison_order(&packets, region.clone()),
+                    "payload {payload}, {n} packets, region {region:?}"
+                );
+            }
+        }
     }
 
     #[test]
