@@ -85,7 +85,8 @@ public final class MatchWindowFollower {
     private var lastRequested: MatchWindow.Ask?
     /// The view the host scales the live mode to, as this side last asked it.
     private var liveView: (width: UInt32, height: UInt32)?
-    private var lastRequestAt: Date?
+    /// `systemUptime` of the last request, so a wall-clock step never stretches the spacing.
+    private var lastRequestAt: TimeInterval?
     /// The last size we reported via [`onResizeTarget`] — dedups the per-layout stream of a drag so
     /// the UI is notified once per distinct target, and reset to `nil` when the window is back in
     /// sync with the live mode (so a later resize re-reports).
@@ -193,7 +194,7 @@ public final class MatchWindowFollower {
         // ≥ 1 s spacing: a request went out recently → re-arm the debounce and retry later rather
         // than fire early (keeps at most ~one request outstanding — the accept ack round-trips in
         // milliseconds, ahead of the host's rebuild).
-        if let last = lastRequestAt, Date().timeIntervalSince(last) < minSpacing {
+        if let last = lastRequestAt, ProcessInfo.processInfo.systemUptime - last < minSpacing {
             schedule()
             return
         }
@@ -212,6 +213,6 @@ public final class MatchWindowFollower {
             view: view)
         lastRequested = req
         liveView = view
-        lastRequestAt = Date()
+        lastRequestAt = ProcessInfo.processInfo.systemUptime
     }
 }
