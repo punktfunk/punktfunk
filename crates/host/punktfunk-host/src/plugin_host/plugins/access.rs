@@ -997,11 +997,20 @@ impl AccessStore {
         // as written.
         let pattern = pattern_of(raw_path).filter(|_| !write);
         let files = files || pattern.is_some();
-        let resolved = match &pattern {
-            Some(pattern) => pattern.base.canonicalize(),
-            None => raw_path.canonicalize(),
-        };
-        let canonical = match resolved {
+        // A seat host looks as the seat's account: a plugin learns nothing of a path its runner
+        // can't reach.
+        let resolved = super::as_seat_account(|| {
+            match &pattern {
+                Some(pattern) => pattern.base.canonicalize(),
+                None => raw_path.canonicalize(),
+            }
+            .map(|c| {
+                let facts = path_facts(&c);
+                (c, facts)
+            })
+        })
+        .and_then(|r| r);
+        let (canonical, facts) = match resolved {
             Ok(c) => c,
             Err(_) if raw_path.is_absolute() => {
                 // The refusal rule still applies its string checks; a path that does not
@@ -1019,7 +1028,6 @@ impl AccessStore {
         };
         // The rules judge `canonical`; the row and the grant carry `stored`, a pattern's base
         // with its `*` and tail put back.
-        let facts = path_facts(&canonical);
         let stored = match &pattern {
             Some(pattern) => canonical.join("*").join(&pattern.tail),
             None => canonical.clone(),
