@@ -1269,8 +1269,8 @@ fn tell_adopted(
     });
 }
 
-/// Start the send thread on the data plane the ramp hands back, and the resend hook the control
-/// task's NACKs ride beside the frames. A ramp step in flight finishes first, which is ≤ 50 ms.
+/// Start the send thread on the data plane the ramp hands back, and the hook that queues the
+/// control task's NACKs ahead of its frames. A ramp step in flight finishes first, ≤ 50 ms.
 /// Depth 3: encode blocks if send falls behind, rather than drop a frame (infinite GOP freeze).
 /// Returns the thread and a sender for the further screens.
 #[allow(clippy::too_many_arguments)]
@@ -1293,13 +1293,8 @@ fn start_send(
 )> {
     let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<SendMsg>(3);
     let frame_tx = Arc::new(frame_tx);
-    let nack_tx = Arc::downgrade(&frame_tx);
-    *wiring.resend.lock().unwrap_or_else(|e| e.into_inner()) =
-        Some(Box::new(move |frame, shards| {
-            nack_tx
-                .upgrade()
-                .is_some_and(|tx| tx.try_send(SendMsg::Resend { frame, shards }).is_ok())
-        }));
+    let (hook, asks) = super::send::resend_hook(&frame_tx);
+    *wiring.resend.lock().unwrap_or_else(|e| e.into_inner()) = Some(hook);
     let stats = SendStats {
         rec: facts.stats.clone(),
         mode: shared.live_mode.clone(),
@@ -1330,6 +1325,7 @@ fn start_send(
             send_loop(
                 session,
                 frame_rx,
+                asks,
                 probe_rx,
                 probe_result_tx,
                 stop,

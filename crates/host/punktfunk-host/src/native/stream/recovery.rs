@@ -809,7 +809,7 @@ pub(super) fn confirmed(acked: u64) -> Option<crate::encode::Acked> {
 }
 
 /// Frames whose plaintext a NACK can still reach.
-const RESEND_FRAMES: usize = 3;
+pub(super) const RESEND_FRAMES: usize = 3;
 /// Bytes the ring holds at most; the oldest frames go first, never the one in progress.
 const RESEND_BYTES: usize = 4 << 20;
 

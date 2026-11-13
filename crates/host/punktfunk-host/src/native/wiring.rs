@@ -100,8 +100,8 @@ pub(crate) struct SessionShared {
     /// Both ends' ports, from the handshake: the pacer's floor and hard ceiling, and the
     /// bound on every probe.
     pub(crate) ports: crate::send_pacing::Ports,
-    /// Queues a resend of `(frame, shards)` beside the frames on the send thread; `false`
-    /// when its queue is full. `None` until the send thread exists.
+    /// Queues a resend of `(frame, shards)` ahead of the frames on the send thread; `false`
+    /// once the thread is gone. `None` until the send thread exists.
     pub(crate) resend: Arc<std::sync::Mutex<Option<ResendFn>>>,
     /// The newest frame the client confirmed it decoded and the sixteen before it,
     /// `last << 16 | mask`; [`NONE_ACKED`] until the first.
