@@ -1,8 +1,9 @@
 //! Anti-rollback: the highest manifest serial each channel has accepted.
 //!
 //! A validly signed older manifest is a replay, never a downgrade. The floor file maps channel
-//! to serial; an unreadable one reads as 0. The caller supplies the durable write, since host
-//! and client persist their state differently.
+//! to serial; a missing or unparsable one reads as 0, and a read error as 0 for a check but
+//! never as a base for a write. The caller supplies the durable write, since host and client
+//! persist their state differently.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -14,16 +15,20 @@ struct FloorFile {
     serial_floor: BTreeMap<String, u64>,
 }
 
-fn read(path: &Path) -> FloorFile {
-    std::fs::read(path)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+/// Empty when the file is missing or does not parse, so the next raise replaces it. An I/O
+/// error is `Err`: the file may hold floors that this read could not see.
+fn read(path: &Path) -> io::Result<FloorFile> {
+    match std::fs::read(path) {
+        Ok(b) => Ok(serde_json::from_slice(&b).unwrap_or_default()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(FloorFile::default()),
+        Err(e) => Err(e),
+    }
 }
 
 /// The channel's floor, or 0 when none was ever accepted.
 pub fn load(path: &Path, channel: &str) -> u64 {
-    read(path).serial_floor.get(channel).copied().unwrap_or(0)
+    let file = read(path).unwrap_or_default();
+    file.serial_floor.get(channel).copied().unwrap_or(0)
 }
 
 /// Refuse a manifest serial below the channel's floor.
@@ -38,13 +43,14 @@ pub fn check(path: &Path, channel: &str, serial: u64) -> Result<(), String> {
 }
 
 /// Raise the channel's floor to `serial`, never lower it. `write` persists the whole file.
+/// A file that cannot be read is left alone: the write would drop the other channels' floors.
 pub fn raise(
     path: &Path,
     channel: &str,
     serial: u64,
     write: impl FnOnce(&Path, &[u8]) -> io::Result<()>,
 ) -> io::Result<()> {
-    let mut file = read(path);
+    let mut file = read(path)?;
     let slot = file.serial_floor.entry(channel.to_string()).or_insert(0);
     if serial <= *slot {
         return Ok(());
@@ -84,6 +90,18 @@ mod tests {
         assert_eq!(load(&path, "stable"), 0);
         raise_plain(&path, "stable", 5);
         assert_eq!(load(&path, "stable"), 5);
+    }
+
+    #[test]
+    fn a_read_error_does_not_lower_the_other_floors() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory where the file belongs: reading it fails, and is not "missing".
+        let path = dir.path().join("update-state.json");
+        std::fs::create_dir(&path).unwrap();
+        let err = raise(&path, "canary", 7, |_, _| {
+            panic!("no write over an unread file")
+        });
+        assert!(err.is_err());
     }
 
     #[test]
