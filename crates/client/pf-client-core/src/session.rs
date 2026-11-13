@@ -1200,7 +1200,8 @@ fn screen_pump(
 }
 
 /// The session thread: dial, open the decoder and the plane threads, run [`Pump`] until
-/// the session ends, then send exactly one terminal event.
+/// the session ends, then send exactly one terminal event. A stop raised during the redial
+/// pause ends the session without dialing.
 fn pump(
     params: SessionParams,
     ev_tx: async_channel::Sender<SessionEvent>,
@@ -1223,6 +1224,10 @@ fn pump(
     let until = Instant::now() + pause;
     while Instant::now() < until && !stop.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(20));
+    }
+    if stop.load(Ordering::SeqCst) {
+        end_session(&stop, &mic, None, &ev_tx, SessionEvent::Ended(None));
+        return;
     }
     let connector = match dial(&params, &stop, &plan, &ev_tx) {
         Ok(c) => c,
@@ -2572,6 +2577,49 @@ mod tests {
         );
         assert_eq!(params(""), None);
         assert_eq!(params("tablet"), None);
+    }
+
+    /// A stop raised before the dial ends the session as ended, without a connection
+    /// attempt that would come back as a timeout.
+    #[test]
+    fn a_stop_before_the_dial_ends_without_dialing() {
+        let dial = Dial {
+            host: "127.0.0.1".into(),
+            port: 9,
+            pin: [9; 32],
+            launch: None,
+            profile: None,
+            connect_timeout: Duration::from_secs(5),
+        };
+        let probes = Probes {
+            mode: mode_1080p(),
+            vulkan: None,
+            display_hdr: None,
+            hdr_enabled: false,
+            identity: ("cert".into(), "key".into()),
+            gamepad: GamepadPref::Auto,
+            force_software: Arc::default(),
+            stats_verbosity: crate::trust::StatsVerbosity::Off,
+            hevc_444_hardware: false,
+        };
+        let params = SessionParams::from_plan(
+            &crate::trust::Settings::default(),
+            false,
+            None,
+            None,
+            None,
+            dial,
+            probes,
+        );
+        let (ev_tx, ev_rx) = async_channel::unbounded();
+        let (frame_tx, _frames) = async_channel::bounded(2);
+        let stop = Arc::new(AtomicBool::new(true));
+        pump(params, ev_tx, frame_tx, stop, MicControl::default());
+        assert!(matches!(ev_rx.try_recv(), Ok(SessionEvent::Ended(None))));
+        assert!(
+            ev_rx.try_recv().is_err(),
+            "and nothing after the one terminal event"
+        );
     }
 
     /// Each launch verdict is said once; one that needs no words says nothing.
