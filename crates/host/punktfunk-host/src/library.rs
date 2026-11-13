@@ -390,6 +390,25 @@ pub(crate) fn lists_source(view: &View, source: &str) -> bool {
     games.iter().any(|g| hidden::store_of(&g.id) == source)
 }
 
+/// `doc`'s game entries for the titles `view`'s library lists, and its source entries for the
+/// sources with one, as [`lists`] and [`lists_source`] decide.
+pub(crate) fn listed_entries(
+    view: &View,
+    doc: OverridesDoc,
+) -> (
+    std::collections::BTreeMap<String, OverrideEntry>,
+    std::collections::BTreeMap<String, OverrideEntry>,
+) {
+    let games = sorted_games_for(view);
+    let ids: std::collections::BTreeSet<&str> = games.iter().map(|g| g.id.as_str()).collect();
+    let sources: std::collections::BTreeSet<&str> =
+        ids.iter().map(|id| hidden::store_of(id)).collect();
+    let (mut by_game, mut by_source) = (doc.games, doc.sources);
+    by_game.retain(|id, _| ids.contains(id.as_str()));
+    by_source.retain(|source, _| sources.contains(source.as_str()));
+    (by_game, by_source)
+}
+
 /// The library in `view` including hidden titles, each flagged.
 ///
 /// Only the console list on the operator lane calls this: a hidden entry has to

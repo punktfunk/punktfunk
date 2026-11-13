@@ -507,8 +507,17 @@ export function useOverrideDocs(enabled = true) {
 	const own = useGetLibraryOverrides(as, {
 		query: { enabled: enabled && as !== undefined },
 	});
-	const lent = own.data?.box_sets;
-	const box = person ? (lent ? { sets: lent } : undefined) : owners.data;
+	// A person reads the owner's entries only for what their library lists, beside their own.
+	const lent = own.data;
+	const box = person
+		? lent?.box_sets
+			? {
+					sets: lent.box_sets,
+					games: lent.box_games ?? undefined,
+					sources: lent.box_sources ?? undefined,
+				}
+			: undefined
+		: owners.data;
 	return {
 		box,
 		own: as ? own.data : undefined,
