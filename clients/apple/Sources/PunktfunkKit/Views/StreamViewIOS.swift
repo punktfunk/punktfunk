@@ -759,10 +759,9 @@ public final class StreamViewController: StreamViewControllerBase {
         capture.gcMouseForwarding = true
         capture.setForwarding(captureEnabled)
         inputCapture = capture
-        // The TV's mode switch (requested in applyDisplayCriteriaIfNeeded) completes
-        // asynchronously, and a dynamic-range-only switch doesn't re-layout by itself —
-        // re-layout on the switch/mode notifications so the presenter sees the new EDR
-        // headroom immediately (layout pushes UIScreen.currentEDRHeadroom down).
+        // Re-layout when the TV's mode switch ends or the screen mode changes: a dynamic-range-
+        // only switch does not re-layout by itself, and layout pushes the screen's EDR headroom
+        // to the presenter. The HDR output itself follows the switch's end (`setHDROutput`).
         observers.append(NotificationCenter.default.addObserver(
             forName: .AVDisplayManagerModeSwitchEnd, object: nil, queue: .main
         ) { [weak self] _ in self?.layoutMetalLayer() })
