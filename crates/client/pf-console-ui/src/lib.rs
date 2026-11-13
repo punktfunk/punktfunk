@@ -91,9 +91,9 @@ pub use library::{
     DecodedPoster, DownloadsPush, LibraryGame, LibraryPhase, LibraryShared, Stale, TitleFiles,
 };
 pub use model::{
-    ConsoleBus, ConsoleCmd, ConsoleShared, HostAction, HostRow, LicenseSection, OtherDevice,
-    PadTestState, PairPhase, PairStatus, PresetChip, ProfilesAnswer, RequestKey, SpeedPhase,
-    SpeedStatus, WakeStatus,
+    ConsoleBus, ConsoleCmd, ConsoleShared, HiddenAnswer, HideAnswer, HostAction, HostRow,
+    LicenseSection, OtherDevice, PadTestState, PairPhase, PairStatus, PresetChip, ProfilesAnswer,
+    RequestKey, SpeedPhase, SpeedStatus, WakeStatus,
 };
 pub use platform::Platform;
 pub use ring::Ring;

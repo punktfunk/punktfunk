@@ -86,6 +86,7 @@ public final class ConsoleBridge {
         case deletePreset = "DeletePreset", padTest = "PadTest", loadLicenses = "LoadLicenses"
         case promptAnswer = "PromptAnswer", padAction = "PadAction", hostAction = "HostAction"
         case setScreen = "SetScreen", endGame = "EndGame", install = "Install"
+        case setHidden = "SetHidden", fetchHidden = "FetchHidden"
     }
 
     /// Where the session the console asked for stands. `profileLocked` is a failure the host

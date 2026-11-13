@@ -212,6 +212,9 @@ pub(crate) struct LibraryScreen {
     zone: Zone,
     /// The zone is the player's or the ready list's, not the arrival guess.
     seated: bool,
+    /// A band zone's band, section and line as last placed: a band that empties hands focus
+    /// to the line that takes its place.
+    band_seat: Option<(usize, crate::library::Section, usize)>,
     /// Pills, chips, band items and the state button as last drawn, for the pointer and
     /// the line handoff.
     hits: Vec<(Zone, Rect)>,
@@ -219,7 +222,23 @@ pub(crate) struct LibraryScreen {
     embedded: bool,
     /// Embedded, with the row holding focus: no focused card, no title line.
     quiet: bool,
+    /// [`LibraryShared`]'s in-place edits as last synced: a title hidden or shown is no new list.
+    edits: u64,
+    /// What a profile hides, in place of the host's list ([`Self::hidden`]).
+    hidden: Option<Box<Hidden>>,
 }
+
+/// The titles hidden from a profile, as their own shelf: whose, by id and by name, and the
+/// titles asked back whose answer is still out.
+struct Hidden {
+    profile: String,
+    name: String,
+    asked: Vec<String>,
+}
+
+/// A hidden card's ink, and the focused one's: there to bring back, not to play.
+const HIDDEN_ALPHA: f32 = 0.45;
+const HIDDEN_FOCUS_ALPHA: f32 = 0.8;
 
 impl LibraryScreen {
     pub(crate) fn new(host: &HostRow) -> LibraryScreen {
@@ -265,9 +284,87 @@ impl LibraryScreen {
             sections: crate::library::sections(""),
             zone: Zone::Grid,
             seated: false,
+            band_seat: None,
             hits: Vec::new(),
             embedded: false,
             quiet: false,
+            edits: 0,
+            hidden: None,
+        }
+    }
+
+    /// What profile `profile`, called `name`, hides on `host`: the field alone, its cards
+    /// dimmed, OK showing one again. Lists what [`Self::set_hidden_list`] hands it.
+    pub(crate) fn hidden(host: &HostRow, profile: &str, name: &str) -> LibraryScreen {
+        LibraryScreen {
+            drilled: true,
+            filter_label: Some(pf_l10n::client::lib_hidden_for(name)),
+            hidden: Some(Box::new(Hidden {
+                profile: profile.into(),
+                name: name.into(),
+                asked: Vec::new(),
+            })),
+            ..LibraryScreen::new(host)
+        }
+    }
+
+    /// The command that fills a hidden shelf, or asks again.
+    pub(crate) fn fetch_hidden(&self) -> Option<ConsoleCmd> {
+        let h = self.hidden.as_ref()?;
+        Some(ConsoleCmd::FetchHidden {
+            addr: self.host.addr.clone(),
+            mgmt: self.host.mgmt_port,
+            fp_hex: self.host.fp_hex.clone(),
+            profile: h.profile.clone(),
+        })
+    }
+
+    /// The profile a hidden shelf lists for; `None` on any other.
+    pub(crate) fn hidden_profile(&self) -> Option<&str> {
+        self.hidden.as_ref().map(|h| h.profile.as_str())
+    }
+
+    /// The host's answer for a hidden shelf.
+    pub(crate) fn set_hidden_list(&mut self, answer: crate::model::HiddenAnswer) {
+        self.phase = match answer {
+            crate::model::HiddenAnswer::Listed(games) => {
+                self.games = games;
+                match self.games.is_empty() {
+                    true => LibraryPhase::Empty,
+                    false => LibraryPhase::Ready,
+                }
+            }
+            crate::model::HiddenAnswer::Failed(why) => LibraryPhase::Error {
+                title: pf_l10n::client::lib_load_failed().into(),
+                body: why,
+                can_retry: true,
+            },
+        };
+        self.cursor = 0;
+        self.entrance = None;
+        self.entrance_armed = false;
+        self.ready_at = None;
+        self.recollate();
+    }
+
+    /// Title `id` is back on its profile's shelf: it leaves this hidden one, and focus takes
+    /// the title that slides into its place. The title it was.
+    pub(crate) fn drop_hidden(&mut self, id: &str) -> Option<LibraryGame> {
+        let h = self.hidden.as_mut()?;
+        h.asked.retain(|a| a != id);
+        let at = self.games.iter().position(|g| g.id == id)?;
+        let gone = self.games.remove(at);
+        if self.games.is_empty() {
+            self.phase = LibraryPhase::Empty;
+        }
+        self.recollate();
+        Some(gone)
+    }
+
+    /// A hidden title the host kept hidden: OK may ask again.
+    pub(crate) fn keep_hidden(&mut self, id: &str) {
+        if let Some(h) = self.hidden.as_mut() {
+            h.asked.retain(|a| a != id);
         }
     }
 
@@ -523,17 +620,21 @@ impl LibraryScreen {
         let Some(shared) = self.shared.clone() else {
             return;
         };
-        if shared.generation() != self.generation {
+        if self.hidden.is_none() && shared.generation() != self.generation {
             let snap = shared.snapshot();
             let (phase, games, generation) = (snap.phase, snap.games, snap.generation);
+            // A title hidden or shown in place keeps the shelf: the cursor stays on its index.
+            let edited = !self.games.is_empty() && snap.edits != self.edits;
+            self.edits = snap.edits;
             // Multiset of ids. An order-only change (running-first from `/status`) is not freshness.
-            let fresh = self.games.len() != games.len() || {
-                let mut before: Vec<&str> = self.games.iter().map(|g| g.id.as_str()).collect();
-                let mut after: Vec<&str> = games.iter().map(|g| g.id.as_str()).collect();
-                before.sort_unstable();
-                after.sort_unstable();
-                before != after
-            };
+            let fresh = !edited
+                && (self.games.len() != games.len() || {
+                    let mut before: Vec<&str> = self.games.iter().map(|g| g.id.as_str()).collect();
+                    let mut after: Vec<&str> = games.iter().map(|g| g.id.as_str()).collect();
+                    before.sort_unstable();
+                    after.sort_unstable();
+                    before != after
+                });
             // Title under the cursor. Stack survives a stream; only a moving list can lose it.
             let anchor = (!fresh)
                 .then(|| self.focused().map(|g| g.id.clone()))
@@ -731,7 +832,7 @@ impl LibraryScreen {
             LibraryPhase::Error {
                 can_retry: true, ..
             } => Some(StateAction::Retry),
-            LibraryPhase::Empty => Some(StateAction::StreamDesktop),
+            LibraryPhase::Empty if self.hidden.is_none() => Some(StateAction::StreamDesktop),
             _ => None,
         }
     }
@@ -741,7 +842,9 @@ impl LibraryScreen {
         match self.state_action()? {
             StateAction::Retry => {
                 self.phase = LibraryPhase::Loading; // optimistic; the fetch re-syncs
-                fx.cmds.push(ConsoleCmd::fetch_library(&self.host));
+                let fetch = self.fetch_hidden();
+                fx.cmds
+                    .push(fetch.unwrap_or_else(|| ConsoleCmd::fetch_library(&self.host)));
             }
             StateAction::StreamDesktop => fx.connect = Some(self.desktop_intent()),
         }
@@ -751,6 +854,9 @@ impl LibraryScreen {
     fn ready_action(&mut self, ev: MenuEvent, fx: &mut Outbox) -> Option<MenuPulse> {
         if !matches!(self.phase, LibraryPhase::Ready) {
             return None;
+        }
+        if self.hidden.is_some() {
+            return self.hidden_action(ev, fx);
         }
         match ev {
             MenuEvent::Confirm => {
@@ -786,6 +892,37 @@ impl LibraryScreen {
             | MenuEvent::Sector(_)
             | MenuEvent::JumpBack
             | MenuEvent::JumpForward => None,
+        }
+    }
+
+    /// A hidden shelf's pad: OK, or Y as the legend says, asks the host to show the focused
+    /// title again, once until it answers; Back leaves.
+    fn hidden_action(&mut self, ev: MenuEvent, fx: &mut Outbox) -> Option<MenuPulse> {
+        match ev {
+            MenuEvent::Confirm | MenuEvent::Secondary => {
+                let g = self.focused()?.clone();
+                let h = self.hidden.as_mut()?;
+                if h.asked.contains(&g.id) {
+                    return Some(MenuPulse::Boundary);
+                }
+                h.asked.push(g.id.clone());
+                fx.cmds.push(ConsoleCmd::SetHidden {
+                    addr: self.host.addr.clone(),
+                    mgmt: self.host.mgmt_port,
+                    fp_hex: self.host.fp_hex.clone(),
+                    profile: h.profile.clone(),
+                    name: h.name.clone(),
+                    app_id: g.id,
+                    title: g.title,
+                    hidden: false,
+                });
+                Some(MenuPulse::Confirm)
+            }
+            MenuEvent::Back => {
+                fx.pop();
+                None
+            }
+            _ => Some(MenuPulse::Boundary),
         }
     }
 
@@ -886,6 +1023,15 @@ impl LibraryScreen {
         }
     }
 
+    /// A card's ink: whole, or dimmed on a hidden shelf, the focused one less.
+    fn dim(&self, focused: bool) -> f32 {
+        match (self.hidden.is_some(), focused) {
+            (false, _) => 1.0,
+            (true, false) => HIDDEN_ALPHA,
+            (true, true) => HIDDEN_FOCUS_ALPHA,
+        }
+    }
+
     /// The focused-title band shows: on the tab and on a drilled shelf, not under Hosts.
     fn band_shown(&self) -> bool {
         !self.embedded && !self.quiet
@@ -936,6 +1082,8 @@ impl LibraryScreen {
         let ui = ctx.ui;
         let t = ctx.t;
         let (bands, lines) = self.place_zone(ctx);
+        let hidden = games::hides_for(ctx, &self.host)
+            .map(|p| pf_l10n::client::lib_hidden_for(&p.display_name));
         let sectioned = self.sectioned();
         // The lines run on to the screen's foot and blur under the band there.
         let clip = canvas.local_clip_bounds().unwrap_or(rect);
@@ -1039,7 +1187,8 @@ impl LibraryScreen {
                     caption: caption.as_deref(),
                     focused: focused && !this.quiet,
                 };
-                card.paint(canvas, ui, fonts, slot, ch, k, ent.fade as f32);
+                let dim = this.dim(focused);
+                card.paint(canvas, ui, fonts, slot, ch, k, ent.fade as f32 * dim);
                 canvas.restore();
             })
             .id(grid_cell(i))
@@ -1112,8 +1261,17 @@ impl LibraryScreen {
                         )
                         .child(El::column().size(avail as f32, (BAR_AIR * k) as f32)),
                     Line::Chips => root.child(
-                        this.chips_el(ui, ctx.hosts, ctx.profiles, fonts, avail, k, hits)
-                            .id(id),
+                        this.chips_el(
+                            ui,
+                            ctx.hosts,
+                            ctx.profiles,
+                            hidden.clone(),
+                            fonts,
+                            avail,
+                            k,
+                            hits,
+                        )
+                        .id(id),
                     ),
                     Line::Band(b) => root.child(
                         this.band_el(ui, &bands[b], b, fonts, avail, (cw, ch), k, hits)
@@ -1469,12 +1627,13 @@ impl LibraryScreen {
                 for (x, y) in corners {
                     (l, tp, r, b) = (l.min(x), tp.min(y), r.max(x), b.max(y));
                 }
+                let dim = f64::from(self.dim(i as i32 == self.cursor));
                 ShelfCard {
                     i,
                     m,
                     size: (g.w, g.h),
                     prox,
-                    fade: ent.fade * (1.0 - RECEDE_FADE * prox),
+                    fade: ent.fade * (1.0 - RECEDE_FADE * prox) * dim,
                     bounds: Rect::from_ltrb(l as f32, tp as f32, r as f32, b as f32),
                 }
             })
@@ -1644,10 +1803,16 @@ impl LibraryScreen {
     ) -> El<'a> {
         let (title, body): (String, String) = match &self.phase {
             LibraryPhase::Error { title, body, .. } => (title.clone(), body.clone()),
-            LibraryPhase::Empty => (
-                pf_l10n::client::lib_empty_title().into(),
-                pf_l10n::client::lib_empty_body().into(),
-            ),
+            LibraryPhase::Empty => match &self.hidden {
+                Some(h) => (
+                    pf_l10n::client::lib_hidden_for(&h.name),
+                    pf_l10n::client::lib_hidden_none(&h.name),
+                ),
+                None => (
+                    pf_l10n::client::lib_empty_title().into(),
+                    pf_l10n::client::lib_empty_body().into(),
+                ),
+            },
             LibraryPhase::Ready if self.no_match() => (
                 pf_l10n::client::lib_no_matches().into(),
                 pf_l10n::client::lib_no_match_body(self.query.as_deref().unwrap_or_default()),
@@ -1895,6 +2060,15 @@ impl ScreenView for LibraryScreen {
         }
         if !matches!(self.phase, LibraryPhase::Ready) || self.focused().is_none() {
             return vec![Hint::new(HintKey::Back, pf_l10n::common::common_back())];
+        }
+        // The legend shows a pad's Y, never its A: the one press that brings a title back.
+        if let Some(h) = &self.hidden {
+            let show = pf_l10n::client::lib_show_for(&h.name);
+            return vec![
+                Hint::new(HintKey::Confirm, show.clone()),
+                Hint::new(HintKey::Secondary, show),
+                Hint::new(HintKey::Back, pf_l10n::common::common_back()),
+            ];
         }
         let desktop = self
             .focused()

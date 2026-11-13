@@ -247,6 +247,9 @@ pub struct ConsoleOptions {
     /// `ProfileLocked` close before its failure, so the console asks for a locked profile's
     /// password. False dials a locked profile as it stands.
     pub prompts_unlock: bool,
+    /// The host answers [`ConsoleCmd::SetHidden`] and [`ConsoleCmd::FetchHidden`], so a title
+    /// offers Hide for me where the box says this device may. False offers it nowhere.
+    pub hides: bool,
     /// The OS's preferred languages, BCP-47, most preferred first. A non-empty list sets the
     /// process's language ([`pf_l10n::set_languages`]) when the console is built; empty leaves it.
     pub languages: Vec<String>,
@@ -281,6 +284,7 @@ impl ConsoleOptions {
             screen: None,
             profiles: true,
             prompts_unlock: true,
+            hides: true,
             languages: Vec::new(),
         }
     }
@@ -472,6 +476,7 @@ impl Shell {
                 tv: opts.tv,
                 spatial: opts.spatial,
                 fallback_ui: opts.fallback_ui,
+                hides: opts.hides,
                 pyrowave_ok: opts.pyrowave_ok,
                 av1_ok: opts.av1_ok,
                 name: opts.device_name,
@@ -699,6 +704,7 @@ impl Shell {
             self.device.code = Some(code);
         }
         self.feed_top();
+        self.apply_hides();
         self.sync_pair();
         self.open_first_paired_library();
         self.sync_wake();
@@ -805,6 +811,41 @@ impl Shell {
                     self.profiles.learn(p.fp_hex(), &answer);
                     p.set_answer(answer);
                 }
+            }
+        }
+        if let Some(Screen::Library(l)) = self.stack.last_mut() {
+            let answer = (l.hidden_profile())
+                .and_then(|p| self.console.take_hidden_list(l.host_fp_hex(), p));
+            if let Some(answer) = answer {
+                l.set_hidden_list(answer);
+            }
+        }
+    }
+
+    /// What the host made of each hide or show: its line as a toast, and where it took one,
+    /// the title leaves that shelf or comes back to it, and leaves a hidden shelf it was on.
+    fn apply_hides(&mut self) {
+        for a in self.console.take_hide_answers() {
+            let kind = match a.done {
+                true => ToastKind::Success,
+                false => ToastKind::Error,
+            };
+            self.show_toast_kind(a.notice.clone(), kind);
+            let shelf = self.stack.iter_mut().rev().find_map(|s| match s {
+                Screen::Library(l) if l.host_fp_hex() == a.fp_hex => {
+                    (l.hidden_profile() == Some(a.profile.as_str())).then_some(l)
+                }
+                _ => None,
+            });
+            match (a.done, a.hidden, shelf) {
+                (false, _, Some(l)) => l.keep_hidden(&a.app_id),
+                (true, true, _) => drop(self.library.drop_title(&a.fp_hex, &a.app_id)),
+                (true, false, Some(l)) => {
+                    if let Some(game) = l.drop_hidden(&a.app_id) {
+                        self.library.put_title(&a.fp_hex, game);
+                    }
+                }
+                _ => {}
             }
         }
     }

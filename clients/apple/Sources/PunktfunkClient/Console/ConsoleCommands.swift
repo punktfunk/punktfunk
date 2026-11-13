@@ -137,6 +137,9 @@ extension ConsoleModel {
             padTest(a["on"] as? Bool ?? false)
         case .promptAnswer:
             answerPrompt(id: a["id"] as? String ?? "", choice: a["choice"] as? Int)
+        // Never sent here: this app creates the console with `hides` off.
+        case .setHidden, .fetchHidden:
+            break
         case .speedTest:
             speedTest(
                 key: a["key"] as? String ?? "", addr: a["addr"] as? String ?? "",

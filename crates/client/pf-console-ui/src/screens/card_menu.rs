@@ -57,6 +57,9 @@ enum Action {
     Files(InstallAction),
     /// Mark or unmark the title on this device.
     Favorite,
+    /// Take the title off the shelf of the profile this device plays as, where the box lets
+    /// it (`pf_client_core::hide::offer`).
+    Hide,
     /// The poster's card: cover, facts, and its verbs.
     TitleDetails,
     /// [`Screen::BindPreset`] for the host, or for a library title.
@@ -249,6 +252,7 @@ impl CardMenu {
         let mut rows = self.all_actions(store, book);
         let handheld = device.platform == Platform::Android && !device.tv;
         rows.retain(|a| match a {
+            Action::Hide => device.hides,
             Action::CopyLink => !device.tv,
             Action::Clipboard => !device.tv || device.platform == Platform::Android,
             Action::HomeScreen | Action::LauncherFile => handheld,
@@ -267,12 +271,9 @@ impl CardMenu {
             // No Play row: the poster's OK launches it. The Mac's four rows, the title's files,
             // and End game while the host runs a launch of this device's.
             (Subject::Game { game, .. }, Mode::Menu) => {
-                let mut rows = vec![
-                    Action::PlayWith,
-                    Action::Favorite,
-                    Action::TitleDetails,
-                    Action::CopyLink,
-                ];
+                let mut rows = vec![Action::PlayWith, Action::Favorite];
+                rows.extend(self.hide_name(book).map(|_| Action::Hide));
+                rows.extend([Action::TitleDetails, Action::CopyLink]);
                 rows.extend(
                     game.install
                         .as_ref()
@@ -283,14 +284,14 @@ impl CardMenu {
                 return rows;
             }
             (Subject::Game { game, .. }, _) => {
-                let mut rows = vec![
-                    Action::Play,
-                    Action::Favorite,
+                let mut rows = vec![Action::Play, Action::Favorite];
+                rows.extend(self.hide_name(book).map(|_| Action::Hide));
+                rows.extend([
                     Action::BindPreset,
                     Action::CopyLink,
                     Action::HomeScreen,
                     Action::LauncherFile,
-                ];
+                ]);
                 rows.extend(
                     game.install
                         .as_ref()
@@ -390,6 +391,7 @@ impl CardMenu {
         match a {
             Action::ConnectWith | Action::PlayWith | Action::Play | Action::Preset(_) => "play",
             Action::Favorite => "check",
+            Action::Hide => "eye-off",
             Action::TitleDetails => "info",
             Action::Browse => "gamepad-2",
             Action::SwitchProfile => "refresh-cw",
@@ -422,6 +424,17 @@ impl CardMenu {
             Action::Files(InstallAction::Pause) => "pause",
             Action::Files(InstallAction::Remove) => "trash-2",
         }
+    }
+
+    /// The name of the profile a title here hides for: the one its shelf plays as, where the
+    /// box lets this device hide its titles. Never for the desktop tile, which is the host.
+    fn hide_name(&self, book: &ProfileBook) -> Option<String> {
+        let Subject::Game { host, game, .. } = &self.subject else {
+            return None;
+        };
+        let pick = host.remembered().map(|p| p.id.as_str());
+        let row = pf_client_core::hide::offer(book.listed(&host.fp_hex), pick)?;
+        (game.id != crate::library::DESKTOP_ID).then(|| row.display_name.clone())
     }
 
     /// The title is marked on this device.
@@ -495,6 +508,9 @@ impl CardMenu {
                 pf_l10n::client::lib_favorite_remove().into()
             }
             Action::Favorite => pf_l10n::client::lib_favorite_add().into(),
+            Action::Hide => {
+                pf_l10n::client::lib_hide_for(self.hide_name(ctx.profiles).unwrap_or_default())
+            }
             Action::TitleDetails => pf_l10n::client::lib_title_details().into(),
             Action::BindPreset => match self.subject {
                 Subject::Game { .. } => pf_l10n::client::lib_title_preset().into(),
@@ -642,6 +658,28 @@ impl CardMenu {
                 if self.mode == Mode::Menu {
                     fx.pop();
                 }
+            }
+            // The title leaves the shelf when the host says it took it; its answer is the toast.
+            Action::Hide => {
+                let (Subject::Game { host, game, .. }, Some(name)) =
+                    (&self.subject, self.hide_name(ctx.profiles))
+                else {
+                    return;
+                };
+                let Some(profile) = host.remembered() else {
+                    return;
+                };
+                fx.cmds.push(ConsoleCmd::SetHidden {
+                    addr: host.addr.clone(),
+                    mgmt: host.mgmt_port,
+                    fp_hex: host.fp_hex.clone(),
+                    profile: profile.id.clone(),
+                    name,
+                    app_id: game.id.clone(),
+                    title: game.title.clone(),
+                    hidden: true,
+                });
+                fx.pop();
             }
             Action::SwitchProfile => {
                 let host = self.host();
@@ -1889,6 +1927,98 @@ mod tests {
         let again = crate::library::favorites(&crate::store::file_store().load(), "aa")
             .contains(&"steam:367520".to_string());
         assert_ne!(marked, again, "a second press undoes the first");
+    }
+
+    /// Hide for the shelf's profile follows Favorite only where the profile's row says this
+    /// device is its person, and pressing it asks the host, then closes the menu.
+    #[test]
+    fn hide_is_offered_only_where_the_box_lets_this_device() {
+        use crate::model::ProfilesAnswer;
+        use pf_client_core::profiles::{ListedProfile, ProfilePick};
+        fake_home();
+        let book = |person| {
+            let kid = ListedProfile {
+                id: "kid".into(),
+                display_name: "Kid".into(),
+                person,
+                ..Default::default()
+            };
+            let mut book = ProfileBook::new(true);
+            book.learn("aa", &ProfilesAnswer::Listed(vec![kid]));
+            book
+        };
+        let picked = HostRow {
+            profile: Some(ProfilePick {
+                id: "kid".into(),
+                display_name: "Kid".into(),
+                remember: true,
+                ..Default::default()
+            }),
+            ..host()
+        };
+        let offered = |host: &HostRow, game: &LibraryGame, book: &ProfileBook, d: &Device| {
+            let menu = CardMenu::for_game(host, game, None);
+            menu.actions(crate::store::file_store(), book, d)
+                .contains(&Action::Hide)
+        };
+        let (yes, device) = (book(true), Device::test());
+        let rows = rows_on(&CardMenu::for_game(&picked, &game(), None), &device);
+        assert!(!rows.contains(&Action::Hide), "no book, no row");
+        let rows = CardMenu::for_game(&picked, &game(), None).actions(
+            crate::store::file_store(),
+            &yes,
+            &device,
+        );
+        assert_eq!(
+            rows[..3],
+            [Action::PlayWith, Action::Favorite, Action::Hide]
+        );
+        assert!(
+            !offered(&picked, &game(), &book(false), &device),
+            "not its person"
+        );
+        assert!(!offered(&host(), &game(), &yes, &device), "no saved pick");
+        let shell = Device {
+            hides: false,
+            ..Device::test()
+        };
+        assert!(
+            !offered(&picked, &game(), &yes, &shell),
+            "an embedder without the call"
+        );
+        let desk = LibraryGame {
+            id: crate::library::DESKTOP_ID.into(),
+            ..game()
+        };
+        assert!(
+            !offered(&picked, &desk, &yes, &device),
+            "the desktop tile is the host"
+        );
+
+        let mut settings = crate::store::file_store().load();
+        let library = crate::library::LibraryShared::default();
+        let mut ctx = Ctx {
+            profiles: &yes,
+            ..Ctx::test(&mut settings, &library)
+        };
+        let mut s = CardMenu::for_game(&picked, &game(), None);
+        assert_eq!(s.label(Action::Hide, &ctx), "Hide for Kid");
+        let mut fx = Outbox::default();
+        s.run(Action::Hide, &mut ctx, &mut fx);
+        assert!(matches!(fx.nav, Some(Nav::Pop)));
+        match fx.cmds.as_slice() {
+            [ConsoleCmd::SetHidden {
+                profile,
+                name,
+                app_id,
+                hidden: true,
+                ..
+            }] => assert_eq!(
+                (profile.as_str(), name.as_str(), app_id.as_str()),
+                ("kid", "Kid", "steam:367520")
+            ),
+            other => panic!("one SetHidden, got {other:?}"),
+        }
     }
 
     /// The label reads back the explicit pointer; pressing the row again clears it.

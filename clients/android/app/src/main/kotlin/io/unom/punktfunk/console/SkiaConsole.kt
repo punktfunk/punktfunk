@@ -995,8 +995,11 @@ object SkiaConsole {
         "PadAction" to { c -> state.now { onPadAction }?.invoke(c.optString("action"), c.optString("pad_key")) },
     )
 
-    /** `ConsoleCmd`s this shell drops: it raises no prompt, so no `PromptAnswer` comes back. */
-    internal val ignoredCommands = setOf("PromptAnswer")
+    /**
+     * `ConsoleCmd`s this shell drops: it raises no prompt, so no `PromptAnswer` comes back, and it
+     * creates the console with `hides` off, so no hide command comes either.
+     */
+    internal val ignoredCommands = setOf("PromptAnswer", "SetHidden", "FetchHidden")
 
     /**
      * The stream port of the saved host [fp] pins, where its management API answers without TCP.

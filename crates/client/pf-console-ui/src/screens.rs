@@ -70,6 +70,8 @@ pub struct Device {
     /// Host has a fallback UI ([`crate::shell::ConsoleOptions::fallback_ui`]); gates the
     /// console-off row.
     pub fallback_ui: bool,
+    /// The host hides titles for this device ([`crate::shell::ConsoleOptions::hides`]).
+    pub hides: bool,
     /// This device decodes PyroWave ([`crate::shell::ConsoleOptions::pyrowave_ok`]).
     /// False marks the codec row's PyroWave value unsupported.
     pub pyrowave_ok: bool,
@@ -132,6 +134,7 @@ impl Device {
             tv: false,
             spatial: false,
             fallback_ui: false,
+            hides: true,
             pyrowave_ok: true,
             av1_ok: true,
             name: "test".into(),
