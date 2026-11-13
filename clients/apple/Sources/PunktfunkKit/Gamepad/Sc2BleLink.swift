@@ -198,6 +198,7 @@ final class Sc2BleLink: NSObject {
         polling = false
         ready = false
         central = nil
+        finishIdentity() // a read left running would take over the next connection's
     }
 
     private func setClassic(_ on: Bool) {
@@ -519,6 +520,7 @@ extension Sc2BleLink: CBCentralManagerDelegate {
         candidateChars.removeAll()
         pendingWrites.removeAll()
         onClosed() // the capture releases its wire slot
+        finishIdentity() // after the release, so the claim it ends finds its entry gone
         if central.state == .poweredOn {
             acquire() // pads power-cycle many times per session — keep polling
         }
