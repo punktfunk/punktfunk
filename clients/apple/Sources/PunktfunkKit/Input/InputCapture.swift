@@ -72,8 +72,8 @@ public final class InputCapture {
     /// reaches GCKeyboard, racing the NSEvent monitor — latched here so it can't type
     /// an Escape into the host in either toggle direction.
     private var suppressedVK: UInt32?
-    /// Physical ⌘ keys currently held (tracked even while released — the ⌘⎋ toggle and
-    /// its Esc suppression need it in both states).
+    /// Physical ⌘ keys currently held. Off macOS the GC handler tracks them in both capture
+    /// states, for the ⌘⎋ toggle; macOS tracks them only while forwarding, for the chord flush.
     private var cmdKeysDown: Set<UInt32> = []
 
     #if os(macOS)
@@ -179,12 +179,13 @@ public final class InputCapture {
         return down ? fired : firedVKs.remove(vk) != nil
     }
 
-    /// The keyboard engine forgets every key: GC delivers nothing while inactive, so a key
-    /// released in another app would otherwise stay down here.
+    /// The keyboard engine and the ⌘ tracking forget every key: GC delivers nothing while
+    /// inactive, so a key released in another app would otherwise stay down here.
     private func forgetShortcutKeys() {
         _ = keyEngine.flush()
         shortcutKeys.removeAll()
         firedVKs.removeAll()
+        cmdKeysDown.removeAll()
     }
 
     /// Fired when a newer InputCapture takes the process-global GC handler slots (the
@@ -417,14 +418,14 @@ public final class InputCapture {
 
     isolated deinit { stop() }
 
-    /// Send release events for everything currently held, and drop the motion residuals
-    /// and modifier/latch tracking (GC delivers nothing while inactive, so a ⌘ released
-    /// in another app would otherwise stay "held" here forever — hijacking Esc).
+    /// Send release events for everything currently held, and drop the motion residuals and
+    /// the one-shot latches.
     private func releaseAll() {
-        #if !os(macOS)
+        #if os(macOS)
+        cmdKeysDown.removeAll() // tracked only while forwarding (`handleFlagsChanged`)
+        #else
         stopAutoRepeat() // before the releases below, so the ticker can't outlive the key-up
         #endif
-        cmdKeysDown.removeAll()
         // The shortcut engine keeps its keys: Release input itself lands here, with its
         // modifiers still held. A lost device forgets them (`forgetShortcutKeys`).
         suppressedVK = nil
