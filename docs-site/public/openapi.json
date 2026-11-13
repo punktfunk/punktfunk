@@ -4889,7 +4889,7 @@
           "library"
         ],
         "summary": "One page of the library.",
-        "description": "Title order, `limit` titles a page (60 when absent, 200 at most). `next_cursor` names the\nlast title sent; pass it back as `cursor` for the next page. It is a place in the order, not\nan offset: a title added or removed between two pages neither repeats nor skips one.\n`q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,\n`launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a\ncaller that needs only that entry. Lanes see what `GET /library` shows them, `as`\nincluded.",
+        "description": "Title order, `limit` titles a page (60 when absent, 200 at most). `next_cursor` names the\nlast title sent; pass it back as `cursor` for the next page. It is a place in the order, not\nan offset: a title added or removed between two pages neither repeats nor skips one.\n`q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,\n`launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a\ncaller that needs only that entry. Lanes see what `GET /library` shows them, `as`\nincluded. `hidden=true` lists only hidden titles: every one on the operator's lane, and to\na device that is the person of the profile `as` names, the titles that profile hides. Any\nother caller gets the page it would get without it.",
         "operationId": "getLibraryPage",
         "parameters": [
           {
@@ -4961,6 +4961,15 @@
             "name": "install",
             "in": "query",
             "description": "`installed` (on this host) or `missing` (not installed)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "`true`: only hidden titles, each `hidden: true`. The operator's lane sees every one; a device that is the person of the profile `as` names sees the titles that profile hides. Ignored for any other caller",
             "required": false,
             "schema": {
               "type": "string"
@@ -7318,7 +7327,7 @@
           "profiles"
         ],
         "summary": "List the profiles a device can pick",
-        "description": "The profiles the asking device may open, the owner first, and the locked ones that take a\nPIN; the console lists every profile. A client shows this as its picker. Each row's `unlock`\nsays what the asking device sends with its connect: a profile on a person's own Linux account\nneeds the account's password, or a key proof from a device that enrolled one, until the\ndevice is signed in to its running desktop; a locked profile whose list lacks the device\nneeds its PIN.",
+        "description": "The profiles the asking device may open, the owner first, and the locked ones that take a\nPIN; the console lists every profile. A client shows this as its picker. Each row's `unlock`\nsays what the asking device sends with its connect: a profile on a person's own Linux account\nneeds the account's password, or a key proof from a device that enrolled one, until the\ndevice is signed in to its running desktop; a locked profile whose list lacks the device\nneeds its PIN. `person` marks the rows whose own library view this device may change now.",
         "operationId": "enumerateProfiles",
         "responses": {
           "200": {
@@ -17813,6 +17822,10 @@
           "owner": {
             "type": "boolean",
             "description": "The box's own session."
+          },
+          "person": {
+            "type": "boolean",
+            "description": "The asking device is this locked profile's person now: it may hide a title for it\n(`PUT /library/hidden/{id}?as=`) and list what it hides (`GET /library/page?hidden=true`)."
           },
           "seat": {
             "oneOf": [

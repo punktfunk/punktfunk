@@ -270,6 +270,17 @@ impl AsProfile {
     }
 }
 
+impl AsProfile {
+    /// The asking device is the person of the profile this call names ([`super::person::check`]).
+    async fn person(&self, st: &MgmtState) -> bool {
+        let Some(fp) = self.device.as_deref() else {
+            return false;
+        };
+        let named = self.profile.as_deref();
+        super::person::check(st, named, fp, None).await.is_ok()
+    }
+}
+
 impl Scoped {
     fn fill<'a>(&self, games: impl IntoIterator<Item = &'a mut crate::library::GameEntry>) {
         if let Some(p) = self.mine.as_deref() {
@@ -422,6 +433,8 @@ pub(crate) struct LibraryPageQuery {
     role: Option<String>,
     id: Option<String>,
     install: Option<String>,
+    /// `true` narrows to hidden titles, for a caller that sees them; any other value is ignored.
+    hidden: Option<String>,
     limit: Option<u32>,
     cursor: Option<String>,
 }
@@ -482,7 +495,9 @@ fn decode_cursor(cursor: &str) -> Option<(String, String)> {
 /// `q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,
 /// `launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a
 /// caller that needs only that entry. Lanes see what `GET /library` shows them, `as`
-/// included.
+/// included. `hidden=true` lists only hidden titles: every one on the operator's lane, and to
+/// a device that is the person of the profile `as` names, the titles that profile hides. Any
+/// other caller gets the page it would get without it.
 #[utoipa::path(
     get,
     path = "/library/page",
@@ -497,6 +512,7 @@ fn decode_cursor(cursor: &str) -> Option<(String, String)> {
         ("role" = Option<String>, Query, description = "`game` or `launcher`"),
         ("id" = Option<String>, Query, description = "Only the entry with this library id"),
         ("install" = Option<String>, Query, description = "`installed` (on this host) or `missing` (not installed)"),
+        ("hidden" = Option<String>, Query, description = "`true`: only hidden titles, each `hidden: true`. The operator's lane sees every one; a device that is the person of the profile `as` names sees the titles that profile hides. Ignored for any other caller"),
         ("as" = Option<String>, Query, description = "Profile id: the library as that profile plays it, its own play stats in `stats.mine`"),
     ),
     responses(
@@ -528,6 +544,8 @@ pub(crate) async fn get_library_page(
         },
     };
     let limit = q.limit.unwrap_or(PAGE_DEFAULT).clamp(1, PAGE_MAX) as usize;
+    let only_hidden = q.hidden.as_deref() == Some("true")
+        && (lane.is_operator() || (view.layer().is_some() && who.person(&st).await));
     // Rows borrow the kept list: only the titles of this page are copied out of it.
     let library = crate::library::sorted_games_for(view);
     let (by_box, by_profile) = crate::library::hidden_layers(view);
@@ -541,8 +559,11 @@ pub(crate) async fn get_library_page(
         // A profile's view leaves out what the box hides; only the box brings it back.
         .filter(|g| view.layer().is_none() || !by_box.contains(&g.id))
         .map(|g| (g, by_box.contains(&g.id) || by_profile.contains(&g.id)))
-        // Only the operator's lane sees a hidden title.
-        .filter(|(_, hidden)| lane.is_operator() || !hidden)
+        // Only the operator's lane sees a hidden title, and a person the ones its profile hides.
+        .filter(|(_, hidden)| match only_hidden {
+            true => *hidden,
+            false => lane.is_operator() || !hidden,
+        })
         .filter(|(g, _)| {
             matches_query(g, &narrow)
                 && (needle.is_empty() || punktfunk_core::search::fold(&g.title).contains(&needle))

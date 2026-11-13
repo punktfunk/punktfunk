@@ -489,6 +489,147 @@ async fn the_box_s_host_hears_no_door() {
     assert_eq!(files(tmp.path()), before);
 }
 
+/// `enumerate` as device `fp`: each row's id and whether it carries `person`.
+async fn flags(app: &Router, fp: &str) -> Vec<(String, bool)> {
+    let (status, rows) = as_device(app, get_req("/api/v1/profiles/enumerate"), fp).await;
+    assert_eq!(status, StatusCode::OK, "{rows}");
+    let rows = rows.as_array().expect("rows").clone();
+    let flag = |r: &serde_json::Value| match r.get("person") {
+        None => false,
+        Some(v) => v == true,
+    };
+    let id = |r: &serde_json::Value| r["id"].as_str().unwrap().to_string();
+    rows.iter().map(|r| (id(r), flag(r))).collect()
+}
+
+/// Whether the person lane takes a write from `fp` as profile `id`: a show, which any title takes.
+async fn takes(app: &Router, fp: &str, id: &str) -> bool {
+    let body = Some(serde_json::json!({"hidden": false}));
+    let req = call(
+        &Method::PUT,
+        "/api/v1/library/hidden/steam:400",
+        Some(id),
+        &body,
+    );
+    as_device(app, req, fp).await.0 == StatusCode::OK
+}
+
+/// Each row's `person` is the lane's own answer for that device: on exactly the rows whose write
+/// the lane takes, never the owner's, never an open profile's, gone with a PIN or a sign-out, and
+/// never on the operator's list.
+#[tokio::test]
+async fn enumerate_marks_exactly_the_rows_whose_writes_the_lane_takes() {
+    let tmp = ConfigDirOverride::new();
+    let (app, store) = locked_box(tmp.path());
+    let agree = |app: Router, fp: &'static str| async move {
+        let rows = flags(&app, fp).await;
+        for (id, person) in &rows {
+            assert_eq!(*person, takes(&app, fp, id).await, "{fp} as {id}");
+        }
+        rows.into_iter()
+            .filter(|(_, p)| *p)
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(agree(app.clone(), LISTED).await, [SEAT_P]);
+    assert!(agree(app.clone(), OTHER).await.is_empty());
+    // The owner's lock lets OTHER in: it is the sharer's person, never the owner's.
+    add(&store, OWNER, OTHER);
+    assert_eq!(agree(app.clone(), OTHER).await, [SHARER]);
+    // A device that needs the PIN is listed for it, and is no person.
+    store
+        .locks()
+        .edit(SEAT_P, |l, _| l.pin = pf_seats::locks::PinHash::new("2468"))
+        .unwrap();
+    let out = format!("/api/v1/profiles/{SEAT_P}/devices/{LISTED}");
+    let out = axum::http::Request::delete(out)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&app, out).await.0, StatusCode::NO_CONTENT);
+    assert!(agree(app.clone(), LISTED).await.is_empty());
+    let (_, operator) = send(&app, get_req("/api/v1/profiles/enumerate")).await;
+    let rows = operator.as_array().expect("rows");
+    assert_eq!(rows.len(), 3);
+    assert!(rows.iter().all(|r| r.get("person").is_none()), "{operator}");
+}
+
+/// `(title, hidden)` of a page's rows.
+fn page_rows(page: &serde_json::Value) -> Vec<(String, bool)> {
+    let rows = page["items"].as_array().cloned().unwrap_or_default();
+    let row = |g: &serde_json::Value| {
+        (
+            g["title"].as_str().unwrap().to_string(),
+            g["hidden"] == true,
+        )
+    };
+    rows.iter().map(row).collect()
+}
+
+/// A person lists what its profile hides, and none the box hides. Every other caller of either
+/// library read gets the answer it gets without the flag, whatever value it sends.
+#[tokio::test]
+async fn only_a_person_lists_what_its_profile_hides() {
+    let tmp = ConfigDirOverride::new();
+    let (app, _) = locked_box(tmp.path());
+    let page = |q: &str| format!("/api/v1/library/page?{q}");
+    let (status, mine) = as_device(
+        &app,
+        get_req(&page(&format!("as={SEAT_P}&hidden=true"))),
+        LISTED,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{mine}");
+    assert_eq!(page_rows(&mine), [("Half-Life".to_string(), true)]);
+    assert_eq!(mine["total"], 1);
+
+    let today = |fp: &'static str, path: String| {
+        let app = app.clone();
+        async move {
+            let plain = as_device(&app, get_req(&path), fp).await;
+            for flag in ["hidden=true", "hidden=1", "hidden=TRUE", "hidden="] {
+                let sep = if path.contains('?') { '&' } else { '?' };
+                let asked = as_device(&app, get_req(&format!("{path}{sep}{flag}")), fp).await;
+                assert_eq!(asked, plain, "{fp} {path} {flag}");
+            }
+        }
+    };
+    for route in ["/api/v1/library", "/api/v1/library/page"] {
+        for fp in [LISTED, OTHER] {
+            today(fp, route.to_string()).await;
+            for id in [SEAT_P, OWNER, SHARER, "0123456789ab"] {
+                let path = format!("{route}?as={id}");
+                if !(fp == LISTED && id == SEAT_P && route.ends_with("page")) {
+                    today(fp, path).await;
+                }
+            }
+        }
+    }
+    // The person's own flag only reads `true`, and the paged route only.
+    let plain = page(&format!("as={SEAT_P}"));
+    let (_, without) = as_device(&app, get_req(&plain), LISTED).await;
+    assert!(!page_rows(&without)
+        .iter()
+        .any(|(t, _)| t == "Half-Life" || t == "Dota"));
+    for flag in ["hidden=1", "hidden=TRUE", "hidden="] {
+        let asked = as_device(&app, get_req(&format!("{plain}&{flag}")), LISTED).await;
+        assert_eq!(asked.1, without, "{flag}");
+    }
+
+    // The operator's lane narrows to what it already sees.
+    let (_, ops) = send(&app, get_req(&page(&format!("as={SEAT_P}&hidden=true")))).await;
+    assert_eq!(page_rows(&ops), [("Half-Life".to_string(), true)]);
+    let (_, ops) = send(&app, get_req(&page("hidden=true"))).await;
+    assert_eq!(page_rows(&ops), [("Dota".to_string(), true)]);
+
+    // Signed out, the person's list is gone with its lane.
+    let out = format!("/api/v1/profiles/{SEAT_P}/devices/{LISTED}");
+    let out = axum::http::Request::delete(out)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&app, out).await.0, StatusCode::NO_CONTENT);
+    today(LISTED, plain).await;
+}
+
 /// The lane's pins. Each route is a profile's data, takes `as`, and is the owner's host's on a
 /// door; none was a route a device could write before the lane, and a device writes nothing
 /// else. A route added to `PERSON` fails here until it has a lane test.
