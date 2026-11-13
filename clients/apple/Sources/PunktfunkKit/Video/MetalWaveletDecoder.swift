@@ -414,6 +414,8 @@ public struct WaveletPlanes: @unchecked Sendable {
     public let csc: CscUniform
     /// PQ (HDR) stream: the presenter picks the HDR/tone-map planar pipeline + EDR config.
     public let pq: Bool
+    /// 10-bit without PQ: the planes are 16-bit, and the presenter takes the 10-bit drawable.
+    public var tenBitSDR: Bool { !pq && y.pixelFormat == .r16Unorm }
     public var width: Int { y.width }
     public var height: Int { y.height }
 }

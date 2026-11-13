@@ -1341,7 +1341,8 @@ extension MetalVideoPresenter {
                 isHDR: isHDR, tenBitSDR: MetalVideoPresenter.tenBitBuffer(pixelBuffer))
         case .planar(let planes):
             reconcileLayer(
-                decodedSize: CGSize(width: planes.width, height: planes.height), isHDR: planes.pq)
+                decodedSize: CGSize(width: planes.width, height: planes.height), isHDR: planes.pq,
+                tenBitSDR: planes.tenBitSDR)
         }
     }
 }
