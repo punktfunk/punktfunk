@@ -75,7 +75,7 @@ actor ArtCache {
         } catch {
             return // a cache that can't write is a slow cache, not a broken app
         }
-        // Amortised: prune once per budget's worth of new bytes. The budget is a ceiling on
+        // Amortised: prune once per `pruneInterval` of new bytes. The budget is a ceiling on
         // steady-state size, not a per-write invariant, so overshooting it between prunes by at
         // most one pruneInterval is the whole cost.
         writtenSincePrune += data.count
@@ -113,7 +113,7 @@ actor ArtCache {
         }
         guard total > maxBytes else { return }
 
-        // Oldest first — `data(for:)` touches on read, so this is least-recently-USED.
+        // Oldest first — `data(forKey:)` touches on read, so this is least-recently-USED.
         for file in files.sorted(by: { $0.date < $1.date }) {
             guard total > maxBytes else { break }
             try? fileManager.removeItem(at: file.url)
