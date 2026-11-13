@@ -81,6 +81,13 @@
 // `{"Listed": [rows]}`, `"NoProfiles"` or `{"Failed": "why"}`.
 #define PUNKTFUNK_CONSOLE_PUSH_PROFILES 20
 
+// `{"fp_hex": "…", "profile": "…", "answer": HiddenAnswer}` — the answer to the `FetchHidden`
+// command: `{"Listed": [LibraryGame]}` or `{"Failed": "why"}`.
+#define PUNKTFUNK_CONSOLE_PUSH_HIDDEN 21
+
+// `HideAnswer` — the answer to the `SetHidden` command, echoing its host, profile and title.
+#define PUNKTFUNK_CONSOLE_PUSH_HIDE 22
+
 // The room `punktfunk_console_take_unlock` needs: the longest password the wire takes.
 #define PUNKTFUNK_CONSOLE_UNLOCK_MAX 512
 
