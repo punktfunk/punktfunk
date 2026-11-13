@@ -1,9 +1,7 @@
 // On-disk cache for library cover art.
 //
-// Posters are the bulk of what the library screen transfers and they essentially never change, so
-// re-fetching them on every visit is pure waste — the Windows client has cached them on disk for
-// this reason and Apple did not. It matters more now that host art rides `MgmtTransport`: a cache
-// hit costs no connection at all.
+// Posters are the bulk of what the library screen transfers and essentially never change, so they
+// stay on disk: a hit costs no connection at all.
 //
 // Lives in the CACHES directory on purpose: every byte here is re-derivable from the host, so the
 // system is welcome to evict it under storage pressure. Entries are keyed by a caller-chosen

@@ -11,8 +11,6 @@
 // LaunchSpec schema in `crates/host/punktfunk-host/src/library.rs`.
 
 import Foundation
-// `punktfunkDefaultMgmtPort` (and StoredHost/DefaultsKey) now live in PunktfunkShared so the
-// dependency-free widget extension can share them; PunktfunkKit re-exports the module.
 import PunktfunkShared
 
 /// Cover art: a host-relative path to the host's art proxy, or an absolute CDN or `data:` URL.
@@ -130,8 +128,7 @@ public struct GameEntry: Codable, Hashable, Identifiable, Sendable {
     }
 
     /// Display name for the store badge — the same table the Rust clients use
-    /// (`pf_client_core::library::store_label`). Before this existed the badge said "Steam" for
-    /// every non-custom entry, which a Lutris or GOG title made a lie.
+    /// (`pf_client_core::library::store_label`).
     public var storeLabel: String { storeName ?? String(localized: L10n.libStoreOther) }
 
     /// Whether `store` is an id this build has a name for; an unknown one reads as "Game".

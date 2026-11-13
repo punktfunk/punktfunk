@@ -1,14 +1,8 @@
 // On-disk cache for a host's library CATALOG — the list of titles, not their art.
 //
-// Cover art has been cached since `ArtCache`, but the catalog behind it never was: every visit to a
-// library refetched `GET /api/v1/library` and showed nothing until that call returned. A host that
-// is asleep, or simply not reachable yet, therefore had an EMPTY library — which is the opposite of
-// what a player wants from the screen they use to decide what to play, and it makes waking a host
-// on library entry pointless: there would be nothing to look at while it boots.
-//
-// So the catalog is cached per host and rendered immediately, marked stale, and reconciled when the
-// host answers. Field request, 2026-08-16: "it would add a nice seamless experience if offline
-// library would be added".
+// The catalog is cached per host and rendered at once, marked stale, and reconciled when the host
+// answers: a host that is asleep or not reachable yet still has a shelf to choose from while a
+// wake boots it.
 //
 // Caches directory, like `ArtCache`, for the same reason: every byte is re-derivable from the host,
 // so the system is welcome to evict it. Unlike art, a catalog is small (a few hundred KB for a big
