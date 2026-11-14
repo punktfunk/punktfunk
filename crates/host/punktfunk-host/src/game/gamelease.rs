@@ -187,6 +187,9 @@ pub struct LeaseShared {
     /// The window stage is watching a compositor that lists windows, and has
     /// not found the game's yet. A launch hold waits on it past `running`.
     awaiting_window: AtomicBool,
+    /// The emulator bindings this launch's prepare wrote, the only ones its exit reverts
+    /// ([`crate::emulators::bindings_of`] at open, just after that prepare).
+    bindings: Option<u64>,
 }
 
 impl LeaseShared {
@@ -513,6 +516,7 @@ pub fn open(req: LeaseRequest, on_exit: OnExit) -> GameLease {
         group_leader: *leader,
     });
     let child = child.map(|(c, _)| c);
+    let bindings = crate::emulators::bindings_of(game.id.as_deref());
     let shared = Arc::new(LeaseShared {
         game,
         client,
@@ -534,6 +538,7 @@ pub fn open(req: LeaseRequest, on_exit: OnExit) -> GameLease {
         last_seen_ms: AtomicU64::new(0),
         outcome,
         awaiting_window: AtomicBool::new(false),
+        bindings,
     });
 
     if launcher {
@@ -1327,8 +1332,8 @@ fn finish(shared: &Arc<LeaseShared>, on_exit: &OnExit, why: &str, run: Option<Ru
 
 /// Mark the game exited and emit `game.exited`, once per lease: the watcher and the session's
 /// own exit signals (gamescope's atoms, a nested capture going away) can both see one exit.
-/// The emulator bindings `prepare` wrote for this session's pads go back too. A seat's saves
-/// are exported first, so the owner's plugins read the new ones.
+/// The emulator bindings this launch's `prepare` wrote go back too, unless a later launch has
+/// replaced them. A seat's saves are exported first, so the owner's plugins read the new ones.
 pub fn report_exit(shared: &LeaseShared) {
     if shared
         .state
@@ -1337,7 +1342,8 @@ pub fn report_exit(shared: &LeaseShared) {
     {
         return;
     }
-    std::thread::spawn(crate::emulators::revert_players);
+    let held = shared.bindings;
+    std::thread::spawn(move || crate::emulators::revert_players(held));
     crate::emulators::exchange::after_exit(shared.game.id.as_deref());
     crate::events::emit(crate::events::EventKind::GameExited {
         game: game_event_ref(shared),
@@ -1557,8 +1563,9 @@ pub fn end_detached(d: crate::launchreg::Detached, why: &'static str) {
             let procs: Vec<crate::procscan::ProcRef> =
                 d.procs.lock().unwrap_or_else(|e| e.into_inner()).clone();
             end_previous_launch(&d.game.title, &procs, why);
-            // No launch follows this one to revert the bindings.
-            crate::emulators::revert_players();
+            // Its bindings go back here, unless a later launch has replaced them.
+            let held = crate::emulators::bindings_of(d.game.id.as_deref());
+            crate::emulators::revert_players(held);
             crate::launchreg::ended(&d.procs);
             crate::emulators::exchange::after_exit(d.game.id.as_deref());
             crate::events::emit(crate::events::EventKind::GameExited {
