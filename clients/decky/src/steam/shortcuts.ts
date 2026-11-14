@@ -100,9 +100,9 @@ function removeDuplicateShortcuts(): number {
 // unprivileged backend.
 const SHELL = "/bin/sh";
 
-// Gated in storage so Steam's config dir is not rewritten on every launch; bump after the
-// shipped .vdf changes.
-const CONFIG_VERSION = 1;
+// Gated in storage so Steam's config dir is not rewritten on every launch; bump after a
+// layout or `LAYOUTS` in steam_input.py changes.
+const CONFIG_VERSION = 2;
 
 /** Point shortcut `name` at the touch layout unless `marker` already records CONFIG_VERSION. */
 async function configOnce(marker: string, name: string): Promise<void> {
