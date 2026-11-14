@@ -1330,8 +1330,9 @@ impl Shell {
     }
 
     /// A menu event while takeover `t` owns the input. B drops every card; the launch
-    /// hold before its dial lands and the connect card also cancel the dial. After the
-    /// dial lands, A or B on the launch hold shows the stream.
+    /// hold before its dial lands and the connect card also cancel the dial. A dropped
+    /// connect takes its re-ask along, so the next connect may ask again. After the dial
+    /// lands, A or B on the launch hold shows the stream.
     fn takeover_menu(&mut self, t: Takeover, ev: MenuEvent) -> Option<MenuPulse> {
         match (t, ev) {
             (Takeover::Launching, MenuEvent::Confirm | MenuEvent::Back)
@@ -1343,11 +1344,13 @@ impl Shell {
             // never sends one. Hosts handle a dial that lands after the cancel.
             (Takeover::Launching | Takeover::Connecting, MenuEvent::Back) => {
                 self.connect = Connect::Idle;
+                self.reask = Reask::None;
                 self.actions.push_back(OverlayAction::CancelConnect);
             }
             // Nothing has dialed yet: no cancel to send.
             (Takeover::Asking | Takeover::SeatWait, MenuEvent::Back) => {
                 self.connect = Connect::Idle;
+                self.reask = Reask::None;
             }
             (Takeover::Wake, MenuEvent::Back) => {
                 self.bus.send(ConsoleCmd::CancelWake);
@@ -1393,8 +1396,7 @@ impl Shell {
                 if connected && (p.press() || p.kind == PointerKind::Back) {
                     self.reveal_stream();
                 } else if !connected && p.kind == PointerKind::Back {
-                    self.connect = Connect::Idle;
-                    self.actions.push_back(OverlayAction::CancelConnect);
+                    self.takeover_menu(Takeover::Launching, MenuEvent::Back);
                 }
                 return true;
             }
