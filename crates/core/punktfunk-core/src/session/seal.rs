@@ -114,19 +114,21 @@ impl ParityLane {
 
 /// Runs `data_pass` here while the lane computes `frame`'s parity into `recovery`, and
 /// returns its result beside the lane's `(ns, result)`. `None`: the worker is gone, and
-/// `recovery` with it. The nanoseconds are the coder's, counted only when `timed`.
+/// `recovery` with it. The nanoseconds are the coder's, counted only when `timed`. The lane is
+/// borrowed exclusively, so `data_pass` can't put a second job on it.
 #[allow(unsafe_code)]
 pub(super) fn parity_beside<R>(
-    lane: &ParityLane,
+    lane: &mut ParityLane,
     geo: Geometry,
     frame: &[u8],
     recovery: &mut Vec<Vec<Vec<u8>>>,
     timed: bool,
     data_pass: impl FnOnce() -> R,
 ) -> (R, Option<(u64, Result<()>)>) {
-    // SAFETY: the worker reads `frame` only while it holds the job, and the job is back
-    // before this returns or unwinds: `catch_unwind` holds a panic in `data_pass` until the
-    // `recv`, which returns once the worker has handed the job back or has exited.
+    // SAFETY: the worker reads `frame` only while it holds the job, and `&mut` makes that the
+    // lane's only job. It is back before this returns or unwinds: `catch_unwind` holds a
+    // panic in `data_pass` until the `recv`, which returns once the worker has handed the job
+    // back or has exited.
     let frame = unsafe { std::mem::transmute::<&[u8], &'static [u8]>(frame) };
     let job = ParityJob {
         geo,
