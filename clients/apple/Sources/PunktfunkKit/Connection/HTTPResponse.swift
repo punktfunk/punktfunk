@@ -167,7 +167,9 @@ enum HTTPResponseParser {
                     j = end + 2
                 }
             }
-            guard spanFits(i, size + 2, within: b.count) else { return nil }
+            // A chunk longer than the buffer has not arrived; bounding it first keeps `+ 2` from
+            // trapping on a size near `Int.max`.
+            guard size <= b.count, spanFits(i, size + 2, within: b.count) else { return nil }
             i += size + 2 // payload plus its trailing CRLF
         }
     }

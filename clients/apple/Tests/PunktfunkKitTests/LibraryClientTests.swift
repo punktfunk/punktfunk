@@ -301,6 +301,12 @@ final class LibraryClientTests: XCTestCase {
         XCTAssertEqual(try HTTPResponseParser.messageLength(in: trailered), trailered.count)
     }
 
+    func testAChunkOfIntMaxNeitherTrapsNorFits() throws {
+        let huge = raw("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7fffffffffffffff\r\nx")
+        XCTAssertNil(try HTTPResponseParser.messageLength(in: huge))
+        XCTAssertThrowsError(try HTTPResponseParser.parse(huge))
+    }
+
     func testMessageLengthIsNilWithoutFraming() throws {
         // No Content-Length and not chunked ⇒ the body runs to EOF and the connection can't be
         // reused. Partial header blocks are likewise "not yet".
