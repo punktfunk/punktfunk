@@ -747,8 +747,17 @@ object SkiaConsole {
             ev.has("dead") -> {
                 Log.e(TAG, "console: render thread died: ${ev.optString("dead")}")
                 healthy = false // the touch UI takes over; only a process restart tries again
+                dropHeldSession()
             }
         }
+    }
+
+    /** Close the session the launch hold keeps and tell the console it ended: nothing will show it. */
+    private fun ConsoleState.dropHeldSession() {
+        val s = pendingSession ?: return
+        pendingSession = null
+        ioPool.execute { NativeBridge.nativeClose(s.handle) }
+        if (handle != 0L) NativeBridge.nativeConsoleSessionPhase(handle, 3, "")
     }
 
     private fun ConsoleState.onSettingsSaved(j: JSONObject) {
@@ -778,10 +787,11 @@ object SkiaConsole {
                     resumeDiscovery()
                 }
                 // The console's launch hold is done — the game is up, or the player asked to
-                // see. Only now does the stream view replace it.
-                "ShowStream" -> pendingSession?.let { s ->
-                    pendingSession = null
-                    onConnected?.invoke(s)
+                // see. Only now does the stream view replace it; detached, nothing will.
+                "ShowStream" -> {
+                    val take = onConnected
+                    if (take == null) dropHeldSession()
+                    else pendingSession?.let { s -> pendingSession = null; take(s) }
                 }
             }
             is JSONObject -> {
@@ -902,11 +912,13 @@ object SkiaConsole {
                     .copy(launchedFromLibrary = launchId != null, libraryPresetId = presetId)
                 // The console learns the dial landed and keeps the screen while its launch hold
                 // waits on the game; `ShowStream` releases the session. Only the shell knows
-                // whether it holds: a link, a desktop and a launcher tile start none.
+                // whether it holds: a link, a desktop and a launcher tile start none. A console
+                // whose render thread died never sends `ShowStream`, so it holds nothing.
                 NativeBridge.nativeConsoleSessionPhase(handle, 1, "")
                 val take = onConnected
                 when {
-                    NativeBridge.nativeConsoleHoldsLaunch(handle) -> pendingSession = session
+                    healthy && NativeBridge.nativeConsoleHoldsLaunch(handle) ->
+                        pendingSession = session
                     take != null -> take(session)
                     // Nothing on screen to hand it to (the console is parked behind a
                     // stream): close it rather than leave the host feeding a session
