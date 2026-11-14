@@ -1178,7 +1178,7 @@ pub(crate) async fn wake_profile(
         return opens_with_password();
     }
     let fp = device.map(|Extension(PairedDevice(fp))| fp);
-    if lane != AuthLane::Admin && !may_wake(&st, profiles, &p.id, fp.as_deref()) {
+    if lane != AuthLane::Admin && !may_wake(st.native.as_deref(), profiles, &p.id, fp.as_deref()) {
         return api_error_coded(
             StatusCode::FORBIDDEN,
             "device_not_allowed_to_wake_seat",
@@ -1219,8 +1219,14 @@ pub(crate) async fn wake_profile(
 
 /// A paired device wakes only a profile it opens with nothing asked ([`Profiles::opens`]): the
 /// one it lands in when it names none, one that can't play yet included, and another only while
-/// its live mask (expiry-aware) carries the launch grant.
-fn may_wake(st: &MgmtState, profiles: &Profiles, id: &str, fp: Option<&str>) -> bool {
+/// its live mask (expiry-aware) in `native` carries the launch grant. A dial's seat start keeps
+/// the same rule.
+pub(crate) fn may_wake(
+    native: Option<&crate::native_pairing::NativePairing>,
+    profiles: &Profiles,
+    id: &str,
+    fp: Option<&str>,
+) -> bool {
     let Some(fp) = fp else {
         return false;
     };
@@ -1228,9 +1234,7 @@ fn may_wake(st: &MgmtState, profiles: &Profiles, id: &str, fp: Option<&str>) -> 
         return false;
     }
     let own = profiles.pick(Some(fp), None).is_ok_and(|r| r.id == id);
-    own || st
-        .native
-        .as_ref()
+    own || native
         .and_then(|n| n.effective(fp, crate::clock::unix_secs()))
         .is_some_and(|mask| mask & punktfunk_core::quic::GRANT_LAUNCH != 0)
 }

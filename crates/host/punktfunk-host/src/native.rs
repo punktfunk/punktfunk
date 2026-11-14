@@ -1377,15 +1377,15 @@ async fn admit_here(
     // Before placement, so a profile that plays here and one sent to its seat pass one check.
     let fp = fp_hex.as_deref();
     let wire = (&mut *send, &mut *recv);
-    let presence = lock::admit(host, conn, wire, first, &resolved, fp).await?;
+    let (presence, unlocked) = lock::admit(host, conn, wire, first, &resolved, fp).await?;
     // A refusal ends the connect here and leaves the profile's last-used time alone.
     let placed = place_profile(
         conn,
         (send, recv),
         fp_hex.clone(),
         first,
-        &resolved,
-        &host.np,
+        (&resolved, unlocked),
+        host,
     )
     .await?;
     host.profiles.touch(&resolved.id);
@@ -2152,16 +2152,17 @@ fn display_half(
 
 /// A seat profile plays on its seat's host: send the client there, or say why not. A person's
 /// own Linux account goes there only once the supervisor unlocked it for this device, and the
-/// device's claim on it goes to [`unlock::watch_left`]. A made seat a dial's unlock opened starts
-/// for that dial ([`start_for_dial`]). `Some` when the session ended in a redirect; `None` when
-/// it plays here.
+/// device's claim on it goes to [`unlock::watch_left`]. A made seat starts for a dial that
+/// announced an unlock ([`start_for_dial`]) when `unlocked` (that unlock opened the profile's
+/// lock) or when the wake route would start it for this device ([`crate::mgmt::may_wake`]).
+/// `Some` when the session ended in a redirect; `None` when it plays here.
 async fn place_profile(
     conn: &link::SessionLink,
     (send, recv): (&mut link::CtlSend, &mut link::CtlReader),
     fp: Option<String>,
     first: &ClientHello,
-    resolved: &crate::profiles::Resolved,
-    np: &NativePairing,
+    (resolved, unlocked): (&crate::profiles::Resolved, bool),
+    host: &SessionHost,
 ) -> Result<Option<Served>> {
     use crate::seats::placement::{here, place, Asker, Placement};
     if here(&resolved.os_account) {
@@ -2175,7 +2176,8 @@ async fn place_profile(
     let claim = match snap.person_row(&resolved.os_account).cloned() {
         Some(row) => {
             let device = fp.as_deref().map(|fp| {
-                let label = np
+                let label = host
+                    .np
                     .list()
                     .into_iter()
                     .find(|c| c.fingerprint.eq_ignore_ascii_case(fp))
@@ -2191,9 +2193,13 @@ async fn place_profile(
         }
         None => None,
     };
-    // A client dials a stopped locked seat with its unlock rather than waking it: the host
-    // refuses that device a wake until the unlock admits it.
-    if claim.is_none() && first.unlock_follows() {
+    // A dial with an announced unlock starts its stopped seat when that unlock opened the
+    // lock, or as a wake would.
+    if claim.is_none()
+        && first.unlock_follows()
+        && (unlocked
+            || crate::mgmt::may_wake(Some(&host.np), &host.profiles, &resolved.id, fp.as_deref()))
+    {
         snap = start_for_dial(conn, send, &seats, snap, &resolved.os_account).await?;
     }
     let follows = first
@@ -2260,7 +2266,7 @@ async fn start_for_dial(
         Some((s, _)) if s.adopted_uid.is_none() && !start_settled(Some(s), &mut moved) => {}
         _ => return Ok(snap),
     }
-    tracing::info!(seat = %id, "starting the seat a profile unlock opened");
+    tracing::info!(seat = %id, "starting the seat for a dial");
     crate::mgmt::start_seat(&id);
     let deadline = tokio::time::Instant::now() + SEAT_START_WAIT;
     let mut pending = tokio::time::interval(PENDING_EVERY);

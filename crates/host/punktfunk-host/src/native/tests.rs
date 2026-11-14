@@ -2429,13 +2429,14 @@ enum Sends {
     Nothing,
 }
 
-/// What it hears back: a redirect, the session starting here, or the host's typed close and its
-/// sentence.
+/// What it hears back: a redirect, the session starting here, the host's typed close and its
+/// sentence, or, from [`dial_until_held`], a `Pending`.
 #[derive(Debug, PartialEq)]
 enum Heard {
     Redirect { port: u16, pin: String },
     Played,
     Closed(punktfunk_core::reject::RejectReason, String),
+    Held,
 }
 
 /// One dial for `profile`, offering `features`, then `sends`; the `Pending`s it heard and how
@@ -2443,9 +2444,31 @@ enum Heard {
 async fn dial_person(
     port: u16,
     identity: (&str, &str),
+    profile: (&str, Option<&crate::profiles::Profiles>),
+    features: punktfunk_core::quic::v2::features::FeatureSet,
+    sends: Sends,
+) -> (usize, Heard) {
+    dial_until(port, identity, profile, features, sends, false).await
+}
+
+/// [`dial_person`], ended by the client at the host's first `Pending`.
+async fn dial_until_held(
+    port: u16,
+    identity: (&str, &str),
+    profile: (&str, Option<&crate::profiles::Profiles>),
+    features: punktfunk_core::quic::v2::features::FeatureSet,
+    sends: Sends,
+) -> (usize, Heard) {
+    dial_until(port, identity, profile, features, sends, true).await
+}
+
+async fn dial_until(
+    port: u16,
+    identity: (&str, &str),
     (profile, profiles): (&str, Option<&crate::profiles::Profiles>),
     features: punktfunk_core::quic::v2::features::FeatureSet,
     sends: Sends,
+    held_ends: bool,
 ) -> (usize, Heard) {
     use punktfunk_core::quic::v2::{io as v2io, msg, registry};
     let (ep, observed) = endpoint::client_shared(None, Some(identity), &[registry::ALPN], None);
@@ -2486,6 +2509,10 @@ async fn dial_person(
     while let Ok((ty, body)) = recv.read_frame().await {
         if ty == msg::Pending::TYPE {
             pendings += 1;
+            if held_ends {
+                conn.close(0u32.into(), b"");
+                return (pendings, Heard::Held);
+            }
             continue;
         }
         if ty == registry::MSG_SERVER_HELLO {
@@ -3278,4 +3305,99 @@ fn signing_a_device_out_ends_its_session() {
     let unavailable = punktfunk_core::reject::RejectReason::SeatUnavailable.close_code();
     assert_eq!(code, u64::from(unavailable));
     assert_eq!(reason, "This device was signed out of this profile.");
+}
+
+/// A dial that announces an unlock starts a stopped made seat only as a wake would: for a device
+/// whose unlock opened the profile's lock, or one holding the launch grant. Any other device is
+/// told the seat is down, with nothing started and no `Pending`.
+#[test]
+fn a_dial_starts_a_stopped_seat_only_as_a_wake_would() {
+    use crate::native::unlock::fake::{self, Fake};
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let port = 19821;
+    let dir = crate::test_support::scratch();
+    let (open_seat, locked_seat) = ("0a".repeat(16), "0b".repeat(16));
+    let stopped = |id: &str| {
+        let mut seat = fake::person(id, port + 1000);
+        seat.adopted_uid = None;
+        seat.fingerprint = None;
+        seat.runtime.state = pf_seats::RuntimeState::Stopped;
+        seat
+    };
+    let seat = |id: &str, name: &str, on: &str| {
+        serde_json::json!({"id": id, "display_name": name,
+            "os_account": {"kind": "seat", "seat": on}})
+    };
+    let file = serde_json::json!({"version": 1, "profiles": [
+        {"id": OWNER_PROFILE, "display_name": "Enrico", "os_account": {"kind": "operator"}},
+        seat(KID_PROFILE, "Kid", &locked_seat),
+        seat(SHARER_PROFILE, "Guest", &open_seat),
+    ]});
+    std::fs::write(dir.join("profiles.json"), file.to_string()).unwrap();
+    let pin = serde_json::to_value(pf_seats::locks::PinHash::new("2468").unwrap()).unwrap();
+    let locks = serde_json::json!({"version": 1,
+        "profiles": {KID_PROFILE: {"locked": true, "pin": pin}}});
+    std::fs::write(dir.join(pf_seats::locks::FILE), locks.to_string()).unwrap();
+    let profiles = Arc::new(crate::profiles::Profiles::load_with(
+        Some(dir.join("profiles.json")),
+        None,
+    ));
+    let np = NativePairing::load_with(Some(dir.join("punktfunk1-paired.json")), None, false);
+    let np = Arc::new(np.unwrap());
+    let pad = endpoint::generate_identity().unwrap();
+    let couch = endpoint::generate_identity().unwrap();
+    let fp =
+        |(cert, _): &(String, String)| hex::encode(endpoint::fingerprint_of_pem(cert).unwrap());
+    let controller_only = crate::native_pairing::Access {
+        grants: punktfunk_core::quic::GRANT_PRESET_CONTROLLER_ONLY,
+        expires_unix: None,
+        until_disconnect: false,
+    };
+    np.add_with_access("Pad", &fp(&pad), Some(controller_only))
+        .unwrap();
+    np.add_with_access("Couch", &fp(&couch), None).unwrap();
+    let sup = Arc::new(Fake::new(
+        vec![stopped(&open_seat), stopped(&locked_seat)],
+        |_| Ok(pf_seats::ipc::CommandResult::Left),
+    ));
+    let _armed = [
+        fake::arm(&fp(&pad), sup.clone()),
+        fake::arm(&fp(&couch), sup),
+    ];
+    let host = spawn_profile_host(port, 3, np, profiles);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    // A started seat holds the dial with `Pending`s until it runs.
+    let dial = |(cert, key): &(String, String), profile, pin: &str| {
+        let sends = Sends::Unlock(password(pin, false, None));
+        let identity = (cert.as_str(), key.as_str());
+        let dialled = dial_until_held(port, identity, (profile, None), offers(true), sends);
+        let wait = std::time::Duration::from_secs(5);
+        rt.block_on(async { tokio::time::timeout(wait, dialled).await })
+            .expect("the host answers the dial")
+    };
+
+    let refused = dial(&pad, SHARER_PROFILE, "0000");
+    let unavailable = punktfunk_core::reject::RejectReason::SeatUnavailable;
+    assert!(
+        matches!(refused, (0, Heard::Closed(r, _)) if r == unavailable),
+        "{refused:?}"
+    );
+    assert_eq!(
+        dial(&pad, KID_PROFILE, "2468"),
+        (1, Heard::Held),
+        "its PIN opened the lock: the seat starts"
+    );
+    assert_eq!(
+        dial(&couch, SHARER_PROFILE, "0000"),
+        (1, Heard::Held),
+        "the launch grant starts it"
+    );
+    // The last dial's close goes out on a turn of the runtime.
+    rt.block_on(async { tokio::time::sleep(std::time::Duration::from_millis(200)).await });
+    host.join().unwrap().unwrap();
 }
