@@ -83,11 +83,16 @@ fn scale(v: i16, num: i32, den: i32) -> i16 {
     ((v as i32 * num) / den).clamp(i16::MIN as i32, i16::MAX as i32) as i16
 }
 
-/// Wire DualSense (`gs::MOTION_*`) → Deck `hid-steam` (16 LSB/°·s, 16384 LSB/g).
+/// Wire DualSense (`gs::MOTION_*`) → a Steam pad's raw IMU (16 LSB/°·s, 16384 LSB/g).
+/// The wire has Y up and Z toward the player. A Steam pad has Z up and Y away from the
+/// player, so raw is `[x, −z, y]`: the inverse of what `hid-steam` and SDL read.
 pub fn motion_wire_to_deck(gyro: [i16; 3], accel: [i16; 3]) -> ([i16; 3], [i16; 3]) {
+    let raw = |[x, y, z]: [i16; 3], num, den| {
+        [scale(x, num, den), scale(z, -num, den), scale(y, num, den)]
+    };
     (
-        gyro.map(|g| scale(g, GYRO_NUM, GYRO_DEN)),
-        accel.map(|a| scale(a, ACCEL_NUM, ACCEL_DEN)),
+        raw(gyro, GYRO_NUM, GYRO_DEN),
+        raw(accel, ACCEL_NUM, ACCEL_DEN),
     )
 }
 
@@ -127,14 +132,15 @@ mod tests {
     }
 
     #[test]
-    fn motion_rescale_to_deck_units() {
-        // gyro × 16/20 = 0.8; accel × 16384/10000 = 1.6384.
-        let (g, a) = motion_wire_to_deck([1000, -2000, 0], [10000, -5000, 0]);
-        assert_eq!(g, [800, -1600, 0]);
-        assert_eq!(a, [16384, -8192, 0]);
-        // Saturates rather than wraps.
-        let (_, a) = motion_wire_to_deck([0; 3], [32767, i16::MIN, 0]);
-        assert_eq!(a[0], i16::MAX);
-        assert_eq!(a[1], i16::MIN);
+    fn motion_lands_in_deck_units_on_deck_axes() {
+        // gyro × 16/20 = 0.8; accel × 16384/10000 = 1.6384. Wire y is raw z, wire z is raw −y.
+        let (g, a) = motion_wire_to_deck([1000, -2000, 500], [10000, -5000, 2500]);
+        assert_eq!(g, [800, -400, -1600]);
+        assert_eq!(a, [16384, -4096, -8192]);
+        // SDL's Deck driver and `hid-steam` read `[x, z, −y]`: the wire axes come back.
+        assert_eq!([g[0], g[2], -g[1]], [800, -1600, 400]);
+        // Saturates rather than wraps, the negated axis too.
+        let (_, a) = motion_wire_to_deck([0; 3], [32767, i16::MIN, i16::MIN]);
+        assert_eq!(a, [i16::MAX, i16::MAX, i16::MIN]);
     }
 }
