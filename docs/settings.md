@@ -104,7 +104,6 @@ today's state and change with the screen.
 |---|---|
 | `gamepad` | Linux, Windows and Android list `dualsense` before `xboxone`; Android and Apple have no Steam Controller 2; webOS and PS5 offer four of seven |
 | `codec` | Apple lists `av1` before `h264`; webOS has no PyroWave, Tizen only `auto`, `hevc`, `h264`, PS5 no AV1 |
-| `audio_format` | console, Linux, Windows: Opus and two lossless rates; Android, Apple: Opus and five |
 | `decoder` | Linux offers VAAPI, Windows Direct3D 11 |
 | `refresh_hz` | Apple lists only the rates the display reaches |
 | `bitrate_kbps` | a number box (Linux, Windows), a list with Automatic and Custom (console, Android, Apple TV), a switch and a slider (Mac, iPhone, iPad); the rungs differ too |

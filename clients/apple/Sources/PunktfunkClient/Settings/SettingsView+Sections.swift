@@ -1404,7 +1404,7 @@ extension SettingsView {
         // datagram (`pcm::frame_us_for`), 44.1 and 48 kHz surround fit a 1–1.5 ms rung, which
         // costs packets; 88.2 kHz upward fits none, so it gets the other sentence.
         guard choice == .lossless441 || choice == .lossless48 else {
-            return head + " " + String(localized: L10n.applePlayerAudioFormatSurroundLimitHint)
+            return head + " " + String(localized: L10n.playerAudioFormatSurroundLimitHint)
         }
         return head + " " + String(localized: effective.audioChannels == 6
             ? L10n.applePlayerAudioFormatSurround6Hint

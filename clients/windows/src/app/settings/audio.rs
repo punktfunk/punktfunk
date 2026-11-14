@@ -5,10 +5,11 @@ use super::{
     setting_combo, setting_toggle, Cx,
 };
 use crate::trust::Settings;
-// The audio-format table lives in the session crate, not here: the same three stored values also
+// The audio-format table lives in the session crate, not here: the same stored values also
 // have to reach the wire, and they are shared verbatim with the Apple and Android clients so one
 // preset round-trips. A second copy of the spellings in this file is exactly the drift the
 // shared table exists to prevent — which is why this row has no `const` beside AUDIO_CHANNELS.
+use pf_client_core::audio_format::surround_over_limit;
 use pf_client_core::session::AUDIO_FORMATS;
 use pf_client_core::settings::Label;
 use pf_l10n::client;
@@ -158,19 +159,14 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
     );
 
     let d = Settings::default();
-    let stereo = s.audio_channels == 2;
-    let mut advanced = Vec::new();
-    // Stereo-only, so HIDDEN under 5.1/7.1: a lossless surround frame does not fit one
-    // QUIC datagram at the default MTU (design/hi-res-audio.md §4.2).
-    if stereo {
-        advanced.push(described_overridable(
-            cx,
-            &rows::AUDIO_FORMAT,
-            format_combo,
-            client::player_audio_format_hint(),
-        ));
+    // Surround above 48 kHz fits no datagram and comes back as Opus: the caption says so.
+    let mut format_hint = client::player_audio_format_hint().to_string();
+    if surround_over_limit(&s.audio_format, s.audio_channels) {
+        format_hint.push(' ');
+        format_hint.push_str(client::player_audio_format_surround_limit_hint());
     }
-    advanced.extend([
+    let advanced = vec![
+        described_overridable(cx, &rows::AUDIO_FORMAT, format_combo, &format_hint),
         described_overridable(
             cx,
             &rows::KEEP_HOST_AUDIO,
@@ -183,9 +179,9 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
             echo_toggle,
             client::player_echo_cancel_hint(),
         ),
-    ]);
+    ];
     let changed = [
-        stereo && s.audio_format != d.audio_format,
+        s.audio_format != d.audio_format,
         s.keep_host_audio != d.keep_host_audio,
         s.echo_cancel != d.echo_cancel,
     ];

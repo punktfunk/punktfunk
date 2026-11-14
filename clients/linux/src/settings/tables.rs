@@ -2,6 +2,7 @@
 //! its list. Seeding a row and resetting one read the same [`index`] functions.
 
 use crate::trust::Settings;
+use pf_client_core::audio_format::surround_over_limit;
 pub use pf_client_core::session::AUDIO_FORMATS;
 use pf_client_core::settings::{MouseMode, TouchMode};
 use pf_client_core::trust::{HudCorner, StatsVerbosity};
@@ -350,6 +351,18 @@ pub fn codec_caption(i: u32) -> &'static str {
         client::player_codec_pyrowave_hint()
     } else {
         client::player_codec_hint()
+    }
+}
+
+/// The Audio quality caption for row `format` at `channels`: the hint, plus the limit when
+/// the pick comes back as Opus.
+pub fn audio_format_caption(channels: u8, format: u32) -> String {
+    let hint = client::player_audio_format_hint();
+    if surround_over_limit(at(AUDIO_FORMATS, format).0, channels) {
+        let limit = client::player_audio_format_surround_limit_hint();
+        format!("{hint} {limit}")
+    } else {
+        hint.to_string()
     }
 }
 

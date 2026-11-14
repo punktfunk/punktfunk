@@ -103,8 +103,7 @@ pub fn devices() -> Result<(Vec<AudioDevice>, Vec<AudioDevice>)> {
 pub struct PlaybackFormat {
     /// Interleaved count (2/6/8). Wire order FL FR FC LFE RL RR SL SR.
     pub channels: u32,
-    /// 48_000 on Opus; 48_000 or 96_000 on lossless (`design/hi-res-audio.md`).
-    /// 44.1 kHz and its multiples are deferred: they truncate `JitterPolicy`'s integer samples-per-ms.
+    /// 48_000 on Opus; any `pcm::rate_is_supported` rate on lossless.
     pub rate_hz: u32,
     /// One protocol frame in µs: 5_000 on Opus; lossless from path MTU (4 ms at 48/24, 2 ms at 96/24).
     /// Sizes the graph quantum and the policy's shed/floor arithmetic.
@@ -296,14 +295,15 @@ fn pw_thread(
 
     // Pre-reserved so `extend` never reallocates on the realtime loop. Cap plus the
     // 64-chunk channel of this plane's frame; sized from rate, frame, and channels.
+    // Divide last: 44 100 Hz has no whole samples per millisecond.
     let ring_capacity = {
-        let per_ms = fmt.rate_hz as usize * channels / 1000;
+        let cap = fmt.rate_hz as usize * channels * TUNING.hard_cap_ms as usize / 1000;
         let frame = punktfunk_core::audio::pcm::samples_per_frame(
             fmt.rate_hz,
             fmt.frame_us,
             fmt.channels as u8,
         );
-        per_ms * TUNING.hard_cap_ms as usize + 64 * frame
+        cap + 64 * frame
     };
     let ud = PlayerData {
         rx: pcm_rx,

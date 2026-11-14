@@ -1,6 +1,7 @@
 //! Audio: channels, this device's speaker and microphone, the uplink.
 
 use super::Build;
+use crate::settings::choice::set_row_subtitle;
 use crate::settings::field::Field;
 use crate::settings::spec::{self, Page, Spec};
 use crate::settings::tables::*;
@@ -8,7 +9,17 @@ use crate::trust::Settings;
 use adw::prelude::*;
 use pf_client_core::audio::AudioDevice;
 use pf_l10n::client;
+use std::cell::Cell;
 use std::rc::Rc;
+
+/// The channel count behind a row of the Audio channels picker.
+fn channel_count(i: u32) -> u8 {
+    match i {
+        1 => 6,
+        2 => 8,
+        _ => 2,
+    }
+}
 
 pub fn audio(b: &mut Build) {
     let mut p = b.page(Page::Audio, "audio-volume-high-symbolic");
@@ -21,23 +32,33 @@ pub fn audio(b: &mut Build) {
             client::player_audio_channels_8(),
         ],
     );
-    // Lossless is stereo-only: a lossless surround frame does not fit one QUIC datagram at the
-    // default MTU (design/hi-res-audio.md §4.2). Greyed, so the reason stays beside its cause.
     let labels: Vec<&str> = AUDIO_FORMATS.iter().map(|(_, l)| l()).collect();
     let format = b.choice(&spec::AUDIO_FORMAT, &labels);
     {
+        // Surround above 48 kHz comes back as Opus: the caption says so beside its cause.
+        // The handlers share the two indices, not the rows, so no row owns its own closure.
+        let picked = Rc::new(Cell::new((0u32, 0u32)));
         let w = format.widget().clone();
-        channels.connect_changed(move |i| w.set_sensitive(i == 0));
+        let show = Rc::new(move |(channels, format): (u32, u32)| {
+            set_row_subtitle(&w, &audio_format_caption(channel_count(channels), format));
+        });
+        channels.connect_changed({
+            let (picked, show) = (picked.clone(), show.clone());
+            move |i| {
+                picked.set((i, picked.get().1));
+                show(picked.get());
+            }
+        });
+        format.connect_changed(move |i| {
+            picked.set((picked.get().0, i));
+            show(picked.get());
+        });
     }
     b.put(
         &mut p,
         Some(&g),
         Field::choice(&spec::AUDIO_CHANNELS, &channels, index::surround, |s, i| {
-            s.audio_channels = match i {
-                1 => 6,
-                2 => 8,
-                _ => 2,
-            }
+            s.audio_channels = channel_count(i)
         }),
     );
     let speaker = device(

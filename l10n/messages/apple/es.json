@@ -188,7 +188,6 @@
 	"apple_player_mic_channel_n": "Canal {n}",
 	"apple_player_audio_format_opus_hint": "Opus comprimido a 256 kbit/s — prácticamente transparente.",
 	"apple_player_audio_format_lossless_hint": "PCM exacto al bit, unos {rate} Mbit/s además del vídeo, o Estándar si alguno de los dos lo rechaza.",
-	"apple_player_audio_format_surround_limit_hint": "El sonido envolvente requiere 48 kHz o menos.",
 	"apple_player_audio_format_surround6_hint": "El triple en 5.1.",
 	"apple_player_audio_format_surround8_hint": "El cuádruple en 7.1.",
 	"apple_player_echo_cancel_mac_hint": "Solo en los dispositivos predeterminados del sistema.",

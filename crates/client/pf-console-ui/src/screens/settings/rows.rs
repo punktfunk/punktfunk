@@ -4,7 +4,7 @@
 
 use crate::screens::{home, Ctx};
 use crate::widgets::RowSpec;
-use pf_client_core::audio_format::{AUDIO_FORMATS, AUDIO_FORMAT_OPUS};
+use pf_client_core::audio_format::{surround_over_limit, AUDIO_FORMATS, AUDIO_FORMAT_OPUS};
 use pf_client_core::display_targets::{host_screen_choices, HostScreenChoice, Targets};
 use pf_client_core::presets::SettingsOverlay;
 use pf_client_core::settings::Label;
@@ -52,7 +52,7 @@ pub enum RowId {
     Vsync,
     AllowVrr,
     Audio,
-    /// Cross-client `audio_format` key. Gated on stereo — see [`row_spec`].
+    /// Cross-client `audio_format` key.
     AudioFormat,
     /// `CLIENT_CAP_KEEP_HOST_AUDIO`. Advertised on every platform, including Android.
     KeepHostAudio,
@@ -1756,10 +1756,6 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
 fn row_enabled(id: RowId, s: &pf_client_core::trust::Settings) -> bool {
     match id {
         RowId::EchoCancel => s.mic_enabled,
-        // Session still drops lossless unless `audio_channels == 2` (before the wire).
-        // A live row under surround would change nothing. Delete this arm when that
-        // filter learns the frame ladder — not before.
-        RowId::AudioFormat => s.audio_channels == 2,
         RowId::Pad
         | RowId::PadType
         | RowId::PadRumble
@@ -1810,6 +1806,15 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
         RowId::Vsync => m::player_vsync_hint().into(),
         RowId::AllowVrr => m::player_allow_vrr_hint().into(),
         RowId::Audio => m::player_audio_channels_hint().into(),
+        // The host answers Opus here; say why beside the pick.
+        RowId::AudioFormat
+            if surround_over_limit(&ctx.settings.audio_format, ctx.settings.audio_channels) =>
+        {
+            two(
+                m::player_audio_format_hint(),
+                m::player_audio_format_surround_limit_hint().into(),
+            )
+        }
         RowId::AudioFormat => m::player_audio_format_hint().into(),
         RowId::KeepHostAudio => m::player_keep_host_audio_hint().into(),
         RowId::Mic => two(

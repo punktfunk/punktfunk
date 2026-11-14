@@ -218,14 +218,13 @@ pub struct Settings {
     pub echo_cancel: bool,
     /// Requested channels: 2 (stereo), 6 (5.1), 8 (7.1). Host clamps; decoder follows.
     pub audio_channels: u8,
-    /// Cross-client `audio_format`: Opus (default), lossless 48, or lossless 96
+    /// Cross-client `audio_format`: Opus (default) or a lossless rate
     /// (`crate::audio_format::AUDIO_FORMATS`).
     ///
-    /// Off by default: lossless takes 2.3–4.6 Mbps outside the ABR video budget, vs
-    /// ~256 kbps Opus. A request, never a fact — the host may still answer Opus.
-    /// Stereo-only: a lossless surround frame does not fit one QUIC datagram
-    /// (`design/hi-res-audio.md`). A `String` so an unrecognized value resolves to
-    /// Opus rather than ending a session.
+    /// Off by default: lossless takes 2.1–8.5 Mbps in stereo outside the ABR video
+    /// budget, vs ~256 kbps Opus. A request, never a fact — the host may still answer
+    /// Opus, and does for surround above 48 kHz. A `String` so an unrecognized value
+    /// resolves to Opus rather than ending a session.
     #[serde(default = "default_audio_format")]
     pub audio_format: String,
     /// Ask the host to leave its own audio devices alone (`CLIENT_CAP_KEEP_HOST_AUDIO`).

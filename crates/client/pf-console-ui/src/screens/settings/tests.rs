@@ -267,14 +267,13 @@ fn scalar(v: &serde_json::Value) -> String {
 
 /// Pickers that list fewer entries than the catalogue, with the ones they list in the
 /// catalogue's order: a codec the platform cannot decode, a pad it cannot present, a decoder
-/// the OS lacks, the lossless rates the console offers.
+/// the OS lacks.
 fn listed_subset(key: &str, platform: &str) -> Option<&'static [&'static str]> {
     Some(match (key, platform) {
         ("codec", "webos") => &["auto", "hevc", "h264", "av1"],
         ("codec", "tizen") => &["auto", "hevc", "h264"],
         ("codec", "ps5") => &["auto", "hevc", "h264", "pyrowave"],
         ("gamepad", "webos" | "ps5") => &["auto", "xboxone", "dualsense", "dualshock4"],
-        ("audio_format", _) => &["opus", "lossless48", "lossless96"],
         ("decoder", "desktop") if cfg!(windows) => {
             &["auto", "native-vulkan", "native-d3d11va", "software"]
         }
@@ -2173,13 +2172,15 @@ fn dpad_alone_reaches_every_tab() {
 }
 
 /// Assert against `audio_format` constants so a spelling change there reds this
-/// instead of writing a key nobody reads. Dim under surround: see [`row_spec`].
+/// instead of writing a key nobody reads. Live at every channel count: the hint names
+/// the one combination the host answers with Opus.
 #[test]
-fn audio_format_ships_off_and_follows_the_channel_count() {
-    use pf_client_core::audio_format::{AUDIO_FORMAT_LOSSLESS_48, AUDIO_FORMAT_LOSSLESS_96};
+fn audio_format_ships_off_and_steps_at_every_channel_count() {
+    use pf_client_core::audio_format::{
+        AUDIO_FORMATS, AUDIO_FORMAT_LOSSLESS_48, AUDIO_FORMAT_LOSSLESS_96,
+    };
     let mut settings = Settings::default();
     assert_eq!(settings.audio_format, AUDIO_FORMAT_OPUS, "off by default");
-    assert_eq!(settings.audio_channels, 2, "…and the gate starts open");
     let library = crate::library::LibraryShared::default();
     let mut ctx = Ctx::test(&mut settings, &library);
     let mut s = SettingsScreen::with_presets(Vec::new());
@@ -2194,17 +2195,17 @@ fn audio_format_ships_off_and_follows_the_channel_count() {
     assert_eq!(
         first_advanced.map(|i| audio[i]),
         Some(RowId::AudioFormat),
-        "it leads the tab's advanced rows, the nearest it can sit to the row that dims it"
+        "it leads the tab's advanced rows, the nearest it can sit to Audio channels"
     );
 
     assert!(
         !adjust(RowId::AudioFormat, -1, false, &mut ctx),
         "already Opus = thud"
     );
-    assert!(adjust(RowId::AudioFormat, 1, false, &mut ctx));
-    assert_eq!(ctx.settings.audio_format, AUDIO_FORMAT_LOSSLESS_48);
-    assert!(adjust(RowId::AudioFormat, 1, false, &mut ctx));
-    assert_eq!(ctx.settings.audio_format, AUDIO_FORMAT_LOSSLESS_96);
+    for (want, _) in &AUDIO_FORMATS[1..] {
+        assert!(adjust(RowId::AudioFormat, 1, false, &mut ctx));
+        assert_eq!(ctx.settings.audio_format, *want);
+    }
     assert!(
         !adjust(RowId::AudioFormat, 1, false, &mut ctx),
         "last = thud"
@@ -2212,21 +2213,18 @@ fn audio_format_ships_off_and_follows_the_channel_count() {
     assert!(adjust(RowId::AudioFormat, 1, true, &mut ctx));
     assert_eq!(ctx.settings.audio_format, AUDIO_FORMAT_OPUS);
 
+    // Surround keeps the row live; only a rate no surround frame fits earns the extra line.
+    let limit = pf_l10n::client::player_audio_format_surround_limit_hint();
     ctx.settings.audio_format = AUDIO_FORMAT_LOSSLESS_48.into();
     ctx.settings.audio_channels = 6;
-    assert!(!row_spec(RowId::AudioFormat, &ctx, &[], &Default::default()).enabled);
-    assert!(
-        !adjust(RowId::AudioFormat, 1, false, &mut ctx),
-        "surround = thud"
-    );
-    assert!(!adjust(RowId::AudioFormat, 1, true, &mut ctx), "A too");
-    assert_eq!(
-        ctx.settings.audio_format, AUDIO_FORMAT_LOSSLESS_48,
-        "and nothing was written — the stored preference survives the gate"
-    );
-    assert!(s.row_ids(&ctx).contains(&RowId::AudioFormat));
-    ctx.settings.audio_channels = 2;
     assert!(row_spec(RowId::AudioFormat, &ctx, &[], &Default::default()).enabled);
+    assert!(!detail(RowId::AudioFormat, &ctx).contains(limit));
+    assert!(adjust(RowId::AudioFormat, 1, false, &mut ctx));
+    assert!(adjust(RowId::AudioFormat, 1, false, &mut ctx));
+    assert_eq!(ctx.settings.audio_format, AUDIO_FORMAT_LOSSLESS_96);
+    assert!(detail(RowId::AudioFormat, &ctx).ends_with(limit));
+    ctx.settings.audio_channels = 2;
+    assert!(!detail(RowId::AudioFormat, &ctx).contains(limit));
 
     ctx.settings.audio_format = AUDIO_FORMAT_OPUS.into();
     let opus = row_spec(RowId::AudioFormat, &ctx, &[], &Default::default()).value;
