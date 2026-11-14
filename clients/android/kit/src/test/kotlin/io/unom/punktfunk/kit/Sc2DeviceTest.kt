@@ -226,13 +226,12 @@ class Sc2DeviceTest {
     }
 
     @Test
-    fun `an unknown output id keeps its whole payload`() {
-        // Strip the id, keep the rest, never guess-trim. The characteristic still follows the
-        // firmware's id-plus-0x35 scheme, whatever the id.
-        val unknown = byteArrayOf(0x90.toByte(), 1, 2, 3, 4, 5)
-        val write = Sc2Device.outputWrite(unknown)!!
-        assertEquals("100f6cc5-1735-4313-b402-38567131e5f3", write.charUuid)
-        assertArrayEquals(byteArrayOf(1, 2, 3, 4, 5), write.payload)
+    fun `an output id outside the block is never written`() {
+        // 0xFF + 0x35 wraps to 0x34, the feature characteristic: a host must not reach it this way.
+        assertEquals(Sc2Device.BLE_FEATURE_CHAR, Sc2Device.bleOutputChar(0xFF))
+        assertNull(Sc2Device.outputWrite(byteArrayOf(0xFF.toByte(), 0x8E.toByte(), 0)))
+        assertNull(Sc2Device.outputWrite(byteArrayOf(0x90.toByte(), 1, 2, 3, 4, 5)))
+        assertNull(Sc2Device.outputWrite(byteArrayOf(0x7F, 1)))
     }
 
     @Test
@@ -273,7 +272,7 @@ class Sc2DeviceTest {
         for (i in 0 until rows.length()) {
             val row = rows.getJSONObject(i)
             val id = row.getInt("id")
-            // Undeclared ids stay whole on both sides: the host does not trim, we do not guess.
+            // An undeclared id has no length here: the host sends it whole, the BLE link drops it.
             val want = if (row.isNull("len")) null else row.getInt("len") - 1
             assertEquals("id 0x%02x".format(id), want, Sc2Device.strippedOutputLen(id))
         }

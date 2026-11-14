@@ -1,5 +1,5 @@
 {
-  "$comment": "Host raw writes (HidOutput::HidRaw: kind 0 output, 1 feature, data id first) a client replays on a captured Steam Controller. classic is the 2015 pad on a cable, its dongle or Bluetooth; triton is the Steam Controller 2, a Puck slot included. A classic pad takes feature frames only, report id 0 then a command in classic_forwarded. A triton feature frame's command is its first byte from 0x80, else its second; it is refused when that command is in triton_held_back. Every triton output report passes. pf-client-core sc2_capture.rs refused, Sc2Capture.swift refusedWrite and Sc2Capture.kt hostWriteRefused each check every command byte against the two lists, then the frames.",
+  "$comment": "Host raw writes (HidOutput::HidRaw: kind 0 output, 1 feature, data id first) a client replays on a captured Steam Controller. classic is the 2015 pad on a cable, its dongle or Bluetooth; triton is the Steam Controller 2, a Puck slot included. A classic pad takes feature frames only, report id 0 then a command in classic_forwarded. A triton feature frame's command is its first byte from 0x80, else its second; it is refused when that command is in triton_held_back. Every triton output report passes the host filter. triton_ble: what a Steam Controller 2 Bluetooth link writes, judged after it strips byte 0 (an output id picks the characteristic, a feature frame loses its channel byte). Refused when the stripped feature command is in triton_held_back, or the output id is outside 0x80 to 0x89 (0xFF selects the feature characteristic). The Apple and Android featurePayload and outputWrite replay these rows and every command byte. pf-client-core sc2_capture.rs refused, Sc2Capture.swift refusedWrite and Sc2Capture.kt hostWriteRefused each check every command byte against the two lists, then the frames.",
   "classic_forwarded": [135, 143, 159, 182, 193, 206],
   "triton_held_back": [129, 133, 142],
   "frames": [
@@ -19,5 +19,20 @@
     {"model": "triton", "kind": 1, "data": [], "refused": false},
     {"model": "triton", "kind": 0, "data": [128, 1, 0, 0], "refused": false},
     {"model": "triton", "kind": 0, "data": [142, 0], "refused": false}
+  ],
+  "triton_ble": [
+    {"kind": 1, "data": [1, 135, 3, 9, 0, 0], "refused": false},
+    {"kind": 1, "data": [1, 174, 21, 1], "refused": false},
+    {"kind": 1, "data": [1, 142, 0], "refused": true},
+    {"kind": 1, "data": [128, 142, 0], "refused": true},
+    {"kind": 1, "data": [135, 129, 0], "refused": true},
+    {"kind": 1, "data": [2, 133], "refused": true},
+    {"kind": 0, "data": [128, 1, 0, 0], "refused": false},
+    {"kind": 0, "data": [130, 3, 1, 255], "refused": false},
+    {"kind": 0, "data": [137, 0], "refused": false},
+    {"kind": 0, "data": [255, 142, 0], "refused": true},
+    {"kind": 0, "data": [127, 1], "refused": true},
+    {"kind": 0, "data": [138, 1], "refused": true},
+    {"kind": 0, "data": [144, 1, 2, 3], "refused": true}
   ]
 }

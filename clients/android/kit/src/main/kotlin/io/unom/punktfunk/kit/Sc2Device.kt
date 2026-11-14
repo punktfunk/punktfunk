@@ -49,7 +49,7 @@ object Sc2Device {
 
     /**
      * Declared STRIPPED payload length per output report id (wire length = stripped + 1), or null
-     * for an id with no declared length: clamp to what arrived, never guess-trim past it.
+     * for an id outside the output block, which [outputWrite] never writes.
      *
      * The host's `pf_driver_proto::triton::out_report_len` holds the same table id-INCLUDED;
      * `clients/shared/sc2-vectors.json` holds it, the Apple table and this one to the same rows.
@@ -119,12 +119,13 @@ object Sc2Device {
      * Outgoing OUTPUT (`kind` 0): the frame arrives id-first, the id selects the characteristic
      * and is stripped, and the payload is trimmed to [strippedOutputLen] clamped to what arrived.
      * The clamp earns its keep — an older host pads every frame to 64 B, and the write must carry
-     * exactly the declared length either way. Null for a frame too short to carry a payload.
+     * exactly the declared length either way. Null for a frame too short to carry a payload, and
+     * for an id outside `0x80..0x89`: `0xFF` would select [BLE_FEATURE_CHAR].
      */
     fun outputWrite(frame: ByteArray): OutputWrite? {
         if (frame.size < 2) return null
         val id = frame[0].toInt() and 0xFF
-        val n = (strippedOutputLen(id) ?: (frame.size - 1)).coerceAtMost(frame.size - 1)
+        val n = strippedOutputLen(id)?.coerceAtMost(frame.size - 1) ?: return null
         return OutputWrite(bleOutputChar(id), frame.copyOfRange(1, 1 + n))
     }
 
@@ -132,10 +133,15 @@ object Sc2Device {
      * Outgoing FEATURE (`kind` 1): strip the leading `0x01` channel report-id and write the rest
      * to [BLE_FEATURE_CHAR] whole, zero padding included. The characteristic value carries no
      * channel byte, so the firmware reads byte 0 as the command id: unstripped it parses as
-     * command `0x01` and lizard-off fails silently. Null for a frame with no command.
+     * command `0x01` and lizard-off fails silently. Null for a frame with no command, and for a
+     * command in [TRITON_HELD_BACK], judged on the byte the firmware reads.
      */
     fun featurePayload(frame: ByteArray): ByteArray? =
-        if (frame.size < 2) null else frame.copyOfRange(1, frame.size)
+        if (frame.size < 2 || (frame[1].toInt() and 0xFF) in TRITON_HELD_BACK) {
+            null
+        } else {
+            frame.copyOfRange(1, frame.size)
+        }
 
     // Input report ids (`ETritonReportIDTypes`). State layouts share every offset the client
     // reads (seq/buttons/triggers/sticks); 0x47 only diverges from byte 18 (trackpad timestamp).

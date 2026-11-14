@@ -8,17 +8,42 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * [hostWriteRefused] against `clients/shared/pad-write-vectors.json`, which the desktop core's
- * `refused` and Swift's `refusedWrite` replay too.
+ * [hostWriteRefused] and the Bluetooth framing against `clients/shared/pad-write-vectors.json`,
+ * which the desktop core's `refused` and Swift's `refusedWrite` and `Sc2Device` replay too.
  */
 class PadWriteVectorTest {
-    @Test
-    fun hostWritesMatchTheSharedVectors() {
+    private fun bytes(a: JSONArray) = (0 until a.length()).map { a.getInt(it) }
+
+    private fun shared(): JSONObject {
         // Gradle runs unit tests with the module dir as cwd (clients/android/kit).
         val file = File("../../shared/pad-write-vectors.json")
         assertTrue("the shared vector file must be reachable at ${file.absolutePath}", file.isFile)
-        val root = JSONObject(file.readText())
-        fun bytes(a: JSONArray) = (0 until a.length()).map { a.getInt(it) }
+        return JSONObject(file.readText())
+    }
+
+    @Test
+    fun bluetoothWritesMatchTheSharedVectors() {
+        val root = shared()
+        val heldBack = bytes(root.getJSONArray("triton_held_back"))
+        for (cmd in 0..0xFF) {
+            val feature = Sc2Device.featurePayload(byteArrayOf(1, cmd.toByte(), 0))
+            assertEquals("feature 0x%02x".format(cmd), cmd in heldBack, feature == null)
+            val output = Sc2Device.outputWrite(byteArrayOf(cmd.toByte(), 0))
+            assertEquals("output 0x%02x".format(cmd), cmd in 0x80..0x89, output != null)
+            assertTrue(output?.charUuid != Sc2Device.BLE_FEATURE_CHAR)
+        }
+        val rows = root.getJSONArray("triton_ble")
+        for (i in 0 until rows.length()) {
+            val row = rows.getJSONObject(i)
+            val data = bytes(row.getJSONArray("data")).map { it.toByte() }.toByteArray()
+            val got = if (row.getInt("kind") == 0) Sc2Device.outputWrite(data) else Sc2Device.featurePayload(data)
+            assertEquals(row.toString(), row.getBoolean("refused"), got == null)
+        }
+    }
+
+    @Test
+    fun hostWritesMatchTheSharedVectors() {
+        val root = shared()
         val forwarded = bytes(root.getJSONArray("classic_forwarded"))
         val heldBack = bytes(root.getJSONArray("triton_held_back"))
         for (cmd in 0..0xFF) {

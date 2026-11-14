@@ -71,13 +71,12 @@ final class Sc2FramingTests: XCTestCase {
         XCTAssertNil(Sc2Device.outputWrite(frame: []))
     }
 
-    func testUnknownOutputIdKeepsTheWholePayload() {
-        // Unknown id: len-1 clamp only — never guess-trim beyond the id strip. The char is
-        // still computed at id+0x35 (the firmware's scheme, whatever the id).
-        let unknown: [UInt8] = [0x90, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-        let write = Sc2Device.outputWrite(frame: unknown)
-        XCTAssertEqual(write?.charUUID, "100f6cc5-1735-4313-b402-38567131e5f3")
-        XCTAssertEqual(write?.payload, Array(unknown[1...]))
+    func testOutputIdOutsideTheBlockIsNeverWritten() {
+        // 0xFF + 0x35 wraps to 0x34, the feature characteristic: a host must not reach it this way.
+        XCTAssertEqual(Sc2Device.outputCharUUID(id: 0xFF), Sc2Device.reportCharUUID.lowercased())
+        XCTAssertNil(Sc2Device.outputWrite(frame: [0xFF, 0x8E, 0x00]))
+        XCTAssertNil(Sc2Device.outputWrite(frame: [0x90, 1, 2, 3, 4, 5]))
+        XCTAssertNil(Sc2Device.outputWrite(frame: [0x7F, 1]))
     }
 
     // MARK: - Outgoing FEATURE (kind 1): strip the 0x01 channel id, pass the rest whole
