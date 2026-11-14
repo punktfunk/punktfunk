@@ -1,15 +1,17 @@
 // The console's calls to a plugin's own surfaces: `/api/plugin-metadata`, `/api/plugin-config` and
 // `/api/plugin-game`. Hand-written, since the plugin serves them and not the host API. Built on
 // `apiFetch`, so a lost session goes to /login like every other call.
+import { GRANT_HEADER, type Handover } from "@/lib/handed-paths";
 import { PASSWORD_HEADER } from "@/lib/password-gates";
 import { m } from "@/paraglide/messages";
 import { ApiError, apiFetch } from "./fetcher";
 
-/** A save: its JSON body, and the console password when the save hands a folder over. */
+/** A save: its JSON body, and for a plugin form what it hands over and the console password. */
 interface Send {
 	method: "PUT" | "POST";
 	body: unknown;
 	password?: string;
+	handover?: Handover;
 }
 
 /** A surface's refusal: the plugin's own `issue`, the route's `error`, and its 404 markers. */
@@ -46,6 +48,13 @@ export async function pluginSurface<T>(
 					...(send.password === undefined
 						? {}
 						: { [PASSWORD_HEADER]: send.password }),
+					...(send.handover
+						? {
+								[GRANT_HEADER]: encodeURIComponent(
+									JSON.stringify(send.handover),
+								),
+							}
+						: {}),
 				},
 				body: JSON.stringify(send.body),
 			},

@@ -1,11 +1,22 @@
 // The folders an operator types into a plugin's form (`format: "pf:path"`, or `"pf:path:write"`).
-// The console's server grants the ones a save adds (server/util/handedPaths.ts) and asks for the
-// console password first; the form pages read the same rule, so they ask exactly then.
+// The form pages work out what a save hands over from the form they loaded, list it in the
+// password dialog and send it in `GRANT_HEADER`; the console's server grants only that
+// (server/util/handedPaths.ts).
 import { flatten, handed, type JsonSchemaNode } from "./schema-node";
 
 export interface HandedPath {
 	path: string;
 	write: boolean;
+}
+
+/** Carries a save's {@link Handover} to the console's server, as URI-encoded JSON. */
+export const GRANT_HEADER = "x-punktfunk-grant";
+
+/** What one save hands over: the new paths the operator confirms, and, when the save drops a
+ * path, every path the form still hands over (`null` otherwise). */
+export interface Handover {
+	grant: HandedPath[];
+	keep: string[] | null;
 }
 
 /** A grant the host refused: its English, and the `code` and `params` that word it. */
@@ -60,3 +71,13 @@ export function keepAfterDrop(
 	);
 	return dropped ? kept : null;
 }
+
+/** The {@link Handover} of a save from `before`, the form as loaded, to `after`. */
+export const handover = (
+	schema: unknown,
+	before: unknown,
+	after: unknown,
+): Handover => ({
+	grant: newlyHanded(schema, before, after),
+	keep: keepAfterDrop(schema, before, after),
+});

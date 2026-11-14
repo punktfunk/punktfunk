@@ -82,9 +82,16 @@ finish-args:
   - --filesystem=xdg-run/pipewire-0
   # --- network: QUIC control and media + mDNS discovery (_punktfunk._udp) ---
   - --share=network
-  # --- the folder older builds kept the pairing in. Read-only: the client copies its client-*
-  #     files into its own config dir under ~/.var/app on first start. ---
-  - --filesystem=~/.config/punktfunk:ro
+  # --- the client-* files older builds kept in ~/.config/punktfunk, read-only: the client copies
+  #     them into its own config dir under ~/.var/app on first start. Only these files: the rest
+  #     of that folder is the host's (admin token, keys). ---
+  - --filesystem=~/.config/punktfunk/client-key.pem:ro
+  - --filesystem=~/.config/punktfunk/client-cert.pem:ro
+  - --filesystem=~/.config/punktfunk/client-known-hosts.json:ro
+  - --filesystem=~/.config/punktfunk/client-gtk-settings.json:ro
+  - --filesystem=~/.config/punktfunk/client-presets.json:ro
+  - --filesystem=~/.config/punktfunk/client-profiles.json:ro
+  - --filesystem=~/.config/punktfunk/client-update-state.json:ro
   # --- HDR under gamescope (Steam Deck Game Mode) ---
   # A flatpak's Vulkan loader can't see the host's gamescope WSI layer, so without help the SDL3
   # surface never offers the HDR10 (ST.2084) colorspace and the presenter silently tone-maps

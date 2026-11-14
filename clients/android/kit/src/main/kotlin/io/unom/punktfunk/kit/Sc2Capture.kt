@@ -477,7 +477,7 @@ class Sc2Capture(
 private val CLASSIC_HOST_COMMANDS = setOf(0x87, 0x8F, 0x9F, 0xB6, 0xC1, 0xCE)
 
 /** What a host never sends a Steam Controller 2: lizard mode off and on, the factory settings. */
-private val TRITON_HELD_BACK = setOf(0x81, 0x85, 0x8E)
+internal val TRITON_HELD_BACK = setOf(0x81, 0x85, 0x8E)
 
 /**
  * Why a host write must not reach the pad, or null to write it. [kind] 1 is a feature report; a

@@ -10,6 +10,7 @@ import io.unom.punktfunk.kit.security.KnownHost
 import java.math.BigDecimal
 import java.math.RoundingMode
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
@@ -162,7 +163,7 @@ internal fun mbitRate(mbps: Double): String = fixed(mbps, 0) + " Mbit/s"
 /**
  * Connect to [host]:[port] through [services] as a diagnostic session, run the network check, and
  * report. Suspends on IO — call from a coroutine; [onPhase] is invoked as it progresses so the
- * dialog can narrate.
+ * dialog can narrate. The session closes even when the caller is cancelled mid-check.
  *
  * The connect is deliberately minimal: 1280×720@60, no launch, host-default bitrate, and probes
  * only — the host builds no display or encoder for it. The check itself is the core's
@@ -214,7 +215,7 @@ suspend fun runSpeedTest(
         val done = report?.let(::parseNetworkCheck)
         onPhase(done ?: SpeedTestPhase.Failed(res.getString(R.string.speedtest_no_result_body)))
     } finally {
-        withContext(Dispatchers.IO) { NativeBridge.nativeClose(handle) }
+        withContext(Dispatchers.IO + NonCancellable) { NativeBridge.nativeClose(handle) }
     }
 }
 

@@ -47,8 +47,9 @@ where
         let mut start_code_offset = pos + current_nalu_offset;
 
         // If the preceding byte is 00, then we actually have a four byte SC,
-        // i.e. 00 00 00 01 Where the first 00 is the "zero_byte()"
-        if start_code_offset > 0 && cursor.get_ref()[start_code_offset - 1] == 00 {
+        // i.e. 00 00 00 01 Where the first 00 is the "zero_byte()". A byte before the
+        // cursor belongs to what the caller already read, never to this start code.
+        if start_code_offset > pos && cursor.get_ref()[start_code_offset - 1] == 00 {
             start_code_offset -= 1;
         }
 

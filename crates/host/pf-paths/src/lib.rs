@@ -303,8 +303,8 @@ fn relock(dir: &std::path::Path) -> std::io::Result<()> {
 /// Read `dir` before changing it, then lock it and deal with what it holds ([`FirstPass`]).
 /// `true` when its tree is still to be re-owned. A folder that was open and does not end
 /// admin-only, or keeps an entry another account owns, is an error: its contents are unproven.
-/// It holds [`pf_paths_win::UNPROVEN`] from its lock until then, so the next pass sets aside
-/// again instead of re-owning what the failed one left.
+/// It holds a new marker ([`pf_paths_win::mark_unproven`]) from its lock until then, so the
+/// next pass sets aside again instead of re-owning what the failed one left.
 #[cfg(windows)]
 fn first_hardening(dir: &std::path::Path) -> std::io::Result<bool> {
     if create_locked(dir)? {
@@ -317,10 +317,9 @@ fn first_hardening(dir: &std::path::Path) -> std::io::Result<bool> {
             format!("lock {} to SYSTEM and Administrators: {e}", dir.display()),
         )
     };
-    let unproven = dir.join(pf_paths_win::UNPROVEN);
     match first_pass(
         pf_paths_win::is_admin_owned(dir),
-        pf_paths_win::inherits_open_acl(dir) || std::fs::symlink_metadata(&unproven).is_ok(),
+        pf_paths_win::inherits_open_acl(dir) || pf_paths_win::is_unproven(dir),
     ) {
         FirstPass::Refuse => Err(std::io::Error::other(format!(
             "{} is owned by an account outside SYSTEM and Administrators",
@@ -328,7 +327,7 @@ fn first_hardening(dir: &std::path::Path) -> std::io::Result<bool> {
         ))),
         FirstPass::SetAside => {
             pf_paths_win::lock_admin_only(dir).map_err(lock_failed)?;
-            pf_paths_win::mark_unproven(&unproven)?;
+            let marker = pf_paths_win::mark_unproven(dir)?;
             pf_paths_win::ensure_admin_only_source(dir).map_err(lock_failed)?;
             pf_paths_win::quarantine_planted_tree(dir).map_err(|e| {
                 std::io::Error::new(
@@ -339,7 +338,7 @@ fn first_hardening(dir: &std::path::Path) -> std::io::Result<bool> {
                     ),
                 )
             })?;
-            std::fs::remove_file(&unproven)?;
+            pf_paths_win::mark_proven(dir, &marker)?;
             Ok(false)
         }
         FirstPass::Reown => {
@@ -1140,6 +1139,62 @@ mod tests {
         assert!(!plant.exists(), "the plant stayed");
         assert!(open.join("hooks.json.untrusted").exists());
         assert!(!marker.exists(), "a proven folder keeps its marker");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Elevated: a marker another account planted and holds without share-delete fails the
+    /// first pass, which leaves its own marker beside it, so the pass after the planter deletes
+    /// theirs sets the plant aside instead of re-owning it. Not elevated, the folder is refused.
+    #[cfg(windows)]
+    #[test]
+    fn a_planted_marker_held_open_is_no_proof() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let icacls = |path: &std::path::Path, args: &[&str]| {
+            std::process::Command::new(system32("icacls.exe"))
+                .arg(path)
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        let base = std::env::temp_dir().join(format!("pf-paths-marker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let open = base.join("open");
+        std::fs::create_dir_all(&open).unwrap();
+        assert!(icacls(&base, &["/grant", "*S-1-5-32-545:(OI)(CI)(M)"]));
+        let (plant, marker) = (open.join("hooks.json"), open.join(pf_paths_win::UNPROVEN));
+        std::fs::write(&plant, "x").unwrap();
+        std::fs::write(&marker, "").unwrap();
+        if pf_paths_win::is_admin_owned(&open) != Some(true) {
+            assert!(create_private_dir(&open).is_err());
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+        // LocalService stands in for the standard user who planted both files.
+        assert!(icacls(&plant, &["/setowner", "*S-1-5-19"]));
+        assert!(icacls(&marker, &["/setowner", "*S-1-5-19"]));
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x1) // FILE_SHARE_READ: no rename while this is open
+            .open(&marker)
+            .unwrap();
+        assert!(create_private_dir(&open).is_err());
+        drop(held);
+        std::fs::remove_file(&marker).unwrap();
+        assert!(
+            pf_paths_win::is_unproven(&open),
+            "the planter's marker was the only one"
+        );
+        create_private_dir(&open).unwrap();
+        assert!(!plant.exists(), "the plant was adopted");
+        assert_eq!(
+            pf_paths_win::is_admin_owned(&open.join("hooks.json.untrusted")),
+            Some(false)
+        );
+        assert!(
+            !pf_paths_win::is_unproven(&open),
+            "a proven folder keeps a marker"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 

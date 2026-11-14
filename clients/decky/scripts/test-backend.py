@@ -523,6 +523,27 @@ mixed = existing.replace('"halflife2"', '"Punktfunk"')
 replaced = steam_input._upsert_configset_entry(mixed, "punktfunk", "template", "punktfunk.vdf")
 check("vdf: matches an existing key case-insensitively", replaced.count("unktfunk\"\n") == 1)
 
+# A game title is a quoted key one level into controller_config: a brace in it is text, a quote
+# or backslash is escaped, and a title equal to a nested key ("template") is its own entry.
+def _entry(quoted_key: str, template: str) -> str:
+    return f'\t"{quoted_key}"\n\t{{\n\t\t"template"\t\t"{template}"\n\t}}\n'
+
+
+_hl2, _portal = _entry("halflife2", "other.vdf"), _entry("portal", "p.vdf")
+for _title in ("half{life", "half}life", "{", "}", "template", 'say "hi"', "back\\slash"):
+    _esc = _title.replace("\\", "\\\\").replace('"', '\\"')
+    _ours = _entry(_esc, "punktfunk.vdf")
+    _absent = '"controller_config"\n{\n' + _hl2 + _portal + "}\n"
+    _first = '"controller_config"\n{\n' + _entry(_esc, "old.vdf") + _hl2 + _portal + "}\n"
+    _got = steam_input._upsert_configset_entry(_absent, _title, "template", "punktfunk.vdf")
+    check(f"vdf: {_title!r} is inserted, every other block intact",
+          _got == '"controller_config"\n{\n' + _hl2 + _portal + _ours + "}\n")
+    check(f"vdf: {_title!r} is idempotent",
+          steam_input._upsert_configset_entry(_got, _title, "template", "punktfunk.vdf") == _got)
+    check(f"vdf: {_title!r} replaces only its own block",
+          steam_input._upsert_configset_entry(_first, _title, "template", "punktfunk.vdf")
+          == '"controller_config"\n{\n' + _ours + _hl2 + _portal + "}\n")
+
 # A raw-forwarded Steam Controller doubles every key binding of its Deck-side layout on the
 # host, so each type in LAYOUTS needs its own entry, and the triton copy its own type.
 import tempfile as _tf  # noqa: E402

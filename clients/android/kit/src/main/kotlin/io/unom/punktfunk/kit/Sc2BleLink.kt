@@ -146,12 +146,15 @@ class Sc2BleLink(
      * Replay one raw host report on the pad. [kind] is the C ABI's HID_RAW_OUTPUT (0) /
      * HID_RAW_FEATURE (1) and [data] is id-first, exactly as Steam wrote it. The id selects the
      * destination and never rides along: an output goes to its own characteristic trimmed to that
-     * id's declared length, a feature command to [Sc2Device.BLE_FEATURE_CHAR] whole.
+     * id's declared length, a feature command to [Sc2Device.BLE_FEATURE_CHAR] whole. The framing
+     * functions refuse what the pad must not get, on the bytes this link sends: an output id
+     * outside the block, a held-back feature command. A 2015 pad's frame meets the 2015 rule
+     * here, because a reconnect can change the model after the capture judged it.
      */
     fun writeRaw(kind: Int, data: ByteArray) {
         if (state != State.READY) return
         if (isClassic) {
-            if (kind == 1) writeClassic(data)
+            if (kind == 1 && hostWriteRefused(true, kind, data) == null) writeClassic(data)
             return
         }
         if (kind == 0) {

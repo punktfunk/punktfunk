@@ -128,20 +128,22 @@ pub fn offered(id: &str) -> hermir::Result<bool> {
 /// Installs (or reinstalls) `id` and makes its folder exist, so the grant that follows has a
 /// directory to land on even when the copy itself is a Flatpak. On a Linux box with seats a
 /// Flatpak goes in box-wide ([`install_box_wide`]); an AppImage or archive stays this account's.
+/// Players may write in [`home_of`] only, set before hermir writes its manifests beside it.
 pub fn install(id: &str) -> hermir::Result<Installed> {
     let h = open()?;
     let emulator = h.emulator(id)?;
+    let home = home_of(id);
+    crate::plugins::open_for_players(&home);
     let row = match box_flatpak(emulator.entry()).filter(|_| box_wide()) {
         Some(app) => install_box_wide(&h, id, app)?,
         None => emulator.install(&Quiet)?,
     };
-    let home = home_of(id);
     std::fs::create_dir_all(&home).map_err(|e| hermir::Error::Io {
         op: "create",
         path: home.clone(),
         source: e,
     })?;
-    crate::plugins::open_for_players(&prefix().join(id));
+    crate::plugins::open_for_players(&home);
     Ok(row)
 }
 
@@ -245,35 +247,22 @@ fn core_file(dir: &Path, core: &str) -> PathBuf {
 }
 
 /// A core moved in from an admin-only folder keeps that folder's ACL, and the player's RetroArch
-/// can't load it. A copy made beside it takes the cores folder's ACL.
+/// can't load it. The cores folder is the player's, so the core gets the player's read and
+/// execute ACE through one handle that refuses a link on the way, never a copy by path.
 #[cfg(windows)]
 fn open_core(dir: &Path, core: &str) {
+    use pf_paths_win::player::{grant_on_file, READ_EXECUTE};
     let path = core_file(dir, core);
     if !path.is_file() || !pf_paths_win::admin_only_acl(&path) {
         return;
     }
-    match recreate(&path) {
-        Ok(()) => tracing::info!(core, path = %path.display(), "core opened to the player"),
+    let Some(sid) = crate::windows::theme::session_sid() else {
+        return;
+    };
+    match grant_on_file(&path, &sid, READ_EXECUTE) {
+        Ok(()) => tracing::debug!(core, path = %path.display(), "core opened to the player"),
         Err(error) => tracing::warn!(core, %error, "core left unreadable to the player"),
     }
-}
-
-/// `path` replaced by a copy of itself made in its own folder. A new file takes the folder's
-/// inherited ACL; a moved one keeps its old ACL.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn recreate(path: &Path) -> std::io::Result<()> {
-    let part = path.with_extension("part");
-    let _ = std::fs::remove_file(&part);
-    let copied = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&part)
-        .and_then(|mut to| std::io::copy(&mut std::fs::File::open(path)?, &mut to))
-        .and_then(|_| std::fs::rename(&part, path));
-    if copied.is_err() {
-        let _ = std::fs::remove_file(&part);
-    }
-    copied
 }
 
 /// How long a launch waits for the client's first pad, and for every pad it claimed to be
@@ -551,12 +540,58 @@ fn virtual_pads(text: &str, sys: &Path) -> Vec<hermir::PadRef> {
         .collect()
 }
 
-/// Puts every emulator's own bindings back after a game: what `prepare` wrote for the
-/// session's pads is gone again, file by file. Forced: an emulator rewrites its config on
-/// exit, and that is no edit of the player's. Nothing outstanding is a quiet no-op.
-pub fn revert_players() {
+/// Whose session bindings are out: `prepared` counts the prepares, `owner` is the library id of
+/// the launch whose prepare was last. `None` for a prepare outside a launch, and once reverted.
+struct Bindings {
+    prepared: u64,
+    owner: Option<String>,
+}
+
+impl Bindings {
+    /// What a launch of `library_id` holds: the last prepare, when it was that launch's.
+    fn of(&self, library_id: Option<&str>) -> Option<u64> {
+        (self.owner.is_some() && self.owner.as_deref() == library_id).then_some(self.prepared)
+    }
+
+    /// Whether an exit holding `held` ([`Self::of`]) puts the bindings back: its own, or ones
+    /// no launch owns.
+    fn reverts_for(&self, held: Option<u64>) -> bool {
+        self.owner.is_none() || held == Some(self.prepared)
+    }
+
+    fn prepared_for(&mut self, owner: Option<&str>) {
+        self.prepared += 1;
+        self.owner = owner.map(str::to_string);
+    }
+}
+
+static BINDINGS: std::sync::Mutex<Bindings> = std::sync::Mutex::new(Bindings {
+    prepared: 0,
+    owner: None,
+});
+
+fn bindings() -> std::sync::MutexGuard<'static, Bindings> {
+    BINDINGS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The bindings a launch of `library_id` holds, for [`revert_players`]: `Some` while the last
+/// [`prepare`] was that launch's.
+pub fn bindings_of(library_id: Option<&str>) -> Option<u64> {
+    bindings().of(library_id)
+}
+
+/// Puts the emulators' own bindings back after a game, file by file, when they are the exiting
+/// launch's (`held`, from [`bindings_of`]) or no launch's: a later launch's prepare already put
+/// this one's back and wrote its own. Forced: an emulator rewrites its config on exit, and that
+/// is no edit of the player's. Nothing outstanding is a quiet no-op.
+pub fn revert_players(held: Option<u64>) {
     let Ok(h) = open() else { return };
+    let mut out = bindings();
+    if !out.reverts_for(held) {
+        return;
+    }
     revert_with(&h);
+    out.owner = None;
 }
 
 fn revert_with(h: &Hermir) {
@@ -579,8 +614,21 @@ fn revert_with(h: &Hermir) {
 /// `let_player_read`), and has the session's pads written in seat order (steps of kind
 /// `players`; reverted after the game): see [`session_players`] for `pad` and `slots`.
 /// `platform` is a catalog id or any of its aliases (RomM slug, ES-DE folder, libretro name).
-/// Blocking: an installer may run.
+/// Blocking: an installer may run. The bindings belong to no launch: any game's exit reverts
+/// them.
 pub fn prepare(
+    id: &str,
+    platform: Option<&str>,
+    firmware_dir: Option<&Path>,
+    pad: GamepadPref,
+    slots: Option<&AtomicU16>,
+) -> hermir::Result<Vec<(String, hermir::Prepared)>> {
+    prepare_as(None, id, platform, firmware_dir, pad, slots)
+}
+
+/// [`prepare`], its bindings `owner`'s: the library id of the launch they are for.
+fn prepare_as(
+    owner: Option<&str>,
     id: &str,
     platform: Option<&str>,
     firmware_dir: Option<&Path>,
@@ -590,7 +638,11 @@ pub fn prepare(
     let h = open()?;
     // A game that ended without a lease reporting it (its session took the nested gamescope
     // down with it) still has its bindings out; the next launch is the latest they go back.
-    revert_with(&h);
+    {
+        let mut out = bindings();
+        revert_with(&h);
+        out.prepared_for(owner);
+    }
     let emulator = h.emulator(id)?;
     let platform = platform.map(|p| {
         h.catalog()
@@ -850,8 +902,8 @@ pub fn in_catalog(id: &str) -> bool {
 /// Before an `emulator` entry starts: the RetroArch core it names when this host's RetroArch
 /// lacks it, and on Windows readable by the player, every copy past its first-run questions, the
 /// platform's firmware from the plugin's `firmware/<platform>` when it staged some, the session's
-/// pads. What it did goes to the log. A launch waits for the client's pads, at most
-/// [`SETTLE_ALL`], and never on the rest to succeed.
+/// pads, which only this launch's exit reverts ([`bindings_of`]). What it did goes to the log. A
+/// launch waits for the client's pads, at most [`SETTLE_ALL`], and never on the rest to succeed.
 pub fn prepare_launch(library_id: &str, pad: GamepadPref, slots: Option<&AtomicU16>) {
     let Some(entry) = crate::library::entry_for_library_id(library_id) else {
         return;
@@ -886,7 +938,14 @@ pub fn prepare_launch(library_id: &str, pad: GamepadPref, slots: Option<&AtomicU
         .as_deref()
         .zip(platform)
         .and_then(|(provider, platform)| staged_firmware(provider, platform));
-    match prepare(&spec.value, platform, staged.as_deref(), pad, slots) {
+    match prepare_as(
+        Some(library_id),
+        &spec.value,
+        platform,
+        staged.as_deref(),
+        pad,
+        slots,
+    ) {
         Ok(copies) => {
             for (exe, prepared) in copies {
                 for s in prepared.steps {
@@ -1107,6 +1166,31 @@ I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2
     }
 
     #[test]
+    fn an_exit_reverts_only_the_bindings_its_own_launch_still_holds() {
+        let mut out = Bindings {
+            prepared: 0,
+            owner: None,
+        };
+        out.prepared_for(Some("emu-a"));
+        let a = out.of(Some("emu-a"));
+        let native = out.of(Some("native-game"));
+        out.prepared_for(Some("emu-b"));
+        let b = out.of(Some("emu-b"));
+        assert!(!out.reverts_for(a), "A's exit leaves B's bindings");
+        assert!(
+            !out.reverts_for(native),
+            "a launch that prepared nothing leaves them"
+        );
+        assert!(out.reverts_for(b));
+        // The same title launched again: the first launch's exit leaves the second's.
+        out.prepared_for(Some("emu-b"));
+        assert!(!out.reverts_for(b));
+        // A prepare outside a launch is any exit's to revert.
+        out.prepared_for(None);
+        assert!(out.reverts_for(None) && out.reverts_for(a));
+    }
+
+    #[test]
     fn a_core_counts_as_present_only_under_the_name_retroarch_loads() {
         let dir = tempfile::tempdir().unwrap();
         let ext = std::env::consts::DLL_EXTENSION;
@@ -1115,16 +1199,5 @@ I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2
         assert!(has_core(dir.path(), "snes9x"));
         assert!(!has_core(dir.path(), "mgba"));
         assert!(!has_core(dir.path(), "ppsspp"));
-    }
-
-    #[test]
-    fn a_recreated_core_keeps_its_bytes_and_leaves_no_part() {
-        let dir = tempfile::tempdir().unwrap();
-        let core = dir.path().join("snes9x_libretro.dll");
-        std::fs::write(&core, b"core").unwrap();
-        std::fs::write(dir.path().join("snes9x_libretro.part"), b"stale").unwrap();
-        recreate(&core).unwrap();
-        assert_eq!(std::fs::read(&core).unwrap(), b"core");
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

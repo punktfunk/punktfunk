@@ -615,21 +615,44 @@ pub(crate) fn grant_acl(
 }
 
 /// A managed emulator runs in the player's session and, portable, writes beside its exe: on
-/// Windows the folder gets `Users: Modify`. Best-effort; POSIX needs none.
+/// Windows its `app` folder gets `Users: Modify`. The folder around it, where the host writes
+/// the release's manifests by path, keeps no Users grant. Best-effort; POSIX needs none.
+///
+/// A player can turn `app` into a link at any time. The grant lands only once the folder around
+/// it is closed and `app` is a plain folder, and `/L` keeps a link made after that check to the
+/// link itself. An entry a player made in the folder while it was open stays its owner's.
 #[cfg(windows)]
-pub(crate) fn open_for_players(dir: &std::path::Path) {
-    let ok = std::process::Command::new(windows::icacls_path())
-        .arg(dir)
-        .args(["/grant", "*S-1-5-32-545:(OI)(CI)M"])
-        .status()
-        .is_ok_and(|s| s.success());
-    if !ok {
-        tracing::warn!(dir = %dir.display(), "emulator folder not opened to players");
+pub(crate) fn open_for_players(app: &std::path::Path) {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    let icacls = |dir: &std::path::Path, args: &[&str]| {
+        std::process::Command::new(windows::icacls_path())
+            .arg(dir)
+            .args(args)
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    let Some(own) = app.parent().filter(|own| own.is_dir()) else {
+        return;
+    };
+    if !icacls(own, &["/remove:g", "*S-1-5-32-545"]) {
+        tracing::warn!(dir = %own.display(), "emulator folder not closed to players");
+        return;
+    }
+    let Ok(md) = std::fs::symlink_metadata(app) else {
+        return;
+    };
+    if !md.is_dir() || md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        tracing::warn!(dir = %app.display(), "emulator folder left closed: not a plain folder");
+        return;
+    }
+    if !icacls(app, &["/grant", "*S-1-5-32-545:(OI)(CI)M", "/L"]) {
+        tracing::warn!(dir = %app.display(), "emulator folder not opened to players");
     }
 }
 
 #[cfg(not(windows))]
-pub(crate) fn open_for_players(_dir: &std::path::Path) {}
+pub(crate) fn open_for_players(_app: &std::path::Path) {}
 
 /// Take the runner's ACE and `plugin`'s capability ACE off a folder no plugin holds any more, in
 /// one walk. POSIX has none to take.

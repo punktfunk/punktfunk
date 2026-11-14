@@ -300,7 +300,14 @@ pub(super) struct Task {
     pub(super) counters: Arc<crate::session_status::SessionCounters>,
     /// Armed capture the per-minute line is also written into, so a bug report is one file.
     pub(super) stats: Arc<crate::stats_recorder::StatsRecorder>,
+    /// Closed when the client stops reading the control stream ([`SEND_WAIT`]).
+    pub(super) conn: super::link::SessionLink,
 }
+
+/// How long one control-stream write waits for the client's credit, as `start_for_dial` bounds
+/// its own. A reading client frees credit within a round trip and a dead path closes at the
+/// default QUIC idle timeout first, so only a client whose reader stopped waits 10 s.
+const SEND_WAIT: std::time::Duration = super::PENDING_EVERY;
 
 /// What the client hears about a delivered mode.
 #[derive(Debug, PartialEq)]
@@ -572,10 +579,18 @@ impl ControlTask {
         }
     }
 
+    /// Every write to the control stream. One the client leaves without credit for [`SEND_WAIT`]
+    /// closes the session, so no lane into this task grows behind a client that stopped reading.
     async fn send<M: v2msg::V2Message>(&mut self, msg: &M) -> Step {
-        v2io::send(&mut self.task.ctrl_send, msg)
-            .await
-            .map_err(Ended::from)
+        let sent = v2io::send(&mut self.task.ctrl_send, msg);
+        match tokio::time::timeout(SEND_WAIT, sent).await {
+            Ok(sent) => sent.map_err(Ended::from),
+            Err(_) => {
+                tracing::warn!(peer = %self.task.peer, "control stream unread, session closed");
+                self.task.conn.close(1, b"error");
+                Err(Ended)
+            }
+        }
     }
 
     /// One feedback datagram: a further screen's keyframe ask, else the first screen's link

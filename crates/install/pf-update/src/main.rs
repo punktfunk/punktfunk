@@ -207,10 +207,14 @@ mod linux_main {
                     Command::new("dpkg-query").args(["-W", "-f", "${Package}\n", "punktfunk*"]),
                     "dpkg-query",
                 )?;
+                // A conffile prompt on the unit's empty stdin fails the configure: confdef with
+                // confold keeps an admin-edited conffile (the AppArmor profile) without asking.
                 let mut install = Command::new("apt-get");
                 install
                     .env("DEBIAN_FRONTEND", "noninteractive")
                     .args(["install", "--only-upgrade", "-y"])
+                    .args(["-o", "Dpkg::Options::=--force-confdef"])
+                    .args(["-o", "Dpkg::Options::=--force-confold"])
                     .args(&pkgs);
                 run(&mut install, "apt-get install --only-upgrade")?;
                 Ok(false)

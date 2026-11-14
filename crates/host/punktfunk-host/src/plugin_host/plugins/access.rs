@@ -580,10 +580,12 @@ const STARTUP_PATHS: &[&str] = &[
     ".xsession",
 ];
 
-/// Under the home: browser profiles, keyrings and cloud credentials. No root holds one or a parent
-/// of one. The SDK's `SECRETS` is the same list.
+/// Under the home: browser profiles, keyrings, cloud credentials and the display's cookies. No
+/// root holds one or a parent of one. The SDK's `SECRETS` is the same list.
 #[cfg(unix)]
 const SECRET_PATHS: &[&str] = &[
+    ".Xauthority",
+    ".ICEauthority",
     ".mozilla",
     ".config/mozilla",
     ".config/google-chrome",
@@ -609,6 +611,47 @@ const SECRET_PATHS: &[&str] = &[
     ".config/gcloud",
     ".config/gh",
 ];
+
+/// Names directly under `/tmp` that hold a desktop's display, session, agent or terminal sockets,
+/// or an X cookie; a trailing `*` matches any rest. A read-only bind still lets `connect` through,
+/// so no root holds one, nor `/tmp` itself. The SDK's `TMP_SOCKETS` is the same list.
+#[cfg(unix)]
+const TMP_SOCKETS: &[&str] = &[
+    ".X11-unix",
+    ".ICE-unix",
+    ".XIM-unix",
+    ".font-unix",
+    "tmux-*",
+    "zellij-*",
+    "screens",
+    "uscreens",
+    "nvim.*",
+    "ssh-*",
+    "dbus-*",
+    "pulse-*",
+    "fcitx-socket-*",
+    "orbit-*",
+    ".wine-*",
+    "emacs*",
+    "xauth*",
+    ".Xauth*",
+];
+
+/// `p` is `tmp` itself or lies in one of its [`TMP_SOCKETS`].
+#[cfg(unix)]
+fn tmp_socket(p: &Path, tmp: &Path) -> bool {
+    let Ok(rest) = p.strip_prefix(tmp) else {
+        return false;
+    };
+    let Some(first) = rest.components().next() else {
+        return true;
+    };
+    let name = first.as_os_str().to_string_lossy();
+    TMP_SOCKETS.iter().any(|s| match s.strip_suffix('*') {
+        Some(prefix) => name.starts_with(prefix),
+        None => name == *s,
+    })
+}
 
 /// Inside any Windows profile, folded: browser profiles and credential stores. No root holds one
 /// or a parent of one.
@@ -694,7 +737,8 @@ fn refusal_rule(
                     .iter()
                     .any(|r| within(canonical, Path::new(r))))
             || near(SECRET_PATHS)
-            || (write && near(STARTUP_PATHS));
+            || (write && near(STARTUP_PATHS))
+            || [raw, canonical].iter().any(|p| tmp_socket(p, &policy.tmp));
     }
     #[cfg(windows)]
     {
@@ -2183,7 +2227,8 @@ mod tests {
         const USER_CONFIG: &str = "/home/u/.config/punktfunk";
         const SYSTEM_CONFIG: &str = "/var/lib/punktfunk";
         // `(config dir, read-only roots, the operator's read-write roots, a manifest's read-write
-        // roots)`; every start-up location and credential store joins the first two lists below.
+        // roots)`; every start-up location, credential store and `/tmp` socket joins the first two
+        // lists below, and each `/tmp` socket the last.
         type Row<'a> = (&'a str, &'a [&'a str], &'a [&'a str], &'a [&'a str]);
         let rows: &[Row] = &[
             (
@@ -2225,6 +2270,11 @@ mod tests {
                     "/run/media/deck/SD/Emulation/roms",
                     "/mnt/games1",
                     "/tmp/vhclient_response",
+                    "/tmp",
+                    "/tmp/.X11-unix/X0",
+                    "/tmp/tmux-1000/default",
+                    "/tmp/.X11-unixx",
+                    "/tmp/tmuxx",
                     "/usr/share/applications",
                     "/home/u/.var",
                     "/home/u/.var/app",
@@ -2267,6 +2317,8 @@ mod tests {
                     "/mnt/games1",
                     "/run/media/u/SD",
                     "/tmp/vhclient",
+                    "/tmp",
+                    "/tmp/.X11-unix",
                 ],
                 &[
                     "/home/u/Games",
@@ -2274,6 +2326,7 @@ mod tests {
                     "/home/u/.config/hypr",
                     "/tmp/vhclient",
                     "/tmp/vhclient_response",
+                    "/tmp",
                     "/tmpx/games",
                     "/mnt/games1",
                     "/run/media/u/SD",
@@ -2324,11 +2377,17 @@ mod tests {
                 runtime_dir: Some("/run/user/1000".into()),
                 tmp: "/tmp".into(),
             };
+            let sockets = || {
+                TMP_SOCKETS
+                    .iter()
+                    .map(|s| format!("/tmp/{}", s.replace('*', "1000")))
+            };
             let listed = || {
                 STARTUP_PATHS
                     .iter()
                     .chain(SECRET_PATHS)
                     .map(|d| format!("{HOME}/{d}"))
+                    .chain(sockets())
             };
             let row = |write, operator| move |p: &&str| (write, operator, (*p).to_string());
             let rows = reads
@@ -2337,7 +2396,8 @@ mod tests {
                 .chain(listed().map(|p| (false, false, p)))
                 .chain(owned.iter().map(row(true, true)))
                 .chain(listed().map(|p| (true, true, p)))
-                .chain(declared.iter().map(row(true, false)));
+                .chain(declared.iter().map(row(true, false)))
+                .chain(sockets().map(|p| (true, false, p)));
             for (write, operator, path) in rows {
                 let p = Path::new(&path);
                 let rule = bind_refusal(p, p, write, operator, &policy, facts);
@@ -2611,6 +2671,34 @@ mod tests {
         ];
         bound.sort();
         assert_eq!(targets(&s.runner_roots(&declared)), bound);
+    }
+
+    /// `/tmp` itself, a desktop's sockets there and the X cookie bind for no manifest and no
+    /// grant, read or write; a plugin's own FIFO under `/tmp` still binds read-write.
+    #[cfg(unix)]
+    #[test]
+    fn tmp_sockets_and_tmp_itself_never_bind() {
+        let f = fixture();
+        let path = |d: &Path| d.to_string_lossy().into_owned();
+        let tmp = f.policy.tmp.clone();
+        let x11 = f.dir("tmp/.X11-unix");
+        let tmux = f.dir("tmp/tmux-1000");
+        let fifo = f.dir("tmp/vhclient");
+        std::fs::write(f.policy.home.join(".Xauthority"), b"cookie").unwrap();
+        let declared = manifest(
+            &[&path(&tmp), &path(&x11), &path(&tmux), "~/.Xauthority"],
+            &[&path(&tmp), &path(&x11), &path(&fifo)],
+        );
+        let s = f.store();
+        assert_eq!(
+            targets(&s.runner_roots(&declared)),
+            vec![(path(&fifo), true)]
+        );
+        for dir in [&tmp, &x11, &tmux] {
+            assert_eq!(f.request(&path(dir)), "refused:protected_path", "{dir:?}");
+            let err = s.grant("demo", dir, false, "cli").unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{dir:?}");
+        }
     }
 
     /// Browser profiles, keyrings and cloud credentials never bind, nor does a parent of one; a

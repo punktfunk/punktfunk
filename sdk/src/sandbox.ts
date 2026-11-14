@@ -304,8 +304,11 @@ const STARTUP = [
 	".xsession",
 ];
 
-/** Under the home: browser profiles, keyrings and cloud credentials. No bind holds one. */
+/** Under the home: browser profiles, keyrings, cloud credentials and the display's cookies. No
+ * bind holds one. */
 const SECRETS = [
+	".Xauthority",
+	".ICEauthority",
 	".mozilla",
 	".config/mozilla",
 	".config/google-chrome",
@@ -333,14 +336,41 @@ const SECRETS = [
 ];
 
 /**
+ * Names directly under `/tmp` that hold a desktop's display, session, agent or terminal sockets,
+ * or an X cookie; a trailing `*` matches any rest. A read-only bind still lets `connect` through,
+ * so no bind holds one, nor `/tmp` itself. The host's `TMP_SOCKETS` is the same list.
+ */
+const TMP_SOCKETS = [
+	".X11-unix",
+	".ICE-unix",
+	".XIM-unix",
+	".font-unix",
+	"tmux-*",
+	"zellij-*",
+	"screens",
+	"uscreens",
+	"nvim.*",
+	"ssh-*",
+	"dbus-*",
+	"pulse-*",
+	"fcitx-socket-*",
+	"orbit-*",
+	".wine-*",
+	"emacs*",
+	"xauth*",
+	".Xauth*",
+];
+
+/**
  * A root no manifest or grant may bind: the host's processes, devices, the session bus and
- * runtime sockets, the home or anything above it, keys, credential stores (`SECRETS`) or a parent
- * of one, and the host's config dir (`configDir`, and `~/.config/punktfunk*` wherever the config
- * lives) or anything above it, which holds every plugin's token. A read-write bind (`write`) also
- * may not hold what the session runs (`STARTUP`) or a parent of one, and one outside `/tmp` needs
- * the owner's grant (`operator`): a manifest's `writes` there waits for the owner's yes. Checked on
- * the path and on what it resolves to in the runner's view. The host's `bind_refusal` is the other
- * half; path-refusal-vectors.json pins the two.
+ * runtime sockets, `/tmp` itself and a desktop's sockets there (`TMP_SOCKETS`), the home or
+ * anything above it, keys, credential stores (`SECRETS`) or a parent of one, and the host's config
+ * dir (`configDir`, and `~/.config/punktfunk*` wherever the config lives) or anything above it,
+ * which holds every plugin's token. A read-write bind (`write`) also may not hold what the session
+ * runs (`STARTUP`) or a parent of one, and one not below `/tmp` needs the owner's grant
+ * (`operator`): a manifest's `writes` there waits for the owner's yes. Checked on the path and on
+ * what it resolves to in the runner's view. The host's `bind_refusal` is the other half;
+ * path-refusal-vectors.json pins the two.
  */
 export const refusedRoot = (
 	abs: string,
@@ -362,6 +392,16 @@ export const refusedRoot = (
 		const under = (base: string) => p === base || p.startsWith(`${base}/`);
 		const above = (base: string) => `${base}/`.startsWith(`${p}/`);
 		const near = (d: string) => under(path.join(h, d)) || above(path.join(h, d));
+		const tmpSocket = (t: string) => {
+			if (!under(t)) return false;
+			const name = p.slice(t.length + 1).split("/")[0] ?? "";
+			return (
+				p === t ||
+				TMP_SOCKETS.some((s) =>
+					s.endsWith("*") ? name.startsWith(s.slice(0, -1)) : name === s,
+				)
+			);
+		};
 		return (
 			p === "/" ||
 			above(h) ||
@@ -372,6 +412,7 @@ export const refusedRoot = (
 			(under("/run") && !p.startsWith("/run/media/")) ||
 			[".ssh", ".gnupg"].some((d) => under(path.join(h, d))) ||
 			SECRETS.some(near) ||
+			tmps.some(tmpSocket) ||
 			(write && STARTUP.some(near)) ||
 			(write && !operator && !tmps.some(under)) ||
 			p.startsWith(path.join(h, ".config", "punktfunk"))

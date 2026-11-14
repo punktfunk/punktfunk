@@ -164,8 +164,10 @@ struct Inner {
     hook: OnceLock<UnitHook>,
     /// The prerequisite checks `Seating` last answered with, and when they ran.
     checks: Mutex<Option<(Instant, Vec<Diagnostic>)>>,
-    /// Held by a removal throughout and by [`level_seat`] for each seat it refreshes, so a
-    /// refresh never writes a removed seat's trust copy or environment file back.
+    /// Held by a removal throughout, by [`level_seat`] for each seat it refreshes, and by a
+    /// start or adoption while it writes a trust copy, an environment file or the box's
+    /// library. A refresh never writes a removed seat's files back, and two writers never
+    /// share a temp file or put back an environment file's old token.
     level: Mutex<()>,
     /// Each person's row's device list, loaded on first use. Held across each change, its save
     /// and the trust copy it rewrites, so two writers never cross. Taken after `level`.
@@ -641,9 +643,10 @@ impl LinuxBackend {
     /// file, with a fresh token when the file holds none. A host that is up keeps the token it
     /// started with. The box's library follows their home from here on. `true` when the
     /// environment file changed. Only the account `door-helper` recorded gets any of it: a row
-    /// left behind for another account writes nothing and never starts.
+    /// left behind for another account writes nothing and never starts. Writes under `level`.
     fn prepare_owner(&self, seat: &Seat, passwd: &accounts::Passwd) -> Result<bool, BackendError> {
         accounts::require_recorded(&self.inner.state, &seat.account)?;
+        let _level = self.inner.level.lock().unwrap_or_else(|e| e.into_inner());
         let reader = Tracked::of(seat, passwd).reader;
         shared::refresh_owner_trust(&self.inner.box_dir, &self.inner.state, &seat.id, reader)?;
         *self.inner.owner.lock().unwrap_or_else(|e| e.into_inner()) = Some(passwd.clone());
@@ -999,7 +1002,8 @@ impl PlatformBackend for LinuxBackend {
     }
 
     /// A made seat's row up: its user's group, home, groups, folders, Steam links and copies put
-    /// right, then [`LinuxBackend::bring_up`]. The owner's and a person's rows start their own way.
+    /// right, the copies under `level`, then [`LinuxBackend::bring_up`]. The owner's and a
+    /// person's rows start their own way.
     fn start(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
         let asked = self.inner.stops.load(Ordering::SeqCst);
         match Own::of(seat) {
@@ -1032,8 +1036,10 @@ impl PlatformBackend for LinuxBackend {
             tracing::warn!(account = %passwd.name, %error, "seat's steam links not made");
         }
         let reader = shared::Reader::group(passwd.gid);
+        let level = self.inner.level.lock().unwrap_or_else(|e| e.into_inner());
         shared::refresh_trust(box_dir, state, &seat.id, reader)?;
         shared::refresh_seat_library(box_dir, state, &seat.id, reader)?;
+        drop(level);
         unit_hook(&self.inner, &seat.account, Some(passwd.uid));
         self.bring_up(seat, Own::Seat, &passwd, None, asked)?;
         self.track(&seat.id, Tracked::of(seat, &passwd));
@@ -1332,8 +1338,9 @@ impl LinuxBackend {
     /// login is theirs, and the headless session would sit beside it uninvited. Otherwise the
     /// unit brings up the headless session and a contract seat's host in it, which admits only
     /// the devices the row's list does. The account is checked first, and what is made is the
-    /// row's own, never in the account. The login drop-in [`Self::bring_up`] wrote stays while
-    /// the start waits; a helper that ended before a session falls back to the plain start.
+    /// row's own, never in the account; its copies are written under `level`. The login drop-in
+    /// [`Self::bring_up`] wrote stays while the start waits; a helper that ended before a session
+    /// falls back to the plain start.
     fn start_person(
         &self,
         seat: &Seat,
@@ -1355,8 +1362,10 @@ impl LinuxBackend {
         let state = &self.inner.state;
         shared::ensure_person_dirs(state, &seat.id, &passwd)?;
         let reader = shared::Reader::person(passwd.uid, passwd.gid);
+        let level = self.inner.level.lock().unwrap_or_else(|e| e.into_inner());
         person_trust(&self.inner, &seat.id, reader)?;
         shared::refresh_seat_library(&self.inner.box_dir, state, &seat.id, reader)?;
+        drop(level);
         let written = self.bring_up(seat, Own::Person, &passwd, password, asked)?;
         self.track(&seat.id, Tracked::of(seat, &passwd));
         let ready = self.wait_ready(seat, asked, written.is_some());
@@ -1376,9 +1385,10 @@ impl LinuxBackend {
     }
 
     /// `seat`'s unit up from cold, a row of `kind` on `passwd`'s account: a fresh token, the
-    /// unit's files, then the unit. A unit already up keeps its token, which its host read when it
-    /// started, and nothing here runs. `password` is a person's, for [`Self::person_login`];
-    /// the login drop-in's guard comes back for the caller to hold while it waits.
+    /// unit's files under `level`, then the unit. A unit already up keeps its token, which its
+    /// host read when it started, and nothing here runs. `password` is a person's, for
+    /// [`Self::person_login`]; the login drop-in's guard comes back for the caller to hold while
+    /// it waits.
     fn bring_up<'s>(
         &self,
         seat: &'s Seat,
@@ -1406,7 +1416,9 @@ impl LinuxBackend {
         };
         let (state, browser) = (&self.inner.state, session::browser(&self.inner.box_dir));
         let shown = shares.as_ref();
+        let level = self.inner.level.lock().unwrap_or_else(|e| e.into_inner());
         session::write_unit_files(seat, kind, passwd, state, &token, shown, &browser)?;
+        drop(level);
         let (written, password) = match kind {
             Own::Person => self.person_login(seat, password)?,
             Own::Owner | Own::Seat => (None, None),
@@ -1535,10 +1547,11 @@ impl LinuxBackend {
 }
 
 /// Keeps every running seat level with the box, every [`TRUST_TICK`], one job after another: the
-/// box's library, the console's certificate in Firefox, each seat's copies and the desk yield of a
-/// row on a person's own account, a made seat's missed libraries every [`REACH_EVERY`], the games
-/// folder's ACL mask. Each job's memory is a local here, handed to it. The owner's row stays listed
-/// while its host is the owner's own, which reads the same copy. Ends when the backend is dropped.
+/// box's library under `level`, the console's certificate in Firefox, each seat's copies and the
+/// desk yield of a row on a person's own account, a made seat's missed libraries every
+/// [`REACH_EVERY`], the games folder's ACL mask. Each job's memory is a local here, handed to it.
+/// The owner's row stays listed while its host is the owner's own, which reads the same copy. Ends
+/// when the backend is dropped.
 fn keep_level(inner: Weak<Inner>) {
     let mut acl_at = Instant::now();
     let mut reach_at = Instant::now();
@@ -1549,11 +1562,10 @@ fn keep_level(inner: Weak<Inner>) {
     loop {
         std::thread::sleep(TRUST_TICK);
         let Some(inner) = inner.upgrade() else { return };
-        once_per_outage(
-            refresh_box_library(&inner),
-            &mut library_failing,
-            "box library not copied",
-        );
+        let level = inner.level.lock().unwrap_or_else(|e| e.into_inner());
+        let library = refresh_box_library(&inner);
+        drop(level);
+        once_per_outage(library, &mut library_failing, "box library not copied");
         once_per_outage(
             firefox::level(&inner.box_dir),
             &mut firefox_failing,

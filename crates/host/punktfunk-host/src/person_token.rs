@@ -129,13 +129,14 @@ pub(crate) fn sign(token: &str, ts: u64, nonce: &str, profile: &str) -> String {
     format!("{ts}.{nonce}.{profile}.{mac}")
 }
 
-/// `ticket` split into its parts, when each has its shape: decimal seconds, a 32-hex nonce, a
-/// profile id and a 64-hex MAC.
+/// `ticket` split into its parts, when each has its shape: seconds as [`sign`] writes them, a
+/// 32-hex nonce, a profile id and a 64-hex MAC. Every part has one spelling, so a used ticket's
+/// text is the only one that redeems it.
 pub(crate) fn parse(ticket: &str) -> Option<Ticket<'_>> {
     let mut parts = ticket.split('.');
     let (ts, nonce, profile, mac) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
     let hex = |s: &str, len: usize| s.len() == len && s.bytes().all(|b| b.is_ascii_hexdigit());
-    let decimal = !ts.is_empty() && ts.len() <= 20 && ts.bytes().all(|b| b.is_ascii_digit());
+    let decimal = ts.parse::<u64>().is_ok_and(|n| n.to_string() == ts);
     let lower = |s: &str| !s.bytes().any(|b| b.is_ascii_uppercase());
     let shaped = parts.next().is_none()
         && decimal
@@ -212,6 +213,10 @@ mod tests {
             format!("{good}.x"),
             good.replacen("1000", "-1", 1),
             good.replacen("1000", "", 1),
+            good.replacen("1000", "01000", 1),
+            good.replacen("1000", "+1000", 1),
+            good.replacen("1000", " 1000", 1),
+            good.replacen("1000", "18446744073709551616", 1),
             good.replace(NONCE, "0011"),
         ] {
             assert!(parse(&bad).is_none(), "{bad}");

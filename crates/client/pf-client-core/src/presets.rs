@@ -12,7 +12,9 @@
 //!
 //! Design: `design/client-settings-profiles.md`.
 
-use crate::trust::{config_dir, load_json, write_atomic, FileStamp, Settings, StatsVerbosity};
+use crate::trust::{
+    config_dir, load_json, read_json, write_atomic, FileStamp, Settings, StatsVerbosity,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -490,8 +492,14 @@ impl PresetsFile {
     }
 
     fn load_from(dir: &Path) -> PresetsFile {
-        let current: Option<PresetsFile> = load_json(&dir.join(FILE));
-        let legacy: Option<LegacyFile> = load_json(&dir.join(LEGACY_FILE));
+        Self::pick(
+            load_json(&dir.join(FILE)),
+            load_json(&dir.join(LEGACY_FILE)),
+        )
+    }
+
+    /// The newer of the catalog and its mirror; neither is no presets.
+    fn pick(current: Option<PresetsFile>, legacy: Option<LegacyFile>) -> PresetsFile {
         match (current, legacy) {
             (Some(current), Some(old)) if old.mirror => current,
             (Some(current), None) => current,
@@ -511,11 +519,16 @@ impl PresetsFile {
     }
 
     /// Load the catalog, apply `f`, save: a shell's edit, so another process's write in
-    /// between survives.
+    /// between survives. A catalog file that exists but can't be read refuses the edit, so no
+    /// save replaces it.
     pub fn update<R>(f: impl FnOnce(&mut PresetsFile) -> R) -> anyhow::Result<R> {
-        let mut catalog = Self::load();
+        let dir = config_dir()?;
+        let mut catalog = Self::pick(
+            read_json(&dir.join(FILE))?,
+            read_json(&dir.join(LEGACY_FILE))?,
+        );
         let r = f(&mut catalog);
-        catalog.save()?;
+        catalog.save_to(&dir)?;
         Ok(r)
     }
 

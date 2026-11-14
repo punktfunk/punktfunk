@@ -2,7 +2,9 @@
 //! resolver every front-end and the session go through. `trust` re-exports all of it.
 
 use crate::presets::{PresetsFile, Resolution, StreamPreset};
-use crate::trust::{config_dir, load_json_or_default, write_atomic, KnownHosts, StoreLock};
+use crate::trust::{
+    config_dir, load_json_or_default, read_json, write_atomic, KnownHosts, StoreLock,
+};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -862,7 +864,8 @@ impl Settings {
 
     /// Re-read the file, apply `f`, and save when it returns `true`, all under the file's
     /// [`StoreLock`]: an edit that keeps what another process wrote. Returns the settings as
-    /// edited. Fire-and-forget like [`save`](Self::save).
+    /// edited. Fire-and-forget like [`save`](Self::save). A file that exists but can't be read
+    /// is left alone: the edit applies to defaults in memory only.
     pub fn update(f: impl FnOnce(&mut Settings) -> bool) -> Settings {
         match Self::path() {
             Ok(p) => Self::update_at(&p, f),
@@ -876,19 +879,28 @@ impl Settings {
 
     fn update_at(path: &Path, f: impl FnOnce(&mut Settings) -> bool) -> Settings {
         let _lock = StoreLock::take(path);
-        let mut s: Settings = load_json_or_default(path);
-        if f(&mut s) {
+        let (mut s, saves) = match read_json(path) {
+            Ok(s) => (s.unwrap_or_default(), true),
+            Err(e) => {
+                tracing::warn!(error = %format!("{e:#}"), "settings edit not saved");
+                (Settings::default(), false)
+            }
+        };
+        if f(&mut s) && saves {
             s.save_at(path);
         }
         s
     }
 
     /// Write this snapshot whole, under the file's lock. A snapshot read earlier drops what
-    /// another process saved since: an edit goes through [`update`](Self::update).
+    /// another process saved since: an edit goes through [`update`](Self::update). A file
+    /// that exists but can't be read is left alone, as [`update`](Self::update) leaves it.
     pub fn save(&self) {
         let Ok(p) = Self::path() else { return };
-        let _lock = StoreLock::take(&p);
-        self.save_at(&p);
+        Self::update_at(&p, |s| {
+            s.clone_from(self);
+            true
+        });
     }
 
     /// Fire-and-forget (a failed write must never take a stream down), but temp+rename: a
@@ -1029,6 +1041,29 @@ mod tests {
         assert_eq!(kept, br#"{"width":1280,"#);
         let stored: Settings = load_json_or_default(&path);
         assert_eq!(stored.last_window_w, 1280);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// A settings file this user can't read is not replaced by the edit, which applies in
+    /// memory only. Root reads it anyway, so there the check has nothing to prove.
+    #[cfg(unix)]
+    #[test]
+    fn an_update_leaves_an_unreadable_settings_file_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = crate::trust::store_health_lock();
+        let path = crate::presets::tests::scratch_dir("settings-unreadable").join("settings.json");
+        std::fs::write(&path, br#"{"width":1280}"#).unwrap();
+        let mode = |m| std::fs::set_permissions(&path, std::fs::Permissions::from_mode(m));
+        mode(0o000).unwrap();
+        if std::fs::read(&path).is_err() {
+            let s = Settings::update_at(&path, |s| {
+                s.last_window_w = 640;
+                true
+            });
+            assert_eq!(s.last_window_w, 640);
+            mode(0o600).unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), br#"{"width":1280}"#);
+        }
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

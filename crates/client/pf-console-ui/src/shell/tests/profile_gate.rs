@@ -203,6 +203,31 @@ fn a_profile_gone_at_the_dial_forgets_the_pick_and_asks_once_more() {
     );
 }
 
+/// Back on the second ask drops it whole: the next connect may ask once more.
+#[test]
+fn a_cancelled_second_ask_leaves_the_next_connect_armed() {
+    let (mut s, console, bus, row) = asking(pick("kid", "Kid"));
+    let both = || listed(&[("own", "Ben"), ("kid", "Kid")]);
+    s.start_connect(ConnectIntent::to_host(&row, None));
+    console.set_profiles("aa11", both());
+    s.sync();
+    assert_eq!(launched_as(&mut s), Some(Some("kid".into())));
+    s.profile_gone();
+    s.session_failed("gone");
+    assert!(s.connect.asking().is_some(), "the second ask");
+    s.handle_menu(MenuEvent::Back);
+    s.start_connect(ConnectIntent::to_host(&row, None));
+    console.set_profiles("aa11", both());
+    s.sync();
+    assert_eq!(launched_as(&mut s), Some(Some("kid".into())));
+    bus.drain();
+    s.profile_gone();
+    assert!(
+        sets_profile(&bus.drain()),
+        "the next connect asks once more"
+    );
+}
+
 /// A saved pick still listed dials as it; a single profile dials as that one.
 #[test]
 fn a_listed_pick_or_a_lone_profile_dials_at_once() {

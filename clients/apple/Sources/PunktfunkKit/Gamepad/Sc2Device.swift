@@ -81,8 +81,8 @@ enum Sc2Device {
     /// Declared STRIPPED payload length per output report id (wire length = stripped + 1). The
     /// hardware-verified table; its id-INCLUDED twin is the host's
     /// `pf_driver_proto::triton::out_report_len`, and `clients/shared/sc2-vectors.json` holds
-    /// both (and Android's) to the same rows. `nil` = unknown id: clamp to what arrived minus
-    /// the id byte, never guess-trim beyond that.
+    /// both (and Android's) to the same rows. `nil` for an id outside the output block, which
+    /// `outputWrite` never writes.
     static func strippedOutputLen(id: UInt8) -> Int? {
         switch id {
         case 0x80: return 9 // grip rumble    → 100F6CB5 (left/right motor fields)
@@ -301,14 +301,12 @@ enum Sc2Device {
     /// payload is trimmed to the declared stripped length, clamped to what arrived. The clamp is
     /// redundant-but-kept: current Windows hosts already trim each drained OUTPUT frame to
     /// `out_report_len(id)` before the HidRaw push, but older hosts pad to 64 B — and the GATT
-    /// write must carry exactly the declared length either way. Unknown id: the whole id-stripped
-    /// payload (never guess-trim). `nil` for a frame too short to carry a payload.
+    /// write must carry exactly the declared length either way. `nil` for a frame too short to
+    /// carry a payload, and for an id outside `0x80...0x89`: `0xFF` would select `reportCharUUID`.
     static func outputWrite(frame: [UInt8]) -> OutputWrite? {
-        guard frame.count >= 2 else { return nil }
-        let id = frame[0]
-        let declared = strippedOutputLen(id: id) ?? frame.count - 1
+        guard frame.count >= 2, let declared = strippedOutputLen(id: frame[0]) else { return nil }
         let n = min(declared, frame.count - 1)
-        return OutputWrite(charUUID: outputCharUUID(id: id), payload: Array(frame[1 ..< 1 + n]))
+        return OutputWrite(charUUID: outputCharUUID(id: frame[0]), payload: Array(frame[1 ..< 1 + n]))
     }
 
     /// Outgoing FEATURE (`kind == 1`, HID_RAW_FEATURE): the frame is `[0x01][0x87 …]` — strip
@@ -317,9 +315,10 @@ enum Sc2Device {
     /// (64 B, un-trimmed), so trailing zero-padding is passed through — the firmware accepts the
     /// zero-padded form (Android sends `disableLizard` padded to 64 B the same way). NO 0xC0
     /// segment wrapper: proven unnecessary on-device for both feature and output writes.
-    /// `nil` for a frame too short to carry a command.
+    /// `nil` for a frame too short to carry a command, and for a command in
+    /// `Sc2Capture.tritonHeldBack`, judged on the byte the firmware reads.
     static func featurePayload(frame: [UInt8]) -> [UInt8]? {
-        guard frame.count >= 2 else { return nil }
+        guard frame.count >= 2, !Sc2Capture.tritonHeldBack.contains(frame[1]) else { return nil }
         return Array(frame.dropFirst())
     }
 }

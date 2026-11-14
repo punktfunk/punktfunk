@@ -7,6 +7,7 @@ import {
 	readRawBody,
 	setResponseStatus,
 } from "h3";
+import { GRANT_HEADER } from "../../src/lib/handed-paths";
 import { PASSWORD_HEADER } from "../../src/lib/password-gates";
 import { confirmPassword } from "./confirm";
 import { putAndGrant } from "./handedPaths";
@@ -18,10 +19,11 @@ type Method = "GET" | "PUT" | "POST";
  * Forward the request's method and body to `path` on plugin `id` and relay the answer.
  *
  * `methods` is all that is forwarded (405 otherwise). A PUT with `grantForm` saves through
- * `putAndGrant`, which asks for the console password (in `PASSWORD_HEADER`) when the save hands a
- * folder over, and merges its `access` outcome into the answer. `notFound` is the body a plugin's
- * 404 becomes: marked, so the host API's own 404 under `bun run dev` never reads as it. A plugin's
- * 401 refuses our secret, not the session, so it answers 502 like an unreachable plugin.
+ * `putAndGrant`, which grants the folders the operator confirmed (`GRANT_HEADER`) after the console
+ * password (`PASSWORD_HEADER`), and merges its `access` outcome into the answer. `notFound` is the
+ * body a plugin's 404 becomes: marked, so the host API's own 404 under `bun run dev` never reads as
+ * it. A plugin's 401 refuses our secret, not the session, so it answers 502 like an unreachable
+ * plugin.
  */
 export async function pluginSurface(
 	event: H3Event,
@@ -45,8 +47,14 @@ export async function pluginSurface(
 			: ((await readRawBody(event, false)) as Uint8Array | undefined);
 	const { res, access } =
 		method === "PUT" && opts.grantForm
-			? await putAndGrant(id, path, body, opts.grantForm, () =>
-					confirmPassword(event, getRequestHeader(event, PASSWORD_HEADER)),
+			? await putAndGrant(
+					id,
+					path,
+					body,
+					opts.grantForm,
+					getRequestHeader(event, GRANT_HEADER),
+					() =>
+						confirmPassword(event, getRequestHeader(event, PASSWORD_HEADER)),
 				)
 			: {
 					res: await callPlugin(id, path, {

@@ -211,12 +211,17 @@ final class Sc2BleLink: NSObject {
     /// Replay one raw host report on the physical controller. `kind` is the C ABI's
     /// `PUNKTFUNK_HID_RAW_OUTPUT` (0) / `PUNKTFUNK_HID_RAW_FEATURE` (1); `frame` is id-first,
     /// exactly as Steam wrote it. Safe from any thread — `frame` is an owned copy, and the
-    /// resolution + GATT write happen on the BLE queue.
+    /// resolution + GATT write happen on the BLE queue. `Sc2Device`'s framing refuses what the
+    /// pad must not get, on the bytes this link sends: an output id outside the block, a
+    /// held-back feature command. A 2015 pad's frame meets the 2015 rule here, because a
+    /// reconnect can change the model after the capture judged it.
     func writeRaw(kind: UInt8, frame: [UInt8]) {
         queue.async { [self] in
             guard let controller else { return }
             if isClassic {
-                if kind == 1 { writeClassic(frame) }
+                if kind == 1, Sc2Capture.refusedWrite(classic: true, kind: kind, data: frame) == nil {
+                    writeClassic(frame)
+                }
                 return
             }
             let target: CBCharacteristic?

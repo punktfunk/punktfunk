@@ -440,5 +440,26 @@ this crate with overflow checks off, as it ships: 26, 28, 30 and 31 abort a rele
     `skip_bits_lands_where_reading_the_same_bits_would` in the file's own test module. Not a
     defect; not for upstream.
 
+43. `src/codec/h264/nalu.rs` — `Nalu::next`: the `zero_byte` of a four-byte start code is
+    taken only when it lies at or after the cursor (`start_code_offset > pos`, was `> 0`).
+    An end-of-sequence or end-of-bitstream NAL is sized as its header alone, so a caller that
+    steps the cursor to the NAL's end stands right behind its second header byte. When that
+    byte is zero (`nuh_temporal_id_plus1 = 0`, which `NaluHeader::parse` accepts) and a start
+    code follows at once, the next NAL's start reached back into the NAL just read:
+    `00 00 01 48 00 00 00 01`. `pf-bitstream`'s `PocWidener::widen` slices between the two
+    and panicked, in release too, on the Android client's decode thread. Regression test:
+    `a_start_code_right_behind_an_end_nal_starts_after_it` in `pf-bitstream`
+    (`h265/poc_widen.rs`). **Report upstream — not yet filed.**
+
+44. `src/codec/h265/parser.rs` — `parse_pps`: the explicit tile sizes
+    (`uniform_spacing_flag == 0`) read each `column_width_minus1` / `row_height_minus1` with
+    a maximum of `remainder - 1`, where the running remainder sits in the last slot. A PPS
+    whose earlier tiles use the picture up leaves a remainder of zero with tiles still to
+    read: the subtraction panicked in debug and wrapped in release, so widths that run past
+    the picture reached the Vulkan, D3D11VA and V4L2 picture builders. 6.5.1 gives every
+    tile at least one CTB, so a zero remainder there is refused with `checked_sub`.
+    Regression test: `a_pps_whose_tiles_run_past_the_picture_is_a_parse_error_not_a_panic`
+    in `pf-bitstream`. **Report upstream — not yet filed.**
+
 Re-sync procedure: fetch the AOSP tree, re-apply this trim, diff `codec/` +
 `bitstream_utils.rs` (expect near-zero conflicts), update the commit pin above.

@@ -59,8 +59,9 @@ fn said((id, text): Words) -> Said {
 }
 
 /// Whether device `fp` may open `resolved` here, with the PIN or key proof the hello announced
-/// when it needs one, and its hold on the profile's list when it is on one. Any other answer
-/// closes the connect, typed, and errs.
+/// when it needs one: its hold on the profile's list when it is on one, and `true` when that
+/// proof, read and checked here, opened the lock. Any other answer closes the connect, typed,
+/// and errs.
 pub(super) async fn admit(
     host: &SessionHost,
     conn: &link::SessionLink,
@@ -68,12 +69,12 @@ pub(super) async fn admit(
     first: &ClientHello,
     resolved: &Resolved,
     fp: Option<&str>,
-) -> Result<Option<Presence>> {
+) -> Result<(Option<Presence>, bool)> {
     let profiles = &host.profiles;
     let id = resolved.id.as_str();
     let opens = profiles.opens(id, fp);
     let fp = match (opens, fp) {
-        (Opens::Yes, fp) => return Ok(fp.and_then(|fp| Presence::join(profiles, id, fp))),
+        (Opens::Yes, fp) => return Ok((fp.and_then(|fp| Presence::join(profiles, id, fp)), false)),
         (Opens::Pin | Opens::Key, Some(fp)) => fp,
         _ => {
             refuse(conn, RejectReason::SeatUnavailable, said(NOT_ALLOWED)).await;
@@ -111,7 +112,7 @@ pub(super) async fn admit(
     let holder = profiles.lock_holder(id);
     let key_only = opens == Opens::Key && profiles.locks().get(&holder).pin.is_none();
     let (reason, words) = match answer {
-        PinAnswer::Opened => return Ok(Presence::join(profiles, id, fp)),
+        PinAnswer::Opened => return Ok((Presence::join(profiles, id, fp), true)),
         PinAnswer::NoPin | PinAnswer::KeyFailed if key_only => {
             (RejectReason::SeatUnavailable, said(NOT_ALLOWED))
         }

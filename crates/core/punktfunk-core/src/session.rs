@@ -481,7 +481,7 @@ impl Session {
         } = self;
         let c = crypto.as_ref().expect("pipelined seal needs crypto");
         let lane = seal_lane.take().expect("pipelined seal needs the lane");
-        let fec_lane = parity_lane
+        let mut fec_lane = parity_lane
             .take()
             .expect("pipelined seal needs the parity lane");
         let mut send = |p: &[&[u8]]| -> Result<usize> {
@@ -554,7 +554,7 @@ impl Session {
         };
         // The data streams out while the parity lane computes the parity beside it.
         let (emitted, parity) =
-            parity_beside(&fec_lane, geo, data, &mut recovery, perf_armed, || {
+            parity_beside(&mut fec_lane, geo, data, &mut recovery, perf_armed, || {
                 packetizer.emit_data(&geo, data, pts_ns, user_flags, frame_index, &mut emit)
             });
         let fec_lane_ok = parity.is_some();

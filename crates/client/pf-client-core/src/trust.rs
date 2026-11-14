@@ -59,16 +59,26 @@ pub(crate) fn load_json_or_default<T: serde::de::DeserializeOwned + Default>(pat
 /// [`load_json_or_default`] without the fallback: `None` for a missing, unreadable or
 /// unparsable file, with the same warnings.
 pub(crate) fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    read_json(path).unwrap_or_else(|e| {
+        tracing::warn!(
+            error = %format!("{e:#}"),
+            "config file not read — every setting in it is being IGNORED"
+        );
+        None
+    })
+}
+
+/// A store about to be edited and saved: `None` for a missing file (a first run) or one set
+/// aside as unparsable, an error for one that exists but can't be read, so the save that
+/// follows never replaces it. That error is a persist failure too ([`store_health`]): the edit
+/// it refuses is not saved.
+pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
-            tracing::warn!(
-                path = %path.display(),
-                error = %e,
-                "config file could not be read — every setting in it is being IGNORED"
-            );
-            return None;
+            store_health::record(path, &e);
+            return Err(e).with_context(|| format!("read {}", path.display()));
         }
     };
     let parsed = match std::str::from_utf8(&bytes) {
@@ -77,7 +87,7 @@ pub(crate) fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T
         Err(e) => Err(e.to_string()),
     };
     match parsed {
-        Ok(v) => Some(v),
+        Ok(v) => Ok(Some(v)),
         Err(e) => {
             tracing::warn!(
                 path = %path.display(),
@@ -87,7 +97,7 @@ pub(crate) fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T
                  is not UTF-8, re-save it as UTF-8)"
             );
             set_aside(path, &bytes);
-            None
+            Ok(None)
         }
     }
 }
@@ -416,6 +426,31 @@ mod tests {
         assert_eq!(d.codec, Settings::default().codec);
         let gone: Settings = load_json_or_default(&dir.join("nope.json"));
         assert_eq!(gone.codec, Settings::default().codec);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An edit starts empty only from a missing or unparsable store. One that exists but
+    /// can't be read is an error, so no save replaces it, and the app hears of it.
+    #[test]
+    fn only_a_missing_or_broken_store_reads_as_empty() {
+        let _guard = store_health_lock();
+        store_health::clear();
+        let dir = crate::presets::tests::scratch_dir("read-json");
+        let gone: Option<Settings> = read_json(&dir.join("nope.json")).unwrap();
+        assert!(gone.is_none());
+        std::fs::write(dir.join("broken.json"), "{").unwrap();
+        let broken: Option<Settings> = read_json(&dir.join("broken.json")).unwrap();
+        assert!(broken.is_none());
+        let unreadable = dir.join("unreadable.json");
+        std::fs::create_dir_all(&unreadable).unwrap();
+        assert_eq!(
+            store_health::last_error(),
+            None,
+            "a first run is no failure"
+        );
+        assert!(read_json::<Settings>(&unreadable).is_err());
+        assert!(store_health::last_error().is_some());
+        store_health::clear();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

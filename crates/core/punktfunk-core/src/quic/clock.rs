@@ -33,7 +33,8 @@ pub struct ClockSkew {
 /// Client-side skew handshake: `ROUNDS` [`ClockProbe`]/[`ClockEcho`] round-trips.
 /// `None` if the host never answers (pre-skew host) — caller assumes a shared
 /// clock. Each round is bounded so a silent host cannot wedge session start.
-/// Any other message the host sends meanwhile goes back on `recv` for the control task.
+/// Any other message the host sends meanwhile goes back on `recv` for the control task;
+/// past a bounded number of them the rounds end, so what is held stays small.
 ///
 /// Needs the feature for its runtime; the [`ClockProbe`]/[`ClockEcho`] codecs above do not, and a
 /// browser drives the same rounds over its own stream.
@@ -49,9 +50,14 @@ where
     use super::v2::{io, msg::decode};
     use std::time::Duration;
     const ROUNDS: usize = 8;
+    // What the rounds set aside before they give up. A host sends a handful of messages here;
+    // one that floods the stream ends the sync and is read by the control task from then on.
+    const ASIDE_FRAMES: usize = 64;
+    const ASIDE_BYTES: usize = 1 << 20;
     let read_timeout = Duration::from_secs(2);
     let mut samples: Vec<(u64, u64, u64, u64)> = Vec::with_capacity(ROUNDS);
     let mut aside = Vec::new();
+    let mut aside_bytes = 0usize;
     'rounds: for _ in 0..ROUNDS {
         let t1 = wall_clock_ns();
         if io::send(send, &ClockProbe { t1_ns: t1 }).await.is_err() {
@@ -62,7 +68,13 @@ where
             match tokio::time::timeout_at(deadline, recv.read_frame()).await {
                 Ok(Ok((ty, body))) => match decode::<ClockEcho>(ty, &body) {
                     Ok(e) => break e,
-                    Err(_) => aside.push((ty, body)),
+                    Err(_) => {
+                        aside_bytes += body.len();
+                        aside.push((ty, body));
+                        if aside.len() > ASIDE_FRAMES || aside_bytes > ASIDE_BYTES {
+                            break 'rounds;
+                        }
+                    }
                 },
                 _ => break 'rounds, // timeout / stream error: pre-skew host
             }
@@ -540,5 +552,54 @@ mod tests {
             decode::<AudioState>(ty, &body).unwrap(),
             AudioState { muted: true }
         );
+    }
+
+    /// A host that answers a probe with a flood ends the rounds: the sync holds a bounded
+    /// number of frames, and every frame still reaches the next reader in order.
+    #[cfg(feature = "quic")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn clock_sync_ends_when_a_host_floods_the_rounds() {
+        const FLOOD: usize = 200;
+        let server = endpoint::server("127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = server.local_addr().unwrap();
+        let host = tokio::spawn(async move {
+            let conn = server.accept().await.unwrap().await.unwrap();
+            let (mut send, recv) = conn.accept_bi().await.unwrap();
+            let mut recv = FrameReader::new(recv);
+            let (ty, body) = recv.read_frame().await.unwrap();
+            let probe = decode::<ClockProbe>(ty, &body).unwrap();
+            for i in 0..FLOOD {
+                v2io::send(&mut send, &AudioState { muted: i % 2 == 0 })
+                    .await
+                    .unwrap();
+            }
+            let t = wall_clock_ns();
+            let echo = ClockEcho {
+                t1_ns: probe.t1_ns,
+                t2_ns: t,
+                t3_ns: t,
+            };
+            v2io::send(&mut send, &echo).await.unwrap();
+            (server, conn, send)
+        });
+        let client = endpoint::client_insecure().unwrap();
+        let conn = client.connect(addr, "punktfunk").unwrap().await.unwrap();
+        let (mut send, recv) = conn.open_bi().await.unwrap();
+        let mut recv = FrameReader::new(recv);
+        assert!(
+            clock_sync(&mut send, &mut recv).await.is_none(),
+            "the rounds read past the flood"
+        );
+        let _host = host.await.unwrap();
+        for i in 0..FLOOD {
+            let (ty, body) = recv.read_frame().await.unwrap();
+            assert_eq!(
+                decode::<AudioState>(ty, &body).unwrap(),
+                AudioState { muted: i % 2 == 0 },
+                "frame {i}"
+            );
+        }
+        let (ty, body) = recv.read_frame().await.unwrap();
+        assert!(decode::<ClockEcho>(ty, &body).is_ok());
     }
 }

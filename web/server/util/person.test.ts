@@ -1,7 +1,13 @@
 // A person's own console: a ticket opens it only through the seat host the box names, a session
 // lives here and never in the browser, and an operator session in the same browser stays apart.
 import { beforeEach, describe, expect, test } from "bun:test";
-import { resetPersonState, ticketProfile } from "./person";
+import { createApp, defineEventHandler, getQuery, toWebHandler } from "h3";
+import {
+	liveSessions,
+	openSession,
+	resetPersonState,
+	ticketProfile,
+} from "./person";
 import {
 	ADMIN,
 	asDoor,
@@ -456,5 +462,40 @@ describe("two kinds of session in one browser", () => {
 		const res = await send("/api/v1/profiles", { cookie: stale });
 		expect(res.status).toBe(200);
 		expect(jar(res, stale)).not.toContain("pf_person");
+	});
+});
+
+describe("sessions held here", () => {
+	const opener = toWebHandler(
+		createApp().use(
+			"/open",
+			defineEventHandler((event) => {
+				const { profile, n } = getQuery(event);
+				openSession(event, {
+					profile: String(profile),
+					owner: null,
+					own: true,
+					seat: { port: seat.port, pin: PIN },
+					token: String(n),
+					expiresAt: Date.now() + 60_000,
+				});
+				return "";
+			}),
+		),
+	);
+	const open = (profile: string, n: number) =>
+		opener(local(`/open?profile=${profile}&n=${n}`));
+	const tokens = (profile: string) =>
+		liveSessions()
+			.filter((s) => s.profile === profile)
+			.map((s) => s.token);
+
+	test("one profile's opens end only its own oldest sessions", async () => {
+		await open(OTHER, 0);
+		for (let n = 1; n <= 40; n++) await open(PROFILE, n);
+		expect(tokens(OTHER)).toEqual(["0"]);
+		expect(tokens(PROFILE)).toEqual(
+			Array.from({ length: 16 }, (_, i) => String(25 + i)),
+		);
 	});
 });

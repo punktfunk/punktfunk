@@ -15,6 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { apiErrorMessage } from "@/lib/errors";
+import type { HandedPath } from "@/lib/handed-paths";
 import { m } from "@/paraglide/messages";
 
 export type PasswordFailure = "wrong" | "throttled" | null;
@@ -201,3 +202,41 @@ export const PasswordConfirmDialog: FC<{
 		</Dialog>
 	);
 };
+
+/** A plugin form's save that hands `plugin` new folders: each folder with its access, then the
+ * password. What it lists is all the save grants. */
+export const HandOverDialog: FC<{
+	open: boolean;
+	id: string;
+	plugin: string;
+	paths: HandedPath[];
+	submitLabel: ReactNode;
+	onSubmit: (password: string) => Promise<unknown>;
+	onClose: () => void;
+}> = ({ plugin, paths, ...dialog }) => (
+	<PasswordConfirmDialog
+		{...dialog}
+		title={m.plugin_form_confirm_title()}
+		body={m.plugin_form_confirm_body({ plugin })}
+	>
+		<ul className="max-h-60 space-y-2 overflow-y-auto">
+			{paths.map((p) => (
+				<li
+					key={p.path}
+					className={
+						p.write
+							? "rounded-md border border-amber-600/40 bg-amber-500/5 px-3 py-2"
+							: "rounded-md border px-3 py-2"
+					}
+				>
+					<div className="break-all font-mono text-xs">{p.path}</div>
+					<div className="text-xs text-muted-foreground">
+						{p.write
+							? m.plugin_access_read_write()
+							: m.plugin_access_read_only()}
+					</div>
+				</li>
+			))}
+		</ul>
+	</PasswordConfirmDialog>
+);

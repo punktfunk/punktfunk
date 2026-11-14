@@ -69,7 +69,7 @@ mod theme;
 mod update;
 mod webtransport;
 
-pub(crate) use profiles::start_seat;
+pub(crate) use profiles::{may_wake, start_seat};
 
 /// Default management port — next to the GameStream block (47984…48010).
 ///

@@ -3624,6 +3624,35 @@ mod tests {
         }
     }
 
+    /// Each tile takes at least one CTB: explicit widths or heights that use the picture
+    /// up before the last tile are refused.
+    #[test]
+    fn a_pps_whose_tiles_run_past_the_picture_is_a_parse_error_not_a_panic() {
+        // 2048×2048 luma, 64×64 CTBs: 32 CTBs each way.
+        let sps = SpsOpts {
+            width: 2048,
+            height: 2048,
+            ..Default::default()
+        };
+        for (columns, rows) in [(3, 0), (0, 3)] {
+            let mut s = pps_prefix();
+            s.bit(1); // tiles_enabled_flag
+            s.bit(0); // entropy_coding_sync_enabled_flag
+            s.ue(columns); // num_tile_columns_minus1
+            s.ue(rows); // num_tile_rows_minus1
+            s.bit(0); // uniform_spacing_flag
+            s.ue(30); // the first tile takes 31 of the 32 CTBs: one is left for three more
+            s.ue(0);
+            s.ue(0);
+            let mut au = synth_sps(&sps);
+            au.extend(h265_nalu(PPS_NUT, &padded(s)));
+            assert!(
+                matches!(H265Planner::new().plan_au(&au), Err(PlanError::Parse(_))),
+                "{columns} columns / {rows} rows must be refused"
+            );
+        }
+    }
+
     /// Entry-point maximum multiplied tile counts in u8 (20 × 22 overflows);
     /// `entry_point_offset_minus1` is 32 deep however large that maximum is.
     #[test]
