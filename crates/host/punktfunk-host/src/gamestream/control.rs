@@ -173,7 +173,7 @@ impl SessionAccess {
 /// `xinputhid` exists, XUSB where it does not, `PUNKTFUNK_XBOX_BACKEND` overriding both.
 ///
 /// Elsewhere there is no choice: Linux is one uinput X-Box pad; other platforms drop events.
-enum SessionPads {
+enum PadDevices {
     /// Linux uinput / the Windows XUSB companion — `crate::inject::gamepad`.
     Xusb(GamepadManager),
     /// Windows UMDF HID Xbox pad — the native plane's default.
@@ -181,32 +181,123 @@ enum SessionPads {
     Hid(crate::inject::xbox_windows::XboxWindowsManager),
 }
 
+/// This session's pads, made under host-wide OS slots ([`crate::inject::pad_pool`]). Every
+/// client numbers its first pad 0, and the OS names a pad by its index, so the wire index
+/// is never the device's: a native session beside this one holds slots too.
+struct SessionPads {
+    dev: PadDevices,
+    slots: crate::inject::pad_pool::PadSlotMap<'static>,
+    /// When each wire pad's removal frame came. Its slot goes back after
+    /// [`PAD_RELEASE_GRACE`], once the device and its mailbox are gone.
+    removed_at: [Option<std::time::Instant>; MAX_PADS],
+}
+
+/// The managers' 300 ms unplug grace plus one pump, as the native plane waits.
+const PAD_RELEASE_GRACE: Duration = Duration::from_millis(400);
+
 impl SessionPads {
     fn new() -> SessionPads {
-        #[cfg(target_os = "windows")]
-        if crate::native::gamepad::windows_xbox_hid() {
-            return SessionPads::Hid(crate::inject::xbox_windows::XboxWindowsManager::new());
-        }
-        SessionPads::Xusb(GamepadManager::new())
+        SessionPads::with_slots(crate::inject::pad_pool::PadSlotMap::default())
     }
 
-    /// Apply one decoded controller event (create/destroy by mask, then state).
+    fn with_slots(slots: crate::inject::pad_pool::PadSlotMap<'static>) -> SessionPads {
+        #[cfg(target_os = "windows")]
+        let dev = if crate::native::gamepad::windows_xbox_hid() {
+            PadDevices::Hid(crate::inject::xbox_windows::XboxWindowsManager::new())
+        } else {
+            PadDevices::Xusb(GamepadManager::new())
+        };
+        #[cfg(not(target_os = "windows"))]
+        let dev = PadDevices::Xusb(GamepadManager::new());
+        SessionPads {
+            dev,
+            slots,
+            removed_at: [None; MAX_PADS],
+        }
+    }
+
+    /// Apply one decoded controller event (create/destroy by mask, then state) in OS-slot space.
     fn handle(&mut self, ev: &GamepadEvent) {
-        match self {
-            SessionPads::Xusb(m) => m.handle(ev),
+        let Some(ev) = self.in_slot_space(ev, std::time::Instant::now()) else {
+            return;
+        };
+        match &mut self.dev {
+            PadDevices::Xusb(m) => m.handle(&ev),
             #[cfg(target_os = "windows")]
-            SessionPads::Hid(m) => m.handle(ev),
+            PadDevices::Hid(m) => m.handle(&ev),
+        }
+    }
+
+    /// The event renumbered to the slot its device is made under, `active_mask` included. A
+    /// present pad claims its slot; a removal never mints one. `None`: out of range, a removal
+    /// of a pad that holds no slot, or every slot on the host held.
+    fn in_slot_space(
+        &mut self,
+        ev: &GamepadEvent,
+        now: std::time::Instant,
+    ) -> Option<GamepadEvent> {
+        let (wire, present) = match ev {
+            GamepadEvent::State(f) => {
+                let wire = usize::try_from(f.index).ok().filter(|&w| w < MAX_PADS)?;
+                (wire, f.active_mask & (1 << wire) != 0)
+            }
+            GamepadEvent::Arrival { index, .. } => (usize::from(*index), true),
+        };
+        let slot = if present {
+            let slot = self.slots.claim_for(wire)?;
+            self.removed_at[wire] = None;
+            slot
+        } else {
+            let slot = self.slots.slot_of(wire)?;
+            self.removed_at[wire] = Some(now);
+            slot
+        };
+        Some(match *ev {
+            GamepadEvent::State(f) => GamepadEvent::State(GamepadFrame {
+                index: i16::from(slot),
+                active_mask: self.slots.os_mask(f.active_mask),
+                ..f
+            }),
+            GamepadEvent::Arrival {
+                kind,
+                capabilities,
+                audio_caps,
+                ..
+            } => GamepadEvent::Arrival {
+                index: slot,
+                kind,
+                capabilities,
+                audio_caps,
+            },
+        })
+    }
+
+    /// Hand back the slots of pads removed at least [`PAD_RELEASE_GRACE`] ago.
+    fn release_removed(&mut self, now: std::time::Instant) {
+        for wire in 0..MAX_PADS {
+            if self.removed_at[wire].is_some_and(|t| now.duration_since(t) >= PAD_RELEASE_GRACE) {
+                self.removed_at[wire] = None;
+                self.slots.release(wire);
+            }
         }
     }
 
     /// Pump force-feedback every tick: games block inside the kernel handshake until answered.
     /// HID rich-feedback is discarded — GameStream's rumble (`0x010B`) carries the two handle
-    /// motors only, so trigger levels are dropped at the call site.
-    fn pump_rumble(&mut self, rumble: impl FnMut(u16, u16, u16, u16, u16)) {
-        match self {
-            SessionPads::Xusb(m) => m.pump_rumble(rumble),
+    /// motors only, so trigger levels are dropped at the call site. `rumble` gets the client's
+    /// wire index; feedback from a slot this session does not hold is dropped.
+    fn pump_rumble(&mut self, mut rumble: impl FnMut(u16, u16, u16, u16, u16)) {
+        self.release_removed(std::time::Instant::now());
+        let slots = &self.slots;
+        let to_wire = |slot: u16, low, high, lt, rt| {
+            if let Some(wire) = u8::try_from(slot).ok().and_then(|s| slots.wire_of(s)) {
+                rumble(wire as u16, low, high, lt, rt);
+            }
+        };
+        match &mut self.dev {
+            PadDevices::Xusb(m) => m.pump_rumble(to_wire),
             #[cfg(target_os = "windows")]
-            SessionPads::Hid(m) => m.pump(rumble, |_| {}),
+            PadDevices::Hid(m) => m.pump(to_wire, |_| {}),
         }
     }
 }
@@ -1638,5 +1729,68 @@ mod tests {
         super::tick_access(&mut access, &state, &mut peer, &tx);
         assert!(rx.try_iter().next().is_none());
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// A Moonlight pad takes a host-wide slot: alone, wire 0 is slot 0; beside a native
+    /// session that holds slot 0, it is made elsewhere and still answers to wire 0.
+    #[test]
+    fn moonlight_pads_take_host_wide_slots() {
+        use super::{GamepadEvent, GamepadFrame, SessionPads, PAD_RELEASE_GRACE};
+        use crate::inject::pad_pool::{PadSlotMap, PadSlotPool};
+        let pool = || -> &'static PadSlotPool { Box::leak(Box::new(PadSlotPool::new())) };
+        let frame = |index, active_mask| {
+            GamepadEvent::State(GamepadFrame {
+                index,
+                active_mask,
+                ..Default::default()
+            })
+        };
+        let os = |ev: Option<GamepadEvent>| match ev {
+            Some(GamepadEvent::State(f)) => Some((f.index, f.active_mask)),
+            Some(GamepadEvent::Arrival { index, .. }) => Some((i16::from(index), 0)),
+            None => None,
+        };
+        let now = std::time::Instant::now();
+
+        let mut lone = SessionPads::with_slots(PadSlotMap::with_pool(pool()));
+        assert_eq!(os(lone.in_slot_space(&frame(0, 0b1), now)), Some((0, 0b1)));
+
+        let shared = pool();
+        let mut native = PadSlotMap::with_pool(shared);
+        assert_eq!(native.claim_for(0), Some(0));
+        let mut gs = SessionPads::with_slots(PadSlotMap::with_pool(shared));
+        assert_eq!(os(gs.in_slot_space(&frame(0, 0b1), now)), Some((1, 0b10)));
+        let arrival = GamepadEvent::Arrival {
+            index: 1,
+            kind: 1,
+            capabilities: 0,
+            audio_caps: 0,
+        };
+        assert_eq!(os(gs.in_slot_space(&arrival, now)), Some((2, 0)));
+        assert_eq!(
+            gs.slots.wire_of(1),
+            Some(0),
+            "rumble on slot 1 is wire pad 0"
+        );
+        assert_eq!(native.wire_of(1), None);
+
+        // Wire 0 unplugs: the frame reaches its device, and the slot follows it out.
+        assert_eq!(os(gs.in_slot_space(&frame(0, 0b10), now)), Some((1, 0b100)));
+        gs.release_removed(now + PAD_RELEASE_GRACE - std::time::Duration::from_millis(1));
+        assert_eq!(
+            gs.slots.slot_of(0),
+            Some(1),
+            "held through the device's grace"
+        );
+        gs.release_removed(now + PAD_RELEASE_GRACE);
+        assert_eq!(gs.slots.slot_of(0), None);
+
+        assert_eq!(
+            os(gs.in_slot_space(&frame(3, 0), now)),
+            None,
+            "no slot, nothing to remove"
+        );
+        assert_eq!(os(gs.in_slot_space(&frame(-1, 0xffff), now)), None);
+        assert_eq!(os(gs.in_slot_space(&frame(16, 0xffff), now)), None);
     }
 }
