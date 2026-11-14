@@ -204,6 +204,22 @@ pub(crate) fn log_descriptor(path: &str, vid: u16, pid: u16) {
     }
 }
 
+/// `SETTING_IMU_MODE` to raw accel + raw gyro, for a Deck's built-in controller.
+const DECK_IMU_ON: [u8; 65] = {
+    let mut r = [0u8; 65];
+    r[1] = 0x87; // ID_SET_SETTINGS_VALUES, after report id 0
+    r[2] = 3; // one {u8 num, u16 value}
+    r[3] = 0x30; // SETTING_IMU_MODE
+    r[4] = 0x18; // SEND_RAW_ACCEL | SEND_RAW_GYRO
+    r
+};
+
+/// Turn a Deck's motion sensors on, through a second handle on the SDL slot's node. SDL's Deck
+/// driver never writes this setting. False when the node will not open or refuses the write.
+pub(crate) fn deck_imu_on(path: &str) -> bool {
+    Dev::open(path).is_some_and(|dev| dev.send_feature(&DECK_IMU_ON) >= 0)
+}
+
 /// A second hidapi handle on an SDL slot's node.
 pub(crate) struct Dev(*mut hid::SDL_hid_device);
 
