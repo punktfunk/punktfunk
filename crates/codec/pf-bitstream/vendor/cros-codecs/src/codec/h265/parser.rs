@@ -3550,10 +3550,13 @@ impl Parser {
                 pps.column_width_minus1[usize::from(pps.num_tile_columns_minus1)] =
                     sps.pic_width_in_ctbs_y - 1;
 
+                // Each tile takes at least one CTB, so the remainder kept in the last slot
+                // must stay above zero while a tile is still to be read.
                 for i in 0..usize::from(pps.num_tile_columns_minus1) {
-                    pps.column_width_minus1[i] = r.read_ue_max(
-                        pps.column_width_minus1[usize::from(pps.num_tile_columns_minus1)] - 1,
-                    )?;
+                    let room = pps.column_width_minus1[usize::from(pps.num_tile_columns_minus1)]
+                        .checked_sub(1)
+                        .ok_or("tile columns run past the picture width")?;
+                    pps.column_width_minus1[i] = r.read_ue_max(room)?;
                     pps.column_width_minus1[usize::from(pps.num_tile_columns_minus1)] -=
                         pps.column_width_minus1[i] + 1;
                 }
@@ -3562,9 +3565,10 @@ impl Parser {
                     sps.pic_height_in_ctbs_y - 1;
 
                 for i in 0..usize::from(pps.num_tile_rows_minus1) {
-                    pps.row_height_minus1[i] = r.read_ue_max(
-                        pps.row_height_minus1[usize::from(pps.num_tile_rows_minus1)] - 1,
-                    )?;
+                    let room = pps.row_height_minus1[usize::from(pps.num_tile_rows_minus1)]
+                        .checked_sub(1)
+                        .ok_or("tile rows run past the picture height")?;
+                    pps.row_height_minus1[i] = r.read_ue_max(room)?;
                     pps.row_height_minus1[usize::from(pps.num_tile_rows_minus1)] -=
                         pps.row_height_minus1[i] + 1;
                 }
