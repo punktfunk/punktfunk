@@ -128,20 +128,22 @@ pub fn offered(id: &str) -> hermir::Result<bool> {
 /// Installs (or reinstalls) `id` and makes its folder exist, so the grant that follows has a
 /// directory to land on even when the copy itself is a Flatpak. On a Linux box with seats a
 /// Flatpak goes in box-wide ([`install_box_wide`]); an AppImage or archive stays this account's.
+/// Players may write in [`home_of`] only, set before hermir writes its manifests beside it.
 pub fn install(id: &str) -> hermir::Result<Installed> {
     let h = open()?;
     let emulator = h.emulator(id)?;
+    let home = home_of(id);
+    crate::plugins::open_for_players(&home);
     let row = match box_flatpak(emulator.entry()).filter(|_| box_wide()) {
         Some(app) => install_box_wide(&h, id, app)?,
         None => emulator.install(&Quiet)?,
     };
-    let home = home_of(id);
     std::fs::create_dir_all(&home).map_err(|e| hermir::Error::Io {
         op: "create",
         path: home.clone(),
         source: e,
     })?;
-    crate::plugins::open_for_players(&prefix().join(id));
+    crate::plugins::open_for_players(&home);
     Ok(row)
 }
 
