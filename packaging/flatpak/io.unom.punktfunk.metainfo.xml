@@ -204,7 +204,7 @@
   </branding>
 
   <releases>
-    <release version="0.47.0" date="2026-11-13">
+    <release version="0.47.0" date="2026-11-14">
       <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.47.0</url>
       <description>
         <p>Six languages, locked profiles with a PIN, a screen role for each device, stream settings per game, shortcuts you can change, and faster recovery from a lost packet.</p>

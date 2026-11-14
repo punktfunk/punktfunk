@@ -1,5 +1,6 @@
 • Punktfunk speaks German, Spanish, French, Italian and Brazilian Portuguese.
 • A locked profile asks for its PIN, and a fingerprint keeps you signed in.
 • Tell the host what your screen is: the only screen, the main screen, a second screen or one monitor.
-• Shortcuts you can change, Hide for me, and Reset in Settings.
+• Each host has a page, and the Library is a tab with search, sort and favorites.
+• Shortcuts you can change, and Hide for me.
 • Realtek, Tensor and Chromecast boxes heal a lost packet without a frozen or green picture.
