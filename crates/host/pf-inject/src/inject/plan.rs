@@ -167,6 +167,12 @@ impl Plan {
         })
     }
 
+    /// Whether a wire key holds `evdev` down.
+    pub fn holds(&self, evdev: u16) -> bool {
+        let mut keys = self.held.keys();
+        keys.any(|vk| vk_to_evdev(vk as u8) == Some(evdev))
+    }
+
     /// The ups for everything still held, planned like the client's own. Leaves nothing held.
     pub fn release(&mut self) -> Vec<Op> {
         self.lift(true, true)
@@ -450,6 +456,18 @@ mod tests {
         );
         assert!(plan.release().is_empty());
         assert_eq!(run(&mut plan, &[down(VK_A)]), [key(KEY_A, true)]);
+    }
+
+    /// A text wrap asks before it presses a modifier, so it never lifts the client's own.
+    #[test]
+    fn a_held_wire_key_holds_its_evdev_key() {
+        let mut plan = Plan::default();
+        assert!(!plan.holds(KEY_LEFTSHIFT));
+        run(&mut plan, &[down(VK_SHIFT)]);
+        assert!(plan.holds(KEY_LEFTSHIFT));
+        assert!(!plan.holds(KEY_LEFTCTRL));
+        run(&mut plan, &[up(VK_SHIFT)]);
+        assert!(!plan.holds(KEY_LEFTSHIFT));
     }
 
     /// The pointer lets go and the keys stay: a re-aimed wlr pointer drops its buttons only.

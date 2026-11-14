@@ -57,6 +57,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import io.unom.punktfunk.components.SCREEN_MARGIN
 import io.unom.punktfunk.kit.R
 
 /**
@@ -87,7 +88,8 @@ internal fun PresetScopeChips(
     // Which chip's menu is open — one at a time, and it closes itself when the scope changes.
     var menuFor by remember { mutableStateOf<String?>(null) }
     Row(
-        modifier = modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+        // Under the screen's title, at its margin.
+        modifier = modifier.horizontalScroll(rememberScrollState()).padding(horizontal = SCREEN_MARGIN),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

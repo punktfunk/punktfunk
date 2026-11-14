@@ -173,7 +173,12 @@ data class GameEntry(
      * Display name for the store badge — the same table the other clients use
      * (`pf-console-ui::library::store_label`). A store's own name is shown as it is.
      */
-    val storeLabel: Say get() = when (store) {
+    val storeLabel: Say get() = storeName ?: say(R.string.lib_store_other)
+
+    /** Whether [store] is an id this build has a name for; an unknown one reads as "Game". */
+    val hasStoreName: Boolean get() = storeName != null
+
+    private val storeName: Say? get() = when (store) {
         "steam" -> Say.Text("Steam")
         "custom" -> say(R.string.lib_store_custom)
         "heroic" -> Say.Text("Heroic")
@@ -181,7 +186,7 @@ data class GameEntry(
         "epic" -> Say.Text("Epic")
         "gog" -> Say.Text("GOG")
         "xbox" -> Say.Text("Xbox")
-        else -> say(R.string.lib_store_other)
+        else -> null
     }
 }
 

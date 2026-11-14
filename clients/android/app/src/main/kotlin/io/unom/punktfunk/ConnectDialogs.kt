@@ -2,7 +2,6 @@ package io.unom.punktfunk
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,7 +17,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -28,7 +26,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -198,18 +195,15 @@ internal fun PairPinDialog(
 }
 
 /**
- * Edit a saved host: name, address, port, the Wake-on-LAN MAC, and the per-host settings the record
- * owns — shared clipboard (a trust decision about THIS machine, so it was never really a global).
- * The MAC is auto-learned from the host's mDNS advert while it's online, but this is where you can
- * enter or correct it (e.g. to wake a host you've only ever reached by address). [suggestedMacs]
- * prefills the field from the live advert when nothing's been learned yet. Keyed by the host so
- * reopening resets the fields. Mirrors the Apple client's edit form.
+ * Edit how a saved host is reached: name, address, port and the Wake-on-LAN MAC. The MAC is
+ * learned from the host's advert while it is online; here it is entered or corrected for a host
+ * only ever reached by address. [suggestedMacs] prefills it from the live advert when none is
+ * learned yet. Opened from the host page, which holds the record's other settings.
  */
 @Composable
 internal fun EditHostDialog(
     target: KnownHost,
     suggestedMacs: List<String>,
-    presets: List<StreamPreset>,
     onSave: (KnownHost) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -219,13 +213,6 @@ internal fun EditHostDialog(
     var mac by remember(target) {
         mutableStateOf(target.mac.ifEmpty { suggestedMacs }.joinToString(", "))
     }
-    var clipboard by remember(target) { mutableStateOf(target.clipboardSync) }
-    // A binding whose preset was deleted reads as "Default settings" (which is what it already
-    // resolves to) and is cleaned off the record on the next save — never an error state.
-    var boundId by remember(target, presets) {
-        mutableStateOf(target.presetId?.takeIf { id -> presets.any { it.id == id } })
-    }
-    var pins by remember(target) { mutableStateOf(target.pinnedPresetIds) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.hosts_edit_title)) },
@@ -261,31 +248,6 @@ internal fun EditHostDialog(
                     placeholder = { Text(stringResource(R.string.hosts_field_mac_placeholder)) },
                     singleLine = true,
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(stringResource(R.string.hosts_clipboard), style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            stringResource(R.string.hosts_clipboard_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(checked = clipboard, onCheckedChange = { clipboard = it })
-                }
-                if (presets.isNotEmpty()) {
-                    HostPresetBinding(
-                        presets = presets,
-                        boundId = boundId,
-                        onBind = { boundId = it },
-                        pins = pins,
-                        onTogglePin = { id ->
-                            pins = if (id in pins) pins - id else pins + id
-                        },
-                    )
-                }
             }
         },
         confirmButton = {
@@ -298,9 +260,6 @@ internal fun EditHostDialog(
                             address = address.trim(),
                             port = port.toIntOrNull() ?: target.port,
                             mac = KnownHostStore.parseMacs(mac),
-                            clipboardSync = clipboard,
-                            presetId = boundId,
-                            pinnedPresetIds = pins,
                         ),
                     )
                 },

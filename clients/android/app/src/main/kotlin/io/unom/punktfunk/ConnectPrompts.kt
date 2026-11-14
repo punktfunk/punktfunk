@@ -28,8 +28,6 @@ internal fun ConnectPrompts(
     identity: ClientIdentity?,
     /** Runs the PIN ceremony. */
     services: HostServices,
-    presets: List<StreamPreset>,
-    isOnline: (KnownHost) -> Boolean,
     // ---- trust / pairing --------------------------------------------------------------------
     pendingTrust: PendingTrust?,
     /** Dismiss (null) or re-aim the SAME decision at another kind — "Pair with PIN…" does that. */
@@ -122,7 +120,6 @@ internal fun ConnectPrompts(
         EditHostDialog(
             target = kh,
             suggestedMacs = editSuggestedMacs,
-            presets = presets,
             onSave = onSaveHost,
             onDismiss = onDismissEdit,
         )
