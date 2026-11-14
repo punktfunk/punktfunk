@@ -62,6 +62,9 @@ login, session start or a compositor reload, nor a parent of it: `~/.config/syst
 `~/.local/share/gnome-shell`, and the shell and X start-up files such as `~/.bashrc`, `~/.profile`
 and `~/.xinitrc`. Reading those with `reads` is fine. Any other `writes` entry outside `/tmp`
 binds once the owner allows the request the host files for it, and stays unbound after a no.
+On Linux no entry or grant binds `/tmp` itself, the display, session and terminal sockets a
+desktop keeps there (`/tmp/.X11-unix`, `/tmp/tmux-*`, an SSH agent's `/tmp/ssh-*` and the like) or
+`~/.Xauthority`: a `writes` entry under `/tmp` binds only its own path.
 
 An `exec` template names a program and its arguments with `{param}` placeholders. A title supplies
 the values, and the host builds the argv itself. `exe` is a program name looked up on `PATH`, or an absolute path inside the plugin's roots; it may

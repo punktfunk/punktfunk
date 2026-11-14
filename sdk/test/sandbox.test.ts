@@ -181,6 +181,41 @@ describe("refusedRoot", () => {
 		]);
 	});
 
+	test("binds neither /tmp nor a desktop's sockets there, but a plugin's own FIFO", () => {
+		for (const p of [
+			"/tmp",
+			"/tmp/.X11-unix",
+			"/tmp/.X11-unix/X0",
+			"/tmp/.ICE-unix/1234",
+			"/tmp/tmux-1000/default",
+			"/tmp/ssh-abc/agent.1",
+			"/tmp/.wine-1000",
+			"/home/u/.Xauthority",
+		]) {
+			for (const [write, operator] of [
+				[false, false],
+				[true, false],
+				[true, true],
+			] as const) {
+				expect([p, write, operator, refusedRoot(p, "/home/u", paths.configDir, write, operator)])
+					.toEqual([p, write, operator, true]);
+			}
+		}
+		const argv = bwrapArgv(
+			manifest({
+				reads: ["/tmp/.X11-unix", "/tmp/tmux-1000", "~/.Xauthority"],
+				writes: ["/tmp", "/tmp/vhclient", "/tmp/vhclient_response"],
+			}),
+			paths,
+		);
+		expect(binds(argv, "--bind-try")).toEqual([
+			["/tmp/vhclient", "/tmp/vhclient"],
+			["/tmp/vhclient_response", "/tmp/vhclient_response"],
+		]);
+		const read = binds(argv, "--ro-bind-try").map(([src]) => src);
+		expect(read.filter((p) => p.startsWith("/tmp") || p.startsWith("/home"))).toEqual([]);
+	});
+
 	test("binds nothing spelled with `..`, which the kernel resolves past a planted link", () => {
 		const argv = bwrapArgv(
 			manifest({
