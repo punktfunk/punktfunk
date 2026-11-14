@@ -146,28 +146,41 @@ fn strip_trailing_nul(b: &[u8]) -> &[u8] {
 // V4/V5, optional palette/masks, then rows). Windows synthesizes
 // `CF_BITMAP`/`CF_DIBV5` from it; the registered `"PNG"` format is rare.
 
+/// Largest decode, and largest 32bpp pixel block, a paste renders.
+const MAX_DIB_BYTES: usize = 256 * 1024 * 1024;
+
 /// PNG/JPEG/GIF (anything `image` sniffs) → `CF_DIB` (BITMAPINFOHEADER,
 /// 32bpp BGRA, BI_RGB, bottom-up). GIF uses frame 0. `None` = leave unrendered.
-/// An RGBA8 decode is reused as the pixels, so the peak is those pixels plus the output.
+/// The decode and its 32bpp widening are each capped at [`MAX_DIB_BYTES`] before they
+/// allocate, so the peak stays a few times that whatever the source format.
 pub fn image_to_dib(bytes: &[u8]) -> Option<Vec<u8>> {
     // Decode caps, not result caps: `image` defaults to 512 MiB and would
     // allocate a huge declared size before the check below. 32767 is the
-    // CF_DIB per-side max; 256 MiB bounds the decode well below that.
+    // CF_DIB per-side max.
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(32767);
     limits.max_image_height = Some(32767);
-    limits.max_alloc = Some(256 * 1024 * 1024);
+    limits.max_alloc = Some(MAX_DIB_BYTES as u64);
     let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .ok()?;
     let mut reader = reader;
     reader.limits(limits);
     let img = reader.decode().ok()?;
-    let rgba = img.into_rgba8();
-    let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+    let (w, h) = (img.width() as usize, img.height() as usize);
     if w == 0 || h == 0 || w > 32767 || h > 32767 {
         return None;
     }
+    // A grey or palette decode is a quarter of its 32bpp size, so the widening is capped too.
+    if w * h * 4 > MAX_DIB_BYTES {
+        tracing::warn!(
+            width = w,
+            height = h,
+            "clipboard image too large to paste as a bitmap"
+        );
+        return None;
+    }
+    let rgba = img.into_rgba8();
     let mut out = Vec::with_capacity(40 + w * h * 4);
     // BITMAPINFOHEADER, 32bpp BI_RGB (no masks/palette). Positive height = bottom-up.
     out.extend_from_slice(&40u32.to_le_bytes()); // biSize
@@ -346,6 +359,17 @@ mod tests {
         let back = image::load_from_memory(&png2).unwrap().to_rgba8();
         assert_eq!(back.dimensions(), (3, 2));
         assert_eq!(back.get_pixel(2, 1), img.get_pixel(2, 1));
+    }
+
+    /// A grey PNG inside the decode cap whose 32bpp form is not stays unrendered.
+    #[test]
+    fn an_image_too_large_as_32bpp_is_refused_before_widening() {
+        let mut png = Vec::new();
+        image::DynamicImage::ImageLuma8(image::GrayImage::new(8192, 8193))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        assert!(png.len() < 1024 * 1024, "small on the wire");
+        assert!(image_to_dib(&png).is_none());
     }
 
     #[test]
