@@ -234,11 +234,46 @@ pub fn install_core(core: &str) -> hermir::Result<PathBuf> {
 
 /// Whether RetroArch's cores folder `dir` already holds `core`, under the name hermir gives it.
 pub fn has_core(dir: &Path, core: &str) -> bool {
+    core_file(dir, core).is_file()
+}
+
+fn core_file(dir: &Path, core: &str) -> PathBuf {
     dir.join(format!(
         "{core}_libretro.{}",
         std::env::consts::DLL_EXTENSION
     ))
-    .is_file()
+}
+
+/// A core moved in from an admin-only folder keeps that folder's ACL, and the player's RetroArch
+/// can't load it. A copy made beside it takes the cores folder's ACL.
+#[cfg(windows)]
+fn open_core(dir: &Path, core: &str) {
+    let path = core_file(dir, core);
+    if !path.is_file() || !pf_paths_win::admin_only_acl(&path) {
+        return;
+    }
+    match recreate(&path) {
+        Ok(()) => tracing::info!(core, path = %path.display(), "core opened to the player"),
+        Err(error) => tracing::warn!(core, %error, "core left unreadable to the player"),
+    }
+}
+
+/// `path` replaced by a copy of itself made in its own folder. A new file takes the folder's
+/// inherited ACL; a moved one keeps its old ACL.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn recreate(path: &Path) -> std::io::Result<()> {
+    let part = path.with_extension("part");
+    let _ = std::fs::remove_file(&part);
+    let copied = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&part)
+        .and_then(|mut to| std::io::copy(&mut std::fs::File::open(path)?, &mut to))
+        .and_then(|_| std::fs::rename(&part, path));
+    if copied.is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+    copied
 }
 
 /// How long a launch waits for the client's first pad, and for every pad it claimed to be
@@ -778,9 +813,10 @@ pub fn in_catalog(id: &str) -> bool {
 }
 
 /// Before an `emulator` entry starts: the RetroArch core it names when this host's RetroArch
-/// lacks it, every copy past its first-run questions, the platform's firmware from the plugin's
-/// `firmware/<platform>` when it staged some, the session's pads. What it did goes to the log. A
-/// launch waits for the client's pads, at most [`SETTLE_ALL`], and never on the rest to succeed.
+/// lacks it, and on Windows readable by the player, every copy past its first-run questions, the
+/// platform's firmware from the plugin's `firmware/<platform>` when it staged some, the session's
+/// pads. What it did goes to the log. A launch waits for the client's pads, at most
+/// [`SETTLE_ALL`], and never on the rest to succeed.
 pub fn prepare_launch(library_id: &str, pad: GamepadPref, slots: Option<&AtomicU16>) {
     let Some(entry) = crate::library::entry_for_library_id(library_id) else {
         return;
@@ -797,17 +833,18 @@ pub fn prepare_launch(library_id: &str, pad: GamepadPref, slots: Option<&AtomicU
     };
     let platform = arg("platform");
     if let Some(core) = arg("core").filter(|c| valid_core(c))
-        && cores_dir()
-            .ok()
-            .flatten()
-            .is_some_and(|d| !has_core(&d, core))
+        && let Some(dir) = cores_dir().ok().flatten()
     {
-        match install_core(core) {
-            Ok(path) => {
-                tracing::info!(core, path = %path.display(), "core installed for the launch")
+        if !has_core(&dir, core) {
+            match install_core(core) {
+                Ok(path) => {
+                    tracing::info!(core, path = %path.display(), "core installed for the launch")
+                }
+                Err(error) => tracing::warn!(core, %error, "core not installed for the launch"),
             }
-            Err(error) => tracing::warn!(core, %error, "core not installed for the launch"),
         }
+        #[cfg(windows)]
+        open_core(&dir, core);
     }
     let staged = entry
         .provider
@@ -1043,5 +1080,16 @@ I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2
         assert!(has_core(dir.path(), "snes9x"));
         assert!(!has_core(dir.path(), "mgba"));
         assert!(!has_core(dir.path(), "ppsspp"));
+    }
+
+    #[test]
+    fn a_recreated_core_keeps_its_bytes_and_leaves_no_part() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = dir.path().join("snes9x_libretro.dll");
+        std::fs::write(&core, b"core").unwrap();
+        std::fs::write(dir.path().join("snes9x_libretro.part"), b"stale").unwrap();
+        recreate(&core).unwrap();
+        assert_eq!(std::fs::read(&core).unwrap(), b"core");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

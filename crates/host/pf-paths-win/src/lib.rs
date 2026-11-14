@@ -182,6 +182,17 @@ pub fn inherits_open_acl(dir: &Path) -> bool {
     read().unwrap_or(true)
 }
 
+/// No allow ACE on `path`, inherited or explicit, lets an account outside SYSTEM, Administrators
+/// and TrustedInstaller write it: what a file moved out of an [`ADMIN_ONLY`] folder carries.
+/// Unreadable or missing counts as not.
+pub fn admin_only_acl(path: &Path) -> bool {
+    let read = || -> Result<bool> {
+        let info = SecurityInfo::read(path, true)?;
+        Ok(info.foreign_writer(&privileged_sids()?, false)?.is_none())
+    };
+    read().unwrap_or(false)
+}
+
 /// Owner Administrators; SYSTEM and Administrators full control, inherited below; nothing else,
 /// and protected from the parent's ACL: what [`ensure_admin_only_source`] passes.
 pub const ADMIN_ONLY: &str = "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
@@ -769,6 +780,36 @@ mod open_acl_tests {
         assert!(icacls(&base.join("child"), &["/inheritance:d"]));
         assert!(!super::inherits_open_acl(&base.join("child")));
         assert!(super::ensure_admin_only_source(&base.join("child")).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A file only SYSTEM may write reads as admin-only; a Users grant, even explicit, opens it.
+    #[test]
+    fn only_a_file_no_one_else_may_write_reads_admin_only() {
+        let icacls = |path: &std::path::Path, args: &[&str]| {
+            std::process::Command::new("icacls")
+                .arg(path)
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        let base = std::env::temp_dir().join(format!("pf-admin-only-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let file = base.join("core.dll");
+        std::fs::write(&file, b"").unwrap();
+        let grant = [
+            "/inheritance:r",
+            "/grant:r",
+            "*S-1-5-18:(F)",
+            "*S-1-5-32-545:(M)",
+        ];
+        assert!(icacls(&file, &grant));
+        assert!(!super::admin_only_acl(&file));
+        assert!(icacls(&file, &["/remove:g", "*S-1-5-32-545"]));
+        assert!(super::admin_only_acl(&file));
+        assert!(!super::admin_only_acl(&base.join("missing")));
         let _ = std::fs::remove_dir_all(&base);
     }
 }
