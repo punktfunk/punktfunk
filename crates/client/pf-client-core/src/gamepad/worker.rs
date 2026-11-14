@@ -37,6 +37,17 @@ const G: f32 = 9.80665;
 /// Steam-Controller driver. The engine owns timing and 1-LSB jitter.
 const DECK_RUMBLE_KEEPALIVE_MS: u16 = 40;
 
+/// Gap between two asks for a Deck's motion sensors. A write shows in the reports within
+/// 10 ms; this bounds a refused one to four a second.
+const DECK_IMU_RETRY: Duration = Duration::from_millis(250);
+
+/// Steam on a Deck turns the built-in controller's IMU off while its own layout binds no
+/// gyro, again on every overlay close. Off reads zero on all six axes; a live IMU never
+/// does, gravity is always there.
+fn deck_imu_off(pref: GamepadPref, gyro: [i16; 3], accel: [i16; 3]) -> bool {
+    pref == GamepadPref::SteamDeck && gyro == [0; 3] && accel == [0; 3]
+}
+
 /// Open-pad battery re-read. 15 s is coarser than a percent move, finer than the
 /// worker loop; the read is a cached HID report.
 const BATTERY_POLL: Duration = Duration::from_secs(15);
@@ -412,6 +423,8 @@ struct Slot {
     sent_motion: bool,
     /// Log-once: this path runs at the pad's sensor rate.
     motion_unreachable_logged: bool,
+    /// When this Deck's motion sensors were last asked for ([`DECK_IMU_RETRY`]).
+    imu_asked: Option<Instant>,
     /// bit0 = haptics, bit1 = speaker. Nonzero only for tier-A; bit0 also suppresses wire rumble
     /// while haptics frames arrive.
     audio_caps: u8,
@@ -451,6 +464,7 @@ impl Slot {
             last_accel: [0; 3],
             sent_motion: false,
             motion_unreachable_logged: false,
+            imu_asked: None,
             audio_caps: 0,
             rumble_suppressed_logged: false,
             trigger_rumble_logged: false,
@@ -1552,6 +1566,8 @@ impl Worker {
         }
     }
 
+    /// One sensor event to the wire: accel is kept, a gyro event sends both. A Deck whose
+    /// IMU reads off is asked for it back here ([`deck_imu_off`]).
     fn forward_motion(
         c: &NativeClient,
         slot: &mut Slot,
@@ -1589,6 +1605,16 @@ impl Worker {
                 let mut gyro = [0i16; 3];
                 for (i, v) in data.iter().enumerate() {
                     gyro[i] = (v * GYRO_LSB_PER_RAD_S).clamp(-32768.0, 32767.0) as i16;
+                }
+                if deck_imu_off(slot.pref, gyro, slot.last_accel)
+                    && slot.imu_asked.is_none_or(|t| t.elapsed() >= DECK_IMU_RETRY)
+                {
+                    let first = slot.imu_asked.replace(Instant::now()).is_none();
+                    let path = slot.pad.path();
+                    let on = path.is_some_and(|p| crate::sc2_capture::deck_imu_on(&p));
+                    if first {
+                        tracing::info!(pad = slot.index, on, "deck motion sensors were off");
+                    }
                 }
                 slot.sent_motion = true;
                 let _ = c.send_rich_input(RichInput::Motion {
@@ -1985,6 +2011,16 @@ mod slot_tests {
         let mut but_seven = all.clone();
         but_seven.retain(|&i| i != 7);
         assert_eq!(lowest_free_index(&but_seven), Some(7));
+    }
+
+    #[test]
+    fn only_a_deck_reading_zero_on_all_six_axes_has_its_imu_off() {
+        let deck = GamepadPref::SteamDeck;
+        assert!(deck_imu_off(deck, [0; 3], [0; 3]));
+        // At rest the gyro reads zero and gravity does not.
+        assert!(!deck_imu_off(deck, [0; 3], [0, 0, 10_000]));
+        assert!(!deck_imu_off(deck, [1, 0, 0], [0; 3]));
+        assert!(!deck_imu_off(GamepadPref::DualSense, [0; 3], [0; 3]));
     }
 
     #[test]
