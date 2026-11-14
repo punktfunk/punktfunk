@@ -69,6 +69,8 @@ mod theme;
 mod update;
 mod webtransport;
 
+pub(crate) use profiles::start_seat;
+
 /// Default management port — next to the GameStream block (47984…48010).
 ///
 /// Sunshine's web UI is also 47990, so a Sunshine fork and a GameStream-off

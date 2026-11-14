@@ -20,8 +20,8 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     SetupDiGetDevicePropertyW, SetupDiGetDeviceRegistryPropertyW, SetupDiOpenDevRegKey,
     SetupDiRegisterDeviceInfo, SetupDiSetDeviceRegistryPropertyW,
     UpdateDriverForPlugAndPlayDevicesW, DICD_GENERATE_ID, DICS_FLAG_GLOBAL, DIREG_DEV,
-    GUID_DEVCLASS_MEDIA, HDEVINFO, SETUP_DI_GET_CLASS_DEVS_FLAGS, SPDRP_HARDWAREID,
-    SP_DEVINFO_DATA, UPDATEDRIVERFORPLUGANDPLAYDEVICES_FLAGS,
+    GUID_DEVCLASS_MEDIA, HDEVINFO, SETUP_DI_GET_CLASS_DEVS_FLAGS, SETUP_DI_REGISTRY_PROPERTY,
+    SPDRP_FRIENDLYNAME, SPDRP_HARDWAREID, SP_DEVINFO_DATA, UPDATEDRIVERFORPLUGANDPLAYDEVICES_FLAGS,
 };
 use windows::Win32::Devices::Properties::{
     DEVPKEY_Device_DriverInfPath, DEVPROPTYPE, DEVPROP_TYPE_STRING,
@@ -388,8 +388,7 @@ pub fn create_media_devnode(
         .iter()
         .flat_map(|u| u.to_le_bytes())
         .collect();
-    // SAFETY: live set + element; the multi-sz property bytes travel with the slice.
-    unsafe { SetupDiSetDeviceRegistryPropertyW(*set.0, &mut did, SPDRP_HARDWAREID, Some(&hwid)) }
+    set_registry_property(&set, &mut did, SPDRP_HARDWAREID, &hwid)
         .context("set SPDRP_HARDWAREID")?;
     // NOT SetupDiCallClassInstaller(DIF_REGISTERDEVICE): needs an interactive
     // window station and fails with 1459 from a service.
@@ -398,6 +397,49 @@ pub fn create_media_devnode(
         .context("SetupDiRegisterDeviceInfo")?;
     mark(&set, &mut did)?;
     instance_id(&set, &did).context("read the new devnode's instance id")
+}
+
+/// Gives a devnode we minted its own FriendlyName; best-effort, it logs and moves on.
+///
+/// At every device start Windows rebuilds the endpoint's adapter name from the FriendlyName,
+/// or from the INF's DeviceDesc ("Steam Streaming Speakers") when there is none, and that
+/// undoes an endpoint stamp. SteamVR takes any endpoint whose adapter name contains "Steam
+/// Streaming Speakers" or "Steam Streaming Microphone" for its own device.
+pub fn name_devnode(instance_id: &str, name: &str) {
+    match set_friendly_name(instance_id, name) {
+        Ok(true) => tracing::info!(devnode = %instance_id, name, "audio devnode named"),
+        Ok(false) => {}
+        Err(e) => tracing::warn!(devnode = %instance_id, error = %format!("{e:#}"),
+            "audio devnode kept the driver's name"),
+    }
+}
+
+/// `Ok(true)` when it wrote, `Ok(false)` when the devnode already had `name`.
+fn set_friendly_name(inst: &str, name: &str) -> Result<bool> {
+    let set = media_class_devs()?;
+    let mut did = set
+        .iter()
+        .find(|did| instance_id(&set, did).is_some_and(|id| id.eq_ignore_ascii_case(inst)))
+        .with_context(|| format!("no MEDIA devnode {inst}"))?;
+    let have = devnode_multi_sz_prop(&set, &did, SPDRP_FRIENDLYNAME);
+    if have.first().map(String::as_str) == Some(name) {
+        return Ok(false);
+    }
+    let bytes: Vec<u8> = wide(name).iter().flat_map(|u| u.to_le_bytes()).collect();
+    set_registry_property(&set, &mut did, SPDRP_FRIENDLYNAME, &bytes)
+        .context("set SPDRP_FRIENDLYNAME")?;
+    Ok(true)
+}
+
+/// One devnode registry property; `bytes` is its raw value (REG_SZ or REG_MULTI_SZ).
+fn set_registry_property(
+    set: &DevInfoSet,
+    did: &mut SP_DEVINFO_DATA,
+    prop: SETUP_DI_REGISTRY_PROPERTY,
+    bytes: &[u8],
+) -> windows::core::Result<()> {
+    // SAFETY: live set + element; the property bytes travel with the slice.
+    unsafe { SetupDiSetDeviceRegistryPropertyW(*set.0, did, prop, Some(bytes)) }
 }
 
 /// Bind `inf` to every unbound devnode carrying `hwid`. Idempotent: nothing

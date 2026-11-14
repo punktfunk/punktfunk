@@ -68,10 +68,8 @@ public final class SessionAudio: @unchecked Sendable {
     private var ring: AudioRing?
     /// Every engine build, start, stop and rebuild runs here, serially — and NOT on the main
     /// thread. macOS captures and sends input from the main thread, so the seconds a
-    /// voice-processing start can take (~1.9 s measured in the 2026-08-14 field loop) would
-    /// freeze the stream's input for exactly that long — the recovery must never make the main
-    /// thread wait on the audio server. The main queue keeps only the trigger bookkeeping
-    /// (debounce, backoff, retry ladder), which is cheap by construction.
+    /// voice-processing start can take would freeze the stream's input for that long. The main
+    /// queue keeps only the trigger bookkeeping (debounce, backoff, retry ladder).
     private let engineQueue = DispatchQueue(
         label: "io.unom.punktfunk.audio.engines", qos: .userInitiated)
     /// The video plane's end-to-end meter (capture→on-glass), if the owner wired one — the
@@ -138,21 +136,19 @@ public final class SessionAudio: @unchecked Sendable {
     /// `engineQueue`-confined, like the start paths that consult and feed it.
     private var combinedGate = CombinedTopologyGate()
     #endif
-    /// Retries when a rebuild's `start()` loses the race with a device that is still going away
-    /// (0.3 s, 0.6 s, 1.2 s). A failed rebuild leaves no engine to post the next notification,
-    /// so this ladder — and, on macOS, the HAL listener — is all that stands between a mistimed
-    /// switch and a silent session.
+    /// How many times `rebuildFailed` retries a rebuild whose playback did not come back.
     private static let rebuildAttempts = 3
 
     public init(connection: PunktfunkConnection) {
         self.connection = connection
     }
 
-    /// Backstop for an owner dropping us without stop() — unblocks the drain thread
-    /// (which captures the connection strongly, NOT self) within one poll timeout.
-    /// Engine teardown still belongs to stop().
+    /// Backstop for an owner dropping us without stop(): ends the drain thread (it holds the
+    /// connection, not self) within one poll timeout, and the engines with the mic worker,
+    /// which otherwise waits forever for a quantum and keeps the connection alive.
     deinit {
         flag.stop()
+        tearDownEngines()
         // The observers only hold self weakly, so we can be deinited with them still registered;
         // drop them here too rather than leaking them when an owner skips stop().
         deviceWatcher?.stop()
@@ -244,8 +240,8 @@ public final class SessionAudio: @unchecked Sendable {
     private var wireFrameMS: Int { max(1, (wireFrameUs + 999) / 1000) }
 
     /// IO quantum asked of `AVAudioSession` on iOS/tvOS, every session, mic on or off. Two wire
-    /// packets: the playback ring's floor is one quantum plus one packet, so this sets that floor
-    /// at 15 ms. Best-effort — `activateAudioSession` logs the granted value.
+    /// packets: the ring aims for at least one quantum plus one packet, which this keeps under
+    /// `JitterPolicy.baseTargetMS`. Best-effort — `activateAudioSession` logs the granted value.
     static let preferredIOBufferSeconds: Double = 0.010
 
     #if !os(macOS)
@@ -258,34 +254,10 @@ public final class SessionAudio: @unchecked Sendable {
         do {
             #if os(iOS) || os(visionOS)
             if micEnabled {
-                // NO .defaultToSpeaker here, deliberately. It reads like "prefer the speaker over
-                // the earpiece", and the comment that used to sit here claimed headphones and
-                // Bluetooth still won. That is true of WIRED headphones and false of Bluetooth —
-                // a cable is the one way to test this and see the right answer. It is an
-                // OVERRIDE, and it outranks an A2DP route: with it set, every Bluetooth headset
-                // lost the stream to the phone's own speaker. That is the 0.25 field report ("no
-                // audio over Bluetooth ... plays through speakers if Mic input is enabled") — mic
-                // and echo cancellation both default to ON, so this branch is the DEFAULT path
-                // and every Bluetooth listener hit it; turning the mic off was the accidental
-                // workaround, because that lands on `.playback` below, which routes to A2DP
-                // happily.
-                //
-                // The earpiece problem it was reaching for is real, so it is solved after
-                // activation instead, against the route we were ACTUALLY given —
-                // see `steerBuiltInOutputToSpeaker`.
-                //
-                // `.allowBluetoothA2DP` alone, also deliberately: adding `.allowBluetooth` would
-                // make a headset's MIC usable, but it buys that by dragging the whole route onto
-                // HFP/SCO and collapsing game audio to narrowband. High-quality A2DP output plus
-                // the built-in mic is the better trade for a game-streaming client.
-                // `.mixWithOthers`, both branches: without it this session is EXCLUSIVE — merely
-                // activating it paused the user's Music at connect, and Music's RESUME took the
-                // session right back, which read as "stream audio stops when I resume Music"
-                // (field report; the interruption observer below is the other half of that fix).
-                // A game stream mixing over someone's playlist is the behavior a console has,
-                // and what this client's peers do. The trade is real but right: a mixable
-                // session is nobody's Now Playing app, so the lock screen shows the music, not
-                // the stream — which is exactly how it should read.
+                // No `.defaultToSpeaker`: it outranks an A2DP route. `steerBuiltInOutputToSpeaker`
+                // moves only the earpiece. No `.allowBluetooth`: its HFP route makes game audio
+                // narrowband. `.mixWithOthers` on both branches: an exclusive session pauses the
+                // player's music when it activates.
                 try session.setCategory(
                     .playAndRecord, mode: .default,
                     options: [.allowBluetoothA2DP, .mixWithOthers])
@@ -336,10 +308,8 @@ public final class SessionAudio: @unchecked Sendable {
             if reachable > 2, session.outputNumberOfChannels < reachable {
                 try? session.setPreferredOutputNumberOfChannels(reachable)
             }
-            // What we were actually GRANTED, not what we asked for. All three are best-effort, and
-            // the ring's behaviour depends on the quantum it really gets — without this, a report of
-            // audio jitter arrives with no way to tell a 10 ms session from a 5 ms or a 23 ms one,
-            // which is exactly the gap that made the last round of this take a simulation to close.
+            // What we were actually GRANTED, not what we asked for: all three are best-effort, and
+            // the ring's behaviour depends on the quantum it really gets.
             let grantedMS = session.ioBufferDuration * 1000
             let askedMS = Self.preferredIOBufferSeconds * 1000
             log.info("""
@@ -457,7 +427,7 @@ public final class SessionAudio: @unchecked Sendable {
         #if os(macOS)
         // A rebuild must not re-attempt a voice-processing start that already failed on this
         // input device: the failure repeats, and the failed attempt's HAL churn stops the healthy
-        // fallback engines — the 2026-08-14 rebuild loop (see `CombinedTopologyGate`).
+        // fallback engines (see `CombinedTopologyGate`).
         var combined = wantsCombined(
             speakerUID: speakerUID, micUID: micUID, micChannel: micChannel,
             echoCancel: echoCancel)
@@ -568,13 +538,9 @@ public final class SessionAudio: @unchecked Sendable {
         #endif
         tearDownEngines()
         #if !os(macOS)
-        // Release the session. (A mixable session interrupts nobody, so the resume cue below is
-        // now a courtesy for the edge where an OLD non-mixable install interrupted something —
-        // harmless either way, and deactivating promptly is still what orders a reconnect.) Like
-        // activation, setActive is synchronous/blocking — run it on the shared serial session queue
-        // (off the main thread). Enqueued HERE — engines already stopped, and BEFORE the drain wait
-        // below — so across a reconnect it lands ahead of the next session's activate on the shared
-        // queue (otherwise a deferred deactivate could deactivate the new session). Fire-and-forget.
+        // Release the session on the shared session queue (setActive blocks). Enqueued here,
+        // after the engines stop and before the drain wait, so across a reconnect it lands ahead
+        // of the next session's activate instead of deactivating it.
         Self.sessionQueue.async {
             do {
                 try AVAudioSession.sharedInstance().setActive(
@@ -626,39 +592,25 @@ public final class SessionAudio: @unchecked Sendable {
 
     // MARK: - Device changes
 
-    /// An AVAudioEngine does not follow the audio hardware. When the output device changes under a
-    /// running engine — AirPods taken out of an ear, a headset unplugged, the default switched in
-    /// System Settings — the engine's IO unit sees the new hardware, THE ENGINE STOPS ITSELF, and
-    /// it posts `AVAudioEngineConfigurationChange`. It stays stopped until somebody starts it
-    /// again. Nothing here ever did, so from that moment the session rendered silence: no audio on
-    /// the speakers the stream had just moved to, and none in the AirPods when they went back in
-    /// (that is a second stop, not a recovery), until the whole stream was restarted. Measured on
-    /// this exact topology: render callbacks go from ~94/s to zero the instant the default output
-    /// device changes, and both restarting the same engine and building a fresh one resume them.
+    /// An AVAudioEngine does not follow the audio hardware: when its output device changes (AirPods
+    /// out of an ear, a headset unplugged, the default switched), the engine stops itself, posts
+    /// `AVAudioEngineConfigurationChange`, and stays stopped until somebody starts it again.
     ///
     /// Three triggers feed one rebuild, because no single one of them covers the ground:
     ///
     ///  - the engine notification, everywhere — the direct signal, but only an engine that still
     ///    EXISTS can post it, so it cannot report a rebuild that failed to start;
-    ///  - the HAL default-output-device listener, macOS — independent of any engine and of the
-    ///    engine's topology. It is what makes the recovery work for the voice-processing engine
-    ///    (mic + echo cancellation, the DEFAULT macOS configuration) without having to assume that
-    ///    a VPIO engine posts the notification the plain one demonstrably does;
-    ///  - the route-change and media-services-reset notifications, iOS/tvOS, where the session and
-    ///    not the device is what moves.
+    ///  - the HAL default-output-device listener, macOS — independent of any engine and of its
+    ///    topology, so it covers the voice-processing engine too;
+    ///  - the route-change, media-services-reset and interruption notifications, iOS/tvOS, where
+    ///    the session and not the device is what moves.
     ///
-    /// And three defenses keep the recovery from ANSWERING ITSELF — a rebuild is not a silent
-    /// act (a voice-processing start builds and tears down HAL aggregates, and every fresh engine
-    /// renegotiates its IO), so its own fallout can retrigger it. The 2026-08-14 field loop was
-    /// exactly that: VPIO failed on a 6-channel mic, every rebuild re-tried it, and the failure's
-    /// churn stopped the fallback engines — audio and (via the main thread) INPUT cutting out
-    /// every ~2.5 s for the whole session. The defenses: a configuration change from an engine
-    /// that is RUNNING is a rebuild's echo and is ignored (`hardwareMoved`); a VPIO failure is
-    /// latched per input device and never re-attempted on it (`CombinedTopologyGate`); and
-    /// rebuilds that chain anyway back off exponentially instead of metronoming
-    /// (`RebuildBackoff`).
+    /// A rebuild's own HAL churn can retrigger it. Three defenses keep the recovery from answering
+    /// itself: a configuration change from a RUNNING engine is a rebuild's echo (`hardwareMoved`);
+    /// a voice-processing failure is latched per input device (`CombinedTopologyGate`); rebuilds
+    /// that chain anyway back off exponentially (`RebuildBackoff`).
     ///
-    /// `micEnabled` only decides whether the mic-bearing session observers are worth installing.
+    /// `micEnabled` picks the session category the iOS and tvOS observers reactivate with.
     @MainActor
     private func installDeviceChangeRecovery(micEnabled: Bool) {
         stateLock.lock()
@@ -730,10 +682,8 @@ public final class SessionAudio: @unchecked Sendable {
     /// that followed the change on its own must not be interrupted for it. Safe from any thread.
     ///
     /// The liveness check runs on `engineQueue`, BEHIND any start or rebuild in flight. A
-    /// voice-processing start takes about a second and posts route changes of its own, so a check
-    /// made on the main queue found the engines mid-swap, read that as "stopped", and scheduled
-    /// the rebuild that would trigger the next one — the iPad mic-on loop, one rebuild per
-    /// backoff step for the whole session.
+    /// voice-processing start takes about a second and posts route changes of its own; checked
+    /// from the main queue, the engines read as "stopped" mid-swap and schedule the next rebuild.
     ///
     /// Gated on a start having been ATTEMPTED rather than on an engine existing, which is the
     /// difference between recovering a session whose very first `startPlayback` failed — no
@@ -834,11 +784,9 @@ public final class SessionAudio: @unchecked Sendable {
         }
     }
 
-    /// A rebuild's playback did not come back (main queue) — walk the retry ladder. Retries
-    /// when a rebuild's `start()` loses the race with a device that is still going away
-    /// (0.3 s, 0.6 s, 1.2 s): a failed rebuild leaves no engine to post the next notification,
-    /// so this ladder — and, on macOS, the HAL listener — is all that stands between a mistimed
-    /// switch and a silent session.
+    /// A rebuild's playback did not come back (main queue): retry after 0.3 s, 0.6 s, then 1.2 s.
+    /// A failed rebuild leaves no engine to post the next notification, so this ladder (and, on
+    /// macOS, the HAL listener) keeps a device still going away from leaving the session silent.
     @MainActor
     private func rebuildFailed(attempt: Int) {
         guard !flag.isStopped else { return }
@@ -928,12 +876,10 @@ public final class SessionAudio: @unchecked Sendable {
 
     /// Interruptions still happen to a mixable session — a phone call, Siri, an app that claims
     /// a NON-mixable session of its own. iOS stops the engines, and when the interruption ends it
-    /// restarts NOTHING by itself; before this observer the stream just stayed silent (under the
-    /// old exclusive category, Music itself was such an interrupter, which is how "resume Music,
-    /// lose the stream" was ever possible). Reactivate and revive on `.ended` — unconditionally,
-    /// not only when iOS hints `.shouldResume`: a live stream is the one case where the user's
-    /// intent to keep hearing it is not in doubt, and `reviveStoppedEngines` already declines
-    /// when playback never went down.
+    /// restarts NOTHING by itself. Reactivate and revive on `.ended` — unconditionally, not only
+    /// when iOS hints `.shouldResume`: a live stream is the one case where the user's intent to
+    /// keep hearing it is not in doubt, and `reviveStoppedEngines` declines when playback never
+    /// went down.
     private func installInterruptionObserver(micEnabled: Bool) {
         let observer = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
@@ -998,7 +944,7 @@ public final class SessionAudio: @unchecked Sendable {
     /// Push the latched mute onto whichever engine carries the uplink. Split out from
     /// `setMicMuted` because the start paths call it too, with the engine they just started —
     /// that's how a mute requested before the permission grant lands on the engine the grant
-    /// creates. Never resumes a stopped session's engine.
+    /// creates. Never leaves a stopped session's engine running.
     private func apply(micMuted muted: Bool, capture: AVAudioEngine?, combined: AVAudioEngine?) {
         if let combined {
             combined.inputNode.isVoiceProcessingInputMuted = muted
@@ -1008,7 +954,13 @@ public final class SessionAudio: @unchecked Sendable {
         if muted {
             capture.pause()
         } else if !flag.isStopped {
-            try? capture.start()
+            do {
+                try capture.start()
+            } catch {
+                log.error("capture engine did not restart on unmute: \(error.localizedDescription)")
+            }
+            // `stop()` may have stopped this engine between the check and the start.
+            if flag.isStopped { capture.stop() }
         }
     }
 
@@ -1018,10 +970,7 @@ public final class SessionAudio: @unchecked Sendable {
     ///
     /// Both, never just the depth: a deep ring on a jittery link is CORRECT behaviour — the
     /// adaptive floor put it there because the link kept starving — and only the offset separates
-    /// that from a ring that is simply holding audio late. Before this pair existed the plane
-    /// published nothing any surface could render (depth and target lived in a periodic log line),
-    /// and a field investigation into "the audio delay seems way too high" ran all the way to its
-    /// conclusion without either number.
+    /// that from a ring that is simply holding audio late.
     public struct Stats: Sendable {
         /// Decoded audio queued ahead of the speaker (ms).
         public let bufferMS: Int
@@ -1059,8 +1008,8 @@ public final class SessionAudio: @unchecked Sendable {
     // MARK: - Playback (host → speaker)
 
     /// The playback jitter ring + the source node draining it — shared by the plain playback
-    /// engine and the combined voice-processing engine, and REUSED across an engine rebuild
-    /// (same session, same ring: the drain thread keeps writing right through the swap). nil
+    /// engine and the combined voice-processing engine, and REUSED across an engine rebuild at
+    /// the same format (the drain thread keeps writing right through the swap). nil
     /// when the host's channel layout can't be expressed (already logged). Runs on `engineQueue`.
     private func makePlaybackChain()
         -> (ring: AudioRing, source: AVAudioSourceNode, format: AVAudioFormat)?
@@ -1071,9 +1020,11 @@ public final class SessionAudio: @unchecked Sendable {
         let channels = Int(connection.audioFormat.channels)
         let rateHz = wireRateHz
         // One second of capacity at the session's format. The de-jitter depth is the ring's
-        // `JitterPolicy`, not a prefill passed in here.
+        // `JitterPolicy`, not a prefill passed in here. A ring of another format holds the ended
+        // drain's audio: a rebuild that beats `audioFormatChanged` must not play it at this one.
         stateLock.lock()
-        let ring = self.ring ?? AudioRing(seconds: 1, channels: channels, rateHz: rateHz)
+        let ring = self.ring.flatMap { $0.channels == channels && $0.rateHz == rateHz ? $0 : nil }
+            ?? AudioRing(seconds: 1, channels: channels, rateHz: rateHz)
         self.ring = ring
         stateLock.unlock()
         // The session's real frame: the shed and the priming lift are one frame. Idempotent, so
@@ -1241,15 +1192,9 @@ public final class SessionAudio: @unchecked Sendable {
         }
         drainStarted = true
         stateLock.unlock()
-        // A/V sync. This thread is the only place that holds all three ingredients at once: the
-        // packet's host capture `ptsNs`, the ring depth, and the video plane's end-to-end figure.
-        // `ptsNs` was decoded into `AudioPCM` and then dropped on the floor right here for the
-        // plane's entire existence, which is why audio ran at whatever depth its jitter ring
-        // happened to settle at and nothing ever placed it against the picture.
-        //
-        // The escape hatch mirrors the Rust clients': a field regression in a loop that steers
-        // PLAYBACK should be bisectable without a rebuild. macOS honours it from the environment;
-        // elsewhere it simply never trips, which is the same as today's behaviour.
+        // A/V sync: the drain thread alone holds the packet's `ptsNs`, the ring depth and the
+        // video plane's end-to-end figure. `PUNKTFUNK_NO_AV_SYNC` turns the loop off, as it does
+        // on the Rust clients.
         let syncEnabled = !["1", "true"].contains(
             ProcessInfo.processInfo.environment["PUNKTFUNK_NO_AV_SYNC"] ?? "")
         // nil disarms the loop entirely — no reference, no correction (see `videoLatency`).
@@ -1272,23 +1217,22 @@ public final class SessionAudio: @unchecked Sendable {
     /// The host moved the audio format and the drain ended on it. The ring and the render
     /// graph are the old format's, so this is the one rebuild that does NOT keep the ring:
     /// the engines come back with a new one, and a new drain, at the format the connection
-    /// reads now. Runs on `engineQueue`, like every rebuild.
+    /// reads now. Runs on `engineQueue` and retries a failed start, like every rebuild.
     private func audioFormatChanged() {
         engineQueue.async { [weak self] in
-            guard let self, !self.flag.isStopped else { return }
-            // The ended drain's signal, so `stop()` waits for the new one.
-            _ = self.drainDone.wait(timeout: .now() + .milliseconds(400))
+            guard let self else { return }
+            // The ended drain signals once. Decided under the lock `stop()` reads `drainStarted`
+            // under: either `stop()` waits for that signal, or this rebuild takes it.
             self.stateLock.lock()
-            let config = self.startConfig
-            self.drainStarted = false
-            self.ring = nil
+            let config = self.flag.isStopped ? nil : self.startConfig
+            if config != nil {
+                self.drainStarted = false
+                self.ring = nil
+            }
             self.stateLock.unlock()
             guard let config else { return }
-            self.tearDownEngines()
-            self.startEngines(
-                speakerUID: config.speakerUID, micUID: config.micUID,
-                micChannel: config.micChannel, micEnabled: config.micEnabled,
-                echoCancel: config.echoCancel)
+            _ = self.drainDone.wait(timeout: .now() + .milliseconds(400))
+            self.performRebuild(config: config, attempt: 0)
         }
     }
 
@@ -1493,51 +1437,12 @@ public final class SessionAudio: @unchecked Sendable {
             return nil
         }
 
-        // A pro interface has the mic on one of N inputs, and a converter's downmix takes
-        // channels 0 and 1. So the uplink folds to mono itself: 0 sums every channel but the
-        // device's loopback inputs, n ≥ 1 pins 1-based input channel n.
-        let inChannels = Int(inFormat.channelCount)
-        if micChannel > inChannels {
-            log.warning(
-                "mic channel \(micChannel) out of range (device has \(inChannels)) — mixing all")
-        }
-        let skipped = skip.filter { $0 < inChannels }.count
-        let mixed = skipped < inChannels ? inChannels - skipped : inChannels
-        let channelPlan = (1...inChannels).contains(micChannel)
-            ? "channel \(micChannel)/\(inChannels)"
-            : (inChannels > 1 ? "mix \(mixed)/\(inChannels)ch→mono" : "mono")
-
-        // The device being recorded, its format and the fold, once per session. A UID that
-        // fell back to the default, or a wrong channel, reads here and not as silence at the
-        // host.
-        #if os(macOS)
-        if let unit = input.audioUnit, let live = Self.currentDevice(of: unit),
-           let dev = AudioDevices.describe(live) {
-            if !micUID.isEmpty, dev.uid != micUID {
-                log.warning("""
-                    mic selection not honored — requested \(micUID) but capturing from \
-                    \(dev.name) [\(dev.uid)]; the device's UID likely changed (replug) — \
-                    reselect it in Settings
-                    """)
-            }
-            log.info("""
-                mic capture: \(dev.name) [\(dev.uid)] — \(Int(inFormat.sampleRate)) Hz, \
-                \(inChannels) ch, \(channelPlan)
-                """)
-        } else {
-            log.info("""
-                mic capture: <device unavailable> — \(Int(inFormat.sampleRate)) Hz, \
-                \(inChannels) ch, \(channelPlan)
-                """)
-        }
-        #else
-        log.info(
-            "mic capture: \(Int(inFormat.sampleRate)) Hz, \(inChannels) ch, \(channelPlan)")
-        #endif
+        let channelPlan = Self.logMicCapture(
+            input: input, format: inFormat, micUID: micUID, micChannel: micChannel, skip: skip)
 
         // Mono end to end: the resampler takes mono at the input's rate onto the encoder's
-        // 48 kHz mono, and the host's decoder upmixes. Every buffer is allocated here, so the
-        // worker allocates nothing in steady state.
+        // 48 kHz mono, and the host's decoder upmixes. The PCM buffers are allocated here; in
+        // steady state the worker allocates only the packets the encoder returns.
         let scratchFrames = AVAudioFrameCount(MicUplink.batchLimit)
         guard let encoder = try? OpusEncoder(),
               var chain = Self.micChain(
@@ -1560,14 +1465,8 @@ public final class SessionAudio: @unchecked Sendable {
         let flag = flag
         let node = uplink.node
 
-        // An app can be handed digital zeros (a zeroed input slider, a stale grant, the wrong
-        // channel) while everything downstream looks alive. One verdict on the first 10 s of
-        // the folded bus says which.
-        let silenceWindow = Int(inFormat.sampleRate * 10)
         let deviceLabel = micUID.isEmpty ? "default input" : micUID
-        var framesInspected = 0
-        var inputPeak: Float = 0
-        var levelReported = false
+        var level = MicLevelCheck(rate: inFormat.sampleRate)
         var firstBatch = true
 
         uplink.start { samples, frames in
@@ -1595,27 +1494,20 @@ public final class SessionAudio: @unchecked Sendable {
             dst.update(from: samples, count: frames)
             mono.frameLength = AVAudioFrameCount(frames)
 
-            if !levelReported {
-                var localPeak: Float = 0
-                for i in 0..<frames where abs(dst[i]) > localPeak { localPeak = abs(dst[i]) }
-                if localPeak > inputPeak { inputPeak = localPeak }
-                framesInspected += frames
-                if framesInspected >= silenceWindow {
-                    levelReported = true
-                    if inputPeak == 0 {
-                        log.warning("""
-                            mic uplink has been pure digital SILENCE for 10 s (\(deviceLabel), \
-                            \(channelPlan)) — check the input level (System Settings → Sound → \
-                            Input), Privacy & Security → Microphone, and the Microphone channel in \
-                            Settings; the host is receiving zeros
-                            """)
-                    } else {
-                        let dbfs = 20 * log10(inputPeak)
-                        log.info("""
-                            mic uplink OK — peak \(String(format: "%.1f", dbfs)) dBFS over first \
-                            10 s (\(deviceLabel), \(channelPlan))
-                            """)
-                    }
+            if let peak = level.note(dst, count: frames) {
+                if peak == 0 {
+                    log.warning("""
+                        mic uplink has been pure digital SILENCE for 10 s (\(deviceLabel), \
+                        \(channelPlan)) — check the input level (System Settings → Sound → \
+                        Input), Privacy & Security → Microphone, and the Microphone channel in \
+                        Settings; the host is receiving zeros
+                        """)
+                } else {
+                    let dbfs = 20 * log10(peak)
+                    log.info("""
+                        mic uplink OK — peak \(String(format: "%.1f", dbfs)) dBFS over first \
+                        10 s (\(deviceLabel), \(channelPlan))
+                        """)
                 }
             }
 
@@ -1655,6 +1547,77 @@ public final class SessionAudio: @unchecked Sendable {
             if head > 0 { fifo.removeFirst(head) } // keeps capacity — no realloc
         }
         return uplink
+    }
+
+    /// Log the device being recorded, its format and the fold, once per session: a UID that fell
+    /// back to the default, or a wrong channel, reads here and not as silence at the host.
+    /// Returns the fold, which the level verdict names too.
+    private static func logMicCapture(
+        input: AVAudioInputNode, format inFormat: AVAudioFormat, micUID: String, micChannel: Int,
+        skip: [Int]
+    ) -> String {
+        // A pro interface has the mic on one of N inputs, and a converter's downmix takes
+        // channels 0 and 1. So the uplink folds to mono itself: 0 sums every channel but the
+        // device's loopback inputs, n ≥ 1 pins 1-based input channel n.
+        let inChannels = Int(inFormat.channelCount)
+        if micChannel > inChannels {
+            log.warning(
+                "mic channel \(micChannel) out of range (device has \(inChannels)) — mixing all")
+        }
+        let skipped = skip.filter { $0 < inChannels }.count
+        let mixed = skipped < inChannels ? inChannels - skipped : inChannels
+        let channelPlan = (1...inChannels).contains(micChannel)
+            ? "channel \(micChannel)/\(inChannels)"
+            : (inChannels > 1 ? "mix \(mixed)/\(inChannels)ch→mono" : "mono")
+
+        #if os(macOS)
+        if let unit = input.audioUnit, let live = Self.currentDevice(of: unit),
+           let dev = AudioDevices.describe(live) {
+            if !micUID.isEmpty, dev.uid != micUID {
+                log.warning("""
+                    mic selection not honored — requested \(micUID) but capturing from \
+                    \(dev.name) [\(dev.uid)]; the device's UID likely changed (replug) — \
+                    reselect it in Settings
+                    """)
+            }
+            log.info("""
+                mic capture: \(dev.name) [\(dev.uid)] — \(Int(inFormat.sampleRate)) Hz, \
+                \(inChannels) ch, \(channelPlan)
+                """)
+        } else {
+            log.info("""
+                mic capture: <device unavailable> — \(Int(inFormat.sampleRate)) Hz, \
+                \(inChannels) ch, \(channelPlan)
+                """)
+        }
+        #else
+        log.info(
+            "mic capture: \(Int(inFormat.sampleRate)) Hz, \(inChannels) ch, \(channelPlan)")
+        #endif
+        return channelPlan
+    }
+
+    /// One verdict on the first 10 s of the folded mic bus. An app can be handed digital zeros
+    /// (a zeroed input slider, a stale grant, the wrong channel) while everything downstream
+    /// looks alive. `internal` for unit testing.
+    struct MicLevelCheck {
+        private let window: Int
+        private var inspected = 0
+        private var peak: Float = 0
+        private var done = false
+
+        init(rate: Double) { window = Int(rate * 10) }
+
+        /// Fold in `count` samples. Returns the peak magnitude (0 = digital silence) once, on
+        /// the call that fills the window.
+        mutating func note(_ samples: UnsafePointer<Float>, count: Int) -> Float? {
+            guard !done else { return nil }
+            for i in 0..<count where abs(samples[i]) > peak { peak = abs(samples[i]) }
+            inspected += count
+            guard inspected >= window else { return nil }
+            done = true
+            return peak
+        }
     }
 
     /// The rate-dependent half of the mic chain: a mono bus at `rate`, the resampler from it onto

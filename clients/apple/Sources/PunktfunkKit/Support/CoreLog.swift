@@ -1,10 +1,8 @@
 // The Rust core's log lines, routed into `ClientLog` (os_log + the send-to-host ring).
 //
-// The core logs through `tracing`. The desktop and Android shells install a subscriber/logger and
-// see those lines; this app never did, so every transport warning (socket-buffer clamp, QoS
-// refusal), every quinn connection event and every rustls handshake note vanished, and a bundle
-// sent to the host carried the Swift half of the story only. `punktfunk_set_log_callback`
-// (ABI v25) hands them to the C callback below, which files each under a `core.<crate>` category.
+// The core logs through `tracing`; `punktfunk_set_log_callback` hands each line to the C callback
+// below, which files it under a `core.<crate>` category. Without it the transport warnings, quinn
+// connection events and rustls handshake notes never reach a log bundle.
 
 import Foundation
 import PunktfunkCore

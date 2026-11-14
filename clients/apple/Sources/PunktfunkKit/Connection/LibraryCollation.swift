@@ -1,4 +1,4 @@
-// Sorting and grouping the library — the Swift port of `pf-console-ui`'s `collate.rs`, which is
+// Sorting and grouping the library — the Swift port of `pf-client-core`'s `collate.rs`, which is
 // the portable SPEC every console shell implements: how titles fold for A–Z, what a platform-less
 // Steam title buckets under, why launchers always lead, and when a library is worth browsing as
 // collections at all. The rules are pinned by a shared vectors file rather than by prose:
@@ -110,15 +110,6 @@ public enum LibraryGroupKey: Hashable, Sendable {
         case .launchers: return String(localized: L10n.libSectionLaunchers)
         case .platform(Self.otherPlatform): return String(localized: L10n.libGroupOther)
         case .platform(let name), .store(let name): return name
-        }
-    }
-
-    /// The kind caption a collection tile wears (Launchers / Platform / Store).
-    public var kindCaption: String {
-        switch self {
-        case .launchers: return String(localized: L10n.libCollectionKindLaunchers)
-        case .platform: return String(localized: L10n.libCollectionKindPlatform)
-        case .store: return String(localized: L10n.libCollectionKindStore)
         }
     }
 }

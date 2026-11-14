@@ -1152,6 +1152,9 @@ pub mod pen {
 #[path = "inject/linux/kwin_fake_input.rs"]
 mod kwin_fake_input;
 #[cfg(target_os = "linux")]
+#[path = "inject/linux/kwin_text.rs"]
+mod kwin_text;
+#[cfg(target_os = "linux")]
 #[path = "inject/linux/libei.rs"]
 mod libei;
 #[cfg(target_os = "windows")]

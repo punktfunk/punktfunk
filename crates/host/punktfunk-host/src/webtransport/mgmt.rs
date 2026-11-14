@@ -297,12 +297,12 @@ async fn read_request<R: AsyncRead + Unpin>(rx: &mut R) -> Result<(Head, Vec<u8>
 
 /// One request into the router, as the LAN peer it came from.
 ///
-/// Refused here, before the router: a method other than `GET`, `POST` or `DELETE`, a path
-/// outside `/api/v1/` or under `/api/v1/local/` (the position-authenticated lane, which a LAN
-/// peer must never reach), and any header a browser's `fetch` could not have sent. What passes is
-/// stamped like a request off the HTTPS listener — the peer, the bound address, and the client
-/// certificate its connection proved (`fingerprint`, hex), never one a request could name — so
-/// `require_auth` judges it as that request.
+/// Refused here, before the router: a method the API doesn't route, a path outside `/api/v1/`
+/// or under `/api/v1/local/` (the position-authenticated lane, which a LAN peer must never
+/// reach), and any header a browser's `fetch` could not have sent. What passes is stamped like a
+/// request off the HTTPS listener — the peer, the bound address, and the client certificate its
+/// connection proved (`fingerprint`, hex), never one a request could name — so `require_auth`
+/// judges it as that request, `PUT` and `PATCH` as over HTTPS.
 pub(crate) async fn dispatch(
     router: &Router,
     peer: SocketAddr,
@@ -314,11 +314,13 @@ pub(crate) async fn dispatch(
     let method = match head.m.as_str() {
         "GET" => Method::GET,
         "POST" => Method::POST,
+        "PUT" => Method::PUT,
+        "PATCH" => Method::PATCH,
         "DELETE" => Method::DELETE,
         _ => {
             return api_error(
                 StatusCode::METHOD_NOT_ALLOWED,
-                "the tunnel carries GET, POST and DELETE only",
+                "the tunnel carries GET, POST, PUT, PATCH and DELETE only",
             )
         }
     };
@@ -649,7 +651,7 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(body, b"echo:the page's log");
 
-        let (status, _, _) = call(&page, r#"{"m":"PUT","p":"/api/v1/health"}"#, b"").await;
+        let (status, _, _) = call(&page, r#"{"m":"TRACE","p":"/api/v1/health"}"#, b"").await;
         assert_eq!(status, 405);
 
         // Sixteen streams opened and left without FIN hold every slot; the seventeenth is told

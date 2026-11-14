@@ -1,5 +1,5 @@
-// The Y′CbCr→RGB conversion as three shader rows, ported from pf-client-core's `csc_rows`
-// (crates/client/pf-client-core/src/video_color.rs) — the ONE coefficient implementation every
+// The Y′CbCr→RGB conversion as three shader rows, ported from pf-client-video's `csc_rows`
+// (crates/client/pf-client-video/src/video_color.rs) — the ONE coefficient implementation every
 // punktfunk presenter derives its CSC from. `clients/shared/csc-vectors.json`, which the Rust
 // side writes, holds this port to it (`CscRowsTests`).
 //
@@ -53,9 +53,7 @@ public enum CscRows {
             } else {
                 // CICP codes CoreMedia has no named constant for arrive as the literal string
                 // "YCbCrMatrix#<code>" — the suffix IS the H.273 code. BT.470BG (5) takes this
-                // form (proven by the 601 golden fixture), and BT.470BG is exactly what a Linux
-                // host's RGB-input NVENC signals, so missing it re-creates the hue bug the
-                // per-frame signaling exists to fix.
+                // form, and it is what a Linux host's RGB-input NVENC signals.
                 let str = s as String
                 if str.hasPrefix("YCbCrMatrix#"), let code = UInt8(str.dropFirst(12)) {
                     matrix = code
@@ -74,8 +72,7 @@ public enum CscRows {
     /// (8-bit: 16/235/240 over 255; 10-bit: 64/940/960 over 1023 — NOT the same normalized
     /// values, the difference is ~half a code). `msbPacked` folds in the P010/x444 packing
     /// factor: 10 significant bits live in the MSBs of 16, so an `.r16Unorm` sample reads
-    /// `code·64/65535` — multiplying by `65535/65472` recovers exact `code/1023` (this replaces
-    /// the shaders' old documented ~0.1% approximation).
+    /// `code·64/65535` — multiplying by `65535/65472` recovers exact `code/1023`.
     public static func rows(_ signal: Signal, depth: Int, msbPacked: Bool) -> CscUniform {
         // BT.601 (5/6), BT.2020 (9/10); everything else — incl. unspecified — is the host's
         // BT.709 SDR default (mirrors the Rust side's dispatch).

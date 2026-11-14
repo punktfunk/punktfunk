@@ -51,6 +51,8 @@ fn draw_toast_mark(canvas: &Canvas, mark: ToastMark, cx: f64, cy: f64, k: f64, i
 }
 
 impl Shell {
+    /// `foot`: how far the bottom tray reaches into the content (a screen's pinned band), px.
+    /// A toast sits above it.
     #[allow(clippy::too_many_arguments)]
     pub(in crate::shell) fn draw_overlays(
         &mut self,
@@ -61,6 +63,7 @@ impl Shell {
         dt: f64,
         t: f64,
         fonts: &Fonts,
+        foot: f64,
     ) {
         let ui = &self.ui;
         // Resolved before the chain below: naming the layer Apply writes to reads the
@@ -265,7 +268,7 @@ impl Shell {
             let lead = mark_pad + mark_w + gap;
             let bw = lead + tw + pad_x;
             let bx = (w - bw) / 2.0;
-            let by = h - BOTTOM_BAND * k - bh - 8.0 * k + (1.0 - slide) * 12.0 * k;
+            let by = h - BOTTOM_BAND * k - foot - bh - 8.0 * k + (1.0 - slide) * 12.0 * k;
             let rect = Rect::from_xywh(bx as f32, by as f32, bw as f32, bh as f32);
             // Bound the fade layer to the pill. Unbounded `save_layer` is a full-surface
             // offscreen every frame. 12 k outset is stroke slack (no blur to reach further).

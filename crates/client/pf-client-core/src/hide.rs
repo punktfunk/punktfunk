@@ -38,8 +38,13 @@ pub enum Outcome {
 }
 
 impl Outcome {
+    /// Only a coded error is a sentence for the player; one with no code is the operator's
+    /// line and reads as a failure.
     pub fn from_reply(status: u16, body: &str) -> Outcome {
-        match (status, crate::host_text::api_error(body)) {
+        let coded = serde_json::from_str::<serde_json::Value>(body)
+            .is_ok_and(|j| j["code"].as_str().is_some_and(|c| !c.is_empty()));
+        let said = crate::host_text::api_error(body).filter(|_| coded);
+        match (status, said) {
             (200..=299, _) => Outcome::Done,
             (_, Some(said)) => Outcome::Refused(said),
             (code, None) => Outcome::Failed(pf_l10n::client::error_mgmt_refused(code)),

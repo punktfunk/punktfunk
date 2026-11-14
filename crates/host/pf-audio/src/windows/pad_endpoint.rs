@@ -22,7 +22,7 @@
 use super::audio_control;
 use super::devnode_api::{
     bind_driver, create_media_devnode, devnode_inf_path, devnode_multi_sz_prop, instance_id,
-    media_class_devs, pv_bytes, pv_guid, pv_string, read_devparam_dword, wide,
+    media_class_devs, name_devnode, pv_bytes, pv_guid, pv_string, read_devparam_dword, wide,
     write_devparam_dword, BorrowedVariant, DevInfoSet,
 };
 use anyhow::{anyhow, bail, Context, Result};
@@ -45,6 +45,8 @@ use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 pub const PFDS_TAG: u32 = 0x5046_4453;
 /// Creation DeviceDesc. The INF overwrites it; [`PAD_INDEX_VALUE`] is the durable marker.
 const DEVNODE_DESC: &str = "Punktfunk Pad Audio";
+/// Adapter half of the endpoint's name, and the devnode FriendlyName it is rebuilt from.
+const DEVICE_NAME: &str = "DualSense Wireless Controller";
 const SSS_HWID: &str = "ROOT\\SteamStreamingSpeakers";
 /// Devnode `Device Parameters` slot (REG_DWORD). The uninstall sweep matches on it.
 pub const PAD_INDEX_VALUE: &str = "PunktfunkPadIndex";
@@ -165,7 +167,7 @@ fn stamps_for(pad_index: u8) -> [Stamp; 7] {
         Stamp {
             label: "device-name",
             key: PKEY_ENDPOINT_DEVICE_NAME,
-            value: StampValue::Str("DualSense Wireless Controller"),
+            value: StampValue::Str(DEVICE_NAME),
         },
         Stamp {
             label: "container-id",
@@ -730,8 +732,9 @@ pub fn served_blob(endpoint_id: &str, key: &PROPERTYKEY) -> Option<Vec<u8>> {
 }
 
 /// Idempotent pad-audio provision for one slot: reuse or create the devnode,
-/// bind SSS, wait, stamp DualSense identity, undo a default-playback flip.
-/// Host startup, not per session. COM thread; WASAPI objects never leave it.
+/// bind SSS, wait, name the devnode, stamp DualSense identity, undo a
+/// default-playback flip. Host startup, not per session. COM thread; WASAPI
+/// objects never leave it.
 pub fn ensure(pad_index: u8) -> Result<PadEndpoint> {
     anyhow::ensure!(pad_index < 8, "pad index out of range (0..=7): {pad_index}");
     wasapi::initialize_mta()
@@ -749,6 +752,7 @@ pub fn ensure(pad_index: u8) -> Result<PadEndpoint> {
             wait_for_endpoint(&device_instance, wasapi::Direction::Render, ENDPOINT_WAIT)?
         }
     };
+    name_devnode(&device_instance, DEVICE_NAME);
     // Stamp until it stays. On a fresh endpoint the write lands, an immediate
     // check reports served, then AEB reverts the three format keys. Check after
     // STAMP_SETTLE. A false `needs_aeb_kick` restarts the machine audio stack

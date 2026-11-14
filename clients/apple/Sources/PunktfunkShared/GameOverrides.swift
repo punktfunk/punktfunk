@@ -62,9 +62,10 @@ public struct GameOverrides: Codable, Hashable, Sendable {
         lines == nil && hz == nil && hdr == nil && gamepad == nil && !beyondScreen
     }
 
-    /// Nearest even number; the host refuses odd sizes.
+    /// Nearest even number, saturating at the largest even `UInt32`; the host refuses odd sizes.
+    /// A host sends `lines` as any `UInt32`, and doubling or scaling it must not trap.
     static func even(_ x: Double) -> UInt32 {
-        UInt32((x / 2).rounded()) * 2
+        UInt32(min((x / 2).rounded(), Double(UInt32.max / 2))) * 2
     }
 
     /// The mode to ask for once these apply to `mode`, the one this device would ask on its own.

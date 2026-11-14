@@ -137,7 +137,7 @@ pub(super) fn box_fingerprint(box_dir: &Path, state: &Path) -> Result<[u8; 32], 
             format!("the box certificate is {shown}, pinned as {pin}"),
         )),
         None => {
-            super::session::write_if_changed(&state.join(PIN), &format!("{shown}\n"), 0o600)
+            super::session::write_if_changed(&state.join(PIN), format!("{shown}\n"), 0o600)
                 .map_err(|e| BackendError::new("box_pin", format!("write {PIN}: {e}")))?;
             tracing::info!(fingerprint = %shown, "box certificate pinned for key proofs");
             Ok(now)

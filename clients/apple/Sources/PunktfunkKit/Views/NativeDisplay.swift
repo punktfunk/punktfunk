@@ -5,9 +5,28 @@ import AppKit
 #else
 import UIKit
 #endif
+#if os(tvOS)
+import AVFoundation
+#endif
 
 @MainActor
 public enum NativeDisplay {
+    /// Whether this display can present HDR: what a connect advertises, so the host sends an
+    /// SDR stream to an SDR display. Each platform's answer is the mode-independent one. macOS
+    /// reads the potential headroom (the current one is 1.0 on an idle desktop); tvOS asks the
+    /// TV's capability (its headroom follows the current output mode, SDR on the home screen).
+    public static var presentsHDR: Bool {
+        #if os(macOS)
+        return (NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0) > 1.0
+        #elseif os(tvOS)
+        return AVPlayer.eligibleForHDRPlayback
+        #elseif os(visionOS)
+        return true
+        #else
+        return screen.potentialEDRHeadroom > 1.0
+        #endif
+    }
+
     #if os(iOS) || os(tvOS)
     /// The screen the app's window is on. A foldable has two built-in screens and `UIScreen.main`
     /// stays the cover one, so the key window decides. An attached monitor's scene never counts.

@@ -7,19 +7,16 @@
 // 47990, also advertised in the host's mDNS `mgmt` TXT). A paired client is authorized for the
 // read-only library route by its **mTLS certificate** — no bearer token. The host binds this read
 // surface to the LAN by DEFAULT (the bearer-gated admin surface stays loopback-only), so a paired
-// client browses a host's library with no operator step. This mirrors the GameEntry/Artwork/
-// LaunchSpec schema in `crates/host/punktfunk-host/src/library.rs`.
+// client browses a host's library with no operator step. GameEntry and Artwork decode the part
+// of `crates/host/punktfunk-host/src/library.rs`'s schema a client shows.
 
 import Foundation
-// `punktfunkDefaultMgmtPort` (and StoredHost/DefaultsKey) now live in PunktfunkShared so the
-// dependency-free widget extension can share them; PunktfunkKit re-exports the module.
 import PunktfunkShared
 
-/// Cover art URLs (the public Steam CDN for Steam titles, user-supplied for custom entries).
+/// Cover art: a host-relative path to the host's art proxy, or an absolute CDN or `data:` URL.
 public struct Artwork: Codable, Hashable, Sendable {
     public var portrait: String?
     public var hero: String?
-    public var logo: String?
     public var header: String?
 
     /// Preferred order for a poster grid: the 600×900 capsule, falling back to the header
@@ -27,12 +24,6 @@ public struct Artwork: Codable, Hashable, Sendable {
     public var posterCandidates: [URL] {
         [portrait, header, hero].compactMap { $0 }.compactMap { URL(string: $0) }
     }
-}
-
-/// How the host would launch a title (carried for a later step; the client only displays it).
-public struct LaunchSpec: Codable, Hashable, Sendable {
-    public var kind: String // "steam_appid" | "command"
-    public var value: String
 }
 
 /// One title's play numbers as the host keeps them (`GameEntry.stats`).
@@ -68,7 +59,6 @@ public struct GameEntry: Codable, Hashable, Identifiable, Sendable {
     public var store: String // "steam" | "custom" | "lutris" | "heroic" | "epic" | "gog" | "xbox"
     public var title: String
     public var art: Artwork
-    public var launch: LaunchSpec?
     /// `"game"` (the default, and what an older host omits) or `"launcher"` — an entry that opens
     /// the launcher itself (Steam Big Picture, Heroic) rather than a title. Deliberately a plain
     /// optional String: the host owns the vocabulary, and an unknown future value must never fail
@@ -106,12 +96,10 @@ public struct GameEntry: Codable, Hashable, Identifiable, Sendable {
     public var overrides: GameOverrides?
 
     private enum CodingKeys: String, CodingKey {
-        case id, store, title, art, launch, role, icon, platform
+        case id, store, title, art, role, icon, platform
         case developer, publisher, genres, description, tags, players, stats, install, overrides
         case releaseYear = "release_year"
     }
-
-    public var isCustom: Bool { store == "custom" }
 
     /// Whether this entry opens a launcher rather than a game.
     public var isLauncher: Bool { role == "launcher" }
@@ -130,8 +118,7 @@ public struct GameEntry: Codable, Hashable, Identifiable, Sendable {
     }
 
     /// Display name for the store badge — the same table the Rust clients use
-    /// (`pf-console-ui::library::store_label`). Before this existed the badge said "Steam" for
-    /// every non-custom entry, which a Lutris or GOG title made a lie.
+    /// (`pf_client_core::library::store_label`).
     public var storeLabel: String { storeName ?? String(localized: L10n.libStoreOther) }
 
     /// Whether `store` is an id this build has a name for; an unknown one reads as "Game".
@@ -347,11 +334,12 @@ public enum LibraryError: LocalizedError {
     }
 }
 
-/// One game the host currently has launched, from `/api/v1/status`.
-///
-/// A deliberately partial mirror of the host's `ActiveGame`: only the fields a client can act on.
-/// The console's own view of this payload carries more (which session, which plane, the grace
-/// countdown), and none of that is a player's business from the library screen.
+/// The host's own sentence for a request it refused.
+struct HostRefused: LocalizedError {
+    let reason: String
+    var errorDescription: String? { reason }
+}
+
 /// One title's download, from `GET /api/v1/status` `downloads[]`. Its words match the Rust and
 /// Kotlin shells', so a report quotes one line whichever client it came from.
 public struct HostDownload: Codable, Hashable, Sendable {
@@ -452,6 +440,11 @@ public struct HostDownload: Codable, Hashable, Sendable {
     }
 }
 
+/// One game the host currently has launched, from `/api/v1/status`.
+///
+/// A deliberately partial mirror of the host's `ActiveGame`: only the fields a client can act on.
+/// The console's own view of this payload carries more (which session, which plane, the grace
+/// countdown), and none of that is a player's business from the library screen.
 public struct RunningGame: Codable, Hashable, Sendable {
     /// Store-qualified library id (`steam:570`) — the key that lines this up with a `GameEntry`.
     /// Absent for an operator-typed GameStream command, which has no catalog entry behind it.
@@ -629,6 +622,13 @@ public enum LibraryClient {
             withAllowedCharacters: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~")))
     }
 
+    /// `s` as one path segment: unreserved characters and `:` stay, the rest is percent-encoded.
+    static func pathSegment(_ s: String) -> String {
+        s.addingPercentEncoding(
+            withAllowedCharacters: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~:")))
+            ?? s
+    }
+
     /// The whole catalog, a page at a time, so no answer grows with the library. `get` takes
     /// the cursor of the page before and answers one page's body. Any page failing fails the
     /// walk: half a catalog is not one.
@@ -700,18 +700,10 @@ public enum LibraryClient {
     private struct Coded: Decodable { let code: String? }
 
     /// The host's catalog as `profile` plays it, walked over ``send(_:to:method:body:)``'s lanes
-    /// (``catalog(as:_:)``).
+    /// (``catalog(as:_:)``). Host art keeps the host-relative path it arrives as, so a cached
+    /// catalog still names it after the host moves; ``LibraryArtLoader`` asks its own host.
     public static func fetch(_ target: MgmtTarget, as profile: String?) async throws -> Catalog {
-        guard let base = URL(
-            string: "\(baseURL(address: target.address, port: target.port))/api/v1/library")
-        else { throw LibraryError.unreachable("invalid host address") }
-        var fetched = try await catalog(as: profile) { path in try await send(path, to: target) }
-        // Art the host serves arrives as host-relative proxy paths (`/api/v1/library/art/...`).
-        // Resolve them against THIS host, so every consumer sees absolute URLs.
-        for i in fetched.games.indices {
-            fetched.games[i].art = fetched.games[i].art.resolved(against: base)
-        }
-        return fetched
+        try await catalog(as: profile) { path in try await send(path, to: target) }
     }
 
     /// The profiles on this host, from `GET /api/v1/profiles/enumerate`, in host order. nil: the
@@ -741,9 +733,8 @@ public enum LibraryClient {
     /// Start profile `id`'s stopped seat: `POST /api/v1/profiles/{id}/wake`. The host answers the
     /// row, `starting` until the seat is up; the caller reads progress from the list.
     public static func wakeProfile(id: String, on target: MgmtTarget) async throws {
-        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let response = try await send(
-            "/api/v1/profiles/\(escaped)/wake", to: target, method: "POST",
+            "/api/v1/profiles/\(pathSegment(id))/wake", to: target, method: "POST",
             body: (Data(), "application/json"))
         try expectWoken(response)
     }
@@ -753,11 +744,8 @@ public enum LibraryClient {
     public static func unlockChallenge(id: String, on target: MgmtTarget) async throws
         -> UnlockChallenge
     {
-        var allowed = CharacterSet.urlPathAllowed
-        allowed.remove("/")
-        let escaped = id.addingPercentEncoding(withAllowedCharacters: allowed) ?? id
         let response = try await send(
-            "/api/v1/profiles/\(escaped)/unlock-challenge", to: target, method: "POST",
+            "/api/v1/profiles/\(pathSegment(id))/unlock-challenge", to: target, method: "POST",
             body: (Data(), "application/json"))
         try expectOK(response)
         guard let challenge = UnlockChallenge(json: response.body) else {
@@ -822,10 +810,7 @@ public enum LibraryClient {
     public static func changeInstall(
         appID: String, action: InstallAction, on target: MgmtTarget
     ) async -> InstallOutcome {
-        var allowed = CharacterSet.urlPathAllowed
-        allowed.remove("/")
-        let id = appID.addingPercentEncoding(withAllowedCharacters: allowed) ?? appID
-        let path = "/api/v1/library/install/\(id)"
+        let path = "/api/v1/library/install/\(pathSegment(appID))"
         let empty = (data: Data(), contentType: "application/json")
         do {
             let response: HTTPResponse
@@ -839,7 +824,7 @@ public enum LibraryClient {
             }
             return .from(status: response.status, message: hostReason(response.body))
         } catch {
-            return .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            return .failed(error.localizedDescription)
         }
     }
 
@@ -866,20 +851,6 @@ public enum LibraryClient {
         return json?["id"] as? String ?? ""
     }
 
-    /// What this host lets THIS device do to it — sleep, restart, shut it down
-    /// (`design/host-actions.md` §7) — from `GET /api/v1/actions`.
-    ///
-    /// Only the PERMITTED rows come back: the host is the only judge of whether this device's
-    /// access carries the Host-power grant. Best-effort, like ``status(_:)``: a missing menu row
-    /// costs a menu row; a thrown error would cost the screen.
-    public static func actions(_ target: MgmtTarget) async -> [HostAction] {
-        guard let response = try? await send("/api/v1/actions", to: target),
-              response.status == 200,
-              let list = try? JSONDecoder().decode(HostActionList.self, from: response.body)
-        else { return [] }
-        return list.actions.filter(\.permitted)
-    }
-
     /// End one title on the host, live session included (`POST /api/v1/game/end`). The host ends
     /// it only if this device launched it. Never throws: every outcome is something to tell the
     /// player.
@@ -891,7 +862,7 @@ public enum LibraryClient {
                 "/api/v1/game/end", to: target, method: "POST", body: (body, "application/json"))
             return .from(status: response.status)
         } catch {
-            return .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            return .failed(error.localizedDescription)
         }
     }
 
@@ -902,12 +873,16 @@ public enum LibraryClient {
     /// with the host's own sentence ("another device is streaming from this host right now").
     /// The body stays empty: the id is the whole request.
     public static func invokeAction(id: String, on target: MgmtTarget) async throws {
-        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let response = try await send(
-            "/api/v1/actions/\(escaped)", to: target, method: "POST",
+            "/api/v1/actions/\(pathSegment(id))", to: target, method: "POST",
             body: (Data(), "application/json"))
+        try expectAccepted(response)
+    }
+
+    /// ``expectOK(_:_:)`` for an action: a refusal the host words throws its sentence.
+    static func expectAccepted(_ response: HTTPResponse) throws {
         if ![200, 202, 401, 403].contains(response.status), let why = hostReason(response.body) {
-            throw LibraryError.unreachable(why)
+            throw HostRefused(reason: why)
         }
         try expectOK(response, [200, 202])
     }
@@ -920,10 +895,6 @@ public enum LibraryClient {
         var downloads: [HostDownload]?
         /// This device's live grants; absent from a host that predates the field.
         var grants: UInt32?
-    }
-
-    private struct HostActionList: Decodable {
-        var actions: [HostAction]
     }
 
     /// `https://addr:port`, IPv6 literals bracketed — the mirror of the Rust client's `base_url`.
@@ -953,10 +924,10 @@ public enum LibraryClient {
     }
 
     /// One request against `target`: over the stream port when it is known, which needs no TCP
-    /// 47990, then over HTTPS, with transport failures mapped onto `LibraryError`. The stream
-    /// port's answer stands, except 401 and 403: a host that predates stamping the client
-    /// certificate on its tunnel refuses the paired lane there. That refusal stands only when
-    /// HTTPS can't be reached either.
+    /// 47990, then over HTTPS, with failures mapped by ``transportFailure(_:)``. The stream
+    /// port's answer stands, except 401, 403 and 405: a host that predates stamping the client
+    /// certificate on its tunnel refuses the paired lane there, and one before 0.47 carries no
+    /// `PUT` or `PATCH`. That refusal stands only when HTTPS can't be reached either.
     static func send(
         _ path: String, to target: MgmtTarget, method: String = "GET",
         body: (data: Data, contentType: String)? = nil
@@ -966,7 +937,7 @@ public enum LibraryClient {
             do {
                 let response = try await MgmtTransport.tunnel(
                     method, path, body: body?.data, contentType: body?.contentType, to: target)
-                guard response.status == 401 || response.status == 403 else { return response }
+                guard [401, 403, 405].contains(response.status) else { return response }
                 refused = response
             } catch MgmtTransportError.pinMismatch {
                 throw LibraryError.pinMismatch
@@ -983,230 +954,18 @@ public enum LibraryClient {
             throw LibraryError.pinMismatch
         } catch {
             if let refused { return refused }
-            if case MgmtTransportError.timedOut = error { throw LibraryError.unreachable("timed out") }
-            if let error = error as? MgmtTransportError {
-                throw LibraryError.unreachable(String(describing: error))
-            }
-            throw LibraryError.unreachable(error.localizedDescription)
+            throw transportFailure(error)
         }
     }
-}
 
-extension Artwork {
-    /// Rewrite any host-relative field (one starting with `/`) into an absolute URL against `base`.
-    /// External CDN URLs (GOG/Heroic/Xbox) and `data:` URLs (Lutris) already don't start with `/`,
-    /// so they pass through unchanged. `internal` (not `fileprivate`) so `LibraryClientTests` can
-    /// exercise it directly without a live host.
-    func resolved(against base: URL) -> Artwork {
-        func abs(_ s: String?) -> String? {
-            guard let s, s.hasPrefix("/") else { return s }
-            return URL(string: s, relativeTo: base)?.absoluteString ?? s
+    /// An HTTPS failure as ``send(_:to:method:body:)`` throws it: `unreachable`, except that a
+    /// cancelled caller's `CancellationError` stays one. The host was never asked.
+    static func transportFailure(_ error: Error) -> Error {
+        switch error {
+        case is CancellationError: return error
+        case MgmtTransportError.timedOut: return LibraryError.unreachable("timed out")
+        case let error as MgmtTransportError: return LibraryError.unreachable(String(describing: error))
+        default: return LibraryError.unreachable(error.localizedDescription)
         }
-        var a = self
-        a.portrait = abs(a.portrait)
-        a.hero = abs(a.hero)
-        a.logo = abs(a.logo)
-        a.header = abs(a.header)
-        return a
-    }
-}
-
-/// Anything that answers poster bytes for a cover-art URL. The production implementation is
-/// [`LibraryArtLoader`]; the screenshot harness substitutes a canned source so store frames carry
-/// artwork without a host on the network.
-public protocol LibraryArtSource: Sendable {
-    func data(for url: URL) async throws -> Data
-    /// Release pooled connections when the owning screen goes away. Sources without connections
-    /// have nothing to do.
-    func close() async
-}
-
-/// One fetch per key, shared by everyone who asks while it flies, and cancelled once the last
-/// of them is. A tile scrolled past gives up its fetch; a tile still on screen keeps it.
-final class ArtFlights: @unchecked Sendable {
-    private struct Flight {
-        let task: Task<Data, Error>
-        var waiters: Int
-    }
-
-    private let lock = NSLock()
-    private var flights: [String: Flight] = [:]
-
-    func value(
-        for key: String, fetch: @escaping @Sendable () async throws -> Data
-    ) async throws -> Data {
-        let task: Task<Data, Error> = lock.withLock {
-            if var flying = flights[key] {
-                flying.waiters += 1
-                flights[key] = flying
-                return flying.task
-            }
-            let task = Task.detached(operation: fetch)
-            flights[key] = Flight(task: task, waiters: 1)
-            return task
-        }
-        defer { lock.withLock { if flights[key]?.task == task { flights[key] = nil } } }
-        return try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: {
-            lock.withLock {
-                guard var flying = flights[key], flying.task == task else { return }
-                flying.waiters -= 1
-                if flying.waiters > 0 {
-                    flights[key] = flying
-                } else {
-                    flights[key] = nil
-                    task.cancel()
-                }
-            }
-        }
-    }
-}
-
-/// Loads cover art for the library UI, routing each URL to the transport that suits its origin.
-///
-/// A `GameEntry`'s art candidates mix two very different things: the host's own art proxy
-/// (`/api/v1/library/art/...`, resolved to absolute URLs against this host) and public store CDN
-/// URLs carried verbatim on custom/GOG/Heroic entries. Host URLs go over [`MgmtTransport`] with
-/// the paired identity and the pinned fingerprint — outside the URL loading system, so App
-/// Transport Security can stay ON app-wide. Every other origin keeps ordinary `URLSession` with
-/// full system trust evaluation and no client certificate, which is exactly what it should get.
-///
-/// Posters are cached on disk (`ArtCache`), so a second visit to a library costs no network at
-/// all — and the connections behind a first visit are pooled and kept alive rather than paying a
-/// TLS handshake per tile.
-///
-/// Built once per library screen and reused across a whole grid's worth of posters.
-public final class LibraryArtLoader: LibraryArtSource, @unchecked Sendable {
-    private let target: MgmtTarget
-    /// Third-party origins only, with the system's normal certificate validation and no URLCache
-    /// (`ArtCache` owns persistence). Process-wide and never invalidated: a fetch that outlives
-    /// `close()` would otherwise create a task on a dead session, which raises.
-    private static let cdn: URLSession = {
-        let config = URLSessionConfiguration.default
-        config.urlCache = nil
-        return URLSession(configuration: config)
-    }()
-    /// nil when the caches directory is unavailable — then we simply always fetch.
-    private var cache: ArtCache? { ArtCache.shared }
-    /// One fetch per cache key at a time — the same entry shown in two sections must not fetch
-    /// its art twice on a cold cache. Failures are deliberately not remembered.
-    private let flights = ArtFlights()
-
-    public init(_ target: MgmtTarget) {
-        self.target = target
-    }
-
-    /// Image bytes for one art URL, cached on disk after the first fetch. A miss propagates the
-    /// error so the poster can move on to its next candidate.
-    public func data(for url: URL) async throws -> Data {
-        // Inline art never leaves the manifest — decode it here rather than probe a cache that
-        // could never hold it.
-        if url.scheme?.lowercased() == "data" { return try Self.inlineBytes(url) }
-        let key = Self.cacheKey(
-            for: url, hostAddress: target.address, hostPort: target.port, pin: target.pin)
-        if let cache, let cached = await cache.data(forKey: key) { return cached }
-        let fetched = try await flights.value(for: key) { try await self.fetch(url) }
-        if let cache { await cache.store(fetched, forKey: key) }
-        return fetched
-    }
-
-    /// The poster the disk cache or the URL itself already holds. Never the network: a
-    /// powered-off host costs a full request timeout per poster it is asked for.
-    public func cached(for url: URL) async -> Data? {
-        if url.scheme?.lowercased() == "data" { return try? Self.inlineBytes(url) }
-        let key = Self.cacheKey(
-            for: url, hostAddress: target.address, hostPort: target.port, pin: target.pin)
-        return await cache?.data(forKey: key)
-    }
-
-    /// The bytes of a base64 `data:` URL — art a plugin inlined rather than linked. Base64 is the
-    /// only form the kit emits; anything else, or a body over the transport ceiling, is refused.
-    static func inlineBytes(_ url: URL) throws -> Data {
-        let s = url.absoluteString
-        guard let comma = s.firstIndex(of: ","), s[..<comma].lowercased().hasSuffix(";base64"),
-              let data = Data(base64Encoded: String(s[s.index(after: comma)...])),
-              !data.isEmpty, data.count <= MgmtTransport.maxResponseBytes
-        else { throw LibraryError.badArtURL }
-        return data
-    }
-
-    /// Release this host's pooled connections — call when the library screen goes away, so we
-    /// don't sit on open TLS sockets the user is finished with.
-    public func close() async {
-        await MgmtConnectionPool.shared.closeAll(
-            matching: "\(MgmtTransport.unbracketed(target.address)):\(target.port):")
-    }
-
-    /// The cache entry's identity. A HOST-origin URL is `pin | path` — the machine, not the
-    /// address it happened to have at fetch time: a re-addressed host must keep its cache, and a
-    /// different machine answering the same address must not inherit it. Anything else is keyed
-    /// by its URL, which already names its origin.
-    static func cacheKey(for url: URL, hostAddress: String, hostPort: UInt16, pin: Data?) -> String {
-        guard isHostOrigin(url, address: hostAddress, port: hostPort) else {
-            return url.absoluteString
-        }
-        if let pin { return "\(MgmtTransport.hex(pin))|\(requestPath(url))" }
-        return "tofu|\(MgmtTransport.unbracketed(hostAddress)):\(hostPort)|\(requestPath(url))"
-    }
-
-    /// The request path exactly as it goes on the wire — the ENCODED components. `url.path` and
-    /// `url.query` hand back percent-DECODED text: an id that needed encoding breaks the request
-    /// line, and a decoded CRLF splits the request outright.
-    static func requestPath(_ url: URL) -> String {
-        let parts = URLComponents(url: url, resolvingAgainstBaseURL: true)
-        var path = parts?.percentEncodedPath ?? ""
-        if path.isEmpty { path = "/" }
-        if let query = parts?.percentEncodedQuery { path += "?\(query)" }
-        return path
-    }
-
-    private func fetch(_ url: URL) async throws -> Data {
-        guard Self.isHostOrigin(url, address: target.address, port: target.port) else {
-            // A library entry names its own art URL, so this is host-supplied. Web schemes and
-            // inline `data:` only — a `file:` URL would make the client read its own container and
-            // cache the result as a poster — and the same ceiling the pinned path enforces, since
-            // nothing else bounds a CDN body.
-            if url.scheme?.lowercased() == "data" { return try Self.inlineBytes(url) }
-            guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http"
-            else { throw LibraryError.badArtURL }
-            let (bytes, response) = try await Self.cdn.bytes(from: url)
-            guard let http = response as? HTTPURLResponse else { throw LibraryError.badArtURL }
-            guard (200..<300).contains(http.statusCode) else {
-                throw LibraryError.http(http.statusCode)
-            }
-            // Bound the body WHILE it streams: the ceiling is decorative if every byte is in
-            // memory already when it's checked. A declared length past it is refused unread.
-            let ceiling = MgmtTransport.maxResponseBytes
-            guard http.expectedContentLength <= Int64(ceiling) else {
-                throw MgmtTransportError.tooLarge
-            }
-            var data = Data()
-            var block: [UInt8] = []
-            block.reserveCapacity(65_536)
-            for try await byte in bytes {
-                block.append(byte)
-                guard block.count == 65_536 else { continue }
-                data.append(contentsOf: block)
-                block.removeAll(keepingCapacity: true)
-                if data.count > ceiling { throw MgmtTransportError.tooLarge }
-            }
-            data.append(contentsOf: block)
-            if data.count > ceiling { throw MgmtTransportError.tooLarge }
-            return data
-        }
-        let response = try await LibraryClient.send(Self.requestPath(url), to: target)
-        guard response.status == 200 else { throw LibraryError.http(response.status) }
-        return response.body
-    }
-
-    /// Does this URL point at the host's own art proxy? Compared on host + port rather than a
-    /// string prefix, so a differently-spelled but equivalent URL still takes the pinned path.
-    static func isHostOrigin(_ url: URL, address: String, port: UInt16) -> Bool {
-        guard let host = url.host else { return false }
-        let bare = MgmtTransport.unbracketed(address)
-        let scheme = url.scheme?.lowercased()
-        return host.caseInsensitiveCompare(bare) == .orderedSame
-            && (url.port ?? (scheme == "http" ? 80 : 443)) == Int(port)
     }
 }

@@ -6,7 +6,8 @@ import XCTest
 import PunktfunkShared
 
 final class VirtualPadTests: XCTestCase {
-    private let sizes: [(Float, Float)] = [(933, 420), (420, 933), (1024, 768)]
+    // The last is a phone on its side, between `narrow` and the width the bottom row fits.
+    private let sizes: [(Float, Float)] = [(933, 420), (420, 933), (1024, 768), (830, 345)]
 
     func testEveryPresetFitsItsLayerWithNoTwoControlsOverlapping() {
         for layout in ["full", "sticks", "dpad", ""] {

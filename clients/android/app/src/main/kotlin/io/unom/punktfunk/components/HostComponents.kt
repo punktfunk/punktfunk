@@ -1,7 +1,10 @@
 package io.unom.punktfunk.components
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,26 +12,23 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -37,21 +37,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import io.unom.punktfunk.ProfileArt
+import io.unom.punktfunk.ProfileFace
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.firstLetter
-import io.unom.punktfunk.models.HostStatus
 
 /** Left-aligned section header above each block of the connect screen. */
 @Composable
@@ -64,254 +66,248 @@ fun SectionLabel(text: String) {
     )
 }
 
-/**
- * One row of a host card's overflow menu. [startsSection] draws a divider above it, which is how
- * the preset actions ("Connect with: …", "Pin as card: …") stay legible next to the host actions
- * in one flat menu — Compose has no submenus, and the Windows client made the same call.
- * [detail] is a second line under the label. A row with no [onClick] is a section's title, with
- * its note as [detail], or with [subhead] a smaller label over a group inside the section. A row
- * not [enabled] says why in [detail]. A non-null [selected] makes the row one choice of its
- * section, drawn with a radio button.
- */
+/** One row of a host card's long-press menu. [startsSection] draws a divider above it. */
 data class HostMenuItem(
     val label: String,
     val startsSection: Boolean = false,
-    val enabled: Boolean = true,
-    val detail: String? = null,
-    val selected: Boolean? = null,
-    val subhead: Boolean = false,
-    val onClick: (() -> Unit)?,
+    val onClick: () -> Unit,
 )
 
 /**
- * A host as an Apple-style card: a colored avatar carrying the host's OS mark (its initial when we
- * don't know the OS), name + address, a trust pill, and (for saved hosts) an overflow menu with
- * Wake / Edit / Forget plus whatever [menuItems] adds. Tapping the card connects.
- *
- * [presetLabel] names the settings preset this card connects with. On a host's own card that is
- * its default binding, drawn as a quiet chip — the card says what a tap will do. On a **pinned
- * card** ([presetProminent]) the host name is still the title, but the preset is the loud part,
- * because the pin exists to make that one combination a single tap.
+ * A host's state as one sentence: its card's second line and its page's subtitle. [Found] and
+ * [PairingRequired] are a discovered host's, which has no record yet.
  */
+sealed interface HostLine {
+    data object Connecting : HostLine
+    data class Playing(val game: String) : HostLine
+    data object Online : HostLine
+    data object NotPaired : HostLine
+
+    /** Offline, and a connect sends a Wake-on-LAN packet before it dials. */
+    data object OfflineWakes : HostLine
+    data object Offline : HostLine
+    data object Found : HostLine
+    data object PairingRequired : HostLine
+
+    /** The host answers: a green dot. */
+    val up: Boolean get() = this !is Offline && this !is OfflineWakes && this !is Connecting
+
+    @Composable
+    fun text(): String = when (this) {
+        Connecting -> stringResource(R.string.hostcard_status_connecting)
+        is Playing -> stringResource(R.string.hostcard_status_playing, game)
+        Online -> stringResource(R.string.hostcard_status_online)
+        NotPaired -> stringResource(R.string.hostcard_status_not_paired)
+        OfflineWakes -> stringResource(R.string.hostcard_status_offline_wakes)
+        Offline -> stringResource(R.string.hostcard_status_offline)
+        Found -> stringResource(R.string.hostcard_status_found)
+        PairingRequired -> stringResource(R.string.hostcard_status_pairing_required)
+    }
+
+    companion object {
+        /**
+         * A saved host's sentence. [pinned]: the record holds the host's fingerprint. [wakes]:
+         * auto-wake is on and a MAC is known.
+         */
+        fun of(pinned: Boolean, online: Boolean, connecting: Boolean, playing: String?, wakes: Boolean): HostLine =
+            when {
+                connecting -> Connecting
+                online && !pinned -> NotPaired
+                online && playing != null -> Playing(playing)
+                online -> Online
+                wakes -> OfflineWakes
+                else -> Offline
+            }
+    }
+}
+
+/**
+ * A host in two lines: its name, then [status] with the preset it connects with. A tap connects, a
+ * long press opens [menuItems], and the info button opens the host page ([onDetails]). A pinned
+ * card ([presetProminent]) is a shortcut and has no page; a discovered one shows its [address].
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HostCard(
     name: String,
-    address: String,
-    status: HostStatus,
-    online: Boolean = false,
-    /** OS-identity chain (mDNS `os` TXT / stored), drawn as the avatar's mark. "" = the initial. */
+    status: HostLine,
+    /** OS-identity chain (mDNS `os` TXT / stored), drawn as the tile's mark. "" = the initial. */
     os: String = "",
     enabled: Boolean,
     onConnect: () -> Unit,
-    onForget: (() -> Unit)?,
-    onEdit: (() -> Unit)? = null,
-    onWake: (() -> Unit)? = null,
+    onDetails: (() -> Unit)? = null,
+    /** The record holds the host's identity: a filled tile. A discovered host's is outlined. */
+    filled: Boolean = true,
+    address: String? = null,
     presetLabel: String? = null,
     presetProminent: Boolean = false,
     accent: Color? = null,
     menuItems: List<HostMenuItem> = emptyList(),
-    /**
-     * Keep the preset chip's space even on a card that has no preset. `LazyVerticalGrid` sizes a
-     * row to its tallest item but does NOT stretch the others, so a card that grew a chip would
-     * leave its neighbour visibly short — a row of cards stepping up and down reads as broken
-     * layout. The caller passes true when ANY card in that section carries a chip, so a user with
-     * no presets never pays for the slot.
-     */
-    reservePresetSlot: Boolean = false,
+    /** The host Start in opens on: a star on the tile. */
+    isDefault: Boolean = false,
     /** The profile this device plays as on the host; drawn as a small face. */
     profileName: String? = null,
     profilePicture: String? = null,
-    profileArt: io.unom.punktfunk.ProfileArt? = null,
+    profileArt: ProfileArt? = null,
     /** The screen a connect gets when it is not the only screen: "Second screen", "Streams LG TV". */
     screenLine: String? = null,
-    /** Keep [screenLine]'s space, for the same reason as [reservePresetSlot]. */
-    reserveScreenLine: Boolean = false,
 ) {
-    // D-pad / controller focus highlight: a clickable card is focusable, but the default state
-    // layer is too subtle on a TV across a room — draw a clear primary-colour border when focused.
+    // The default state layer is too faint for a D-pad across a room.
     var focused by remember { mutableStateOf(false) }
-    ElevatedCard(
-        onClick = onConnect,
-        enabled = enabled,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(4.dp)
-            .onFocusChanged { focused = it.isFocused }
-            .then(
-                if (focused) {
-                    Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CardDefaults.elevatedShape)
-                } else {
-                    Modifier
-                },
+    var menu by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(16.dp)
+    val moreLabel = stringResource(R.string.hostcard_more_a11y)
+    Box {
+        Surface(
+            shape = shape,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            border = BorderStroke(
+                if (focused) 2.dp else 1.dp,
+                if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
             ),
-    ) {
-        Box(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .onFocusChanged { focused = it.isFocused }
+                .combinedClickable(
+                    enabled = enabled,
+                    onLongClickLabel = moreLabel.takeIf { menuItems.isNotEmpty() },
+                    onLongClick = { if (menuItems.isNotEmpty()) menu = true },
+                    onClick = onConnect,
+                ),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(start = 14.dp, top = 14.dp, bottom = 14.dp, end = 4.dp),
             ) {
                 Box {
-                    HostAvatar(name, online, os)
+                    HostTile(
+                        name, os, filled = filled, connecting = status == HostLine.Connecting,
+                        modifier = Modifier.alpha(if (status.up || status == HostLine.Connecting) 1f else 0.55f),
+                    )
+                    if (isDefault) DefaultHostBadge(Modifier.align(Alignment.BottomEnd).offset(4.dp, 4.dp))
                     if (profileName != null) {
-                        Box(Modifier.align(Alignment.BottomEnd)) {
-                            io.unom.punktfunk.ProfileFace(
-                                profileName, 24, picture = profilePicture, art = profileArt,
-                            )
+                        Box(Modifier.align(Alignment.TopEnd).offset(5.dp, (-5).dp)) {
+                            ProfileFace(profileName, 20, picture = profilePicture, art = profileArt)
                         }
                     }
                 }
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    name,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                )
-                Text(
-                    address,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                )
-                if (screenLine != null || reserveScreenLine) {
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
                     Text(
-                        screenLine.orEmpty(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
                     )
-                }
-                if (presetLabel != null || reservePresetSlot) {
-                    Spacer(Modifier.height(10.dp))
-                    Box(
-                        Modifier.heightIn(min = PRESET_CHIP_SLOT),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (presetLabel != null) {
-                            PresetChip(presetLabel, accent, prominent = presetProminent)
-                        }
-                    }
-                }
-            }
-
-            // Trust state lives in the free top-left corner, mirroring the overflow on the right —
-            // it costs no height, and it is a state you glance at rather than read. The label is
-            // still there for TalkBack, and the trust DECISION is made in a dialog that spells all
-            // of this out; on the card it only has to say "this one is settled" vs "this one will
-            // ask something of you".
-            TrustBadge(status, Modifier.align(Alignment.TopStart))
-
-            if (onForget != null || onEdit != null || onWake != null || menuItems.isNotEmpty()) {
-                var menu by remember { mutableStateOf(false) }
-                Box(modifier = Modifier.align(Alignment.TopEnd)) {
-                    IconButton(enabled = enabled, onClick = { menu = true }) {
-                        Icon(
-                            Icons.Filled.MoreVert,
-                            contentDescription = stringResource(R.string.hostcard_more_a11y),
-                            modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    if (address != null) {
+                        Text(
+                            address,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        if (onWake != null) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.hostcard_wake)) },
-                                onClick = {
-                                    menu = false
-                                    onWake()
-                                },
+                    // One height with or without a chip, so every card in a row stands the same.
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.height(STATUS_ROW),
+                    ) {
+                        HostStatusLine(
+                            status,
+                            // A plain "Online" says nothing beside the preset a tap uses.
+                            dotOnly = presetLabel != null && status == HostLine.Online,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (presetLabel != null) PresetChip(presetLabel, accent, prominent = presetProminent)
+                        if (screenLine != null) {
+                            Text(
+                                screenLine,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
                             )
-                        }
-                        if (onEdit != null) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.hostcard_edit)) },
-                                onClick = {
-                                    menu = false
-                                    onEdit()
-                                },
-                            )
-                        }
-                        if (onForget != null) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.hostcard_remove)) },
-                                onClick = {
-                                    menu = false
-                                    onForget()
-                                },
-                            )
-                        }
-                        menuItems.forEach { item ->
-                            if (item.startsSection) HorizontalDivider()
-                            val onClick = item.onClick
-                            if (onClick == null && item.subhead) {
-                                Text(
-                                    item.label,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 2.dp),
-                                )
-                            } else if (onClick == null) {
-                                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                                    Text(
-                                        item.label,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = MaterialTheme.colorScheme.primary,
-                                    )
-                                    item.detail?.let {
-                                        Text(
-                                            it,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                }
-                            } else {
-                                DropdownMenuItem(
-                                    text = {
-                                        Column {
-                                            Text(item.label)
-                                            item.detail?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                                        }
-                                    },
-                                    leadingIcon = if (item.selected != null) {
-                                        { RadioButton(selected = item.selected, onClick = null, enabled = item.enabled) }
-                                    } else {
-                                        null
-                                    },
-                                    enabled = item.enabled,
-                                    onClick = {
-                                        menu = false
-                                        onClick()
-                                    },
-                                    modifier = if (item.selected != null) {
-                                        Modifier.semantics {
-                                            role = Role.RadioButton
-                                            selected = item.selected
-                                        }
-                                    } else {
-                                        Modifier
-                                    },
-                                )
-                            }
                         }
                     }
                 }
+                if (onDetails != null) {
+                    IconButton(onClick = onDetails) {
+                        Icon(
+                            Icons.Outlined.Info,
+                            contentDescription = stringResource(R.string.hostcard_details_a11y, name),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    Spacer(Modifier.width(10.dp))
+                }
+            }
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            menuItems.forEach { item ->
+                if (item.startsSection) HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text(item.label) },
+                    onClick = {
+                        menu = false
+                        item.onClick()
+                    },
+                )
             }
         }
     }
 }
 
+/** Line two's height: the chip's, so a card with a preset is no taller than one without. */
+private val STATUS_ROW = 26.dp
+
 /**
- * The preset a card connects with. Quiet on a bound host's own card (it is a note about what a tap
- * does); filled and tinted on a pinned card, where the preset IS the reason the card exists — the
- * accent field the schema reserves earns its keep here.
+ * [status] behind its presence dot: green while the host answers, a hollow ring when it doesn't,
+ * none while dialing. A game up reads in green. [dotOnly] drops the words, kept for TalkBack.
+ */
+@Composable
+fun HostStatusLine(status: HostLine, modifier: Modifier = Modifier, dotOnly: Boolean = false) {
+    val words = status.text()
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier.clearAndSetSemantics { contentDescription = words },
+    ) {
+        if (status != HostLine.Connecting) {
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .then(
+                        if (status.up) {
+                            Modifier.background(PRESENCE_ONLINE)
+                        } else {
+                            // A shape as well as a colour: it survives greyscale.
+                            Modifier.border(1.5.dp, MaterialTheme.colorScheme.onSurfaceVariant, CircleShape)
+                        },
+                    ),
+            )
+        }
+        if (!dotOnly) {
+            Text(
+                words,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (status is HostLine.Playing) PRESENCE_ONLINE else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = if (status == HostLine.Connecting) 0.dp else 6.dp),
+            )
+        }
+    }
+}
+
+/**
+ * The preset a card connects with. Quiet on a bound host's own card, where it says what a tap
+ * does; filled on a pinned card, where the preset is why the card exists.
  */
 @Composable
 private fun PresetChip(label: String, accent: Color?, prominent: Boolean) {
@@ -320,18 +316,15 @@ private fun PresetChip(label: String, accent: Color?, prominent: Boolean) {
         modifier = Modifier
             .clip(RoundedCornerShape(50))
             .background(tint.copy(alpha = if (prominent) 0.24f else 0.12f))
-            .padding(horizontal = 10.dp, vertical = 4.dp),
+            .padding(horizontal = 9.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(7.dp).clip(CircleShape).background(tint))
         Spacer(Modifier.width(6.dp))
         Text(
             label,
-            style = if (prominent) {
-                MaterialTheme.typography.labelLarge
-            } else {
-                MaterialTheme.typography.labelMedium
-            },
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (prominent) FontWeight.Bold else FontWeight.Medium,
             color = tint,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -339,106 +332,70 @@ private fun PresetChip(label: String, accent: Color?, prominent: Boolean) {
     }
 }
 
-/**
- * Reserved height for the preset chip — the one part of a card that varies. `LazyVerticalGrid`
- * sizes a row to its tallest item and does NOT stretch the others, so a card that grew a chip its
- * neighbour lacks would leave the row stepping up and down.
- *
- * `heightIn(min =)`, not a fixed height: at a large accessibility font scale the chip must be
- * allowed to grow rather than clip, and the reservation is sized with room to spare because the
- * equal-height guarantee only holds while every card fits INSIDE it.
- */
-private val PRESET_CHIP_SLOT = 26.dp
-
-/** Live presence, on any dynamic scheme: green reads as "up" to everyone, and Material You's
- * primary might be any hue at all — including a green that would then mean nothing. */
-private val PRESENCE_ONLINE = Color(0xFF4ADE80)
+/** Fixed, not the theme's primary: Material You may seed a green that would then mean nothing. */
+internal val PRESENCE_ONLINE = Color(0xFF4ADE80)
 
 /**
- * The host's avatar (Apple-contact style) with its presence as a dot on the corner — the idiom
- * every contact list already uses, and one fewer labelled badge on a small card. It carries the
- * host's OS mark when [os] resolves to one we ship, and the host's initial otherwise.
- *
- * [online] is true when the host advertises on mDNS OR answers the reachability probe, so a
- * routed/VPN host that never advertises still reads as up. Online is a FILLED green dot, offline a
- * hollow grey ring: the difference is a shape as well as a colour, so it survives both a
- * colour-blind reader and a screenshot in greyscale. TalkBack gets the word either way.
+ * The host's squared tile: its OS mark when [os] resolves to one we ship, else its initial.
+ * [filled] is a saved identity; an outline is a host not saved or not paired yet. [connecting]
+ * spins in the mark's place.
  */
 @Composable
-fun HostAvatar(name: String, online: Boolean = false, os: String = "") {
-    val letter = name.trim().takeIf { it.isNotEmpty() }?.let(::firstLetter) ?: "?"
-    val cardColor = CardDefaults.elevatedCardColors().containerColor
-    val osIcon = resolveOsIcon(os)
-    val presence = stringResource(if (online) R.string.hostcard_status_online else R.string.hostcard_status_offline)
-    Box {
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center,
-        ) {
-            // The OS mark IS the avatar when we know the OS — it identifies the machine better than
-            // the initial ever did, and it's the same circle, so a card whose host advertises no OS
-            // (or one we ship no mark for) keeps the letter and the row still reads as one set.
-            if (osIcon != null) {
-                Icon(
-                    osIcon,
-                    contentDescription = os,
-                    modifier = Modifier.size(24.dp),
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            } else {
-                Text(
-                    letter,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            }
+fun HostTile(
+    name: String,
+    os: String,
+    modifier: Modifier = Modifier,
+    filled: Boolean = true,
+    connecting: Boolean = false,
+    size: Dp = 48.dp,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(size * 0.27f)
+    val ink = if (filled) scheme.onPrimaryContainer else scheme.primary
+    Box(
+        modifier = modifier
+            .size(size)
+            .clip(shape)
+            .background(if (filled) scheme.primaryContainer else scheme.primary.copy(alpha = 0.14f))
+            .then(if (filled) Modifier else Modifier.border(1.dp, scheme.primary.copy(alpha = 0.45f), shape)),
+        contentAlignment = Alignment.Center,
+    ) {
+        val osIcon = resolveOsIcon(os)
+        when {
+            connecting -> CircularProgressIndicator(Modifier.size(size * 0.45f), color = ink, strokeWidth = 2.dp)
+            osIcon != null -> Icon(osIcon, contentDescription = os, modifier = Modifier.size(size * 0.5f), tint = ink)
+            else -> Text(
+                name.trim().takeIf { it.isNotEmpty() }?.let(::firstLetter) ?: "?",
+                style = if (size >= 64.dp) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = ink,
+            )
         }
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .size(13.dp)
-                .clip(CircleShape)
-                // A ring in the card's own colour is what makes the dot read as sitting ON the
-                // avatar rather than beside it.
-                .background(cardColor)
-                .padding(2.dp)
-                .clip(CircleShape)
-                .then(
-                    if (online) {
-                        Modifier.background(PRESENCE_ONLINE)
-                    } else {
-                        Modifier
-                            .background(cardColor)
-                            .border(1.5.dp, MaterialTheme.colorScheme.onSurfaceVariant, CircleShape)
-                    },
-                )
-                .semantics { contentDescription = presence },
-        )
     }
 }
 
-/**
- * The host's trust state as a corner glyph: locked (paired — nothing more to do), a key (this host
- * will ask for a PIN), or an open lock (trust-on-first-use, the weakest of the three). The full
- * label rides along as the content description, and the dialogs that actually make the decision
- * spell it out in sentences.
- */
+/** The default host's mark: a star on the tile's corner, ringed in the card's colour. */
 @Composable
-private fun TrustBadge(status: HostStatus, modifier: Modifier = Modifier) {
-    val (icon, tint) = when (status) {
-        HostStatus.PAIRED -> Icons.Filled.Lock to MaterialTheme.colorScheme.primary
-        HostStatus.PAIRING -> Icons.Filled.Key to MaterialTheme.colorScheme.tertiary
-        HostStatus.TOFU -> Icons.Filled.LockOpen to MaterialTheme.colorScheme.onSurfaceVariant
+private fun DefaultHostBadge(modifier: Modifier = Modifier) {
+    val label = stringResource(R.string.hostcard_default_host)
+    Box(
+        modifier = modifier
+            .size(18.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(1.5.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primary)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            Icons.Filled.Star,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier.size(10.dp),
+        )
     }
-    Icon(
-        icon,
-        contentDescription = stringResource(status.label),
-        tint = tint.copy(alpha = 0.85f),
-        modifier = modifier.padding(14.dp).size(18.dp),
-    )
 }
 
 /** Shown when there are no saved or discovered hosts. */

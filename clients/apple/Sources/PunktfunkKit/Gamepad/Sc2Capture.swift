@@ -17,7 +17,9 @@
 // slot is claimed. Reports arrive on the link queue, host writes on the feedback thread, lifecycle
 // on the main actor; all mutable state sits behind `lock`.
 
-#if !os(macOS)
+#if os(macOS)
+import AppKit
+#else
 import UIKit
 #endif
 import Foundation
@@ -155,10 +157,8 @@ public final class Sc2Capture {
                 self?.handleReport(source: Sc2Capture.bleSource, report)
             },
             onClosed: { [weak self] in
-                // Controller powered off / out of range. Release the slot (the punktfunk
-                // analogue of "Steam sees a REAL disconnect": the host tears down /
-                // neutralizes its virtual pad) — the link keeps re-acquiring on its own 2 s
-                // poll, and the next connection re-claims + re-proves its IMU live.
+                // Controller powered off or out of range: the host tears its virtual pad down.
+                // The link re-acquires on its own; the next connection's first report claims again.
                 self?.releaseSource(Sc2Capture.bleSource, reason: "link closed")
             })
         #if os(macOS)
@@ -221,7 +221,8 @@ public final class Sc2Capture {
 
     /// Begin acquisition. Wire slots are claimed later, on each source's first state report.
     /// A Mac app keeps its HID and Bluetooth access while inactive, so focus changes leave the
-    /// capture and its host slots alone. iOS and tvOS release BLE while inactive.
+    /// capture and its host slots alone; becoming active retries the USB opens Input Monitoring
+    /// refused. iOS and tvOS release BLE while inactive.
     @MainActor
     public func start() {
         guard Self.running == nil || Self.running === self else {
@@ -238,10 +239,17 @@ public final class Sc2Capture {
         lock.unlock()
         // Take the hardware off the menu-nav reader (iOS): one peripheral, one central.
         manager.holdSc2Hardware(true)
-        #if !os(macOS)
-        // Both observers run on main, where `start` put this object; the weak reference crosses
+        // The observers run on main, where `start` put this object; the weak reference crosses
         // no thread.
         nonisolated(unsafe) weak let weakSelf = self
+        #if os(macOS)
+        observers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { _ in
+            guard let self = weakSelf, self.currentTransport == .usb else { return }
+            self.usbLink.start()
+        })
+        #else
         observers.append(NotificationCenter.default.addObserver(
             forName: UIApplication.willResignActiveNotification, object: nil, queue: .main
         ) { _ in
@@ -336,6 +344,9 @@ public final class Sc2Capture {
     /// frame. A write `refusedWrite` names stays off the pad. NO main-actor hop — the rumble
     /// replay runs at Steam's 25–40 ms resend cadence and the device write happens on the link
     /// queue anyway.
+    ///
+    /// The write queues under `lock` while `pad` still names the source, so the rumble stop
+    /// `releaseSource` queues after removing it always lands after this write.
     public func onHidRaw(pad: UInt8, kind: UInt8, data: [UInt8]) {
         lock.lock()
         let source = sources.first(where: { $0.value.padIndex == pad })?.key
@@ -345,7 +356,9 @@ public final class Sc2Capture {
             log.debug("SC2: host write refused (kind \(kind), head \(Array(data.prefix(2)))): \(reason)")
             return
         }
-        write(source: source, kind: kind, frame: data)
+        lock.lock()
+        if sources[source]?.padIndex == pad { write(source: source, kind: kind, frame: data) }
+        lock.unlock()
     }
 
     /// The feature commands a host may send a 2015 pad after its report id 0, and the ones it
@@ -396,10 +409,9 @@ public final class Sc2Capture {
             return
         }
         var state = Sc2Device.State()
-        var report = framed
         let isState = classic
-            ? Sc1Device.parseState(report, into: &state)
-            : Sc2Device.parseState(report, into: &state)
+            ? Sc1Device.parseState(framed, into: &state)
+            : Sc2Device.parseState(framed, into: &state)
         lock.lock()
         if stopped || suspended {
             lock.unlock()
@@ -414,12 +426,12 @@ public final class Sc2Capture {
             let shouldClaim = isState && !src.claimPending
             if shouldClaim { src.claimPending = true }
             lock.unlock()
-            if shouldClaim { claimSlot(source: source) }
+            if shouldClaim { claimSlot(source: source, for: src) }
             return
         }
         if !isState {
             // Battery/status and future report types still belong to the as-is stream.
-            forwardRawLocked(src, &report, pad: pad)
+            forwardRawLocked(src, framed, pad: pad)
             lock.unlock()
             return
         }
@@ -427,7 +439,7 @@ public final class Sc2Capture {
         // a press the client consumed never reaches the game.
         deliver(src.ring.read(state))
         src.ring.apply(&state)
-        forwardRawLocked(src, &report, pad: pad)
+        forwardRawLocked(src, framed, pad: pad)
         mirrorTypedLocked(src, state, pad: pad)
         lock.unlock()
     }
@@ -464,10 +476,9 @@ public final class Sc2Capture {
     /// One wireless connect/disconnect report (`0x79`/`0x46`).
     ///
     /// Authoritative ONLY through a Puck dongle, which is why this does nothing on any other
-    /// transport. A wired or BLE pad emits these too — truthfully, since it genuinely has no
-    /// radio link — and acting on that tore the wire slot down 255 ms after it was created on
-    /// Android's first on-glass run. SDL's wired path likewise marks the controller connected
-    /// unconditionally and reconnects on any state report.
+    /// transport. A wired or BLE pad emits these too, truthfully (it has no radio link), and
+    /// acting on one would tear the slot down right after its claim. SDL's wired path likewise
+    /// marks the controller connected unconditionally and reconnects on any state report.
     ///
     /// A connect needs nothing: the first state report claims the slot, and the host's virtual
     /// Puck queues its own connect edge.
@@ -482,7 +493,7 @@ public final class Sc2Capture {
 
     /// Forward one id-first report on the raw plane: copy into the source's reusable buffer,
     /// send. Caller holds `lock`.
-    private func forwardRawLocked(_ src: PadSource, _ report: inout [UInt8], pad: UInt8) {
+    private func forwardRawLocked(_ src: PadSource, _ report: [UInt8], pad: UInt8) {
         let n = min(report.count, src.rawBuf.count)
         src.rawBuf.replaceSubrange(0 ..< n, with: report[0 ..< n])
         src.rawBuf.withUnsafeBytes { buf in
@@ -522,10 +533,10 @@ public final class Sc2Capture {
     /// Reserve a wire index on the main actor and finish `source`'s claim under the lock. On
     /// success sends `gamepadArrival` (pref 9, or 10 for a Puck slot) — the declaration the
     /// host builds the virtual SC2 from — before any input can flow on that index.
-    private func claimSlot(source: UInt64) {
+    private func claimSlot(source: UInt64, for src: PadSource) {
         // The host builds the virtual pad from the identity, so it is read before the arrival.
         readIdentity(source: source) { [weak self] identity in
-            self?.finishClaim(source: source, identity: identity)
+            self?.finishClaim(source: source, src: src, identity: identity)
         }
     }
 
@@ -543,7 +554,9 @@ public final class Sc2Capture {
         link.readIdentity(done)
     }
 
-    private func finishClaim(source: UInt64, identity: PunktfunkConnection.PadIdentity?) {
+    private func finishClaim(
+        source: UInt64, src: PadSource, identity: PunktfunkConnection.PadIdentity?
+    ) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             MainActor.assumeIsolated {
@@ -559,20 +572,12 @@ public final class Sc2Capture {
                 let dongle = self.isDongleSource(source)
                 let kind: PunktfunkConnection.GamepadType = self.isClassicSource(source)
                     ? .steamController : dongle ? .steamController2Puck : .steamController2
-                #if os(macOS)
-                let serial = source == Sc2Capture.bleSource
-                    ? nil : self.usbLink.serial(source: source)
-                #else
-                let serial: String? = nil
-                #endif
                 self.lock.lock()
-                guard let src = self.sources[source], src.claimPending else {
-                    // The source went away between the report that scheduled this claim and
-                    // the hop landing: `releaseSource` cleared the pending token (it is set
-                    // nowhere else while a claim is in flight). Completing now would arm a
-                    // virtual pad — and announce a badge — for a dead source, with no
-                    // `.released` ever coming. Hand the index straight back instead; a live
-                    // source's next state report simply schedules a fresh claim.
+                guard self.sources[source] === src, src.claimPending else {
+                    // The entry that asked was released, and a later report may have made a
+                    // fresh one with its own claim. Completing here would arm a dead source,
+                    // or the fresh one under this read's identity. A live source's next state
+                    // report schedules its own claim.
                     self.lock.unlock()
                     if let index { self.manager.releaseExternalPadIndex(index) }
                     return
@@ -600,7 +605,7 @@ public final class Sc2Capture {
                 self.syncShadowSuppression()
                 let via = dongle ? "Puck" : (self.currentTransport == .usb ? "USB" : "BLE")
                 log.info(
-                    "SC2 captured → wire pad \(index) (\(via, privacy: .public) passthrough, pref \(kind.rawValue), serial \(serial ?? "?"))"
+                    "SC2 captured → wire pad \(index) (\(via, privacy: .public) passthrough, pref \(kind.rawValue))"
                 )
                 self.onPhaseChange?(.captured(pad: index))
             }
@@ -611,8 +616,9 @@ public final class Sc2Capture {
     /// stuck last frame), typed-diff state dropped with the source entry, index handed back to
     /// the shared allocator. The removal restarts core's gate for that index.
     /// `.released` fires only when no other source still holds a slot, so the badge survives a
-    /// single pad of several powering off. Safe from any thread; no-op for an unseen source.
-    private func releaseSource(_ source: UInt64, reason: String) {
+    /// single pad of several powering off. `stopRumble` is for a pad that is still there; a
+    /// removed one has nothing to write to. Safe from any thread; no-op for an unseen source.
+    private func releaseSource(_ source: UInt64, reason: String, stopRumble: Bool = false) {
         lock.lock()
         guard let src = sources.removeValue(forKey: source) else {
             lock.unlock()
@@ -623,7 +629,7 @@ public final class Sc2Capture {
         lock.unlock()
         guard let index else { return }
         // A 2015 pad's haptics are finite pulse trains; `0x80` means something else to it.
-        if !isClassicSource(source) { write(source: source, kind: 0, frame: Self.rumbleStop) }
+        if stopRumble, !isClassicSource(source) { write(source: source, kind: 0, frame: Self.rumbleStop) }
         connection.send(.gamepadRemove(pad: UInt32(index)))
         DispatchQueue.main.async { [weak self, manager] in
             MainActor.assumeIsolated {
@@ -651,11 +657,11 @@ public final class Sc2Capture {
         manager.steamController2Claims = owned
     }
 
-    /// Release every source — the stop/suspend teardown.
+    /// Release every source — the stop/suspend teardown, with the pads still attached.
     private func releaseAll(reason: String) {
         lock.lock()
         let keys = Array(sources.keys)
         lock.unlock()
-        for key in keys { releaseSource(key, reason: reason) }
+        for key in keys { releaseSource(key, reason: reason, stopRumble: true) }
     }
 }

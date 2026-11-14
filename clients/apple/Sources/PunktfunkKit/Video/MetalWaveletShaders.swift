@@ -1,8 +1,8 @@
 // PyroWave decode compute kernels — the Metal port of the vendored Vulkan shaders
 // (crates/codec/pyrowave-sys/vendor/pyrowave/shaders/wavelet_dequant.comp + idwt.comp, upstream pin
-// c0b997f8, MIT © 2025 Hans-Kristian Arntzen). Runtime-compiled Swift strings per client
-// convention (no metallib build step — see GamepadChrome.swift's rationale); these are the
-// client's first compute pipelines.
+// c0b997f8, MIT © 2025 Hans-Kristian Arntzen). Runtime-compiled Swift strings, as in
+// MetalVideoPresenter (SwiftPM has no metallib build step); these are the client's first
+// compute pipelines.
 //
 // Port notes (design/pyrowave-codec-plan.md §4.7):
 // • Only the STORAGE_MODE 0 path exists: MSL device pointers replace the 8/16-bit-storage SSBO
@@ -259,8 +259,8 @@ kernel void wavelet_dequant(
     if (simd_group != 0)
         sign_offset += shared_sign_scan[simd_group - 1];
 
-    // Load 64 bits of sign stream and bit-align (may read one word past the payload — the
-    // buffer carries a 16-byte zeroed guard tail for exactly this).
+    // Load 64 bits of sign stream and bit-align (may read one word past the payload — each pool
+    // slot has `WaveletAccessUnitPool.slackBytes` of room past its AU for exactly this).
     uint sign_word = payload_u32[sign_offset / 32 + 0];
     uint sign_word_upper = payload_u32[sign_offset / 32 + 1];
 

@@ -87,7 +87,7 @@ fn pair_page(props: &Svc, live_pin: &Rc<RefCell<String>>) -> View {
                                 Ok(()) => Ok(client::pair_paired(&target3.host.name)),
                                 Err(e) => Err(client::pair_saved_failed(format!("{e:#}"))),
                             });
-                            ss.call(Screen::Hosts);
+                            ss.call(Screen::Home);
                         }
                         Err(e) => {
                             if !current() {
@@ -96,7 +96,7 @@ fn pair_page(props: &Svc, live_pin: &Rc<RefCell<String>>) -> View {
                             // Cause-specific: wrong PIN vs pairing-not-armed vs unreachable —
                             // never blame the PIN for a dead network path (shared wording).
                             st.call(trust::pair_error_message(&e));
-                            ss.call(Screen::Hosts);
+                            ss.call(Screen::Home);
                         }
                     }
                 });
@@ -106,7 +106,7 @@ fn pair_page(props: &Svc, live_pin: &Rc<RefCell<String>>) -> View {
         let (ss, ctx2) = (set_screen.clone(), ctx.clone());
         icon_button("x", common::common_cancel()).on_click(move || {
             ctx2.shared.pair_gen.fetch_add(1, Ordering::SeqCst);
-            ss.call(Screen::Hosts);
+            ss.call(Screen::Home);
         })
     };
     // The no-PIN alternative offered alongside the PIN ceremony: open an identified connect that
@@ -123,7 +123,7 @@ fn pair_page(props: &Svc, live_pin: &Rc<RefCell<String>>) -> View {
         Grid::new()
             .children((
                 // `Target` holds no OS chain, so the pairing card keeps the monogram.
-                avatar(pal, &target.host.name, "")
+                host_tile(pal, &target.host.name, "", true, 44.0)
                     .grid_column(0)
                     .vertical_alignment(VerticalAlignment::Center),
                 vstack((

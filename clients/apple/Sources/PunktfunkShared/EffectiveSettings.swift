@@ -266,21 +266,16 @@ public struct EffectiveSettings: Equatable, Sendable {
 /// than merely validated.
 ///
 /// **The ladder is both rate families**, matching `punktfunk_core::audio::pcm::rate_is_supported`:
-/// 44 100 / 48 000 / 88 200 / 96 000 / 176 400 Hz. The 44.1 kHz family used to be absent, and for
-/// exactly one reason: every buffer figure in the jitter policy — at both ends and in all four
-/// clients — was `ms × perMS` with `perMS` an INTEGER number of samples per millisecond, so
-/// 44 100 → 44.1 truncated to 44 and put every target, every de-prime fuse and every reported
-/// `buffer_ms` 2.3 % low. That arithmetic now multiplies before it divides (see the conversion
-/// helpers at the top of `AudioRing.swift`, and `JitterPolicy::new_at_rate`), which is the whole of
-/// what §4.1 deferred the family behind (design/hi-res-audio.md §4.1).
+/// 44 100 / 48 000 / 88 200 / 96 000 / 176 400 Hz. Jitter-buffer figures multiply before they
+/// divide (`AudioRing.swift`'s conversion helpers, `JitterPolicy::new_at_rate`): a whole number of
+/// samples per millisecond would truncate 44.1 kHz to 44 and put every target 2.3 % low.
 ///
-/// ⚠ **A rate being representable is not a promise that it will be granted**, and this surface must
-/// never read as one. The host runs a five-condition gate and any failure resolves the session back
-/// to Opus 48 kHz; on top of that the frame has to FIT one QUIC datagram, which the top of the
-/// ladder only barely does — 176 400/24-bit stereo is 8.5 Mbps and fits only the shortest rung
-/// (1 ms, ~1 069 B), and surround above 48 kHz fits no rung at all. What a session actually got is
-/// `PunktfunkConnection`'s `resolvedAudioRateHz`/`resolvedAudioBits`/`resolvedAudioChannels`/
-/// `isLosslessAudio`, which is what the HUD shows.
+/// ⚠ **A representable rate is not a promise that it will be granted.** The host runs a
+/// five-condition gate and any failure resolves the session back to Opus 48 kHz; the frame also
+/// has to FIT one QUIC datagram, which the top of the ladder barely does — 176 400/24-bit stereo
+/// is 8.5 Mbps and fits only the shortest rung (1 ms, ~1 069 B), and surround above 48 kHz fits
+/// none. What a session got is `PunktfunkConnection`'s `resolvedAudioRateHz`/`resolvedAudioBits`/
+/// `resolvedAudioChannels`, which the HUD shows.
 ///
 /// Lossless at the DEFAULT 48 kHz/16-bit is deliberately not offered: it spends ~1.5 Mbps to sound
 /// like the transparent 256 kbps Opus it replaces, and it is the one lossless request whose wire
@@ -348,9 +343,6 @@ public enum AudioFormatChoice: String, CaseIterable, Sendable {
         case .lossless1764: return (176_400, 24)
         }
     }
-
-    /// True for the lossless plane — the gate for anything that spends the extra bandwidth.
-    public var isLossless: Bool { self != .opus }
 }
 
 public extension EffectiveSettings {

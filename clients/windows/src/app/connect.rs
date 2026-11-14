@@ -377,16 +377,16 @@ fn connect_spawn(
                         move || {
                             profiles::save_pick(&host, None);
                             st.call(msg);
-                            ss.call(Screen::Hosts);
+                            ss.call(Screen::Home);
                         }
                     };
                     let log = crate::spawn::log_hint();
                     match attempt.on_exit(&host, &outcome, Some(&log)) {
                         // The user closed the stream window, or Disconnect killed it.
-                        ExitRoute::Silent => ss.call(Screen::Hosts),
+                        ExitRoute::Silent => ss.call(Screen::Home),
                         ExitRoute::Banner(msg) => {
                             st.call(msg);
-                            ss.call(Screen::Hosts);
+                            ss.call(Screen::Home);
                         }
                         ExitRoute::Repair(msg) => {
                             st.call(msg);
@@ -434,7 +434,7 @@ fn connect_spawn(
     );
     if let Err(e) = spawned {
         set_status.call(e);
-        set_screen.call(Screen::Hosts);
+        set_screen.call(Screen::Home);
     }
 }
 
@@ -477,13 +477,13 @@ pub(crate) fn open_console(
                 if let Some(msg) = outcome.console_banner(Some(&crate::spawn::log_hint())) {
                     st.call(msg);
                 }
-                ss.call(Screen::Hosts);
+                ss.call(Screen::Home);
             }
         }
     });
     if let Err(e) = spawned {
         set_status.call(e);
-        set_screen.call(Screen::Hosts);
+        set_screen.call(Screen::Home);
     }
 }
 
@@ -530,7 +530,7 @@ pub(crate) fn request_access(props: &Svc, target: &Target) {
             Ok(fp) => fp,
             Err(e) => {
                 st.call(trust::access_error_message(&e));
-                ss.call(Screen::Hosts);
+                ss.call(Screen::Home);
                 return;
             }
         };
@@ -554,7 +554,7 @@ pub(crate) fn request_access(props: &Svc, target: &Target) {
             Ok(()) => Ok(client::pair_paired(&target.host.name)),
             Err(e) => Err(client::pair_saved_failed(format!("{e:#}"))),
         });
-        ss.call(Screen::Hosts);
+        ss.call(Screen::Home);
     });
 }
 
@@ -684,7 +684,7 @@ pub(crate) fn trust_page(
     };
     let cancel_btn = {
         let ss = set_screen.clone();
-        icon_button("x", common::common_cancel()).on_click(move || ss.call(Screen::Hosts))
+        icon_button("x", common::common_cancel()).on_click(move || ss.call(Screen::Home))
     };
     let actions = hstack((trust_btn, pair_btn, cancel_btn))
         .spacing(8.0)
@@ -728,7 +728,7 @@ pub(crate) fn request_access_page(
                 if session.is_running() {
                     session.kill();
                 }
-                ss.call(Screen::Hosts);
+                ss.call(Screen::Home);
             })
             .horizontal_alignment(HorizontalAlignment::Center)
     };
@@ -771,7 +771,7 @@ pub(crate) fn waking_page(
                 if let Some(c) = ctx.shared.cancel.lock().unwrap().as_ref() {
                     c.store(true, Ordering::SeqCst);
                 }
-                ss.call(Screen::Hosts);
+                ss.call(Screen::Home);
             })
             .horizontal_alignment(HorizontalAlignment::Center)
     };
@@ -805,7 +805,7 @@ pub(crate) fn wake_parked_page(
     };
     let cancel_btn = {
         let ss = set_screen.clone();
-        icon_button("x", common::common_cancel()).on_click(move || ss.call(Screen::Hosts))
+        icon_button("x", common::common_cancel()).on_click(move || ss.call(Screen::Home))
     };
     let actions = hstack((retry_btn, cancel_btn))
         .spacing(8.0)

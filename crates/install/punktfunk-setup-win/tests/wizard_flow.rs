@@ -15,10 +15,18 @@ use punktfunk_setup::platform::windows::demo::win_preset;
 use punktfunk_setup_win::real::Seams;
 use punktfunk_setup_win::wizard::{Wizard, WizardInput};
 use windows_reactor::test::{
-    ComponentHost, EventDispatch, EventId, EventPayload, EventValue, Mutation, ObjectId,
-    ObjectType, PropertyId, PropertyValue, RecordingAdapter, RelationId,
+    ComponentHost, EventCall, EventDispatch, EventId, EventValue, Mutation, ObjectId, ObjectType,
+    PropertyId, PropertyValue, RecordingAdapter, RelationId,
 };
 use windows_reactor::{component, Brush, ThemeBrush};
+
+/// What a fired event carries; [`Wiz::fire`] pairs it with the control's recorded callback.
+enum EventPayload {
+    Unit,
+    Bool(bool),
+    OptionalBool(Option<bool>),
+    SelectionIndex(Option<usize>),
+}
 
 #[derive(Default)]
 struct Model {
@@ -155,8 +163,18 @@ impl Wiz {
             .and_then(|e| e.get(&event))
             .cloned()
             .unwrap_or_else(|| panic!("the control has no {event:?} handler"));
-        self.host
-            .queue_event(EventDispatch::new(id, event, value, payload));
+        let call = match (value, payload) {
+            (EventValue::Unit(cb), EventPayload::Unit) => EventCall::Unit(cb),
+            (EventValue::Bool(cb), EventPayload::Bool(v)) => EventCall::Bool(cb, v),
+            (EventValue::OptionalBool(cb), EventPayload::OptionalBool(v)) => {
+                EventCall::OptionalBool(cb, v)
+            }
+            (EventValue::SelectionIndex(cb), EventPayload::SelectionIndex(v)) => {
+                EventCall::SelectionIndex(cb, v)
+            }
+            (value, _) => panic!("{event:?} does not take this payload: {value:?}"),
+        };
+        self.host.queue_event(EventDispatch::new(id, event, call));
         self.settle();
     }
 

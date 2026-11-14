@@ -216,7 +216,6 @@
 	"apierr_seat_no_answer_start": "Der Seat hat nicht geantwortet. Starte ihn und versuch es dann erneut.",
 	"apierr_seat_no_answer_stop": "Der Seat hat nicht geantwortet. Stoppe ihn stattdessen, um die Person dort zu trennen.",
 	"apierr_seat_pairing_on_box": "Das ist ein Seat. Kopple Geräte in der Web-Konsole des Hosts selbst.",
-	"apierr_seat_runs_no_plugins": "Dieser Seat nutzt die Plugins des Hosts, deshalb lassen sich hier keine installieren. Installiere sie auf dem Host.",
 	"apierr_seat_part_is_box": "Dieser Teil eines Seats gehört dem Host. Ändere ihn auf dieser Seite, nicht über einen Seat.",
 	"apierr_seat_session_settings_read_only": "Die Sitzungseinstellungen eines Seats lassen sich hier nicht ändern. Ändere die Seat-Standards am Host.",
 	"apierr_seat_session_starting": "Diese Sitzung startet gerade. Versuch es gleich noch einmal.",

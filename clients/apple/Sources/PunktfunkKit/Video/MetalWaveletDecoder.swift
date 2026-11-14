@@ -17,8 +17,8 @@
 // MTLBuffer), the parse records where each packet lies, and the dequant kernel reads it there;
 // only a FRAG chain or a misaligned body moves, within the AU. GPU, per frame: one
 // concurrent encoder for the ~42 dequant dispatches, then one per iDWT level (encoder
-// boundaries stand in for Vulkan's barriers), into a ring of 4 plane sets that stays alive
-// while the presenter samples it.
+// boundaries stand in for Vulkan's barriers), into a ring of plane sets (the pipeline sizes it
+// past its frame store, 4 at least) that stays alive while the presenter samples it.
 
 #if canImport(Metal)
 import Foundation
@@ -102,8 +102,8 @@ struct ParsedWaveletFrame {
     var decodedBlocks: Int
     /// VUI bits from the sequence header (BitstreamSequenceHeader).
     var bt2020: Bool
-    /// PQ transfer ⇒ HDR session: 16-bit studio-code planes + EDR present (the host stamps
-    /// this bit iff the session negotiated 10-bit — the depth is coupled to the transfer).
+    /// PQ transfer ⇒ HDR session: 16-bit studio-code planes + EDR present. The host stamps it
+    /// only on a 10-bit session; 10-bit without it is SDR (`WaveletPlanes.tenBitSDR`).
     var pq: Bool
     var fullRange: Bool
 
@@ -143,7 +143,7 @@ enum WaveletBitstream {
             ok = state.pushPackets(UnsafeBufferPointer(start: base, count: count), wordBase: wordBase)
         }
         guard ok, let frame = state.finish() else { return nil }
-        // The old upstream partial rule: with no SOF the frame is undecodable; at half the
+        // Upstream's partial rule: with no SOF the frame is undecodable; at half the
         // blocks or fewer it is presumed garbage.
         guard frame.totalBlocks > 0, frame.decodedBlocks > frame.totalBlocks / 2 else {
             return nil
@@ -237,9 +237,12 @@ enum WaveletBitstream {
                     let chroma444 = (word1 >> 26) & 1 != 0
                     let w = Int(word0 & 0x3fff) + 1
                     let h = Int((word0 >> 14) & 0x3fff) + 1
-                    guard w >= 2, h >= 2, chroma444 || (w % 2 == 0 && h % 2 == 0) else {
-                        return false
-                    }
+                    // The fields reach 16384 a side, and a ring of planes that size is
+                    // gigabytes. The host's own per-axis wall is the limit here too.
+                    let side = RenderScale.maxDimension(codec: "pyrowave")
+                    guard w >= 2, h >= 2, w <= side, h <= side,
+                          chroma444 || (w % 2 == 0 && h % 2 == 0)
+                    else { return false }
                     if sawSOF {
                         // One frame, one geometry — a second SOF must agree.
                         guard layout?.width == w, layout?.height == h,
@@ -304,9 +307,12 @@ enum WaveletBitstream {
 /// kernel reads where the reassembler wrote, cut into slots of an AU and the kernel's
 /// read-past-the-end slack. A slot is free once the core released it and no decode reads it.
 public final class WaveletAccessUnitPool: AccessUnitMemory {
-    /// Past an AU: the slack the kernel's 64-bit sign load needs. 4096-byte slot strides keep
+    /// Past an AU: room for what the dequant kernel reads beyond a packet's own bytes. A
+    /// well-formed packet overshoots by one 64-bit sign load. A malformed one can send the
+    /// kernel about 2.5 KB past its header: 16 blocks of at most 144 bytes, then the sign
+    /// stream. One page keeps every such read inside the buffer. 4096-byte slot strides keep
     /// every AU 4-byte aligned.
-    static let slackBytes = 64
+    static let slackBytes = 4096
     /// AUs in flight at once: a few reassembling, one queued, the decodes still reading.
     static let slots = 8
 
@@ -405,8 +411,9 @@ public final class WaveletAccessUnitPool: AccessUnitMemory {
 }
 
 /// One decoded frame's output planes, handed to the presenter's planar render path. The
-/// textures belong to the decoder's ring — ring depth (4) plus same-queue hazard tracking keep
-/// them valid while referenced. Public because it rides inside `ReadyImage`.
+/// textures belong to a slot of the decoder's ring. While a copy of this value lives, `lease`
+/// keeps the decoder out of that slot; a render already committed is ordered ahead of the
+/// next decode by the queue they share. Public because it rides inside `ReadyImage`.
 public struct WaveletPlanes: @unchecked Sendable {
     public let y: MTLTexture
     public let cb: MTLTexture
@@ -414,6 +421,9 @@ public struct WaveletPlanes: @unchecked Sendable {
     public let csc: CscUniform
     /// PQ (HDR) stream: the presenter picks the HDR/tone-map planar pipeline + EDR config.
     public let pq: Bool
+    /// The ring slot's lease, nil for planes no decoder owns. Only its reference count
+    /// matters: the decoder reuses a slot once nothing else holds this.
+    var lease: AnyObject?
     /// 10-bit without PQ: the planes are 16-bit, and the presenter takes the 10-bit drawable.
     public var tenBitSDR: Bool { !pq && y.pixelFormat == .r16Unorm }
     public var width: Int { y.width }
@@ -467,11 +477,16 @@ public final class MetalWaveletDecoder {
     /// output target chaining level L+1 into level L.
     private var llViews: [[MTLTexture]] = []
 
+    private final class SlotLease {}
+
     private struct Slot {
         var y: MTLTexture
         var cb: MTLTexture
         var cr: MTLTexture
         var offsets: MTLBuffer
+        /// Held by every `WaveletPlanes` of this slot: a decode in flight, a frame in the
+        /// present store, one the render thread is drawing. Free when only the ring holds it.
+        var lease = SlotLease()
     }
 
     private var slots: [Slot] = []
@@ -540,8 +555,8 @@ public final class MetalWaveletDecoder {
         mirrorSampler = sampler
     }
 
-    /// `decode(_:)` of an AU in its own memory: copied into a pool slot first. Tests, and the
-    /// pump's fallback for an AU the core assembled elsewhere.
+    /// `decode(_:)` of an AU in its own memory: copied into a pool slot first. For tests: the
+    /// pump stages such an AU itself (`pool.stage`).
     func decode(
         au: Data, chunkAligned: Bool, windowSize: Int,
         completion: @escaping @Sendable (WaveletPlanes?) -> Void
@@ -590,7 +605,19 @@ public final class MetalWaveletDecoder {
         var submitted = false
         defer { if !submitted { ringSlots.signal() } }
 
-        let slot = slots[nextSlot]
+        // The next slot no frame still holds. A slot rewritten while its frame waits in the
+        // store or with the render thread shows that frame with a later picture. None free
+        // drops this frame: the GPU or the presenter is several frames behind.
+        var free: Int?
+        for step in 0..<slots.count {
+            let index = (nextSlot + step) % slots.count
+            if isKnownUniquelyReferenced(&slots[index].lease) {
+                free = index
+                break
+            }
+        }
+        guard let free else { return false }
+        let slot = slots[free]
         frame.offsets.withUnsafeBytes { src in
             slot.offsets.contents().copyMemory(
                 from: src.baseAddress!, byteCount: min(src.count, slot.offsets.length))
@@ -679,7 +706,7 @@ public final class MetalWaveletDecoder {
         let planes = WaveletPlanes(
             y: slot.y, cb: slot.cb, cr: slot.cr,
             csc: CscRows.rows(frame.cscSignal, depth: wide ? 10 : 8, msbPacked: wide),
-            pq: frame.pq)
+            pq: frame.pq, lease: slot.lease)
         // Captured directly: the handler must not retain the decoder.
         let slotReleased = ringSlots
         let token = placed.token
@@ -691,7 +718,7 @@ public final class MetalWaveletDecoder {
         cmd.commit()
         submitted = true
         committed = true
-        nextSlot = (nextSlot + 1) % ringDepth
+        nextSlot = (free + 1) % slots.count
         return true
     }
 

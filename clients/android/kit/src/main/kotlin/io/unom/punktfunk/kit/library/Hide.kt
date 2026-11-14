@@ -112,9 +112,13 @@ sealed class HideOutcome {
     }
 
     companion object {
+        /**
+         * [said] is [HostText.apiError]'s. Only a coded error ([Say.Host]) is a sentence for the
+         * player; one with no code is the operator's line and reads as a failure.
+         */
         fun fromReply(code: Int, said: Say?): HideOutcome = when {
             code in 200..299 -> Done
-            said != null -> Refused(said)
+            said is Say.Host -> Refused(said)
             else -> Failed(say(R.string.error_mgmt_refused, code))
         }
     }

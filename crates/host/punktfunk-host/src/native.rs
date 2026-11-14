@@ -2152,8 +2152,9 @@ fn display_half(
 
 /// A seat profile plays on its seat's host: send the client there, or say why not. A person's
 /// own Linux account goes there only once the supervisor unlocked it for this device, and the
-/// device's claim on it goes to [`unlock::watch_left`]. `Some` when the session ended in a
-/// redirect; `None` when it plays here.
+/// device's claim on it goes to [`unlock::watch_left`]. A made seat a dial's unlock opened starts
+/// for that dial ([`start_for_dial`]). `Some` when the session ended in a redirect; `None` when
+/// it plays here.
 async fn place_profile(
     conn: &link::SessionLink,
     (send, recv): (&mut link::CtlSend, &mut link::CtlReader),
@@ -2190,6 +2191,11 @@ async fn place_profile(
         }
         None => None,
     };
+    // A client dials a stopped locked seat with its unlock rather than waking it: the host
+    // refuses that device a wake until the unlock admits it.
+    if claim.is_none() && first.unlock_follows() {
+        snap = start_for_dial(conn, send, &seats, snap, &resolved.os_account).await?;
+    }
     let follows = first
         .features
         .has(punktfunk_core::quic::v2::registry::FEATURE_PROFILES);
@@ -2229,6 +2235,75 @@ async fn place_profile(
             close_rejected(conn, reason).await;
             anyhow::bail!("seat refused: {reason}");
         }
+    }
+}
+
+/// How long a dial waits for the seat it started. A first logon takes tens of seconds.
+const SEAT_START_WAIT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// The ledger once `account`'s made seat is up, started for this dial when it was down, with
+/// `Pending` to the client every [`PENDING_EVERY`] meanwhile. A seat already up, a person's own
+/// account, one that went down again and one still down after [`SEAT_START_WAIT`] come back as
+/// they stand, and placement answers for them.
+async fn start_for_dial(
+    conn: &link::SessionLink,
+    send: &mut link::CtlSend,
+    seats: &Arc<dyn crate::mgmt::owner::Seats>,
+    snap: crate::seats::Snapshot,
+    account: &crate::profiles::OsAccount,
+) -> Result<crate::seats::Snapshot> {
+    let Some(id) = snap.row_of(account).map(str::to_string) else {
+        return Ok(snap);
+    };
+    let mut moved = false;
+    match snap.seat(&id) {
+        Some((s, _)) if s.adopted_uid.is_none() && !start_settled(Some(s), &mut moved) => {}
+        _ => return Ok(snap),
+    }
+    tracing::info!(seat = %id, "starting the seat a profile unlock opened");
+    crate::mgmt::start_seat(&id);
+    let deadline = tokio::time::Instant::now() + SEAT_START_WAIT;
+    let mut pending = tokio::time::interval(PENDING_EVERY);
+    let mut poll = tokio::time::interval(std::time::Duration::from_secs(1));
+    loop {
+        tokio::select! {
+            _ = conn.closed() => anyhow::bail!("client left while its seat started"),
+            _ = pending.tick() => {
+                // Bounded: a peer that stops reading would hold the other arms with this one.
+                let sent = punktfunk_core::quic::v2::io::send(&mut *send, &v2msg::Pending {});
+                if !matches!(tokio::time::timeout(PENDING_EVERY, sent).await, Ok(Ok(_))) {
+                    anyhow::bail!("client stopped reading while its seat started");
+                }
+            }
+            _ = poll.tick() => {
+                let asked = Arc::clone(seats);
+                let now = tokio::task::spawn_blocking(move || asked.ledger())
+                    .await
+                    .context("seat ledger task")?;
+                let settled = start_settled(now.seat(&id).map(|(s, _)| s), &mut moved);
+                if settled || tokio::time::Instant::now() >= deadline {
+                    return Ok(now);
+                }
+            }
+        }
+    }
+}
+
+/// Whether a dial stops waiting on `seat`: up with its host's pin, gone, or down again once
+/// `moved` saw it starting.
+fn start_settled(seat: Option<&pf_seats::Seat>, moved: &mut bool) -> bool {
+    use pf_seats::RuntimeState::{Failed, Running, Starting, Stopped};
+    let Some(seat) = seat else {
+        return true;
+    };
+    match seat.runtime.state {
+        Running if seat.fingerprint.is_some() => true,
+        Starting | Running => {
+            *moved = true;
+            false
+        }
+        Failed | Stopped => *moved,
+        _ => false,
     }
 }
 

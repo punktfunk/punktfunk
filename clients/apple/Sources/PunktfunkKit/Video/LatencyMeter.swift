@@ -1,11 +1,11 @@
 // Per-frame latency sampler: records one interval per frame (an end instant minus a start
-// instant, both CLOCK_REALTIME ns) and drains percentiles on demand.
+// instant, both CLOCK_REALTIME ns) and drains their median on demand.
 // NSLock rather than an actor — the writers are the non-async pump/decode/present paths (same
 // pattern as the app's FrameMeter).
 
 import Foundation
 
-/// Samples one latency interval per frame and reports percentiles. The stats overlay's figures
+/// Samples one latency interval per frame and reports their median. The stats overlay's figures
 /// live in the core; this serves the app's own readers: capture→on-glass for the A/V sync loop,
 /// the client-queue wait, and the stage-1 pump.
 ///
@@ -20,7 +20,6 @@ public final class LatencyMeter: @unchecked Sendable {
     /// Window cap: 17 s at 240 Hz, far past a 1 Hz drain. A meter read only through
     /// `latestSample` is never drained, and must not grow for the whole session.
     private static let maxSamples = 4096
-    private var skewCorrected = false
     /// The most recent sample and the instant it ended, for `latestSample(asOfNs:maxAgeMs:)` —
     /// a LEVEL, not a window, so `drain` deliberately leaves both alone.
     private var latestNs: Int64 = 0
@@ -50,7 +49,6 @@ public final class LatencyMeter: @unchecked Sendable {
         if samplesUs.count < Self.maxSamples { samplesUs.append(latNs / 1000) }
         latestNs = latNs
         latestAtNs = atNs
-        if offsetNs != 0 { skewCorrected = true }
         lock.unlock()
     }
 
@@ -61,8 +59,8 @@ public final class LatencyMeter: @unchecked Sendable {
     /// **What it is for.** Read off the END-TO-END meter, this is the video plane's live
     /// glass-to-glass figure — `displayed + clockOffset − pts`, exactly the shape `AvSync` compares
     /// audio against — and it is the reference the A/V sync loop needs. It is published from
-    /// `record`, so BOTH present paths (arrival and deadline) feed it without either knowing that
-    /// audio exists.
+    /// `record`, so every presenter feeds it (stage-1 at enqueue, the others on glass) without
+    /// knowing that audio exists.
     ///
     /// **Why staleness is not optional.** The number is a level, so absent an age check it would
     /// simply keep its last value forever. This client has a state where that matters: the
@@ -86,12 +84,6 @@ public final class LatencyMeter: @unchecked Sendable {
 
     public struct Stats: Sendable {
         public let p50Ms: Double
-        public let p95Ms: Double
-        public let p99Ms: Double
-        public let count: Int
-        /// True if the skew offset was applied (a host that answered the handshake) — i.e. the
-        /// numbers are cross-machine valid, not just same-host.
-        public let skewCorrected: Bool
     }
 
     /// Forget everything, level included. A meter outlives the session that fed it, and a pump can
@@ -101,27 +93,18 @@ public final class LatencyMeter: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         samplesUs.removeAll(keepingCapacity: true)
-        skewCorrected = false
         latestNs = 0
         latestAtNs = 0
     }
 
-    /// Percentiles over the samples accumulated since the last drain, then reset the window. `nil`
+    /// The median of the samples accumulated since the last drain, then reset the window. `nil`
     /// when no samples arrived in the interval.
     public func drain() -> Stats? {
         lock.lock()
         let sorted = samplesUs.sorted()
-        let corrected = skewCorrected
         samplesUs.removeAll(keepingCapacity: true)
-        skewCorrected = false
         lock.unlock()
         guard !sorted.isEmpty else { return nil }
-        func pct(_ p: Double) -> Double {
-            let i = min(Int(Double(sorted.count) * p), sorted.count - 1)
-            return Double(sorted[i]) / 1000.0 // us -> ms
-        }
-        return Stats(
-            p50Ms: pct(0.50), p95Ms: pct(0.95), p99Ms: pct(0.99),
-            count: sorted.count, skewCorrected: corrected)
+        return Stats(p50Ms: Double(sorted[sorted.count / 2]) / 1000.0) // us -> ms
     }
 }

@@ -912,12 +912,16 @@ impl VulkanVideoEncoder {
 
     /// Queue the slot's batches. With a compute batch, compute signals `csc_sem` and the encode
     /// waits it; the encode signals the slot's fence. Per-slot cmd/sem/fence make ring frames
-    /// independent; the DPB barrier orders N's reconstruct-write before N+1's read.
+    /// independent; the DPB barrier orders N's reconstruct-write before N+1's read. The fence
+    /// waiter lets go of the fence first: a reset and a submit need it to themselves.
     unsafe fn submit(&mut self, slot: usize, compute: bool) -> Result<()> {
         let compute_cmd = self.frames[slot].compute_cmd;
         let cmd = self.frames[slot].cmd;
         let csc_sem = self.frames[slot].csc_sem;
         let fence = self.frames[slot].fence;
+        if let Some(waiter) = &self.fence_waiter {
+            waiter.settle(fence);
+        }
         self.device.reset_fences(&[fence])?;
         let ecmds = [cmd];
         if !compute {

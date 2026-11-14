@@ -131,8 +131,11 @@ public final class GamepadCapture {
     /// pf-client-core's `TAP_PRESS`: a synthetic tap's presses and release this far apart, or
     /// back-to-back transitions fold into nothing in the host's per-pad input fold.
     nonisolated private static let tapPress: TimeInterval = 0.05
-    /// Wakes the engines when a hold or an owed tap release comes due.
+    /// Wakes the engines when a hold or an owed tap release comes due, and sends what `owed`
+    /// holds.
     private var shortcutTimer: Timer?
+    /// Synthetic presses and releases the wire is still owed.
+    private var owed = OwedPresses()
     /// The pad's End stream shortcut fired (by default L1+R1+Start+Select held 1 s). On tvOS
     /// this and the Siri Remote's hold-Back are the only ways out of a stream: B and Menu are
     /// swallowed during a session (see ContentView's tvOS session branch).
@@ -143,7 +146,7 @@ public final class GamepadCapture {
     /// be decoded and dropped. The argument is the kind this pad declared, so the UI can name it.
     ///
     /// It fires at open rather than on the first sample precisely because nothing is sampled: the
-    /// IMU is never powered in this case (see `openSlot`), which is also what stops the pad
+    /// IMU is never powered in this case (see `attach`), which is also what stops the pad
     /// burning battery streaming gyro nobody reads.
     public var onMotionUnreachable: ((PunktfunkConnection.GamepadType) -> Void)?
 
@@ -154,13 +157,15 @@ public final class GamepadCapture {
     public var onRingNav: ((RingNav) -> Void)?
     /// The ring is up: everything held is released on the host NOW (a held sprint must not
     /// survive a menu), and until it closes the hardware state is adopted silently while its
-    /// edges drive the ring. On close nothing is replayed: what is still held is already the
+    /// edges drive the ring. Touchpad fingers and motion stay off the wire as well, the phone's
+    /// mirrored gyro included. On close nothing is replayed: what is still held is already the
     /// slot's state, so the next diff sends only real changes.
     public var ringOpen = false {
         didSet {
             guard ringOpen != oldValue else { return }
             stickSector = nil
             if ringOpen { for slot in slots { flush(slot) } }
+            updateDeviceGyro()
         }
     }
     /// The ring sector the left stick last resolved to — see `ringSector`.
@@ -330,15 +335,11 @@ public final class GamepadCapture {
     public func holdButton(_ bit: UInt32, down: Bool, pad: UInt32? = nil) {
         let pad = pad ?? slots.first?.pad ?? 0
         let presses = systemPresses(bit, pad: pad)
-        let mask = presses.reduce(0, |)
-        let slot = slots.first { $0.pad == pad }
         if down {
             send(presses.enumerated().map { (bit: $0.element, down: true, after: Double($0.offset) * Self.tapPress) },
                  pad: pad)
-            slot?.synthetic |= mask
         } else {
             send(presses.reversed().map { (bit: $0, down: false, after: 0) }, pad: pad)
-            slot?.synthetic &= ~mask
         }
     }
 
@@ -349,23 +350,20 @@ public final class GamepadCapture {
         return GamepadWire.quickAccessPresses(hasButton: connection.hasQuickAccess(declared: pref))
     }
 
-    /// Send timed wire events on `pad`: the ones due now at once, the rest from main-loop timers.
+    /// Send timed synthetic events on `pad`: the ones due now at once, the rest through `owed`,
+    /// behind whatever the pad still owes.
     private func send(_ events: [(bit: UInt32, down: Bool, after: TimeInterval)], pad: UInt32) {
-        guard let wire else { return }
-        // One timer per moment: two timers due together fire in no promised order.
-        for delay in Set(events.map(\.after)).sorted() {
-            let due = events.filter { $0.after == delay }
-            guard delay > 0 else {
-                for e in due { wire.send(.gamepadButton(e.bit, down: e.down, pad: pad)) }
-                continue
-            }
-            let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    for e in due { self?.wire?.send(.gamepadButton(e.bit, down: e.down, pad: pad)) }
-                }
-            }
-            RunLoop.main.add(timer, forMode: .common)
-        }
+        guard wire != nil else { return }
+        for e in owed.push(events, pad: pad, now: .now) { emit(e.bit, down: e.down, pad: pad) }
+        scheduleShortcutTick()
+    }
+
+    /// One synthetic transition on `pad`'s wire, tracked in its slot's `synthetic` so `flush`
+    /// lifts what is down.
+    private func emit(_ bit: UInt32, down: Bool, pad: UInt32) {
+        wire?.send(.gamepadButton(bit, down: down, pad: pad))
+        guard let slot = slots.first(where: { $0.pad == pad }) else { return }
+        slot.synthetic = down ? slot.synthetic | bit : slot.synthetic & ~bit
     }
 
     /// A synthetic tap's wire events (pf-client-core's `tap_events`): each press `tapPress`
@@ -483,23 +481,10 @@ public final class GamepadCapture {
                 MainActor.assumeIsolated { if let self, let slot { self.touch(slot, finger: 1, x: x, y: y) } }
             }
         }
-        // Motion is wire-only — `forwardMotion` has nothing to do with forwarding off, and no
-        // local feature reads it. Powering the IMU anyway costs the pad real battery (it streams
-        // gyro + accel continuously over Bluetooth, which is why `closeSlot` is careful to power
-        // it back down), so with nothing to forward we simply never turn it on.
-        //
-        // A host that built this pad a backend WITHOUT a motion plane is the same situation: every
-        // sample would be decoded and dropped, so there is equally nothing to forward. Asked per
-        // pad off what this slot declared, not off the session echo — under "Automatic" a couch
-        // with an X-Box pad on 0 and a DualSense on 1 echoes X-Box 360 while the host builds pad 1
-        // a DualSense whose gyro works.
-        //
-        // Gated on `hasRotationRate`, not on `motion != nil`. An X-Box controller exposes a
-        // `GCMotion` that reports gravity and NOTHING else — attaching to it streamed a
-        // permanently-zero `rotationRate` to the host as authoritative gyro, under a declaration
-        // that says this pad has one. A game reading it sees a controller being held perfectly
-        // still forever, which is worse than seeing no motion plane at all: there is nothing to
-        // fall back to and nothing to notice.
+        // Motion is wire-only and a powered IMU costs the pad battery, so it is switched on
+        // only when its samples reach the game: asked per pad, off what this slot declared.
+        // Gated on `hasRotationRate`: a pad that reports gravity alone (an Xbox pad) would
+        // send a rotation rate of zero as real gyro.
         if forwarding, let motion = c.motion, motion.hasRotationRate,
            connection.motionReaches(declared: slot.pref) {
             if motion.sensorsRequireManualActivation { motion.sensorsActive = true }
@@ -552,6 +537,7 @@ public final class GamepadCapture {
 
     private func closeAllSlots() {
         while let slot = slots.first { closeSlot(slot) }
+        owed = OwedPresses() // a tap on a pad that had no slot
         scheduleShortcutTick()
     }
 
@@ -672,12 +658,13 @@ public final class GamepadCapture {
     /// The bindings a pad engine runs; the dial only while the session opens it.
     private var padBindings: [Shortcuts.Binding] { shortcuts.runnable(dial: onShortcut != nil) }
 
-    /// Wake the engines when a hold or a tap's release comes due: GameController reports changes
-    /// only, and a held chord changes nothing.
+    /// Wake the engines when a hold or a tap's release comes due, or a synthetic press is owed:
+    /// GameController reports changes only, and a held chord changes nothing.
     private func scheduleShortcutTick() {
         shortcutTimer?.invalidate()
         shortcutTimer = nil
-        guard let due = slots.compactMap(\.engine.nextDue).min() else { return }
+        guard let due = (slots.compactMap(\.engine.nextDue) + [owed.nextDue].compactMap { $0 }).min()
+        else { return }
         let wait = due - ContinuousClock.now
         let seconds = max(0, Double(wait.components.seconds) + Double(wait.components.attoseconds) / 1e18)
         let timer = Timer(timeInterval: seconds, repeats: false) { [weak self] _ in
@@ -685,6 +672,7 @@ public final class GamepadCapture {
                 guard let self else { return }
                 self.shortcutTimer = nil
                 let now = ContinuousClock.now
+                for e in self.owed.take(dueBy: now) { self.emit(e.bit, down: e.down, pad: e.pad) }
                 for slot in self.slots { self.apply(slot, slot.engine.tick(now)) }
                 self.scheduleShortcutTick()
             }
@@ -743,21 +731,16 @@ public final class GamepadCapture {
         if g.dpad.right.isPressed { b |= GamepadWire.dpadRight }
         if g.buttonMenu.isPressed { b |= GamepadWire.start }
         if g.buttonOptions?.isPressed == true { b |= GamepadWire.back }
-        // The dedicated share/create/capture element (Xbox-Series Share, DualSense Create, a clone
-        // pad's screenshot button — e.g. the GameSir G8's, below its d-pad) → the wire's capture
-        // bit, matching the Rust client's `Button::Misc1 => wire::BTN_MISC1`. On an Xbox-Series pad
-        // this is a button physically DISTINCT from View (buttonOptions, above), so it must not
-        // collapse onto back — the host reads MISC1 as its own control (DualSense mute / Steam
-        // quick-access). Caveat: a pad that surfaces ONE physical button as both buttonOptions and
-        // this share element now emits back+misc1 for it — harmless on a plain xpad session (no
-        // misc button) and rare otherwise. NOTE: on-glass verify on a real Xbox-Series pad.
+        // The share/create/capture element is the wire's misc1 (the Rust client's
+        // `Button::Misc1`), a button apart from View above: the host reads it as its own
+        // control. A pad that reports one physical button as both sends back + misc1.
         if g.buttons[GCInputButtonShare]?.isPressed == true { b |= GamepadWire.misc1 }
         if g.leftThumbstickButton?.isPressed == true { b |= GamepadWire.leftStickClick }
         if g.rightThumbstickButton?.isPressed == true { b |= GamepadWire.rightStickClick }
         if g.leftShoulder.isPressed { b |= GamepadWire.leftShoulder }
         if g.rightShoulder.isPressed { b |= GamepadWire.rightShoulder }
         // guide (Home/PS) is NOT read here — it's forwarded directly by the Home button's
-        // pressedChangedHandler (the legacy `buttonHome` element is unreliable). See `openSlot`.
+        // pressedChangedHandler (the legacy `buttonHome` element is unreliable). See `attach`.
         if g.buttonA.isPressed { b |= GamepadWire.a }
         if g.buttonB.isPressed { b |= GamepadWire.b }
         if g.buttonX.isPressed { b |= GamepadWire.x }
@@ -787,9 +770,11 @@ public final class GamepadCapture {
 
     /// One touchpad finger moved on a slot's pad. GC reports ±1 positions and snaps to exactly
     /// (0, 0) on lift — treated as the lift signal (a real finger landing on the precise center
-    /// momentarily reads as a lift; harmless for a 1-in-65k coincidence).
+    /// momentarily reads as a lift; harmless for a 1-in-65k coincidence). Nothing is sent while
+    /// the ring owns the pad: its flush lifted the fingers, and a finger still down when it
+    /// closes lands again with its next move.
     private func touch(_ slot: Slot, finger: Int, x: Float, y: Float) {
-        guard live else { return }
+        guard live, !ringOpen else { return }
         let lifted = x == 0 && y == 0
         if lifted {
             if slot.fingerActive[finger] {
@@ -803,8 +788,10 @@ public final class GamepadCapture {
         wire?.sendTouchpad(pad: UInt8(slot.pad), finger: UInt8(finger), active: true, x: w.x, y: w.y)
     }
 
+    /// One motion sample of a slot's pad, to the wire. Silent while the ring owns the pad: its
+    /// flush parked the host pad's rotation at zero, and a menu must not turn the camera.
     private func forwardMotion(_ slot: Slot, _ m: GCMotion) {
-        guard live else { return }
+        guard live, !ringOpen else { return }
         #if os(iOS)
         // While the phone-gyro mirror speaks for pad 0, the controller's own motion —
         // necessarily rotation-less, that's the engage condition — stays off the wire:
@@ -812,36 +799,12 @@ public final class GamepadCapture {
         // would keep stomping the mirror's gyro with zeros.
         if slot.pad == 0, deviceGyro?.isRunning == true { return }
         #endif
-        // Every sample goes out. There used to be a 4 ms floor here, and it was a DROP: a sample
-        // arriving 3.9 ms after the last one was discarded outright.
-        //
-        // That is the wrong shape for this signal. Buttons and sticks are absolute state, so a
-        // dropped frame costs nothing — the next one says everything it would have. Angular
-        // velocity is a RATE, and a consumer integrates it into an angle; a dropped sample is
-        // rotation that happened and can never be recovered. GameController's delivery is jittery
-        // around the pad's own ~250 Hz, so a floor set AT that rate does not shed a rare extra
-        // sample, it sheds a steady fraction of every turn — and the error is one-signed, so it
-        // accumulates into aim drifting short rather than into noise.
-        //
-        // Nothing needed the ceiling: GC delivers at the sensor's rate rather than faster, the SDL
-        // client has always forwarded every sample, and the host's own idle watchdog runs on a
-        // 100 ms timeout this cannot outpace. The throttle's `lastMotionNs`/`motionIntervalNs` went
-        // with it rather than being left set-but-unread — nothing else consumed either.
-        // Total acceleration in g: gravity + user when split, else the raw vector — then NEGATED
-        // into the wire's convention.
-        //
-        // Apple reports acceleration as the gravity VECTOR: a device lying flat face-up reads
-        // z = −1, because gravity points down. An accelerometer physically measures proper
-        // acceleration, which at rest is the +1 g normal force pushing UP, and that is what a
-        // DualSense's report — the wire's convention — carries. The two are exact negatives, so
-        // every sample we sent was upside down, on both branches (`m.acceleration` follows the
-        // same Apple convention as the gravity/user split).
-        //
-        // Measured on glass 2026-08-07 (G16): a DualSense flat and face-up, streamed from an
-        // iPhone to a Linux host, arrived at hid-playstation as z = −0.99 g where +1.00 was owed.
-        // Magnitude was 1.006 g, so the SCALE was already right — this is purely direction.
-        // `rotationRate` is a true angular rate and needs no flip; the same session confirmed yaw
-        // came through with the correct sign.
+        // Every sample goes out, with no rate floor. Angular velocity is a rate the consumer
+        // integrates: a dropped sample is rotation lost for good, and the loss is one-signed.
+
+        // Total acceleration in g (gravity + user when split, else the raw vector), negated.
+        // Apple reports the gravity vector (flat and face-up reads z = −1); the wire carries
+        // proper acceleration like a DualSense report (+1). `rotationRate` needs no flip.
         let ax: Float
         let ay: Float
         let az: Float
@@ -856,10 +819,9 @@ public final class GamepadCapture {
         }
         let gs = GamepadWire.gyroLSBPerRadS
         let as_ = GamepadWire.accelLSBPerG
-        // Into the DualSense report frame. GameController and the pad's own report do not agree
-        // about which slot is which axis — measured, both from the same controller, on 2026-08-07
-        // — so forwarding GC's x/y/z straight through sent yaw where the game reads roll. See
-        // `GamepadWire.appleMotionToWire`. One change of basis, applied to both planes.
+        // Into the DualSense report frame: GameController and the pad's own report disagree
+        // about which slot is which axis, so GC's x/y/z sent as is would put yaw where the game
+        // reads roll. One change of basis (`GamepadWire.appleMotionToWire`) for both planes.
         let g = GamepadWire.appleMotionToWire(
             (Float(m.rotationRate.x), Float(m.rotationRate.y), Float(m.rotationRate.z)))
         let a = GamepadWire.appleMotionToWire((ax, ay, az))
@@ -886,22 +848,28 @@ public final class GamepadCapture {
     /// Engage or stand down the phone-gyro mirror: it speaks for pad 0 exactly while a
     /// forwarded controller holds that index but can't rotate for itself — no `GCMotion`,
     /// or a motion object without a rotation rate (gravity-only pads, e.g. an Xbox pad on
-    /// iOS). Re-evaluated on every reconcile and on suspend/resume; `DeviceGyro.stop`
-    /// parks the host pad's rotation at zero, so standing down never strands a spin.
+    /// iOS), and the host built that pad a backend with a motion plane. It stands down while
+    /// the ring owns the pad. Re-evaluated on every reconcile, on suspend/resume and as the ring
+    /// opens or closes; `DeviceGyro.stop` parks the host pad's rotation at zero, so standing
+    /// down never strands a spin.
     private func updateDeviceGyro() {
         #if os(iOS)
         guard let gyro = deviceGyro else { return }
         let pad0 = slots.first { $0.pad == 0 }
-        let wants = live && pad0 != nil && pad0!.controller.motion?.hasRotationRate != true
+        let wants = live && !ringOpen && pad0 != nil
+            && pad0!.controller.motion?.hasRotationRate != true
+            && connection.motionReaches(declared: pad0!.pref)
         if wants { gyro.start() } else { gyro.stop() }
         #endif
     }
 
     /// Unwind everything a slot holds on the wire: button-ups, neutral axes, lifted fingers. The
-    /// host's virtual pad returns to rest instead of running with the last state. Wire events only
-    /// (no GC calls) — safe against an already-removed device. Does NOT close the slot or send
-    /// GamepadRemove (that's `closeSlot`).
+    /// host's virtual pad returns to rest instead of running with the last state. Synthetic
+    /// presses still owed are dropped, so none lands after this. Wire events only (no GC calls)
+    /// — safe against an already-removed device. Does NOT close the slot or send GamepadRemove
+    /// (that's `closeSlot`).
     private func flush(_ slot: Slot) {
+        owed.drop(pad: slot.pad)
         for bit in GamepadWire.allButtons where (slot.buttons | slot.synthetic) & bit != 0 {
             wire?.send(.gamepadButton(bit, down: false, pad: slot.pad))
         }
@@ -934,5 +902,47 @@ public final class GamepadCapture {
             flush(slot)
         }
         scheduleShortcutTick()
+    }
+}
+
+/// Synthetic pad presses and releases not yet sent, in send order (pf-client-core's
+/// `synthetic` queue). A pad's new events queue behind what it still owes, so a release never
+/// overtakes the press it lifts: a hold let go inside `tapPress` must not leave its second
+/// button down on the host.
+struct OwedPresses {
+    typealias Instant = ContinuousClock.Instant
+    private(set) var events: [(pad: UInt32, bit: UInt32, down: Bool, due: Instant)] = []
+
+    /// When the next event comes due, or nil while nothing is owed.
+    var nextDue: Instant? { events.map(\.due).min() }
+
+    /// Queue `new` on `pad`, each `after` seconds past the pad's last owed event (or `now`).
+    /// Returns what goes out at once: the events due now on a pad that owes nothing.
+    mutating func push(
+        _ new: [(bit: UInt32, down: Bool, after: TimeInterval)], pad: UInt32, now: Instant
+    ) -> [(bit: UInt32, down: Bool)] {
+        let behind = events.last { $0.pad == pad }?.due
+        let start = max(now, behind ?? now)
+        var atOnce: [(bit: UInt32, down: Bool)] = []
+        for e in new {
+            if behind == nil, e.after <= 0 {
+                atOnce.append((e.bit, e.down))
+            } else {
+                events.append((pad, e.bit, e.down, start + .seconds(e.after)))
+            }
+        }
+        return atOnce
+    }
+
+    /// Remove and return the events due by `now`, in send order.
+    mutating func take(dueBy now: Instant) -> [(pad: UInt32, bit: UInt32, down: Bool)] {
+        let due = events.filter { $0.due <= now }
+        events.removeAll { $0.due <= now }
+        return due.map { ($0.pad, $0.bit, $0.down) }
+    }
+
+    /// Forget what `pad` is owed: its slot was flushed or closed.
+    mutating func drop(pad: UInt32) {
+        events.removeAll { $0.pad == pad }
     }
 }

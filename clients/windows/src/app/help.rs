@@ -72,20 +72,14 @@ fn shortcuts_reference(pal: &Palette, ctx: &AppCtx) -> Vec<View> {
         .collect()
 }
 
-/// The Stream controls screen: a `page`-column with a Back button to the host list, an intro
-/// card on the capture model with Change into the Shortcuts settings, and the reference.
+/// The Stream controls screen: a `page`-column with an intro card on the capture model, whose
+/// Change opens the Shortcuts settings, and the reference. The title bar's Back leads home.
 pub(crate) fn help_page(
     pal: &Palette,
     ctx: &Arc<AppCtx>,
     set_screen: &AsyncSetState<Screen>,
     set_nav: &AsyncSetState<String>,
 ) -> View {
-    let back_btn = icon_button("arrow-left", common::common_back())
-        .style(ButtonStyle::Accent)
-        .on_click({
-            let ss = set_screen.clone();
-            move || ss.call(Screen::Hosts)
-        });
     let change = button(common::common_change())
         .on_click({
             let (ctx, ss, nav) = (ctx.clone(), set_screen.clone(), set_nav.clone());
@@ -112,7 +106,7 @@ pub(crate) fn help_page(
     );
 
     let mut children = vec![
-        page_header(client::controls_title(), back_btn),
+        page_header(client::controls_title(), Vec::new()),
         intro.into(),
     ];
     children.extend(shortcuts_reference(pal, ctx));

@@ -1,10 +1,8 @@
 // What a user typed into an add-or-edit-host form, and the one set of rules for turning it into a
 // stored record.
 //
-// Three forms take this input — the pointer sheet, the gamepad screen, and the tvOS commit path —
-// and each validated it differently: the same typed port became 65535 in one, the default in
-// another, and a refusal in the third, so the same typo saved three different records. The rules
-// live here so every form answers the same way, and so they can be tested without a view.
+// The pointer sheet, the gamepad screen and the tvOS commit path all take their answers from here,
+// so the same typed text saves the same record on each, and the rules test without a view.
 
 import Foundation
 
@@ -45,8 +43,9 @@ public struct HostFormDraft: Equatable, Sendable {
     /// The address with surrounding whitespace gone and any `:port` suffix split off — a user who
     /// pastes what the cards RENDER (`192.168.1.5:9777`) typed a valid thing, and storing it whole
     /// makes the core build `[192.168.1.5:9777]:9777`, which never resolves and fails every dial
-    /// with a generic "could not connect". An IPv6 literal is left alone unless it is bracketed
-    /// with a port after it (`[fd7a::1]:9777`), since a bare one is all colons.
+    /// with a generic "could not connect". An IPv6 literal keeps its colons and loses its
+    /// brackets (`[fd7a::1]:9777` stores `fd7a::1`): a stored address is bare, and a deep link
+    /// puts the brackets back itself.
     public var trimmedAddress: String { Self.split(address).host }
 
     /// The resolved port: the address's suffix if it carried one, else the typed field, else the
@@ -109,7 +108,8 @@ public struct HostFormDraft: Equatable, Sendable {
     }
 
     /// Split a trailing `:port` off an address, after mapping what a CJK keyboard types (full-width
-    /// forms, `。`) to ASCII. Bare IPv6 (more than one colon, unbracketed) is returned whole.
+    /// forms, `。`) to ASCII. Bare IPv6 (more than one colon, unbracketed) is returned whole;
+    /// brackets around the host are dropped.
     static func split(_ raw: String) -> (host: String, port: UInt16?) {
         let text = raw.withASCIIAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let colon = text.lastIndex(of: ":") else { return (text, nil) }
@@ -119,8 +119,13 @@ public struct HostFormDraft: Equatable, Sendable {
         let bracketed = head.hasPrefix("[") && head.hasSuffix("]")
         let looksIPv6 = head.contains(":") && !bracketed
         guard !looksIPv6, !head.isEmpty, let value = UInt16(tail.withASCIIDigits), value > 0 else {
-            return (text, nil)
+            return (unbracketed(text), nil)
         }
-        return (head, value)
+        return (unbracketed(head), value)
+    }
+
+    private static func unbracketed(_ host: String) -> String {
+        guard host.hasPrefix("["), host.hasSuffix("]"), host.count > 2 else { return host }
+        return String(host.dropFirst().dropLast())
     }
 }

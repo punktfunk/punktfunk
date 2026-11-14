@@ -3,11 +3,13 @@
 //! One root component, [`Shell`], holds the shell's state, and everything that changes it
 //! arrives as a [`Msg`]: event handlers and worker threads (discovery, the spawned session's
 //! reader, the probes) post through an [`AsyncSetState`], a typed handle on the root's queue.
-//! Screens are functions of that state; the five with state of their own (hosts, pairing, the
-//! speed test, the ring editor and the shortcuts editor) are child components fed by props.
-//! Each screen lives in its own submodule:
+//! Screens are functions of that state; the six with state of their own (hosts, a host's page,
+//! pairing, the speed test, the ring editor and the shortcuts editor) are child components fed
+//! by props. Each screen lives in its own submodule:
 //!
-//! * [`hosts`] — saved/discovered/manual host list, plus per-host forget + speed test
+//! * [`home`] — the navigation pane and its two destinations, Hosts and Library
+//! * [`hosts`] — the saved and discovered hosts as cards · [`host_page`] — one host's page
+//! * [`library`] — a host's games
 //! * [`connect`] — the trust gate and session lifecycle glue (connect / request-access flows)
 //! * [`pair`] — the SPAKE2 PIN pairing ceremony
 //! * [`speed`] — the per-host network speed test (probe burst over the real data plane)
@@ -19,6 +21,10 @@
 
 mod connect;
 mod help;
+/// The navigation pane and the destination it points at.
+mod home;
+/// One saved host's page: how to reach it, what it streams, its pairing and its power.
+mod host_page;
 mod hosts;
 mod launcher_icons;
 mod library;
@@ -42,8 +48,8 @@ mod style;
 mod unlock;
 
 use crate::trust::{KnownHosts, Settings};
-use hosts::{HostRef, HostsProps};
-use pf_client_core::collate::SortKey;
+use hosts::HostRef;
+use pf_client_core::collate::{GroupBy, SortKey};
 use pf_client_core::discovery::{self, DiscoveredHost};
 use pf_client_core::gamepad::GamepadService;
 use pf_client_core::orchestrate::{self, HostTarget};
@@ -57,11 +63,13 @@ use speed::{SpeedProps, SpeedState};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use windows_reactor::*;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Screen {
-    Hosts,
+    /// The navigation pane and what it points at ([`Dest`]). Every flow ends back here.
+    Home,
     Connecting,
     /// The no-PIN "request access" wait: an identified connect is in flight, parked by the host
     /// until the operator approves this device in its console. Cancelable.
@@ -83,8 +91,13 @@ pub(crate) enum Screen {
     Trust,
     /// Per-host network speed test (probe burst + recommended bitrate).
     SpeedTest,
-    /// The target host's game library (poster grid; tap-to-launch) — paired hosts only,
-    /// since the fetch authenticates with the pairing identity.
+}
+
+/// Where Home points: the pane's destinations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Dest {
+    Hosts,
+    /// A paired host's games.
     Library,
 }
 
@@ -224,9 +237,14 @@ pub(crate) struct Svc {
     /// The hosts page resets the speed test to `Running` before navigating; the probe worker
     /// completes it.
     pub(crate) set_speed: AsyncSetState<SpeedState>,
-    /// The hosts page starts a library fetch before navigating; the worker and the art
-    /// stream complete it.
-    pub(crate) set_library: AsyncSetState<library::LibraryState>,
+    /// Home's destination.
+    pub(crate) set_dest: AsyncSetState<Dest>,
+    /// The host whose page is up; `None` is the host list.
+    pub(crate) set_host_page: AsyncSetState<Option<HostRef>>,
+    /// Bumped when a store write changes what the host pages show.
+    pub(crate) bump_hosts: AsyncSetState<()>,
+    /// Shows the Library on the shelf with this key ([`library::shelf_key`]).
+    pub(crate) open_shelf: AsyncSetState<String>,
 }
 
 impl Svc {
@@ -276,11 +294,34 @@ pub(crate) enum Msg {
     EndGame(library::EndGameUi),
     Hide(library::HideEdit),
     LibrarySort(SortKey),
-    Forget(Option<HostRef>),
-    Rename(Option<HostRef>),
+    LibraryGroup(Option<GroupBy>),
+    LibrarySearch(String),
+    /// A pick among the shelf chips.
+    Shelf(String),
+    /// Show the Library on this shelf, from anywhere.
+    OpenShelf(String),
+    /// Ask the shelf's host again.
+    Reload,
+    /// A settings write changed what the Library shows: favorites, sections.
+    LibraryBump,
+    /// The title whose details sheet is up.
+    Details(Option<String>),
+    /// Put the caret in the Library's search box.
+    FocusSearch,
+    Dest(Dest),
+    HostPage(Option<HostRef>),
+    /// A pick in the navigation pane, by the item's tag.
+    Nav(Option<String>),
+    /// The title bar's pane toggle.
+    PaneToggle,
+    /// The pane over a narrow window opened or closed itself.
+    PaneOver(bool),
+    /// The title bar's Back.
+    Back,
+    Key(rules::Shortcut),
     ShowAdd(bool),
-    Hover(Option<String>),
-    HostsRev(u64),
+    /// A store write changed what the host pages show.
+    HostsBump,
     SettingsNav(String),
     SettingsScope(String),
     SettingsDelete(Option<String>),
@@ -313,6 +354,8 @@ pub(crate) enum Msg {
 #[derive(Clone, Copy)]
 pub(crate) enum Anim {
     Screen,
+    /// Home's content, on a change of destination or of the host whose page is up.
+    Page,
     Section,
     AddHost,
 }
@@ -331,9 +374,15 @@ pub(crate) struct Shell {
     ctx: Arc<AppCtx>,
     queue: ComponentCompletion<Msg>,
     pal: Palette,
-    /// The window's client width, which the tile grids lay out by.
+    /// The window's client width, which the pane and the card grids lay out by.
     width: f64,
     screen: Screen,
+    dest: Dest,
+    host_page: Option<HostRef>,
+    /// The toggle's last word on a pane beside the page; `None` follows the width.
+    pane_choice: Option<bool>,
+    /// The pane is up over a narrow window.
+    pane_over: bool,
     status: String,
     status_severity: InfoBarSeverity,
     /// Clears a note. Any later status write drops it, which cancels the clear.
@@ -346,14 +395,22 @@ pub(crate) struct Shell {
     library: library::LibraryState,
     end_game: library::EndGameUi,
     hide: library::HideUi,
+    /// The shelf's titles as they stand: the catalog with what `hide` took and gave back.
+    shelf_games: Arc<Vec<pf_client_core::library::GameEntry>>,
+    /// The shelf picked this run; empty rests on the remembered one.
+    library_shelf: String,
+    library_search: String,
+    /// The grid's grouping, this run's.
+    library_group: Option<GroupBy>,
+    details: Option<String>,
+    /// The Library's search box, for the shortcut that focuses it.
+    search: ElementRef<AutoSuggestBox>,
+    /// Fires `FocusSearch` once the box is on screen.
+    focus_search: Option<ComponentTimer>,
     /// The shelf's order: the shared `library_sort`, read at start and written on each pick.
     library_sort: SortKey,
-    forget: Option<HostRef>,
-    rename: Option<HostRef>,
     show_add: bool,
-    /// The hovered host tile's stable id, for the card's pointer-over fill.
-    hover: Option<String>,
-    /// Bumped when a menu action rewrites the known-hosts store behind the tiles.
+    /// Bumped when an action rewrites the known-hosts store behind the cards.
     hosts_rev: u64,
     /// The Settings sidebar section, kept across visits this run.
     settings_nav: String,
@@ -376,6 +433,7 @@ pub(crate) struct Shell {
     link_confirm: Option<Box<orchestrate::ConnectPlan>>,
     pads: usize,
     enter: Tween,
+    page_enter: Tween,
     section_enter: Tween,
     add_enter: Tween,
     /// Keeps [`Msg::Colors`] arriving while the window lives.
@@ -398,7 +456,10 @@ impl Shell {
             set_status: self.set(Msg::Status),
             set_note: self.set(Msg::Note),
             set_speed: self.set(Msg::Speed),
-            set_library: self.set(Msg::Library),
+            set_dest: self.set(Msg::Dest),
+            set_host_page: self.set(Msg::HostPage),
+            bump_hosts: self.set(|()| Msg::HostsBump),
+            open_shelf: self.set(Msg::OpenShelf),
         }
     }
 }
@@ -415,7 +476,11 @@ impl Component for Shell {
             queue: cx.completion(),
             pal: Palette::system(),
             width: WINDOW_W,
-            screen: Screen::Hosts,
+            screen: Screen::Home,
+            dest: Dest::Hosts,
+            host_page: None,
+            pane_choice: None,
+            pane_over: false,
             status: String::new(),
             status_severity: InfoBarSeverity::Error,
             note_timer: None,
@@ -426,11 +491,15 @@ impl Component for Shell {
             library: library::LibraryState::default(),
             end_game: library::EndGameUi::default(),
             hide: library::HideUi::default(),
+            shelf_games: Arc::default(),
+            library_shelf: String::new(),
+            library_search: String::new(),
+            library_group: None,
+            details: None,
+            search: ElementRef::new(),
+            focus_search: None,
             library_sort,
-            forget: None,
-            rename: None,
             show_add: false,
-            hover: None,
             hosts_rev: 0,
             // Opens on General, the first sidebar item, as the Apple client does.
             settings_nav: "general".into(),
@@ -447,6 +516,7 @@ impl Component for Shell {
             link_confirm: None,
             pads: 0,
             enter: Tween::start(0.0, 1.0, ENTER_FRAMES, Msg::Tick(Anim::Screen), cx),
+            page_enter: Tween::settled(1.0),
             section_enter: Tween::settled(1.0),
             add_enter: Tween::settled(0.0),
             _colors: {
@@ -481,8 +551,13 @@ impl Component for Shell {
         match msg {
             Msg::Screen(s) => {
                 if s != self.screen {
+                    // Back from a stream: what the host has up has changed.
+                    let played = self.screen == Screen::Stream && s == Screen::Home;
                     self.screen = s;
                     self.enter = Tween::start(0.0, 1.0, ENTER_FRAMES, Msg::Tick(Anim::Screen), cx);
+                    if played {
+                        self.sync_library(true);
+                    }
                 }
             }
             Msg::Status(s) => {
@@ -500,17 +575,91 @@ impl Component for Shell {
             Msg::Hud(h) => self.hud = *h,
             Msg::Speed(s) => self.speed = s,
             Msg::Library(l) => {
-                // A fetch starts the shelf afresh: what it lists already says what is hidden.
-                if l.phase == library::LibraryPhase::Loading {
-                    self.hide = library::HideUi::default();
+                // A worker's answer for a shelf that is no longer the one shown is dropped.
+                if l.shelf == self.library.shelf {
+                    self.library = l;
+                    self.shelf_games = self.hide.shelf(&self.library.games);
                 }
-                self.library = l;
             }
             Msg::EndGame(e) => self.end_game = e,
-            Msg::Hide(edit) => edit(&mut self.hide),
+            Msg::Hide(edit) => {
+                edit(&mut self.hide);
+                self.shelf_games = self.hide.shelf(&self.library.games);
+            }
             Msg::LibrarySort(k) => self.library_sort = k,
-            Msg::Forget(f) => self.forget = f,
-            Msg::Rename(r) => self.rename = r,
+            Msg::LibraryGroup(g) => self.library_group = g,
+            Msg::LibrarySearch(s) => self.library_search = s,
+            Msg::Shelf(key) => {
+                // The pick is this device's, kept under the key the GTK shell keeps it under.
+                Settings::update(|s| {
+                    let name = pf_client_core::settings::LIBRARY_SHELF_KEY;
+                    s.extra.insert(name.into(), key.as_str().into());
+                    true
+                });
+                self.library_shelf = key;
+                self.sync_library(false);
+            }
+            Msg::OpenShelf(key) => {
+                self.update(Msg::Screen(Screen::Home), cx);
+                self.update(Msg::Dest(Dest::Library), cx);
+                self.update(Msg::Shelf(key), cx);
+            }
+            Msg::Reload => self.sync_library(true),
+            Msg::LibraryBump => {}
+            Msg::Details(d) => self.details = d,
+            Msg::FocusSearch => {
+                self.focus_search = None;
+                // `false` when the box is not on screen: nothing to focus.
+                let _ = self.search.request_focus();
+            }
+            Msg::Dest(d) => {
+                if d != self.dest {
+                    self.dest = d;
+                    self.pane_over = false;
+                    self.page_enter =
+                        Tween::start(0.0, 1.0, ENTER_FRAMES, Msg::Tick(Anim::Page), cx);
+                    self.sync_library(false);
+                }
+            }
+            Msg::HostPage(h) => {
+                // A page that follows its record through a rename is the same page.
+                let record = |h: &Option<HostRef>| h.as_ref().map(HostRef::seed_key);
+                if record(&h) != record(&self.host_page) || self.dest != Dest::Hosts {
+                    self.page_enter =
+                        Tween::start(0.0, 1.0, ENTER_FRAMES, Msg::Tick(Anim::Page), cx);
+                }
+                self.host_page = h;
+                self.dest = Dest::Hosts;
+            }
+            Msg::Nav(tag) => self.nav(tag.as_deref().unwrap_or_default(), cx),
+            Msg::PaneToggle => match rules::pane(self.width, self.pane_choice, self.pane_over) {
+                rules::Pane::Over(open) => self.pane_over = !open,
+                rules::Pane::Beside(open) => self.pane_choice = Some(!open),
+            },
+            Msg::PaneOver(open) => {
+                // A pane beside the page reports its own writes; only the one over it closes
+                // itself.
+                let over = rules::pane(self.width, self.pane_choice, self.pane_over);
+                if matches!(over, rules::Pane::Over(_)) {
+                    self.pane_over = open;
+                }
+            }
+            Msg::Back => {
+                let hidden = self.hide.viewing();
+                match rules::back(&self.screen, self.dest, self.host_page.is_some(), hidden) {
+                    Some(rules::Back::Screen(s)) => {
+                        // Back into Settings re-enters it: re-base its snapshot on the file.
+                        if s == Screen::Settings {
+                            settings::refresh_snapshot(&self.ctx);
+                        }
+                        self.update(Msg::Screen(s), cx)
+                    }
+                    Some(rules::Back::HostList) => self.update(Msg::HostPage(None), cx),
+                    Some(rules::Back::Shelf) => self.hide.close_view(),
+                    None => {}
+                }
+            }
+            Msg::Key(key) => self.key(key, cx),
             Msg::ShowAdd(open) => {
                 if open != self.show_add {
                     self.show_add = open;
@@ -522,8 +671,11 @@ impl Component for Shell {
                     };
                 }
             }
-            Msg::Hover(h) => self.hover = h,
-            Msg::HostsRev(r) => self.hosts_rev = r,
+            Msg::HostsBump => {
+                self.hosts_rev += 1;
+                // A host paired, renamed or removed changes the shelves there are.
+                self.sync_library(false);
+            }
             Msg::SettingsNav(tag) => {
                 // The content column slides in on a section switch; the sidebar stays put.
                 if tag != self.settings_nav {
@@ -580,14 +732,15 @@ impl Component for Shell {
                 } else if self.settings_edit {
                     self.settings_edit = false;
                     self.settings_rev += 1;
-                } else if self.rename.is_some() {
-                    self.rename = None;
+                } else if self.details.is_some() {
+                    self.details = None;
                 } else {
                     self.update(Msg::ShowAdd(false), cx);
                 }
             }
             Msg::Tick(anim) => match anim {
                 Anim::Screen => self.enter.tick(Msg::Tick(anim), cx),
+                Anim::Page => self.page_enter.tick(Msg::Tick(anim), cx),
                 Anim::Section => self.section_enter.tick(Msg::Tick(anim), cx),
                 Anim::AddHost => self.add_enter.tick(Msg::Tick(anim), cx),
             },
@@ -617,29 +770,7 @@ impl Component for Shell {
         let svc = self.svc();
         let pal = &self.pal;
         let body: View = match &self.screen {
-            Screen::Hosts => component::<hosts::HostsPage>(
-                "hosts",
-                HostsProps {
-                    svc: svc.clone(),
-                    hosts: self.hosts.clone(),
-                    probed: self.probed.clone(),
-                    status: self.status.clone(),
-                    severity: self.status_severity,
-                    forget: self.forget.clone(),
-                    rename: self.rename.clone(),
-                    show_add: self.show_add,
-                    add_anim: self.add_enter.eased(),
-                    hover: self.hover.clone(),
-                    hosts_rev: self.hosts_rev,
-                    width: self.width,
-                    set_forget: self.set(Msg::Forget),
-                    set_rename: self.set(Msg::Rename),
-                    set_show_add: self.set(Msg::ShowAdd),
-                    set_hover: self.set(Msg::Hover),
-                    set_hosts_rev: self.set(Msg::HostsRev),
-                },
-            )
-            .into(),
+            Screen::Home => home::home(self, cx),
             Screen::Connecting => connect::connecting_page(pal, &self.ctx, &self.status),
             Screen::RequestAccess => connect::request_access_page(pal, &self.ctx, &svc.set_screen),
             Screen::Waking => connect::waking_page(pal, &self.ctx, &svc.set_screen),
@@ -647,7 +778,7 @@ impl Component for Shell {
                 connect::wake_parked_page(pal, &self.ctx, &svc.set_screen, &svc.set_status)
             }
             Screen::Settings => settings::settings_page(self),
-            Screen::Licenses => licenses::licenses_page(pal, &self.ctx, &svc.set_screen),
+            Screen::Licenses => licenses::licenses_page(pal),
             Screen::Help => {
                 help::help_page(pal, &self.ctx, &svc.set_screen, &self.set(Msg::SettingsNav))
             }
@@ -661,20 +792,40 @@ impl Component for Shell {
                 },
             )
             .into(),
-            Screen::Library => library::library_page(self),
             // The stream runs in the punktfunk-session child's own window; this screen is
             // its status card.
             Screen::Stream => stream::session_page(pal, &self.ctx, &self.hud),
         };
-        // The caption, which Settings' back arrow rides on: NavigationView's own back button
-        // raises no event here, and the WinUI pattern puts it in the title bar.
+        // The caption carries Back and the pane's toggle, the WinUI pattern: one Back for
+        // every drill-in, wherever the page under it scrolls to.
+        let hidden = self.hide.viewing();
+        let back = rules::back(&self.screen, self.dest, self.host_page.is_some(), hidden);
         let caption = TitleBar::new()
+            .preferred_height(WindowTitleBarHeight::Tall)
             .title("Punktfunk")
             .icon(Icon::image_data(EncodedImage::from_static(APP_ICON)))
-            .is_back_button_visible(self.screen == Screen::Settings)
+            .is_back_button_visible(back.is_some())
             .is_back_button_enabled(true)
-            .on_back_requested(cx.callback(|()| Msg::Screen(Screen::Hosts)));
+            .is_pane_toggle_button_visible(self.screen == Screen::Home)
+            .on_back_requested(cx.callback(|()| Msg::Back))
+            .on_pane_toggle_requested(cx.callback(|()| Msg::PaneToggle));
+        // The Library's search sits in the title bar, where the page under it scrolls past.
+        let searching = self.screen == Screen::Home
+            && self.dest == Dest::Library
+            && !self.library.shelf.is_empty();
+        // Always a content: the bar stands 48 px with one and 32 px without, and everything
+        // under it would jump 16 px between the Library and the other pages.
+        let caption = caption.content(match searching {
+            true => library::search_box(self),
+            false => Border::new().into(),
+        });
         let (escape, sheet_open) = (cx.callback(|()| Msg::Escape), self.sheet_open());
+        // The shell's shortcuts act on Home with no sheet up; Back wherever it leads.
+        let (key, keys_on, back_on) = (
+            cx.callback(Msg::Key),
+            self.screen == Screen::Home && !sheet_open,
+            back.is_some() && !sheet_open,
+        );
         Border::new()
             .content(
                 Grid::new()
@@ -692,11 +843,22 @@ impl Component for Shell {
             // Escape tunnels through here from any focused element, so it closes a sheet
             // that never took focus.
             .on_preview_key_down(RoutedCallback::new(move |k: KeyEventInfo| {
-                let close = sheet_open && k.key == VirtualKey::ESCAPE;
-                if close {
+                if sheet_open && k.key == VirtualKey::ESCAPE {
                     escape.call(());
+                    return true;
                 }
-                close
+                let held = |m| k.modifiers.contains(m);
+                let asked = rules::shortcut(
+                    k.key.0,
+                    held(InputModifiers::CONTROL),
+                    held(InputModifiers::ALT),
+                );
+                match asked {
+                    Some(rules::Shortcut::Back) if back_on => key.call(rules::Shortcut::Back),
+                    Some(s) if keys_on && s != rules::Shortcut::Back => key.call(s),
+                    _ => return false,
+                }
+                true
             }))
             // At root, not on a page: a link can arrive while any screen is up.
             .content_dialog(self.link_confirmation())
@@ -708,10 +870,13 @@ const APP_ICON: &[u8] =
     include_bytes!("../../packaging/assets/Square44x44Logo.targetsize-48_altform-unplated.png");
 
 /// The window's first client size, in DIPs.
-const WINDOW_W: f64 = 1000.0;
-const WINDOW_H: f64 = 720.0;
+const WINDOW_W: f64 = 1120.0;
+const WINDOW_H: f64 = 760.0;
 
-pub fn run(identity: (String, String), gamepad: GamepadService) -> windows::core::Result<()> {
+pub fn run(
+    identity: (String, String),
+    gamepad: GamepadService,
+) -> Result<(), impl std::fmt::Display> {
     let ctx = Arc::new(AppCtx {
         identity,
         settings: Mutex::new(Settings::load()),
@@ -742,7 +907,92 @@ impl Shell {
             || self.seat.is_some()
             || self.picker.is_some()
             || (self.screen == Screen::Settings && self.settings_edit)
-            || (self.screen == Screen::Hosts && (self.rename.is_some() || self.show_add))
+            || (self.screen == Screen::Home && (self.show_add || self.details.is_some()))
+    }
+
+    /// A pick in the navigation pane. The footer's items leave Home, so the pane comes back
+    /// with the destination still picked.
+    fn nav(&mut self, tag: &str, cx: &ComponentContext<Self>) {
+        match tag {
+            "hosts" => self.update(Msg::HostPage(None), cx),
+            "library" => self.update(Msg::Dest(Dest::Library), cx),
+            "console" => {
+                let svc = self.svc();
+                connect::open_console(&self.ctx, &svc.set_screen, &svc.set_status, false);
+            }
+            "help" => self.update(Msg::Screen(Screen::Help), cx),
+            "settings" => {
+                // Re-base the settings snapshot on the file before the page renders: this
+                // process is not its only writer (see settings::refresh_snapshot).
+                settings::refresh_snapshot(&self.ctx);
+                self.update(Msg::Screen(Screen::Settings), cx);
+            }
+            _ => {}
+        }
+    }
+
+    /// A shell shortcut, pressed on Home with no sheet up.
+    fn key(&mut self, key: rules::Shortcut, cx: &ComponentContext<Self>) {
+        use rules::Shortcut as K;
+        match key {
+            K::Hosts => self.update(Msg::HostPage(None), cx),
+            K::Library => self.update(Msg::Dest(Dest::Library), cx),
+            K::Search => {
+                self.update(Msg::Dest(Dest::Library), cx);
+                // The box mounts with the Library: give it a frame.
+                let wait = Duration::from_millis(80);
+                self.focus_search = Some(cx.set_timeout(wait, Msg::FocusSearch));
+            }
+            K::AddHost => {
+                self.update(Msg::HostPage(None), cx);
+                self.update(Msg::ShowAdd(true), cx);
+            }
+            K::Reload => match self.dest {
+                Dest::Hosts => hosts::rescan(&self.svc()),
+                Dest::Library => self.sync_library(true),
+            },
+            K::Settings => self.nav("settings", cx),
+            K::Back => self.update(Msg::Back, cx),
+        }
+    }
+
+    /// Point the Library at its shelf and load it: on showing the Library, on a pick, on a
+    /// change to the hosts. `forced` asks the host again for the shelf already shown, which
+    /// stays on screen meanwhile.
+    fn sync_library(&mut self, forced: bool) {
+        if self.dest != Dest::Library {
+            return;
+        }
+        let known = KnownHosts::load();
+        let shelves = library::shelves(&known, &hosts::CardPreset::catalog());
+        let Some(shelf) = library::resting(&shelves, &self.library_shelf, &known) else {
+            self.library = library::LibraryState::default();
+            self.shelf_games = Arc::default();
+            return;
+        };
+        let other = self.library.shelf != shelf.key;
+        if other {
+            // Another shelf: what was hidden, asked or open belongs to the one before.
+            self.hide = library::HideUi::default();
+            self.end_game = library::EndGameUi::default();
+            self.details = None;
+        }
+        if other || forced {
+            let shown = (!other).then_some(&self.library);
+            let set = self.set(Msg::Library);
+            self.library = library::start_fetch(&self.ctx, shelf, &set, shown);
+            self.shelf_games = self.hide.shelf(&self.library.games);
+        }
+    }
+
+    /// The width Home's content has beside the pane.
+    pub(crate) fn content_width(&self) -> f64 {
+        let pane = match rules::pane(self.width, self.pane_choice, self.pane_over) {
+            rules::Pane::Over(_) => 0.0,
+            rules::Pane::Beside(true) => home::PANE_OPEN,
+            rules::Pane::Beside(false) => home::PANE_RAIL,
+        };
+        self.width - pane
     }
 
     /// The "Open this link?" confirmation for a guessable-reference link: Connect runs the
@@ -963,7 +1213,7 @@ fn route_link(
     let refuse = |msg: String| {
         tracing::info!(%msg, "deep link refused");
         set_status.call(msg);
-        set_screen.call(Screen::Hosts);
+        set_screen.call(Screen::Home);
     };
     // Rule 2 of §3: never preempt a live session. Only this layer knows one is running,
     // which is why the brain leaves the check here.

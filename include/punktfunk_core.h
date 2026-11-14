@@ -4116,7 +4116,7 @@ PunktfunkStatus punktfunk_connection_wants_decode_latency(const PunktfunkConnect
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
 // Start a bandwidth speed test: host bursts filler at `target_kbps` goodput for
-// `duration_ms` (clamped ≤ 10 Gbps / ≤ 5 s), briefly pausing video. Non-blocking —
+// `duration_ms` (clamped ≤ 10 Gbps / ≤ 5 s) beside the video. Non-blocking —
 // poll [`punktfunk_connection_probe_result`] until `done` is 1. Starting a probe
 // resets any prior measurement.
 //

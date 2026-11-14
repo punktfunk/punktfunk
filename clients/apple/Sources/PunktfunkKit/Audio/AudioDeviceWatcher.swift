@@ -77,15 +77,13 @@ final class AudioDeviceWatcher {
         lock.unlock()
 
         #if os(macOS)
-        // The engine notification is the direct signal, but it is delivered BY an engine — useless
-        // in the two places it is needed most: after a rebuild that could not start (no engine left
-        // to notify anyone) and on an engine topology whose notification behaviour is unverified
-        // (the voice-processing engine, which is the DEFAULT macOS configuration and which no Mac
-        // here can even initialize). The HAL is told either way.
+        // The engine notification is delivered BY an engine: useless after a rebuild that could
+        // not start (no engine left to notify anyone), and unverified for the voice-processing
+        // engine. The HAL is told either way.
         let block: AudioObjectPropertyListenerBlock = { [weak self] count, addresses in
             // On the main queue — registered against it below. No engine posted this, so nil.
-            let list = count > 0 && addresses[0].mSelector == kAudioHardwarePropertyDevices
-            self?.onChange(list ? .deviceList : .defaultOutputDevice, nil)
+            let changed = UnsafeBufferPointer(start: addresses, count: Int(count))
+            self?.onChange(Self.reason(changed.map(\.mSelector)), nil)
         }
         var address = Self.defaultOutputAddress()
         let status = AudioObjectAddPropertyListenerBlock(
@@ -133,6 +131,14 @@ final class AudioDeviceWatcher {
     }
 
     #if os(macOS)
+    /// One listener call can carry several changed properties: a device list change that also
+    /// moved the default output is a default output change.
+    static func reason(_ selectors: [AudioObjectPropertySelector]) -> Reason {
+        selectors.contains(kAudioHardwarePropertyDevices)
+            && !selectors.contains(kAudioHardwarePropertyDefaultOutputDevice)
+            ? .deviceList : .defaultOutputDevice
+    }
+
     /// Freshly built per call rather than held in a mutable static: the HAL takes the address
     /// `inout` and copies it, so there is nothing to share and a shared one would only be a
     /// mutable global.

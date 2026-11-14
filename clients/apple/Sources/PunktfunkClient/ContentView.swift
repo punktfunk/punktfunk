@@ -119,8 +119,7 @@ struct ContentView: View {
     @Environment(\.controlActiveState) private var controlActiveState
     #endif
     /// Wakes a sleeping host and waits for it to come back online before connecting (drives the
-    /// "Waking…" phase of the connect overlay). Available on every platform now that the iOS/tvOS
-    /// multicast entitlement is granted (see PunktfunkConnection.wakeOnLANAvailable).
+    /// "Waking…" phase of the connect overlay). Available on every platform (`WakePolicy`).
     @StateObject private var waker = HostWaker()
     #if os(macOS)
     /// Whether the hosting window is native-fullscreen right now (reported by
@@ -1105,13 +1104,10 @@ struct ContentView: View {
         #else
         .background(Color.black)
         .ignoresSafeArea()
-        // SWALLOW Menu/B during a session — a game controller's B button ALSO surfaces as this
-        // UIKit menu press, so the old instant-disconnect here ended the session on every B
-        // press in gameplay. The button still reaches the host via GamepadCapture; the
-        // DELIBERATE exits are holding the remote's Back ≥ 1 s (SiriRemotePointer) and holding
-        // L1+R1+Start+Select ≥ 1.5 s on a pad (GamepadCapture's escape chord), both surfaced by
-        // the start-of-stream banner. The empty handler is what keeps the press from bubbling
-        // out and suspending the app.
+        // Swallow Menu/B during a session: a pad's B is also this UIKit menu press, and unhandled
+        // it bubbles out and suspends the app. B still reaches the host via GamepadCapture. The
+        // exits are deliberate holds of 1 s: the remote's Back (SiriRemotePointer) and the pad's
+        // L1+R1+Start+Select (GamepadCapture), both named by the start-of-stream banner.
         .onExitCommand {}
         #endif
     }

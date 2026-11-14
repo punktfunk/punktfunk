@@ -7,8 +7,6 @@ import Foundation
 import VideoToolbox
 
 final class DemoEncoder {
-    let width: Int
-    let height: Int
     private let session: VTCompressionSession
     private let fps: Int32
     private let onAccessUnit: (Data, Bool) -> Void
@@ -32,8 +30,6 @@ final class DemoEncoder {
             outputCallback: nil, refcon: nil, compressionSessionOut: &out)
         guard rc == noErr, let session = out else { return nil }
         self.session = session
-        self.width = width
-        self.height = height
         self.fps = Int32(max(1, fps))
         self.onAccessUnit = onAccessUnit
         let set = { (key: CFString, value: CFTypeRef) in

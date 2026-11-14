@@ -1,31 +1,26 @@
 // HTTPS transport for the host's management REST API, built on Network.framework rather than
 // URLSession.
 //
-// WHY NOT URLSession. App Transport Security governs the URL loading system, and its default
-// policy exempts only "local" destinations — `.local` names, unqualified names, and RFC1918 /
-// link-local IP literals. Everything else must present a certificate that passes system trust
-// evaluation. A punktfunk host is self-signed by construction (there is no CA that could vouch
-// for a box on someone's LAN), so the library worked at 192.168.x and died at the TLS layer on
-// every other address: a Tailscale peer (100.64/10 is CGNAT, NOT RFC1918), a WireGuard peer, or a
-// public IP. No ATS key can express "any address the user typed" — the exception keys are
-// domain-scoped — so the only ways out were disabling ATS app-wide (which also drops the TLS
-// floor and the cleartext block on third-party cover-art fetches, the one surface we did NOT want
-// to open) or leaving the URL loading system for this one origin. This is that second option.
+// WHY NOT URLSession. App Transport Security governs the URL loading system and exempts only
+// "local" destinations — `.local` names, unqualified names, RFC1918 / link-local IP literals.
+// A Punktfunk host is self-signed by construction, so ATS refuses it at every other address: a
+// Tailscale peer (100.64/10 is CGNAT, not RFC1918), a WireGuard peer, a public IP. No ATS key
+// can say "any address the user typed", and turning ATS off app-wide would also drop its TLS
+// floor and cleartext block for the third-party cover-art fetches.
 //
-// Network.framework is not subject to ATS, and `sec_protocol_options_set_verify_block` lets us
-// state the trust rule we actually mean: the leaf certificate must hash to the fingerprint the
-// user pinned during PIN pairing. That is a stronger check than CA trust here, not a weaker one,
-// and it is the same rule the QUIC stream plane has always applied via punktfunk-core — which is
-// precisely why streaming kept working over Tailscale while the library did not.
+// Network.framework is not subject to ATS, and `sec_protocol_options_set_verify_block` states
+// the trust rule we mean: the leaf certificate must hash to the fingerprint pinned at pairing,
+// the rule the QUIC stream plane applies too.
 //
 // Connections are POOLED and kept alive: a library screen fetches one JSON payload and then a
-// poster per title, and giving each its own TLS handshake was pure latency. `MgmtConnectionPool`
+// poster per title, and a TLS handshake each would be pure latency. `MgmtConnectionPool`
 // keeps a small number of connections per host, hands them out one request at a time, and makes
 // callers wait rather than opening an unbounded number.
 
 import CryptoKit
 import Foundation
 import Network
+import os
 import PunktfunkCore
 import Security
 
@@ -43,13 +38,16 @@ enum MgmtTransport {
     /// Largest response we will buffer. The host's art proxy serves Steam hero images that run to
     /// a few MB; anything past this is not a poster and not a library payload.
     static let maxResponseBytes = 16 * 1024 * 1024
+    /// How long one request waits for its whole answer.
+    static let requestTimeout: TimeInterval = 15
 
     /// One request to `https://host:port/path`, authenticated by mTLS (`identity`) and pinned by
     /// `pin`. A `body` goes out with `contentType` and a length.
     ///
     /// Runs over a pooled keep-alive connection. A connection the host has since dropped is
     /// indistinguishable from a live one until we write to it, so a REUSED connection that fails
-    /// is retried, up to once per pooled socket; a fresh connection that fails is a real error.
+    /// is retried (`retries(after:reused:)`), up to once per pooled socket; a fresh connection
+    /// that fails is a real error.
     static func request(
         host: String,
         port: UInt16,
@@ -58,8 +56,7 @@ enum MgmtTransport {
         body: Data?,
         contentType: String?,
         identity: SecIdentity,
-        pin: Data,
-        timeout: TimeInterval = 15
+        pin: Data
     ) async throws -> HTTPResponse {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             throw MgmtTransportError.invalidPort(port)
@@ -80,16 +77,26 @@ enum MgmtTransport {
             do {
                 let response = try await connection.perform(
                     method: method, path: path, body: body, contentType: contentType,
-                    timeout: timeout)
+                    timeout: requestTimeout)
                 await MgmtConnectionPool.shared.release(connection, key: key)
                 return response
             } catch {
                 await MgmtConnectionPool.shared.release(connection, key: key)
                 lastError = error
-                if !wasReused || attempt == MgmtConnectionPool.maxPerHost { throw error }
+                if !retries(after: error, reused: wasReused) || attempt == MgmtConnectionPool.maxPerHost {
+                    throw error
+                }
             }
         }
         throw lastError
+    }
+
+    /// Only a reused socket that failed as a socket goes again: the host may have closed it while
+    /// idle. After a timeout or an answer that would not parse, the host may have run the request,
+    /// and a POST must not run twice.
+    static func retries(after error: Error, reused: Bool) -> Bool {
+        guard reused, case .connection? = error as? MgmtTransportError else { return false }
+        return true
     }
 
     static func hex(_ data: Data) -> String {
@@ -115,13 +122,47 @@ extension MgmtTransport {
         _ method: String, _ path: String, body: Data?, contentType: String?,
         to target: MgmtTarget
     ) async throws -> HTTPResponse {
-        try await withCheckedThrowingContinuation { done in
-            // The call blocks for a dial; it must not hold a cooperative thread.
-            DispatchQueue.global(qos: .userInitiated).async {
-                done.resume(with: Result {
-                    try tunnelBlocking(method, path, body: body ?? Data(), contentType, to: target)
-                })
+        // The call blocks for a dial; it must not hold a cooperative thread.
+        try await onTunnelThread(host: "\(unbracketed(target.address)):\(target.streamPort)") {
+            try tunnelBlocking(method, path, body: body ?? Data(), contentType, to: target)
+        }
+    }
+
+    /// Each host's tunnel threads, by `host:port`. A process talks to a handful of hosts.
+    private static let tunnelQueues = OSAllocatedUnfairLock(
+        uncheckedState: [String: OperationQueue]())
+
+    /// Tunnel calls one host runs at once. The tunnel carries each on a stream of its own, so a
+    /// screenful of posters loads together: 32 covers one, and is half the threads libdispatch
+    /// gives a process.
+    static let tunnelWidth = 32
+
+    /// Runs `work`, which blocks, on one of `host`'s tunnel threads: at most `tunnelWidth` at
+    /// once, started in the order asked, so a long shelf parks a bounded number of threads
+    /// rather than one per tile. A caller cancelled while it waits never runs.
+    static func onTunnelThread<T>(
+        host: String, _ work: @escaping () throws -> T
+    ) async throws -> T {
+        let queue = tunnelQueues.withLockUnchecked { queues in
+            if let queue = queues[host] { return queue }
+            let queue = OperationQueue()
+            queue.maxConcurrentOperationCount = tunnelWidth
+            queue.qualityOfService = .userInitiated
+            queues[host] = queue
+            return queue
+        }
+        let cancelled = OSAllocatedUnfairLock(initialState: false)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { done in
+                queue.addOperation {
+                    done.resume(with: Result {
+                        if cancelled.withLock({ $0 }) { throw CancellationError() }
+                        return try work()
+                    })
+                }
             }
+        } onCancel: {
+            cancelled.withLock { $0 = true }
         }
     }
 
@@ -174,7 +215,7 @@ actor MgmtConnectionPool {
     /// Also the retry budget: every pooled socket may be a stale keep-alive.
     static let maxPerHost = 4
     /// Idle longer than this and a pooled socket is replaced, not trusted: a host that vanished
-    /// silently costs a full request timeout per socket before the retry loop gives up.
+    /// silently would cost the request its full timeout.
     static let maxIdle: TimeInterval = 20
 
     /// Throws `CancellationError` for a cancelled caller, before it takes a connection. A grid
@@ -255,9 +296,10 @@ actor MgmtConnectionPool {
 /// One TLS connection to a host, serving requests one at a time. The pool guarantees a single
 /// caller at a time, so there is no request queueing here.
 ///
-/// Everything mutable is touched only on `queue`, which also runs the connection's callbacks, the
-/// verify block and the timeout — so the state below needs no locking and two callbacks can never
-/// race to resume the same continuation.
+/// The request state is touched only on `queue`, which also runs the connection's callbacks, the
+/// verify block and the timeout, so two callbacks can never race to resume the same continuation.
+/// `isHealthy` is the exception: the pool reads it from its actor while `queue` may be writing it,
+/// so it sits behind a lock. `poolEpoch` and `pooledAt` belong to the pool alone.
 final class MgmtConnection: @unchecked Sendable {
     private let queue = DispatchQueue(label: "io.unom.punktfunk.mgmt-connection")
     private let connection: NWConnection
@@ -280,7 +322,11 @@ final class MgmtConnection: @unchecked Sendable {
     /// When the pool last took it back (system uptime). Pool-owned, like `poolEpoch`.
     var pooledAt: TimeInterval = 0
     /// False once the connection has failed; the pool discards these instead of handing them out.
-    private(set) var isHealthy = true
+    private(set) var isHealthy: Bool {
+        get { healthy.withLock { $0 } }
+        set { healthy.withLock { $0 = newValue } }
+    }
+    private let healthy = OSAllocatedUnfairLock(initialState: true)
     /// Has this connection completed at least one request? Drives the retry-once rule in
     /// `MgmtTransport.request` — only a connection the host may have dropped since is worth retrying.
     var hasServedRequest: Bool { servedRequest }
@@ -452,7 +498,7 @@ final class MgmtConnection: @unchecked Sendable {
                     // No framing header: the body ran to EOF, so what we have is the whole thing
                     // and the connection is spent.
                     self.isHealthy = false
-                    let response = try HTTPResponseParser.parse(self.buffer)
+                    let response = try Self.closeFramed(self.buffer)
                     self.servedRequest = true
                     self.finish(.success(response))
                     return
@@ -464,6 +510,16 @@ final class MgmtConnection: @unchecked Sendable {
             }
             self.receive()
         }
+    }
+
+    /// What the peer sent before it closed, as a close-framed answer. Nothing at all is a socket
+    /// error: the host hung up without running the request, as it does on a kept-alive socket
+    /// it closed while idle, and that is the failure a reused connection retries.
+    static func closeFramed(_ received: Data) throws -> HTTPResponse {
+        guard !received.isEmpty else {
+            throw MgmtTransportError.connection("closed before answering")
+        }
+        return try HTTPResponseParser.parse(received)
     }
 
     private func finish(_ result: Result<HTTPResponse, Error>) {

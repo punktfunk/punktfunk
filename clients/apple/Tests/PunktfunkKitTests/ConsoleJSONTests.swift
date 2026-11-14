@@ -171,6 +171,20 @@ final class ConsoleJSONTests: XCTestCase {
         XCTAssertTrue(out.last?["stats"] is NSNull)
     }
 
+    /// The console builds a resource name from `icon`: only `[a-z0-9-]`, as core checks it.
+    func testLibraryGamesDropANonAsciiIcon() throws {
+        let wire = #"""
+            [{"id": "a", "store": "steam", "title": "A", "art": {}, "icon": "steam-2"},
+             {"id": "b", "store": "steam", "title": "B", "art": {}, "icon": "café"},
+             {"id": "c", "store": "steam", "title": "C", "art": {}, "icon": "x٣"}]
+            """#
+        let games = try JSONDecoder().decode([GameEntry].self, from: Data(wire.utf8))
+        let push = ConsoleJSON.libraryGames(ConsoleJSON.unasked, games)
+        let doc = try JSONSerialization.jsonObject(with: Data(push.utf8)) as? [String: Any]
+        let icons = try XCTUnwrap(doc?["games"] as? [[String: Any]]).map { $0["icon"] as? String }
+        XCTAssertEqual(icons, ["steam-2", "", ""])
+    }
+
     func testKnownHostsCarryWhatALinkNeeds() throws {
         let saved = host(name: "Desk")
         let data = try XCTUnwrap(ConsoleJSON.knownHosts([saved]).data(using: .utf8))
@@ -206,6 +220,41 @@ final class ConsoleJSONTests: XCTestCase {
         XCTAssertEqual(defaults.integer(forKey: DefaultsKey.compositor), 4)
         XCTAssertTrue(defaults.bool(forKey: DefaultsKey.vsync))
         defaults.removePersistentDomain(forName: "console-json-tests")
+    }
+
+    /// The console's document has no `default_host` key once the player clears the default
+    /// (the Rust field skips `None`), so a save without the key clears this app's default too.
+    func testAConsoleSaveWithoutADefaultHostClearsIt() throws {
+        let suite = "console-default-host-tests"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        ConsoleSettings.apply(["default_host": "desk"], defaults)
+        XCTAssertEqual(defaults.string(forKey: DefaultsKey.defaultHost), "desk")
+        ConsoleSettings.apply(["vsync": true], defaults)
+        XCTAssertEqual(defaults.string(forKey: DefaultsKey.defaultHost), "")
+        XCTAssertTrue(ConsoleSettings.document(defaults)["default_host"] is NSNull)
+    }
+
+    /// A JSON null is no property-list value, and storing one raises: the base document is
+    /// kept without them, at any depth.
+    func testASavedDocumentIsStoredWithoutItsNulls() throws {
+        let suite = "console-null-tests"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        ConsoleSettings.apply(
+            ["decoder": NSNull(), "vsync": true,
+             "pads": ["a": ["speaker_volume": NSNull(), "name": "couch"]]],
+            defaults)
+        let stored = try XCTUnwrap(defaults.dictionary(forKey: ConsoleSettings.documentKey))
+        XCTAssertNil(stored["decoder"])
+        XCTAssertEqual(stored["vsync"] as? Bool, true)
+        let pad = (stored["pads"] as? [String: [String: Any]])?["a"]
+        XCTAssertEqual(pad?["name"] as? String, "couch")
+        XCTAssertNil(pad?["speaker_volume"])
     }
 
     /// A preset the console saved lands on this app's copy: the console's keys set or clear,

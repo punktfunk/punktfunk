@@ -23,8 +23,10 @@ final class DemoScene {
     private var sticks: [CGFloat] = [0, 0, 0, 0]
     /// LT, RT in 0…1.
     private var triggers: [CGFloat] = [0, 0]
+    /// An empty `PUNKTFUNK_DEMO_FLASH=` leaves the flash off.
     private static let flashLabel = ProcessInfo.processInfo.environment["PUNKTFUNK_DEMO_FLASH"]
-    private var lastInput = "Nothing yet"
+        .flatMap { $0.isEmpty ? nil : $0 }
+    private(set) var lastInput = "Nothing yet"
     private var lastInputAt = -10.0
     private var lastRender: Double?
     private var frame = 0
@@ -70,10 +72,14 @@ final class DemoScene {
         case PUNKTFUNK_INPUT_KIND_MOUSE_BUTTON_DOWN.rawValue:
             let name = [1: "Left click", 2: "Middle click", 3: "Right click"][ev.code] ?? "Click"
             press(name, now)
-        case PUNKTFUNK_INPUT_KIND_MOUSE_SCROLL.rawValue:
-            note(ev.x > 0 ? "Scroll up" : "Scroll down", now)
-        case PUNKTFUNK_INPUT_KIND_SCROLL.rawValue:
-            if ev.x != 0 { note(ev.x > 0 ? "Scroll up" : "Scroll down", now) }
+        case PUNKTFUNK_INPUT_KIND_MOUSE_SCROLL.rawValue, PUNKTFUNK_INPUT_KIND_SCROLL.rawValue:
+            // `code` is the axis, 1 horizontal; positive is up or right.
+            guard ev.x != 0 else { break }
+            if ev.code == 1 {
+                note(ev.x > 0 ? "Scroll right" : "Scroll left", now)
+            } else {
+                note(ev.x > 0 ? "Scroll up" : "Scroll down", now)
+            }
         case PUNKTFUNK_INPUT_KIND_KEY_DOWN.rawValue:
             key(ev.code, now)
         case PUNKTFUNK_INPUT_KIND_TEXT_INPUT.rawValue:

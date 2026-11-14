@@ -9,7 +9,9 @@ import PunktfunkShared
 public enum PyroWaveQuality {
     /// Core's `BPP_FLOOR` to `BPP_MAX`, by tenths.
     public static let range = 0.5...2.0
-    public static let rungs = stride(from: 5, through: 20, by: 1).map { Double($0) / 10 }
+    public static let rungs = stride(
+        from: Int(range.lowerBound * 10), through: Int(range.upperBound * 10), by: 1
+    ).map { Double($0) / 10 }
 
     /// `bpp` on the nearest rung.
     public static func snapped(_ bpp: Double) -> Double {
@@ -25,22 +27,25 @@ public enum PyroWaveQuality {
         return (kind, mbps)
     }
 
-    /// The kbps `s`'s quality needs at `mode`. 4:4:4 and 10 bits follow the switches that ask.
+    /// The kbps `s`'s quality needs at `mode`. 4:4:4 follows its switch, and the depth is the one
+    /// a connect offers (`ConnectOffer.tenBit`): HDR prices 10 bits only on a display that
+    /// shows it.
     public static func kbps(
-        _ s: EffectiveSettings, mode: (width: UInt32, height: UInt32, hz: UInt32)
+        _ s: EffectiveSettings, mode: (width: UInt32, height: UInt32, hz: UInt32),
+        displayHDR: Bool
     ) -> UInt32 {
         punktfunk_pyrowave_kbps(
             mode.width, mode.height, mode.hz, s.enable444,
-            s.hdrEnabled || s.tenBitSdr ? 10 : 8, s.pyrowaveBppX100)
+            ConnectOffer.tenBit(s, displayHDR: displayHDR) ? 10 : 8, s.pyrowaveBppX100)
     }
 
     /// The row's caption, `3840×2160 at 120 Hz: 1.6 Gbit/s`, and the warning when `link` is
     /// short of that rate.
     public static func lines(
         _ s: EffectiveSettings, mode: (width: UInt32, height: UInt32, hz: UInt32),
-        link: (kind: UInt8, mbps: UInt32)
+        link: (kind: UInt8, mbps: UInt32), displayHDR: Bool
     ) -> (caption: String, warning: String?) {
-        let need = kbps(s, mode: mode)
+        let need = kbps(s, mode: mode, displayHDR: displayHDR)
         var buf = [CChar](repeating: 0, count: 160)
         _ = punktfunk_pyrowave_link_warning(need, link.kind, link.mbps, &buf, UInt(buf.count))
         let warning = String(cString: buf)

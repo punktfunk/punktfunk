@@ -128,13 +128,16 @@ rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "prefer-post-quantum", "std"] }
 ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "rustls-webpki-roots"] }
 
-# microsoft/windows-rs at one verified commit: windows-reactor is unpublished (0.0.0), and
-# `windows` comes from the same rev so its `windows-core` unifies with reactor's. Re-run
-# punktfunk-setup-win's tests/wizard_flow.rs on every bump. Host crates declare crates.io
-# `windows = "0.62"` inline: cargo can't rename a workspace entry per member.
+# microsoft/windows-rs at verified commits: no crates.io release carries reactor's Component
+# API. Re-run punktfunk-setup-win's tests/wizard_flow.rs on every reactor bump. Host crates
+# declare crates.io `windows = "0.62"` inline: cargo can't rename a workspace entry per member.
+#
+# Two revs on purpose. Past 58217a690 `windows` projects Win32 with pointer + count for a slice
+# and out-params for return values, which the D3D11 decode path would have to follow. No
+# `windows` COM object reaches reactor, so the two need no common `windows-core`.
 windows = { git = "https://github.com/microsoft/windows-rs", rev = "58217a690" }
-windows-reactor = { git = "https://github.com/microsoft/windows-rs", rev = "58217a690" }
-windows-reactor-setup = { git = "https://github.com/microsoft/windows-rs", rev = "58217a690" }
+windows-reactor = { git = "https://github.com/microsoft/windows-rs", rev = "d19f6bbc0" }
+windows-reactor-setup = { git = "https://github.com/microsoft/windows-rs", rev = "d19f6bbc0" }
 
 windows-sys = "0.61"
 

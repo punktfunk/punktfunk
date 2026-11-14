@@ -242,5 +242,16 @@ final class MetalPresenterTests: XCTestCase {
         XCTAssertEqual(cache.removeAll().sorted(), ["a", "c2"])
         XCTAssertEqual(cache.count, 0)
     }
+
+    /// A parked pass reads its uniform when the GPU runs it. With three buffers, pass 4 takes
+    /// pass 1's: it parks only once pass 1 has run, however far the GPU is behind.
+    func testAParkedPassWaitsForItsUniformsLastPass() {
+        let free = MetalVideoPresenter.latchUniformFree
+        XCTAssertTrue(free(3, 0, 3), "the first three passes share no buffer")
+        XCTAssertFalse(free(4, 0, 3), "pass 1 is still queued")
+        XCTAssertTrue(free(4, 1, 3))
+        XCTAssertFalse(free(9, 5, 3), "pass 6 is still queued")
+        XCTAssertFalse(free(1, 0, 0), "no buffer was allocated")
+    }
 }
 #endif

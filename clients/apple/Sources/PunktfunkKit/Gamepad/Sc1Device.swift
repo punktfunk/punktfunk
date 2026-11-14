@@ -1,7 +1,7 @@
-// The 2015 Steam Controller (SDL "D0G") as `Sc2UsbLink` captures it on a Mac: frames carry no
-// report id, just a version word of 1 and the type. The parser feeds only the typed mirror and
-// local chords, in the Steam Controller 2's layout so `Sc2Capture` serves both pads. Android's
-// `Sc1Device.kt` is its sibling; `clients/shared/sc1-vectors.json` pins both tables.
+// The 2015 Steam Controller (SDL "D0G") as `Sc2UsbLink` (Mac) and `Sc2BleLink` capture it:
+// frames carry no report id, just a version word of 1 and the type. The parser feeds only the
+// typed mirror and local chords, in the Steam Controller 2's layout so `Sc2Capture` serves both
+// pads. Android's `Sc1Device.kt` is its sibling; `clients/shared/sc1-vectors.json` pins both.
 
 import Foundation
 

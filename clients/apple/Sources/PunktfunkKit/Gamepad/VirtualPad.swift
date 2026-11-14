@@ -110,8 +110,9 @@ private func disc(_ id: String, _ label: String, _ glyph: String, _ bit: UInt32,
 /// stick, the face buttons in the bottom-right corner with the right stick beside them, the
 /// shoulders in the top corners with the stick clicks beside them, Select, Guide and Start along
 /// the bottom edge, and the quick-action ring's button inboard of the left bumper. A narrow layer
-/// lifts the D-pad and the right stick above their neighbours and puts the middle three along the
-/// top edge instead. An unknown preset is `full`.
+/// lifts the D-pad and the right stick above their neighbours; the middle three keep the bottom
+/// edge only while the clusters leave it free, and take the top edge when they do not. An unknown
+/// preset is `full`.
 public func padControls(layout: String, w: Float, h: Float) -> [PadControl] {
     typealias P = VirtualPad
     let narrow = w < P.narrow
@@ -173,10 +174,16 @@ public func padControls(layout: String, w: Float, h: Float) -> [PadControl] {
         out.append(PadControl(id: "rs", label: String(localized: L10n.padControlRightStick), rect: right,
                               kind: .stick(axisX: GamepadWire.axisRSX, axisY: GamepadWire.axisRSY)))
     }
-    let midY = narrow ? P.margin + P.smallRadius : bottom - P.smallRadius
-    out.append(disc("select", "Select", "⧉", GamepadWire.back, w / 2 - 64, midY, P.smallRadius))
-    out.append(disc("guide", "Guide", "◎", GamepadWire.guide, w / 2, midY, P.smallRadius))
-    out.append(disc("start", "Start", "☰", GamepadWire.start, w / 2 + 64, midY, P.smallRadius))
+    // Measured against the clusters, not guessed from the width: between `narrow` and about
+    // 900 points the right stick still spreads into the bottom corner, near enough to sit on Start.
+    func middle(_ y: Float) -> [PadControl] {
+        [disc("select", "Select", "⧉", GamepadWire.back, w / 2 - 64, y, P.smallRadius),
+         disc("guide", "Guide", "◎", GamepadWire.guide, w / 2, y, P.smallRadius),
+         disc("start", "Start", "☰", GamepadWire.start, w / 2 + 64, y, P.smallRadius)]
+    }
+    let low = middle(bottom - P.smallRadius)
+    let blocked = low.contains { m in out.contains { $0.rect.overlaps(m.rect) } }
+    out += blocked ? middle(P.margin + P.smallRadius) : low
     let ringX = P.margin + 2 * P.bumperRadius + 8
     out.append(PadControl(id: "ring", label: String(localized: L10n.padControlRing),
                           rect: PadRect(ringX, P.margin + P.bumperRadius - P.smallRadius, 2 * P.smallRadius, 2 * P.smallRadius),

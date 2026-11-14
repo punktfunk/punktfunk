@@ -1,14 +1,8 @@
 // On-disk cache for a host's library CATALOG — the list of titles, not their art.
 //
-// Cover art has been cached since `ArtCache`, but the catalog behind it never was: every visit to a
-// library refetched `GET /api/v1/library` and showed nothing until that call returned. A host that
-// is asleep, or simply not reachable yet, therefore had an EMPTY library — which is the opposite of
-// what a player wants from the screen they use to decide what to play, and it makes waking a host
-// on library entry pointless: there would be nothing to look at while it boots.
-//
-// So the catalog is cached per host and rendered immediately, marked stale, and reconciled when the
-// host answers. Field request, 2026-08-16: "it would add a nice seamless experience if offline
-// library would be added".
+// The catalog is cached per host and rendered at once, marked stale, and reconciled when the host
+// answers: a host that is asleep or not reachable yet still has a shelf to choose from while a
+// wake boots it.
 //
 // Caches directory, like `ArtCache`, for the same reason: every byte is re-derivable from the host,
 // so the system is welcome to evict it. Unlike art, a catalog is small (a few hundred KB for a big
@@ -24,17 +18,13 @@ import Foundation
 /// A host's library as last seen, with when that was.
 public struct CachedLibrary: Codable, Sendable {
     public var games: [GameEntry]
+    /// When the host answered it. A catalog of any age still goes up: it beats an empty shelf.
     public var fetchedAt: Date
 
     public init(games: [GameEntry], fetchedAt: Date) {
         self.games = games
         self.fetchedAt = fetchedAt
     }
-
-    /// How old this snapshot is. The UI uses it to word the staleness note, never to decide whether
-    /// to show the catalog: a year-old library is still a far better answer than an empty one, and
-    /// the live fetch is always in flight behind it anyway.
-    public var age: TimeInterval { Date().timeIntervalSince(fetchedAt) }
 }
 
 /// Per-host catalog storage. An actor so disk work stays off the SwiftUI thread and a read can

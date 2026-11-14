@@ -51,12 +51,35 @@ class LibraryHideTest {
         compose.setContent {
             val loader = ImageLoader(compose.activity)
             val ready = LibState.Ready(listOf(braid), loader, ClientIdentity("", ""))
-            TouchLibrary("Desk", ready, false, {}, {}, { _, _ -> }, { _, _ -> })
+            TouchLibrary(ready, false, {}, { _, _ -> }, { _, _ -> })
         }
         openMenu("Braid")
         compose.onNodeWithText(text(R.string.hostcard_copy_link)).assertExists()
         compose.onNodeWithText("Hide for", substring = true).assertDoesNotExist()
-        compose.onNodeWithContentDescription("Hidden for", substring = true).assertDoesNotExist()
+        // The shelf's own menu offers no way to what a profile hides either.
+        compose.onNodeWithText(text(R.string.hostcard_copy_link)).performClick()
+        compose.onNodeWithContentDescription(text(R.string.lib_title_more)).performClick()
+        compose.onNodeWithText(text(R.string.lib_customize)).assertExists()
+        compose.onNodeWithText("Hidden for", substring = true).assertDoesNotExist()
+    }
+
+    /** Add to favorites lands the title in the Favorites row; the title menu then takes it back. */
+    @Test
+    fun a_favorite_gets_its_row() {
+        var favorites by mutableStateOf(emptySet<String>())
+        compose.setContent {
+            TouchGrid(
+                listOf(arkham, braid), ImageLoader(compose.activity), onLaunch = {}, onLink = { _, _ -> },
+                favorites = favorites,
+                onFavorite = { g -> favorites = if (g.id in favorites) favorites - g.id else favorites + g.id },
+            )
+        }
+        compose.onNodeWithText(text(R.string.lib_section_favorites)).assertDoesNotExist()
+        openMenu("Braid")
+        compose.onNodeWithText(text(R.string.lib_favorite_add)).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.lib_section_favorites)).assertExists()
+        assertEquals(setOf("steam:2"), favorites)
     }
 
     @Test
@@ -96,7 +119,7 @@ class LibraryHideTest {
             val loader = ImageLoader(compose.activity)
             val ready = LibState.Ready(listOf(braid), loader, ClientIdentity("", ""))
             TouchLibrary(
-                "Desk", ready, false, {}, {}, { _, _ -> }, { _, _ -> },
+                ready, false, {}, { _, _ -> }, { _, _ -> },
                 hidesFor = "Kid", hidden = LibState.Ready(emptyList(), loader, ClientIdentity("", "")),
             )
         }

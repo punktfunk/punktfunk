@@ -36,12 +36,6 @@ public enum GamepadUIEnvironment {
         mode: String
     ) -> Bool {
         guard enabledSetting else { return false }
-        return mode == modeAlways || gamepadConnected || forced
+        return mode == modeAlways || gamepadConnected
     }
-
-    /// Dev-only escape hatch (like ContentView's `PUNKTFUNK_AUTOCONNECT`): pretend a controller is
-    /// attached so the gamepad UI can be exercised/screenshotted without physical hardware —
-    /// essential on a headless CI Mac and for `swift run` UI work. Never set in production.
-    private static let forced =
-        ProcessInfo.processInfo.environment["PUNKTFUNK_FORCE_GAMEPAD_UI"] == "1"
 }

@@ -78,6 +78,7 @@ struct AUIntake {
             concealer = connection.videoCodec == .hevc ? HevcConcealer() : nil
             av1Concealer = connection.videoCodec == .av1 ? Av1Concealer() : nil
             pump.requireIDR()
+            awaitingSince = Date()
             intakeLog.notice(
                 "video: the host changed the stream format — rebuilding the decoder for \(String(describing: connection.videoCodec), privacy: .public)"
             )
