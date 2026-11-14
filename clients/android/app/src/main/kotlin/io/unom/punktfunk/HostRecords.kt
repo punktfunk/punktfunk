@@ -7,21 +7,22 @@ import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.kit.security.KnownHostStore
 
 /**
- * The host-record edits both shells make: the touch home's card menu and the console's commands.
+ * The host-record edits both shells make: the touch home's host page and the console's commands.
  * Each does the whole job on the store and on what is filed under the record's id; the caller
  * refreshes its own view and owns any notice or confirmation.
  */
 object HostRecords {
     /**
-     * Forget [kh]. A forgotten host leaves no list of what somebody plays, and no record of what
-     * they were playing, behind on the device: both are filed under the record id, so this is the
-     * last moment either can be found. Returns [settings] with the default host cleared when it
+     * Forget [kh]. A forgotten host leaves no list of what somebody plays, no favorites and no
+     * record of what they were playing behind on the device: this is the last moment the record
+     * names where they are filed. Returns [settings] with the default host cleared when it
      * pointed here, for the caller to persist; null when the settings stand.
      */
     fun forget(context: Context, store: KnownHostStore, kh: KnownHost, settings: Settings): Settings? {
         store.remove(kh)
         LibraryCache.standard(context.cacheDir).forget(kh.id)
         LibraryPosition.forget(context, kh.id)
+        if (kh.fpHex.isNotEmpty()) LibraryLayout.forgetFavorites(context, settings, kh.fpHex)
         return if (settings.defaultHost == kh.id) settings.copy(defaultHost = null) else null
     }
 

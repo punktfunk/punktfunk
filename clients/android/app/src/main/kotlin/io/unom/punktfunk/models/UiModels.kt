@@ -2,6 +2,7 @@ package io.unom.punktfunk.models
 
 import androidx.annotation.StringRes
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -10,9 +11,13 @@ import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.library.GameEntry
 import io.unom.punktfunk.kit.security.KnownHost
 
-/** Bottom-bar destinations (the immersive stream view is shown full-screen, outside the bar). */
+/**
+ * The touch shell's destinations: the hosts, their games, the settings. The stream is shown
+ * full-screen, outside the bar.
+ */
 enum class Tab(@StringRes val label: Int, val icon: ImageVector) {
     Connect(R.string.hosts_tab, Icons.Filled.Home),
+    Library(R.string.hosts_tab_library, Icons.Filled.GridView),
     Settings(R.string.hosts_tab_settings, Icons.Filled.Settings),
 }
 
@@ -133,10 +138,3 @@ data class LaunchHold(
  * default one wearing the same name.
  */
 data class LibraryReturn(val hostId: String, val presetId: String? = null)
-
-/** Trust state of a host, shown as a colored pill on its card. */
-enum class HostStatus(@StringRes val label: Int) {
-    PAIRED(R.string.hostcard_paired),
-    PAIRING(R.string.android_hostcard_trust_pin_a11y),
-    TOFU(R.string.hostcard_tofu),
-}

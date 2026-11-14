@@ -54,7 +54,6 @@ import io.unom.punktfunk.kit.link.HostResolution
 import io.unom.punktfunk.kit.link.StartScreen
 import io.unom.punktfunk.kit.link.host
 import io.unom.punktfunk.kit.SessionEndReason
-import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.kit.security.KnownHostStore
 import io.unom.punktfunk.console.SkiaConsole
 import io.unom.punktfunk.console.SkiaConsoleShell
@@ -80,16 +79,17 @@ fun App(forceGamepadUi: Boolean = false) {
     // navigation state does not outlive the stream. Cleared once the shell has consumed it, so a
     // later manual Back out of the library is not undone by a stale value.
     var reopenLibrary by remember { mutableStateOf<LibraryReturn?>(null) }
-    // Which host's game library the TOUCH shell is showing, and which of its pinned cards opened it
-    // (null = the host's own card). Held here beside `tab` rather than inside the tab content: it is
-    // a PUSH over the whole shell, and a `remember` down in ConnectScreen would not survive the
-    // stream that a launch off the shelf starts — which is exactly what `reopenLibrary` restores.
-    var touchLibrary by remember { mutableStateOf<Pair<KnownHost, String?>?>(null) }
-    // …and whether that shelf should dial the host's desktop as it opens (`start_in = stream`).
-    // Only the cold-start effect below ever sets it; every other route to the library is a
-    // deliberate press and must not start a stream on its own. Any launch off the shelf disarms
-    // it: the stream screen replaces the shelf, so ending one composes a fresh shelf that would
-    // otherwise read this as a cold start and dial again.
+    // The shelf the Library tab shows, as a [Shelf] id: a card's Browse library, Start in and a
+    // game's exit set it; null is the shelf the tab last showed. Held here beside `tab`: a
+    // `remember` inside the tab does not outlive the stream a launch off the shelf starts.
+    var shelfId by remember { mutableStateOf<String?>(null) }
+    fun showShelf(hostId: String, presetId: String?) {
+        shelfId = Shelf.id(hostId, presetId).also { LibraryLayout.rememberShelf(context, it) }
+        tab = Tab.Library
+    }
+    // Whether that shelf dials the host's desktop as it opens (`start_in = stream`). Only the
+    // cold start sets it. A launch off the shelf, a picked shelf and a tab switch disarm it: a
+    // shelf composed again would read it as a cold start and dial again.
     var touchAutoStream by remember { mutableStateOf(false) }
 
     // A stream's capture hides the pad it claims (a Sony pad's forced USB claim, the paused SC2
@@ -205,7 +205,11 @@ fun App(forceGamepadUi: Boolean = false) {
     val pendingLink = activity?.pendingDeepLink
     LaunchedEffect(pendingLink, session) {
         val url = pendingLink ?: return@LaunchedEffect
-        val live = session ?: return@LaunchedEffect // not streaming: ConnectScreen routes it
+        // Not streaming: the Hosts tab routes it, so a link that finds another tab up shows it.
+        val live = session ?: run {
+            tab = Tab.Connect
+            return@LaunchedEffect
+        }
         activity.pendingDeepLink = null
         val parsed = DeepLinks.parse(url) as? DeepLinkResult.Parsed ?: return@LaunchedEffect
         val target = DeepLinks.resolveHost(parsed.link, KnownHostStore(context).all())
@@ -229,9 +233,9 @@ fun App(forceGamepadUi: Boolean = false) {
         val hosts = KnownHostStore(context).all()
         val start = StartScreen.resolve(settings.startIn, settings.defaultHost, hosts)
         val host = start.host ?: return@LaunchedEffect
-        // Stream is the library PLUS a connect, not a fourth screen: the shelf goes up either
+        // Stream is the library plus a connect, not a fourth screen: the shelf goes up either
         // way, so a cancelled or refused dial lands there rather than back on the host grid.
-        touchLibrary = host to null
+        showShelf(host.id, null)
         touchAutoStream = start is StartScreen.Stream
     }
 
@@ -245,7 +249,7 @@ fun App(forceGamepadUi: Boolean = false) {
         KnownHostStore(context).all().firstOrNull { it.id == id }?.let { kh ->
             // A pin unpinned while the game was running is no longer a shelf: fall back to the
             // host's own, rather than a card that no longer exists.
-            touchLibrary = kh to pinId?.takeIf { it in kh.pinnedPresetIds }
+            showShelf(kh.id, pinId?.takeIf { it in kh.pinnedPresetIds })
         }
         reopenLibrary = null
     }
@@ -341,8 +345,6 @@ fun App(forceGamepadUi: Boolean = false) {
         },
         label = "StreamTransition"
     ) { active ->
-        // Read once: `touchLibrary` is a `var`, so it does not smart-cast through the branch.
-        val library = touchLibrary
         when {
             active != null -> StreamScreen(
                 active,
@@ -394,21 +396,7 @@ fun App(forceGamepadUi: Boolean = false) {
                 reopenLibrary = reopenLibrary,
                 onReopenLibraryHandled = { reopenLibrary = null },
             )
-            // The touch shell's library is a PUSHED screen, not a tab: it belongs to one host, so
-            // it takes the whole window (bar included) and Back — the arrow or the system gesture —
-            // returns to the grid.
-            library != null -> LibraryScreen(
-                host = library.first,
-                settings = settings,
-                onLaunched = { touchAutoStream = false; owner.open(it) },
-                onBack = {
-                    touchLibrary = null
-                    touchAutoStream = false
-                },
-                pinnedPresetId = library.second,
-                autoStream = touchAutoStream,
-            )
-            else -> TouchTabs(tab, onTab = { tab = it }) { targetTab ->
+            else -> TouchTabs(tab, onTab = { tab = it; touchAutoStream = false }) { targetTab ->
                 when (targetTab) {
                     Tab.Connect -> ConnectScreen(
                         settings = settings,
@@ -416,13 +404,25 @@ fun App(forceGamepadUi: Boolean = false) {
                         onSettingsChange = { settings = it; settingsStore.save(it) },
                         deepLink = pendingLink,
                         onDeepLinkHandled = { activity?.pendingDeepLink = null },
-                        // "Browse library…" in a card's overflow — the touch route to the shelf
-                        // the console shell reaches with Y.
-                        onOpenLibrary = { kh, pinId -> touchLibrary = kh to pinId },
+                        // A card's Browse library: the Library tab, on that card's shelf.
+                        onOpenLibrary = { kh, pinId -> showShelf(kh.id, pinId) },
                         lnpGranted = lnpGranted,
                         onAskLocalNetwork = {
                             localNetLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
                         },
+                    )
+                    Tab.Library -> LibraryTab(
+                        settings = settings,
+                        shelfId = shelfId,
+                        onShelf = { id ->
+                            shelfId = id
+                            LibraryLayout.rememberShelf(context, id)
+                            touchAutoStream = false
+                        },
+                        autoStream = touchAutoStream,
+                        lnpGranted = lnpGranted,
+                        onLaunched = { touchAutoStream = false; owner.open(it) },
+                        onShowHosts = { tab = Tab.Connect },
                     )
                     Tab.Settings -> SettingsScreen(
                         initial = settings,

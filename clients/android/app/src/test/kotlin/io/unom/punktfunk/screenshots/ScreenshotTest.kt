@@ -200,6 +200,12 @@ class ScreenshotTest {
     fun libraryTouch() = shootRoot("library-touch") { TouchLibraryScene() }
 
     @Test
+    fun hostPage() = shootRoot("host-page") { HostPageScene() }
+
+    @Test
+    fun titleDetails() = shootScreen("title-details") { TitleDetailScene() }
+
+    @Test
     fun trust() = shootScreen("trust") {
         HostsScene()
         TrustDialog()
