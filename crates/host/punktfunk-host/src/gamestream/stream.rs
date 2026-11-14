@@ -395,7 +395,7 @@ fn run(
             seat,
             #[cfg(target_os = "linux")]
             lease,
-        } = open_gs_virtual_source(&cfg, app, target.as_ref(), &life.quit, true, device)?;
+        } = open_gs_virtual_source(&cfg, app, target.as_ref(), life, true, device)?;
         // Only Linux `launch_is_nested` reads them; gamescope does not exist on Windows.
         #[cfg(not(target_os = "linux"))]
         let _ = (&gamescope_route, nested_launch_started);
@@ -526,7 +526,15 @@ fn run(
                     anyhow::bail!("no output to re-attach to");
                 }
             }
-            let s = open_gs_virtual_source(&cfg, app, target.as_ref(), &life.quit, false, device)?;
+            let s = open_gs_virtual_source(&cfg, app, target.as_ref(), life, false, device)?;
+            // A native client joining this display next finds it where it moved.
+            crate::vdisplay::admission::publish_display(
+                &life.preempted,
+                s.compositor,
+                s.route.clone(),
+                cfg.hdr,
+                sample_format(&cfg),
+            );
             let blend = gs_cursor_blend(s.compositor, s.route.as_ref(), &cfg);
             #[cfg(target_os = "linux")]
             {
@@ -815,8 +823,8 @@ struct GsSource {
 }
 
 /// Virtual-display source at the client's mode, or the monitor `device` streams. A joiner
-/// shares the owner's display, on its compositor and route, at its mode. Else the app's own
-/// `compositor` wins; otherwise the native plane's
+/// shares the owner's display where the owner's row says it runs now, on its compositor and
+/// route, at its mode. Else the app's own `compositor` wins; otherwise the native plane's
 /// [`crate::compositor_route::resolve_compositor`] picks, pin included. Only a connect
 /// (`revive`) may revive a session. Re-run on mid-stream capture loss to follow a Desktop↔Game
 /// switch. Does not launch the app — a rebuild must not re-spawn it. The capturer owns the
@@ -826,11 +834,16 @@ fn open_gs_virtual_source(
     app: Option<&super::apps::AppEntry>,
     // Resolved once by the caller so a rebuild cannot re-resolve to something different.
     launch: Option<&crate::library::LaunchTarget>,
-    quit: &Arc<AtomicBool>,
+    life: &GameLifetime,
     revive: bool,
     device: Option<[u8; 32]>,
 ) -> Result<GsSource> {
-    let owner = (cfg.joined.as_ref()).and_then(|(_, d)| Some((d.compositor?, d.route.clone())));
+    // The owner moves on a Desktop↔Game switch; once it is gone, the display joined at launch.
+    let joined = (cfg.joined.as_ref()).map(|at_launch| {
+        crate::vdisplay::admission::join_target(&life.preempted)
+            .unwrap_or_else(|| at_launch.clone())
+    });
+    let owner = (joined.as_ref()).and_then(|(_, d)| Some((d.compositor?, d.route.clone())));
     let (compositor, gamescope_route) = if let Some(owner) = owner {
         owner
     } else if let Some(c) = app.and_then(|a| a.compositor) {
@@ -868,8 +881,7 @@ fn open_gs_virtual_source(
         (cfg.width, cfg.height),
         &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )?;
-    let (width, height, refresh_hz) = cfg
-        .joined
+    let (width, height, refresh_hz) = joined
         .as_ref()
         .map_or((cfg.width, cfg.height, cfg.fps), |(m, _)| *m);
     let vout = crate::vdisplay::registry::acquire(
@@ -880,7 +892,7 @@ fn open_gs_virtual_source(
             refresh_hz,
         },
         // Quit App / management stop / game exit skip linger; only a real drop lingers.
-        quit.clone(),
+        life.quit.clone(),
         None,
     )
     .context("create virtual output at client resolution")?;

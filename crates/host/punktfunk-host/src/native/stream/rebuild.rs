@@ -680,9 +680,10 @@ impl StreamState {
         None
     }
 
-    /// Swap the build in, then the plan's epilogue: the display request it commits to and the
-    /// colour and format later joiners read off it, the input route, the rate, the further screens, the
-    /// mode, which a switch also gives later joiners, and who hears it, the gap.
+    /// Swap the build in, then the plan's epilogue: the display request it commits to, what later
+    /// joiners read off it (colour, format, and the compositor and route it moved to), the input
+    /// route, the rate, the further screens, the mode, which a switch also gives later joiners,
+    /// and who hears it, the gap.
     fn commit(
         &mut self,
         plan: &RebuildPlan,
@@ -702,17 +703,29 @@ impl StreamState {
         if let Some(DisplayChange::Switch(to)) = plan.display {
             self.display.compositor = to;
         }
+        let format = crate::vdisplay::admission::SampleFormat {
+            bit_depth: self.bit_depth,
+            chroma_444: self.plan.chroma.is_444(),
+            full_range: self.plan.full_range(self.plan.hdr, self.bit_depth),
+        };
         // The request every later display of this session starts from.
         if let Some(params) = prep.params {
             let stop = self.facts.life.stop_flag();
             crate::vdisplay::admission::publish_hdr(stop, params.hdr);
-            let format = crate::vdisplay::admission::SampleFormat {
-                bit_depth: self.bit_depth,
-                chroma_444: self.plan.chroma.is_444(),
-                full_range: self.plan.full_range(self.plan.hdr, self.bit_depth),
-            };
             crate::vdisplay::admission::publish_format(stop, format);
             self.display.vd_params = params;
+        }
+        // A capture loss retargets in its build, with no switch in the plan: compare, not ask.
+        let moved = self.display.compositor != prep.before.compositor;
+        if moved || self.display.vd_params.route != prep.before.params.route {
+            let d = &self.display;
+            crate::vdisplay::admission::publish_display(
+                self.facts.life.stop_flag(),
+                d.compositor,
+                d.vd_params.route.clone(),
+                d.vd_params.hdr,
+                format,
+            );
         }
         if e.input {
             self.repoint_input();
@@ -721,7 +734,6 @@ impl StreamState {
             Rate::Built => self.adopt_built_bitrate(built.rate_kbps),
             Rate::Applied => self.adopt_rebuilt_rate(plan.rate_kbps),
         }
-        let moved = self.display.compositor != prep.before.compositor;
         if e.screens == Screens::Rebase || (e.screens == Screens::RebaseIfMoved && moved) {
             self.rebase_screens();
         }

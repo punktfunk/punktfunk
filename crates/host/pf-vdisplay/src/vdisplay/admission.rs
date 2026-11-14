@@ -446,6 +446,34 @@ pub fn publish_format(stop: &Arc<AtomicBool>, format: SampleFormat) {
     }
 }
 
+/// Where the display of the session holding `stop` runs now, for the next joiner: its
+/// compositor, route and colour, and `format` where its sessions share one capture.
+pub fn publish_display(
+    stop: &Arc<AtomicBool>,
+    compositor: crate::Compositor,
+    route: Option<crate::GamescopeRoute>,
+    hdr: bool,
+    format: SampleFormat,
+) {
+    let mut live = table().lock().unwrap();
+    let rows = live.iter_mut().filter(|s| Arc::ptr_eq(&s.stop, stop));
+    for d in rows.filter_map(|s| s.display.as_mut()) {
+        d.compositor = Some(compositor);
+        d.route = route.clone();
+        d.hdr = hdr;
+        d.format = shares_capture(Some(compositor)).then_some(format);
+    }
+}
+
+/// The display a join from the plane holding `own` takes now, as [`decide`] picks it: the
+/// oldest other row that streams. A joiner re-reads it, as its owner's display moves.
+pub fn join_target(own: &Arc<AtomicBool>) -> Option<((u32, u32, u32), LiveDisplay)> {
+    let live = table().lock().unwrap();
+    (live.iter())
+        .filter(|s| !Arc::ptr_eq(&s.stop, own))
+        .find_map(|s| Some((s.mode, s.display.clone()?)))
+}
+
 /// The mode the display of the session holding `stop` now runs, for the next joiner: it is
 /// admitted at this mode, and the Linux pool joins only a display at it.
 pub fn publish_mode(stop: &Arc<AtomicBool>, mode: (u32, u32, u32)) {
@@ -784,6 +812,52 @@ mod tests {
         assert_eq!(row_hdr(), Some(true));
         publish_hdr(&stop, false);
         assert_eq!(row_hdr(), Some(false));
+    }
+
+    /// An owner that moves from the desktop into Game Mode: a joiner reads the new compositor,
+    /// route and shared format off its row, never its own plane's row.
+    #[test]
+    fn a_joiner_finds_the_owners_display_where_it_moved() {
+        let name = "a_joiner_finds_the_owners_display_where_it_moved";
+        crate::fake::in_child(module_path!(), name, &[], || {
+            let (owner, own) = (Arc::new(AtomicBool::new(false)), Arc::default());
+            let kwin = LiveDisplay {
+                compositor: Some(crate::Compositor::Kwin),
+                ..LiveDisplay::default()
+            };
+            // The plane's own row first: the lookup must skip it, not just reach the owner first.
+            let _gs = register(
+                None,
+                MODE,
+                Arc::clone(&own),
+                "gs".into(),
+                kwin.clone(),
+                None,
+            );
+            let _owner = register(fp(1), MODE, owner.clone(), "o".into(), kwin, None);
+            let fmt = SampleFormat {
+                bit_depth: 8,
+                chroma_444: false,
+                full_range: true,
+            };
+            let managed = crate::GamescopeRoute::Managed {
+                client: "steam".into(),
+            };
+            let game = crate::Compositor::Gamescope;
+            publish_display(&owner, game, Some(managed.clone()), false, fmt);
+            let (mode, d) = join_target(&own).expect("the owner streams");
+            assert_eq!(
+                (mode, d.compositor, d.route),
+                (MODE, Some(game), Some(managed))
+            );
+            assert_eq!(d.format, Some(fmt), "gamescope shares one capture");
+            publish_display(&owner, crate::Compositor::Kwin, None, false, fmt);
+            let (_, d) = join_target(&own).expect("the owner streams");
+            assert_eq!(
+                (d.compositor, d.format),
+                (Some(crate::Compositor::Kwin), None)
+            );
+        });
     }
 
     #[test]
