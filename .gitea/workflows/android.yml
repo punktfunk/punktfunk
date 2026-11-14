@@ -483,4 +483,6 @@ jobs:
                  --track "$PLAY_TRACK" --status completed
           if [ -n "${PLAY_ALSO_TRACK:-}" ]; then set -- "$@" --also-track "$PLAY_ALSO_TRACK"; fi
           if [ -n "${PLAY_NOTES:-}" ]; then set -- "$@" --release-notes-file "$PLAY_NOTES"; fi
+          # A canary waits out a pending review; restarting it on every push means none ever clears.
+          case "$GITHUB_REF" in refs/heads/main) set -- "$@" --skip-if-in-review ;; esac
           python3 clients/android/ci/play-upload.py "$@"

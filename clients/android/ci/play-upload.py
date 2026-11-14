@@ -10,7 +10,7 @@ Usage (upload a new build):
   SERVICE_ACCOUNT_JSON='<raw-or-base64 SA key>' \
     python3 play-upload.py --package io.unom.punktfunk \
       --aab path/to/app-release.aab --track beta --also-track alpha \
-      --status completed [--no-commit]
+      --status completed [--no-commit] [--skip-if-in-review]
 
 Usage (promote a build that is already on Play, no rebuild):
   python3 play-upload.py --package io.unom.punktfunk \
@@ -24,6 +24,9 @@ the move is atomic: testers are never left pinned to a code that production also
 
 --no-commit: do insert -> upload/assign -> track-update -> validate, then delete the edit
 (publishes nothing). Use it to dry-run the credentials/AAB/notes without touching the live track.
+
+--skip-if-in-review: while an earlier submission is in Play review, delete the edit and exit 0.
+Without it the commit cancels that review and starts a new one.
 """
 import argparse, base64, json, os, subprocess, sys, tempfile, time
 import urllib.request, urllib.parse, urllib.error
@@ -174,6 +177,8 @@ def main():
     ap.add_argument("--release-notes-file", help="Play 'What's new' text (<=500 chars)")
     ap.add_argument("--release-notes-language", default="en-US")
     ap.add_argument("--no-commit", action="store_true")
+    ap.add_argument("--skip-if-in-review", action="store_true",
+                    help="drop this edit instead of restarting a review already in progress")
     a = ap.parse_args()
 
     if bool(a.aab) == bool(a.promote):
@@ -234,14 +239,23 @@ def main():
             call("DELETE", f"{app}/edits/{edit}", token=tok, want_json=False)
             return
 
+        # Play's default commit cancels the submission in review and restarts it with this one.
+        commit = f"{app}/edits/{edit}:commit?changesInReviewBehavior=" + (
+            "ERROR_IF_IN_REVIEW" if a.skip_if_in_review else "CANCEL_IN_REVIEW_AND_SUBMIT")
         try:
-            call("POST", f"{app}/edits/{edit}:commit", token=tok)
-        except ApiError as e:
-            if "changesNotSentForReview" in e.body:
+            try:
+                call("POST", commit, token=tok)
+            except ApiError as e:
+                if "changesNotSentForReview" not in e.body:
+                    raise
                 print("commit needs changesNotSentForReview=true — retrying")
-                call("POST", f"{app}/edits/{edit}:commit?changesNotSentForReview=true", token=tok)
-            else:
+                call("POST", f"{commit}&changesNotSentForReview=true", token=tok)
+        except ApiError as e:
+            if not (a.skip_if_in_review and "CHANGES_ALREADY_IN_REVIEW" in e.body):
                 raise
+            call("DELETE", f"{app}/edits/{edit}", token=tok, want_json=False)
+            print(f"SKIPPED: an earlier submission is still in Play review; versionCode={vc} not committed")
+            return
         print(f"COMMITTED: versionCode={vc} live on track '{a.track}' ({a.status})")
     except ApiError as e:
         print(f"\nPLAY API ERROR:\n{e}", file=sys.stderr)
