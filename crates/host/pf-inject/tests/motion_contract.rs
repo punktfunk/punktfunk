@@ -154,9 +154,18 @@ fn rescaling_backends_convert_the_wire_into_their_native_units() {
     let wire_accel = MOTION_ACCEL_LSB_PER_G as i16;
 
     // hid-steam: STEAM_DECK_GYRO_RES_PER_DPS = 16, ACCEL_RES_PER_G = 16384.
+    // Units only: the Deck's raw Y is the wire's −Z.
     let (gyro, accel) = motion_wire_to_deck([wire_gyro; 3], [wire_accel; 3]);
-    assert_eq!(gyro, [100 * 16; 3], "Deck gyro: 100 °/s at 16 LSB/°·s");
-    assert_eq!(accel, [16384; 3], "Deck accel: 1 g at 16384 LSB/g");
+    assert_eq!(
+        gyro.map(i16::abs),
+        [100 * 16; 3],
+        "Deck gyro: 100 °/s at 16 LSB/°·s"
+    );
+    assert_eq!(
+        accel.map(i16::abs),
+        [16384; 3],
+        "Deck accel: 1 g at 16384 LSB/g"
+    );
 
     // hid-nintendo: JC_IMU_GYRO_RES_PER_DPS = 14.247, ACCEL_RES_PER_G = 4096.
     // Identity factory-calibration blob, so report is 1:1. 100 °/s × 14.247 = 1424.7, truncated.
@@ -292,15 +301,15 @@ fn every_backend_neutral_reads_as_a_still_pad_not_a_falling_one() {
     );
     assert_eq!(ds.gyro, [0; 3], "and it must not be turning");
 
-    // Deck neutral is the wire's, through the same rescale a live sample takes.
-    // 16384 LSB/g is hid-steam's ACCEL_RES_PER_G.
+    // Deck neutral is the wire's, through the same conversion a live sample takes.
+    // 16384 LSB/g is hid-steam's ACCEL_RES_PER_G. A Deck lying flat reads 1 g on raw Z.
     let deck = SteamState::neutral();
     assert_eq!(
         deck.accel,
         motion_wire_to_deck([0; 3], MOTION_NEUTRAL_ACCEL).1,
-        "the Deck neutral must be the wire neutral, rescaled — not a second opinion about 1 g"
+        "the Deck neutral must be the wire neutral, converted — not a second opinion about 1 g"
     );
-    assert_eq!(deck.accel, [0, 16384, 0]);
+    assert_eq!(deck.accel, [0, 0, 16384]);
     assert_eq!(deck.gyro, [0; 3]);
 
     // Switch Pro is a different device (hid-nintendo); its up axis is its own.

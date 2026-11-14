@@ -289,7 +289,7 @@ impl SteamState {
                 self.rpad_y = (32768 - (y as i32)).min(32767) as i16;
             }
             RichInput::Motion { gyro, accel, .. } => {
-                // Wire is DualSense units; hid-steam wants 16 LSB/°·s and 16384 LSB/g.
+                // Wire is DualSense units and axes; the pad's raw IMU has its own.
                 let (g, a) = super::steam_remap::motion_wire_to_deck(gyro, accel);
                 self.gyro = g;
                 self.accel = a;
@@ -897,14 +897,14 @@ mod tests {
         assert_ne!(s.buttons & btn::RPAD_TOUCH, 0);
         assert_eq!(s.rpad_x, 32767); // 65535-32768
         assert_eq!(s.rpad_y, 32767); // wire y=0 top (screen) → Deck +up
-                                     // DualSense → Deck: gyro ×16/20, accel ×16384/10000.
+                                     // DualSense → Deck: gyro ×16/20, accel ×16384/10000, wire y on raw z.
         s.apply_rich(RichInput::Motion {
             pad: 0,
             gyro: [1000, -2000, 0],
             accel: [10000, -5000, 0],
         });
-        assert_eq!(s.gyro, [800, -1600, 0]);
-        assert_eq!(s.accel, [16384, -8192, 0]);
+        assert_eq!(s.gyro, [800, 0, -1600]);
+        assert_eq!(s.accel, [16384, 0, -8192]);
     }
 
     /// Empty serial must not panic. `clamp(1, 21)` then `bytes[..len]`
