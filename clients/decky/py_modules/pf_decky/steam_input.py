@@ -55,49 +55,56 @@ def _configset_dirs() -> list[Path]:
     return [p / "config" for p in sorted(base.glob("*")) if (p / "config").is_dir()]
 
 
+def _vdf_tokens(text: str):
+    """Yield ``(start, end, token)`` for each VDF token: ``{``, ``}``, or a quoted string with
+    its quotes. A brace inside quotes is text, and a backslash escapes the next character, as
+    Steam writes them."""
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            yield i, j + 1, text[i : j + 1]
+            i = j + 1
+        else:
+            if text[i] in "{}":
+                yield i, i + 1, text[i]
+            i += 1
+
+
 def _upsert_configset_entry(text: str, key: str, source_type: str, source_val: str) -> str:
     """Set the top-level ``"<key>" { "<source_type>" "<source_val>" }`` block in a
-    ``configset_<type>.vdf``: replace the block for that key (case-insensitive), or insert
-    one before the file's final closing brace. Every other game's entry stays byte-for-byte
-    intact. An empty file gets the ``"controller_config" { }`` skeleton."""
-    block = f'\t"{key}"\n\t{{\n\t\t"{source_type}"\t\t"{source_val}"\n\t}}\n'
+    ``configset_<type>.vdf``: replace the block of the depth-1 key (case-insensitive), or insert
+    one before the last top-level closing brace. The key is written escaped and braces count
+    only outside quotes, so every other game's entry stays byte-for-byte intact. An empty file
+    gets the ``"controller_config" { }`` skeleton."""
+    quoted = '"' + key.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    block = f'\t{quoted}\n\t{{\n\t\t"{source_type}"\t\t"{source_val}"\n\t}}\n'
     if '"controller_config"' not in text:
         return '"controller_config"\n{\n' + block + "}\n"
 
-    lower = text.lower()
-    needle = f'"{key.lower()}"'
-    # Find the key token that begins a top-level entry (its own line), then its "{ … }" block.
-    search_from = 0
-    while True:
-        idx = lower.find(needle, search_from)
-        if idx == -1:
-            break
-        # Must be a standalone key line (preceded only by whitespace back to a newline).
-        line_start = text.rfind("\n", 0, idx) + 1
-        if text[line_start:idx].strip() != "":
-            search_from = idx + len(needle)
-            continue
-        brace = text.find("{", idx)
-        if brace == -1:
-            break
-        depth = 0
-        i = brace
-        while i < len(text):
-            if text[i] == "{":
-                depth += 1
-            elif text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    break
-            i += 1
-        end = i + 1
-        # Consume the trailing newline after the block so we don't accumulate blank lines.
-        if end < len(text) and text[end] == "\n":
-            end += 1
-        return text[:line_start] + block + text[end:]
+    want = quoted.lower()
+    depth, prev, found, last_close = 0, None, None, -1
+    for start, end, tok in _vdf_tokens(text):
+        if tok == "{":
+            depth += 1
+            # A string followed by "{" one level into controller_config is a game's key.
+            if depth == 2 and prev is not None and prev[1].lower() == want:
+                found = prev[0]
+        elif tok == "}":
+            depth -= 1
+            if depth == 1 and found is not None:
+                line_start = text.rfind("\n", 0, found) + 1
+                cut = line_start if not text[line_start:found].strip() else found
+                # Take the block's own newline too, so rewrites don't pile up blank lines.
+                if text[end : end + 1] == "\n":
+                    end += 1
+                return text[:cut] + block + text[end:]
+            if depth == 0:
+                last_close = start
+        prev = (start, tok)
 
-    # Not present — insert before the last closing brace (the controller_config block's end).
-    last_close = text.rstrip().rfind("}")
     if last_close == -1:
         return text.rstrip() + "\n" + block
     return text[:last_close] + block + text[last_close:]
