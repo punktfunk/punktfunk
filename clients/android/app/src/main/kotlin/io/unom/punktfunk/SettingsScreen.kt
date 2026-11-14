@@ -87,6 +87,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import io.unom.punktfunk.kit.DeviceGyro
+import io.unom.punktfunk.components.SCREEN_MARGIN
+import io.unom.punktfunk.components.ScreenTitle
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.Shortcuts
 import io.unom.punktfunk.kit.SlotId
@@ -265,74 +267,86 @@ fun SettingsScreen(
     val selected = selectedName
         ?.let { n -> categories.firstOrNull { it.name == n } }
 
-    Column(Modifier.fillMaxSize()) {
-        PresetScopeChips(
-            presets = presets,
-            selectedId = active?.id,
-            onSelect = { id ->
-                scopeId = id
-                // About has no presetable rows at all; don't strand the pane on it.
-                if (id != null && selected?.presetable == false) selectedName = null
-            },
-            onNew = { editing = EditIntent.New(nextAccent(presets)) },
-            onEdit = { p -> editing = EditIntent.Existing(p) },
-            onDuplicate = { p ->
-                val copy = newPreset(uniqueName(context, presetStore, p.name), p.accent)
-                    .copy(overrides = p.overrides)
-                presetStore.save(copy)
-                presets = presetStore.all()
-                scopeId = copy.id
-            },
-            onDelete = { p -> deleting = p },
-            modifier = Modifier.padding(top = 12.dp),
-        )
-        if (active != null) {
-            Text(
-                stringResource(R.string.prefs_scope_preset_hint, active.name),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 10.dp),
+    // Two panes from 640 dp: the list beside the detail. Below that the list pushes to the detail.
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val twoPane = maxWidth >= 640.dp
+        Column(Modifier.fillMaxSize()) {
+            // The tab's title, where every tab has it. On a phone a category page takes its place,
+            // with the way back to the list.
+            val pushed = selected.takeIf { !twoPane }
+            ScreenTitle(
+                stringResource(pushed?.title ?: R.string.prefs_title),
+                onBack = if (pushed != null) ({ selectedName = null }) else null,
             )
-        }
-        Spacer(Modifier.height(12.dp))
-        HorizontalDivider()
-
-        CompositionLocalProvider(
-            LocalSettingsScope provides SettingsScopeState(
-                presetScope = active != null,
-                overridden = active?.overrides?.overridden() ?: emptySet(),
-                onReset = ::resetField,
-                showAdvanced = globals.showAdvanced,
-                onShowAdvanced = { on ->
-                    globals = globals.copy(showAdvanced = on)
-                    onChange(globals)
+            PresetScopeChips(
+                presets = presets,
+                selectedId = active?.id,
+                onSelect = { id ->
+                    scopeId = id
+                    // About has no presetable rows at all; don't strand the pane on it.
+                    if (id != null && selected?.presetable == false) selectedName = null
                 },
-            ),
-        ) {
-            CategoryPanes(
-                categories = categories,
-                selected = selected,
-                onSelect = { selectedName = it?.name },
-                onBack = onBack,
-            ) { cat, back ->
-                // Keyed on the scope: switching chips rebuilds the page rather than recomposing
-                // it in place. Correctness no longer depends on it (see [scopePreset]), but a
-                // row's own `remember` is per-scope state too — "Custom…" picked while editing
-                // a preset has no business still being picked over on the defaults.
-                key(active?.id) {
-                    CategoryDetail(
-                        category = cat,
-                        settings = s,
-                        onChange = ::update,
-                        context = context,
-                        onMicChange = onMicChange,
-                        onOpenControllers = { showControllers = true },
-                        onOpenQuickActions = { showQuickActions = true },
-                        onOpenLicenses = { showLicenses = true },
-                        onOpenShortcuts = { showShortcuts = true },
-                        onResetAll = ::resetAll,
-                        onBack = back,
-                    )
+                onNew = { editing = EditIntent.New(nextAccent(presets)) },
+                onEdit = { p -> editing = EditIntent.Existing(p) },
+                onDuplicate = { p ->
+                    val copy = newPreset(uniqueName(context, presetStore, p.name), p.accent)
+                        .copy(overrides = p.overrides)
+                    presetStore.save(copy)
+                    presets = presetStore.all()
+                    scopeId = copy.id
+                },
+                onDelete = { p -> deleting = p },
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            if (active != null) {
+                Text(
+                    stringResource(R.string.prefs_scope_preset_hint, active.name),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 10.dp),
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider()
+
+            CompositionLocalProvider(
+                LocalSettingsScope provides SettingsScopeState(
+                    presetScope = active != null,
+                    overridden = active?.overrides?.overridden() ?: emptySet(),
+                    onReset = ::resetField,
+                    showAdvanced = globals.showAdvanced,
+                    onShowAdvanced = { on ->
+                        globals = globals.copy(showAdvanced = on)
+                        onChange(globals)
+                    },
+                ),
+            ) {
+                CategoryPanes(
+                    categories = categories,
+                    selected = selected,
+                    twoPane = twoPane,
+                    onSelect = { selectedName = it?.name },
+                    onBack = onBack,
+                ) { cat ->
+                    // Keyed on the scope: switching chips rebuilds the page rather than recomposing
+                    // it in place. Correctness no longer depends on it (see [scopePreset]), but a
+                    // row's own `remember` is per-scope state too — "Custom…" picked while editing
+                    // a preset has no business still being picked over on the defaults.
+                    key(active?.id) {
+                        CategoryDetail(
+                            category = cat,
+                            settings = s,
+                            onChange = ::update,
+                            context = context,
+                            onMicChange = onMicChange,
+                            onOpenControllers = { showControllers = true },
+                            onOpenQuickActions = { showQuickActions = true },
+                            onOpenLicenses = { showLicenses = true },
+                            onOpenShortcuts = { showShortcuts = true },
+                            onResetAll = ::resetAll,
+                            titled = twoPane,
+                        )
+                    }
                 }
             }
         }
@@ -350,20 +364,20 @@ fun SettingsScreen(
 }
 
 /**
- * The category list beside (≥ 640 dp) or in front of the detail page. Two-pane: a side list with
- * a cross-fading detail, never an empty one. Compact: the list pushes to a full-screen detail
- * and back, like the iOS / Android system settings — a horizontal slide tracking the drill-in.
+ * The category list beside the detail page ([twoPane]) or in front of it. Two-pane: a side list
+ * with a cross-fading detail, never an empty one. Compact: the list pushes to a full-screen
+ * detail and back with a horizontal slide, and the screen's title follows.
  */
 @Composable
 private fun CategoryPanes(
     categories: List<SettingsCategory>,
     selected: SettingsCategory?,
+    twoPane: Boolean,
     onSelect: (SettingsCategory?) -> Unit,
     onBack: () -> Unit,
-    detail: @Composable (SettingsCategory, (() -> Unit)?) -> Unit,
+    detail: @Composable (SettingsCategory) -> Unit,
 ) {
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val twoPane = maxWidth >= 640.dp
+    Box(Modifier.fillMaxSize()) {
         LaunchedEffect(twoPane, categories) {
             if (twoPane && selected == null) onSelect(categories.first())
         }
@@ -383,7 +397,7 @@ private fun CategoryPanes(
                         targetState = selected ?: categories.first(),
                         transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(200)) },
                         label = "SettingsPane",
-                    ) { cat -> detail(cat, null) }
+                    ) { cat -> detail(cat) }
                 }
             }
         } else {
@@ -410,7 +424,7 @@ private fun CategoryPanes(
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
-                    detail(sel) { onSelect(null) }
+                    detail(sel)
                 }
             }
         }
@@ -601,7 +615,7 @@ enum class SettingsCategory(
     About(R.string.prefs_category_about, Icons.Filled.Info, presetable = false),
 }
 
-/** The category list — the settings root. Highlights the [selected] row when it drives a detail pane. */
+/** The category list: the settings root. It highlights the [selected] row when it drives a detail pane. */
 @Composable
 private fun CategoryList(
     categories: List<SettingsCategory>,
@@ -613,14 +627,9 @@ private fun CategoryList(
     Column(
         modifier
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 20.dp),
+            .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Text(
-            stringResource(R.string.prefs_title),
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(start = 8.dp, bottom = 12.dp),
-        )
         categories.forEach { cat ->
             val highlighted = twoPane && selected == cat
             Row(
@@ -651,7 +660,10 @@ private fun CategoryList(
     }
 }
 
-/** One category's controls. [onBack] non-null (phone push) shows a back arrow; null (tablet pane) hides it. */
+/**
+ * One category's controls. [titled] heads them with the category's name: a tablet's pane, where
+ * the screen's title stays Settings. On a phone the screen's title names the category instead.
+ */
 @Composable
 private fun CategoryDetail(
     category: SettingsCategory,
@@ -664,23 +676,16 @@ private fun CategoryDetail(
     onOpenLicenses: () -> Unit,
     onOpenShortcuts: () -> Unit,
     onResetAll: () -> Unit,
-    onBack: (() -> Unit)?,
+    titled: Boolean,
 ) {
     Column(
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 16.dp),
+            .padding(horizontal = SCREEN_MARGIN, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (onBack != null) {
-                IconButton(onClick = onBack, modifier = Modifier.padding(end = 4.dp)) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
-                }
-            }
-            Text(stringResource(category.title), style = MaterialTheme.typography.headlineMedium)
-        }
+        if (titled) Text(stringResource(category.title), style = MaterialTheme.typography.headlineMedium)
         when (category) {
             SettingsCategory.General -> GeneralSettings(settings, onChange, onResetAll)
             SettingsCategory.Display -> DisplaySettings(settings, onChange, context)

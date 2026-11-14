@@ -17,11 +17,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
@@ -43,6 +41,8 @@ import androidx.compose.ui.unit.dp
 import io.unom.punktfunk.components.HostLine
 import io.unom.punktfunk.components.HostStatusLine
 import io.unom.punktfunk.components.HostTile
+import io.unom.punktfunk.components.SCREEN_MARGIN
+import io.unom.punktfunk.components.ScreenTitle
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.security.KnownHost
 
@@ -102,27 +102,15 @@ internal fun HostDetailScreen(
     var confirmRemove by remember { mutableStateOf(false) }
     var confirmUnpair by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 8.dp),
-        ) {
-            IconButton(onClick = acts.back) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
-            }
-            Text(
-                stringResource(R.string.hostcard_details_hint),
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        ScreenTitle(stringResource(R.string.hostcard_details_hint), onBack = acts.back)
+        // Under the title's margin; a wide window does not stretch the rows.
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
             Column(
                 verticalArrangement = Arrangement.spacedBy(20.dp),
                 modifier = Modifier
-                    .widthIn(max = 640.dp)
+                    .widthIn(max = 680.dp)
                     .verticalScroll(rememberScrollState())
-                    .padding(16.dp),
+                    .padding(start = SCREEN_MARGIN, end = SCREEN_MARGIN, top = 4.dp, bottom = 16.dp),
             ) {
                 if (notice != null || failure != null) NoticeBanners(notice, failure)
 

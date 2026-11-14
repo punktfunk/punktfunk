@@ -90,6 +90,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.ImageLoader
 import io.unom.punktfunk.components.PRESENCE_ONLINE
+import io.unom.punktfunk.components.SCREEN_MARGIN
+import io.unom.punktfunk.components.SCREEN_TITLE_HEIGHT
+import io.unom.punktfunk.components.ScreenTitle
 import io.unom.punktfunk.components.launcherIcon
 import io.unom.punktfunk.components.resolveOsIcon
 import io.unom.punktfunk.kit.R
@@ -167,37 +170,30 @@ internal fun TouchLibrary(
     val ready = state as? LibState.Ready
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 8.dp).height(56.dp),
-            ) {
-                when {
-                    showsHidden -> {
-                        IconButton(onClick = { onHidden(false) }) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = stringResource(R.string.common_back),
-                            )
-                        }
-                        BarTitle(stringResource(R.string.lib_hidden_for, hidesFor!!), Modifier.weight(1f))
-                        IconButton(onClick = onReload, enabled = hidden !is LibState.Loading) {
-                            Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.lib_reload))
-                        }
+            when {
+                showsHidden -> ScreenTitle(
+                    stringResource(R.string.lib_hidden_for, hidesFor!!),
+                    onBack = { onHidden(false) },
+                ) {
+                    IconButton(onClick = onReload, enabled = hidden !is LibState.Loading) {
+                        Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.lib_reload))
                     }
-                    searching -> SearchField(search, onChange = { search = it }, onClose = closeSearch)
-                    else -> {
-                        BarTitle(stringResource(R.string.lib_title), Modifier.weight(1f).padding(start = 12.dp))
-                        IconButton(onClick = { searching = true }) {
-                            Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.lib_search_titles))
-                        }
-                        SortMenu(layout, onLayout)
-                        ShelfMenu(
-                            hidesFor = hidesFor,
-                            onHidden = { onHidden(true) },
-                            onCustomize = { customize = true },
-                            onReload = onReload.takeIf { state !is LibState.Loading },
-                        )
+                }
+                // In the title's place and at its height, so the shelf under it does not move.
+                searching -> Box(Modifier.height(SCREEN_TITLE_HEIGHT), contentAlignment = Alignment.BottomCenter) {
+                    SearchField(search, onChange = { search = it }, onClose = closeSearch)
+                }
+                else -> ScreenTitle(stringResource(R.string.lib_title)) {
+                    IconButton(onClick = { searching = true }) {
+                        Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.lib_search_titles))
                     }
+                    SortMenu(layout, onLayout)
+                    ShelfMenu(
+                        hidesFor = hidesFor,
+                        onHidden = { onHidden(true) },
+                        onCustomize = { customize = true },
+                        onReload = onReload.takeIf { state !is LibState.Loading },
+                    )
                 }
             }
             if (showsHidden) {
@@ -295,18 +291,6 @@ internal fun TouchLibrary(
     }
 }
 
-@Composable
-private fun BarTitle(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text,
-        style = MaterialTheme.typography.headlineSmall,
-        fontWeight = FontWeight.SemiBold,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = modifier,
-    )
-}
-
 /** The bar's search field; it takes focus as it opens, and its cross clears and closes it. */
 @Composable
 private fun SearchField(text: String, onChange: (String) -> Unit, onClose: () -> Unit) {
@@ -329,7 +313,7 @@ private fun SearchField(text: String, onChange: (String) -> Unit, onClose: () ->
             focusedIndicatorColor = Color.Transparent,
             unfocusedIndicatorColor = Color.Transparent,
         ),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).focusRequester(focus),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = SCREEN_MARGIN).focusRequester(focus),
     )
 }
 
@@ -663,7 +647,7 @@ internal fun TouchGrid(
         state = grid,
         modifier = modifier.fillMaxWidth(),
         // The header item's spacing makes up the top margin.
-        contentPadding = PaddingValues(start = SHELF_MARGIN, end = SHELF_MARGIN, top = 4.dp, bottom = SHELF_MARGIN),
+        contentPadding = PaddingValues(start = SCREEN_MARGIN, end = SCREEN_MARGIN, top = 4.dp, bottom = SCREEN_MARGIN),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -686,8 +670,6 @@ internal fun TouchGrid(
     }
 }
 
-/** The grid's margin, which a row scrolls across to the screen's edge. */
-private val SHELF_MARGIN = 16.dp
 
 /** A row's poster width: the grid's column minimum, so a row's posters match the grid's. */
 private val STRIP_TILE = 130.dp
@@ -727,9 +709,9 @@ private fun SectionHeading(text: String) {
 @Composable
 internal fun Strip(content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
     LazyRow(
-        contentPadding = PaddingValues(horizontal = SHELF_MARGIN),
+        contentPadding = PaddingValues(horizontal = SCREEN_MARGIN),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.bleed(SHELF_MARGIN),
+        modifier = Modifier.bleed(SCREEN_MARGIN),
         content = content,
     )
 }

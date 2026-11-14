@@ -36,6 +36,8 @@ import io.unom.punktfunk.components.EmptyHostsState
 import io.unom.punktfunk.components.HostCard
 import io.unom.punktfunk.components.HostLine
 import io.unom.punktfunk.components.HostMenuItem
+import io.unom.punktfunk.components.SCREEN_MARGIN
+import io.unom.punktfunk.components.ScreenTitle
 import io.unom.punktfunk.components.SectionLabel
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
@@ -134,109 +136,111 @@ internal fun ConnectGrid(
     }
     val res = LocalContext.current.resources
 
-    Box(Modifier.fillMaxSize()) {
-        LazyVerticalGrid(
-            // One column on a phone, two or more on a tablet.
-            columns = GridCells.Adaptive(minSize = 340.dp),
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            if (notice != null || status != null) {
-                item(span = { GridItemSpan(maxLineSpan) }) { NoticeBanners(notice, status) }
-            }
+    Column(Modifier.fillMaxSize()) {
+        ScreenTitle(stringResource(R.string.hosts_tab))
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            LazyVerticalGrid(
+                // One column on a phone, two or more on a tablet.
+                columns = GridCells.Adaptive(minSize = 340.dp),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = SCREEN_MARGIN, end = SCREEN_MARGIN, top = 4.dp, bottom = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (notice != null || status != null) {
+                    item(span = { GridItemSpan(maxLineSpan) }) { NoticeBanners(notice, status) }
+                }
 
-            if (!lnpGranted) {
-                item(span = { GridItemSpan(maxLineSpan) }) { LocalNetworkBanner(onAskLocalNetwork) }
-            }
+                if (!lnpGranted) {
+                    item(span = { GridItemSpan(maxLineSpan) }) { LocalNetworkBanner(onAskLocalNetwork) }
+                }
 
-            if (savedHosts.isEmpty() && discoveredUnsaved.isEmpty()) {
+                if (savedHosts.isEmpty() && discoveredUnsaved.isEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        EmptyHostsState()
+                    }
+                }
+
+                // The screen's title heads the saved hosts; only the discovered ones need a label.
+                if (savedHosts.isNotEmpty()) {
+                    items(savedCards, key = { it.key }) { entry ->
+                        val kh = entry.host
+                        val pin = entry.pin
+                        val shown = pin ?: kh.presetId?.let { id -> presets.firstOrNull { it.id == id } }
+                        HostCard(
+                            name = kh.name,
+                            status = HostLine.of(
+                                pinned = kh.fpHex.isNotEmpty(),
+                                online = kh.isOnline(reachable),
+                                connecting = false,
+                                playing = nowPlaying[kh.fpHex],
+                                wakes = autoWake && kh.mac.isNotEmpty(),
+                            ),
+                            // Live advert preferred (the store lags a discovery tick), else stored.
+                            os = discovered.firstOrNull { kh.matches(it) && it.os.isNotEmpty() }?.os
+                                ?: kh.os,
+                            enabled = !connecting,
+                            // A pinned card connects with its preset; the host's own follows the binding.
+                            onConnect = { onConnect(kh, pin?.id) },
+                            onDetails = if (pin == null) ({ onDetails(kh) }) else null,
+                            filled = kh.fpHex.isNotEmpty(),
+                            presetLabel = shown?.name,
+                            presetProminent = pin != null,
+                            accent = accentColor(shown?.accent),
+                            menuItems = hostMenu(kh, pin),
+                            isDefault = pin == null && defaultHostId == kh.id,
+                            profileName = if (pin == null) kh.asProfile?.displayName else null,
+                            profilePicture = kh.asProfile?.avatar,
+                            profileArt = if (kh.asProfile?.avatar != null) rememberProfileArt(kh) else null,
+                            // Named only when it is not the only screen.
+                            screenLine = screens[kh.fpHex]?.takeIf { kh.paired }?.cardLineUnder(shown, res),
+                        )
+                    }
+                }
+
+                if (discoveredUnsaved.isNotEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        // Set off from the saved hosts above it, when there are any.
+                        if (savedHosts.isNotEmpty()) Spacer(Modifier.height(12.dp))
+                        SectionLabel(stringResource(R.string.hosts_section_discovered))
+                    }
+                    // The advert's instance key: two same-named hosts can merge onto one address.
+                    items(discoveredUnsaved, key = { "disc-${it.key}" }) { dh ->
+                        HostCard(
+                            name = dh.name,
+                            status = if (dh.pairingRequired) HostLine.PairingRequired else HostLine.Found,
+                            os = dh.os,
+                            enabled = !connecting,
+                            onConnect = { onConnectDiscovered(dh) },
+                            filled = false,
+                            // No name of its own yet, so the address tells two apart.
+                            address = "${dh.host}:${dh.port}",
+                        )
+                    }
+                }
+
+                // Scan again is offered whether or not anything turned up: one expected host missing
+                // looks the same as a browse that went deaf. Without the local network grant the
+                // banner above owns the state.
+                if (lnpGranted && !connecting) {
+                    item(span = { GridItemSpan(maxLineSpan) }) { SearchRow(discovered.isEmpty(), onRescan) }
+                }
+
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    EmptyHostsState()
+                    Spacer(Modifier.height(96.dp))
                 }
             }
 
-            if (savedHosts.isNotEmpty()) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    SectionLabel(stringResource(R.string.hosts_section_saved))
-                }
-                items(savedCards, key = { it.key }) { entry ->
-                    val kh = entry.host
-                    val pin = entry.pin
-                    val shown = pin ?: kh.presetId?.let { id -> presets.firstOrNull { it.id == id } }
-                    HostCard(
-                        name = kh.name,
-                        status = HostLine.of(
-                            pinned = kh.fpHex.isNotEmpty(),
-                            online = kh.isOnline(reachable),
-                            connecting = false,
-                            playing = nowPlaying[kh.fpHex],
-                            wakes = autoWake && kh.mac.isNotEmpty(),
-                        ),
-                        // Live advert preferred (the store lags a discovery tick), else stored.
-                        os = discovered.firstOrNull { kh.matches(it) && it.os.isNotEmpty() }?.os
-                            ?: kh.os,
-                        enabled = !connecting,
-                        // A pinned card connects with its preset; the host's own follows the binding.
-                        onConnect = { onConnect(kh, pin?.id) },
-                        onDetails = if (pin == null) ({ onDetails(kh) }) else null,
-                        filled = kh.fpHex.isNotEmpty(),
-                        presetLabel = shown?.name,
-                        presetProminent = pin != null,
-                        accent = accentColor(shown?.accent),
-                        menuItems = hostMenu(kh, pin),
-                        isDefault = pin == null && defaultHostId == kh.id,
-                        profileName = if (pin == null) kh.asProfile?.displayName else null,
-                        profilePicture = kh.asProfile?.avatar,
-                        profileArt = if (kh.asProfile?.avatar != null) rememberProfileArt(kh) else null,
-                        // Named only when it is not the only screen.
-                        screenLine = screens[kh.fpHex]?.takeIf { kh.paired }?.cardLineUnder(shown, res),
-                    )
-                }
-            }
-
-            if (discoveredUnsaved.isNotEmpty()) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    Spacer(Modifier.height(12.dp))
-                    SectionLabel(stringResource(R.string.hosts_section_discovered))
-                }
-                // The advert's instance key: two same-named hosts can merge onto one address.
-                items(discoveredUnsaved, key = { "disc-${it.key}" }) { dh ->
-                    HostCard(
-                        name = dh.name,
-                        status = if (dh.pairingRequired) HostLine.PairingRequired else HostLine.Found,
-                        os = dh.os,
-                        enabled = !connecting,
-                        onConnect = { onConnectDiscovered(dh) },
-                        filled = false,
-                        // No name of its own yet, so the address tells two apart.
-                        address = "${dh.host}:${dh.port}",
-                    )
-                }
-            }
-
-            // Scan again is offered whether or not anything turned up: one expected host missing
-            // looks the same as a browse that went deaf. Without the local network grant the
-            // banner above owns the state.
-            if (lnpGranted && !connecting) {
-                item(span = { GridItemSpan(maxLineSpan) }) { SearchRow(discovered.isEmpty(), onRescan) }
-            }
-
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                Spacer(Modifier.height(96.dp))
-            }
+            ExtendedFloatingActionButton(
+                onClick = onAddHost,
+                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                text = { Text(stringResource(R.string.hosts_add)) },
+                expanded = !connecting,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(20.dp),
+            )
         }
-
-        ExtendedFloatingActionButton(
-            onClick = onAddHost,
-            icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-            text = { Text(stringResource(R.string.hosts_add)) },
-            expanded = !connecting,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(20.dp),
-        )
     }
 }
 
