@@ -400,6 +400,14 @@ impl VirtualMouse {
         self.doorbell.is_some()
     }
 
+    /// Ring slots free for a report right now. The driver only frees more.
+    pub(crate) fn ring_free(&self) -> usize {
+        let shm = self.channel.data();
+        let head = shm.load_u32(OFF_RING_HEAD, Ordering::Relaxed);
+        let tail = shm.load_u32(OFF_RING_TAIL, Ordering::Relaxed);
+        MOUSE_RING_LEN.saturating_sub(head.wrapping_sub(tail) as usize)
+    }
+
     fn driver_proto(&self) -> u32 {
         self.channel
             .data()

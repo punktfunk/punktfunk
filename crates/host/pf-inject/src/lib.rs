@@ -59,6 +59,12 @@ pub trait InputInjector {
     fn on_deadline(&mut self) -> Result<()> {
         Ok(())
     }
+
+    /// How many moves a backlog of adjacent relative motion stays. 1 sums it into one. A
+    /// backend whose OS reads each report's size for its pointer curve keeps them apart.
+    fn motion_reports(&self) -> usize {
+        1
+    }
 }
 
 /// Preferred injection backend. Variants are per-OS so [`open`] cannot name a backend the

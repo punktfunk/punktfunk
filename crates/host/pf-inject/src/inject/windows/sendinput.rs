@@ -41,6 +41,9 @@ use super::InputInjector;
 const GENERIC_ALL: u32 = 0x1000_0000;
 const XBUTTON1: u32 = 0x0001;
 const XBUTTON2: u32 = 0x0002;
+/// Relative moves one batch keeps apart at most: half the virtual HID ring. Windows' pointer
+/// curve reads each report's size, so a summed backlog travels further than its reports would.
+const MOTION_REPORTS: usize = pf_driver_proto::mouse::MOUSE_RING_LEN / 2;
 
 pub struct SendInputInjector {
     desktop: Option<HDESK>,
@@ -227,6 +230,13 @@ impl Drop for SendInputInjector {
 }
 
 impl InputInjector for SendInputInjector {
+    /// Half of what the ring has free, so the batch's keys and buttons fit too and a ring the
+    /// driver is slow to drain gets fewer, larger moves instead of dropped ones.
+    fn motion_reports(&self) -> usize {
+        crate::mouse_windows::with_hid(|m| m.ring_free())
+            .map_or(MOTION_REPORTS, |free| (free / 2).clamp(1, MOTION_REPORTS))
+    }
+
     fn inject(&mut self, event: &InputEvent) -> Result<()> {
         let sc_ex = self.key_sc_ex(event);
         if self.inject_hid(event, sc_ex) {

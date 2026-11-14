@@ -152,7 +152,7 @@ impl InjectorSlot {
 
 /// Lazy-open worker over an [`InjectorSlot`]. Exits when every sender drops (host shutdown, or
 /// session end for a pin). `pin` is the gamescope relay ([`InjectorService::start_at`]); `None`
-/// follows [`default_backend`]. Each wake drains the backlog and [`coalesce`]s motion so a slow
+/// follows [`default_backend`]. Each wake drains the backlog through [`coalesce`], so a slow
 /// backend cannot queue stale relative-mouse/scroll; buttons, keys, and absolute moves stay ordered.
 fn injector_service_thread(
     rx: std::sync::mpsc::Receiver<InputEvent>,
@@ -185,10 +185,10 @@ fn injector_service_thread(
             }
             Ok(opened)
         });
-        if slot.injector.is_some() {
+        if let Some(reports) = slot.injector.as_ref().map(|i| i.motion_reports()) {
             let aim = crate::aim();
             slot.inject_batch(warp_onto_stream_head(
-                coalesce(batch),
+                coalesce(batch, reports),
                 aim.generation,
                 &mut warped_gen,
                 aim.target.extent,
@@ -242,16 +242,30 @@ fn warp_onto_stream_head(
     out
 }
 
-/// Sum adjacent relative-mouse and same-axis, same-precision scroll. Buttons, keys, moves, and type
-/// changes pass through in order: a key between two moves flushes the accumulated motion first.
-fn coalesce(events: Vec<InputEvent>) -> Vec<InputEvent> {
+/// Sum same-axis, same-precision scroll, and each run of adjacent relative motion into at most
+/// `motion_reports` moves of equal share. Buttons, keys, moves, and type changes pass through
+/// in order: a key between two moves flushes the motion before it first.
+fn coalesce(events: Vec<InputEvent>, motion_reports: usize) -> Vec<InputEvent> {
     let mut out: Vec<InputEvent> = Vec::with_capacity(events.len());
-    for ev in events {
-        match out.last_mut() {
-            Some(last) if last.kind == InputKind::MouseMove && ev.kind == InputKind::MouseMove => {
-                last.x = last.x.saturating_add(ev.x);
-                last.y = last.y.saturating_add(ev.y);
+    let mut rest = events.as_slice();
+    while let Some(&ev) = rest.first() {
+        if ev.kind == InputKind::MouseMove {
+            let run = rest
+                .iter()
+                .take_while(|e| e.kind == InputKind::MouseMove)
+                .count();
+            for group in rest[..run].chunks(run.div_ceil(motion_reports.max(1))) {
+                let mut sum = group[0];
+                for e in &group[1..] {
+                    sum.x = sum.x.saturating_add(e.x);
+                    sum.y = sum.y.saturating_add(e.y);
+                }
+                out.push(sum);
             }
+            rest = &rest[run..];
+            continue;
+        }
+        match out.last_mut() {
             Some(last)
                 if last.kind == InputKind::MouseScroll
                     && ev.kind == InputKind::MouseScroll
@@ -262,6 +276,7 @@ fn coalesce(events: Vec<InputEvent>) -> Vec<InputEvent> {
             }
             _ => out.push(ev),
         }
+        rest = &rest[1..];
     }
     out
 }
@@ -295,7 +310,7 @@ mod tests {
             mk(InputKind::MouseScroll, 0, 2, 0),
             mk(InputKind::MouseScroll, 1, 1, 0),
         ];
-        let out = coalesce(events);
+        let out = coalesce(events, 1);
         assert_eq!(out.len(), 5);
         assert_eq!(
             (out[0].kind, out[0].x, out[0].y),
@@ -324,7 +339,26 @@ mod tests {
             mk(InputKind::Scroll, 0, 100, 0),
             mk(InputKind::Scroll, 0, 200, 0),
         ];
-        assert_eq!(coalesce(events).len(), 2);
+        assert_eq!(coalesce(events, 1).len(), 2);
+    }
+
+    /// A backend that keeps reports apart gets a short backlog unsummed and a long one in
+    /// equal groups: the travel and the order stay.
+    #[test]
+    fn coalesce_keeps_motion_reports_apart_up_to_the_cap() {
+        let run = |n: i32| -> Vec<InputEvent> {
+            (1..=n)
+                .map(|i| mk(InputKind::MouseMove, 0, i, -i))
+                .collect()
+        };
+        let xs = |out: &[InputEvent]| out.iter().map(|e| e.x).collect::<Vec<_>>();
+        assert_eq!(xs(&coalesce(run(5), 32)), [1, 2, 3, 4, 5]);
+        let out = coalesce(run(70), 32);
+        assert_eq!(out.len(), 24); // groups of ceil(70 / 32) = 3
+        assert_eq!(xs(&out)[..2], [1 + 2 + 3, 4 + 5 + 6]);
+        assert_eq!(out.iter().map(|e| e.x).sum::<i32>(), (1..=70).sum::<i32>());
+        assert_eq!(out.iter().map(|e| e.y).sum::<i32>(), -(1..=70).sum::<i32>());
+        assert_eq!(xs(&coalesce(run(70), 1)), [(1..=70).sum::<i32>()]);
     }
 
     fn warp(events: Vec<InputEvent>, aim: u64, warped: &mut u64) -> Vec<InputEvent> {
@@ -480,8 +514,11 @@ mod tests {
 
     #[test]
     fn coalesce_handles_empty_and_singleton() {
-        assert!(coalesce(vec![]).is_empty());
-        assert_eq!(coalesce(vec![mk(InputKind::MouseMove, 0, 7, 8)]).len(), 1);
+        assert!(coalesce(vec![], 1).is_empty());
+        assert_eq!(
+            coalesce(vec![mk(InputKind::MouseMove, 0, 7, 8)], 1).len(),
+            1
+        );
     }
 
     /// A trackpad delta and a wheel detent mean different distances, so summing one into the
@@ -491,7 +528,7 @@ mod tests {
         let wheel = mk(InputKind::MouseScroll, 0, 120, 0);
         let mut precise = mk(InputKind::MouseScroll, 0, 12, 0);
         precise.flags = SCROLL_FLAG_PRECISE;
-        let out = coalesce(vec![precise, precise, wheel, wheel]);
+        let out = coalesce(vec![precise, precise, wheel, wheel], 1);
         assert_eq!(out.len(), 2);
         assert_eq!((out[0].x, out[0].flags), (24, SCROLL_FLAG_PRECISE));
         assert_eq!((out[1].x, out[1].flags), (240, 0));
