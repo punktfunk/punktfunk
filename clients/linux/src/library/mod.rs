@@ -632,14 +632,15 @@ fn loading_page() -> gtk::Box {
     page
 }
 
-/// Why a shelf did not load, and the next move, in the player's words.
-fn failure(e: &LibraryError, host: &str) -> String {
-    match e {
+/// Why a shelf did not load, and the next move, in the player's words. It is a status page's
+/// description, which is markup, so the host's name arrives escaped.
+fn failure(e: &LibraryError, host: &str) -> glib::GString {
+    glib::markup_escape_text(&match e {
         LibraryError::PinMismatch => desktop::desktop_lib_failed_pin(host),
         LibraryError::NotPaired => desktop::desktop_lib_failed_not_paired(host),
         LibraryError::Http(code) => desktop::desktop_lib_failed_http(host, code),
         LibraryError::Unreachable(_) => desktop::desktop_lib_failed_unreachable(host),
-    }
+    })
 }
 
 fn status_page(
@@ -1185,7 +1186,8 @@ impl LibraryPage {
             (true, Some(name)) => {
                 let none = &self.widgets.none_hidden;
                 none.set_title(&client::lib_hidden_for(&name));
-                none.set_description(Some(&client::lib_hidden_none(&name)));
+                let said = glib::markup_escape_text(&client::lib_hidden_none(&name));
+                none.set_description(Some(&said));
                 self.shelf_page = self.widgets.stack.visible_child_name();
                 *self.view.hidden.borrow_mut() = Some(Vec::new());
                 self.load_hidden();
@@ -1305,7 +1307,15 @@ impl LibraryPage {
 
 #[cfg(test)]
 mod tests {
-    use super::columns_for;
+    use super::{columns_for, failure, LibraryError};
+
+    /// A host's name reaches the error page as text, not as markup.
+    #[test]
+    fn a_failure_escapes_the_host_name() {
+        let said = failure(&LibraryError::NotPaired, "<b>Den</b> & co");
+        assert!(said.contains("&lt;b&gt;Den&lt;/b&gt; &amp; co"));
+        assert!(!said.contains('<'));
+    }
 
     /// A row of n tiles is n·150 plus n−1 gaps of 16 plus 8 each side, and must fit.
     #[test]

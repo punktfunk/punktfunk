@@ -298,8 +298,10 @@ impl SimpleComponent for HostsPage {
         stack.add_named(&scrolled, Some("grid"));
         stack.add_named(&empty, Some("empty"));
 
-        // Connect failures land here, not in toasts.
+        // Connect failures land here, not in toasts. They carry the host's name and words, so
+        // the title is plain text.
         let banner = adw::Banner::new("");
+        banner.set_use_markup(false);
         banner.set_button_label(Some(desktop::desktop_banner_dismiss()));
         banner.connect_button_clicked(|b| b.set_revealed(false));
 

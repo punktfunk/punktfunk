@@ -729,9 +729,12 @@ impl DetailPage {
     }
 }
 
+/// A row that runs something when pressed. Its words may come from the host (an action's
+/// title and reason): plain text, never markup.
 fn action_row(title: &str, subtitle: &str) -> adw::ActionRow {
     let row = adw::ActionRow::builder()
         .title(title)
+        .use_markup(false)
         .activatable(true)
         .build();
     if !subtitle.is_empty() {
