@@ -90,37 +90,85 @@ pub fn clear_open_tree(dir: &Path, keep: &Path) -> Result<()> {
     set_aside_tree(dir, true, Some(keep))
 }
 
-/// The file a folder holds from its lock until what it held is proven. A pass that finds
-/// anything at this name has that work to do, whatever the folder's ACL says by then.
+/// The marker a folder holds from its lock until what it held is proven: this name, or this
+/// name and `.N` when an entry already holds it. A pass that finds any has that work to do,
+/// whatever the folder's ACL says by then.
 pub const UNPROVEN: &str = ".pf-unproven";
 
-/// Leave this process's marker at `path`, in a folder locked just before: a plain file an admin
-/// owns stays, anything else there goes aside first. On `Err` what was at `path` is still
-/// there, so the next pass finds it.
-pub fn mark_unproven(path: &Path) -> Result<()> {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    match std::fs::symlink_metadata(path) {
-        Ok(md)
-            if md.is_file()
-                && md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
-                && is_admin_owned(path) == Some(true) =>
-        {
-            return Ok(());
-        }
-        Ok(_) => {
-            rename_aside(path)
-                .map_err(|e| other(format!("rename {} aside: {e}", path.display())))?;
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(other(format!("read {}: {e}", path.display()))),
+/// The `n`th marker name: [`UNPROVEN`], then [`UNPROVEN`]`.1` and on.
+fn marker_name(n: u32) -> String {
+    if n == 0 {
+        UNPROVEN.to_owned()
+    } else {
+        format!("{UNPROVEN}.{n}")
     }
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map(drop)
-        .map_err(|e| other(format!("create {}: {e}", path.display())))
+}
+
+/// `name` is a marker name, in any case. A marker set aside as `.untrusted` is not one.
+fn is_marker(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy().to_ascii_lowercase();
+    name.strip_prefix(UNPROVEN).is_some_and(|rest| {
+        rest.is_empty()
+            || rest
+                .strip_prefix('.')
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
+fn list_names(dir: &Path) -> Result<Vec<std::ffi::OsString>> {
+    std::fs::read_dir(dir)
+        .and_then(|it| it.map(|e| e.map(|e| e.file_name())).collect())
+        .map_err(|e| other(format!("list {}: {e}", dir.display())))
+}
+
+/// `dir` holds a marker, whoever owns it. A listing that fails counts as one.
+pub fn is_unproven(dir: &Path) -> bool {
+    list_names(dir).map_or(true, |names| names.iter().any(|n| is_marker(n)))
+}
+
+/// Leave a new marker in `dir`, locked just before, at the first marker name no entry holds,
+/// and return it. An entry already there may have a handle from before the lock, so none is
+/// taken as this pass's marker.
+pub fn mark_unproven(dir: &Path) -> Result<PathBuf> {
+    let taken: Vec<String> = list_names(dir)?
+        .iter()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .collect();
+    // A listed name is skipped, not probed: a plant pending delete refuses a create there.
+    for name in (0..u32::MAX).map(marker_name) {
+        if taken.contains(&name) {
+            continue;
+        }
+        let path = dir.join(&name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(other(format!("create {}: {e}", path.display()))),
+        }
+    }
+    Err(other(format!("no free marker name in {}", dir.display())))
+}
+
+/// Take every marker out of `dir` once its walk has passed: a file at a marker name is removed,
+/// anything else there goes aside, and `ours` goes last. On `Err` `ours` is still there.
+pub fn mark_proven(dir: &Path, ours: &Path) -> Result<()> {
+    for name in list_names(dir)?.into_iter().filter(|n| is_marker(n)) {
+        let path = dir.join(name);
+        if path == ours {
+            continue;
+        }
+        if path.is_file() {
+            std::fs::remove_file(&path)
+                .map_err(|e| other(format!("remove {}: {e}", path.display())))?;
+        } else {
+            rename_aside(&path).map_err(|e| other(format!("set {} aside: {e}", path.display())))?;
+        }
+    }
+    std::fs::remove_file(ours).map_err(|e| other(format!("remove {}: {e}", ours.display())))
 }
 
 fn set_aside_tree(dir: &Path, files: bool, keep: Option<&Path>) -> Result<()> {
@@ -854,8 +902,7 @@ mod planted_tree_tests {
             .unwrap();
         assert!(link.success(), "mklink /J must work for a standard user");
         let admin = super::is_admin_owned(&root.join("sub")) == Some(true);
-        let marker = root.join(super::UNPROVEN);
-        super::mark_unproven(&marker).unwrap();
+        let marker = super::mark_unproven(&root).unwrap();
 
         super::clear_open_tree(&root, &marker).unwrap();
         assert!(marker.is_file(), "the marker went aside");
@@ -876,6 +923,26 @@ mod planted_tree_tests {
         std::fs::remove_dir(root.join("link.untrusted")).unwrap();
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&target);
+    }
+}
+
+#[cfg(test)]
+mod marker_tests {
+    /// Only a name `mark_unproven` may take counts, in any case; a marker set aside does not.
+    #[test]
+    fn only_marker_names_count_as_unproven() {
+        for name in [".pf-unproven", ".pf-unproven.1", ".PF-Unproven.12"] {
+            assert!(super::is_marker(name.as_ref()), "{name}");
+        }
+        for name in [
+            ".pf-unproven.untrusted",
+            ".pf-unproven.1.untrusted",
+            ".pf-unproven.",
+            ".pf-unprovenx",
+            "pf-unproven",
+        ] {
+            assert!(!super::is_marker(name.as_ref()), "{name}");
+        }
     }
 }
 

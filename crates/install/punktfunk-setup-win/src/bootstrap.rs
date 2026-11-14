@@ -173,9 +173,9 @@ fn protected_dir(path: &Path, sddl: &str) -> Result<(), String> {
 /// Give `dir` the DACL `sddl` describes (`grants`: its ACEs as icacls spells them): a missing
 /// dir is born with it, one that exists takes it in place of what it inherited. A link, or a
 /// dir another account owns, is refused. A dir others could write in until now then loses every
-/// file and every folder they own ([`pf_paths_win::clear_open_tree`]). It holds
-/// [`pf_paths_win::UNPROVEN`] from its lock until that is done, so a run that fails halfway
-/// leaves the dir locked and the next run finishes the clear.
+/// file and every folder they own ([`pf_paths_win::clear_open_tree`]). It holds a new marker
+/// ([`pf_paths_win::mark_unproven`]) from its lock until that is done, so a run that fails
+/// halfway leaves the dir locked and the next run finishes the clear.
 // A real-box step: demo and test runs neither extract nor deploy a payload.
 #[allow(clippy::disallowed_methods)]
 pub(crate) fn lock_dir(dir: &Path, sddl: &str, grants: &[&str]) -> Result<(), String> {
@@ -219,12 +219,10 @@ pub(crate) fn lock_dir(dir: &Path, sddl: &str, grants: &[&str]) -> Result<(), St
         }
     };
     pf_paths_win::ensure_admin_only_source(dir).map_err(|e| e.to_string())?;
-    let unproven = dir.join(pf_paths_win::UNPROVEN);
-    if was_open || std::fs::symlink_metadata(&unproven).is_ok() {
-        pf_paths_win::mark_unproven(&unproven).map_err(|e| e.to_string())?;
-        pf_paths_win::clear_open_tree(dir, &unproven).map_err(|e| e.to_string())?;
-        std::fs::remove_file(&unproven)
-            .map_err(|e| format!("remove {}: {e}", unproven.display()))?;
+    if was_open || pf_paths_win::is_unproven(dir) {
+        let marker = pf_paths_win::mark_unproven(dir).map_err(|e| e.to_string())?;
+        pf_paths_win::clear_open_tree(dir, &marker).map_err(|e| e.to_string())?;
+        pf_paths_win::mark_proven(dir, &marker).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -283,6 +281,126 @@ mod tests {
         assert!(
             app.join("punktfunk-host.exe").exists(),
             "a healthy dir was walked"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Elevated: a marker another account planted and holds without share-delete fails the run,
+    /// which leaves its own marker beside it, so the run after the planter deletes theirs still
+    /// clears the dir. Not elevated, the folder this test owns is refused.
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn a_planted_marker_held_open_leaves_the_dir_unproven() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const GRANTS: [&str; 2] = ["*S-1-5-18:(OI)(CI)(F)", "*S-1-5-32-544:(OI)(CI)(F)"];
+        let lock = |dir: &std::path::Path| super::lock_dir(dir, pf_paths_win::ADMIN_ONLY, &GRANTS);
+        let icacls = |path: &std::path::Path, args: &[&str]| {
+            std::process::Command::new(pf_paths::system32("icacls.exe"))
+                .arg(path)
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        let base = std::env::temp_dir().join(format!("pf-setup-marker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let app = base.join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        assert!(icacls(
+            &base,
+            &["/grant", "*S-1-5-32-545:(OI)(CI)(M)", "/Q"]
+        ));
+        std::fs::write(app.join("version.dll"), "x").unwrap();
+        let planted = app.join(pf_paths_win::UNPROVEN);
+        std::fs::write(&planted, "").unwrap();
+        if pf_paths_win::is_admin_owned(&app) != Some(true) {
+            assert!(lock(&app).is_err());
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+
+        // LocalService stands in for the standard user who planted the marker.
+        assert!(icacls(&planted, &["/setowner", "*S-1-5-19"]));
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x1) // FILE_SHARE_READ: no rename while this is open
+            .open(&planted)
+            .unwrap();
+        assert!(lock(&app).is_err());
+        drop(held);
+        std::fs::remove_file(&planted).unwrap();
+        assert!(
+            pf_paths_win::is_unproven(&app),
+            "the planter's marker was the only one"
+        );
+        lock(&app).unwrap();
+        assert!(!app.join("version.dll").exists(), "the plant stayed");
+        assert!(app.join("version.dll.untrusted").exists());
+        assert!(
+            !pf_paths_win::is_unproven(&app),
+            "a cleared dir keeps a marker"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Elevated: a marker admins own, held through a delete handle from before the lock, is not
+    /// the run's own, so the run that fails leaves one that outlives that delete. Not elevated,
+    /// the folder this test owns is refused.
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn an_admin_owned_marker_from_before_the_lock_is_no_proof() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const GRANTS: [&str; 2] = ["*S-1-5-18:(OI)(CI)(F)", "*S-1-5-32-544:(OI)(CI)(F)"];
+        const DELETE: u32 = 0x0001_0000;
+        const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
+        let lock = |dir: &std::path::Path| super::lock_dir(dir, pf_paths_win::ADMIN_ONLY, &GRANTS);
+        let base = std::env::temp_dir().join(format!("pf-setup-admin-mark-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let app = base.join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        let granted = std::process::Command::new(pf_paths::system32("icacls.exe"))
+            .arg(&base)
+            .args(["/grant", "*S-1-5-32-545:(OI)(CI)(M)", "/Q"])
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(granted.success());
+        std::fs::write(app.join("version.dll"), "x").unwrap();
+        let planted = app.join(pf_paths_win::UNPROVEN);
+        std::fs::write(&planted, "").unwrap();
+        if pf_paths_win::is_admin_owned(&app) != Some(true) {
+            assert!(lock(&app).is_err());
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+
+        // An admin's file a user renamed here: its owner stays Administrators, and the handle
+        // deletes it on close wherever the walk moved it.
+        assert_eq!(pf_paths_win::is_admin_owned(&planted), Some(true));
+        let marker = std::fs::OpenOptions::new()
+            .access_mode(DELETE)
+            .share_mode(0x7)
+            .custom_flags(FILE_FLAG_DELETE_ON_CLOSE)
+            .open(&planted)
+            .unwrap();
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x1) // FILE_SHARE_READ: no rename while this is open
+            .open(app.join("version.dll"))
+            .unwrap();
+        assert!(lock(&app).is_err());
+        drop(marker);
+        drop(held);
+        assert!(
+            pf_paths_win::is_unproven(&app),
+            "the run's marker went with the planter's"
+        );
+        lock(&app).unwrap();
+        assert!(!app.join("version.dll").exists(), "the plant stayed");
+        assert!(app.join("version.dll.untrusted").exists());
+        assert!(
+            !pf_paths_win::is_unproven(&app),
+            "a cleared dir keeps a marker"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
