@@ -639,6 +639,10 @@ jobs:
       # x86_64 only. A RUSTFLAGS variable replaces any config rustflags; .cargo/config.toml
       # holds none today and says why. With `--target`, build scripts stay uninstrumented.
       RUSTFLAGS: -Zsanitizer=thread
+      # TSan resolves a stack through addr2line: one for the test binary, one more for each
+      # child process a test starts. Full debug info costs each 4 GB of the job's 12; line
+      # tables still name every frame and its line.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -665,12 +669,15 @@ jobs:
       # A test binary with a report exits 66 after its tests pass, so `cargo test` fails on one.
       # The pass count is the proved-it-ran guard, as in the miri steps. `--lib --tests` leaves
       # the doc-tests out: rustdoc builds them uninstrumented, and they then refuse to link.
+      # `timeout` ends the whole process group, so a stalled run is a warning too. An addr2line
+      # the kernel kills for memory leaves the runtime waiting on its own symbolizer lock.
       - name: tsan — punktfunk-core and pf-zerocopy
         run: |
           set -o pipefail
           export TSAN_OPTIONS="suppressions=$PWD/ci/tsan.supp halt_on_error=0"
           ok=1
-          cargo +"$TSAN_TOOLCHAIN" test -Zbuild-std --target x86_64-unknown-linux-gnu --locked \
+          timeout -k 30 20m \
+            cargo +"$TSAN_TOOLCHAIN" test -Zbuild-std --target x86_64-unknown-linux-gnu --locked \
             -p punktfunk-core -p pf-zerocopy --features punktfunk-core/quic --lib --tests -- \
             --skip ten_minutes_at_the_top_of_the_range_simulates_in_under_a_second \
             2>&1 | tee /tmp/tsan-core.log || ok=0
@@ -683,7 +690,8 @@ jobs:
           set -o pipefail
           export TSAN_OPTIONS="suppressions=$PWD/ci/tsan.supp halt_on_error=0"
           ok=1
-          cargo +"$TSAN_TOOLCHAIN" test -Zbuild-std --target x86_64-unknown-linux-gnu --locked \
+          timeout -k 30 30m \
+            cargo +"$TSAN_TOOLCHAIN" test -Zbuild-std --target x86_64-unknown-linux-gnu --locked \
             -p punktfunk-host --bin punktfunk-host 2>&1 | tee /tmp/tsan-host.log || ok=0
           grep -qE 'test result: ok\. [1-9][0-9]* passed' /tmp/tsan-host.log || ok=0
           [ "$ok" = 1 ] || echo "::warning::tsan (punktfunk-host) reported a race or did not pass; see punktfunk-planning design/rust-safety-programme.md §6.3"
