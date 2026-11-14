@@ -3401,3 +3401,47 @@ fn a_dial_starts_a_stopped_seat_only_as_a_wake_would() {
     rt.block_on(async { tokio::time::sleep(std::time::Duration::from_millis(200)).await });
     host.join().unwrap().unwrap();
 }
+
+/// A client that stops reading its control stream is closed once a host write has waited out
+/// the control task's bound, rather than leaving the host to queue for it.
+#[test]
+fn a_client_that_stops_reading_its_control_stream_is_closed() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    use punktfunk_core::quic::{endpoint, v2::io as v2io};
+    let store = access_store_path("unread");
+    let _ = std::fs::remove_file(&store);
+    let np = Arc::new(NativePairing::load_with(Some(store.clone()), None, false).unwrap());
+    let (cert, key) = endpoint::generate_identity().unwrap();
+    let fp_hex = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
+    np.add_with_access("Stalled", &fp_hex, None).unwrap();
+    let host = spawn_access_host(19822, 1, np);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let code = rt.block_on(async {
+        let (conn, mut send, _unread, _welcome, _media) =
+            raw_session(19822, (cert.as_str(), key.as_str())).await;
+        // Each probe makes the host write an echo this client never reads.
+        let probe = ClockProbe { t1_ns: 1 };
+        let flood = async {
+            while v2io::send(&mut send, &probe).await.is_ok() {}
+            std::future::pending::<()>().await
+        };
+        let closed = async {
+            tokio::select! {
+                code = closed_app_code(&conn) => code,
+                () = flood => unreachable!(),
+            }
+        };
+        let wait = std::time::Duration::from_secs(30);
+        tokio::time::timeout(wait, closed)
+            .await
+            .expect("the host closes the session")
+    });
+    assert_eq!(code, 1, "the host's error close");
+    let _ = std::fs::remove_file(&store);
+    host.join().unwrap().unwrap();
+}

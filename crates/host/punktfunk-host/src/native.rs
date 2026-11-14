@@ -1872,6 +1872,7 @@ fn spawn_control(
         plane: conn.plane(),
         counters: who.counters.clone(),
         stats: host.stats.clone(),
+        conn: conn.clone(),
     }));
 }
 
