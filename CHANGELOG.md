@@ -14,6 +14,74 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ---
 
+## v0.47.0
+
+1530 commits since v0.46.0. ALPN `pkf2` stays; driver protocol 10 with floor 9; **C ABI 72**. A
+profile can be locked to devices and a PIN, and a Linux profile can run on a person's own account.
+A device names its screen's role and the size it shows, and the host scales down before encoding.
+Every person-facing sentence carries a message id, and six languages ship. A relayed or
+unfamiliar-page browser pairs only by PIN. gamescope moves to `+pfhdr35` on upstream 3.17.0.
+Deep dive: `git log v0.46.0..v0.47.0`
+
+### Versions
+
+| | v0.46.0 | v0.47.0 | Notes |
+|---|---|---|---|
+| Wire protocol | punktfunk/2 | **punktfunk/2** | ALPN unchanged; mDNS now advertises `proto=punktfunk/2`. Message 0x07 `ProfileUnlock` follows the hello; feature bits 42 (can unlock) and 43 (an unlock follows this hello); a locked profile closes with code 116. ClientHello tags 30 view, 31 further screens' views, 32 screen wish; ServerHello tags 28 screen echo (`0xFF` shared), 29 encoded picture, 30 granted role and reason; StreamConfig field 12 picture. Typed text rides the control stream to a host with `HOST_CAP2_INPUT_EDGES`. A connection takes no unidirectional streams, 32 bidirectional and 4 MiB unread; the browser plane answers an unvalidated source with Retry. Old peers skip all of it |
+| C ABI | 63 | **72** | 64 `PunktfunkProfileUnlock` on `PunktfunkConnectOpts`, `PUNKTFUNK_UNLOCK_*`, `PUNKTFUNK_ENROLL_*`, `PUNKTFUNK_STATUS_REJECTED_PROFILE_LOCKED`; 65 `punktfunk_connection_launch_message`; 66 `view_width`/`view_height`, `punktfunk_connection_request_mode_view`; 67 `screen_views`, `punktfunk_connection_request_screens_view`; 68 `punktfunk_connection_shares_screen`; 69 `punktfunk_av1_concealer_*`, `punktfunk_locked_profile_unlock_message`; 70 `PUNKTFUNK_GRANT_DISPLAY`; 71 screen wish, `punktfunk_connection_screen_role{,_reason}`, `PUNKTFUNK_SCREEN_ROLE_*`; 72 merges both lines. `punktfunk_request_access` refuses a NULL `pin_sha256` |
+| C headers | — | — | `punktfunk_core.h` gains the above; `PUNKTFUNK_GRANT_ALL` is `0x1FF`, the old value `PUNKTFUNK_GRANT_ALL_PRE_DISPLAY`. `punktfunk_console.h` gains `punktfunk_console_take_unlock`, `PUNKTFUNK_CONSOLE_UNLOCK_MAX`, `punktfunk_console_set_languages`, pushes 21 hidden list and 22 hide answer; phase 6 awaits approval, 7 is a `profile-locked` refusal |
+| Rust edition / MSRV | 2024 / 1.85 | **2024 / 1.85** | unchanged |
+| Workspace crate dirs | 47 | **47** | unchanged under `crates/`; `l10n/` (`pf-l10n`) joins the workspace and generates every platform's messages |
+| Virtual-display driver protocol | 9 | **10** | floor stays 9. `SET_ENCODE` gains a source rectangle and an encode size; a driver that honours it stamps `frames_input` in the AU header. A v9 driver streams unscaled |
+| Windows virtual-gamepad channel | 3 | **3** | unchanged. Seat pad presence is a section only SYSTEM writes: a seat host and pad-audio enumerator update together |
+| Plugin index schema | 1 | **1** | unchanged; integrity pins are sha512 only |
+| Host event schema | 1 | **1** | unchanged |
+| `api/openapi.json` | 0.46.0 | **0.47.0** | Every operation carries `x-scope`; errors carry `code` and `params`. New: `/auth/person/*`, `/profiles/{id}/lock{,/pin}`, `/profiles/{id}/devices{,/{fingerprint}}`, `/profiles/{id}/unlock-challenge`, `/display/targets`, `/library/overrides*`, `/library/own`, `DELETE /session/settings`. `?as=<profile>` reads and writes a profile's layer. Per-device `capture_monitor` is `screen`; the old key stays one release. `PendingRequest` gains `relayed`, `unfamiliar_origin`, `origin`. Nothing removed |
+| gamescope patch level (`+pfhdrN`) | 31 | **35** | rebased on upstream 3.17.0: planar capture `DRM_FORMAT_MOD_LINEAR` on NVIDIA, a private capture node for the host |
+| `@punktfunk/host` (SDK) | 0.5.0 | **0.6.0** | additive: screen routes, game overrides, Play together, the folder-files grant, a lease for a plugin's child process |
+| `@punktfunk/plugin-kit` | 0.14.0 | **0.15.0** | the folder-files ask, an in-process registry read; peers `@punktfunk/host` `^0.4.0 \|\| ^0.5.0 \|\| ^0.6.0` |
+
+### Breaking
+
+- **C ABI 72.** Re-pin and rebuild against the new header.
+- **Discovery.** The advert says `proto=punktfunk/2`, so 0.43 and older Linux, Windows and Android
+  clients skip the host on the LAN. A saved or typed host still connects.
+- **Request access needs a pin.** `punktfunk pair --request-access` takes the fingerprint from
+  `--fp` or a saved record and exits 5 without one.
+- **Screen grant.** Picking a screen needs `GRANT_DISPLAY`; a record the new host writes says so.
+- **Seats on an existing account.** No hooks, no box-chosen commands. On Windows only Verified
+  plugins; on Linux the person's own console runs their plugins. The Linux supervisor checks the
+  account password once under attempt limits and keeps none.
+- **Strict pairing.** A `pf-client-addr` header, or a public `Origin` no paired device used and not
+  in Browser origins, makes a knock `wan`: approve answers 409, pair by an armed PIN. `/echo` is
+  gone from release hosts.
+- **Plugin sandbox.** A declared write outside `/tmp` waits for the owner's grant. `~/.local`,
+  `~/.local/share`, `~/.var/app`, `~/snap`, `AppData`, start-up files and `..` no longer bind. A
+  Windows registry key sits under `Software`; a detect probe is local. An emulator entry with
+  `extra` is refused at publish: declare an `exec` template.
+- **Plugin pages** run on an origin of their own with no cookies or storage. Reach the API by
+  relative URL or `resolvePluginBase()`; no `credentials: "include"`.
+- **Windows install folder.** The first upgrade over a folder others could write renames their
+  files to `*.untrusted`.
+- **Linux seat libraries** mount under `/run/media/punktfunk/<key>` and `/run/media/punktfunk/games`.
+- **`profiles.json`** drops fields no code read; the credential key stays, set to none.
+
+### Knobs
+
+- New: `PUNKTFUNK_NVENC_RM_IMPORT=0` maps a Linux NVIDIA capture through EGL.
+  `PUNKTFUNK_VKDECODE_ARRANGEMENT=sampler` reads each picture through a sampler Y'CbCr conversion.
+- Gone: `PUNKTFUNK_GAMESCOPE_FLATPAK_SHIM`; nested Steam gets a runtime dir without Wayland.
+- CLI: `punktfunk screen`, `actions`, `device-code`; `pair --json` adds `kind` and `reject`.
+  `punktfunk-host settings`; `console-url` works inside a Windows seat.
+- JNI: `nativeLaunchRefusal`, `nativeLockedProfileUnlockMessage`, `nativeConsoleSetHideAnswer`,
+  `nativeConsoleSetHiddenList`, `nativeSetLanguages`. Android `debug.punktfunk.conceal` replaces
+  `debug.punktfunk.h265_conceal`.
+- Apple builds run `scripts/gen-l10n-apple.sh` for the String Catalog.
+- Packaging ID `io.unom.punktfunk.webconsole.desktop` (Punktfunk Settings). Package removal runs
+  `door-remove`.
+
+---
+
 ## v0.46.0
 
 490 commits since v0.45.0. ALPN `pkf2` and driver protocol floor 9 stay; **C ABI 63**. Umbriel joins

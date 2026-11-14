@@ -1616,7 +1616,7 @@ dependencies = [
 
 [[package]]
 name = "pf-paths"
-version = "0.46.0"
+version = "0.47.0"
 dependencies = [
  "pf-paths-win",
  "tracing",
@@ -1624,7 +1624,7 @@ dependencies = [
 
 [[package]]
 name = "pf-paths-win"
-version = "0.46.0"
+version = "0.47.0"
 dependencies = [
  "tracing",
  "windows",
@@ -1632,7 +1632,7 @@ dependencies = [
 
 [[package]]
 name = "pf-seats"
-version = "0.46.0"
+version = "0.47.0"
 dependencies = [
  "aws-lc-rs",
  "hex",
