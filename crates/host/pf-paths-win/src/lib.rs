@@ -195,8 +195,10 @@ pub fn admin_only_acl(path: &Path) -> bool {
 
 /// Lets `sid` read the file at `path`, when it is `inside`'s own: a file, not a link, with one
 /// name, whose real path lies inside `inside`. The checks and the grant act on one open handle,
-/// so a link swapped in after a caller's check reaches nothing. The read ACE is explicit, on
-/// that file alone; granting again changes nothing.
+/// so a link swapped in after a caller's check reaches nothing. `inside` is compared as given,
+/// never resolved: pass it canonical, under a folder no less-trusted account can replace, and a
+/// link swapped in for `inside` itself fails the check too. The read ACE is explicit, on that
+/// file alone; granting again changes nothing.
 pub fn grant_read_inside(path: &Path, inside: &Path, sid: &str) -> Result<()> {
     use std::os::windows::ffi::OsStringExt;
     use std::os::windows::fs::OpenOptionsExt;
@@ -241,7 +243,7 @@ pub fn grant_read_inside(path: &Path, inside: &Path, sid: &str) -> Result<()> {
         return Err(std::io::Error::last_os_error());
     }
     let real = PathBuf::from(std::ffi::OsString::from_wide(&buf[..n]));
-    if !real.starts_with(std::fs::canonicalize(inside)?) {
+    if !real.starts_with(inside) {
         return Err(other(format!(
             "{} is not inside {}",
             real.display(),
@@ -940,6 +942,7 @@ mod open_acl_tests {
         let _ = std::fs::remove_dir_all(&base);
         let own = base.join("own");
         std::fs::create_dir_all(&own).unwrap();
+        let own = own.canonicalize().unwrap();
         let file = own.join("PS3UPDAT.PUP");
         std::fs::write(&file, b"fw").unwrap();
         std::fs::write(base.join("outside.bin"), b"x").unwrap();
@@ -968,6 +971,28 @@ mod open_acl_tests {
         assert!(super::grant_read_inside(&own, &own, "S-1-5-32-545").is_err());
         std::fs::hard_link(&file, own.join("second-name")).unwrap();
         assert!(super::grant_read_inside(&file, &own, "S-1-5-32-545").is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The state folder swapped for a junction after the caller resolved it: the file the
+    /// junction reaches gets nothing.
+    #[test]
+    fn a_state_folder_swapped_for_a_junction_is_refused() {
+        let base = std::env::temp_dir().join(format!("pf-grant-swap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let elsewhere = base.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("secret"), b"s").unwrap();
+        let own = base.canonicalize().unwrap().join("plugin");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(base.join("plugin"))
+            .arg(&elsewhere)
+            .status()
+            .is_ok_and(|s| s.success());
+        assert!(made);
+
+        assert!(super::grant_read_inside(&own.join("secret"), &own, "S-1-5-32-545").is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
 }

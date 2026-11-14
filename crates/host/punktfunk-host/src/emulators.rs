@@ -577,8 +577,9 @@ fn revert_with(h: &Hermir) {
 /// Every copy of `id` answers its first-run questions, gets `platform`'s firmware from
 /// `firmware_dir` (the regular files in it, not below, which a Windows player may then read,
 /// `let_player_read`), and has the session's pads written in seat order (steps of kind
-/// `players`; reverted after the game): see [`session_players`] for `pad` and `slots`. `platform` is a catalog id or any of its aliases (RomM slug, ES-DE
-/// folder, libretro name). Blocking: an installer may run.
+/// `players`; reverted after the game): see [`session_players`] for `pad` and `slots`.
+/// `platform` is a catalog id or any of its aliases (RomM slug, ES-DE folder, libretro name).
+/// Blocking: an installer may run.
 pub fn prepare(
     id: &str,
     platform: Option<&str>,
