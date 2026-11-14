@@ -15,7 +15,7 @@
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::library::ART_MAX_BYTES;
@@ -32,6 +32,9 @@ static WRITTEN: AtomicU64 = AtomicU64::new(0);
 
 /// Distinguishes the temp files of concurrent workers within one process.
 static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
+
+/// Set by the first failed write, which is the only one logged.
+static REFUSED: AtomicBool = AtomicBool::new(false);
 
 /// `$XDG_CACHE_HOME/punktfunk/art` / `%LOCALAPPDATA%\punktfunk\cache\art`.
 fn dir() -> Option<PathBuf> {
@@ -112,8 +115,13 @@ fn store_in(dir: &Path, url: &str, bytes: &[u8]) -> bool {
         std::process::id(),
         NEXT_TMP.fetch_add(1, Ordering::Relaxed)
     ));
-    if std::fs::write(&tmp, bytes).is_err() || std::fs::rename(&tmp, file_for(dir, url)).is_err() {
+    let kept = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, file_for(dir, url)));
+    if let Err(error) = kept {
         let _ = std::fs::remove_file(&tmp);
+        // Once: a directory that refuses one poster refuses them all.
+        if !REFUSED.swap(true, Ordering::Relaxed) {
+            tracing::warn!(dir = %dir.display(), %error, "poster cache write refused");
+        }
         return false;
     }
     // Amortised: the budget is a steady-state ceiling, not a per-write invariant.

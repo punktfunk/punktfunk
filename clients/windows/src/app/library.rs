@@ -4,9 +4,10 @@
 //!
 //! The catalog comes from the disk first, then the host, over `pf-client-core::library` (mTLS
 //! against the host's management API, pre-classified errors, the 3-worker art pipeline). Poster
-//! bytes land in the shared `art_cache`, which the `Image` loads them from. The fetch and the
-//! art stream complete on worker threads into the root's [`LibraryState`];
-//! `Shared::library_gen` stops a superseded fetch from publishing.
+//! bytes land in the shared `art_cache`, which the `Image` loads them from; a poster the cache
+//! could not keep shows from the fetched bytes. The fetch and the art stream complete on worker
+//! threads into the root's [`LibraryState`]; `Shared::library_gen` stops a superseded fetch from
+//! publishing.
 //!
 //! The rows are one virtualized list, so a library of thousands builds what is on screen.
 
@@ -155,7 +156,7 @@ pub(crate) enum Stale {
 }
 
 /// The page's whole thread-driven state: the catalog, where it came from, and poster art as
-/// it lands (game id → its file in the disk cache).
+/// it lands (game id → [`Poster`]).
 #[derive(Clone, Default)]
 pub(crate) struct LibraryState {
     /// The shelf this is for.
@@ -163,7 +164,7 @@ pub(crate) struct LibraryState {
     pub(crate) phase: LibraryPhase,
     pub(crate) games: Arc<Vec<GameEntry>>,
     pub(crate) stale: Option<Stale>,
-    art: Arc<HashMap<String, String>>,
+    art: Art,
     /// What the host has up (`/status`), by game id: `true` when this device launched it and
     /// may end it.
     running: HashMap<String, bool>,
@@ -195,7 +196,7 @@ pub(crate) enum HiddenView {
     Loading,
     Failed(String),
     /// The titles, and each one's cached poster.
-    Listed(Arc<Vec<GameEntry>>, Arc<HashMap<String, String>>),
+    Listed(Arc<Vec<GameEntry>>, Art),
 }
 
 /// A change to [`HideUi`], made on the UI thread.
@@ -283,20 +284,31 @@ fn failure(e: &LibraryError, host: &str) -> String {
     }
 }
 
-/// The first candidate poster the shared cache holds, as the path `Image` loads. The file is
-/// replaced only by rename, so it is whole or absent.
-fn cached_art(candidates: &[String]) -> Option<String> {
+/// Where a tile's poster loads from.
+#[derive(Clone)]
+pub(crate) enum Poster {
+    /// The shared cache's file, replaced only by rename, so whole or absent.
+    File(String),
+    /// The fetched bytes, held because the cache could not keep them.
+    Bytes(EncodedImage),
+}
+
+/// Posters by game id.
+pub(crate) type Art = Arc<HashMap<String, Poster>>;
+
+/// The first candidate poster the shared cache holds.
+fn cached_art(candidates: &[String]) -> Option<Poster> {
     let path = candidates
         .iter()
         .find_map(|u| pf_client_core::art_cache::path_of(u))?;
-    Some(path.display().to_string())
+    Some(Poster::File(path.display().to_string()))
 }
 
 /// Seed `art` with the posters the cache holds, and list the rest to fetch.
 fn seed_art(
     games: &[GameEntry],
     base: &str,
-    art: &mut HashMap<String, String>,
+    art: &mut HashMap<String, Poster>,
 ) -> VecDeque<(String, Vec<String>)> {
     let mut jobs = VecDeque::new();
     for g in games {
@@ -305,7 +317,7 @@ fn seed_art(
         }
         let candidates = g.art.poster_candidates(base);
         match cached_art(&candidates) {
-            Some(path) => drop(art.insert(g.id.clone(), path)),
+            Some(poster) => drop(art.insert(g.id.clone(), poster)),
             None if !candidates.is_empty() => jobs.push_back((g.id.clone(), candidates)),
             None => {}
         }
@@ -433,26 +445,22 @@ pub(crate) fn start_fetch(
             }
             let urls: HashMap<String, Vec<String>> = jobs.iter().cloned().collect();
             let rx = library::spawn_art_fetch(api, jobs);
-            // The workers have written the winning poster to the cache; the bytes are not
-            // needed. A publish re-renders the shelf, so the posters that land in one
-            // ART_BATCH go out together.
+            // A poster loads from the cache file, so the page holds no bytes; one the cache could
+            // not keep shows from the bytes. A publish re-renders the shelf, so the posters that
+            // land in one ART_BATCH go out together.
             while let Ok(first) = rx.recv_blocking() {
                 std::thread::sleep(ART_BATCH);
                 if shared.library_gen.load(Ordering::SeqCst) != generation {
                     return; // superseded: stop touching state
                 }
-                let mut landed = false;
-                for (id, _) in
+                for (id, bytes) in
                     std::iter::once(first).chain(std::iter::from_fn(|| rx.try_recv().ok()))
                 {
-                    if let Some(path) = urls.get(&id).and_then(|c| cached_art(c)) {
-                        Arc::make_mut(&mut state.art).insert(id, path);
-                        landed = true;
-                    }
+                    let poster = urls.get(&id).and_then(|c| cached_art(c));
+                    let poster = poster.unwrap_or_else(|| Poster::Bytes(EncodedImage::new(bytes)));
+                    Arc::make_mut(&mut state.art).insert(id, poster);
                 }
-                if landed {
-                    publish(&state);
-                }
+                publish(&state);
             }
         })
         .ok();
@@ -526,7 +534,7 @@ fn open_hidden(svc: &Svc, set_hide: &AsyncSetState<HideEdit>, shelf: &Shelf, hid
 }
 
 /// What the list shows: the titles its rows index, each one's cached poster, and the rows.
-type Listing = (Arc<Vec<GameEntry>>, Arc<HashMap<String, String>>, Vec<Row>);
+type Listing = (Arc<Vec<GameEntry>>, Art, Vec<Row>);
 
 /// A paired host as the Desktops section shows it.
 struct Desk {
@@ -546,7 +554,7 @@ struct RowCx {
     shelf: Shelf,
     /// The titles the rows index: the shelf, or the hidden ones while they show.
     games: Arc<Vec<GameEntry>>,
-    art: Arc<HashMap<String, String>>,
+    art: Art,
     running: HashMap<String, bool>,
     favorites: Vec<String>,
     hides: Option<Hides>,
@@ -737,11 +745,12 @@ fn poster_face(cx: &RowCx, g: Option<&GameEntry>, width: f64) -> View {
             lucide::mark(library::DESKTOP_ICON).font_size(width * 0.3),
         ));
     };
-    let cached = cx.art.get(&g.id).and_then(|path| {
-        Image::new()
-            .source_file(path)
-            .ok()
-            .map(|i| i.stretch(Stretch::UniformToFill).height(height))
+    let cached = cx.art.get(&g.id).and_then(|poster| {
+        let image = match poster {
+            Poster::File(path) => Image::new().source_file(path).ok()?,
+            Poster::Bytes(bytes) => Image::new().source_data(bytes.clone()),
+        };
+        Some(image.stretch(Stretch::UniformToFill).height(height))
     });
     if let Some(image) = cached {
         return image.into();
