@@ -9,6 +9,8 @@
 
 #![cfg(windows)]
 
+pub mod player;
+
 use std::path::{Path, PathBuf};
 
 type Result<T> = std::result::Result<T, std::io::Error>;

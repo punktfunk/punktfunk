@@ -245,35 +245,22 @@ fn core_file(dir: &Path, core: &str) -> PathBuf {
 }
 
 /// A core moved in from an admin-only folder keeps that folder's ACL, and the player's RetroArch
-/// can't load it. A copy made beside it takes the cores folder's ACL.
+/// can't load it. The cores folder is the player's, so the core gets the player's read and
+/// execute ACE through one handle that refuses a link on the way, never a copy by path.
 #[cfg(windows)]
 fn open_core(dir: &Path, core: &str) {
+    use pf_paths_win::player::{grant_on_file, READ_EXECUTE};
     let path = core_file(dir, core);
     if !path.is_file() || !pf_paths_win::admin_only_acl(&path) {
         return;
     }
-    match recreate(&path) {
-        Ok(()) => tracing::info!(core, path = %path.display(), "core opened to the player"),
+    let Some(sid) = crate::windows::theme::session_sid() else {
+        return;
+    };
+    match grant_on_file(&path, &sid, READ_EXECUTE) {
+        Ok(()) => tracing::debug!(core, path = %path.display(), "core opened to the player"),
         Err(error) => tracing::warn!(core, %error, "core left unreadable to the player"),
     }
-}
-
-/// `path` replaced by a copy of itself made in its own folder. A new file takes the folder's
-/// inherited ACL; a moved one keeps its old ACL.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn recreate(path: &Path) -> std::io::Result<()> {
-    let part = path.with_extension("part");
-    let _ = std::fs::remove_file(&part);
-    let copied = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&part)
-        .and_then(|mut to| std::io::copy(&mut std::fs::File::open(path)?, &mut to))
-        .and_then(|_| std::fs::rename(&part, path));
-    if copied.is_err() {
-        let _ = std::fs::remove_file(&part);
-    }
-    copied
 }
 
 /// How long a launch waits for the client's first pad, and for every pad it claimed to be
@@ -1115,16 +1102,5 @@ I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2
         assert!(has_core(dir.path(), "snes9x"));
         assert!(!has_core(dir.path(), "mgba"));
         assert!(!has_core(dir.path(), "ppsspp"));
-    }
-
-    #[test]
-    fn a_recreated_core_keeps_its_bytes_and_leaves_no_part() {
-        let dir = tempfile::tempdir().unwrap();
-        let core = dir.path().join("snes9x_libretro.dll");
-        std::fs::write(&core, b"core").unwrap();
-        std::fs::write(dir.path().join("snes9x_libretro.part"), b"stale").unwrap();
-        recreate(&core).unwrap();
-        assert_eq!(std::fs::read(&core).unwrap(), b"core");
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }
