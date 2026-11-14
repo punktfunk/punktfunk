@@ -523,6 +523,28 @@ mixed = existing.replace('"halflife2"', '"Punktfunk"')
 replaced = steam_input._upsert_configset_entry(mixed, "punktfunk", "template", "punktfunk.vdf")
 check("vdf: matches an existing key case-insensitively", replaced.count("unktfunk\"\n") == 1)
 
+# A raw-forwarded Steam Controller doubles every key binding of its Deck-side layout on the
+# host, so each type in LAYOUTS needs its own entry, and the triton copy its own type.
+import tempfile as _tf  # noqa: E402
+
+with _tf.TemporaryDirectory() as _root:
+    _acct = Path(_root) / "steamapps" / "common" / "Steam Controller Configs" / "1" / "config"
+    _acct.mkdir(parents=True)
+    (_acct / "configset_controller_neptune.vdf").write_text(existing)
+    _real_root, _real_src = steam_input._steam_root, steam_input._controller_template_src
+    steam_input._steam_root = lambda: Path(_root)
+    steam_input._controller_template_src = lambda: _PLUGIN / "controller_config" / "punktfunk.vdf"
+    _got = asyncio.run(steam_input.apply_controller_config("Hollow Knight"))
+    steam_input._steam_root, steam_input._controller_template_src = _real_root, _real_src
+    check("layouts: applied for the account", _got["ok"] and "configset:1" in _got["applied"])
+    for _ctype, _template in steam_input.LAYOUTS.items():
+        _set = (_acct / f"configset_{_ctype}.vdf").read_text()
+        check(f"layouts: {_ctype} names {_template}", f'"hollow knight"\n\t{{\n\t\t"template"\t\t"{_template}"' in _set)
+    check("layouts: the Deck's neighbour survives", '"halflife2"' in (_acct / "configset_controller_neptune.vdf").read_text())
+    _triton = (Path(_root) / "controller_base" / "templates" / steam_input.TRITON_TEMPLATE).read_text()
+    check("layouts: the triton copy is typed triton", '"controller_type"\t\t"controller_triton"' in _triton)
+    check("layouts: no neptune type left in it", '"controller_neptune"' not in _triton)
+
 # ---- Decky's loader shape ---------------------------------------------------------------
 #
 # Decky appends only <plugin>/py_modules to sys.path and loads main.py as module `_`, so a

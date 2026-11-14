@@ -98,9 +98,9 @@ While a stream runs, the panel opens with a **Streaming** section.
   and gyro. Set a game's controls in Steam on the host, during a stream so Steam there sees the
   Deck: send the Steam button to the host as above, then open the game's controller settings.
   On the Deck, every stream uses the **Punktfunk** layout the plugin installs, even when the
-  overlay shows the game's name. That layout sends the touchscreen as real touch. A different
-  layout stops touch, and any key or mouse binding in it reaches the host on top of the
-  controller.
+  overlay shows the game's name. A Steam Controller connected to the Deck gets a gamepad-only
+  layout too. The Punktfunk layout sends the touchscreen as real touch. A different layout stops
+  touch, and any key or mouse binding in it reaches the host on top of the controller.
 
 ## Updating
 
