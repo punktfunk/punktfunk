@@ -1,7 +1,7 @@
 //! The known-hosts store: pinned records, the trust decisions that write them, and what
 //! adverts and connects teach them.
 
-use super::{config_dir, load_json_or_default, write_atomic};
+use super::{config_dir, load_json_or_default, read_json, write_atomic};
 use crate::presets::{PresetsFile, StreamPreset};
 use anyhow::Result;
 use punktfunk_core::discovery::DiscoveredHost;
@@ -517,10 +517,11 @@ impl KnownHosts {
 
     /// One edit of the store at `path`, alone: under the lock, re-read, run `f`, and write
     /// when it returns `true` beside its result. Another process's edit lands before or
-    /// after this one, never in between.
+    /// after this one, never in between. A store that exists but can't be read refuses the
+    /// edit, so no save replaces it.
     fn locked_at<R>(path: &Path, f: impl FnOnce(&mut KnownHosts) -> (bool, R)) -> Result<R> {
         let _lock = StoreLock::take(path);
-        let mut known: KnownHosts = load_json_or_default(path);
+        let mut known: KnownHosts = read_json(path)?.unwrap_or_default();
         let (write, r) = f(&mut known);
         if write {
             known.save_at(path)?;
@@ -1122,6 +1123,22 @@ mod tests {
             let stored: KnownHosts = load_json_or_default(&path);
             assert_eq!(stored.hosts.len(), 1);
         }
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// A store that exists but can't be read refuses the edit before it runs, so no save
+    /// replaces every pairing with the one edit.
+    #[test]
+    fn an_unreadable_store_refuses_the_edit() {
+        let _guard = crate::trust::store_health_lock();
+        let path = scratch_store("hosts-unreadable");
+        std::fs::create_dir_all(&path).unwrap();
+        let mut ran = false;
+        let edit = KnownHosts::locked_at(&path, |k| {
+            ran = true;
+            (true, k.hosts.push(named("fresh")))
+        });
+        assert!(edit.is_err() && !ran);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
