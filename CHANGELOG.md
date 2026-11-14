@@ -16,7 +16,7 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ## v0.47.0
 
-1280 commits since v0.46.0. ALPN `pkf2` stays; driver protocol 10 with floor 9; **C ABI 72**. A
+1530 commits since v0.46.0. ALPN `pkf2` stays; driver protocol 10 with floor 9; **C ABI 72**. A
 profile can be locked to devices and a PIN, and a Linux profile can run on a person's own account.
 A device names its screen's role and the size it shows, and the host scales down before encoding.
 Every person-facing sentence carries a message id, and six languages ship. A relayed or
