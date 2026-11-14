@@ -49,6 +49,9 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time", "macros"] }
 # Builds/validates the xkb keymap uploaded to the virtual keyboard + tracks modifier state.
 xkbcommon = "0.9"
+# KWin's active keyboard layout, one blocking session-bus call per typed character on a
+# multi-layout keymap. The zbus ashpd already pulls, on its tokio backend.
+zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"] }
 # Vendored + trimmed usbip server core — presents a virtual Steam Deck over USB/IP for Steam Input.
 usbip-sim = { path = "vendor/usbip-sim" }
 # The seat pad broker's relay (`pad_broker`): fd passing over its socket, the relay's poll, and
