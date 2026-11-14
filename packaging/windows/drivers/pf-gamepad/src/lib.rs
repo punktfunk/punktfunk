@@ -890,7 +890,9 @@ fn on_get_feature(request: &Request) -> NTSTATUS {
     // report-descriptor change — the identity Steam and SDL fingerprint is untouched. Derived only
     // from our own devnode Location + pid: nothing a caller supplies feeds into it.
     if report_id == pf_driver_proto::gamepad::HID_FEATURE_REPORT_CHANNEL_PROOF {
-        let len = request.output_buffer_len();
+        // At most 64 bytes, as the Triton arm serves: the proof is 17, and the caller's buffer
+        // length is not an allocation size.
+        let len = request.output_buffer_len().min(64);
         return match pf_driver_proto::gamepad::ChannelProof::new(
             CHANNEL.index(),
             std::process::id(),
