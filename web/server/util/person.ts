@@ -16,8 +16,9 @@ export const MODE_COOKIE = "pf_mode";
 export const TICKET_TTL_MS = 60_000;
 /** The longest a session lives here; the seat host's own grant is the same or shorter. */
 const MAX_SESSION_MS = 12 * 60 * 60 * 1000;
-/** Sessions held at once. Past this the one that ends soonest goes. */
-const MAX_SESSIONS = 64;
+/** Sessions one profile holds at once, as many as its seat host keeps. Past this that profile's
+ * own session that ends soonest goes, never another's. */
+const MAX_SESSIONS_PER_PROFILE = 16;
 /** A seat host on loopback that takes this long is not answering. */
 const SEAT_TIMEOUT_MS = 15_000;
 
@@ -88,7 +89,8 @@ const cookieBase = () => ({
 	secure: cookieSecure(),
 });
 
-/** Opens `session` in this browser, replacing any person session it held. */
+/** Opens `session` in this browser, replacing any person session it held. A profile at
+ * `MAX_SESSIONS_PER_PROFILE` loses its own session that ends soonest. */
 export function openSession(
 	event: H3Event,
 	session: Omit<PersonSession, "pageKey">,
@@ -97,11 +99,11 @@ export function openSession(
 	if (old) live.delete(digest(old));
 	const now = Date.now();
 	for (const [k, s] of live) if (s.expiresAt <= now) live.delete(k);
-	while (live.size >= MAX_SESSIONS) {
-		const first = [...live].sort((a, b) => a[1].expiresAt - b[1].expiresAt)[0];
-		if (!first) break;
-		live.delete(first[0]);
-	}
+	const own = [...live]
+		.filter(([, s]) => s.profile === session.profile)
+		.sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+	const over = Math.max(0, own.length + 1 - MAX_SESSIONS_PER_PROFILE);
+	for (const [k] of own.slice(0, over)) live.delete(k);
 	const expiresAt = Math.min(session.expiresAt, now + MAX_SESSION_MS);
 	const id = randomBytes(32).toString("hex");
 	const pageKey = randomBytes(32).toString("hex");
