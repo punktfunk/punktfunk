@@ -53,6 +53,8 @@ pub struct SendInputInjector {
     /// Keys and buttons pressed through `SendInput`, lifted when the injector goes. The HID
     /// device keeps its own mirror, lifted through it.
     held: HeldInput,
+    /// Extended scancode each held wire VK pressed ([`held_scan`]); 0 = not held.
+    key_scans: [u32; 256],
 }
 
 // SAFETY: the only non-`Send` field is `Option<HDESK>` (`SyntheticTouch` is `Send`
@@ -69,6 +71,7 @@ impl SendInputInjector {
             touch_failed: false,
             scroll: ScrollMapper::new(ScrollBackend::Windows),
             held: HeldInput::default(),
+            key_scans: [0; 256],
         };
         me.reattach_input_desktop(); // best-effort
         tracing::info!("SendInput injector ready (Win32 KeyboardAndMouse)");
@@ -136,7 +139,8 @@ impl SendInputInjector {
     /// read as hardware. `false` leaves it to `SendInput`: no device (a seat host, an old
     /// driver), text, touch, an unmapped key, or a point off the primary monitor. A release
     /// follows its press: an up the device never held was pressed through `SendInput`.
-    fn inject_hid(&mut self, event: &InputEvent) -> bool {
+    /// `sc_ex` is the key's scancode from [`Self::key_sc_ex`].
+    fn inject_hid(&mut self, event: &InputEvent, sc_ex: u32) -> bool {
         use crate::mouse_windows::with_hid;
         let down = matches!(event.kind, InputKind::MouseButtonDown | InputKind::KeyDown);
         match event.kind {
@@ -162,7 +166,7 @@ impl SendInputInjector {
                 let usage = if vk == crate::keymap::VK_PAUSE {
                     Some(crate::keymap::HID_USAGE_PAUSE)
                 } else {
-                    key_scan(vk, semantic, |vk| scan_ex(vk, semantic))
+                    key_scan(vk, semantic, |_| sc_ex)
                         .and_then(|(scan, ext)| crate::keymap::scan_to_hid_usage(scan, ext))
                 };
                 usage
@@ -224,7 +228,8 @@ impl Drop for SendInputInjector {
 
 impl InputInjector for SendInputInjector {
     fn inject(&mut self, event: &InputEvent) -> Result<()> {
-        if self.inject_hid(event) {
+        let sc_ex = self.key_sc_ex(event);
+        if self.inject_hid(event, sc_ex) {
             return Ok(());
         }
         if matches!(
@@ -256,8 +261,7 @@ impl InputInjector for SendInputInjector {
             InputKind::KeyDown | InputKind::KeyUp => {
                 let vk = (event.code & 0xff) as u16;
                 let semantic = (event.flags & crate::KEY_FLAG_SEMANTIC_VK) != 0;
-                key_input(vk, semantic, down, |vk| scan_ex(vk, semantic))
-                    .map_or(Ok(()), |ki| self.send(&[key(ki)]))
+                key_input(vk, semantic, down, |_| sc_ex).map_or(Ok(()), |ki| self.send(&[key(ki)]))
             }
             InputKind::TextInput => {
                 let inputs: Vec<INPUT> = text_units(event.code).into_iter().map(key).collect();
@@ -284,6 +288,22 @@ impl InputInjector for SendInputInjector {
 }
 
 impl SendInputInjector {
+    /// `MapVirtualKeyExW` for one key edge; 0 for anything else. A semantic VK resolves under
+    /// the foreground layout, which can change while the key is down, so every edge of a held
+    /// key sends the scancode its press did.
+    fn key_sc_ex(&mut self, event: &InputEvent) -> u32 {
+        let down = match event.kind {
+            InputKind::KeyDown => true,
+            InputKind::KeyUp => false,
+            _ => return 0,
+        };
+        let vk = (event.code & 0xff) as u16;
+        let semantic = (event.flags & crate::KEY_FLAG_SEMANTIC_VK) != 0;
+        held_scan(&mut self.key_scans[usize::from(vk)], down, || {
+            scan_ex(vk, semantic)
+        })
+    }
+
     /// The PT_TOUCH device, created on the first wire touch: a session that never touches
     /// never creates one, and a pre-1809 create failure latches the no-op.
     fn ensure_touch(&mut self) -> Option<&mut crate::pen::SyntheticTouch> {
@@ -426,6 +446,21 @@ fn key_scan(vk: u16, semantic: bool, map: impl FnOnce(u16) -> u32) -> Option<(u1
             })
         }
     }
+}
+
+/// One edge of a key whose press resolved `held` (0 = not held): a press, or its repeat,
+/// keeps the first resolution, and the release hands it back and clears it.
+fn held_scan(held: &mut u32, down: bool, resolve: impl FnOnce() -> u32) -> u32 {
+    if !down {
+        return match std::mem::take(held) {
+            0 => resolve(),
+            sc => sc,
+        };
+    }
+    if *held == 0 {
+        *held = resolve();
+    }
+    *held
 }
 
 /// `MapVirtualKeyExW` VK → extended scancode, under the foreground app's layout for a
@@ -669,6 +704,32 @@ mod tests {
         assert_eq!(positional_vk_to_scan(0x90), None); // VK_NUMLOCK
         assert!(!crate::keymap::vk_forced_extended(0x90));
         assert!(!crate::keymap::vk_forced_extended(crate::keymap::VK_PAUSE));
+    }
+
+    /// A layout switch while a key is down: the release lifts the scancode the press sent,
+    /// and a repeat in between presses that one too.
+    #[test]
+    fn a_key_releases_what_its_press_pressed() {
+        let mut held = 0;
+        assert_eq!(held_scan(&mut held, true, || 0x15), 0x15, "press under US");
+        assert_eq!(held_scan(&mut held, true, || 0x2c), 0x15, "repeat under DE");
+        assert_eq!(
+            held_scan(&mut held, false, || 0x2c),
+            0x15,
+            "release under DE"
+        );
+        assert_eq!(held, 0);
+        assert_eq!(
+            held_scan(&mut held, false, || 0x2c),
+            0x2c,
+            "an unheld up resolves"
+        );
+        assert_eq!(
+            held_scan(&mut held, true, || 0),
+            0,
+            "unmappable holds nothing"
+        );
+        assert_eq!(held_scan(&mut held, true, || 0x2c), 0x2c);
     }
 
     /// Keypad Enter is E0 1C even though `MapVirtualKeyExW` knows no VK_SEPARATOR.
