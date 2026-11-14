@@ -58,7 +58,7 @@ impl PocWidener {
             let at = cursor.position() as usize;
             let (start, stop) = (at - nalu.offset, at + nalu.size);
             cursor.set_position(stop as u64);
-            out.extend_from_slice(&au[end..start]);
+            out.extend_from_slice(au.get(end..start)?);
             end = stop;
             let (sc, nal) = au[start..stop].split_at(nalu.offset);
             out.extend_from_slice(sc);
@@ -459,6 +459,20 @@ mod tests {
         let hdr = headers(&aus).pop().unwrap();
         assert_eq!(hdr.pic_order_cnt_lsb, 25);
         assert_eq!(hdr.poc_lsb_lt[0], 0);
+    }
+
+    /// An end-of-sequence or end-of-bitstream NAL is its two header bytes. One whose second
+    /// byte is zero, with a start code right behind it, passes through byte for byte: the
+    /// next NAL starts after it, never inside it.
+    #[test]
+    fn a_start_code_right_behind_an_end_nal_starts_after_it() {
+        for end_nal in [0x48u8, 0x4A] {
+            let mut au = opening();
+            au.extend([0, 0, 1, end_nal, 0x00]);
+            au.extend([0, 0, 1, 0x4A, 0x01]);
+            let wide = PocWidener::new().widen(&au).expect("recodes");
+            assert!(wide.ends_with(&[0, 0, 1, end_nal, 0x00, 0, 0, 1, 0x4A, 0x01]));
+        }
     }
 
     /// Replays a host AU dump (`PF_HEVC_DUMP`, `[u32 len][u64 pts][u8 key][bytes]` chunks)
