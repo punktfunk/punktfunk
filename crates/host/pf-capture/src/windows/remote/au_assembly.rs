@@ -124,6 +124,10 @@ impl<'a> AuAssembly<'a> {
     /// A slice never takes this long; past it the access unit is truncated and the loop's
     /// stall path resets the encoder.
     const CHUNK_WAIT: Duration = Duration::from_millis(500);
+    /// A whole access unit closes within this of its first chunk: four slice waits.
+    const AU_WAIT: Duration = Duration::from_secs(2);
+    /// An open access unit past this is dropped: no wire carries a frame over the heap's cap.
+    const MAX_AU_BYTES: usize = au::HEAP_MAX_BYTES as usize;
 
     pub(crate) fn new(reader: AuReader<'a>, clocks: Clocks, dump: Option<AuDump>) -> Self {
         Self {
@@ -195,7 +199,8 @@ impl<'a> AuAssembly<'a> {
     /// The next whole access unit: chunks concatenate in order until LAST closes it. A FIRST
     /// mid-assembly means the driver dropped this AU's tail and moved on: the prefix is
     /// discarded and the next AU starts over, as the loop's `poll_chunked` does for the
-    /// streamed wire.
+    /// streamed wire. A unit still open [`Self::AU_WAIT`] after its first chunk, or past
+    /// [`Self::MAX_AU_BYTES`], is an error, as a late chunk is: the stall path resets past it.
     pub(crate) fn poll(&mut self, wait: &mut dyn FnMut(u32)) -> Result<Option<EncodedFrame>> {
         let start = |c: AuChunk| EncodedFrame {
             data: c.data,
@@ -209,6 +214,7 @@ impl<'a> AuAssembly<'a> {
         let Some(first) = self.poll_chunk(wait)? else {
             return Ok(None);
         };
+        let deadline = (self.clocks.now)() + Self::AU_WAIT;
         let mut last = first.last;
         let mut frame = start(first);
         while !last {
@@ -221,6 +227,14 @@ impl<'a> AuAssembly<'a> {
             } else {
                 frame.data.extend_from_slice(&c.data);
                 frame.keyframe |= c.keyframe;
+            }
+            let late = (self.clocks.now)() >= deadline;
+            if !last && (late || frame.data.len() > Self::MAX_AU_BYTES) {
+                bail!(
+                    "driver encode: wire frame {} still open at {} bytes",
+                    self.reader.next_wire_seq(),
+                    frame.data.len()
+                );
             }
         }
         Ok(Some(frame))
@@ -474,6 +488,40 @@ mod tests {
             (au::FREE, 1)
         );
         assert_eq!(asm.reset_base(), 13);
+    }
+
+    /// A writer that never closes its access unit can't hold the poll: a trickle inside each
+    /// slice wait meets the unit's deadline, a flood the byte cap. The reset skips the unit.
+    #[test]
+    fn an_access_unit_that_never_closes_is_dropped() {
+        use crate::windows::remote::fake::clock;
+        let trickle = Duration::from_millis(490);
+        for (piece, step, bound) in [(1, trickle, "time"), (512 * 1024, Duration::ZERO, "bytes")] {
+            let mut buf = section();
+            let mem = SectionView::over(&mut buf);
+            let mut drv = Producer::init(mem, 1, 0);
+            let reader = AuReader::new(AuView::new(mem), 0);
+            let mut asm = AuAssembly::new(reader, clock::CLOCKS, None);
+            let data = vec![7u8; piece];
+            drv.publish(&data, 0, 1, 0, au::AU_FIRST);
+            let mut chunks = 1;
+            let Err(err) = asm.poll(&mut |_| {
+                clock::advance(step);
+                drv.publish(&data, 0, 1, 0, 0);
+                chunks += 1;
+            }) else {
+                panic!("{bound}: the poll returned");
+            };
+            assert!(
+                format!("{err:#}").contains("still open"),
+                "{bound}: {err:#}"
+            );
+            assert_eq!(asm.reset_base(), 1, "{bound}: the reset skips the unit");
+            if bound == "time" {
+                // 5 × 490 ms passes the 2 s deadline.
+                assert_eq!(chunks, 6, "the deadline holds against a trickle");
+            }
+        }
     }
 
     /// A superseded encoder's publish in `latest` hides the section: the owed chunk is left
