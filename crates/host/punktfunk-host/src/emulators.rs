@@ -575,10 +575,11 @@ fn revert_with(h: &Hermir) {
 }
 
 /// Every copy of `id` answers its first-run questions, gets `platform`'s firmware from
-/// `firmware_dir` (the regular files in it, not below), and has the session's pads written
-/// in seat order (steps of kind `players`; reverted after the game): see [`session_players`]
-/// for `pad` and `slots`. `platform` is a catalog id or any of its aliases (RomM slug, ES-DE
-/// folder, libretro name). Blocking: an installer may run.
+/// `firmware_dir` (the regular files in it, not below, which a Windows player may then read,
+/// `let_player_read`), and has the session's pads written in seat order (steps of kind
+/// `players`; reverted after the game): see [`session_players`] for `pad` and `slots`.
+/// `platform` is a catalog id or any of its aliases (RomM slug, ES-DE folder, libretro name).
+/// Blocking: an installer may run.
 pub fn prepare(
     id: &str,
     platform: Option<&str>,
@@ -612,6 +613,8 @@ pub fn prepare(
             .map(|e| e.path())
             .collect(),
     };
+    #[cfg(windows)]
+    let_player_read(&firmware);
     let players = hermir::Patch {
         players: Some(session_players(pad, slots)),
         ..Default::default()
@@ -625,6 +628,35 @@ pub fn prepare(
             Ok((copy.exe.to_string(), prepared))
         })
         .collect()
+}
+
+/// The emulator opens what a plugin hands it as the session's player, and a plugin's state is
+/// the runner's alone. Each such file gets that player's read ACE, on the file itself and only
+/// while it is the plugin's own; a file outside every plugin's state is left as it is.
+#[cfg(windows)]
+fn let_player_read(files: &[PathBuf]) {
+    let Some(sid) = crate::windows::theme::session_sid() else {
+        return;
+    };
+    let mut roots: Vec<PathBuf> = [pf_paths::config_dir(), pf_paths::seat::library_dir()]
+        .iter()
+        .filter_map(|d| d.join("plugin-state").canonicalize().ok())
+        .collect();
+    roots.dedup();
+    for file in files {
+        let Ok(real) = file.canonicalize() else {
+            continue;
+        };
+        let Some(own) = roots.iter().find_map(|root| {
+            let plugin = real.strip_prefix(root).ok()?.components().next()?;
+            Some(root.join(plugin))
+        }) else {
+            continue;
+        };
+        if let Err(error) = pf_paths_win::grant_read_inside(&real, &own, &sid) {
+            tracing::warn!(file = %real.display(), %error, "plugin file not opened to the player");
+        }
+    }
 }
 
 /// `platform` as the catalog spells it, from its id or any alias; as given when unknown.
@@ -729,13 +761,16 @@ pub fn import_unit(
     })
 }
 
-/// A game's update or DLC files, installed the way the emulator takes them.
+/// A game's update or DLC files, installed the way the emulator takes them. On Windows the
+/// player may then read the ones a plugin keeps (`let_player_read`).
 pub fn install_content(
     id: &str,
     platform: &str,
     kind: &str,
     files: &[PathBuf],
 ) -> hermir::Result<Vec<hermir::ContentStep>> {
+    #[cfg(windows)]
+    let_player_read(files);
     on_best(id, |h, e, i| {
         e.install_content(i, &platform_id(h, platform), kind, files)
     })

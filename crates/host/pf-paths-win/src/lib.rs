@@ -193,6 +193,127 @@ pub fn admin_only_acl(path: &Path) -> bool {
     read().unwrap_or(false)
 }
 
+/// Lets `sid` read the file at `path`, when it is `inside`'s own: a file, not a link, with one
+/// name, whose real path lies inside `inside`. The checks and the grant act on one open handle,
+/// so a link swapped in after a caller's check reaches nothing. `inside` is compared as given,
+/// never resolved: pass it canonical, under a folder no less-trusted account can replace, and a
+/// link swapped in for `inside` itself fails the check too. The read ACE is explicit, on that
+/// file alone; granting again changes nothing.
+pub fn grant_read_inside(path: &Path, inside: &Path, sid: &str) -> Result<()> {
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows::core::{Owned, HSTRING, PWSTR};
+    use windows::Win32::Foundation::{HANDLE, HLOCAL};
+    use windows::Win32::Security::Authorization::{
+        ConvertStringSidToSidW, GetSecurityInfo, SetEntriesInAclW, SetSecurityInfo,
+        EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, TRUSTEE_IS_SID,
+        TRUSTEE_IS_USER, TRUSTEE_W,
+    };
+    use windows::Win32::Security::{
+        ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE, PSECURITY_DESCRIPTOR, PSID,
+    };
+    use windows::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, GetFinalPathNameByHandleW, BY_HANDLE_FILE_INFORMATION,
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_GENERIC_READ, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL, WRITE_DAC,
+    };
+
+    let file = std::fs::OpenOptions::new()
+        .access_mode((READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES).0)
+        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+        .open(path)?;
+    let handle = HANDLE(file.as_raw_handle());
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: `handle` is `file`'s, open for this whole frame; `info` is a live out-param.
+    unsafe { GetFileInformationByHandle(handle, &mut info) }.map_err(win32_io)?;
+    let not_a_file = (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT).0;
+    if info.dwFileAttributes & not_a_file != 0 || info.nNumberOfLinks != 1 {
+        return Err(other(format!(
+            "{} is a folder, a link, or a file with another name",
+            path.display()
+        )));
+    }
+    let mut buf = vec![0u16; 32_768];
+    // SAFETY: `handle` is open; the call writes at most `buf.len()` units into `buf`.
+    let n = unsafe { GetFinalPathNameByHandleW(handle, &mut buf, FILE_NAME_NORMALIZED) } as usize;
+    if n == 0 || n >= buf.len() {
+        return Err(std::io::Error::last_os_error());
+    }
+    let real = PathBuf::from(std::ffi::OsString::from_wide(&buf[..n]));
+    if !real.starts_with(inside) {
+        return Err(other(format!(
+            "{} is not inside {}",
+            real.display(),
+            inside.display()
+        )));
+    }
+
+    let mut trustee = PSID::default();
+    // SAFETY: the `HSTRING` is NUL-terminated and outlives the call; `trustee` is a live out-param.
+    unsafe { ConvertStringSidToSidW(&HSTRING::from(sid), &mut trustee) }.map_err(win32_io)?;
+    // SAFETY: ConvertStringSidToSidW allocates with LocalAlloc; `Owned` frees it once.
+    let _trustee = unsafe { Owned::new(HLOCAL(trustee.0)) };
+    let (mut sd, mut dacl) = (PSECURITY_DESCRIPTOR::default(), std::ptr::null_mut::<ACL>());
+    // SAFETY: `handle` was opened with READ_CONTROL; `dacl` points into `sd`, freed below.
+    let status = unsafe {
+        GetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            Some(&mut dacl),
+            None,
+            Some(&mut sd),
+        )
+    };
+    if status.is_err() {
+        return Err(std::io::Error::from_raw_os_error(status.0 as i32));
+    }
+    // SAFETY: GetSecurityInfo returned one LocalAlloc'd descriptor; `Owned` frees it once.
+    let _sd = unsafe { Owned::new(HLOCAL(sd.0)) };
+    let read = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: FILE_GENERIC_READ.0,
+        grfAccessMode: GRANT_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_USER,
+            ptstrName: PWSTR(trustee.0.cast()),
+        },
+    };
+    let mut merged = std::ptr::null_mut::<ACL>();
+    // SAFETY: `read` names `trustee`, alive in `_trustee`; `dacl` lives in `_sd`. The new ACL
+    // is LocalAlloc'd into `merged`, freed below.
+    let status = unsafe { SetEntriesInAclW(Some(&[read]), Some(dacl), &mut merged) };
+    if status.is_err() {
+        return Err(std::io::Error::from_raw_os_error(status.0 as i32));
+    }
+    // SAFETY: SetEntriesInAclW allocated `merged` with LocalAlloc; `Owned` frees it once.
+    let _merged = unsafe { Owned::new(HLOCAL(merged.cast())) };
+    // SAFETY: `handle` was opened with WRITE_DAC; `merged` is a valid ACL alive in `_merged`.
+    let status = unsafe {
+        SetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            Some(merged.cast_const()),
+            None,
+        )
+    };
+    if status.is_err() {
+        return Err(std::io::Error::from_raw_os_error(status.0 as i32));
+    }
+    Ok(())
+}
+
 /// Owner Administrators; SYSTEM and Administrators full control, inherited below; nothing else,
 /// and protected from the parent's ACL: what [`ensure_admin_only_source`] passes.
 pub const ADMIN_ONLY: &str = "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
@@ -810,6 +931,68 @@ mod open_acl_tests {
         assert!(icacls(&file, &["/remove:g", "*S-1-5-32-545"]));
         assert!(super::admin_only_acl(&file));
         assert!(!super::admin_only_acl(&base.join("missing")));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// One file inside gets an explicit read ACE; a second name, a file outside and a folder
+    /// get nothing.
+    #[test]
+    fn only_a_file_with_one_name_inside_is_opened_to_a_reader() {
+        let base = std::env::temp_dir().join(format!("pf-grant-read-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let own = base.join("own");
+        std::fs::create_dir_all(&own).unwrap();
+        let own = own.canonicalize().unwrap();
+        let file = own.join("PS3UPDAT.PUP");
+        std::fs::write(&file, b"fw").unwrap();
+        std::fs::write(base.join("outside.bin"), b"x").unwrap();
+
+        super::grant_read_inside(&file, &own, "S-1-5-32-545").unwrap();
+        super::grant_read_inside(&file, &own, "S-1-5-32-545").unwrap();
+        let saved = base.join("acl");
+        let ok = std::process::Command::new("icacls")
+            .arg(&file)
+            .arg("/save")
+            .arg(&saved)
+            .status()
+            .is_ok_and(|s| s.success());
+        assert!(ok);
+        let raw = std::fs::read(&saved).unwrap();
+        let wide: Vec<u16> = raw
+            .chunks_exact(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        let sddl = String::from_utf16_lossy(&wide);
+        // FILE_GENERIC_READ is `FR` in SDDL; the inherited ACEs stay as they were.
+        assert_eq!(sddl.matches("(A;;FR;;;BU)").count(), 1, "{sddl}");
+        assert!(sddl.contains("(A;ID;FA;;;SY)"), "{sddl}");
+
+        assert!(super::grant_read_inside(&base.join("outside.bin"), &own, "S-1-5-32-545").is_err());
+        assert!(super::grant_read_inside(&own, &own, "S-1-5-32-545").is_err());
+        std::fs::hard_link(&file, own.join("second-name")).unwrap();
+        assert!(super::grant_read_inside(&file, &own, "S-1-5-32-545").is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The state folder swapped for a junction after the caller resolved it: the file the
+    /// junction reaches gets nothing.
+    #[test]
+    fn a_state_folder_swapped_for_a_junction_is_refused() {
+        let base = std::env::temp_dir().join(format!("pf-grant-swap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let elsewhere = base.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("secret"), b"s").unwrap();
+        let own = base.canonicalize().unwrap().join("plugin");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(base.join("plugin"))
+            .arg(&elsewhere)
+            .status()
+            .is_ok_and(|s| s.success());
+        assert!(made);
+
+        assert!(super::grant_read_inside(&own.join("secret"), &own, "S-1-5-32-545").is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
 }
