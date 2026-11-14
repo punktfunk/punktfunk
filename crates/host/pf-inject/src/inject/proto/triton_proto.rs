@@ -220,10 +220,12 @@ impl TritonState {
 
     /// A raw report from the client's physical pad becomes the state. Touchpad and motion have
     /// nothing to fold: the raw feed carries pads + IMU, and the synth fallback has no surface.
+    /// Only the controller's own report ids pass: the descriptor also declares a mouse (`0x40`)
+    /// and a keyboard (`0x41`), and the gamepad grant covers neither.
     pub fn apply_rich(&mut self, rich: RichInput, now: Instant) {
         if let RichInput::HidReport { len, data, .. } = rich {
             let len = (len as usize).min(data.len()).min(self.raw.len());
-            if len == 0 {
+            if len == 0 || pf_driver_proto::triton::input_len(data[0]).is_none() {
                 return;
             }
             self.raw[..len].copy_from_slice(&data[..len]);
@@ -326,7 +328,8 @@ impl Sc2Identity {
     }
 
     /// What a client sent ([`punktfunk_core::quic::PadIdentity`]); `None` when it carries
-    /// neither a serial nor a reply, or the replies are torn.
+    /// neither a serial nor a reply, or the replies are torn. The serial becomes a USB string
+    /// and a devnode property, so one that is not 1–16 ASCII letters and digits counts as none.
     pub fn from_wire(id: &punktfunk_core::quic::PadIdentity) -> Option<Sc2Identity> {
         let replies: Vec<_> = punktfunk_core::quic::unpack_identity_replies(&id.replies)?
             .into_iter()
@@ -337,7 +340,9 @@ impl Sc2Identity {
                 (req, reply)
             })
             .collect();
-        let serial = (!id.serial.is_empty()).then(|| id.serial.clone());
+        let plain = (1..=16).contains(&id.serial.len())
+            && id.serial.bytes().all(|b| b.is_ascii_alphanumeric());
+        let serial = plain.then(|| id.serial.clone());
         (serial.is_some() || !replies.is_empty()).then_some(Sc2Identity {
             serial,
             replies,
@@ -475,6 +480,52 @@ mod tests {
         }
         let (r, len) = st.report(&mut seq, at + RAW_STALE);
         assert_eq!((len, r[2]), (TRITON_STATE_LEN, 0));
+    }
+
+    /// The descriptor's mouse (`0x40`) and keyboard (`0x41`) reports never become the pad's
+    /// state, alone or after a controller report: the pad keeps what it had.
+    #[test]
+    fn a_mouse_or_keyboard_report_never_becomes_the_state() {
+        let mut seq = 0;
+        let mut st = TritonState::neutral();
+        for id in [0x40, 0x41, 0x00, 0xFF] {
+            st.apply_rich(hid_report(&[id, 0x02, 0x00, 0x04]), t0());
+            let (r, len) = st.report(&mut seq, t0());
+            assert_eq!(
+                (len, r[0]),
+                (TRITON_STATE_LEN, ID_TRITON_CONTROLLER_STATE),
+                "report {id:#04x} was mirrored"
+            );
+        }
+        st.apply_rich(hid_report(&[0x45, 0x11, 0x22]), t0());
+        st.apply_rich(hid_report(&[0x41, 0x02, 0x00, 0x04]), t0());
+        let (r, len) = st.report(&mut seq, t0());
+        assert_eq!((len, &r[..3]), (3, &[0x45, 0x11, 0x22][..]));
+    }
+
+    /// A serial that is not 1–16 ASCII letters and digits counts as none, so it never reaches a
+    /// transport that would refuse the pad over it.
+    #[test]
+    fn a_serial_that_is_not_plain_counts_as_none() {
+        use punktfunk_core::quic::{pack_identity_replies, PadIdentity};
+        let with = |serial: &str| PadIdentity {
+            pad: 0,
+            serial: serial.into(),
+            replies: pack_identity_replies([(&[0x01, 0x83, 0x00][..], &[0x01, 0x83, 0x1E][..])]),
+            slot: 0,
+        };
+        for bad in ["a-b", "has space", "ü", "ABCDEFGHIJKLMNOPQ"] {
+            let id = Sc2Identity::from_wire(&with(bad)).unwrap();
+            assert_eq!(id.serial, None, "{bad:?} kept");
+            assert_eq!(id.replies.len(), 1);
+        }
+        let only_serial = PadIdentity {
+            serial: "a-b".into(),
+            ..PadIdentity::default()
+        };
+        assert!(Sc2Identity::from_wire(&only_serial).is_none());
+        let id = Sc2Identity::from_wire(&with("ABCDEFGHIJKLMNOP")).unwrap();
+        assert_eq!(id.serial.as_deref(), Some("ABCDEFGHIJKLMNOP"));
     }
 
     #[test]
