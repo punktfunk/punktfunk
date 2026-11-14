@@ -8,7 +8,7 @@ import {
 	pluginSurfaceOrThrow,
 	refusalText,
 } from "@/api/pluginSurface";
-import { PasswordConfirmDialog } from "@/components/password-confirm";
+import { HandOverDialog } from "@/components/password-confirm";
 import {
 	type JsonObject,
 	type JsonSchemaDoc,
@@ -22,7 +22,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
-import { type GrantRefusal, newlyHanded } from "@/lib/handed-paths";
+import { type GrantRefusal, type Handover, handover } from "@/lib/handed-paths";
 import { apiText } from "@/lib/host-messages";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -84,12 +84,24 @@ export const SourceSettingsDialog: FC<{
 	});
 	const [saving, setSaving] = useState(false);
 	// A save that hands a folder over waits for the console password.
-	const [asking, setAsking] = useState<JsonObject | null>(null);
+	const [asking, setAsking] = useState<{
+		value: JsonObject;
+		handover: Handover;
+	} | null>(null);
 
-	const put = async (value: JsonObject, password?: string) => {
+	const put = async (
+		value: JsonObject,
+		handed?: Handover,
+		password?: string,
+	) => {
 		const saved = await pluginSurfaceOrThrow<{
 			access?: { refused?: GrantRefusal[] };
-		} | null>(configUrl, { method: "PUT", body: value, password });
+		} | null>(configUrl, {
+			method: "PUT",
+			body: value,
+			handover: handed,
+			password,
+		});
 		for (const r of saved?.access?.refused ?? []) {
 			toast.error(
 				m.plugin_form_grant_refused({
@@ -103,13 +115,16 @@ export const SourceSettingsDialog: FC<{
 	};
 	const save = async (value: JsonObject) => {
 		const loaded = config.data?.tag === "ready" ? config.data : null;
-		if (loaded && newlyHanded(loaded.schema, loaded.value, value).length) {
-			setAsking(value);
+		const handed = loaded
+			? handover(loaded.schema, loaded.value, value)
+			: undefined;
+		if (handed?.grant.length) {
+			setAsking({ value, handover: handed });
 			return;
 		}
 		setSaving(true);
 		try {
-			await put(value);
+			await put(value, handed);
 		} catch (e) {
 			toast.error(
 				m.library_source_settings_failed({
@@ -174,14 +189,14 @@ export const SourceSettingsDialog: FC<{
 					</section>
 				)}
 			</DialogContent>
-			<PasswordConfirmDialog
+			<HandOverDialog
 				open={asking !== null}
 				id="plugin-form-password"
-				title={m.plugin_form_confirm_title()}
-				body={m.plugin_form_confirm_body({ plugin: source.label })}
+				plugin={source.label}
+				paths={asking?.handover.grant ?? []}
 				submitLabel={m.library_source_settings_save()}
 				onSubmit={async (password) => {
-					if (asking) await put(asking, password);
+					if (asking) await put(asking.value, asking.handover, password);
 				}}
 				onClose={() => setAsking(null)}
 			/>

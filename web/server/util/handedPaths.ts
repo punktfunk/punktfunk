@@ -1,12 +1,12 @@
-// The folders an operator types into a plugin's form (`format: "pf:path"`, or `"pf:path:write"`),
-// and the grant that follows a save. Only paths new in that save are granted: the form's old value
-// came from the plugin, and a path the plugin filled in itself is not the operator's word. A save
-// that drops a path lets the form go of it; the host keeps what another form or the operator holds.
-import {
-	type GrantRefusal,
-	type HandedPath,
-	keepAfterDrop,
-	newlyHanded,
+// The grant that follows a plugin form's save. The browser names the folders the operator
+// confirmed, read from the form it loaded (`GRANT_HEADER`); this grants those the saved value
+// holds, at the access confirmed, and reads nothing from the plugin to decide. A save that drops a
+// path lets the form go of it; the host keeps what another form or the operator holds.
+import { createError } from "h3";
+import type {
+	GrantRefusal,
+	HandedPath,
+	Handover,
 } from "../../src/lib/handed-paths";
 import { mgmtFetch } from "./forward";
 import { callPlugin } from "./pluginProxy";
@@ -62,45 +62,75 @@ export async function grantHandedPaths(
 	return out;
 }
 
-/** PUT a form's value to the plugin's `path`, then grant the paths this save handed over and let
- * `form` go of the ones it dropped. `ask` runs first when the save hands over a path, and a throw
- * from it saves nothing. The value before the save is read first; if that read fails, nothing is
- * granted or let go. A failed release leaves the grant in place. */
+/** The {@link Handover} in `raw`, or `null` without one. One that doesn't parse throws 400. */
+function readHandover(raw: string | undefined): Handover | null {
+	if (raw === undefined) return null;
+	let h: Partial<Handover> | null = null;
+	try {
+		h = JSON.parse(decodeURIComponent(raw));
+	} catch {
+		h = null;
+	}
+	const grant = h?.grant;
+	const keep = h?.keep;
+	if (
+		!Array.isArray(grant) ||
+		!grant.every(
+			(p: Partial<HandedPath> | null) =>
+				typeof p?.path === "string" && typeof p.write === "boolean",
+		) ||
+		!(
+			keep === null ||
+			(Array.isArray(keep) && keep.every((p) => typeof p === "string"))
+		)
+	)
+		throw createError({
+			statusCode: 400,
+			statusMessage: "unreadable grant header",
+		});
+	return { grant, keep };
+}
+
+/** Every string `value` holds, trimmed as a handed path is. */
+function strings(value: unknown, out = new Set<string>()): Set<string> {
+	if (typeof value === "string") out.add(value.trim());
+	else if (value && typeof value === "object")
+		for (const v of Object.values(value)) strings(v, out);
+	return out;
+}
+
+/** PUT a form's value to the plugin's `path`, then grant the paths `handover` (the raw
+ * `GRANT_HEADER`) confirms that the value holds, and let `form` go of every path it no longer
+ * keeps. `ask` runs first when there is a grant, and a throw from it saves nothing. A failed
+ * release leaves the grant in place. */
 export async function putAndGrant(
 	id: string,
 	path: string,
 	body: Uint8Array | undefined,
 	form: string,
+	handover: string | undefined,
 	ask: () => Promise<void>,
 ): Promise<{ res: Response | null; access?: GrantOutcome }> {
-	const before = await callPlugin(id, path, { method: "GET" });
-	const prior = before?.ok
-		? ((await before.json().catch(() => null)) as {
-				schema?: unknown;
-				value?: unknown;
-			} | null)
-		: null;
+	const confirmed = readHandover(handover);
 	let value: unknown;
 	try {
 		value = body && JSON.parse(new TextDecoder().decode(body));
 	} catch {
 		value = undefined;
 	}
-	const handed =
-		prior && value !== undefined
-			? newlyHanded(prior.schema, prior.value, value)
-			: [];
-	if (handed.length) await ask();
+	const held = strings(value);
+	const grant = confirmed?.grant.filter((p) => held.has(p.path)) ?? [];
+	if (grant.length) await ask();
 	const res = await callPlugin(id, path, {
 		method: "PUT",
 		headers: { "content-type": "application/json" },
 		body,
 	});
-	if (!res?.ok || !prior || value === undefined) return { res };
-	const access = handed.length
-		? await grantHandedPaths(id, handed, form)
+	if (!res?.ok || value === undefined) return { res };
+	const access = grant.length
+		? await grantHandedPaths(id, grant, form)
 		: undefined;
-	const keep = keepAfterDrop(prior.schema, prior.value, value);
+	const keep = confirmed?.keep?.filter((p) => held.has(p));
 	if (keep) await accessPost(id, "release", { form, keep }).catch(() => null);
 	return { res, ...(access ? { access } : {}) };
 }

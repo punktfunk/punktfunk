@@ -12,14 +12,14 @@ import {
 } from "@/api/pluginSurface";
 import { gamePlugins, usePlugins } from "@/api/plugins";
 import { usePluginsReachable } from "@/api/seat";
-import { PasswordConfirmDialog } from "@/components/password-confirm";
+import { HandOverDialog } from "@/components/password-confirm";
 import {
 	type JsonObject,
 	type JsonSchemaDoc,
 	SchemaForm,
 } from "@/components/schema-form";
 import { Button } from "@/components/ui/button";
-import { type GrantRefusal, newlyHanded } from "@/lib/handed-paths";
+import { type GrantRefusal, type Handover, handover } from "@/lib/handed-paths";
 import { apiText } from "@/lib/host-messages";
 import { m } from "@/paraglide/messages";
 import { Group } from "./fields";
@@ -102,7 +102,10 @@ const PluginTab: FC<{
 	const [saving, setSaving] = useState(false);
 	const [refused, setRefused] = useState<GrantRefusal[]>([]);
 	// A save that hands a folder over waits for the console password.
-	const [asking, setAsking] = useState(false);
+	const [asking, setAsking] = useState<{
+		value: JsonObject;
+		handover: Handover;
+	} | null>(null);
 
 	if (loaded.tag === "offline") {
 		return (
@@ -118,12 +121,17 @@ const PluginTab: FC<{
 	}
 
 	const dirty = JSON.stringify(draft) !== JSON.stringify(stored);
-	const put = async (value: JsonObject, password?: string) => {
+	const put = async (
+		value: JsonObject,
+		handed: Handover,
+		password?: string,
+	) => {
 		const saved = await pluginSurfaceOrThrow<{
 			access?: { refused?: GrantRefusal[] };
 		} | null>(sectionUrl(plugin.id, entryId), {
 			method: "PUT",
 			body: value,
+			handover: handed,
 			password,
 		});
 		setRefused(saved?.access?.refused ?? []);
@@ -132,13 +140,14 @@ const PluginTab: FC<{
 	};
 	const save = async () => {
 		if (!draft) return;
-		if (newlyHanded(loaded.section.schema, stored, draft).length) {
-			setAsking(true);
+		const handed = handover(loaded.section.schema, stored, draft);
+		if (handed.grant.length) {
+			setAsking({ value: draft, handover: handed });
 			return;
 		}
 		setSaving(true);
 		try {
-			await put(draft);
+			await put(draft, handed);
 		} catch (e) {
 			toast.error(
 				m.library_entry_plugin_save_failed({
@@ -211,16 +220,16 @@ const PluginTab: FC<{
 					{m.library_save()}
 				</Button>
 			</div>
-			<PasswordConfirmDialog
-				open={asking}
+			<HandOverDialog
+				open={asking !== null}
 				id={`plugin-game-password-${plugin.id}`}
-				title={m.plugin_form_confirm_title()}
-				body={m.plugin_form_confirm_body({ plugin: plugin.title })}
+				plugin={plugin.title}
+				paths={asking?.handover.grant ?? []}
 				submitLabel={m.library_save()}
 				onSubmit={async (password) => {
-					if (draft) await put(draft, password);
+					if (asking) await put(asking.value, asking.handover, password);
 				}}
-				onClose={() => setAsking(false)}
+				onClose={() => setAsking(null)}
 			/>
 		</Group>
 	);
