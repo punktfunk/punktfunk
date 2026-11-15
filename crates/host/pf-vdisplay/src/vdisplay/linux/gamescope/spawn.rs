@@ -103,6 +103,20 @@ fn cursor_args() -> Vec<String> {
     args
 }
 
+/// The box's own MangoHud config, starting hidden: its `toggle_hud` key shows it.
+const MANGOAPP_HIDDEN: &str = "read_cfg,no_display";
+
+/// `MANGOHUD_CONFIG` for a spawn's mangoapp, or `None` to leave the env alone. A Steam spawn
+/// needs none: gamescope writes Steam a `no_display` file its performance overlay slider drives.
+/// A `MANGOHUD_CONFIG` the box already sets stands.
+fn mangoapp_config(
+    mangoapp: bool,
+    steam_mode: bool,
+    box_config: Option<&str>,
+) -> Option<&'static str> {
+    (mangoapp && !steam_mode && box_config.is_none_or(str::is_empty)).then_some(MANGOAPP_HIDDEN)
+}
+
 /// Paint-on-commit + `--framerate-limit` at the same rate as `-r`. The two travel together: VRR
 /// stops pacing to the refresh grid, so a FIFO game would otherwise run unbounded. Gated on the
 /// probe so argv means what it says. `PUNKTFUNK_GAMESCOPE_VRR=0` opts out.
@@ -219,8 +233,9 @@ pub(super) fn resolved_spawn_app(cmd: Option<&str>) -> Option<String> {
 /// nested environment, and runs the launch value as the shell command its source promises.
 /// The WSI layer stays out of gamescope's own Vulkan process. Only a direct flatpak launch sees
 /// gamescope's Wayland socket ([`shape_flatpak_command`]); a nested Steam sees no Wayland at all
-/// ([`steam_runtime_dir_script`]), and everything else gets [`GDK_X11`]. Gamescope and the game
-/// write to [`spawn_log_path`] of `inst`, kept under [`LOG_CAP`].
+/// ([`steam_runtime_dir_script`]), and everything else gets [`GDK_X11`]. An installed mangoapp
+/// runs hidden ([`mangoapp_config`]). Gamescope and the game write to [`spawn_log_path`] of
+/// `inst`, kept under [`LOG_CAP`].
 pub(super) fn spawn(
     w: u32,
     h: u32,
@@ -262,6 +277,16 @@ pub(super) fn spawn(
     if let Some(path) = discovery::reaper_path_env() {
         cmd.env("PATH", path);
     }
+    // Only the capture patch carries the overlay into the stream.
+    let mangoapp = gamescope_can_composite_external_overlay() && discovery::mangoapp_installed();
+    if mangoapp {
+        cmd.arg("--mangoapp");
+    }
+    let box_config = crate::with_env_lock(|| std::env::var("MANGOHUD_CONFIG").ok());
+    let mangoapp_env = mangoapp_config(mangoapp, steam_mode, box_config.as_deref());
+    if let Some(config) = mangoapp_env {
+        cmd.env("MANGOHUD_CONFIG", config);
+    }
     add_bare_gamescope_args(&mut cmd, w, h, hz, steam_mode, grab_cursor, hdr);
     let wsi = WsiPlan::resolve();
     if wsi == WsiPlan::DistroDisabled {
@@ -281,12 +306,16 @@ pub(super) fn spawn(
     }
     let app = flatpak.unwrap_or(app);
     let steam_dir = is_steam_launch(&app).then(|| steam_runtime_dir(inst));
-    let script = nested_wrapper_script(
+    let mut script = nested_wrapper_script(
         &relay,
         splash_exe.is_some(),
         &nested_env,
         steam_dir.as_deref(),
     );
+    // Only mangoapp starts hidden. A game's own MangoHud keeps the box's config.
+    if mangoapp_env.is_some() {
+        script.insert_str(0, "unset MANGOHUD_CONFIG; ");
+    }
     cmd.args(["sh", "-c", &script, "sh"]);
     if let Some(exe) = &splash_exe {
         cmd.arg(exe);
@@ -330,7 +359,7 @@ pub(super) fn spawn(
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
     }
     tracing::info!(
-        w, h, hz, steam_mode, hdr, ?wsi,
+        w, h, hz, steam_mode, hdr, mangoapp, ?wsi,
         bin = %gamescope_bin(),
         game_cap = %game_cap(game_hz(hz)),
         splash = splash_exe.is_some(),
@@ -635,6 +664,19 @@ mod tests {
              Environment=\"XKB_DEFAULT_OPTIONS=ctrl:nocaps, compose:ralt\"\n"
         );
         assert_eq!(environment_lines(&[]), "");
+    }
+
+    /// mangoapp starts hidden on the box's config, except where Steam or the box decides.
+    #[test]
+    fn mangoapp_starts_hidden_unless_steam_or_the_box_decides() {
+        assert_eq!(mangoapp_config(true, false, None), Some(MANGOAPP_HIDDEN));
+        assert_eq!(
+            mangoapp_config(true, false, Some("")),
+            Some(MANGOAPP_HIDDEN)
+        );
+        assert_eq!(mangoapp_config(true, true, None), None);
+        assert_eq!(mangoapp_config(true, false, Some("fps_only")), None);
+        assert_eq!(mangoapp_config(false, false, None), None);
     }
 
     #[test]

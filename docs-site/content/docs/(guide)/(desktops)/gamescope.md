@@ -136,6 +136,9 @@ chain, and what to check when a stream comes out SDR, is on [HDR](/docs/hdr#linu
   client's rate. `punktfunk-gamescope` reports the real mode;
   `PUNKTFUNK_GAMESCOPE_REFRESH_RATES=60,90,120` adds rates to Steam's menu.
 - **The performance overlay** (mangoapp) reaches the stream only with `punktfunk-gamescope`.
+  A gamescope the host starts runs it when mangoapp is installed, hidden at first. In Steam,
+  the Quick Access Menu shows it; elsewhere, MangoHud's toggle key does (Right Shift+F12, or
+  `toggle_hud` in your MangoHud.conf). MangoHud 0.8.4 and older miss a quick tap: hold the keys.
 - **The keyboard types US layout** on a stock gamescope, whatever the box uses.
 - **The pointer costs a full-frame pass** on a stock gamescope, because the host draws it.
   `punktfunk-gamescope` paints it itself.
