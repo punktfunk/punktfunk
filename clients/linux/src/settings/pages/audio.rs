@@ -35,7 +35,7 @@ pub fn audio(b: &mut Build) {
     let labels: Vec<&str> = AUDIO_FORMATS.iter().map(|(_, l)| l()).collect();
     let format = b.choice(&spec::AUDIO_FORMAT, &labels);
     {
-        // Surround above 48 kHz comes back as Opus: the caption says so beside its cause.
+        // 7.1 above 96 kHz comes back as Opus: the caption says so beside its cause.
         // The handlers share the two indices, not the rows, so no row owns its own closure.
         let picked = Rc::new(Cell::new((0u32, 0u32)));
         let w = format.widget().clone();

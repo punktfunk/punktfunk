@@ -260,6 +260,15 @@ impl SessionLink {
         }
     }
 
+    /// Free bytes in the outgoing datagram buffer, which evicts its oldest datagram once
+    /// full. `None` on the browser plane, which does not say.
+    pub(crate) fn datagram_space(&self) -> Option<usize> {
+        match self {
+            SessionLink::QuicV2(c, _) => Some(c.datagram_send_buffer_space()),
+            SessionLink::Web(..) => None,
+        }
+    }
+
     pub(crate) fn remote_address(&self) -> SocketAddr {
         self.quic().remote_address()
     }

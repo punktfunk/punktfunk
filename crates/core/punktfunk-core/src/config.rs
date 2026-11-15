@@ -479,6 +479,18 @@ pub fn mtu1500_shard_payload_for(peer: core::net::IpAddr) -> usize {
     }
 }
 
+/// Bytes of outgoing QUIC datagrams a connection queues before it evicts the oldest.
+/// 4 KiB ≈ 200 ms of stereo Opus, ~14 ms of 48 kHz/24-bit PCM. Latest-wins under
+/// congestion: the transport is built before the audio plane is known, so a PCM-sized
+/// buffer would give Opus ~800 ms of lag.
+/// cbindgen:ignore
+pub const DATAGRAM_SEND_BUFFER: usize = 4 * 1024;
+
+/// What a queued datagram costs [`DATAGRAM_SEND_BUFFER`] beyond its bytes: quinn's own record
+/// of it, on a 64-bit target. An empty buffer reports this much less than its size.
+/// cbindgen:ignore
+pub const DATAGRAM_QUEUE_OVERHEAD: usize = 32;
+
 /// Floor for a negotiated `shard_payload`. Below this the path cannot carry QUIC
 /// either (QUIC's minimum UDP payload is 1200), so shrinking further buys nothing.
 /// 512 is even and well under every real path.

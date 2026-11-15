@@ -1400,11 +1400,10 @@ extension SettingsView {
         }
         let head = L10n.applePlayerAudioFormatLosslessHint(rate: mbps)
         guard effective.audioChannels > 2 else { return head }
-        // One frame per datagram: more channels buy a shorter frame. At 24-bit and the default
-        // datagram (`pcm::frame_us_for`), 44.1 and 48 kHz surround fit a 1–1.5 ms rung, which
-        // costs packets; 88.2 kHz upward fits none, so it gets the other sentence.
-        guard choice == .lossless441 || choice == .lossless48 else {
-            return head + " " + String(localized: L10n.playerAudioFormatSurroundLimitHint)
+        // More channels buy a shorter frame, or one the host sends in parts. 7.1 at 176.4 kHz
+        // fits neither (`pcm::parted_frame_us_for`), so it gets the other sentence.
+        if effective.audioChannels == 8 && choice == .lossless1764 {
+            return head + " " + String(localized: L10n.playerAudioFormatSurround8LimitHint)
         }
         return head + " " + String(localized: effective.audioChannels == 6
             ? L10n.applePlayerAudioFormatSurround6Hint

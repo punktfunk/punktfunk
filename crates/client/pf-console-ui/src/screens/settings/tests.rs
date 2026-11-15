@@ -2177,7 +2177,7 @@ fn dpad_alone_reaches_every_tab() {
 #[test]
 fn audio_format_ships_off_and_steps_at_every_channel_count() {
     use pf_client_core::audio_format::{
-        AUDIO_FORMATS, AUDIO_FORMAT_LOSSLESS_48, AUDIO_FORMAT_LOSSLESS_96,
+        AUDIO_FORMATS, AUDIO_FORMAT_LOSSLESS_1764, AUDIO_FORMAT_LOSSLESS_96,
     };
     let mut settings = Settings::default();
     assert_eq!(settings.audio_format, AUDIO_FORMAT_OPUS, "off by default");
@@ -2213,17 +2213,16 @@ fn audio_format_ships_off_and_steps_at_every_channel_count() {
     assert!(adjust(RowId::AudioFormat, 1, true, &mut ctx));
     assert_eq!(ctx.settings.audio_format, AUDIO_FORMAT_OPUS);
 
-    // Surround keeps the row live; only a rate no surround frame fits earns the extra line.
-    let limit = pf_l10n::client::player_audio_format_surround_limit_hint();
-    ctx.settings.audio_format = AUDIO_FORMAT_LOSSLESS_48.into();
-    ctx.settings.audio_channels = 6;
+    // Surround keeps the row live; only 7.1 at a rate no frame fits earns the extra line.
+    let limit = pf_l10n::client::player_audio_format_surround8_limit_hint();
+    ctx.settings.audio_format = AUDIO_FORMAT_LOSSLESS_96.into();
+    ctx.settings.audio_channels = 8;
     assert!(row_spec(RowId::AudioFormat, &ctx, &[], &Default::default()).enabled);
     assert!(!detail(RowId::AudioFormat, &ctx).contains(limit));
     assert!(adjust(RowId::AudioFormat, 1, false, &mut ctx));
-    assert!(adjust(RowId::AudioFormat, 1, false, &mut ctx));
-    assert_eq!(ctx.settings.audio_format, AUDIO_FORMAT_LOSSLESS_96);
+    assert_eq!(ctx.settings.audio_format, AUDIO_FORMAT_LOSSLESS_1764);
     assert!(detail(RowId::AudioFormat, &ctx).ends_with(limit));
-    ctx.settings.audio_channels = 2;
+    ctx.settings.audio_channels = 6;
     assert!(!detail(RowId::AudioFormat, &ctx).contains(limit));
 
     ctx.settings.audio_format = AUDIO_FORMAT_OPUS.into();

@@ -23,7 +23,7 @@ pub(super) async fn run(
     // One seq space for every audio plane: a late or duplicate packet never reaches a decoder.
     let mut audio_seq = crate::audio::AudioSeqGate::new();
     let mut pad_audio_seq = [[crate::audio::PadSeqGate::default(); 2]; crate::input::MAX_PADS];
-    // `0xD4` parts become one access unit. A format mark rides the next whole unit out.
+    // `0xD4` and `0xD5` parts become one unit. A format mark rides the next whole unit out.
     let mut access_unit = crate::audio::bitstream::AuAssembler::new();
     let mut access_unit_mark = None;
     // Under audio epochs a packet passes, opens a new format, or waits out its config.
@@ -159,20 +159,31 @@ pub(super) async fn run(
                     });
                 }
             }
-            // Same queue again, one whole access unit per packet. No `0xD2` here either.
-            Some(&crate::quic::AUDIO_BITSTREAM_MAGIC) => {
-                if let Some((seq, pts_ns, index, count, bytes)) =
-                    crate::quic::decode_audio_bitstream_datagram(&d)
-                {
+            // Same queue again, one whole unit per packet: an access unit on `0xD4`, on `0xD5`
+            // the frame a `0xD3` datagram would have carried. No `0xD2` here either.
+            Some(
+                &tag @ (crate::quic::AUDIO_BITSTREAM_MAGIC | crate::quic::AUDIO_PCM_PARTS_MAGIC),
+            ) => {
+                // `0xD4` names no codec within its family; AC-3 stands for both.
+                let (part, codec) = if tag == crate::quic::AUDIO_PCM_PARTS_MAGIC {
+                    (
+                        crate::quic::decode_audio_pcm_part_datagram(&d),
+                        crate::quic::AUDIO_CODEC_PCM,
+                    )
+                } else {
+                    (
+                        crate::quic::decode_audio_bitstream_datagram(&d),
+                        crate::quic::AUDIO_CODEC_AC3,
+                    )
+                };
+                if let Some((seq, pts_ns, index, count, bytes)) = part {
                     // The seq gates run once per unit, on part 0; the assembler takes a later
                     // part only as the continuation of a unit that passed them.
                     if index == 0 {
                         if !audio_seq.fresh(seq) {
                             continue;
                         }
-                        // The tag names no codec within the family; AC-3 stands for both.
-                        let Some(new_format) = admitted(admit(seq, crate::quic::AUDIO_CODEC_AC3))
-                        else {
+                        let Some(new_format) = admitted(admit(seq, codec)) else {
                             continue;
                         };
                         audio_red.recover_before(seq, false);
@@ -340,5 +351,62 @@ mod tests {
         );
         assert_eq!(next.data, head);
         assert!(got.2.is_err(), "one access unit is one packet");
+    }
+
+    /// A PCM frame sent as `0xD5` parts reaches the audio sink as the packet one `0xD3`
+    /// datagram would have been. A frame missing a part never arrives; the next one does.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_parted_lossless_frame_reaches_the_audio_sink_whole() {
+        let (_server_ep, _client_ep, host_conn, client_conn) =
+            crate::quic::test_util::connect_pair().await;
+        let (planes, rx) = super::super::planes::channels();
+        tokio::spawn(run(
+            ClientConn::new(client_conn),
+            planes.datagram,
+            Arc::new(Mutex::new(
+                super::super::frame_channel::EncodeLatAcc::default(),
+            )),
+            Arc::new(ClientShared::new(crate::config::Mode::default())),
+        ));
+
+        // Three parts, each under a new connection's 1 162-byte datagram.
+        let frame: Vec<u8> = (0..3_000u32).map(|i| (i % 251) as u8).collect();
+        let parts: Vec<&[u8]> = frame.chunks(1_000).collect();
+        let sends = [
+            (60, 0, parts[0]),
+            (60, 1, parts[1]),
+            (60, 2, parts[2]),
+            // Part 1 of 61 is lost.
+            (61, 0, parts[0]),
+            (61, 2, parts[2]),
+            (62, 0, parts[0]),
+            (62, 1, parts[1]),
+            (62, 2, parts[2]),
+        ];
+        for (seq, index, part) in sends {
+            let pts = 1_000_000 + u64::from(seq) * 2_000_000;
+            let d = crate::quic::encode_audio_pcm_part_datagram(seq, pts, index, 3, part);
+            let wrapped = crate::quic::v2::dgram::wrap(&d).expect("audio has a kind");
+            host_conn.send_datagram(wrapped.into()).expect("fits");
+            // One at a time: the send buffer holds three parts, not eight.
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+
+        let got = tokio::task::spawn_blocking(move || {
+            let audio = rx.audio.into_inner().unwrap();
+            let first = audio.recv_timeout(std::time::Duration::from_secs(5));
+            let second = audio.recv_timeout(std::time::Duration::from_secs(5));
+            let none = audio.recv_timeout(std::time::Duration::from_millis(200));
+            (first, second, none)
+        })
+        .await
+        .unwrap();
+        let whole = got.0.expect("the 0xD5 arm must feed the audio sink");
+        assert_eq!((whole.seq, whole.pts_ns), (60, 121_000_000));
+        assert_eq!(whole.data, frame, "the parts join in order");
+        let next = got.1.expect("the frame after the broken one arrives");
+        assert_eq!(next.seq, 62, "61 is a gap for the decoder to conceal");
+        assert_eq!(next.data, frame);
+        assert!(got.2.is_err(), "a frame missing a part is no packet");
     }
 }

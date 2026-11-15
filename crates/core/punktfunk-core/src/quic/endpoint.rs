@@ -52,11 +52,8 @@ fn stream_transport_idle(
     if let Some(rtt) = initial_rtt {
         t.initial_rtt(rtt);
     }
-    // 4 KiB ≈ 200 ms of stereo Opus, ~14 ms of 48 kHz/24-bit PCM. Latest-wins
-    // under congestion; do not raise for PCM — TransportConfig is built before
-    // the plane is known, so a PCM-sized buffer would give Opus ~800 ms of lag.
     // Eviction is silent (`send_datagram` drop=true returns Ok); counters miss it.
-    t.datagram_send_buffer_size(4 * 1024);
+    t.datagram_send_buffer_size(crate::config::DATAGRAM_SEND_BUFFER);
     // Probe to the 1500-MTU IPv4 UDP payload (1472), not quinn's 1452: settle at
     // the ceiling proves the path carries full-size video; settle below sizes it.
     // Stock 1452 made a healthy path and a constrained one look the same.

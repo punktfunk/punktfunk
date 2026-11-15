@@ -223,7 +223,7 @@ pub struct Settings {
     ///
     /// Off by default: lossless takes 2.1–8.5 Mbps in stereo outside the ABR video
     /// budget, vs ~256 kbps Opus. A request, never a fact — the host may still answer
-    /// Opus, and does for surround above 48 kHz. A `String` so an unrecognized value
+    /// Opus, and does for 7.1 above 96 kHz. A `String` so an unrecognized value
     /// resolves to Opus rather than ending a session.
     #[serde(default = "default_audio_format")]
     pub audio_format: String,

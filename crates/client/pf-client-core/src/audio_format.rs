@@ -71,10 +71,11 @@ pub fn audio_format_wire(setting: &str) -> Option<(u32, u8)> {
     Some((rate_hz, BITS_24))
 }
 
-/// True when `setting` in surround can only come back as Opus: above 48 kHz no surround
-/// frame fits one datagram, and the host declines. The settings row says so.
+/// True when `setting` at `channels` can only come back as Opus: 7.1 above 96 kHz fits the
+/// datagram send buffer in no frame, whole or in parts, and the host declines. The settings
+/// row says so.
 pub fn surround_over_limit(setting: &str, channels: u8) -> bool {
-    channels > 2 && audio_format_wire(setting).is_some_and(|(rate_hz, _)| rate_hz > 48_000)
+    channels == 8 && audio_format_wire(setting).is_some_and(|(rate_hz, _)| rate_hz > 96_000)
 }
 
 #[cfg(test)]
@@ -96,9 +97,11 @@ mod tests {
             };
             assert!(pcm::rate_is_supported(rate_hz), "{setting}");
             for channels in [6, 8] {
+                let fits = pcm::frame_us_for(rate_hz, bits, channels, DGRAM)
+                    .or_else(|| pcm::parted_frame_us_for(rate_hz, bits, channels, DGRAM));
                 assert_eq!(
                     surround_over_limit(setting, channels),
-                    pcm::frame_us_for(rate_hz, bits, channels, DGRAM).is_none(),
+                    fits.is_none(),
                     "{setting} at {channels} channels"
                 );
             }

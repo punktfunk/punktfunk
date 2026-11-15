@@ -1059,7 +1059,7 @@
 	"player_mic_enabled_keys_hint": "{keys} schaltet es während des Streams stumm und wieder an.",
 	"player_audio_format": "Audioqualität",
 	"player_audio_format_hint": "Verlustfrei ist unkomprimiertes PCM – es kostet 2,1–8,5 Mbit/s der Verbindung, und der Host hat einen eigenen Schalter.",
-	"player_audio_format_surround_limit_hint": "Surround braucht 48 kHz oder weniger.",
+	"player_audio_format_surround8_limit_hint": "7.1 braucht 96 kHz oder weniger.",
 	"player_audio_format_opus": "Standard (Opus)",
 	"player_audio_format_lossless441": "Verlustfrei 44,1 kHz / 24 Bit",
 	"player_audio_format_lossless48": "Verlustfrei 48 kHz / 24 Bit",

@@ -183,8 +183,9 @@ pub(super) fn spawn_input_plane(
 /// The audio thread, except for the two frame-arithmetic sources: their clients want nothing
 /// else on the wire, and the rig's budget carries the audio reservation without a capture
 /// behind it. A joiner (`joined`) taps the owner's sink; `published` is where this session's
-/// thread names the sink it captures. Best-effort: a failed spawn is logged and the session
-/// streams without audio, because the other threads are already up.
+/// thread names the sink it captures. `pcm_parts` is the session's `FEATURE_PCM_PARTS`.
+/// Best-effort: a failed spawn is logged and the session streams without audio, because the
+/// other threads are already up.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_audio_plane(
     scope: &mut SessionScope,
@@ -198,6 +199,7 @@ pub(super) fn spawn_audio_plane(
     audio_epochs: Option<
         tokio::sync::mpsc::UnboundedSender<punktfunk_core::quic::v2::msg::AudioConfig>,
     >,
+    pcm_parts: bool,
 ) {
     if matches!(
         source,
@@ -241,6 +243,7 @@ pub(super) fn spawn_audio_plane(
             muted,
             counters,
             audio_epochs,
+            pcm_parts,
         })
     });
     if let Err(e) = spawned {
@@ -341,6 +344,8 @@ pub(super) fn spawn_planes(
         controls,
         counters,
         audio_epochs,
+        n.features
+            .has(punktfunk_core::quic::v2::registry::FEATURE_PCM_PARTS),
     );
     // Also for a stream that starts SDR on a display lit in HDR: a decoder rebuilt when its
     // content turns HDR is configured before the capture's own metadata arrives.

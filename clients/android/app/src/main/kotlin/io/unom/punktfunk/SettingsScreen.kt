@@ -1406,11 +1406,11 @@ private fun AudioSettings(s: Settings, update: (String, Settings) -> Unit, onMic
         ),
         fields = setOf("audio_format", "keep_host_audio", "echo_cancel"),
     ) {
-        // Offered at every channel count: surround negotiates a shorter frame. Above 48 kHz no
-        // surround frame fits a datagram and the host answers Opus, so the caption says so.
+        // Offered at every channel count: surround negotiates a shorter frame, or one sent in
+        // parts. 7.1 above 96 kHz fits neither and the host answers Opus, so the caption says so.
         val hint = stringResource(R.string.player_audio_format_hint)
-        val limit = stringResource(R.string.player_audio_format_surround_limit_hint)
-        val overLimit = s.audioChannels > 2 && s.audioFormatWire().first > 48_000
+        val limit = stringResource(R.string.player_audio_format_surround8_limit_hint)
+        val overLimit = s.audioChannels == 8 && s.audioFormatWire().first > 96_000
         SettingDropdown(
             label = stringResource(R.string.player_audio_format),
             options = AUDIO_FORMAT_OPTIONS.worded(),

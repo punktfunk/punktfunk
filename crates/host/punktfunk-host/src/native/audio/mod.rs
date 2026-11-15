@@ -317,6 +317,8 @@ pub(super) struct PlaneArgs {
     /// Where a lossless plane that lost its rate announces its Opus successor.
     pub audio_epochs:
         Option<tokio::sync::mpsc::UnboundedSender<punktfunk_core::quic::v2::msg::AudioConfig>>,
+    /// The session runs `FEATURE_PCM_PARTS`: a PCM frame over one datagram leaves as parts.
+    pub pcm_parts: bool,
 }
 
 /// [`run_plane`] on the session's plane. A lossless plane whose capture loses its rate runs on
@@ -539,8 +541,13 @@ pub(super) fn omur_config(
 /// is not a budget. Handshake already refuses the bits; this is the send-side lock.
 enum WireEnc {
     /// `payload` is sized exactly — `from_f32` appends, so it is cleared per frame. A 4 KB
-    /// Opus guess is too small for 96/24 at the longest rungs.
-    Pcm { bits: u8, payload: Vec<u8> },
+    /// Opus guess is too small for 96/24 at the longest rungs. `parts`: the client joins
+    /// `0xD5` parts, so a frame over one datagram is split, not refused.
+    Pcm {
+        bits: u8,
+        payload: Vec<u8>,
+        parts: bool,
+    },
     Opus {
         enc: crate::audio::OpusEnc,
         /// 4096 covers 7.1 HQ ≈ 1.3 KB at 5 ms.
@@ -567,16 +574,19 @@ enum WireEnc {
 impl WireEnc {
     /// No Opus encoder at all on the PCM or `0xD4` plane — there is nothing for it to do, and
     /// building one would make a libopus failure able to kill a session that does not use it.
+    /// `pcm_parts` is the session's `FEATURE_PCM_PARTS`.
     fn open(
         fmt: &PlaneFormat,
         plane: super::handshake::AudioPlane,
         budget: punktfunk_core::audio::AudioBudget,
+        pcm_parts: bool,
     ) -> Result<WireEnc> {
         if fmt.pcm {
             let bytes = pcm::frame_payload_bytes(fmt.rate_hz, fmt.bits, fmt.channels, fmt.frame_us);
             return Ok(WireEnc::Pcm {
                 bits: fmt.bits,
                 payload: Vec::with_capacity(bytes),
+                parts: pcm_parts,
             });
         }
         if fmt.bitstream() {
@@ -598,7 +608,8 @@ impl WireEnc {
         })
     }
 
-    /// `samples` as the datagrams of `seq` into `out`: one on Opus and PCM; on `0xD4` an access
+    /// `samples` as the datagrams of `seq` into `out`: one on Opus; on PCM one, or `0xD5` parts
+    /// when the frame is over `max_datagram` and the client joins them; on `0xD4` an access
     /// unit's parts, or none while omur fills its lookahead. An encode error writes none and is
     /// counted; PCM cannot fail. `false`: the unit does not fit 15 parts of `max_datagram`.
     fn datagrams(
@@ -609,14 +620,21 @@ impl WireEnc {
         max_datagram: usize,
         out: &mut Vec<Vec<u8>>,
     ) -> bool {
+        use punktfunk_core::quic;
         out.clear();
         let (enc, buf, redundancy, prev, errs) = match self {
-            WireEnc::Pcm { bits, payload } => {
+            WireEnc::Pcm {
+                bits,
+                payload,
+                parts,
+            } => {
                 payload.clear();
                 pcm::from_f32(samples, *bits, payload);
-                out.push(punktfunk_core::quic::encode_audio_pcm_datagram(
-                    seq, pts_ns, payload,
-                ));
+                if *parts && quic::AUDIO_PCM_HEADER + payload.len() > max_datagram {
+                    let part = quic::encode_audio_pcm_part_datagram;
+                    return split_unit(part, seq, pts_ns, payload, max_datagram, out);
+                }
+                out.push(quic::encode_audio_pcm_datagram(seq, pts_ns, payload));
                 return true;
             }
             WireEnc::Bitstream {
@@ -650,7 +668,8 @@ impl WireEnc {
                 let (Some(unit), Some(unit_pts)) = (enc.pull(), held) else {
                     return true;
                 };
-                return split_unit(seq, unit_pts, unit.bytes, max_datagram, out);
+                let part = quic::encode_audio_bitstream_datagram;
+                return split_unit(part, seq, unit_pts, unit.bytes, max_datagram, out);
             }
             WireEnc::Opus {
                 enc,
@@ -704,10 +723,15 @@ impl WireEnc {
     }
 }
 
-/// `unit` as `0xD4` parts of near-equal size into `out`, each with `seq` and `pts_ns`.
+/// One part of a unit as its datagram: `(seq, pts_ns, index, count, bytes)`, the `0xD4` or
+/// `0xD5` encoder.
+type PartEncoder = fn(u32, u64, u8, u8, &[u8]) -> Vec<u8>;
+
+/// `unit` as `encode`'s parts of near-equal size into `out`, each with `seq` and `pts_ns`.
 /// `max_datagram` is net of the `punktfunk/2` kind byte ([`super::link::SessionLink`] takes
 /// it off). `false` when 15 parts cannot carry it.
 fn split_unit(
+    encode: PartEncoder,
     seq: u32,
     pts_ns: u64,
     unit: &[u8],
@@ -726,13 +750,31 @@ fn split_unit(
     let part = unit.len().div_ceil(parts);
     let count = unit.len().div_ceil(part) as u8;
     for (index, bytes) in unit.chunks(part).enumerate() {
-        out.push(punktfunk_core::quic::encode_audio_bitstream_datagram(
-            seq,
-            pts_ns,
-            index as u8,
-            count,
-            bytes,
-        ));
+        out.push(encode(seq, pts_ns, index as u8, count, bytes));
+    }
+    true
+}
+
+/// Whether the datagram buffer has room for all of `parts`, waiting up to `wait` for the
+/// connection to drain it: microseconds on a clear wire. The buffer evicts its oldest
+/// datagram once full, which after a back-to-back frame is a part of that frame, so on
+/// `false` the caller drops this frame whole. Spins: the wait is shorter than a sleep the OS
+/// grants.
+fn parts_have_room(
+    conn: &super::link::SessionLink,
+    parts: &[Vec<u8>],
+    wait: std::time::Duration,
+) -> bool {
+    // Each part leaves under a one-byte kind and costs the buffer its own record; the room
+    // the connection reports is already net of one record.
+    let record = punktfunk_core::config::DATAGRAM_QUEUE_OVERHEAD;
+    let need = (parts.iter().map(|d| d.len() + 1 + record).sum::<usize>()).saturating_sub(record);
+    let t0 = std::time::Instant::now();
+    while conn.datagram_space().is_some_and(|free| free < need) {
+        if t0.elapsed() >= wait {
+            return false;
+        }
+        std::thread::yield_now();
     }
     true
 }
@@ -749,6 +791,8 @@ struct Egress {
     last_departure: Option<std::time::Instant>,
     /// Datagrams the wire refused, for the session. Counted: PCM has no PLC to hide a drop.
     oversized_drops: u64,
+    /// Frames in parts the datagram buffer had no room for, for the session.
+    congested_drops: u64,
 }
 
 impl Egress {
@@ -760,6 +804,7 @@ impl Egress {
             window_at: std::time::Instant::now(),
             last_departure: None,
             oversized_drops: 0,
+            congested_drops: 0,
         }
     }
 
@@ -801,6 +846,20 @@ impl Egress {
         self.seq = self.seq.wrapping_add(1);
     }
 
+    /// A frame in parts the datagram buffer had no room for within one frame: the connection
+    /// is not draining. `seq` advances so the client sees a gap and conceals it.
+    fn congested(&mut self) {
+        self.congested_drops += 1;
+        if self.congested_drops.is_power_of_two() {
+            tracing::warn!(
+                count = self.congested_drops,
+                "no room in the datagram buffer for an audio frame's parts — dropping the \
+                 frame and continuing (the connection is not draining)"
+            );
+        }
+        self.seq = self.seq.wrapping_add(1);
+    }
+
     /// Every `STATS_EVERY`, one line for the window, then a fresh window. Same window as the
     /// capture line so they read as a pair: holes at the tap with clean departures means the
     /// host delivered everything it had.
@@ -818,6 +877,7 @@ impl Egress {
             // Cumulative for the session (the rest of this line resets per window):
             // a total answers "did this ever happen". Zero on a healthy session.
             oversized_drops = self.oversized_drops,
+            congested_drops = self.congested_drops,
             "audio egress"
         );
         // Keep this session's `frame_us`. `Default` would zero it, and every
@@ -847,7 +907,7 @@ fn run_plane(args: &PlaneArgs, plane: super::handshake::AudioPlane, seq_io: &mut
     let mut lease = CaptureLease::new(fmt.channels as u32, fmt.rate_hz, route);
     let stopped = || args.stop.load(Ordering::SeqCst);
     lease.open(&args.audio_cap, stopped);
-    let mut wire = match WireEnc::open(&fmt, plane, args.budget) {
+    let mut wire = match WireEnc::open(&fmt, plane, args.budget, args.pcm_parts) {
         Ok(w) => w,
         Err(e) => {
             tracing::warn!(
@@ -972,8 +1032,17 @@ fn run_plane(args: &PlaneArgs, plane: super::handshake::AudioPlane, seq_io: &mut
             if datagrams.is_empty() && !refused {
                 continue;
             }
+            // A PCM frame's parts queue together or not at all, within one frame's time.
+            if fmt.pcm
+                && datagrams.len() > 1
+                && !parts_have_room(&args.conn, &datagrams, fmt.interval)
+            {
+                datagrams.clear();
+                egress.congested();
+                continue;
+            }
             // Four `SendDatagramError` outcomes; only `ConnectionLost` ends the session. A
-            // `0xD4` unit's parts share `seq`: one refused part drops the rest of the unit.
+            // unit's parts share `seq`: one refused part drops the rest of the unit.
             for d in datagrams.drain(..) {
                 match args.conn.send_datagram(d) {
                     super::link::DatagramSend::Sent => {}
@@ -1134,7 +1203,7 @@ mod tests {
             redundancy: true,
             kbps: 0,
         };
-        let mut wire = WireEnc::open(&fmt, plane, budget).unwrap();
+        let mut wire = WireEnc::open(&fmt, plane, budget, false).unwrap();
         let unit_bytes = match &wire {
             WireEnc::Bitstream { config, .. } => config.frame_bytes(),
             _ => panic!("not the 0xD4 arm"),
@@ -1168,9 +1237,145 @@ mod tests {
             "a rebuilt encoder fills its lookahead again"
         );
 
-        assert!(!split_unit(0, 0, &au, 50, &mut out), "36 parts");
-        assert!(!split_unit(0, 0, &au, AUDIO_BITSTREAM_HEADER, &mut out));
+        let part: PartEncoder = punktfunk_core::quic::encode_audio_bitstream_datagram;
+        assert!(!split_unit(part, 0, 0, &au, 50, &mut out), "36 parts");
+        assert!(!split_unit(
+            part,
+            0,
+            0,
+            &au,
+            AUDIO_BITSTREAM_HEADER,
+            &mut out
+        ));
         assert!(out.is_empty());
+    }
+
+    /// The plane `resolve_audio_plane` grants 96 kHz/24-bit 5.1 to a client that joins parts.
+    fn parted_plane(max_datagram: usize) -> (PlaneFormat, super::super::handshake::AudioPlane) {
+        let plane = super::super::handshake::resolve_audio_plane(
+            true,
+            true,
+            96_000,
+            pcm::BITS_24,
+            6,
+            crate::audio::CaptureRate::Declared,
+            200_000,
+            Some(max_datagram),
+            true,
+        );
+        assert_eq!((plane.is_pcm(), plane.frame_us), (true, 2000));
+        (PlaneFormat::new(plane, 6), plane)
+    }
+
+    fn budget() -> punktfunk_core::audio::AudioBudget {
+        punktfunk_core::audio::AudioBudget {
+            tier: Default::default(),
+            redundancy: false,
+            kbps: 0,
+        }
+    }
+
+    /// A PCM frame over one datagram leaves as `0xD5` parts that join into the `0xD3`
+    /// payload. One that fits stays `0xD3`; without the client's bit nothing is split.
+    #[test]
+    fn a_pcm_frame_over_one_datagram_leaves_in_parts() {
+        use punktfunk_core::quic::{decode_audio_pcm_datagram, decode_audio_pcm_part_datagram};
+        const DGRAM: usize = 1433;
+        let (fmt, plane) = parted_plane(DGRAM);
+        let samples: Vec<f32> = (0..fmt.frame_len)
+            .map(|i| (i as f32 * 0.01).sin() * 0.5)
+            .collect();
+        let mut whole = Vec::new();
+        pcm::from_f32(&samples, pcm::BITS_24, &mut whole);
+        assert_eq!(whole.len(), 3456);
+
+        let mut wire = WireEnc::open(&fmt, plane, budget(), true).unwrap();
+        let mut out = Vec::new();
+        assert!(wire.datagrams(9, 77, &samples, DGRAM, &mut out));
+        assert_eq!(out.len(), 3);
+        let mut joined = Vec::new();
+        for (i, d) in out.iter().enumerate() {
+            assert!(d.len() <= DGRAM);
+            let (seq, pts, index, count, bytes) = decode_audio_pcm_part_datagram(d).unwrap();
+            assert_eq!((seq, pts, index as usize, count), (9, 77, i, 3));
+            joined.extend_from_slice(bytes);
+        }
+        assert_eq!(joined, whole, "the parts are the 0xD3 payload");
+
+        // A path that carries the frame whole gets the plain datagram.
+        assert!(wire.datagrams(10, 78, &samples, 4000, &mut out));
+        assert_eq!(out.len(), 1);
+        assert_eq!(decode_audio_pcm_datagram(&out[0]).unwrap().2, &whole[..]);
+
+        // An older client: one datagram, which the wire then refuses.
+        let mut plain = WireEnc::open(&fmt, plane, budget(), false).unwrap();
+        assert!(plain.datagrams(11, 79, &samples, DGRAM, &mut out));
+        assert_eq!(out.len(), 1);
+        assert!(out[0].len() > DGRAM);
+    }
+
+    /// Frames sent back to back over a real connection all leave whole: the sender waits for
+    /// buffer room, where the buffer would otherwise evict the frame before. Counted at the
+    /// sender: a datagram the network loses is not this test's.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn back_to_back_parted_frames_all_leave() {
+        use punktfunk_core::quic::endpoint;
+        const FRAMES: u32 = 40;
+        let server = endpoint::server("127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = server.local_addr().unwrap();
+        let accept = tokio::spawn(async move {
+            let conn = server.accept().await.unwrap().await.unwrap();
+            (server, conn)
+        });
+        let client = endpoint::client_insecure().unwrap();
+        let _client_conn = client.connect(addr, "punktfunk").unwrap().await.unwrap();
+        let (_server, conn) = accept.await.unwrap();
+        let sender = conn.clone();
+        let socket = Arc::new(std::net::UdpSocket::bind("127.0.0.1:0").unwrap());
+        let link = super::super::link::SessionLink::QuicV2(
+            conn.clone(),
+            Arc::new(super::super::link::V2Link::new(conn, socket)),
+        );
+
+        // The audio thread is a plain thread; so is this sender.
+        let queued = tokio::task::spawn_blocking(move || {
+            // A loaded test box drains slowly; the wait is the thing under test.
+            let wait = std::time::Duration::from_secs(30);
+            let max_datagram = link.max_datagram_size().unwrap();
+            let (fmt, plane) = parted_plane(max_datagram);
+            let mut wire = WireEnc::open(&fmt, plane, budget(), true).unwrap();
+            let silence = vec![0.0f32; fmt.frame_len];
+            let (mut out, mut queued) = (Vec::new(), 0u64);
+            for seq in 0..FRAMES {
+                assert!(wire.datagrams(seq, 0, &silence, max_datagram, &mut out));
+                assert!(out.len() > 1, "{max_datagram} B a datagram");
+                queued += out.len() as u64;
+                assert!(parts_have_room(&link, &out, wait), "the connection drains");
+                for d in out.drain(..) {
+                    assert!(matches!(
+                        link.send_datagram(d),
+                        super::super::link::DatagramSend::Sent
+                    ));
+                }
+            }
+            // Empty again: every part left, or was evicted. An empty buffer reports its size
+            // less one record, which also pins quinn's accounting the sizing relies on.
+            use punktfunk_core::config::{DATAGRAM_QUEUE_OVERHEAD, DATAGRAM_SEND_BUFFER};
+            let empty = Some(DATAGRAM_SEND_BUFFER - DATAGRAM_QUEUE_OVERHEAD);
+            let t0 = std::time::Instant::now();
+            while link.datagram_space() != empty {
+                assert!(t0.elapsed() < wait, "the connection drains");
+                std::thread::yield_now();
+            }
+            queued
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            sender.stats().frame_tx.datagram,
+            queued,
+            "a part the buffer evicted never leaves"
+        );
     }
 
     /// The number this clock exists for, pinned exactly.

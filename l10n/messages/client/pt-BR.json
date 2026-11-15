@@ -997,7 +997,7 @@
 	"player_mic_enabled_keys_hint": "{keys} silencia e reativa o microfone durante a transmissão.",
 	"player_audio_format": "Qualidade do áudio",
 	"player_audio_format_hint": "Sem perdas é PCM sem compressão — de 2,1 a 8,5 Mbit/s tirados do link, e o host tem o próprio interruptor.",
-	"player_audio_format_surround_limit_hint": "O surround exige 48 kHz ou menos.",
+	"player_audio_format_surround8_limit_hint": "O 7.1 exige 96 kHz ou menos.",
 	"player_audio_format_opus": "Padrão (Opus)",
 	"player_audio_format_lossless441": "Sem perdas 44,1 kHz / 24 bits",
 	"player_audio_format_lossless48": "Sem perdas 48 kHz / 24 bits",

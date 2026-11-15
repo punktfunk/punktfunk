@@ -58,7 +58,8 @@ pub(super) async fn connect_and_handshake(
 /// What this client offers. A format epoch is the embedder's promise to rebuild its decoder,
 /// screens its promise to show more than one picture, asked for at Hello or later, studio
 /// range its report that the display mishandles full range, and a profile unlock its promise
-/// to prompt, so core offers each only when the embedder made it.
+/// to prompt, so core offers each only when the embedder made it. PCM parts need no promise:
+/// the datagram task joins them before any embedder sees a packet.
 fn client_features(p: &ConnectParams) -> crate::quic::v2::features::FeatureSet {
     use crate::quic::v2::registry;
     let mut set = crate::quic::v2::features::FeatureSet::default()
@@ -66,7 +67,8 @@ fn client_features(p: &ConnectParams) -> crate::quic::v2::features::FeatureSet {
         .with(registry::FEATURE_PAD_WRITES)
         .with(registry::FEATURE_PROFILES)
         .with(registry::FEATURE_CLEAR_PLACEMENT)
-        .with(registry::FEATURE_SCROLL_AXIS_UNITS);
+        .with(registry::FEATURE_SCROLL_AXIS_UNITS)
+        .with(registry::FEATURE_PCM_PARTS);
     if p.rebuilds_decoder {
         set = set.with(registry::FEATURE_FORMAT_EPOCH);
     }

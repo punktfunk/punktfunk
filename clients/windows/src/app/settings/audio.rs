@@ -159,11 +159,11 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
     );
 
     let d = Settings::default();
-    // Surround above 48 kHz fits no datagram and comes back as Opus: the caption says so.
+    // 7.1 above 96 kHz fits no frame and comes back as Opus: the caption says so.
     let mut format_hint = client::player_audio_format_hint().to_string();
     if surround_over_limit(&s.audio_format, s.audio_channels) {
         format_hint.push(' ');
-        format_hint.push_str(client::player_audio_format_surround_limit_hint());
+        format_hint.push_str(client::player_audio_format_surround8_limit_hint());
     }
     let advanced = vec![
         described_overridable(cx, &rows::AUDIO_FORMAT, format_combo, &format_hint),

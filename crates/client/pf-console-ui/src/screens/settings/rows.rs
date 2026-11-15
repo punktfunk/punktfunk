@@ -1812,7 +1812,7 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
         {
             two(
                 m::player_audio_format_hint(),
-                m::player_audio_format_surround_limit_hint().into(),
+                m::player_audio_format_surround8_limit_hint().into(),
             )
         }
         RowId::AudioFormat => m::player_audio_format_hint().into(),

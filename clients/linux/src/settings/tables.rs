@@ -359,7 +359,7 @@ pub fn codec_caption(i: u32) -> &'static str {
 pub fn audio_format_caption(channels: u8, format: u32) -> String {
     let hint = client::player_audio_format_hint();
     if surround_over_limit(at(AUDIO_FORMATS, format).0, channels) {
-        let limit = client::player_audio_format_surround_limit_hint();
+        let limit = client::player_audio_format_surround8_limit_hint();
         format!("{hint} {limit}")
     } else {
         hint.to_string()

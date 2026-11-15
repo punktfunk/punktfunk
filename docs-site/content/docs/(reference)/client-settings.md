@@ -139,7 +139,7 @@ the rate instead of **Bitrate**.
 | Setting | Default | What it does | Where |
 |---|---|---|---|
 | **Audio channels** | Stereo | Stereo, 5.1 or 7.1. A Linux host sends real surround; a Windows host converts its current output. | All |
-| **Audio quality** | Standard (Opus) | **Lossless** sends uncompressed PCM, 2.1 Mbps and up, outside the video budget. The host can refuse it: see [Configuration](/docs/configuration#audio--microphone). | All. Linux, Windows, Apple and Android offer 44.1 to 176.4 kHz; in 5.1 or 7.1, up to 48 kHz. |
+| **Audio quality** | Standard (Opus) | **Lossless** sends uncompressed PCM, 2.1 Mbps and up, outside the video budget. The host can refuse it: see [Configuration](/docs/configuration#audio--microphone). | All. Linux, Windows, Apple and Android offer 44.1 to 176.4 kHz; 7.1 goes up to 96 kHz. Surround above 48 kHz needs a host and client newer than 0.47. |
 | **Keep host audio playing** | Off | Off, the host goes quiet while you stream. On, its own speakers keep playing too. With several clients, one asking is enough. | All |
 | **Stream microphone** | Off | Sends this device's microphone to the host. A shortcut [mutes it](/docs/shortcuts#muting-your-microphone). | All but Apple TV |
 | **Echo cancellation** | On | Keeps the host's audio, playing from your speakers, out of the microphone. Turn it off if your microphone does its own processing. See [Why do I hear myself](/docs/echo). | All but Apple TV |
