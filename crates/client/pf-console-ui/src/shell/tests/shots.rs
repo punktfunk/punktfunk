@@ -812,6 +812,8 @@ struct Rig {
     pads: Vec<PadInfo>,
     viewport: crate::console::Viewport,
     platform: crate::platform::Platform,
+    /// The pad the hints draw their glyphs for.
+    pref: GamepadPref,
 }
 
 impl Rig {
@@ -822,6 +824,7 @@ impl Rig {
             pads: store_pads(),
             viewport,
             platform,
+            pref: GamepadPref::Xbox360,
         }
     }
 
@@ -835,7 +838,7 @@ impl Rig {
                 &self.viewport,
                 &self.fonts,
                 Some(&self.pads[0].name),
-                Some(GamepadPref::Xbox360),
+                Some(self.pref),
                 &self.pads,
             );
         }
@@ -998,6 +1001,74 @@ fn store_shots_in_language() {
     s.handle_menu(MenuEvent::Move(MenuDir::Down));
     s.handle_menu(MenuEvent::Move(MenuDir::Down));
     rig.save(rig.frames(&mut s, 60), "tv-console-pair");
+}
+
+/// The PS5 client's README captures: the console's 1080p layer on the couch formula, a
+/// `DualSense` in hand, and only what that title's own catalog carries: no launcher role,
+/// no year, studio or genres, no running state.
+/// `PF_CONSOLE_STORE=<dir> cargo test -p pf-console-ui -- --ignored ps5_shots`.
+#[test]
+#[ignore]
+fn ps5_shots() {
+    in_shot_language(|| {
+        let mut rig = Rig::new(
+            crate::console::Viewport::plain(1920, 1080),
+            crate::platform::Platform::Ps5,
+        );
+        rig.pads = vec![store_pads().remove(1)];
+        rig.pads[0].name = "DualSense".into();
+        rig.pref = GamepadPref::DualSense;
+        let answer = |library: &LibraryShared| {
+            rig.answer(library);
+            let games = (store_games().into_iter())
+                .filter(|g| !g.launcher)
+                .map(|g| crate::library::LibraryGame {
+                    developer: None,
+                    year: None,
+                    genres: Vec::new(),
+                    ..g
+                })
+                .collect();
+            library.set_games(&library.req(), games);
+        };
+        let shell = |stack: Vec<Screen>| {
+            let s = rig.shell(stack, LibraryShared::default());
+            let mut hosts = store_hosts();
+            hosts.iter_mut().for_each(|h| h.running.clear());
+            s.console.set_hosts(hosts);
+            answer(&s.library);
+            s
+        };
+
+        let mut s = shell(vec![Screen::Home(HomeScreen::new())]);
+        rig.frames(&mut s, 30);
+        s.handle_menu(MenuEvent::Move(MenuDir::Right));
+        s.handle_menu(MenuEvent::Move(MenuDir::Right));
+        rig.frames(&mut s, 60);
+        answer(&s.library);
+        rig.save(rig.frames(&mut s, 90), "ps5-home");
+
+        // Down past the Desktops band onto the first title.
+        let shelf = || {
+            let host = store_hosts()[2].clone();
+            let mut s = shell(vec![
+                Screen::Home(HomeScreen::new()),
+                Screen::Library(LibraryScreen::new(&host)),
+            ]);
+            rig.frames(&mut s, 60);
+            for _ in 0..2 {
+                s.handle_menu(MenuEvent::Move(MenuDir::Down));
+            }
+            s
+        };
+        let mut s = shelf();
+        rig.save(rig.frames(&mut s, 90), "ps5-library");
+
+        let mut s = shelf();
+        rig.frames(&mut s, 90);
+        s.handle_menu(MenuEvent::Confirm);
+        rig.save(rig.frames(&mut s, 120), "ps5-launch");
+    });
 }
 
 /// Website captures, each device at its panel size and the scale its client passes.
