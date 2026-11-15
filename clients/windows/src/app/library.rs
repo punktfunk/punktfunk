@@ -287,7 +287,7 @@ fn failure(e: &LibraryError, host: &str) -> String {
 /// Where a tile's poster loads from.
 #[derive(Clone)]
 pub(crate) enum Poster {
-    /// The shared cache's file, replaced only by rename, so whole or absent.
+    /// The shared cache's file as a [`file_uri`]. Replaced only by rename, so whole or absent.
     File(String),
     /// The fetched bytes, held because the cache could not keep them.
     Bytes(EncodedImage),
@@ -301,7 +301,35 @@ fn cached_art(candidates: &[String]) -> Option<Poster> {
     let path = candidates
         .iter()
         .find_map(|u| pf_client_core::art_cache::path_of(u))?;
-    Some(Poster::File(path.display().to_string()))
+    Some(Poster::File(file_uri(&path)))
+}
+
+/// `path` as a URI an `Image` opens. Non-ASCII stays raw: WinUI opens no UTF-8 escape, so
+/// `%C3%81` never finds a profile folder named `Álvaro`. Other ASCII is escaped (`#` would
+/// end the path).
+fn file_uri(path: &std::path::Path) -> String {
+    let path = path.to_string_lossy().replace('\\', "/");
+    let mut uri = String::from(if path.starts_with("//") {
+        "file:"
+    } else {
+        "file:///"
+    });
+    for c in path.chars() {
+        if !c.is_ascii() || c.is_ascii_alphanumeric() || "-._~/:".contains(c) {
+            uri.push(c);
+        } else {
+            uri.push_str(&format!("%{:02X}", c as u32));
+        }
+    }
+    uri
+}
+
+/// Logs the first poster file WinUI could not open. One names the cause for all of them.
+fn poster_refused(uri: &str) {
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !LOGGED.swap(true, Ordering::Relaxed) {
+        tracing::warn!(uri, "poster image did not load");
+    }
 }
 
 /// Seed `art` with the posters the cache holds, and list the rest to fetch.
@@ -747,7 +775,13 @@ fn poster_face(cx: &RowCx, g: Option<&GameEntry>, width: f64) -> View {
     };
     let cached = cx.art.get(&g.id).and_then(|poster| {
         let image = match poster {
-            Poster::File(path) => Image::new().source_file(path).ok()?,
+            Poster::File(uri) => {
+                let failed = uri.clone();
+                Image::new()
+                    .source(uri.as_str())
+                    .ok()?
+                    .on_failed(move || poster_refused(&failed))
+            }
             Poster::Bytes(bytes) => Image::new().source_data(bytes.clone()),
         };
         Some(image.stretch(Stretch::UniformToFill).height(height))
@@ -1710,6 +1744,16 @@ fn end_game_dialog(
 mod tests {
     use super::*;
     use pf_client_core::trust::KnownHost;
+
+    #[test]
+    fn file_uri_keeps_non_ascii_raw() {
+        let uri = |p: &str| file_uri(std::path::Path::new(p));
+        assert_eq!(
+            uri(r"C:\Users\Álvaro P #1\AppData\Local\a1"),
+            "file:///C:/Users/Álvaro%20P%20%231/AppData/Local/a1"
+        );
+        assert_eq!(uri(r"\\nas\home\50%\a1"), "file://nas/home/50%25/a1");
+    }
 
     fn host(id: &str, name: &str, paired: bool, pins: &[&str]) -> KnownHost {
         KnownHost {
