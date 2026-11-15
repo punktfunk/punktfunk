@@ -432,6 +432,14 @@ impl Shell {
                 timestamp,
                 ..
             } => (FingerPhase::Up, touch_id, finger_id, x, y, timestamp),
+            Event::FingerCanceled {
+                touch_id,
+                finger_id,
+                x,
+                y,
+                timestamp,
+                ..
+            } => (FingerPhase::Cancel, touch_id, finger_id, x, y, timestamp),
             _ => return,
         };
         self.on_finger(stream, phase, touch_id, finger_id, x, y, timestamp);
@@ -788,9 +796,10 @@ fn kind_of(event: &Event, chord: bool) -> Kind {
         Event::MouseButtonDown { .. } | Event::MouseButtonUp { .. } => Kind::Button,
         Event::MouseMotion { .. } => Kind::Motion,
         Event::MouseWheel { .. } => Kind::Wheel,
-        Event::FingerDown { .. } | Event::FingerMotion { .. } | Event::FingerUp { .. } => {
-            Kind::Finger
-        }
+        Event::FingerDown { .. }
+        | Event::FingerMotion { .. }
+        | Event::FingerUp { .. }
+        | Event::FingerCanceled { .. } => Kind::Finger,
         _ => Kind::Other,
     }
 }
@@ -979,10 +988,10 @@ pub(super) fn pointer_in_window(window: &sdl3::video::Window) -> (f32, f32) {
 }
 
 /// Route one SDL touchscreen finger into the session's [`Capture`]. SDL delivers
-/// window-normalized `x`/`y` (0..1); the dispatcher hands physical window pixels
-/// (trackpad ballistics) and the frame position under `fit` (pointer + passthrough).
-/// Down/Move before the first decoded frame are dropped; an Up always dispatches so
-/// a lift can release a held contact.
+/// window-normalized `x`/`y` (0..1) and a nanosecond `timestamp`; the dispatcher adds
+/// the view's size and the frame position under `fit` (pointer + passthrough).
+/// Down/Move before the first decoded frame are dropped; a lift or cancel always
+/// dispatches so it can release a held contact.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn dispatch_finger(
     phase: FingerPhase,
@@ -998,10 +1007,9 @@ pub(super) fn dispatch_finger(
         return Vec::new();
     };
     let (pw, ph) = window.size_in_pixels();
-    let (wx, wy) = (x * pw as f32, y * ph as f32);
     let abs = match st.last_video {
         Some(video) => finger_to_frame(fit, (pw, ph), video, x, y),
-        None if phase == FingerPhase::Up => Abs {
+        None if matches!(phase, FingerPhase::Up | FingerPhase::Cancel) => Abs {
             x: 0,
             y: 0,
             w: 0,
@@ -1012,16 +1020,8 @@ pub(super) fn dispatch_finger(
     let Some(cap) = st.capture.as_mut() else {
         return Vec::new();
     };
-    // `wx`/`wy` are physical px; the gesture engine prices scroll in DIP.
-    cap.set_touch_density(window.display_scale());
-    cap.dispatch_finger(
-        phase,
-        finger_id,
-        wx,
-        wy,
-        abs,
-        timestamp as f64 / 1_000_000.0,
-    )
+    cap.set_touch_view((pw, ph), window.display_scale());
+    cap.dispatch_finger(phase, finger_id, x, y, abs, timestamp)
 }
 
 /// Three-finger tap bumps the stats tier; a two-finger twist turns the quick-action ring.
@@ -1054,7 +1054,7 @@ pub(super) fn on_touch_act(
 }
 
 /// A touchscreen finger while the ring is up goes to the ring as a pointer, not the
-/// gesture engine. Returns true when the ring took it.
+/// gesture engine. Returns true when the ring took it; a cancel is the engine's alone.
 pub(super) fn ring_finger(
     overlay: &mut Option<Box<dyn Overlay>>,
     window: &sdl3::video::Window,
@@ -1068,6 +1068,7 @@ pub(super) fn ring_finger(
     let (pw, ph) = window.size_in_pixels();
     let (x, y) = (x * pw as f32, y * ph as f32);
     let input = match phase {
+        FingerPhase::Cancel => return false,
         FingerPhase::Down => PointerInput::Down {
             x,
             y,

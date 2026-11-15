@@ -19,7 +19,7 @@
 //! here, each forwarded pad's in the gamepad worker.
 
 use crate::backend::Presenter;
-use crate::input::{Capture, FingerPhase};
+use crate::input::Capture;
 use crate::overlay::{
     FrameCtx, Overlay, OverlayAction, OverlayFrame, PointerButton, PointerInput, RingCommand,
     RingFacts, RingInput, SessionPhase,
@@ -27,7 +27,7 @@ use crate::overlay::{
 use crate::present_pace::{
     off_grid_ns, Cadence, CadenceProbe, FrameStore, LatchClock, PresentGate, SourcePacer,
 };
-use crate::touch::{Abs, Act};
+use crate::touch::{Abs, Act, FingerPhase};
 use crate::vk::{FrameInput, Presented};
 use anyhow::{Context as _, Result};
 use pf_client_core::gamepad::{GamepadPump, GamepadService, MenuEvent, ShortcutFired};
