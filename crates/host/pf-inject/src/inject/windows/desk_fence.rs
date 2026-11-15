@@ -26,8 +26,8 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE, CR_SUCCESS, HCMNOTIFICATION,
 };
 use windows::Win32::Devices::HumanInterfaceDevice::{
-    HidD_FreePreparsedData, HidD_GetPreparsedData, HidP_GetCaps, GUID_DEVINTERFACE_HID, HIDP_CAPS,
-    PHIDP_PREPARSED_DATA,
+    HidD_FreePreparsedData, HidD_GetAttributes, HidD_GetPreparsedData, HidP_GetCaps,
+    GUID_DEVINTERFACE_HID, HIDD_ATTRIBUTES, HIDP_CAPS, PHIDP_PREPARSED_DATA,
 };
 use windows::Win32::Devices::Properties::{
     DEVPKEY_Device_InstanceId, DEVPKEY_Device_SessionId, DEVPROPTYPE, DEVPROP_TYPE_EMPTY,
@@ -46,6 +46,15 @@ const GUID_DEVINTERFACE_XUSB: GUID = GUID::from_u128(0xec87f1e3_c13b_4100_b5f7_8
 /// joystick, gamepad, multi-axis controller.
 const USAGE_PAGE_GENERIC_DESKTOP: u16 = 0x01;
 const GAME_USAGES: [u16; 3] = [0x04, 0x05, 0x08];
+/// The first vendor-defined HID usage page.
+const USAGE_PAGE_VENDOR: u16 = 0xFF00;
+/// Valve's vendor id and its controllers: the 2015 Steam Controller on a cable, on Bluetooth
+/// and its dongle, the Deck's own pad, the Steam Controller 2 on a cable and on Bluetooth, and
+/// its Puck.
+const VALVE: u16 = 0x28DE;
+const STEAM_PADS: [u16; 8] = [
+    0x1102, 0x1106, 0x1142, 0x1205, 0x1302, 0x1303, 0x1304, 0x1305,
+];
 
 static ARRIVALS: OnceLock<Mutex<Sender<String>>> = OnceLock::new();
 static NOTIFICATION: OnceLock<usize> = OnceLock::new();
@@ -112,8 +121,8 @@ fn sweep(session: u32) {
     );
 }
 
-/// `(instance id, interface path)` of every present HID game-controller collection and every
-/// present XUSB interface.
+/// `(instance id, interface path)` of every present HID controller collection
+/// ([`is_controller`]) and every present XUSB interface.
 fn candidates() -> Vec<(String, String)> {
     let mut out = Vec::new();
     for (class, hid) in [
@@ -121,7 +130,7 @@ fn candidates() -> Vec<(String, String)> {
         (GUID_DEVINTERFACE_XUSB, false),
     ] {
         for path in interfaces(&class).unwrap_or_default() {
-            if hid && !is_game_collection(&path) {
+            if hid && !is_controller_collection(&path) {
                 continue;
             }
             match instance_id_of(&path) {
@@ -138,7 +147,7 @@ fn fence_interface(path: &str, session: u32) -> Result<()> {
     let is_hid = path
         .to_ascii_lowercase()
         .contains("4d1e55b2-f16f-11cf-88cb-001111000030");
-    if is_hid && !is_game_collection(path) {
+    if is_hid && !is_controller_collection(path) {
         return Ok(());
     }
     let id = instance_id_of(path)?;
@@ -193,12 +202,22 @@ fn is_ts_hub(instance_id: &str) -> bool {
     upper.starts_with("ROOT\\RDPBUS") || upper.contains("TS_USB_HUB") || upper.contains("TSUSBHUB")
 }
 
-/// A HID collection whose top-level usage is a game controller's.
-fn is_game_collection(path: &str) -> bool {
+/// Whether the HID collection behind `path` is a controller's ([`is_controller`]). A device
+/// that doesn't name its ids is judged by its usage alone.
+fn is_controller_collection(path: &str) -> bool {
     let Ok(handle) = open_query(path) else {
         return false;
     };
     let h = HANDLE(handle.as_raw_handle());
+    let mut ids = HIDD_ATTRIBUTES {
+        Size: std::mem::size_of::<HIDD_ATTRIBUTES>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `h` is the live HID interface handle; `ids` is a valid out-param that states its
+    // own size.
+    if !unsafe { HidD_GetAttributes(h, &mut ids) } {
+        ids = HIDD_ATTRIBUTES::default();
+    }
     let mut pp = PHIDP_PREPARSED_DATA::default();
     // SAFETY: `h` is the live HID interface handle; `pp` receives an owned preparsed-data handle.
     if !unsafe { HidD_GetPreparsedData(h, &mut pp) } {
@@ -209,10 +228,18 @@ fn is_game_collection(path: &str) -> bool {
     let st = unsafe { HidP_GetCaps(pp, &mut caps) };
     // SAFETY: `pp` came from `HidD_GetPreparsedData` and is not used after this.
     let _ = unsafe { HidD_FreePreparsedData(pp) };
-    st.0 >= 0 && is_game_usage(caps.UsagePage, caps.Usage)
+    st.0 >= 0 && is_controller(ids.VendorID, ids.ProductID, caps.UsagePage, caps.Usage)
 }
 
-/// The usage test on its own, for the table test.
+/// Whether the fence takes a HID collection: a game controller's by its usage, or the
+/// vendor-defined one a Steam controller talks through. A Steam controller's other collections
+/// are a mouse and a keyboard, so its usage never says game controller.
+fn is_controller(vendor: u16, product: u16, page: u16, usage: u16) -> bool {
+    let steam_pad = vendor == VALVE && STEAM_PADS.contains(&product);
+    is_game_usage(page, usage) || (steam_pad && page >= USAGE_PAGE_VENDOR)
+}
+
+/// A top-level usage that names a game controller.
 fn is_game_usage(page: u16, usage: u16) -> bool {
     page == USAGE_PAGE_GENERIC_DESKTOP && GAME_USAGES.contains(&usage)
 }
@@ -414,6 +441,32 @@ mod tests {
         assert!(!is_game_usage(1, 6), "keyboard");
         assert!(!is_game_usage(1, 2), "mouse");
         assert!(!is_game_usage(0x0C, 1), "consumer control");
+        // A Steam controller reports through a vendor collection, beside a mouse and a keyboard.
+        for product in STEAM_PADS {
+            assert!(is_controller(VALVE, product, 0xFF00, 1), "{product:04x}");
+            assert!(!is_controller(VALVE, product, 1, 2), "{product:04x} mouse");
+            assert!(
+                !is_controller(VALVE, product, 1, 6),
+                "{product:04x} keyboard"
+            );
+        }
+        assert!(
+            is_controller(0x054C, 0x0CE6, 1, 5),
+            "a DualSense, by its usage"
+        );
+        assert!(
+            !is_controller(0x054C, 0x0CE6, 0xFF00, 1),
+            "its vendor collection"
+        );
+        assert!(!is_controller(VALVE, 0x2000, 0xFF00, 1), "a Valve headset");
+        assert!(
+            !is_controller(0x046D, 0xC52B, 0xFF00, 1),
+            "a keyboard receiver"
+        );
+        assert!(
+            !is_controller(0, 0, 0xFF00, 1),
+            "a device that names no ids"
+        );
         assert!(is_ours("SWD\\PUNKTFUNK\\PF_MOUSE_0"));
         assert!(is_ours("swd\\VID_045E&PID_02FD\\PF_XBOX_ONES_0"));
         assert!(!is_ours("USB\\VID_054C&PID_0CE6&MI_03\\8&185D5297&4&0003"));
