@@ -24,6 +24,7 @@
 
 mod accounts;
 mod devices;
+mod door;
 #[cfg(test)]
 mod fake;
 pub mod fence;
@@ -82,14 +83,11 @@ pub fn recorded_owner() -> Option<String> {
     accounts::recorded_owner(Path::new(STATE_DIR))
 }
 
-/// What `door-helper` may switch the door for `account` to: `on` or off. `<uid> <home>` for the
-/// account, `gone` for an owner switched off whose account no longer exists. The error's code
-/// says which rule refused it.
+/// Whether `account` may switch the door `on` or off now, by the record root keeps: the
+/// `door::admit` line `check-owner` prints. The error's code says which rule refused it.
 pub fn check_owner(account: &str, on: bool) -> Result<String, BackendError> {
-    Ok(match accounts::switchable(account, on)? {
-        accounts::Switchable::Account(p) => format!("{} {}", p.uid, p.home.display()),
-        accounts::Switchable::Gone => "gone".into(),
-    })
+    let recorded = recorded_owner();
+    door::admit(on, account, recorded.as_deref(), accounts::switchable).map(|a| a.to_string())
 }
 
 /// A seat has this long to bring up its compositor and open the host's management port.

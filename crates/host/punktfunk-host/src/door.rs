@@ -275,8 +275,10 @@ mod linux {
                 ),
             ));
         }
-        // The helper's own rule, so the console says so before it asks.
-        if let Err(refused) = pf_seats::linux::check_owner(user, on) {
+        // The helper's own rule, so the console says so before it asks. A door on for another
+        // account is the helper's to refuse.
+        let refused = pf_seats::linux::check_owner(user, on).err();
+        if let Some(refused) = refused.filter(|r| r.code != "door_on_for_other") {
             return Some(match refused.code.as_str() {
                 "account_invalid" => (
                     StatusCode::CONFLICT,

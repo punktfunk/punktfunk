@@ -50,7 +50,8 @@ mod linux {
         \x20 adopt-owner <account>       the owner's row, for the user door-helper recorded\n\
         \x20 release-owner               delete the owner's row, if there is one\n\
         \x20 stop-all                    stop every seat that runs or starts\n\
-        \x20 check-owner on|off <account>  door-helper's account rules: `<uid> <home>` or `gone`\n\
+        \x20 check-owner on|off <account>  who may switch the door now, for door-helper:\n\
+        \x20                             `on|off <uid> <home>`, `takeover <gone owner> <uid> <home>`, `gone`\n\
         \x20 start <id> | stop <id> | delete <id>\n\
         \x20 pads                        the controllers plugged into this PC, and whose each is\n\
         \x20 lend <id> <key>             give a controller plugged into this PC to a seat\n\

@@ -13,13 +13,11 @@
 # Both directions are idempotent, and a run that stopped halfway converges on the next. A first
 # `on` that fails before the box's ports move puts the box back, and an `off` that can't hand the
 # files home starts the door again, so neither leaves the box without a host or a console. The one
-# record of "on, and for whom" is $STATE/owner, which only root writes: `on` refuses while it names
-# someone else, and `off` runs only for the user it names. A record whose account is gone names no
-# one: `on` from another member takes the door over, and `off` for it switches the door off with
-# the files left in $BOX. A miss proves that only on a box whose accounts are all local; a failed
-# lookup or a directory service refuses. The box's files move once: `on` copies
-# the user's into /var/lib/punktfunk and marks that in $STATE/door-on, so a repeat never overwrites
-# what the door has changed since; `off` copies the door's back to the user and clears both.
+# record of "on, and for whom" is $STATE/owner, which only root writes; `punktfunk-seats
+# check-owner` judges each switch by it (pf-seats `linux/door.rs`). The box's files move once: `on`
+# copies the user's into /var/lib/punktfunk and marks that in $STATE/door-on, so a repeat never
+# overwrites what the door has changed since; `off` copies the door's back to the user and clears
+# both, and leaves them in $BOX for an owner whose account is gone.
 #
 # Every read and write that touches a user's home runs as that user, so a link the user plants
 # there can't make root read or overwrite anything the user couldn't.
@@ -89,45 +87,25 @@ esac
 # The instance name is data: one that starts with a dash would read as an option below.
 case $user in '' | -*) die "'$user' is not a user name the seats accept" ;; esac
 
-# The seats' owner rules, from the supervisor's binary, which needs no running supervisor: a
-# name and uid the seats accept, a person's account and not a seat's, and for `on` a member of
-# punktfunk-update. It prints `<uid> <home>`, or `gone` for an `off` whose account no longer
-# exists on a box whose accounts are all local. Any doubt refuses, with the reason on stderr.
-owner_check() { "$SEATS" check-owner "$1" "$2"; }
-
-gone=0
-uid=
-OWN=
-# The recorded owner may switch the door off after leaving the group, and `ports` follows them.
-checked=$(owner_check "$([ "$verb" = on ] && echo on || echo off)" "$user") ||
-    die "'$user' can't be switched"
-case $checked in
-# Only the record, read under the lock, says whether this is the owner whose account is gone.
-gone) gone=1 ;;
-*)
-    uid=${checked%% *}
-    OWN="${checked#* }/.config/punktfunk"
-    ;;
-esac
-
 # `ports` runs inside the door's start, which `on` waits for while it holds this lock.
 if [ "$verb" != ports ]; then
     exec 9>/run/punktfunk-door.lock
     flock 9
 fi
 recorded=$(cat "$RECORD" 2>/dev/null || true)
-gone_owner=
-case $verb in
-on)
-    if [ -n "$recorded" ] && [ "$recorded" != "$user" ]; then
-        [ "$(owner_check off "$recorded")" = gone ] ||
-            die "the door is on for $recorded: turn it off from that account first"
-        gone_owner=$recorded
-        echo "door-helper: $recorded is gone, the door passes to $user" >&2
-    fi
-    ;;
-off) [ "$recorded" = "$user" ] || die "the door is not on for $user" ;;
+# Who may switch the door now, from the supervisor's binary, which reads the record and needs no
+# running supervisor: `on|off <uid> <home>`, `takeover <gone owner> <uid> <home>`, or `gone`
+# for a recorded owner whose account no longer exists. Any doubt refuses, the reason on stderr.
+checked=$("$SEATS" check-owner "$([ "$verb" = on ] && echo on || echo off)" "$user") ||
+    die "'$user' can't be switched"
+gone=0 gone_owner= uid= OWN=
+case $checked in
+gone) gone=1 ;;
+takeover\ *) read -r _ gone_owner uid OWN <<<"$checked" ;;
+*) read -r _ uid OWN <<<"$checked" ;;
 esac
+[ "$gone" = 1 ] || OWN="$OWN/.config/punktfunk"
+[ -z "$gone_owner" ] || echo "door-helper: $gone_owner is gone, the door passes to $user" >&2
 
 as_user() { runuser -u "$user" -- "$@"; }
 
