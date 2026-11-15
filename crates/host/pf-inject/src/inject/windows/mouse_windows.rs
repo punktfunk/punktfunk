@@ -422,7 +422,7 @@ impl VirtualMouse {
 }
 
 /// `CreateFileW` for writing, as a HID vendor collection allows.
-fn open_for_write(path: &str) -> Result<OwnedHandle> {
+pub(crate) fn open_for_write(path: &str) -> Result<OwnedHandle> {
     let wide = HSTRING::from(path);
     // SAFETY: `wide` is a valid NUL-terminated UTF-16 path for the duration of the call; the
     // returned handle is owned solely by the `OwnedHandle` built from it.

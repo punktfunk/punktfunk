@@ -241,7 +241,7 @@ jobs:
         # unsafe layer); pf-vdisplay + wdk-iddcx are inherently FFI-bound but every `unsafe {}` carries a
         # `// SAFETY:` proof. Both invariants are lint-gated (`unsafe_op_in_unsafe_fn` +
         # `undocumented_unsafe_blocks`); this step keeps them from regressing.
-        run: ../drivers-cargo.ps1 'clippy --locked -p pf-umdf-util -p pf-xusb -p pf-gamepad -p pf-mouse -p wdk-iddcx -p pf-vdisplay --all-targets -- -D warnings'
+        run: ../drivers-cargo.ps1 'clippy --locked -p pf-umdf-util -p pf-xusb -p pf-gamepad -p pf-mouse -p pf-touchpad -p wdk-iddcx -p pf-vdisplay --all-targets -- -D warnings'
       - name: cargo test pf-umdf-util (the safe helpers the drivers share)
         # A plain lib links no WDF import libs, so its tests run where the cdylib drivers' cannot:
         # the HID IOCTL table, descriptor lengths, string replies and the channel state machine.
@@ -252,7 +252,7 @@ jobs:
         # Linux crate of that name, not this driver.
         run: ../drivers-cargo.ps1 'test --locked -p pf-vdisplay --lib'
       - name: cargo fmt --check the driver workspace
-        run: cargo fmt -p pf-umdf-util -p pf-xusb -p pf-gamepad -p pf-mouse -p wdk-iddcx -p pf-vdisplay --check
+        run: cargo fmt -p pf-umdf-util -p pf-xusb -p pf-gamepad -p pf-mouse -p pf-touchpad -p wdk-iddcx -p pf-vdisplay --check
       - name: Inspect /INTEGRITYCHECK (before) — expect FORCE_INTEGRITY set by wdk-build
         run: |
           # explicit --target (.cargo/config.toml) -> output under the triple subdir.
@@ -279,9 +279,9 @@ jobs:
         # profile like the x64 steps; the encoder features drop out via the driver's target table.
         # A failed build must stop here: the warm target still holds the last run's DLL.
         run: |
-          ../drivers-cargo.ps1 'build --locked --target aarch64-pc-windows-msvc -p pf-vdisplay -p pf-gamepad -p pf-mouse -p pf-xusb -v'
+          ../drivers-cargo.ps1 'build --locked --target aarch64-pc-windows-msvc -p pf-vdisplay -p pf-gamepad -p pf-mouse -p pf-touchpad -p pf-xusb -v'
           if ($LASTEXITCODE) { throw "ARM64 driver build" }
-          ../drivers-cargo.ps1 'clippy --locked --target aarch64-pc-windows-msvc -p pf-umdf-util -p pf-xusb -p pf-gamepad -p pf-mouse -p wdk-iddcx -p pf-vdisplay --all-targets -- -D warnings'
+          ../drivers-cargo.ps1 'clippy --locked --target aarch64-pc-windows-msvc -p pf-umdf-util -p pf-xusb -p pf-gamepad -p pf-mouse -p pf-touchpad -p wdk-iddcx -p pf-vdisplay --all-targets -- -D warnings'
           if ($LASTEXITCODE) { throw "ARM64 driver clippy" }
           $dll = "target\aarch64-pc-windows-msvc\debug\pf_vdisplay.dll"
           if (-not (Test-Path $dll)) { throw "ARM64 pf_vdisplay.dll not produced at $dll" }

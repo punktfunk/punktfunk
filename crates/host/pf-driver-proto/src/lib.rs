@@ -80,6 +80,7 @@ pub mod pad_delivery;
 pub mod pad_kind;
 pub mod rdesc;
 pub mod switch;
+pub mod touchpad;
 pub mod triton;
 pub mod xbox;
 

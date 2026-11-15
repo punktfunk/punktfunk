@@ -107,6 +107,7 @@ authoring kit; plugins add game-library sources and automation. Writing one:
 | `pf-gamepad` | HID minidriver that presents the pad the host names: PlayStation, Xbox, Steam, Switch, 8BitDo and Hori models. |
 | `pf-xusb` | Xbox 360 pad visible to XInput, with no kernel bus driver. |
 | `pf-mouse` | Resident virtual HID mouse and keyboard: Windows draws a cursor on a headless host, and input reaches raw input as a device's. |
+| `pf-touchpad` | Per-session virtual Precision Touchpad: a client's touchpad contacts reach Windows as a touchpad. |
 | `wdk-iddcx`, `pf-umdf-util` | IddCx bindings and the safe UMDF layer the drivers share. |
 
 `crates/host/pf-driver-proto` is the host↔driver contract, a path dependency of both workspaces. The

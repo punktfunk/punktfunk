@@ -210,6 +210,87 @@ pub fn input_test() -> Result<()> {
     anyhow::bail!("input-test requires Linux")
 }
 
+/// Scripted frames on this OS's virtual touchpad, the way a session presents them. No client.
+///
+/// A 100 × 70 mm surface at 125 Hz: one finger glides left↔right, two fingers swipe down then
+/// up, a tap, a click-pad press, a two-finger pinch out and in. Watch the cursor and a page
+/// under it. Windows: stop the host service first and run elevated.
+pub fn touchpad_spike() -> Result<()> {
+    use punktfunk_core::quic::{touchpad_scan_time, TouchpadContact, TouchpadFrame};
+    use std::time::{Duration, Instant};
+
+    #[cfg(target_os = "windows")]
+    anyhow::Context::context(
+        pf_frame::privilege::enable("SeDebugPrivilege"),
+        "enable SeDebugPrivilege",
+    )?;
+    let mut dev = crate::inject::touchpad::VirtualTouchpad::create()?;
+    println!("touchpad-spike: waiting 3 s for the device to come up");
+    std::thread::sleep(Duration::from_secs(3));
+
+    let (mut seq, t0) = (0u16, Instant::now());
+    // Fingers as (x, y) in millimetres on the 100 × 70 mm surface; ids are their order.
+    let mut frame = |button: bool, fingers: &[(f32, f32)]| {
+        let contacts: Vec<_> = fingers
+            .iter()
+            .enumerate()
+            .map(|(i, &(x, y))| TouchpadContact {
+                id: i as u8,
+                tip: true,
+                confident: true,
+                x: (x / 100.0 * 65535.0) as u16,
+                y: (y / 70.0 * 65535.0) as u16,
+            })
+            .collect();
+        seq = seq.wrapping_add(1);
+        let f =
+            TouchpadFrame::new(seq, button, 1000, 700, &contacts).expect("build a touchpad frame");
+        let at = touchpad_scan_time(t0.elapsed().as_micros() as u64);
+        dev.apply(&f.stamped(at).to_pad());
+        std::thread::sleep(Duration::from_millis(8));
+    };
+    let pause = |ms| std::thread::sleep(Duration::from_millis(ms));
+
+    println!("one finger glides left↔right three times");
+    for i in 0..375 {
+        let t = (i % 125) as f32 / 125.0;
+        let x = 20.0 + 60.0 * if t < 0.5 { 2.0 * t } else { 2.0 - 2.0 * t };
+        frame(false, &[(x, 35.0)]);
+    }
+    frame(false, &[]);
+    pause(500);
+    for (what, from, to) in [("down", 20.0, 50.0), ("up", 50.0, 20.0)] {
+        println!("two fingers swipe {what}");
+        for i in 0..=60 {
+            let y = from + (to - from) * i as f32 / 60.0;
+            frame(false, &[(40.0, y), (60.0, y)]);
+        }
+        frame(false, &[]);
+        pause(500);
+    }
+    println!("a tap at the centre");
+    for _ in 0..8 {
+        frame(false, &[(50.0, 35.0)]);
+    }
+    frame(false, &[]);
+    pause(1000);
+    println!("a click-pad press at the centre");
+    for i in 0..30 {
+        frame((5..20).contains(&i), &[(50.0, 35.0)]);
+    }
+    frame(false, &[]);
+    pause(500);
+    println!("two fingers pinch out, then in");
+    for i in 0..=120 {
+        let half = 10.0 + 20.0 * if i <= 60 { i } else { 120 - i } as f32 / 60.0;
+        frame(false, &[(50.0 - half, 35.0), (50.0 + half, 35.0)]);
+    }
+    frame(false, &[]);
+    pause(200);
+    println!("touchpad-spike: done; the device goes with this process");
+    Ok(())
+}
+
 /// What decides HDR on this box: the monitor's colour mode, gamescope's PQ capture and
 /// knob, the encoder's 10-bit profiles, and the verdict for each plane.
 #[cfg(target_os = "linux")]

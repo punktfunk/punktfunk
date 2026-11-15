@@ -450,6 +450,7 @@ fn uninstall_gamepad() -> Result<()> {
         "pf_dualshock4",
         "pf_xusb",
         "pf_mouse",
+        "pf_touchpad",
     ]);
     Ok(())
 }
