@@ -99,7 +99,7 @@ chmod 0755 "$HOME/.local/bin/punktfunk-scripting"
 sed 's|^ExecStart=.*|ExecStart=%h/.local/bin/punktfunk-scripting|' \
     "$SRC/scripts/punktfunk-scripting.service" > "$HOME/.config/systemd/user/punktfunk-scripting.service"
 systemctl --user daemon-reload
-ok "plugin runner rebuilt (opt-in service: systemctl --user enable --now punktfunk-scripting)"
+ok "plugin runner rebuilt (on or off as you left it; turn it on: systemctl --user enable --now punktfunk-scripting)"
 
 # Status tray: rebuilt with the host, and retrofitted onto installs that predate it.
 log "Rebuilding the status tray"

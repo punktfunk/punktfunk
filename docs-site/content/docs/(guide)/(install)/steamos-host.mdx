@@ -115,9 +115,9 @@ bash ~/punktfunk/scripts/steamdeck/update.sh --pull
   check with `id -nG`. Streaming to another Deck? [Turn Steam Input off](/docs/steam-deck) there.
 - **One mode at a time.** Two clients asking for different resolutions fight over the Game Mode
   session.
-- **Plugins.** The runner is installed but off. Turn it on with
-  `systemctl --user enable --now punktfunk-scripting` when you use [plugins](/docs/plugins).
-  A profile with a desktop of its own turns its runner on from its own **Plugins** page.
+- **Plugins.** The first install starts the plugin runner; a re-run leaves it as you set it. Turn
+  it off with `systemctl --user disable --now punktfunk-scripting`, and back on with `enable --now`.
+  See [plugins](/docs/plugins). A profile with a desktop of its own turns its runner on from its own **Plugins** page.
 
 ## Uninstalling
 
