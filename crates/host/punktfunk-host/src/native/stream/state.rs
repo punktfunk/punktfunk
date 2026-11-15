@@ -2179,6 +2179,45 @@ mod tests {
         }
     }
 
+    /// U14: a seat's session opens on the route its handshake picked, the seat's own gamescope
+    /// in Game Mode or its KWin desktop, and a joiner of the seat's screen asks to join. The
+    /// pick (`session_switch::connect_route`) reads the host's role and sets the input backend,
+    /// and a joiner takes the owner's route inside the handshake: neither runs here.
+    #[test]
+    fn a_seat_session_opens_on_the_seats_route() {
+        use crate::native::geometry::Tenure;
+        use crate::vdisplay::Compositor::{Gamescope, Kwin};
+        use crate::vdisplay::GamescopeRoute::Spawn;
+        let verdict = crate::native::tests::Verdict::Wanted;
+        let w = Welcomed {
+            mode: mode(1920, 1080, 60),
+            kbps: 20_000,
+            codec: crate::encode::Codec::H265,
+            auto: true,
+            view: None,
+        };
+        let (own, joiner) = (
+            Tenure::of(None, false),
+            Tenure::of(Some((Default::default(), (1920, 1080))), false),
+        );
+        for (compositor, route, tenure) in [
+            (Gamescope, Some(Spawn), own),
+            (Kwin, None, own),
+            (Gamescope, Some(Spawn), joiner),
+        ] {
+            let f = super::super::swap::tests::fake();
+            let mut ctx = context(&f, w, &[]);
+            let terms = Arc::get_mut(&mut ctx.terms).expect("the context's own terms");
+            (terms.compositor, terms.gamescope_route) = (Some(compositor), route.clone());
+            terms.tenure = tenure;
+            let plan = session_plan(&ctx, compositor);
+            let (_, params) = display_request(&ctx, &plan, compositor);
+            let opens = (params.route, params.join_live);
+            let want = (route, tenure.join_live());
+            assert_eq!(opens, want, "{compositor:?} ({verdict:?})");
+        }
+    }
+
     /// The registry's liveness vocabulary and the wire's are one set, mapped here
     /// and nowhere else. A spawn says nothing; a refusal and a blind adoption
     /// both owe the player a sentence.
