@@ -35,6 +35,10 @@ listen.rs, pf-seats' model.rs and the host's gamestream/mod.rs, and the console 
 the plugin origin one above it. Each firewalld service, ufw profile and NixOS list opens exactly
 those, and data/platforms.json, the docs' table, states no other.
 
+Windows PowerShell 5.1 reads a script in the box's ANSI codepage, so the scripts an installer runs
+are ASCII. windows-host.yml's gate names them and runs on a push; this holds the same list on a
+pull request.
+
 Usage: python3 scripts/ci/check-packaging-policy.py [--self-test | --inputs]
 --inputs lists the files read outside packaging/ and scripts/, for check-workflow-paths.py.
 """
@@ -133,6 +137,7 @@ PORT_HINTS = ["packaging/linux/post-install.sh"]
 PLATFORMS = "data/platforms.json"
 # Scripts that tell a moved management port from the default, by the default's number.
 MGMT_DEFAULT = ["packaging/linux/omarchy/punktfunk-omarchy", "scripts/steamdeck/lib.sh"]
+LOCALE_GATE = ".gitea/workflows/windows-host.yml"
 # What the checks read outside packaging/ and scripts/: packaging-lint.yml runs on each.
 INPUTS = [HOST_UPDATER, LISTEN, SEAT_MODEL, GAMESTREAM, PLATFORMS]
 UNITS = "packaging/linux/*.service"
@@ -575,6 +580,39 @@ def tree_port_errors():
             + default_errors(consts["MGMT_PORT"][0], {p: read(p) for p in MGMT_DEFAULT}))
 
 
+# The gate's own file list, `Get-ChildItem a, b, c -ErrorAction`, before the next step opens.
+GATE_GLOBS = re.compile(r"Locale-safety gate(?:(?!\n\s*- name:).)*?Get-ChildItem\s+"
+                        r"([\w./*-]+(?:,\s*[\w./*-]+)*)\s+-ErrorAction", re.S)
+
+
+def ascii_errors(files):
+    """[(path, error)] for each of `files` ({path: bytes}) with a byte outside ASCII."""
+    errors = []
+    for path, data in files.items():
+        lines = [str(n) for n, line in enumerate(data.split(b"\n"), 1) if not line.isascii()]
+        if lines:
+            more = f" and {len(lines) - 5} more" if len(lines) > 5 else ""
+            errors.append((path, f"line {', '.join(lines[:5])}{more}: not ASCII. The installer runs "
+                                 "this where Windows PowerShell 5.1 and cmd.exe read it in the "
+                                 "box's codepage"))
+    return errors
+
+
+def tree_ascii_errors():
+    gate = GATE_GLOBS.search(read(LOCALE_GATE))
+    if not gate:
+        return [(LOCALE_GATE, "has no locale-safety gate naming the installer-run scripts")]
+    files, errors = {}, []
+    for pattern in re.split(r",\s*", gate.group(1)):
+        paths = sorted(glob.glob(os.path.join(ROOT, pattern)))
+        if not paths:
+            errors.append((LOCALE_GATE, f"the locale-safety gate's {pattern} matches no file"))
+        for path in paths:
+            with open(path, "rb") as f:
+                files[os.path.relpath(path, ROOT)] = f.read()
+    return errors + ascii_errors(files)
+
+
 def tree_errors():
     matrix = read_matrix(read(MATRIX))
     const = dict(GATE_CONST.findall(read(GATE)))
@@ -614,7 +652,7 @@ def tree_errors():
                              {os.path.relpath(f, ROOT): read(os.path.relpath(f, ROOT))
                               for p in RESTART_CALLERS
                               for f in sorted(glob.glob(os.path.join(ROOT, p)))})
-            + tree_port_errors())
+            + tree_port_errors() + tree_ascii_errors())
 
 
 def check():
@@ -932,6 +970,21 @@ sudo setcap cap_sys_nice=ep ${WORKER}
                        ("another port", '[[ "$port" != 47991 ]]\n'),
                        ("inside a longer number", "sleep 147990\n")):
         expect(f"default: {name}", len(default_errors(47990, {"a.sh": text})), 1)
+
+    step = ("      - name: Locale-safety gate (installer-run scripts must be ASCII)\n        run: |\n"
+            "          $bad = Get-ChildItem packaging/windows/*.ps1, scripts/windows/*.cmd"
+            " -ErrorAction SilentlyContinue |\n")
+    expect("gate list", GATE_GLOBS.search(step).group(1),
+           "packaging/windows/*.ps1, scripts/windows/*.cmd")
+    expect("gate renamed", GATE_GLOBS.search(step.replace("Locale-safety", "Encoding")), None)
+    later = "      - name: Stage bun\n        run: Get-ChildItem dist/*.exe -ErrorAction Stop\n"
+    expect("gate without a list reads no later step's",
+           GATE_GLOBS.search(step.replace("Get-ChildItem", "Get-Item") + later), None)
+    expect("ascii clean", ascii_errors({"a.ps1": b"Write-Output 'ok'\r\n", "b.cmd": b""}), [])
+    for name, data in (("em dash", "Write-Output 'a — b'\n".encode()),
+                       ("umlaut in Windows-1252", b"REM \xfc\r\n"),
+                       ("byte order mark", b"\xef\xbb\xbfWrite-Output 'ok'\n")):
+        expect(f"ascii: {name}", len(ascii_errors({"a.ps1": data, "b.ps1": b"ok\n"})), 1)
     if fails:
         return 1
     print("check-packaging-policy self-test ok")
