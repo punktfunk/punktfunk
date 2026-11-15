@@ -2227,6 +2227,99 @@ pub(crate) mod tests {
         );
     }
 
+    /// U10: an owner's commit republishes what a later joiner reads off its row: the mode a
+    /// switch built, the colour a codec change lit, the compositor, route and shared format a
+    /// session switch moved to. A failed build leaves what runs. A source that moved its mode
+    /// with no ask leaves the row at the mode it ran before.
+    #[test]
+    fn a_commit_republishes_what_joiners_read() {
+        use crate::native::tests::Verdict::{self, Other, Wanted};
+        use crate::vdisplay::admission;
+        // The ask, its build, whether a joiner then reads the mode that runs.
+        type Row = (&'static str, fn() -> RebuildAsk, Script, bool, Verdict);
+        let wide: fn() -> RebuildAsk = || RebuildAsk::Mode(mode(WIDE, 60), None);
+        let rows: [Row; 5] = [
+            (
+                "mode switch",
+                wide,
+                Script::Pipeline(WIDE, 20_000),
+                true,
+                Wanted,
+            ),
+            ("failed mode switch", wide, Script::Fails, true, Wanted),
+            (
+                "codec change",
+                || RebuildAsk::Format(crate::encode::Codec::H264),
+                Script::Pipeline(SMALL, 20_000),
+                true,
+                Wanted,
+            ),
+            (
+                "session switch",
+                switch,
+                Script::Pipeline(SMALL, 20_000),
+                true,
+                Wanted,
+            ),
+            (
+                "source mode",
+                || RebuildAsk::SourceMode(DELIVERED),
+                Script::Encoder,
+                false,
+                Other,
+            ),
+        ];
+        for (name, ask, built, mode_told, verdict) in rows {
+            let keyframes = Arc::new(AtomicU32::new(0));
+            // The fake holds the registry's test lock, which every session that admits holds.
+            let mut f = super::super::swap::tests::fake();
+            f.st.display.vd_params.hdr = true;
+            let sink = Arc::new(std::sync::Mutex::new(Some(name.to_string())));
+            let owner = admission::LiveDisplay {
+                compositor: Some(f.st.display.compositor),
+                audio_sink: sink.clone(),
+                hdr: true,
+                ..Default::default()
+            };
+            let (m, stop) = (f.st.live.cur_mode, f.st.facts.life.stop_flag().clone());
+            let at = (m.width, m.height, m.refresh_hz);
+            let _row = admission::register(None, at, stop, name.into(), owner, None);
+            let ask = ask();
+            let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
+            let _ = f.st.perform(plan, ask, |_, plan, _, _| {
+                script(built, plan.rate_kbps, &keyframes)
+            });
+            let joiner = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (joins_at, read) = admission::join_target(&joiner).expect("the owner's row");
+            assert!(
+                Arc::ptr_eq(&read.audio_sink, &sink),
+                "{name}: the owner's row"
+            );
+            let (st, m) = (&f.st, f.st.live.cur_mode);
+            let shared = admission::shares_capture(Some(st.display.compositor));
+            let format = shared.then(|| admission::SampleFormat {
+                bit_depth: st.bit_depth,
+                chroma_444: st.plan.chroma.is_444(),
+                full_range: st.plan.full_range(st.plan.hdr, st.bit_depth),
+            });
+            let d = &st.display;
+            let runs = (
+                Some(d.compositor),
+                d.vd_params.route.clone(),
+                d.vd_params.hdr,
+                format,
+            );
+            let reads = (read.compositor, read.route, read.hdr, read.format);
+            assert_eq!(reads, runs, "{name}: the display a joiner reads");
+            let ran = (m.width, m.height, m.refresh_hz);
+            let told = joins_at == ran;
+            assert_eq!(
+                told, mode_told,
+                "{name} ({verdict:?}): {joins_at:?} / {ran:?}"
+            );
+        }
+    }
+
     /// U12: a mode switch runs no format rule at the new size: the depth and chroma stay, for a
     /// size the format takes and for PyroWave 4:4:4 past the rate controller's block range,
     /// where the handshake would have negotiated 4:2:0.
