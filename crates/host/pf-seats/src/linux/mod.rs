@@ -23,6 +23,8 @@
 //! with the unit ([`LinuxBackend::on_unit`]).
 
 mod accounts;
+#[cfg(test)]
+mod beside;
 mod devices;
 pub mod door;
 #[cfg(test)]
