@@ -81,6 +81,8 @@ mod feed_step;
 mod feedback;
 // `decode`'s hung-decoder checks, `test`-gated like `audio_format` so their proof runs off-device.
 #[cfg(any(target_os = "android", test))]
+mod hold;
+#[cfg(any(target_os = "android", test))]
 mod input_stall;
 // The mic uplink; its open ladder is `test`-gated like `audio_format` so its walk runs off-device.
 #[cfg(any(target_os = "android", test))]

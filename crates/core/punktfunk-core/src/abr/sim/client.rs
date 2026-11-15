@@ -120,6 +120,9 @@ pub(super) struct ClientCfg {
     /// `(ms, µs)`: for this long after the first decoded frame, every frame takes this
     /// long, as a hardware decoder warming up does. `(0, 0)` = none.
     pub decode_warmup: (u64, u32),
+    /// The decoder returns a picture when the next one is fed and holds no queue: its
+    /// latency is that wait plus the decode time, at any rate it keeps up with.
+    pub decode_holds: bool,
 }
 
 impl Default for ClientCfg {
@@ -151,6 +154,7 @@ impl Default for ClientCfg {
             decode_swing_us: 0,
             decode_swing_ms: 0,
             decode_warmup: (0, 0),
+            decode_holds: false,
         }
     }
 }
@@ -261,6 +265,8 @@ pub(super) struct Client {
     decode_swing_until_ms: u64,
     /// When the first frame was decoded.
     first_decode_ms: Option<u64>,
+    /// The picture a holding decoder has not returned yet: when it was fed, and its time.
+    held: Option<(u64, u32)>,
     /// Keyframe throttle: asking until an IDR lands.
     awaiting_idr: bool,
     kf_next_ms: u64,
@@ -356,6 +362,7 @@ impl Client {
             decode_swing: 0,
             decode_swing_until_ms: 0,
             first_decode_ms: None,
+            held: None,
             awaiting_idr: false,
             kf_next_ms: 0,
             starved_next_ms: 0,
@@ -630,9 +637,17 @@ impl Client {
         // A starved or rebuilding decoder takes the frame and shows nothing: no time, no queue.
         if !self.starved(now_ms) && !self.in_rebuild(now_ms) {
             let decode_us = self.decode_us(now_ms);
-            self.abr.on_decode_latency(u64::from(decode_us), 1);
-            self.decode_free_at_ms =
-                self.decode_free_at_ms.max(now_ms) + u64::from(decode_us).div_ceil(1_000);
+            if self.cfg.decode_holds {
+                // This AU pushes the picture before it out.
+                if let Some((fed_ms, us)) = self.held.replace((now_ms, decode_us)) {
+                    let wait_us = (now_ms - fed_ms) * 1_000;
+                    self.abr.on_decode_latency(wait_us + u64::from(us), 1);
+                }
+            } else {
+                self.abr.on_decode_latency(u64::from(decode_us), 1);
+                self.decode_free_at_ms =
+                    self.decode_free_at_ms.max(now_ms) + u64::from(decode_us).div_ceil(1_000);
+            }
         }
         self.note_latency(owd_ms, now_ms);
     }

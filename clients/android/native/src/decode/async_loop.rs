@@ -10,7 +10,7 @@ use punktfunk_core::error::PunktfunkError;
 use punktfunk_core::reanchor::{self, AnchorEvidence, DecoderClass, LocalRecovery};
 use punktfunk_core::session::Frame;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{fs, io};
@@ -19,6 +19,7 @@ use super::display::{
     install_render_callback, layer_dataspace, release_render_callback, DisplayTracker,
 };
 use super::latency::{note_decoded_pts, note_received_frame, now_realtime_ns};
+use super::realtek;
 use super::setup::{
     boost_hot_threads, boost_thread_priority, create_codec, hdr_static, low_latency_format,
     try_set_frame_rate,
@@ -29,9 +30,10 @@ use super::vsync::{VsyncClock, VsyncShared};
 use super::{Backstops, DecodeOptions, IN_FLIGHT_CAP};
 use crate::au_intake::{Delivery, Intake};
 use crate::bring_up::{bring_up_rungs, ladder_label, Rung};
-use crate::codec_format::{codec_mime, take_by_pts, take_flags};
+use crate::codec_format::{codec_mime, is_realtek, take_by_pts, take_flags};
 use crate::feed_rules::{colour_after, render_after, Cause, Piece, Spoiled};
 use crate::feed_step::{Feed, Handoff, Step, OVERSIZE_RUN};
+use crate::hold::{Tail, Trial};
 use crate::input_stall::{
     rung_after_failure, InputStall, OutputSilence, RungFloor, INPUT_STALL_PATIENCE, SETTLED_FRAMES,
 };
@@ -473,6 +475,10 @@ fn run_codec(
         &ctx.codec.name().unwrap_or_default(),
         class == Some(DecoderClass::Strict),
     );
+    state.trial = hold_trial(
+        client.video_format().codec,
+        &ctx.codec.name().unwrap_or_default(),
+    );
     if await_keyframe {
         client.recovery_lost();
     }
@@ -542,6 +548,15 @@ fn run_codec(
             }
         }
         state.housekeeping(&ctx, had_output, &pass);
+    }
+    // A decoder that hung or failed under a tail does not get that tail again.
+    let tail = state.trial.tail();
+    if (state.wedged || state.fatal) && tail != Tail::None {
+        log::warn!(
+            "decode: the run ended under a {} tail — not fed again",
+            tail.label()
+        );
+        TAILS_BLOCKED.fetch_or(tail.bit(), Ordering::Relaxed);
     }
     let end = teardown(state, ctx, aux, render_cb, feeder, shutdown, stale);
     // The codec and its feeder are gone, so nothing reports: with the freeze left up, core
@@ -814,8 +829,10 @@ fn bring_up(
     }
     // The ladder is never empty; the sysprop can shorten it under a floor already raised.
     let floor = floor.min(rungs.len() - 1);
-    for (rung, &(backend, keys)) in rungs.iter().enumerate().skip(floor) {
-        if rung > floor {
+    let mut rung = floor;
+    let mut refused = false;
+    while let Some(&(backend, keys)) = rungs.get(rung) {
+        if std::mem::take(&mut refused) {
             log::warn!(
                 "decode: decoder refused that configuration — retrying through {} with {}",
                 backend_label(backend),
@@ -840,7 +857,34 @@ fn bring_up(
         if !install_async_callbacks(&mut codec, ev_tx) {
             return None; // the platform refused async mode outright — no rung changes that
         }
-        let format = low_latency_format(mime, &mode, &codec_name, keys, hdr_static.as_ref());
+        // Realtek's low-delay key rides the aggressive keys where the framework reads it. A
+        // refusal with it costs the key, not the rung.
+        let low_delay = keys == Some(true) && realtek::low_delay(&codec_name);
+        if rung == floor && is_realtek(&codec_name) {
+            log::info!(
+                "decode: Realtek low-delay — {}; key {}",
+                realtek::describe(),
+                if low_delay { "set" } else { "not set" }
+            );
+        }
+        let mut refuse = |what: &str, e: &dyn std::fmt::Display| {
+            log::error!("decode: {what} failed: {e}");
+            refused = true;
+            if low_delay {
+                log::warn!("decode: that was with Realtek's low-delay key — once more without");
+                realtek::refuse();
+            } else {
+                rung += 1;
+            }
+        };
+        let format = low_latency_format(
+            mime,
+            &mode,
+            &codec_name,
+            keys,
+            hdr_static.as_ref(),
+            low_delay,
+        );
         // The present backend. ASurfaceControl (default) drives its own `AImageReader` output
         // surface + compositor layer, scheduling against the panel's real present clock; the
         // SurfaceView presenter covers API < 29, ChromeOS, an ASC init failure, the sysprop, or a
@@ -876,11 +920,11 @@ fn bring_up(
             Some(configure_window),
             MediaCodecDirection::Decoder,
         ) {
-            log::error!("decode: configure failed: {e}");
+            refuse("configure", &e);
             continue;
         }
         if let Err(e) = codec.start() {
-            log::error!("decode: start failed: {e}");
+            refuse("start", &e);
             continue;
         }
         // `asc.as_ref().and(backend)`, not `backend`: an ASC rung whose backend failed to
@@ -1008,6 +1052,10 @@ struct State {
     /// Points a fed AU's lost reference at a held picture ([`concealer`]). `None` on other
     /// decoders.
     conceal: Option<Concealer>,
+    /// The tail each whole AU is fed with, and the trial that picks it ([`hold_trial`]).
+    trial: Trial,
+    /// When the last output's AU entered the codec: the gap between AUs, for the trial.
+    last_queued: Option<i128>,
     /// The codec's input side: the slots it offered, the parked deliveries, the open AU.
     inputs: Feed,
     ready: Vec<OutputReady>,
@@ -1058,6 +1106,8 @@ struct State {
 struct DecodeTally {
     since: Instant,
     out: u64,
+    /// Outputs that came out after the next AU was fed: a decoder waiting on it holds them all.
+    held: u64,
     slots: u64,
     /// The fed and withheld totals at `since`.
     fed: u64,
@@ -1069,6 +1119,7 @@ impl DecodeTally {
         DecodeTally {
             since: Instant::now(),
             out: 0,
+            held: 0,
             slots: 0,
             fed: 0,
             withheld: 0,
@@ -1086,8 +1137,10 @@ impl DecodeTally {
         if fed_now > 0 || self.out > 0 || self.slots > 0 {
             log::info!(
                 target: "pf.decode",
-                "fed={fed_now} out={} slots={} parked={parked} withheld={} rung={} backend={}",
+                "fed={fed_now} out={} held={} slots={} parked={parked} withheld={} rung={} \
+                 backend={}",
                 self.out,
+                self.held,
                 self.slots,
                 withheld - self.withheld,
                 ctx.rung,
@@ -1097,6 +1150,7 @@ impl DecodeTally {
         *self = DecodeTally {
             since: now,
             out: 0,
+            held: 0,
             slots: 0,
             fed,
             withheld,
@@ -1127,6 +1181,27 @@ fn admission(codec: u8, decoder: &str) -> Option<DecoderClass> {
     };
     log::info!("decode: AV1 AU admission {class:?} for {decoder}");
     Some(class)
+}
+
+/// Tails a decoder hung or failed under in this process ([`Tail::bit`]).
+static TAILS_BLOCKED: AtomicU8 = AtomicU8::new(0);
+
+/// The tail trial for this run. `debug.punktfunk.au_tail` = `off` / `fill` / `aud` names the
+/// tail; `trial` runs the trial on any decoder. Unset, a Realtek decoder runs it on H.264 and
+/// HEVC: it returns each picture when the next AU is fed, and the trial reads whether a tail
+/// ends that. The `pf.decode` line's `held` counts the outputs that waited either way.
+fn hold_trial(codec: u8, decoder: &str) -> Trial {
+    let prop = sysprop(c"debug.punktfunk.au_tail");
+    if let Some(tail) = prop.as_deref().and_then(Tail::named) {
+        log::info!("decode: each AU is fed with tail {}", tail.label());
+        return Trial::fixed(tail);
+    }
+    let tails = !Tail::Fill.bytes(codec).is_empty();
+    if tails && (prop.as_deref() == Some("trial") || is_realtek(decoder)) {
+        log::info!("decode: hold trial on {decoder}");
+        return Trial::new(TAILS_BLOCKED.load(Ordering::Relaxed));
+    }
+    Trial::fixed(Tail::None)
 }
 
 /// The POC widener for this session: HEVC on an Amlogic decoder, which loses a long-term
@@ -1227,6 +1302,8 @@ impl State {
             sink,
             widen: None,
             conceal: None,
+            trial: Trial::fixed(Tail::None),
+            last_queued: None,
             inputs: Feed::default(),
             ready: Vec::new(),
             fed: 0,
@@ -1481,12 +1558,22 @@ impl State {
                 self.spoil(ctx, pass, idx, &piece, Cause::Oversize);
                 continue;
             }
-            let n = au.len();
+            let mut n = au.len();
             // SAFETY: `au` (wire AU) and `dst` (codec input buffer) are distinct allocations, both
             // valid for `n` bytes; `MaybeUninit<u8>` is layout-identical to `u8`, so this
             // initializes dst[..n].
             unsafe {
                 std::ptr::copy_nonoverlapping(au.as_ptr(), dst.as_mut_ptr().cast::<u8>(), n);
+            }
+            // The tail follows a whole AU only, where the buffer has room for it.
+            if frame.part.is_none() {
+                let tail = self.trial.tail().bytes(ctx.client.video_format().codec);
+                if let Some(room) = dst.get_mut(n..n + tail.len()) {
+                    for (d, &b) in room.iter_mut().zip(tail) {
+                        d.write(b);
+                    }
+                    n += tail.len();
+                }
             }
             let flags = if piece.last {
                 0
@@ -1602,7 +1689,30 @@ impl State {
                 None
             };
             let queued = take_by_pts(&mut self.queued_stamps, o.pts_us);
+            // Held: the AU after this picture's was already in the codec when it came out.
+            let next = self.queued_stamps.front().map(|&(_, q)| q);
+            let held = next.is_some_and(|q| q <= o.decoded_ns);
+            self.tally.held += u64::from(held);
             let codec_us = queued.map(|q| ((o.decoded_ns - q).max(0) / 1000) as u64);
+            let gap_us = match (queued, std::mem::replace(&mut self.last_queued, queued)) {
+                (Some(q), Some(last)) => Some(((q - last).max(0) / 1000) as u64),
+                _ => None,
+            };
+            if let Some(r) = codec_us
+                .zip(gap_us)
+                .and_then(|(c, g)| self.trial.note(c, g))
+            {
+                log::info!(
+                    "decode: hold trial — tail {}: codec {:.1} ms with, {:.1} ms without, AUs \
+                     {:.1} ms apart; tail {} {}",
+                    r.tail.label(),
+                    r.with_us as f64 / 1000.0,
+                    r.without_us as f64 / 1000.0,
+                    r.gap_us as f64 / 1000.0,
+                    r.next.label(),
+                    if r.done { "from here" } else { "next" }
+                );
+            }
             let feed_us = match (queued, received_ns) {
                 (Some(q), Some(r)) => Some(((q - r).max(0) / 1000) as u64),
                 _ => None,

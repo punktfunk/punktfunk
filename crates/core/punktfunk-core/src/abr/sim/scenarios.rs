@@ -1065,6 +1065,45 @@ pub(super) fn decoder_slope() -> Scenario {
     sc
 }
 
+/// A decoder that returns a picture when the next one is fed and holds no queue. HEVC at
+/// 3440×1440 60 on a Realtek TV box takes one refresh, 13.6 ms and 0.085 ms per Mbit/s on the
+/// wire, and keeps up at every rate its port carries: 30 ms against a 16.7 ms budget at 2
+/// Mbit/s as at 20.
+pub(super) fn decoder_pipeline() -> Scenario {
+    let mut sc = lan("decoder_pipeline", 500_000, 60);
+    sc.seed = 0x7A_6900;
+    sc.duration_ms = 240_000;
+    sc.blip_at_ms = None;
+    // Where the rate adds 80 % of a period.
+    sc.achievable_kbps = 157_000;
+    let c = &mut sc.sessions[0].client;
+    c.decode = DecodeCfg {
+        base_us: 13_600,
+        jitter_us: 800,
+        knee_kbps: 0,
+        us_per_mbps: 85,
+    };
+    c.decode_holds = true;
+    sc
+}
+
+/// The same decoder under a source at 15 fps for its first 20 s, then full rate: the wait for
+/// the next picture is four refreshes, 80 ms of latency that is the source's gap.
+pub(super) fn decoder_pipeline_slow_source() -> Scenario {
+    let mut sc = decoder_pipeline();
+    sc.name = "decoder_pipeline_slow_source";
+    sc.seed = 0x7A_6A00;
+    sc.sessions[0].host.content = vec![
+        ContentPhase {
+            until_ms: 20_000,
+            active_pct: 25,
+            ..ContentPhase::default()
+        },
+        ContentPhase::default(),
+    ];
+    sc
+}
+
 /// A decoder over its budget at every rate: H.264 at 4K120 on a PS5 takes 9-17 ms a
 /// picture against 8.3 ms, at 20 Mbit/s as at 2. Its queue is shed every two seconds
 /// whatever the rate, so the rate is not the lever, and a cut buys only a worse picture.
@@ -1899,6 +1938,8 @@ pub(super) fn all() -> Vec<Scenario> {
         decoder_headroom(),
         decoder_overrun(),
         decoder_slope(),
+        decoder_pipeline(),
+        decoder_pipeline_slow_source(),
         encoder_stalled(),
         unknown_refresh_knee(),
         host_rebuild_stall(),
@@ -2193,6 +2234,49 @@ mod tests {
         assert!(
             after(45_000).all(|w| w.rate_kbps >= 30_000),
             "walked past the budget: {:?}",
+            after(45_000).map(|w| w.rate_kbps).min()
+        );
+    }
+
+    /// A pipeline is neither walked to the floor nor left at the link's rate: it is held
+    /// where the rate adds 80-90 % of a period to its latency, 157-176 Mbit/s here.
+    #[test]
+    fn a_pipeline_is_held_where_the_rate_fills_its_period() {
+        let r = run(&with_ramp(decoder_pipeline()));
+        let after = |ms: u64| r.windows[0].iter().filter(move |w| w.t_ms >= ms);
+        assert!(
+            after(30_000).all(|w| w.rate_kbps >= 110_000),
+            "walked under its floor: {:?}",
+            after(30_000).map(|w| w.rate_kbps).min()
+        );
+        assert!(
+            after(30_000).all(|w| w.rate_kbps <= 180_000),
+            "past the retreat band: {:?}",
+            after(30_000).map(|w| w.rate_kbps).max()
+        );
+    }
+
+    /// A slow source's gaps cut nothing, and a pipeline first read at the top of the link
+    /// is walked down from there once the source runs.
+    #[test]
+    fn a_pipeline_first_read_at_the_top_is_walked_down() {
+        let r = run(&with_ramp(decoder_pipeline_slow_source()));
+        let w = &r.windows[0];
+        assert!(
+            w.iter()
+                .filter(|w| w.t_ms < 20_000)
+                .all(|w| w.cut_from_kbps.is_none()),
+            "a cut on the source's gaps"
+        );
+        let after = |ms: u64| w.iter().filter(move |w| w.t_ms >= ms);
+        assert!(
+            after(45_000).all(|w| w.rate_kbps <= 180_000),
+            "left past the retreat band: {:?}",
+            after(45_000).map(|w| w.rate_kbps).max()
+        );
+        assert!(
+            after(45_000).all(|w| w.rate_kbps >= 100_000),
+            "walked under its floor: {:?}",
             after(45_000).map(|w| w.rate_kbps).min()
         );
     }
@@ -3107,6 +3191,8 @@ mod tests {
             "knee" => decoder_knee(),
             "overrun" => decoder_overrun(),
             "slope" => decoder_slope(),
+            "pipeline" => decoder_pipeline(),
+            "slowsource" => decoder_pipeline_slow_source(),
             "starved" => starved_client(),
             "unknown" => unknown_refresh(),
             "idle" => idle_then_motion(),

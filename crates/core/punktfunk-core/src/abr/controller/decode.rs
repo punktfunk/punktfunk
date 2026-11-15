@@ -10,7 +10,9 @@
 //! not stands the headroom driver down. A retreat is answered against the
 //! level where its run began: a notch shrinks with the rate and a decoder's
 //! fixed cost does not, so a last notch alone can read as nothing on a decoder
-//! that answered every one before it. A ×0.7 the keyframe asks named is kept
+//! that answered every one before it. A decoder that keeps up from above its
+//! period is a [`Pipeline`]: one notch reads what the rate adds to its
+//! latency, and the bands judge that. A ×0.7 the keyframe asks named is kept
 //! only if the asks stop at the new rate; one they outlive comes back, and the
 //! verdict reads no asks until they stop. A mode switch resets all of it to
 //! [`DecodeKnee::default`].
@@ -35,6 +37,87 @@ const DECODE_FULL_RATE_DEN: i64 = 4;
 /// Windows with decoded frames in them that the bands ignore at the start of a
 /// mode. A hardware decoder warms up over its first seconds; 4 x 750 ms is 3 s.
 pub(super) const DECODE_WARMUP_WINDOWS: u32 = 4;
+
+/// Clean full-rate windows in a row, each over the period with no queue shed,
+/// that prove a pipeline. A decoder that works a picture at a time sheds its
+/// queue inside 4 x 750 ms of running over its period.
+const PIPELINE_WINDOWS: u32 = 4;
+
+/// A decoder that keeps up from above its period: one that returns a picture
+/// when the next is fed, or passes it through stages. Its latency is a floor
+/// no rate removes plus what the rate adds, and the bands judge the second.
+/// A step tells the two apart: the line through its two readings puts the
+/// floor at no rate at all, and a step it does not answer puts it here.
+#[derive(Clone, Copy, Debug, Default)]
+struct Pipeline {
+    /// Clean full-rate windows in a row over the period.
+    over: u32,
+    /// The lowest clean reading, or the level a step left unanswered, µs.
+    seen_us: i64,
+    /// Where the last answered step's line puts the latency at no rate.
+    line_us: Option<i64>,
+    /// A step has been judged on it.
+    stepped: bool,
+}
+
+impl Pipeline {
+    fn proven(&self) -> bool {
+        self.over >= PIPELINE_WINDOWS
+    }
+
+    /// One window: `reading` is a clean full-rate one's mean with no queue
+    /// shed, `spoiled` a bad window or a shed queue. Before the proof a
+    /// reading under the period or a spoiled window starts it over; after it
+    /// a reading only lowers what was seen.
+    fn note(&mut self, reading: Option<i64>, spoiled: bool, budget_us: i64) {
+        match reading {
+            Some(mean_us) if self.proven() => self.seen_us = self.seen_us.min(mean_us),
+            Some(mean_us) if mean_us >= budget_us => {
+                self.seen_us = if self.over == 0 {
+                    mean_us
+                } else {
+                    self.seen_us.min(mean_us)
+                };
+                self.over += 1;
+            }
+            Some(_) => *self = Pipeline::default(),
+            None if spoiled && !self.proven() => *self = Pipeline::default(),
+            None => {}
+        }
+    }
+
+    /// The latency no rate removes, once proven.
+    fn floor_us(&self) -> Option<i64> {
+        self.proven()
+            .then(|| self.seen_us.min(self.line_us.unwrap_or(i64::MAX)))
+    }
+
+    /// A step from `from` to `at`, `(kbps, µs)` each, that the decoder
+    /// answered. The line is redrawn on every one: a run's later notches
+    /// span more rate and read it better.
+    fn answered(&mut self, from: (u32, i64), at: (u32, i64)) {
+        let (rate, fell_us) = (i64::from(from.0) - i64::from(at.0), from.1 - at.1);
+        if !self.proven() || rate <= 0 || fell_us <= 0 {
+            return;
+        }
+        self.line_us = Some((at.1 - fell_us * i64::from(at.0) / rate).max(0));
+        self.stepped = true;
+    }
+
+    /// A step the decoder did not answer: all of `level_us` is the floor here.
+    fn unanswered(&mut self, level_us: i64) {
+        if self.proven() {
+            self.seen_us = level_us;
+            self.line_us = None;
+            self.stepped = true;
+        }
+    }
+
+    /// Proven, and no step has read what the rate adds yet.
+    fn unread(&self) -> bool {
+        self.proven() && !self.stepped
+    }
+}
 
 /// A headroom step awaiting the decoder's answer at its new rate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +173,8 @@ pub(in crate::abr) struct DecodeKnee {
     /// Decode latency over the last clean windows past the warm-up: what a
     /// retreat or a lift is answered against.
     level: Level,
+    /// Whether this decoder keeps up from above its period, and its floor.
+    pipeline: Pipeline,
     /// Windows with decoded frames in them since the mode began.
     decoded_windows: u32,
 }
@@ -108,6 +193,7 @@ impl Default for DecodeKnee {
             headroom: StandDown::new(),
             asks: StandDown::new(),
             level: Level::default(),
+            pipeline: Pipeline::default(),
             decoded_windows: 0,
         }
     }
@@ -211,17 +297,45 @@ impl DecodeKnee {
         Some(self.settle(p, mean, budget_us, rate))
     }
 
+    /// A pipeline's notch that read the rate's share and found the bands had
+    /// nothing to ask: the rate comes back with no cap, the driver armed.
+    fn give_back(&mut self, p: DecodeProbe, mean: i64) -> StepAnswer {
+        self.backoff_kbps = 0;
+        self.cap.drop_cap();
+        self.run = None;
+        tracing::info!(
+            restore_kbps = p.step.from_kbps,
+            decode_us = mean,
+            was_us = p.step.ref_us,
+            floor_us = self.pipeline.floor_us().unwrap_or(0),
+            "adaptive bitrate: the rate adds little to this pipeline's latency — restoring it"
+        );
+        StepAnswer::Restore(p.step.from_kbps)
+    }
+
     /// The decoder's answer to a step, read on each window that reached the
     /// new rate against the level at the rate it left. A retreat, or a cut
     /// taken with a level, is kept when every window fell [`ANSWER_PCT`] of
     /// the budget under it; a lift is undone when every window rose that far,
     /// or sat in the retreat band. A retreat or a cut it did not answer stands
     /// the driver down, and an ask cut the asks: the cap the bands parked and
-    /// the cuts they named were not the rate's either.
+    /// the cuts they named were not the rate's either. On a pipeline the step
+    /// is also the reading of what the rate adds: a notch that reading would
+    /// not have asked goes back, answered or not, and the driver stays armed.
     fn settle(&mut self, p: DecodeProbe, mean: i64, budget_us: i64, rate: Rate) -> StepAnswer {
         let answer_us = budget_us * ANSWER_PCT / 100;
         match p.kind {
             DecodeProbeKind::Retreat | DecodeProbeKind::Cut { .. } if p.step.fell(answer_us) => {
+                // An unleveled cut's reference is the window that tripped it,
+                // picked for being high: no point on the line.
+                if p.kind != (DecodeProbeKind::Cut { leveled: false }) {
+                    self.pipeline
+                        .answered((p.step.from_kbps, p.step.ref_us), (rate.kbps, mean));
+                }
+                let due = self.load_us(p.step.ref_us) * 100 / budget_us >= DECODE_RETREAT_PCT;
+                if p.kind == DecodeProbeKind::Retreat && self.pipeline.proven() && !due {
+                    return self.give_back(p, mean);
+                }
                 tracing::info!(
                     from_kbps = p.step.from_kbps,
                     at_kbps = rate.kbps,
@@ -231,9 +345,14 @@ impl DecodeKnee {
                 );
                 StepAnswer::Followed
             }
+            DecodeProbeKind::Retreat if self.pipeline.proven() => {
+                self.pipeline.unanswered(mean);
+                self.give_back(p, mean)
+            }
             DecodeProbeKind::Retreat | DecodeProbeKind::Cut { .. } => {
-                // Latency is not a function of the rate: a pipelined decoder,
-                // or something else on the SoC.
+                // Latency is not a function of the rate: something else on
+                // the SoC, or a pipeline not proven one yet.
+                self.pipeline.unanswered(mean);
                 self.headroom.disarm();
                 self.backoff_kbps = 0;
                 self.cap.drop_cap();
@@ -244,8 +363,7 @@ impl DecodeKnee {
                     was_us = p.step.ref_us,
                     rearm_after_windows = self.headroom.reprobe_after(),
                     "adaptive bitrate: decode latency did not follow the rate — restoring it \
-                     and standing the headroom driver down (a pipelined decoder sits above \
-                     the period with no queue)"
+                     and standing the headroom driver down"
                 );
                 StepAnswer::StandDown(p.step.from_kbps)
             }
@@ -265,7 +383,7 @@ impl DecodeKnee {
             }
             DecodeProbeKind::Lift => {
                 let worse = p.step.rose(answer_us)
-                    || p.step.least_us() * 100 / budget_us >= DECODE_RETREAT_PCT;
+                    || self.load_us(p.step.least_us()) * 100 / budget_us >= DECODE_RETREAT_PCT;
                 if worse {
                     self.undo_lift(p, mean, rate.floor_kbps);
                     return StepAnswer::Restore(p.step.from_kbps);
@@ -288,9 +406,10 @@ impl DecodeKnee {
     /// load, a decoder inside its warm-up is not at the rate's load yet, and a
     /// step still being judged owns the question. A window whose decode queue
     /// was shed is read whatever its frame count, and a stood-down driver
-    /// re-arms only on a run with no shed queue in it. A retreat is answered
-    /// against the level where its run began, or this window's at a rate with
-    /// none yet.
+    /// re-arms only on a run with no shed queue in it. A pipeline is read over
+    /// its floor, and one no step has been judged on yet is asked a notch for
+    /// that reading. A retreat is answered against the level where its run
+    /// began, or this window's at a rate with none yet.
     pub(super) fn judge_headroom(
         &mut self,
         w: &WindowSample,
@@ -321,8 +440,9 @@ impl DecodeKnee {
         if !self.warmed_up() {
             return None;
         }
-        let pct = mean_us * 100 / budget_us;
-        if pct >= DECODE_RETREAT_PCT && rate.kbps > rate.floor_kbps {
+        let pct = self.load_us(mean_us) * 100 / budget_us;
+        let unread = self.pipeline.unread();
+        if (pct >= DECODE_RETREAT_PCT || unread) && rate.kbps > rate.floor_kbps {
             let next = rate.notch();
             self.cap.park(next);
             let (from_kbps, ref_us) = self
@@ -334,6 +454,16 @@ impl DecodeKnee {
                 kind: DecodeProbeKind::Retreat,
                 step: StepProbe::new(from_kbps, ref_us),
             });
+            if unread {
+                tracing::info!(
+                    from_kbps = rate.kbps,
+                    to_kbps = next,
+                    decode_us = mean_us,
+                    "adaptive bitrate: one notch to read what the rate adds to this \
+                     pipeline's latency"
+                );
+                return Some(next);
+            }
             tracing::info!(
                 from_kbps = rate.kbps,
                 to_kbps = next,
@@ -397,8 +527,9 @@ impl DecodeKnee {
     }
 
     /// One scored window, before anything decides on it: the warm-up count,
-    /// and this window's latency for the level once the next one opens. Only
-    /// a clean full-rate window past the warm-up is a reading of the rate.
+    /// this window's latency for the level once the next one opens, and the
+    /// pipeline's proof. Only a clean full-rate window past the warm-up is a
+    /// reading of the rate.
     pub(super) fn note_window(
         &mut self,
         w: &WindowSample,
@@ -416,6 +547,39 @@ impl DecodeKnee {
             && budget_us.is_some_and(|b| full_rate(w, b));
         self.level
             .note(v.decode_mean_us.filter(|_| clean), rate_kbps);
+        if let Some(budget_us) = budget_us {
+            let reading = v.decode_mean_us.filter(|_| clean && !w.backlog);
+            let proven = self.pipeline.proven();
+            self.pipeline.note(reading, v.bad || w.backlog, budget_us);
+            if let Some(seen_us) = self.pipeline.floor_us().filter(|_| !proven) {
+                tracing::info!(
+                    seen_us,
+                    budget_us,
+                    "adaptive bitrate: the decoder keeps up from above its period — a \
+                     pipeline, judged on what the rate adds"
+                );
+            }
+        }
+    }
+
+    /// The share of a decode mean the bands judge: all of it, or what is over
+    /// a pipeline's floor.
+    fn load_us(&self, mean_us: i64) -> i64 {
+        mean_us - self.pipeline.floor_us().unwrap_or(0)
+    }
+
+    /// Whether the verdict reads no decode latency this window: the driver is
+    /// stood down, or the decoder is waiting on its next picture. Under a slow
+    /// source a mean at or over the gap between pictures, with no queue shed,
+    /// is a decoder that returns each one when the next is fed: the gap is the
+    /// source's. One that works a picture at a time and takes that long is
+    /// behind, and sheds.
+    pub(super) fn withholds(&self, w: &WindowSample, budget_us: Option<i64>) -> bool {
+        let gap_us = sample::WINDOW_US / i64::from(w.decoded.max(1));
+        let waiting = !w.backlog
+            && budget_us.is_some_and(|b| !full_rate(w, b))
+            && w.decode_mean_us.is_some_and(|mean_us| mean_us >= gap_us);
+        self.headroom.disarmed() || waiting
     }
 
     /// Past the first [`DECODE_WARMUP_WINDOWS`] windows with decoded frames.
