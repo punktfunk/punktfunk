@@ -26,6 +26,7 @@ class ConnectRequestVectorTest {
         width = getInt("width"),
         height = getInt("height"),
         refreshHz = getInt("refreshHz"),
+        refreshMilliHz = getInt("refreshMilliHz"),
         certPem = getString("certPem"),
         keyPem = getString("keyPem"),
         pinHex = getString("pinHex"),

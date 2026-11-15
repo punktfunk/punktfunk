@@ -4,7 +4,7 @@
     {
       "name": "plain desktop connect",
       "input": {
-        "host": "10.0.0.2", "port": 9777, "width": 1920, "height": 1080, "refreshHz": 60,
+        "host": "10.0.0.2", "port": 9777, "width": 1920, "height": 1080, "refreshHz": 60, "refreshMilliHz": 59940,
         "certPem": "", "keyPem": "", "pinHex": "", "bitrateKbps": 0,
         "compositorPref": 0, "gamepadPref": 0,
         "hdrEnabled": false, "tenBitSdr": false, "multiSliceOk": false, "framePartsOk": false,
@@ -16,7 +16,7 @@
         "hostScreen": ""
       },
       "json": {
-        "host": "10.0.0.2", "port": 9777, "width": 1920, "height": 1080, "refresh_hz": 60,
+        "host": "10.0.0.2", "port": 9777, "width": 1920, "height": 1080, "refresh_hz": 60, "refresh_mhz": 59940,
         "cert_pem": "", "key_pem": "", "pin_hex": "", "bitrate_kbps": 0, "pyrowave_bpp_x100": 0,
         "compositor_pref": 0, "gamepad_pref": 0,
         "hdr_enabled": false, "ten_bit_sdr": false, "multi_slice_ok": false, "frame_parts_ok": false,
@@ -31,7 +31,7 @@
     {
       "name": "every field set",
       "input": {
-        "host": "host.example", "port": 9778, "width": 2560, "height": 1440, "refreshHz": 120,
+        "host": "host.example", "port": 9778, "width": 2560, "height": 1440, "refreshHz": 120, "refreshMilliHz": 0,
         "certPem": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
         "keyPem": "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n",
         "pinHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -47,7 +47,7 @@
         "hostScreen": "second"
       },
       "json": {
-        "host": "host.example", "port": 9778, "width": 2560, "height": 1440, "refresh_hz": 120,
+        "host": "host.example", "port": 9778, "width": 2560, "height": 1440, "refresh_hz": 120, "refresh_mhz": 0,
         "cert_pem": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
         "key_pem": "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n",
         "pin_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",

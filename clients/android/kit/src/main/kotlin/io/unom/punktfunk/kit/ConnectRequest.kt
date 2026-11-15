@@ -19,6 +19,11 @@ data class ConnectRequest(
     val width: Int,
     val height: Int,
     val refreshHz: Int,
+    /**
+     * The display's exact rate in millihertz, `59940` beside [refreshHz] 60. `0`, or a rate that
+     * is not [refreshHz]'s fraction, asks for the whole rate.
+     */
+    val refreshMilliHz: Int,
     val certPem: String,
     val keyPem: String,
     val pinHex: String,
@@ -110,6 +115,7 @@ data class ConnectRequest(
         .put("width", width)
         .put("height", height)
         .put("refresh_hz", refreshHz)
+        .put("refresh_mhz", refreshMilliHz)
         .put("cert_pem", certPem)
         .put("key_pem", keyPem)
         .put("pin_hex", pinHex)

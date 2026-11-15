@@ -392,14 +392,13 @@ fn run_codec(
         return no_codec(rebuilt, shutdown);
     };
     // ASC votes the rate on its own layer instead (the SurfaceView window shows nothing there).
+    // The exact rate: a display that offers 59.94 Hz beside 60 Hz takes the one the stream runs at.
+    let source_hz = mode.millihz() as f32 / 1000.0;
     if asc.is_none()
         && mode.refresh_hz > 0
-        && !try_set_frame_rate(window, mode.refresh_hz as f32, opts.force_rate_switch())
+        && !try_set_frame_rate(window, source_hz, opts.force_rate_switch())
     {
-        log::debug!(
-            "decode: set_frame_rate({} Hz) unavailable/declined (non-fatal)",
-            mode.refresh_hz
-        );
+        log::debug!("decode: set_frame_rate({source_hz} Hz) unavailable/declined (non-fatal)");
     }
 
     // Skew-corrected latency stats (spec: design/stats-unification.md). Receipt stamps (keyed by the
@@ -430,7 +429,7 @@ fn run_codec(
     let sink = sink::select(
         asc,
         opts,
-        mode.refresh_hz,
+        mode.millihz(),
         window,
         &client.video_format().color,
     );
@@ -902,7 +901,7 @@ fn bring_up(
                 opts.layers.clone(),
                 opts.panel_hz,
                 dataspace.unwrap_or(0), // `Some` whenever `asc_wanted`
-                mode.refresh_hz,
+                mode.millihz(),
                 priority,
                 overlay,
                 opts.force_rate_switch(),

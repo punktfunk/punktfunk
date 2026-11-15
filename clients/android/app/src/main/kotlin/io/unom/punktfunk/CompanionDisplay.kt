@@ -228,7 +228,7 @@ internal fun CompanionOnDisplay(
  * stays lit is [CompanionOnDisplay]'s `lit`.
  */
 private fun holdPicture(window: Window, view: View, display: Display, hz: Int) {
-    if (hz > 0) display.streamModeFor(hz)?.let { m ->
+    if (hz > 0) display.streamModeFor(hz.toFloat())?.let { m ->
         window.attributes = window.attributes.apply { preferredDisplayModeId = m.modeId }
     }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) view.requestUnbufferedDispatch(STREAM_UNBUFFERED_SOURCES)

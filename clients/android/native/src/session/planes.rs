@@ -551,10 +551,11 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoSize<'
             return Ok(JIntArray::default());
         };
         let mode = h.client.mode();
-        let buf: [i32; 3] = [
+        let buf: [i32; 4] = [
             mode.width as i32,
             mode.height as i32,
             mode.refresh_hz as i32,
+            mode.millihz() as i32,
         ];
         let arr = env.new_int_array(buf.len())?;
         arr.set_region(env, 0, &buf)?;

@@ -241,6 +241,7 @@ object NativeBridge {
         width: Int,
         height: Int,
         refreshHz: Int,
+        refreshMilliHz: Int,
         viewWidth: Int,
         viewHeight: Int,
     ): Boolean
@@ -367,7 +368,8 @@ object NativeBridge {
     external fun nativeVideoMime(handle: Long): String
 
     /**
-     * The negotiated video mode as `[width, height, refreshHz]`, or `null` on a `0` handle.
+     * The negotiated video mode as `[width, height, refreshHz, refreshMilliHz]`, or `null` on a
+     * `0` handle. `refreshMilliHz` is the exact rate the host delivers, `59940` at 59.94 Hz.
      * Resolved at the handshake, so it is known before the first frame — the stream view sizes
      * itself to THIS aspect rather than stretching the picture to the panel's, and pins the
      * panel's display mode to the stream refresh. The trailing `refreshHz` was appended later

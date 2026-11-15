@@ -117,7 +117,7 @@ pub(super) fn cushion_tail() -> bool {
 pub(super) fn select(
     asc: Option<AscSink>,
     opts: &DecodeOptions,
-    refresh_hz: u32,
+    source_mhz: u32,
     window: &NativeWindow,
     color: &ColorInfo,
 ) -> Box<dyn Sink> {
@@ -140,7 +140,7 @@ pub(super) fn select(
         window,
         color,
         priority,
-        refresh_hz,
+        source_mhz,
         opts.panel_hz,
     ))
 }

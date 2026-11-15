@@ -412,6 +412,10 @@ struct ConnectRequest {
     width: u32,
     height: u32,
     refresh_hz: u32,
+    /// The display's exact rate in millihertz, `59940` beside `refresh_hz` 60. `0`, or a rate
+    /// that is not `refresh_hz`'s fraction, asks for the whole rate.
+    #[serde(default)]
+    refresh_mhz: u32,
     /// Both non-empty ⇒ presented as the persistent identity, else anonymous.
     #[serde(default)]
     cert_pem: String,
@@ -683,6 +687,7 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         width,
         height,
         refresh_hz,
+        refresh_mhz,
         cert_pem: cert,
         key_pem: key,
         pin_hex,
@@ -763,7 +768,8 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         height,
         refresh_hz,
         refresh_mhz: 0,
-    };
+    }
+    .stating(refresh_mhz);
     // Requested surround layout (2 = stereo / 6 = 5.1 / 8 = 7.1); anything else is stereo. The
     // host clamps it and echoes the resolved count in `connector.audio_channels`, which drives the
     // decoder + AAudio layout (read in `crate::audio::AudioPlayback::start`).
@@ -926,6 +932,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestMode
     width: jint,
     height: jint,
     refresh_hz: jint,
+    refresh_mhz: jint,
     view_width: jint,
     view_height: jint,
 ) -> jboolean {
@@ -941,7 +948,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestMode
             height: height as u32,
             refresh_hz: refresh_hz as u32,
             refresh_mhz: 0,
-        };
+        }
+        .stating(refresh_mhz.max(0) as u32);
         if view_width < 0 || view_height < 0 {
             return session.client.request_mode(mode).is_ok();
         }

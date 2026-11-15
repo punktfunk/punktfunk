@@ -908,6 +908,8 @@ private fun DisplaySettings(
     onHdrWithoutHeadroom: () -> Unit,
 ) {
     val (nw, nh, nhz) = nativeDisplayMode(context, secondScreen = s.secondScreen)
+    // Native names the rate it asks for, fraction and all: "Native (59.94 Hz)".
+    val nativeRate = hzLabel(nativeRefreshMilliHz(context, secondScreen = s.secondScreen))
     // The safe-area row carries its resolved size the same way the native row does. On a display with
     // no cutout this equals the native mode — the row stays, honestly showing that it changes nothing
     // here, rather than silently vanishing on some devices and not others.
@@ -1005,7 +1007,7 @@ private fun DisplaySettings(
             label = stringResource(R.string.player_refresh_hz),
             options = REFRESH_OPTIONS.map { hz ->
                 hz to if (hz == 0) {
-                    stringResource(R.string.player_refresh_hz_native_rate, nhz)
+                    stringResource(R.string.player_refresh_hz_native_rate, nativeRate)
                 } else {
                     stringResource(R.string.common_hz, hz)
                 }

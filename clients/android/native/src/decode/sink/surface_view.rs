@@ -215,9 +215,9 @@ fn grid_period_ns(clock: Option<&VsyncShared>) -> i64 {
 }
 
 impl Timeline {
-    /// `source_hz` is the negotiated stream rate, the cadence cushion's ceiling
+    /// `source_mhz` is the negotiated stream rate in millihertz, the cadence cushion's ceiling
     /// ([`frame_interval_ns`]); `panel_hz` the mode-table rate Kotlin asked for.
-    fn new(priority: PresentPriority, source_hz: u32, panel_hz: i32) -> Timeline {
+    fn new(priority: PresentPriority, source_mhz: u32, panel_hz: i32) -> Timeline {
         let budget = TimelineBudget::new(latch_margin_ns());
         log::info!(
             "presenter: latch margin {}us{}",
@@ -228,7 +228,7 @@ impl Timeline {
                 " (adaptive — widens on latch misses)"
             }
         );
-        let interval_ns = frame_interval_ns(source_hz);
+        let interval_ns = frame_interval_ns(source_mhz);
         log::info!(
             "presenter: cadence clock on the source's timeline, frame interval {:.2}ms",
             interval_ns as f64 / 1e6
@@ -495,16 +495,16 @@ pub(super) struct SurfaceViewSink {
 }
 
 impl SurfaceViewSink {
-    /// The timeline presenter at `priority`; `source_hz` is the negotiated stream rate,
-    /// `panel_hz` the mode-table rate Kotlin asked for.
+    /// The timeline presenter at `priority`; `source_mhz` is the negotiated stream rate in
+    /// millihertz, `panel_hz` the mode-table rate Kotlin asked for.
     pub(super) fn timeline(
         window: &NativeWindow,
         color: &ColorInfo,
         priority: PresentPriority,
-        source_hz: u32,
+        source_mhz: u32,
         panel_hz: i32,
     ) -> SurfaceViewSink {
-        let timeline = Timeline::new(priority, source_hz, panel_hz);
+        let timeline = Timeline::new(priority, source_mhz, panel_hz);
         SurfaceViewSink::tagged(window, color, Some(timeline))
     }
 
