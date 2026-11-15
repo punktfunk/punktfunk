@@ -1289,13 +1289,13 @@ fn settle_bitrate(hello: &mut Hello, codec_bit: u8) {
 }
 
 /// Whether a session's own display on `compositor` runs a rate that is not whole hertz. A
-/// shared display runs its owner's rate. A Windows host's frames are gated in the display
-/// driver's encode thread, which counts whole hertz. No display at all paces as asked.
+/// shared display runs its owner's rate, which the stream then reports. No display at all
+/// paces as asked.
 pub(crate) fn runs_exact_rate(
     compositor: Option<crate::vdisplay::Compositor>,
     shared: bool,
 ) -> bool {
-    !cfg!(windows) && !shared && compositor.is_none_or(|c| c.runs_fractional_rates())
+    !shared && compositor.is_none_or(|c| c.runs_fractional_rates())
 }
 
 /// `mode` at a rate this session delivers: its fraction where the display runs one
@@ -2167,7 +2167,9 @@ mod tests {
     /// answer whole hertz.
     #[test]
     fn a_session_streams_at_a_rate_the_host_delivers() {
-        use crate::vdisplay::Compositor::{Gamescope, Hyprland, Kwin, Mutter, Wlroots};
+        use crate::vdisplay::Compositor::{
+            Gamescope, Hyprland, Kwin, Mutter, Niri, Umbriel, Wlroots,
+        };
         let asked = punktfunk_core::Mode::exact(1920, 1080, 59_940);
         let whole = punktfunk_core::Mode::exact(1920, 1080, 60_000);
         assert_eq!(deliverable_rate(asked, true), asked);
@@ -2178,14 +2180,12 @@ mod tests {
         assert_eq!(deliverable_rate(capped, true), whole);
         assert_eq!(deliverable_rate(whole, true), whole);
 
-        for c in [Wlroots, Hyprland, Mutter] {
-            assert_eq!(runs_exact_rate(Some(c), false), !cfg!(windows), "{c:?}");
+        for c in [Wlroots, Hyprland, Mutter, Kwin, Niri, Umbriel] {
+            assert!(runs_exact_rate(Some(c), false), "{c:?}");
             assert!(!runs_exact_rate(Some(c), true), "{c:?} shared");
         }
-        for c in [Kwin, Gamescope] {
-            assert!(!runs_exact_rate(Some(c), false), "{c:?}");
-        }
-        assert_eq!(runs_exact_rate(None, false), !cfg!(windows));
+        assert!(!runs_exact_rate(Some(Gamescope), false));
+        assert!(runs_exact_rate(None, false));
     }
 
     /// A rate stored for PyroWave reads as Automatic once the host lands on HEVC: the session

@@ -1294,21 +1294,16 @@ mod tests {
     fn only_a_backend_that_runs_fractions_gets_one() {
         let session = punktfunk_core::Mode::exact(2560, 1440, 59_940);
         let mult = |c| pf_host_config::config().vdisplay_hz_mult_for(60, cfg!(windows)) * c;
-        for id in ["wlroots", "hyprland", "mutter"] {
+        for id in ["wlroots", "hyprland", "mutter", "kwin", "niri", "umbriel"] {
             assert_eq!(
                 display_mode_for(session, id).millihz(),
                 mult(59_940),
                 "{id}"
             );
         }
-        for id in ["kwin", "niri", "umbriel", "windows"] {
-            let display = display_mode_for(session, id);
-            assert_eq!(
-                (display.millihz(), display.refresh_mhz),
-                (mult(60_000), 0),
-                "{id}"
-            );
-        }
+        // A mirrored head is asked for no rate: it runs its own.
+        let display = display_mode_for(session, "mirror");
+        assert_eq!((display.millihz(), display.refresh_mhz), (mult(60_000), 0));
         assert_eq!(display_mode_for(session, "gamescope").refresh_mhz, 0);
     }
 

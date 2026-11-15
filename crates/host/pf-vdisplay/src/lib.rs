@@ -244,7 +244,12 @@ impl Compositor {
 /// a rate that is not whole hertz, 59.94 Hz say. Any other backend is asked for whole hertz
 /// and a session on it is told so, so its modes compare as whole ones.
 pub fn runs_fractional_rates(backend: &str) -> bool {
-    matches!(backend, "wlroots" | "hyprland" | "mutter")
+    match backend {
+        "wlroots" | "hyprland" | "mutter" | "niri" | "umbriel" | "kwin" => true,
+        #[cfg(target_os = "windows")]
+        "pf-vdisplay" => manager::runs_exact_rates(),
+        _ => false,
+    }
 }
 
 /// Backends usable now: gamescope if its binary exists, plus the live or pinned
