@@ -50,10 +50,6 @@ mod linux {
         \x20 adopt-owner <account>       the owner's row, for the user door-helper recorded\n\
         \x20 release-owner               delete the owner's row, if there is one\n\
         \x20 stop-all                    stop every seat that runs or starts\n\
-        \x20 check-owner on|off <account>  who may switch the door now, for door-helper:\n\
-        \x20                             `on|off <uid> <home>`, `takeover <gone owner> <uid> <home>`, `gone`\n\
-        \x20 door-ports                  door-helper's port filter: the owner's host.env, then web.env,\n\
-        \x20                             on stdin into the door's copy\n\
         \x20 door on|off <account>       switch Reachable without logging in, for door-helper (root)\n\
         \x20 door ports                  the recorded owner's ports, at each door start (root)\n\
         \x20 start <id> | stop <id> | delete <id>\n\
@@ -113,19 +109,6 @@ mod linux {
             pf_seats::linux::pam_check(account);
             return Ok(());
         }
-        // No flags here: the account is data from a unit's instance name.
-        if let [verb, direction, account] = args.as_slice()
-            && verb == "check-owner"
-        {
-            let on = match direction.as_str() {
-                "on" => true,
-                "off" => false,
-                _ => return Err(USAGE.into()),
-            };
-            let line = pf_seats::linux::check_owner(account, on).map_err(|e| e.to_string())?;
-            println!("{line}");
-            return Ok(());
-        }
         let mut socket_path = PathBuf::from(SOCKET_PATH);
         let mut steam_source = None;
         let mut words = Vec::new();
@@ -163,11 +146,6 @@ mod linux {
             }
             "drain" => {
                 return crate::uinput::ask_to_drain().map_err(|e| format!("drain: {e}"));
-            }
-            "door-ports" => {
-                let to = std::path::Path::new(pf_seats::linux::STATE_DIR).join("host.env");
-                return pf_seats::linux::door::ports(std::io::stdin().lock(), &to)
-                    .map_err(|e| e.to_string());
             }
             "serve-usb" => {
                 pf_seats::logging::to_stderr();

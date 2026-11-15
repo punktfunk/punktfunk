@@ -27,10 +27,10 @@ const PORT_KEYS: [&str; 3] = [
     "PUNKTFUNK_UI_BIND",
 ];
 
-/// The most `door-ports` reads: the owner's two env files, theirs to make any size.
+/// The most [`ports`] reads: the owner's two env files, theirs to make any size.
 const MAX_PORT_INPUT: u64 = 1 << 20;
 
-/// Whom a switch is for, as `check-owner` prints it.
+/// Whom a switch is for, as [`super::check_owner`] prints it.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Admit {
     /// On for this account: the first time, or again.
@@ -147,9 +147,9 @@ pub(super) fn port_lines(text: &[u8]) -> String {
         .collect()
 }
 
-/// `door-ports`: the [`port_lines`] of `input` into `to`, root's and 0644, replaced whole.
-/// Input past [`MAX_PORT_INPUT`] is refused and the last copy stays.
-pub fn ports(input: impl Read, to: &Path) -> Result<(), BackendError> {
+/// The [`port_lines`] of `input` into `to`, root's and 0644, replaced whole. Input past
+/// [`MAX_PORT_INPUT`] is refused and the last copy stays.
+fn ports(input: impl Read, to: &Path) -> Result<(), BackendError> {
     use std::os::unix::fs::PermissionsExt;
     let mut text = Vec::new();
     input
@@ -664,7 +664,7 @@ fn give_avatars(owner: &Owner) -> Result<(), Stop> {
     Ok(())
 }
 
-/// `from`'s bytes as `side`, up to one past what `door-ports` reads.
+/// `from`'s bytes as `side`, up to one past what [`ports`] reads.
 fn read(side: &Side, from: &Theirs) -> Vec<u8> {
     let cat = Cmd::by(side, &["cat", "--"], Some(from), &[]);
     hands::pipe(&[cat.quiet().kept(MAX_PORT_INPUT + 1)]).1
@@ -801,7 +801,7 @@ impl Door {
         Ok(file)
     }
 
-    /// [`admit`] by root's record, its refusal on stderr as `check-owner` prints it.
+    /// [`admit`] by root's record, its refusal's code and reason on stderr.
     fn check(&self, on: bool, user: &str, look: Look) -> Result<Admit, Stop> {
         let recorded = super::accounts::recorded_owner(Path::new(&self.state));
         admit(on, user, recorded.as_deref(), look).map_err(|e| {
@@ -1112,7 +1112,7 @@ mod tests {
         }
     }
 
-    /// Every answer `check-owner` gives, by the fix that decided it.
+    /// Every answer [`admit`] gives, by the fix that decided it.
     #[test]
     fn door_admission_table() {
         type Row = (
@@ -1771,7 +1771,7 @@ mod tests {
         }
     }
 
-    /// Each door start's ports; the port file holds what `door-ports` made of the recorded input.
+    /// Each door start's ports; the port file holds what [`port_lines`] made of the recorded input.
     #[test]
     fn the_door_s_ports_run_exactly_these() {
         let rows: [(&str, Make, &[&str], Option<&str>); 4] = [

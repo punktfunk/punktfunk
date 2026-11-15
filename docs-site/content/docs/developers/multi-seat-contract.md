@@ -537,13 +537,8 @@ the installed unit.
   `start|stop|delete <id>`, `doctor`, `seating`, `pads`, `lend <seat id> <key>` and
   `take-back <key>` send the [socket's](#the-supervisor) requests;
   `release-owner` deletes the owner's row and `stop-all` stops every live seat.
-  `door on|off <user>`, `door ports`, `check-owner on|off <user>` and `door-ports` send none
-  and need no running supervisor. `door` is the [door switch](#the-owners-row-and-the-door)
-  itself, root's, which `door-helper` execs. `check-owner` applies the switch rules below to the owner record and prints
-  `on <uid> <home>`, `off <uid> <home>`, `takeover <gone owner> <uid> <home>` or `gone`; a
-  refusal exits non-zero with its code (`door_on_for_other`, `door_not_on_for`, or the account
-  rule's). `door-ports` reads the owner's `host.env` then `web.env` on stdin and writes the
-  door's [port lines](#the-owners-row-and-the-door) from them.
+  `door on|off <user>` and `door ports` send none and need no running supervisor: they are the
+  [door switch](#the-owners-row-and-the-door) itself, root's, which `door-helper` execs.
 - **Box-wide Flatpaks.** `install_flatpak {id}` adds Flathub to the system installation when the
   box lacks it and installs the app there, for every account; each user keeps its own data in
   `~/.var/app/<id>`. `remove_flatpak {id, purge}` uninstalls it; `purge` deletes root's data of
@@ -805,8 +800,7 @@ browsers. A seat host without Seat defaults follows its `PUNKTFUNK_WEBTRANSPORT*
   the door sends the rows it stored to the owner's host, and answers 503 while that host starts. The
   user must be in the `punktfunk-update` group, and a member switches the door for their own account
   only. The switch writes that account to `/var/lib/punktfunk-seats/owner` first. Who may switch
-  is decided under the switch's lock, from that file, by the rules `punktfunk-seats check-owner`
-  prints: it refuses to switch on while the file names another account, and to switch off for
+  is decided under the switch's lock, from that file: it refuses to switch on while the file names another account, and to switch off for
   any but the one it names, which may have left the group since. A name whose account no longer
   exists names no one: a member's switch-on takes the door over, replacing the box's files with
   their own where they have the same file, and a switch-off for it leaves the box's files in
