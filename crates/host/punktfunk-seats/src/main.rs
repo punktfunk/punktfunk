@@ -52,6 +52,9 @@ mod linux {
         \x20 stop-all                    stop every seat that runs or starts\n\
         \x20 check-owner on|off <account>  door-helper's account rules: `<uid> <home>` or `gone`\n\
         \x20 start <id> | stop <id> | delete <id>\n\
+        \x20 pads                        the controllers plugged into this PC, and whose each is\n\
+        \x20 lend <id> <key>             give a controller plugged into this PC to a seat\n\
+        \x20 take-back <key>             give a lent controller back to this PC\n\
         \x20 doctor                      what a seat needs and what is missing\n\
         \x20 seating                     whether seats are on\n\
         \x20 fence                       udev's IMPORT{program}: whose a seat's pad is\n\
@@ -171,6 +174,16 @@ mod linux {
             "start" => Command::Start { id: id(argument)? },
             "stop" => Command::Stop { id: id(argument)? },
             "delete" => Command::Delete { id: id(argument)? },
+            "pads" => Command::Pads,
+            "lend" => Command::Lend {
+                id: id(argument)?,
+                key: words
+                    .next()
+                    .ok_or(format!("lend needs a pad's key\n{USAGE}"))?,
+            },
+            "take-back" => Command::TakeBack {
+                key: argument.ok_or(format!("take-back needs a pad's key\n{USAGE}"))?,
+            },
             "doctor" => Command::Doctor,
             "seating" => Command::Seating,
             _ => return Err(USAGE.into()),
@@ -264,7 +277,10 @@ mod linux {
             }
             CommandResult::Pads { pads } => {
                 for pad in pads {
-                    let seat = pad.seat.map_or_else(|| "-".to_owned(), |id| id.to_string());
+                    let seat = pad
+                        .seat
+                        .as_ref()
+                        .map_or_else(|| "-".to_owned(), |id| id.to_string());
                     println!(
                         "{} {:?} present={} {seat} {:?}",
                         pad.key, pad.state, pad.present, pad.name

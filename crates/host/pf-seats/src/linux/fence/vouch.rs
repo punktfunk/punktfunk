@@ -123,8 +123,9 @@ fn open_dir(dir: &Path) -> io::Result<()> {
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
-/// Writes `account` as `dir/name`, `0600`, whole: a temporary file renamed into place.
-fn put(dir: &Path, name: &str, account: &str) -> io::Result<()> {
+/// Writes `account` as `dir/name`, `0600`, whole: a temporary file renamed into place. `dir`
+/// is made root's `0700` first.
+pub(in crate::linux) fn put(dir: &Path, name: &str, account: &str) -> io::Result<()> {
     open_dir(dir)?;
     let temp = dir.join(format!(".{name}.tmp"));
     let _ = std::fs::remove_file(&temp);

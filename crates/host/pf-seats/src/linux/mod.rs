@@ -30,6 +30,7 @@ pub mod fence;
 mod firefox;
 mod flatpak;
 pub mod handover;
+pub mod lent;
 mod libraries;
 pub mod login;
 mod logind;
@@ -52,7 +53,7 @@ pub use pam::{run_check as pam_check, CHECK_VERB as PAM_CHECK_VERB};
 pub use shared::ledger_root;
 pub use socket::SOCKET_PATH;
 
-use crate::backend::{Adopted, BackendError, PlatformBackend};
+use crate::backend::{Adopted, BackendError, PlatformBackend, PresentPad};
 use crate::ipc::{Diagnostic, DiagnosticLevel, SeatingStatus};
 use crate::model::{Ledger, RuntimeState, RuntimeStatus, Seat, SeatId};
 use crate::persistence::{LedgerStore, StoreError};
@@ -179,6 +180,8 @@ struct Inner {
     helper_off: AtomicBool,
     /// What the login socket carries, once the binary bound it ([`LinuxBackend::login_socket`]).
     login_label: OnceLock<handover::Label>,
+    /// The desk pads lent to rows, and the hardware they name.
+    lent: lent::Lent,
 }
 
 /// `slot`'s checks when they ran less than [`CHECKS_FRESH`] before `now`, else what `run`
@@ -481,6 +484,7 @@ impl LinuxBackend {
             handover: handover::Handover::default(),
             helper_off: AtomicBool::new(false),
             login_label: OnceLock::new(),
+            lent: lent::Lent::under(Path::new("/")),
         });
         let weak = Arc::downgrade(&inner);
         std::thread::Builder::new()
@@ -490,7 +494,8 @@ impl LinuxBackend {
         Ok(Self { inner })
     }
 
-    /// A backend over `box_dir` and `state`, with no thread keeping it level.
+    /// A backend over `box_dir` and `state`, with no thread keeping it level. Its sysfs, udev
+    /// database and lend records lie under `state`.
     #[cfg(test)]
     fn detached(box_dir: &Path, state: &Path) -> Self {
         Self {
@@ -510,6 +515,7 @@ impl LinuxBackend {
                 handover: handover::Handover::default(),
                 helper_off: AtomicBool::new(false),
                 login_label: OnceLock::new(),
+                lent: lent::Lent::under(state),
             }),
         }
     }
@@ -1002,8 +1008,8 @@ impl PlatformBackend for LinuxBackend {
     }
 
     /// A made seat's row up: its user's group, home, groups, folders, Steam links and copies put
-    /// right, the copies under `level`, then [`LinuxBackend::bring_up`]. The owner's and a
-    /// person's rows start their own way.
+    /// right, the copies under `level`, its lent pads live, then [`LinuxBackend::bring_up`]. The
+    /// owner's and a person's rows start their own way.
     fn start(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
         let asked = self.inner.stops.load(Ordering::SeqCst);
         match Own::of(seat) {
@@ -1040,6 +1046,7 @@ impl PlatformBackend for LinuxBackend {
         shared::refresh_trust(box_dir, state, &seat.id, reader)?;
         shared::refresh_seat_library(box_dir, state, &seat.id, reader)?;
         drop(level);
+        self.inner.lent.level(seat, true, true);
         unit_hook(&self.inner, &seat.account, Some(passwd.uid));
         self.bring_up(seat, Own::Seat, &passwd, None, asked)?;
         self.track(&seat.id, Tracked::of(seat, &passwd));
@@ -1061,17 +1068,24 @@ impl PlatformBackend for LinuxBackend {
         self.start_person(seat, asked, Some(password))
     }
 
-    /// Ends the headless session. A host in the owner's own login stays: it isn't the unit's.
+    /// Ends the headless session, then levels the row's lent pads with what still runs: parked,
+    /// unless the owner's own login hosts the row. A host in that login stays: it isn't the
+    /// unit's.
     fn stop(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
         self.inner.stops.fetch_add(1, Ordering::SeqCst);
         self.stop_unit(seat)?;
+        if !seat.lent.is_empty() {
+            let live = self.status(seat).is_ok_and(|s| lent::runs(&s.state));
+            self.inner.lent.level(seat, live, false);
+        }
         Ok(RuntimeStatus::stopped())
     }
 
     /// The owner's row takes the box's library with it: it was the door's, and the door goes too.
     /// A row the owner's new row has replaced leaves the library, which is the new one's. A
     /// person's row releases the account: its unit stops and what the row made goes, its device
-    /// list included, and nothing of the account does.
+    /// list included, and nothing of the account does. Once its files are gone, the row's lent
+    /// pads are the desk's again.
     fn remove(&self, seat: &Seat) -> Result<(), BackendError> {
         let _level = self.inner.level.lock().unwrap_or_else(|e| e.into_inner());
         let kind = Own::of(seat);
@@ -1096,6 +1110,9 @@ impl PlatformBackend for LinuxBackend {
         let removed = self.remove_files(&seat.account, &seat.id, kind.ours());
         let mut devices = self.inner.devices.lock().unwrap_or_else(|e| e.into_inner());
         devices.remove(&seat.id);
+        if removed.is_ok() {
+            self.inner.lent.release(seat);
+        }
         removed
     }
 
@@ -1107,12 +1124,16 @@ impl PlatformBackend for LinuxBackend {
         Ok(state.runtime())
     }
 
-    /// A unit found up is tracked and gets its proxy; one that is down loses both. A unit between
-    /// the two, stopping, keeps them: a restart rebuilds its namespace on the same proxy.
-    /// The owner's row stays tracked from its adoption. A person's row is tracked while its unit
-    /// is, and has no proxy: its pads come from the broker, and the hook is a made seat's. A
-    /// person's unit found down ends every presence on its row.
+    /// Every row's lent pads go live while it runs or starts and park otherwise. A unit found up
+    /// is tracked and gets its proxy; one that is down loses both. A unit between the two,
+    /// stopping, keeps them: a restart rebuilds its namespace on the same proxy. The owner's row
+    /// stays tracked from its adoption. A person's row is tracked while its unit is, and has no
+    /// proxy: its pads come from the broker, and the hook is a made seat's. A person's unit found
+    /// down ends every presence on its row.
     fn reconcile(&self, seat: &Seat, status: &RuntimeStatus) {
+        self.inner
+            .lent
+            .level(seat, lent::runs(&status.state), false);
         let kind = Own::of(seat);
         if kind == Own::Owner {
             return;
@@ -1313,17 +1334,30 @@ impl PlatformBackend for LinuxBackend {
     fn remove_flatpak(&self, id: &str, purge: bool) -> Result<(), BackendError> {
         flatpak::remove(id, purge)
     }
+
+    fn desk_pads(&self, ledger: &Ledger) -> Result<Vec<PresentPad>, BackendError> {
+        Ok(self.inner.lent.desk_pads(ledger))
+    }
+
+    fn lendable_pad(&self, key: &str, ledger: &Ledger) -> Result<PresentPad, BackendError> {
+        self.inner.lent.lendable_pad(key, ledger)
+    }
+
+    fn settle_pads(&self, ledger: &Ledger, keys: &[String]) -> Result<(), BackendError> {
+        self.inner.lent.settle(ledger, keys)
+    }
 }
 
 impl LinuxBackend {
-    /// The owner's row up. With the owner at the machine their own login hosts it: the headless
-    /// unit stays down and the owner's user host is started if it isn't running. Otherwise the
-    /// unit brings up the headless session and the host in it, whose runner stands the owner's
-    /// user host down first.
+    /// The owner's row up, its lent pads live first. With the owner at the machine their own
+    /// login hosts it: the headless unit stays down and the owner's user host is started if it
+    /// isn't running. Otherwise the unit brings up the headless session and the host in it, whose
+    /// runner stands the owner's user host down first.
     fn start_owner(&self, seat: &Seat, asked: u64) -> Result<RuntimeStatus, BackendError> {
         let passwd = accounts::require_owner(&seat.account)?;
         self.prepare_owner(seat, &passwd)?;
         self.track(&seat.id, Tracked::of(seat, &passwd));
+        self.inner.lent.level(seat, true, true);
         if owner_at_desk(&seat.account) {
             user_host(&seat.account, "start");
             self.wait_port(seat, asked)?;
@@ -1338,9 +1372,9 @@ impl LinuxBackend {
     /// login is theirs, and the headless session would sit beside it uninvited. Otherwise the
     /// unit brings up the headless session and a contract seat's host in it, which admits only
     /// the devices the row's list does. The account is checked first, and what is made is the
-    /// row's own, never in the account; its copies are written under `level`. The login drop-in
-    /// [`Self::bring_up`] wrote stays while the start waits; a helper that ended before a session
-    /// falls back to the plain start.
+    /// row's own, never in the account; its copies are written under `level`, then its lent pads
+    /// go live. The login drop-in [`Self::bring_up`] wrote stays while the start waits; a helper
+    /// that ended before a session falls back to the plain start.
     fn start_person(
         &self,
         seat: &Seat,
@@ -1366,6 +1400,7 @@ impl LinuxBackend {
         person_trust(&self.inner, &seat.id, reader)?;
         shared::refresh_seat_library(&self.inner.box_dir, state, &seat.id, reader)?;
         drop(level);
+        self.inner.lent.level(seat, true, true);
         let written = self.bring_up(seat, Own::Person, &passwd, password, asked)?;
         self.track(&seat.id, Tracked::of(seat, &passwd));
         let ready = self.wait_ready(seat, asked, written.is_some());
