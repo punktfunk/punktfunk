@@ -250,7 +250,8 @@ fn hex4(text: &str) -> bool {
 
 /// The key of the USB device `instance`, `USB\VID_vvvv&PID_pppp\<tail>`: its ids, then `s` and
 /// the tail when that is a serial a key can carry, else `p` and the port id Windows made, its
-/// `&` written `.`. A tail that is neither has no key.
+/// `&` written `.`. A tail that is neither has no key. The tail is upper-cased: Windows
+/// reports one id in either case and finds it by both.
 fn key_of(instance: &str) -> Option<String> {
     let mut parts = instance.split('\\');
     let (bus, ids, tail) = (parts.next()?, parts.next()?, parts.next()?);
@@ -258,9 +259,9 @@ fn key_of(instance: &str) -> Option<String> {
     let (vendor, product) = ids.strip_prefix("vid_")?.split_once("&pid_")?;
     let plain = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-');
     let (kind, tail) = if tail.bytes().all(|b| plain(b) || b == b'.') {
-        ('s', tail.to_owned())
+        ('s', tail.to_ascii_uppercase())
     } else if tail.bytes().all(|b| plain(b) || b == b'&') {
-        ('p', tail.replace('&', "."))
+        ('p', tail.replace('&', ".").to_ascii_uppercase())
     } else {
         return None;
     };
@@ -381,6 +382,13 @@ mod tests {
         assert_eq!(
             key_of("usb\\vid_045e&pid_0b12\\3032363030303631").as_deref(),
             Some("usb-045e-0b12-s-3032363030303631")
+        );
+        // One device, reported in either case, has one key.
+        let lower = key_of("USB\\VID_054C&PID_0CE6\\7&3f94d01&0&2");
+        assert_eq!(lower.as_deref(), Some(DUALSENSE_KEY));
+        assert_eq!(
+            key_of("USB\\VID_28DE&PID_1304\\fxb995480095e").as_deref(),
+            Some(PUCK_KEY)
         );
         for none in [
             "USB\\VID_054C&PID_0CE6&MI_03\\8&185D5297&4&0003",
