@@ -292,6 +292,9 @@ pub(crate) async fn serve(
     )
     .map_err(|e| anyhow!("QUIC server endpoint: {e}"))?;
     let media_socket = Arc::new(media_socket);
+    // Bound: a test dials on this, not on a guessed delay.
+    #[cfg(test)]
+    let _listening = tests::Listening::on(opts.port);
     tracing::info!(
         port = opts.port,
         source = ?opts.source,

@@ -1209,10 +1209,21 @@ fn prepare_at_welcome(
     )
 }
 
-/// Waits until every stopped session has left the live set, its display lease dropped with it.
-/// Capped at the 1.5 s grace the host once always slept: a stuck teardown costs no more than that.
+/// The longest a connect waits for the sessions it stopped: a stuck teardown costs it no more.
+const RELEASE_CAP: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Waits until every stopped session has left the live set, its display lease dropped with it,
+/// or [`RELEASE_CAP`] has passed.
 async fn wait_released(stops: &[Arc<std::sync::atomic::AtomicBool>]) {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(1500);
+    wait_released_within(stops, RELEASE_CAP).await
+}
+
+/// [`wait_released`] under `cap`.
+async fn wait_released_within(
+    stops: &[Arc<std::sync::atomic::AtomicBool>],
+    cap: std::time::Duration,
+) {
+    let deadline = tokio::time::Instant::now() + cap;
     while !crate::vdisplay::admission::all_gone(stops) && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
@@ -2135,6 +2146,50 @@ fn pcm_parts(n: &Negotiation<'_>) -> bool {
 mod tests {
     use super::*;
     use punktfunk_core::audio::pcm;
+
+    /// A stopped session's wait ends when its row leaves the live set, and at the cap when it
+    /// never does. The test sets the cap: a minute where the release has to win, 50 ms where
+    /// nothing leaves.
+    #[tokio::test]
+    async fn a_release_ends_the_wait_and_the_cap_ends_a_stuck_one() {
+        use crate::vdisplay::admission::{all_gone, register};
+        let ms = std::time::Duration::from_millis;
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let stops = std::slice::from_ref(&stop);
+        // No identity and a mode no session asks for: no other test's admission reads it.
+        let row = || {
+            register(
+                None,
+                (1, 1, 1),
+                stop.clone(),
+                "a test".into(),
+                Default::default(),
+                None,
+            )
+        };
+
+        let leaves = row();
+        let leaving = tokio::spawn(async move {
+            tokio::time::sleep(ms(20)).await;
+            drop(leaves);
+        });
+        let (asked, cap) = (std::time::Instant::now(), ms(60_000));
+        wait_released_within(stops, cap).await;
+        assert!(
+            all_gone(stops) && asked.elapsed() < cap,
+            "the release ends it"
+        );
+        leaving.await.unwrap();
+
+        let stays = row();
+        let (asked, cap) = (std::time::Instant::now(), ms(50));
+        wait_released_within(stops, cap).await;
+        assert!(
+            !all_gone(stops) && asked.elapsed() >= cap,
+            "the cap ends it"
+        );
+        drop(stays);
+    }
 
     /// A rate stored for PyroWave reads as Automatic once the host lands on HEVC: the session
     /// resolves the host's default, and every later `== 0` test (the governor, a rebuild's
