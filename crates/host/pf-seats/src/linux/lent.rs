@@ -699,13 +699,8 @@ mod tests {
             mgmt_port: 48_120 + u16::from(n),
             autostart: false,
             runtime,
-            owner: false,
-            owner_uid: None,
+            kind: crate::model::RowKind::made(),
             fingerprint: None,
-            adopted_sid: None,
-            adopted_uid: None,
-            rdp_granted: false,
-            console_deny_kept: false,
             lent: keys
                 .iter()
                 .map(|key| LentPad {

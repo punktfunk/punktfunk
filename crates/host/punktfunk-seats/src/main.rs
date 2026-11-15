@@ -212,7 +212,7 @@ mod linux {
 
     /// Deletes the owner's row; none is not an error. The account and its home stay.
     fn release_owner(socket_path: &std::path::Path) -> Result<(), String> {
-        let Some(owner) = seats(socket_path)?.into_iter().find(|s| s.owner) else {
+        let Some(owner) = seats(socket_path)?.into_iter().find(|s| s.kind.is_owner()) else {
             return Ok(());
         };
         ask(socket_path, Command::Delete { id: owner.id }).map(drop)
@@ -258,7 +258,7 @@ mod linux {
                 seat.account,
                 seat.native_port,
                 seat.mgmt_port,
-                seat.owner,
+                seat.kind.is_owner(),
                 seat.name,
             );
         };

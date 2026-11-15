@@ -667,7 +667,7 @@ async fn a_person_s_call_reaches_the_owner_s_host_as_that_device() {
         assert!(locked.unwrap());
         let mut snapshot = box_snapshot(None);
         if adopted {
-            snapshot.seats[1].adopted_uid = Some(1000);
+            snapshot.seats[1].kind = pf_seats::model::RowKind::linux_person(1000);
         }
         let target = format!("library/hidden/steam:400?as={KID}");
         let seats = FakeSeats::new(snapshot).answering(

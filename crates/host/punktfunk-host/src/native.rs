@@ -2264,7 +2264,7 @@ async fn start_for_dial(
     };
     let mut moved = false;
     match snap.seat(&id) {
-        Some((s, _)) if s.adopted_uid.is_none() && !start_settled(Some(s), &mut moved) => {}
+        Some((s, _)) if !s.kind.starts_on_proof() && !start_settled(Some(s), &mut moved) => {}
         _ => return Ok(snap),
     }
     tracing::info!(seat = %id, "starting the seat for a dial");

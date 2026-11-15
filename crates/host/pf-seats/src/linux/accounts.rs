@@ -384,10 +384,11 @@ fn check_adoptable(
         .said("account_is_owner")
         .param("account", name));
     }
-    let held = ledger
-        .seats
-        .iter()
-        .any(|seat| seat.adopted_uid == Some(found.uid) || seat.account.eq_ignore_ascii_case(name));
+    // A person's row by uid; the owner's is answered above.
+    let held = ledger.seats.iter().any(|seat| {
+        (seat.kind.is_person() && seat.kind.uid() == Some(found.uid))
+            || seat.account.eq_ignore_ascii_case(name)
+    });
     if held {
         return Err(err(
             "account_taken",
@@ -421,10 +422,12 @@ fn require_ordinary(account: &str) -> Result<Passwd, BackendError> {
 }
 
 /// The user a person's row adopted: its name must still resolve to the uid the row recorded. A
-/// name given to another user since, or to none, is refused; nothing runs as a stranger.
+/// name given to another user since, or to none, is refused; nothing runs as a stranger. Any
+/// other row is refused too: the owner's uid is no person's.
 pub(super) fn require_person(seat: &Seat) -> Result<Passwd, BackendError> {
     let account = &seat.account;
-    match (lookup(account)?, seat.adopted_uid) {
+    let uid = seat.kind.uid().filter(|_| seat.kind.is_person());
+    match (lookup(account)?, uid) {
         (Some(found), Some(uid)) if found.uid == uid => Ok(found),
         (Some(_), _) => Err(err(
             "account_not_owned",
@@ -901,7 +904,7 @@ mod tests {
             };
             let mut ledger = Ledger::new();
             let mut seat = ledger.allocate_adopted_user(request, 1500).unwrap();
-            seat.adopted_uid = Some(uid);
+            seat.kind = crate::model::RowKind::linux_person(uid);
             seat
         };
         assert_eq!(
@@ -922,7 +925,7 @@ mod tests {
     #[test]
     fn an_owner_row_is_never_a_person_s() {
         let mut owner = Ledger::new().allocate_owner("root").unwrap();
-        owner.owner_uid = Some(0);
+        owner.kind = owner.kind.prepared(0);
         assert_eq!(
             require_person(&owner).unwrap_err().code,
             "account_not_owned"

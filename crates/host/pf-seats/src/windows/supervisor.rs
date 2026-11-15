@@ -153,7 +153,7 @@ impl Supervisor {
         // supervisor that died, whose host holds the ports. Any other adopted session is its
         // person's.
         let orphans = logoff_owned(&self.root, &self.accounts, seat, false)?;
-        if seat.adopted_sid.is_some() && wts::has_session_besides(&seat.account, &orphans)? {
+        if seat.kind.sid().is_some() && wts::has_session_besides(&seat.account, &orphans)? {
             return Err(accounts::signed_in(&seat.account));
         }
         ensure_ports_free(seat)?;
@@ -384,7 +384,7 @@ fn logoff_owned(
     seat: &Seat,
     cycle: bool,
 ) -> WinResult<Vec<u32>> {
-    let ids = if seat.adopted_sid.is_some() && !cycle {
+    let ids = if seat.kind.sid().is_some() && !cycle {
         let mark = host_root(root, seat)?
             .read_current(SESSION_MARK, 128)
             .map_err(|error| io_error("seat_mark", "read the seat's session mark", error))?
@@ -838,7 +838,7 @@ fn check_ports_free(seat: &Seat) -> WinResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::SeatId;
+    use crate::model::{RowKind, SeatId};
     use crate::windows::credentials::CredentialStore;
     use crate::windows::util;
     use std::path::Path;
@@ -853,13 +853,8 @@ mod tests {
             mgmt_port: 47995,
             autostart: false,
             runtime: RuntimeStatus::stopped(),
-            owner: false,
-            owner_uid: None,
+            kind: RowKind::made(),
             fingerprint: None,
-            adopted_sid: None,
-            adopted_uid: None,
-            rdp_granted: false,
-            console_deny_kept: false,
             lent: Vec::new(),
         }
     }
@@ -932,7 +927,7 @@ mod tests {
         assert_eq!(refused.code, "account_not_owned");
         assert!(supervisor.stop(&seat("pfs-absent")).is_ok());
         let adopted = Seat {
-            adopted_sid: Some("S-1-5-21-1-2-3-1001".into()),
+            kind: RowKind::windows_person("S-1-5-21-1-2-3-1001".into()),
             ..seat(&name)
         };
         assert!(supervisor.stop(&adopted).is_ok());

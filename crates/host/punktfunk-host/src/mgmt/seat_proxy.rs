@@ -61,7 +61,7 @@ pub(crate) async fn proxy_profile_seat(
     };
     // The owner's session starts on demand: the console asked for its library, and nobody has
     // logged in to make it.
-    if row.owner && needs_start(&row.runtime.state) {
+    if row.kind.is_owner() && needs_start(&row.runtime.state) {
         start_seat(&seat);
         return api_error_coded(
             StatusCode::SERVICE_UNAVAILABLE,

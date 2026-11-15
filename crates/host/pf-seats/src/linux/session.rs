@@ -650,7 +650,7 @@ pub(super) fn port_held_by(port: u16, uid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{RuntimeStatus, Seat, SeatId};
+    use crate::model::{RowKind, RuntimeStatus, Seat, SeatId};
 
     fn seat(name: &str) -> Seat {
         Seat {
@@ -662,13 +662,8 @@ mod tests {
             mgmt_port: 47995,
             autostart: false,
             runtime: RuntimeStatus::stopped(),
-            owner: false,
-            owner_uid: None,
+            kind: RowKind::made(),
             fingerprint: None,
-            adopted_sid: None,
-            adopted_uid: None,
-            rdp_granted: false,
-            console_deny_kept: false,
             lent: Vec::new(),
         }
     }
@@ -678,7 +673,7 @@ mod tests {
         Seat {
             account: "enrico".into(),
             name: "enrico".into(),
-            owner: true,
+            kind: RowKind::owner(),
             ..seat("enrico")
         }
     }
@@ -721,11 +716,11 @@ mod tests {
         let state = Path::new("/var/lib/punktfunk-seats");
         let person = Seat {
             account: "jdoe".into(),
-            adopted_uid: Some(1500),
+            kind: RowKind::linux_person(1500),
             ..seat("Jane")
         };
         let kinds = |seat: &Seat| {
-            kind_dropins(Own::of(seat), seat, state, None)
+            kind_dropins(Own::of(&seat.kind), seat, state, None)
                 .map(|(name, contents)| (name, contents.is_some()))
         };
         let gets = |class, binds| [("class.conf", class), ("binds.conf", binds)];
@@ -751,12 +746,12 @@ mod tests {
         let state = Path::new("/var/lib/punktfunk-seats");
         let person = Seat {
             account: "jdoe".into(),
-            adopted_uid: Some(1500),
+            kind: RowKind::linux_person(1500),
             ..seat("Jane")
         };
         let updates = Some("[Service]\nBindReadOnlyPaths=/a:/b\n");
         for row in [owner(), person] {
-            let dropins = kind_dropins(Own::of(&row), &row, state, None);
+            let dropins = kind_dropins(Own::of(&row.kind), &row, state, None);
             assert!(manager_parts(&dropins, updates).is_none());
         }
         let dropins = kind_dropins(Own::Seat, &seat("Desk"), state, None);
@@ -770,7 +765,7 @@ mod tests {
     fn a_person_s_env_file_keeps_their_home_clear() {
         let person = Seat {
             account: "jdoe".into(),
-            adopted_uid: Some(1500),
+            kind: RowKind::linux_person(1500),
             ..seat("Jane")
         };
         let id = "0123456789abcdef0123456789abcdef";

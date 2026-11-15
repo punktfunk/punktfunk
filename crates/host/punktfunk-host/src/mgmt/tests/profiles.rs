@@ -1122,7 +1122,7 @@ mod person {
         let mut person = fake::person(PERSON_SEAT, 9780);
         person.runtime = pf_seats::RuntimeStatus::stopped();
         let mut windows = fake::person(WINDOWS_SEAT, 9781);
-        (windows.adopted_uid, windows.adopted_sid) = (None, Some("S-1-5-21-1-2-3-1001".into()));
+        windows.kind = pf_seats::model::RowKind::windows_person("S-1-5-21-1-2-3-1001".into());
         windows.runtime = pf_seats::RuntimeStatus::stopped();
         vec![person, windows]
     }
@@ -1562,7 +1562,7 @@ mod seat_profiles {
         let store = Arc::new(Profiles::load_with(Some(path), None));
         let mut owner = made("jane");
         owner.id = pf_seats::SeatId::parse("0e".repeat(16)).unwrap();
-        owner.owner = true;
+        owner.kind = pf_seats::model::RowKind::owner();
         let sup = Arc::new(Fake::new(vec![made("Kid"), owner], |c| match c {
             Command::Create(seat) => Ok(CommandResult::Created {
                 seat: made(&seat.name),

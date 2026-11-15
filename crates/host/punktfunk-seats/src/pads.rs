@@ -457,7 +457,7 @@ fn ps_seat(ledger: &pf_seats::Ledger, account: &str) -> u16 {
     ledger
         .seats
         .iter()
-        .find(|seat| seat.account == account && !seat.owner)
+        .find(|seat| seat.account == account && !seat.kind.is_owner())
         .map_or(0, |seat| pad_broker::ps_seat(seat.id.as_str()))
 }
 

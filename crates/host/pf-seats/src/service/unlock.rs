@@ -97,7 +97,7 @@ impl<B: PlatformBackend> SeatService<B> {
     /// `id`'s row, when it is on a person's own Linux account.
     fn person(&self, id: &SeatId) -> Result<Seat, ApiError> {
         let seat = self.lock().seat(id).cloned().ok_or_else(|| not_found(id))?;
-        if seat.adopted_uid.is_none() {
+        if !seat.kind.starts_on_proof() {
             return Err(invalid(
                 "only a seat on a person's own Linux account unlocks",
             ));
@@ -109,7 +109,7 @@ impl<B: PlatformBackend> SeatService<B> {
     /// account no longer resolves to the recorded uid. Called before anything starts or is granted.
     fn still(&self, checked: &Seat) -> Result<Seat, ApiError> {
         let seat = self.person(&checked.id)?;
-        if seat.adopted_uid != checked.adopted_uid || seat.account != checked.account {
+        if seat.kind.uid() != checked.kind.uid() || seat.account != checked.account {
             return Err(ApiError::new(
                 ErrorCode::Conflict,
                 format!("account {} changed while it was unlocked", checked.account),
@@ -164,7 +164,7 @@ impl<B: PlatformBackend> SeatService<B> {
                 "enroll key is not a P-256 point or a 2048-bit RSA key",
             ));
         }
-        let account = format!("uid:{}", checked.adopted_uid.unwrap_or_default());
+        let account = format!("uid:{}", checked.kind.uid().unwrap_or_default());
         let target = Target {
             device: Some((checked.id.as_str(), &device.fingerprint)),
             account: Some(&account),
@@ -350,7 +350,11 @@ impl<B: PlatformBackend> SeatService<B> {
         } else {
             "malformed"
         };
-        let uid = seat.as_ref().and_then(|s| s.adopted_uid);
+        // A person's uid: an unlock of any other row names none.
+        let uid = seat
+            .as_ref()
+            .filter(|s| s.kind.is_person())
+            .and_then(|s| s.kind.uid());
         let key = format!("uid:{}", uid.unwrap_or_default());
         let target = Target {
             device: Some((id.as_str(), fp)),

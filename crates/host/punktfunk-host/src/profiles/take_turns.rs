@@ -225,8 +225,7 @@ pub(crate) fn bindable(
     !is_seat_account(&name)
         && !bound.iter().any(|b| b.to_lowercase() == name)
         && !ledger.iter().any(|seat| {
-            seat.account.to_lowercase() == name
-                || seat.adopted_sid.as_deref() == Some(account.sid.as_str())
+            seat.account.to_lowercase() == name || seat.kind.sid() == Some(account.sid.as_str())
         })
 }
 

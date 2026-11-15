@@ -114,13 +114,15 @@ fn tail(
     let Some(body) = super::tail(seat, &format!("events?since={since}{kinds}")) else {
         return;
     };
-    if seat.owner {
+    if seat.kind.is_owner() {
         // Off this tail: a seat that never answers must not hold the owner's events.
         std::thread::spawn(publish_every_seat_s_own_titles);
     } else {
         publish_own_titles(seat, &profile);
     }
-    let games = (!seat.owner).then(|| games_of(seat.clone())).flatten();
+    let games = (!seat.kind.is_owner())
+        .then(|| games_of(seat.clone()))
+        .flatten();
     for (event, data) in frames(std::io::BufReader::new(body)) {
         if event == "dropped" || event == "live" {
             continue;
@@ -132,14 +134,14 @@ fn tail(
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), ev.seq);
-        if publishes(&ev, seat.owner) {
+        if publishes(&ev, seat.kind.is_owner()) {
             publish_own_titles(seat, &profile);
             // The Windows box's bus carries its seats' games alone.
             if cfg!(windows) {
                 continue;
             }
         }
-        let what = take(&ev, seat.owner, packaged());
+        let what = take(&ev, seat.kind.is_owner(), packaged());
         if what == Take::Skip {
             continue;
         }
@@ -228,7 +230,7 @@ fn publish_every_seat_s_own_titles() {
     let running = ledger
         .seats
         .iter()
-        .filter(|s| !s.owner && s.runtime.state == pf_seats::RuntimeState::Running);
+        .filter(|s| !s.kind.is_owner() && s.runtime.state == pf_seats::RuntimeState::Running);
     for seat in running {
         if let Some(profile) = profile_of(seat) {
             publish_own_titles(seat, &profile);

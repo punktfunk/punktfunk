@@ -287,7 +287,7 @@ fn instance_of(key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{LentPad, RuntimeStatus, SeatId};
+    use crate::model::{LentPad, RowKind, RuntimeStatus, SeatId};
 
     const PUCK: &str = "USB\\VID_28DE&PID_1304\\FXB995480095E";
     const PUCK_KEY: &str = "usb-28de-1304-s-FXB995480095E";
@@ -345,13 +345,8 @@ mod tests {
             mgmt_port: 47995,
             autostart: false,
             runtime: RuntimeStatus::stopped(),
-            owner: false,
-            owner_uid: None,
+            kind: RowKind::made(),
             fingerprint: None,
-            adopted_sid: None,
-            adopted_uid: None,
-            rdp_granted: false,
-            console_deny_kept: false,
             lent: keys.iter().map(lent).collect(),
         }
     }

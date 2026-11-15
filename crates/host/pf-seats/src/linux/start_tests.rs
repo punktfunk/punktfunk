@@ -24,6 +24,11 @@ const GAMES_GID: u32 = 3_999_999_971;
 static RUN: Mutex<()> = Mutex::new(());
 
 fn row(account: &str, id: &str, owner: bool, adopted_uid: Option<u32>) -> Seat {
+    let kind = match (owner, adopted_uid) {
+        (true, _) => RowKind::owner(),
+        (false, Some(uid)) => RowKind::linux_person(uid),
+        (false, None) => RowKind::made(),
+    };
     Seat {
         id: SeatId::parse(id).unwrap(),
         name: "Desk".into(),
@@ -33,13 +38,8 @@ fn row(account: &str, id: &str, owner: bool, adopted_uid: Option<u32>) -> Seat {
         mgmt_port: 48_123,
         autostart: false,
         runtime: RuntimeStatus::stopped(),
-        owner,
-        owner_uid: None,
+        kind,
         fingerprint: None,
-        adopted_sid: None,
-        adopted_uid,
-        rdp_granted: false,
-        console_deny_kept: false,
         lent: Vec::new(),
     }
 }

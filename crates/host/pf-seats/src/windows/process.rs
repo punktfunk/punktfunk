@@ -580,7 +580,7 @@ pub(super) fn seat_environment(
     if let Some(exe) = steam {
         entries.insert("PUNKTFUNK_SEAT_STEAM".into(), exe.as_os_str().to_owned());
     }
-    if seat.adopted_sid.is_some() {
+    if seat.kind.sid().is_some() {
         entries.insert("PUNKTFUNK_SEAT_OWN_ACCOUNT".into(), OsString::from("1"));
     }
     if !isolate {

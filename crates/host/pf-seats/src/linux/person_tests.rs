@@ -173,8 +173,7 @@ fn only_a_made_seat_s_linger_and_manager_are_ours() {
     let rig = rig();
     let _machine = fake::install(machine(&rig.home, 1500, "active", false));
     let owner = Seat {
-        owner: true,
-        adopted_uid: None,
+        kind: RowKind::owner(),
         ..person()
     };
     rig.backend.stop(&owner).unwrap();
@@ -281,25 +280,24 @@ fn a_name_that_is_another_user_now_is_not_the_row() {
 #[test]
 fn only_a_made_seat_is_ours_to_end() {
     let made = Seat {
-        adopted_uid: None,
+        kind: RowKind::made(),
         ..person()
     };
     let owner = Seat {
-        owner: true,
-        adopted_uid: None,
+        kind: RowKind::owner(),
         ..person()
     };
-    assert_eq!(Own::of(&made), Own::Seat);
-    assert_eq!(Own::of(&owner), Own::Owner);
-    assert_eq!(Own::of(&person()), Own::Person);
+    assert_eq!(Own::of(&made.kind), Own::Seat);
+    assert_eq!(Own::of(&owner.kind), Own::Owner);
+    assert_eq!(Own::of(&person().kind), Own::Person);
     for (seat, ours, yields) in [
         (made, true, false),
         (owner, false, true),
         (person(), false, true),
     ] {
-        let kind = Own::of(&seat);
+        let kind = Own::of(&seat.kind);
         assert_eq!(
-            (kind.ours(), kind.yields_to_the_desk()),
+            (kind.ours(), seat.kind.yields_to_the_desk()),
             (ours, yields),
             "{kind:?}"
         );
@@ -330,20 +328,24 @@ struct Rules {
 }
 
 fn rules(seat: &Seat) -> Rules {
-    let own = Own::of(seat);
+    let kind = &seat.kind;
+    let own = Own::of(kind);
     Rules {
-        owner: seat.owner,
-        person: seat.adopted(),
-        proof: seat.adopted_uid.is_some(),
-        upkeep: !seat.owner && seat.adopted_uid.is_none(),
+        owner: kind.is_owner(),
+        person: kind.is_person(),
+        proof: kind.starts_on_proof(),
+        upkeep: kind.upkeep(),
         own,
         ours: own.ours(),
-        yields: own.yields_to_the_desk(),
-        windows_ours: seat.adopted_sid.is_none(),
-        own_marker: seat.adopted_sid.is_some(),
-        uid: seat.adopted_uid.or(seat.owner_uid),
-        sid: seat.adopted_sid.clone(),
-        release: (seat.rdp_granted, seat.releases_console_deny()),
+        yields: kind.yields_to_the_desk(),
+        windows_ours: kind.sid().is_none(),
+        own_marker: kind.sid().is_some(),
+        uid: kind.uid(),
+        sid: kind.sid().map(Into::into),
+        release: (
+            kind.adopted().rdp_granted,
+            !kind.adopted().console_deny_kept,
+        ),
     }
 }
 
@@ -352,20 +354,18 @@ fn rules(seat: &Seat) -> Rules {
 fn row_kind_policy_table() {
     const SID: &str = "S-1-5-21-1-2-3-1001";
     let made = Seat {
-        adopted_uid: None,
+        kind: RowKind::made(),
         ..person()
     };
     let owner = Seat {
-        owner: true,
-        owner_uid: Some(1000),
-        adopted_uid: None,
+        kind: RowKind::owner().prepared(1000),
         ..person()
     };
     let windows = Seat {
-        adopted_uid: None,
-        adopted_sid: Some(SID.into()),
-        rdp_granted: true,
-        console_deny_kept: true,
+        kind: RowKind::windows_person(SID.into()).with_adopted(Adopted {
+            rdp_granted: true,
+            console_deny_kept: true,
+        }),
         ..person()
     };
     let table = [

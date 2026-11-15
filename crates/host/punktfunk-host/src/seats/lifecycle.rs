@@ -81,7 +81,7 @@ impl Supervisor for Socket {
 /// box's host, and not a Linux row on a person's own account: its desktop may hold unsaved work,
 /// and it never starts without its person. A Windows row on an existing account is managed.
 fn managed(seat: &Seat) -> bool {
-    !seat.owner && seat.adopted_uid.is_none()
+    seat.kind.upkeep()
 }
 
 /// The rows of the `wanted` most recent players, newest first, once each, but no row on a
@@ -93,11 +93,11 @@ fn warm_rows(
     now: u64,
     wanted: usize,
 ) -> Vec<String> {
-    let owner = ledger.iter().find(|s| s.owner);
+    let owner = ledger.iter().find(|s| s.kind.is_owner());
     let person = |row: &str| {
         ledger
             .iter()
-            .any(|s| s.id.as_str() == row && s.adopted_uid.is_some())
+            .any(|s| s.id.as_str() == row && s.kind.starts_on_proof())
     };
     let mut recent: Vec<(u64, &str)> = profiles
         .iter()
@@ -205,7 +205,7 @@ fn played(snap: &super::Snapshot, at_desk: impl Fn(&Seat) -> bool) -> bool {
                 .get(s.id.as_str())
                 .is_none_or(|o| !o.is_empty())
         })
-        .any(|s| !(s.owner && at_desk(s)))
+        .any(|s| !(s.kind.is_owner() && at_desk(s)))
 }
 
 /// Holds the box awake while anyone plays on a seat ([`crate::sleep_inhibit`]). A supervisor
@@ -258,6 +258,7 @@ pub(crate) fn run_door() {
 mod tests {
     use super::*;
     use crate::profiles::OsAccount;
+    use pf_seats::model::RowKind;
 
     fn seat(id: &str, owner: bool) -> Seat {
         serde_json::from_value(serde_json::json!({
@@ -379,9 +380,9 @@ mod tests {
     #[test]
     fn a_person_s_own_linux_account_never_warms() {
         let mut person = seat(PERSON, false);
-        person.adopted_uid = Some(1500);
+        person.kind = RowKind::linux_person(1500);
         let mut windows = seat(WINDOWS, false);
-        windows.adopted_sid = Some("S-1-5-21-1-2-3-1001".into());
+        windows.kind = RowKind::windows_person("S-1-5-21-1-2-3-1001".into());
         let ledger = [seat(OWNER, true), person, windows];
         let now = 10_000_000;
         let profiles = [
@@ -400,9 +401,9 @@ mod tests {
     #[test]
     fn the_idle_stop_spares_the_owner_and_a_person_s_own_linux_account() {
         let mut person = seat(PERSON, false);
-        person.adopted_uid = Some(1500);
+        person.kind = RowKind::linux_person(1500);
         let mut windows = seat(WINDOWS, false);
-        windows.adopted_sid = Some("S-1-5-21-1-2-3-1001".into());
+        windows.kind = RowKind::windows_person("S-1-5-21-1-2-3-1001".into());
         assert!(managed(&seat(KID, false)));
         assert!(managed(&windows));
         assert!(!managed(&person));

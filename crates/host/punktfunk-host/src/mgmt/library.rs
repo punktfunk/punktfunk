@@ -324,7 +324,7 @@ pub(super) async fn on_own_account(seat: String) -> Result<bool, Response> {
     }
     let ledger = blocking("seat_check", crate::seats::ledger).await?;
     let row = ledger.seats.iter().find(|s| s.id.as_str() == seat);
-    Ok(row.is_none_or(pf_seats::Seat::adopted))
+    Ok(row.is_none_or(|s| s.kind.is_person()))
 }
 
 /// [`crate::library::proxy_art`], each URL asking for the art of the view's profile.

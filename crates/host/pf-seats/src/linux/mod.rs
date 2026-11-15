@@ -56,7 +56,7 @@ pub use socket::SOCKET_PATH;
 
 use crate::backend::{Adopted, BackendError, PlatformBackend, PresentPad};
 use crate::ipc::{Diagnostic, DiagnosticLevel, SeatingStatus};
-use crate::model::{Ledger, RuntimeState, RuntimeStatus, Seat, SeatId};
+use crate::model::{Ledger, RowKind, RuntimeState, RuntimeStatus, Seat, SeatId};
 use crate::persistence::{LedgerStore, StoreError};
 use crate::secret::Secret;
 use crate::service::SeatService;
@@ -221,10 +221,11 @@ enum Own {
 }
 
 impl Own {
-    fn of(seat: &Seat) -> Self {
-        if seat.owner {
+    /// Linux's view of `kind`: a row adopted by a uid is a person's.
+    fn of(kind: &RowKind) -> Self {
+        if kind.is_owner() {
             Self::Owner
-        } else if seat.adopted_uid.is_some() {
+        } else if kind.uid().is_some() {
             Self::Person
         } else {
             Self::Seat
@@ -235,11 +236,6 @@ impl Own {
     /// process it runs. Only a made seat's is.
     fn ours(self) -> bool {
         self == Self::Seat
-    }
-
-    /// Whether the row's unit ends when its user sits down at the machine.
-    fn yields_to_the_desk(self) -> bool {
-        self != Self::Seat
     }
 }
 
@@ -259,7 +255,7 @@ struct Tracked {
 
 impl Tracked {
     fn of(seat: &Seat, passwd: &accounts::Passwd) -> Self {
-        let kind = Own::of(seat);
+        let kind = Own::of(&seat.kind);
         let (reader, guest) = if kind.ours() {
             (shared::Reader::group(passwd.gid), None)
         } else {
@@ -362,7 +358,7 @@ fn stop_unit(inner: &Inner, seat: &Seat) -> Result<(), BackendError> {
     // A failed unit keeps its state until reset, and would read as failed after a stop.
     let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
     inner.acl_dirty.store(true, Ordering::SeqCst);
-    let kind = Own::of(seat);
+    let kind = Own::of(&seat.kind);
     if kind == Own::Owner {
         return Ok(());
     }
@@ -547,7 +543,11 @@ impl LinuxBackend {
     /// Loads each person's row's device list and writes its trust copy's pairing list from it,
     /// so a presence that ran out while the supervisor was down admits nobody.
     fn load_devices(&self, ledger: &Ledger) {
-        for seat in ledger.seats.iter().filter(|s| Own::of(s) == Own::Person) {
+        for seat in ledger
+            .seats
+            .iter()
+            .filter(|s| Own::of(&s.kind) == Own::Person)
+        {
             let written = with_devices(&self.inner, &seat.id, |held, _| {
                 let admitted = held.list.admitted();
                 shared::rewrite_admitted(
@@ -692,7 +692,7 @@ impl LinuxBackend {
     /// already up restarts onto files that changed; at boot none is up yet. The row is tracked, as
     /// [`PlatformBackend::adopt`] tracks it, for as long as it exists.
     pub fn prepare_owners(&self, ledger: &Ledger) {
-        for seat in ledger.seats.iter().filter(|s| s.owner) {
+        for seat in ledger.seats.iter().filter(|s| s.kind.is_owner()) {
             let prepared = accounts::require_owner(&seat.account).and_then(|passwd| {
                 let fresh = self.prepare_owner(seat, &passwd)?;
                 self.track(&seat.id, Tracked::of(seat, &passwd));
@@ -718,7 +718,7 @@ impl LinuxBackend {
     /// Whether the seat's host answers: the unit is active and the host's management port is up,
     /// and for the owner's row the runner has marked the headless host as its own.
     fn is_ready(&self, seat: &Seat) -> bool {
-        self.serving(seat) && (!seat.owner || session::ready_path(&seat.account).exists())
+        self.serving(seat) && (!seat.kind.is_owner() || session::ready_path(&seat.account).exists())
     }
 
     /// Fails when a stop has been asked since `asked`, the count a start began at.
@@ -995,7 +995,7 @@ impl PlatformBackend for LinuxBackend {
         seat: &Seat,
         edit: &mut dyn FnMut(&mut DeviceList, i64),
     ) -> Result<DeviceList, BackendError> {
-        if Own::of(seat) != Own::Person {
+        if Own::of(&seat.kind) != Own::Person {
             return Err(err("not_a_person", "only a person's row lists devices"));
         }
         edit_devices(&self.inner, &seat.id, edit)
@@ -1010,7 +1010,7 @@ impl PlatformBackend for LinuxBackend {
     /// owner's and a person's rows start their own way.
     fn start(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
         let asked = self.inner.stops.load(Ordering::SeqCst);
-        match Own::of(seat) {
+        match Own::of(&seat.kind) {
             Own::Owner => return self.start_owner(seat, asked),
             Own::Person => return self.start_person(seat, asked, None),
             Own::Seat => {}
@@ -1059,7 +1059,7 @@ impl PlatformBackend for LinuxBackend {
         seat: &Seat,
         password: &Secret,
     ) -> Result<RuntimeStatus, BackendError> {
-        if Own::of(seat) != Own::Person {
+        if Own::of(&seat.kind) != Own::Person {
             return self.start(seat);
         }
         let asked = self.inner.stops.load(Ordering::SeqCst);
@@ -1086,14 +1086,14 @@ impl PlatformBackend for LinuxBackend {
     /// pads are the desk's again.
     fn remove(&self, seat: &Seat) -> Result<(), BackendError> {
         let _level = self.inner.level.lock().unwrap_or_else(|e| e.into_inner());
-        let kind = Own::of(seat);
+        let kind = Own::of(&seat.kind);
         // Before the unit is stopped: ending a stranger's sessions is not removing a seat.
         if kind.ours() {
             accounts::refuse_foreign(&seat.account, &seat.id)?;
         }
         self.stop_unit(seat)?;
         self.untrack(&seat.id);
-        if seat.owner {
+        if seat.kind.is_owner() {
             let mut owner = self.inner.owner.lock().unwrap_or_else(|e| e.into_inner());
             if owner
                 .as_ref()
@@ -1116,7 +1116,7 @@ impl PlatformBackend for LinuxBackend {
 
     fn status(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
         let state = session::state(&seat.account)?;
-        if seat.owner {
+        if seat.kind.is_owner() {
             return Ok(self.owner_status(seat, &state));
         }
         Ok(state.runtime())
@@ -1132,7 +1132,7 @@ impl PlatformBackend for LinuxBackend {
         self.inner
             .lent
             .level(seat, lent::runs(&status.state), false);
-        let kind = Own::of(seat);
+        let kind = Own::of(&seat.kind);
         if kind == Own::Owner {
             return;
         }
@@ -1176,7 +1176,7 @@ impl PlatformBackend for LinuxBackend {
     fn host_config_dir(&self, seat: &Seat) -> Option<PathBuf> {
         let state = &self.inner.state;
         let dir = shared::pin_dir(state, &seat.id);
-        let copied = match Own::of(seat) {
+        let copied = match Own::of(&seat.kind) {
             Own::Owner => {
                 shared::copy_pin(&accounts::require_owner(&seat.account).ok()?.home, &dir)
             }
@@ -1197,10 +1197,10 @@ impl PlatformBackend for LinuxBackend {
         out.extend(fence::diagnostics());
         for seat in &ledger.seats {
             let found = accounts::lookup(&seat.account)?;
-            let kind = Own::of(seat);
+            let kind = Own::of(&seat.kind);
             let owned = found.as_ref().is_some_and(|found| match kind {
                 Own::Owner => accounts::is_ordinary(found),
-                Own::Person => seat.adopted_uid == Some(found.uid),
+                Own::Person => seat.kind.uid() == Some(found.uid),
                 Own::Seat => accounts::owned_by(found, &seat.id),
             });
             let (good, bad) = match kind {
@@ -1827,12 +1827,12 @@ fn rewrite_env(
 fn yield_to_the_desk(inner: &Inner, seat: &Seat) {
     let account = &seat.account;
     let live = session::state(account).is_ok_and(|s| s.live());
-    if !Own::of(seat).yields_to_the_desk() || !live || !owner_at_desk(account) {
+    if !seat.kind.yields_to_the_desk() || !live || !owner_at_desk(account) {
         return;
     }
     tracing::info!(%account, "user at the machine: ending the headless session");
     match stop_unit(inner, seat) {
-        Ok(()) if seat.owner => user_host(account, "start"),
+        Ok(()) if seat.kind.is_owner() => user_host(account, "start"),
         Ok(()) => {}
         Err(error) => tracing::warn!(%account, %error, "headless session not ended"),
     }
@@ -1934,13 +1934,8 @@ mod tests {
             mgmt_port: 47995,
             autostart: false,
             runtime: crate::model::RuntimeStatus::stopped(),
-            owner: true,
-            owner_uid: None,
+            kind: RowKind::owner(),
             fingerprint: None,
-            adopted_sid: None,
-            adopted_uid: None,
-            rdp_granted: false,
-            console_deny_kept: false,
             lent: Vec::new(),
         };
         let passwd = accounts::Passwd {
@@ -1972,13 +1967,8 @@ mod tests {
             mgmt_port: 48_124,
             autostart: false,
             runtime: RuntimeStatus::stopped(),
-            owner: false,
-            owner_uid: None,
+            kind: RowKind::made(),
             fingerprint: None,
-            adopted_sid: None,
-            adopted_uid: None,
-            rdp_granted: false,
-            console_deny_kept: false,
             lent: Vec::new(),
         };
         let passwd = accounts::Passwd {
