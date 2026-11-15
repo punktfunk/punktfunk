@@ -129,5 +129,45 @@ testers.runNixOSTest {
     after = machine.execute("systemctl is-active punktfunk-seats.service")[1].strip()
     assert after == supervisor, f"supervisor {supervisor} before, {after} after"
     machine.succeed(f"rm {control}/punktfunk-door.service && systemctl daemon-reload")
+
+    # An off whose hand-back fails starts the door again and keeps the record and the mark: bob
+    # can't write his own folder. With it writable again, the next off hands the files home.
+    conf = "/home/bob/.config/punktfunk"
+    machine.succeed(switch("bob", "on"))
+    machine.wait_for_unit("punktfunk-door.service")
+    machine.succeed(f"chmod 0500 {conf}")
+    machine.fail(switch("bob", "off"))
+    machine.wait_until_succeeds(
+        "journalctl -u punktfunk-door-off@bob.service | grep -q 'starting the door again'"
+    )
+    assert machine.succeed(f"cat {record}").strip() == "bob"
+    machine.succeed("test -e /var/lib/punktfunk-seats/door-on")
+    machine.wait_for_unit("punktfunk-door.service")
+    machine.succeed(f"chmod 0700 {conf}")
+    machine.succeed(switch("bob", "off"))
+    machine.succeed(f"test ! -e {record}")
+
+    # The console's password only in web.env, as SteamOS keeps it: the on takes the password and
+    # secret lines, the off splices the door's last password line back into web.env.
+    machine.succeed(f"runuser -u bob -- rm -f {conf}/web-password")
+    machine.succeed(
+        f"runuser -u bob -- sh -c 'printf \"%s\\n\" PUNKTFUNK_UI_BIND=127.0.0.1:47990 "
+        f"PUNKTFUNK_UI_PASSWORD_HASH=bob-1 PUNKTFUNK_UI_SECRET=bob-s > {conf}/web.env'"
+    )
+    machine.succeed(switch("bob", "on"))
+    machine.wait_for_unit("punktfunk-door.service")
+    taken = machine.succeed(f"runuser -u punktfunk -- cat {box}/web-password")
+    assert taken == "PUNKTFUNK_UI_PASSWORD_HASH=bob-1\nPUNKTFUNK_UI_SECRET=bob-s\n", taken
+    machine.succeed(
+        "runuser -u punktfunk -- sh -c "
+        f"'echo PUNKTFUNK_UI_PASSWORD_HASH=bob-2 >> {box}/web-password'"
+    )
+    machine.succeed(switch("bob", "off"))
+    machine.succeed(f"test ! -e {record} && test ! -e {conf}/web-password")
+    kept = machine.succeed(f"cat {conf}/web.env")
+    assert kept == (
+        "PUNKTFUNK_UI_BIND=127.0.0.1:47990\nPUNKTFUNK_UI_SECRET=bob-s\n"
+        "PUNKTFUNK_UI_PASSWORD_HASH=bob-2\n"
+    ), kept
   '';
 }
