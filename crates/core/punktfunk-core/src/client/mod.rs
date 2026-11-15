@@ -272,6 +272,9 @@ pub struct NativeClient {
     /// The surface and the pinch helper, which share the host pad. Held while queueing, so
     /// frames reach the touchpad task in the order the state machine made them.
     touch_sources: Mutex<touch_surface::TouchpadSources>,
+    /// The embedder's capture clock minus core's, wrapping, from its last stamped surface
+    /// update. Frames core stamps itself then share one timeline with the embedder's.
+    touch_clock_skew: AtomicU64,
     /// Touchpad contacts of controller-mouse pads, for the input task's pointer.
     pad_touch_tx: tokio::sync::mpsc::UnboundedSender<pad_touch::Contact>,
     /// Per wire pad: what of a Steam Controller 2's raw reports reaches the host.
@@ -864,6 +867,7 @@ impl NativeClient {
             rich_input_tx,
             touchpad_tx,
             touch_sources: Mutex::default(),
+            touch_clock_skew: AtomicU64::new(0),
             pad_touch_tx,
             sc2: Mutex::default(),
             ctrl_tx,
@@ -2256,6 +2260,10 @@ impl NativeClient {
         time_us: u64,
     ) -> Result<bool> {
         self.touchpad_granted()?;
+        if time_us != 0 {
+            let skew = time_us.wrapping_sub(self.born.elapsed().as_micros() as u64);
+            self.touch_clock_skew.store(skew, Ordering::Relaxed);
+        }
         let time_us = touch_surface::capture_us(time_us, || self.touch_clock_us());
         let mut sources = self.touch_sources.lock().unwrap();
         let (frames, forwarded) = sources.surface(
@@ -2299,9 +2307,11 @@ impl NativeClient {
         }
     }
 
-    /// Core's clock for touchpad capture times: µs since the connect.
+    /// Core's clock for touchpad capture times, on the embedder's timeline once it has
+    /// stamped a surface update: a pinch and a touch then never read as two clocks to the host.
     fn touch_clock_us(&self) -> u64 {
-        self.born.elapsed().as_micros() as u64
+        let skew = self.touch_clock_skew.load(Ordering::Relaxed);
+        (self.born.elapsed().as_micros() as u64).wrapping_add(skew)
     }
 
     fn stamp_now(&self, frame: crate::quic::TouchpadFrame) -> crate::quic::TouchpadFrame {
