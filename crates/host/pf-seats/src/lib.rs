@@ -28,6 +28,9 @@ pub mod logging;
 pub mod model;
 pub mod persistence;
 pub mod pin;
+/// Desk pads lent to a seat on Windows, declared here so its tests run on every target.
+#[path = "windows/lent.rs"]
+pub mod seat_pads;
 /// The Windows supervisor's pure half, declared here so its tests run on every target.
 #[path = "windows/step.rs"]
 mod seat_step;

@@ -254,14 +254,6 @@ pub async fn run(
     settings::write_seat_defaults();
     #[cfg(target_os = "windows")]
     crate::windows::background_input::start();
-    // The desk's controllers belong to the console session: the box's host, which runs there,
-    // fences them; a seat host must never claim them for its own session.
-    #[cfg(target_os = "windows")]
-    if !matches!(pf_paths::seat::role(), pf_paths::seat::HostRole::Seat(_))
-        && let Some(session) = pf_win_display::own_session_id()
-    {
-        pf_inject::desk_fence::start(session);
-    }
     // The tray has no supervisor — HKLM `Run` is a sign-in trigger — so
     // `StopTrays` and a crash leave no icon until the next logon.
     #[cfg(target_os = "windows")]

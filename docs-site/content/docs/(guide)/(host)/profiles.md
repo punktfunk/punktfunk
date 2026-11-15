@@ -158,9 +158,9 @@ or shortcuts in the stream, it isn't in the session's controller list or in **Di
 **Controllers**, and using it doesn't count as someone playing: a seat nobody streams still stops
 after **Stop an idle seat after**.
 
-On Windows a controller plugged into the PC stays with the PC; see
-[Seats on Windows](/docs/windows-seats#a-controller-plugged-into-the-pc-appears-on-a-seat). If a
-controller stops working, [Input & controllers](/docs/troubleshooting-input#my-controller-stopped-working-at-the-pc-linux)
+On Windows a few things differ: see
+[Seats on Windows](/docs/windows-seats#a-controller-given-to-a-profile). If a controller stops
+working, [Input & controllers](/docs/troubleshooting-input#my-controller-stopped-working-at-the-pc)
 has the fixes.
 
 ## What a seat can do

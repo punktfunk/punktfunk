@@ -192,6 +192,25 @@ plugged into the PC, without its input; and an Xbox controller plugged into the 
 already has its controller makes that seat's controller player 2 in XInput games until the seat's
 next connection.
 
+### A controller given to a profile
+
+[Give a controller plugged into the PC to a profile](/docs/profiles#give-a-controller-plugged-into-the-pc-to-a-profile)
+works on Windows too. Windows hides a given controller from the PC's desktop and from the other
+seats; it doesn't close it to them. So these differ from Linux:
+
+- **Raw Input at the PC.** A game or a browser tab on the PC's desktop that reads controllers
+  through Raw Input still gets the controller's input. Steam and games that use XInput,
+  DirectInput or GameInput there don't list it.
+- **Xbox controllers.** Windows.Gaming.Input games on the PC's desktop still list a given Xbox
+  controller.
+- **Sound.** The controller's own sound card stays with the PC. A DualSense's speaker and audio
+  haptics don't follow it to the seat.
+- **Right after plugging in.** The PC's desktop can list the controller for a moment before it
+  is hidden. An app there that opens it in that moment keeps it until the controller is
+  unplugged or changes hands.
+- **Ports.** A controller without a serial number is recognised by its USB port. A second
+  controller that reports another one's serial number counts as a controller of its own.
+
 ### A seat has no sound
 
 Steam's audio drivers aren't on this PC: Steam is missing, or was installed and never opened.

@@ -180,12 +180,39 @@ pub struct PresentPad {
     pub port: Option<String>,
 }
 
-fn no_lending() -> BackendError {
+pub(crate) fn no_lending() -> BackendError {
     BackendError::new(
         "pads_unsupported",
         "Giving a controller to a profile isn't available on this system.",
     )
     .said("pads_unsupported")
+}
+
+/// The pad a lend names isn't plugged in.
+pub fn pad_not_present() -> BackendError {
+    BackendError::new(
+        "pad_not_present",
+        "That controller isn't plugged in. Plug it in, then try again.",
+    )
+    .said("pad_not_present")
+}
+
+/// The device a lend names is no game controller.
+pub fn pad_not_a_controller() -> BackendError {
+    BackendError::new(
+        "pad_not_a_controller",
+        "Only game controllers can be given to a profile.",
+    )
+    .said("pad_not_a_controller")
+}
+
+/// The hardware didn't change hands.
+pub fn pad_handover() -> BackendError {
+    BackendError::new(
+        "pad_handover",
+        "Couldn't hand the controller over. Unplug it, plug it back in, then try again.",
+    )
+    .said("pad_handover")
 }
 
 /// What [`PlatformBackend::adopt_account`] found and changed on a person's account. The row keeps

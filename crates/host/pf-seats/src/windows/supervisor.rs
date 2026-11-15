@@ -17,6 +17,7 @@
 use crate::bootstrap::RdpBootstrap;
 use crate::model::{RuntimeStatus, Seat};
 use crate::persistence::SecretRoot;
+use crate::seat_pads::Lent;
 use crate::seat_step::{
     marked_session, session_mark, Action, Look, Observation, Probe, State, START_TIMEOUT,
 };
@@ -45,6 +46,8 @@ pub(super) struct Supervisor {
     runtimes: Arc<Mutex<HashMap<String, Arc<Runtime>>>>,
     /// The seats whose account [`Self::sweep_leftovers`] has looked at.
     swept: Arc<Mutex<HashSet<String>>>,
+    /// Told each seat's session as its cycle enters and leaves it.
+    pads: Arc<Lent>,
 }
 
 struct Runtime {
@@ -93,13 +96,19 @@ impl Runtime {
 }
 
 impl Supervisor {
-    pub(super) fn new(root: SecretRoot, accounts: AccountManager, host_path: PathBuf) -> Self {
+    pub(super) fn new(
+        root: SecretRoot,
+        accounts: AccountManager,
+        host_path: PathBuf,
+        pads: Arc<Lent>,
+    ) -> Self {
         Self {
             root,
             accounts,
             host_path,
             runtimes: Arc::new(Mutex::new(HashMap::new())),
             swept: Arc::new(Mutex::new(HashSet::new())),
+            pads,
         }
     }
 
@@ -164,6 +173,7 @@ impl Supervisor {
             accounts: self.accounts.clone(),
             host_path: self.host_path.clone(),
             seat: seat.clone(),
+            pads: Arc::clone(&self.pads),
             keeper: None,
             session: None,
             launch: None,
@@ -410,8 +420,10 @@ fn host_root(root: &SecretRoot, seat: &Seat) -> WinResult<SecretRoot> {
 /// One seat's loop: probe what the state names, step, perform what it answers.
 fn run_worker(runtime: &Runtime, rig: Rig) {
     let _finished = MarkFinished(runtime);
-    // Declared after the guard, so a panic drops the rig's children before the runtime reads
-    // finished.
+    // A worker that leaves without ending its cycle, by a panic too, still parks its pads.
+    let _parked = ParkPads(Arc::clone(&rig.pads), rig.seat.id.to_string());
+    // Declared after the guards, so a panic drops the rig's children before the pads park and
+    // the runtime reads finished.
     let mut rig = rig;
     loop {
         let look = runtime.lock().look();
@@ -443,6 +455,15 @@ impl Drop for MarkFinished<'_> {
     }
 }
 
+/// Parks a seat's lent pads when its worker leaves.
+struct ParkPads(Arc<Lent>, String);
+
+impl Drop for ParkPads {
+    fn drop(&mut self) {
+        self.0.seat_session(&self.1, None);
+    }
+}
+
 /// What a seat's worker holds from the OS. Which of them are live follows from the
 /// state's phase; nothing here is read to decide what the seat does next.
 struct Rig {
@@ -450,6 +471,7 @@ struct Rig {
     accounts: AccountManager,
     host_path: PathBuf,
     seat: Seat,
+    pads: Arc<Lent>,
     /// The keeper, then the job that contains it and the session children: they drop in that
     /// order.
     keeper: Option<(ChildProcess, Job)>,
@@ -576,6 +598,8 @@ impl Rig {
     fn enter_session(&mut self, id: u32) -> WinResult<()> {
         self.session = Some(id);
         let seat = &self.seat;
+        // The seat's lent pads go live before anything of the seat's starts in the session.
+        self.pads.seat_session(seat.id.as_str(), Some(id));
         let host_root = host_root(&self.root, seat)?;
         // A service that dies leaves this session behind: the mark tells the next start it is ours.
         let marked = wts::logon_time(id).and_then(|time| {
@@ -758,10 +782,11 @@ impl Rig {
         Ok(())
     }
 
-    /// End the cycle in this order: the host and the gate, the keeper and its job, then
-    /// the account's session. A session child ends when its handle drops. The session is found
-    /// by account: Windows reuses the id this cycle recorded. A cycle that started no keeper
-    /// signed no session in.
+    /// End the cycle in this order: the host and the gate, the keeper and its job, the
+    /// account's session, then the seat's lent pads, parked. A session child ends when its
+    /// handle drops. The session is found by account: Windows reuses the id this cycle
+    /// recorded, which is why a pad never keeps a dead session's tag. A cycle that started no
+    /// keeper signed no session in.
     fn end_cycle(&mut self) {
         self.host = None;
         if let (Some(gate), Some(launch)) = (self.gate.take(), &self.launch) {
@@ -775,6 +800,7 @@ impl Rig {
         if let Err(error) = logoff_owned(&self.root, &self.accounts, &self.seat, signed_in) {
             tracing::warn!(seat = %self.seat.id, %error, "seat session not logged off");
         }
+        self.pads.seat_session(self.seat.id.as_str(), None);
     }
 }
 
@@ -845,6 +871,7 @@ mod tests {
             root,
             accounts,
             PathBuf::from(r"C:\Windows\System32\cmd.exe"),
+            Arc::default(),
         )
     }
 

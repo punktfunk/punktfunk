@@ -86,6 +86,16 @@ pub struct LentPad {
     pub port: Option<String>,
 }
 
+/// Whether a USB interface of this class, subclass and protocol may belong to a pad a seat
+/// holds: HID, audio, CDC-ACM, CDC data or vendor-specific. ACM stops at protocol 6, short of
+/// RNDIS's `ff`.
+pub fn pad_interface_allowed(class: u8, subclass: u8, protocol: u8) -> bool {
+    matches!(
+        (class, subclass, protocol),
+        (0x01 | 0x03 | 0x0a | 0xff, _, _) | (0x02, 0x02, 0x00..=0x06)
+    )
+}
+
 /// Whether `key` can name a desk pad: letters, digits, `.`, `_` and `-`, starting with a letter
 /// or digit, at most [`MAX_PAD_KEY_LEN`] long. The key lands in a file name and a URL path.
 pub fn valid_pad_key(key: &str) -> bool {
