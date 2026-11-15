@@ -1360,12 +1360,12 @@ impl PlatformBackend for LinuxBackend {
 impl LinuxBackend {
     /// A row's unit up: its account ready, what runs outside the unit raised, the unit, then what
     /// runs inside it, then the wait for its host. `asked` is the stop count the start began at.
-    /// A made seat's user gets its group, home, groups, folders and Steam links put right. The
-    /// owner at the machine has their own login host the row: the headless unit stays down and
-    /// their user host is started. A person at the machine is refused: their login is theirs, and
-    /// the headless session would sit beside it uninvited; what is made for their row is the
-    /// row's own, never in the account. The login drop-in [`Self::bring_up`] wrote stays while the
-    /// start waits; a helper that ended before a session falls back to the plain start.
+    /// The owner at the machine has their own login host the row: the headless unit stays down
+    /// and their user host is started. A person at the machine is refused: their login is
+    /// theirs, and the headless session would sit beside it uninvited; what is made for their
+    /// row is the row's own, never in the account. The login drop-in [`Self::bring_up`] wrote
+    /// stays while the start waits; a helper that ended before a session falls back to the
+    /// plain start.
     fn start_row(
         &self,
         seat: &Seat,
@@ -1375,32 +1375,7 @@ impl LinuxBackend {
         let kind = Own::of(&seat.kind);
         let state = &self.inner.state;
         let passwd = match kind {
-            Own::Seat => {
-                let mut passwd = accounts::require(seat)?;
-                // The trust copy goes and is made again for the new group.
-                match accounts::own_group(&passwd) {
-                    Ok(false) => {}
-                    Ok(true) => {
-                        tracing::info!(account = %passwd.name, "seat user moved to a group of its own");
-                        let _ = std::fs::remove_dir_all(shared::trust_dir(state, &seat.id));
-                        passwd = accounts::require(seat)?;
-                    }
-                    Err(error) => {
-                        tracing::warn!(account = %passwd.name, %error, "seat user's own group not made");
-                    }
-                }
-                accounts::close_home(&passwd.home)?;
-                let games = accounts::ensure_group(accounts::GAMES_GROUP)?;
-                if let Err(error) = accounts::join_groups(&passwd.name) {
-                    tracing::warn!(account = %passwd.name, %error, "seat user's groups not restored");
-                }
-                shared::ensure_games(state, games)?;
-                shared::ensure_seat_dirs(state, &seat.id, &passwd, self.owner_uid())?;
-                if let Err(error) = shared::link_steam(&passwd) {
-                    tracing::warn!(account = %passwd.name, %error, "seat's steam links not made");
-                }
-                passwd
-            }
+            Own::Seat => self.ready_made_user(seat)?,
             Own::Owner => accounts::require_owner(&seat.account)?,
             Own::Person => {
                 let passwd = accounts::require_person(seat)?;
@@ -1443,6 +1418,36 @@ impl LinuxBackend {
             }
             ready => ready.map(|()| RuntimeStatus::running()),
         }
+    }
+
+    /// A made seat's user ready for its unit: a group of its own, its home closed, its groups,
+    /// the games folder, its seat folders and Steam links.
+    fn ready_made_user(&self, seat: &Seat) -> Result<accounts::Passwd, BackendError> {
+        let state = &self.inner.state;
+        let mut passwd = accounts::require(seat)?;
+        // The trust copy goes and is made again for the new group.
+        match accounts::own_group(&passwd) {
+            Ok(false) => {}
+            Ok(true) => {
+                tracing::info!(account = %passwd.name, "seat user moved to a group of its own");
+                let _ = std::fs::remove_dir_all(shared::trust_dir(state, &seat.id));
+                passwd = accounts::require(seat)?;
+            }
+            Err(error) => {
+                tracing::warn!(account = %passwd.name, %error, "seat user's own group not made");
+            }
+        }
+        accounts::close_home(&passwd.home)?;
+        let games = accounts::ensure_group(accounts::GAMES_GROUP)?;
+        if let Err(error) = accounts::join_groups(&passwd.name) {
+            tracing::warn!(account = %passwd.name, %error, "seat user's groups not restored");
+        }
+        shared::ensure_games(state, games)?;
+        shared::ensure_seat_dirs(state, &seat.id, &passwd, self.owner_uid())?;
+        if let Err(error) = shared::link_steam(&passwd) {
+            tracing::warn!(account = %passwd.name, %error, "seat's steam links not made");
+        }
+        Ok(passwd)
     }
 
     /// `seat`'s unit up from cold, a row of `kind` on `passwd`'s account: a fresh token, the
