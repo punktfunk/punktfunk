@@ -34,6 +34,7 @@ mod firefox;
 mod flatpak;
 pub mod handover;
 pub mod lent;
+mod level;
 mod libraries;
 pub mod login;
 mod logind;
@@ -63,6 +64,7 @@ use crate::persistence::{LedgerStore, StoreError};
 use crate::secret::Secret;
 use crate::service::SeatService;
 use crate::unlock::DeviceList;
+use level::{CopyLocks, Level};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -165,14 +167,8 @@ struct Inner {
     hook: OnceLock<UnitHook>,
     /// The prerequisite checks `Seating` last answered with, and when they ran.
     checks: Mutex<Option<(Instant, Vec<Diagnostic>)>>,
-    /// Held by a removal throughout, by [`level_seat`] for each seat it refreshes, and by a
-    /// start or adoption while it writes a trust copy, an environment file or the box's
-    /// library. A refresh never writes a removed seat's files back, and two writers never
-    /// share a temp file or put back an environment file's old token.
-    level: Mutex<()>,
-    /// Each person's row's device list, loaded on first use. Held across each change, its save
-    /// and the trust copy it rewrites, so two writers never cross. Taken after `level`.
-    devices: Mutex<HashMap<SeatId, devices::Held>>,
+    /// The copy writers' level and the device lists behind it ([`level`]).
+    locks: CopyLocks,
     /// The password of a start through the login helper, while it waits for the helper.
     handover: handover::Handover,
     /// Set once a login helper tripped ([`LOGIN_TRIPPED`]): no helper until the supervisor
@@ -294,14 +290,15 @@ fn unix_now() -> i64 {
     now.map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
-/// `f` over `id`'s held device list, loaded on first use, with the devices lock held throughout.
+/// `f` over `id`'s held device list, loaded on first use, with the lists' lock held throughout.
 fn with_devices<T>(
     inner: &Inner,
+    level: &mut Level<'_>,
     id: &SeatId,
     f: impl FnOnce(&mut devices::Held, i64) -> Result<T, BackendError>,
 ) -> Result<T, BackendError> {
     let now = unix_now();
-    let mut all = inner.devices.lock().unwrap_or_else(|e| e.into_inner());
+    let mut all = level.devices();
     let held = all
         .entry(id.clone())
         .or_insert_with(|| devices::load(&inner.state, id, now));
@@ -312,10 +309,11 @@ fn with_devices<T>(
 /// then the trust copy's pairing list follows who is admitted.
 fn edit_devices(
     inner: &Inner,
+    level: &mut Level<'_>,
     id: &SeatId,
     edit: &mut dyn FnMut(&mut DeviceList, i64),
 ) -> Result<DeviceList, BackendError> {
-    with_devices(inner, id, |held, now| {
+    with_devices(inner, level, id, |held, now| {
         let mut next = held.list.clone();
         next.expire(now);
         edit(&mut next, now);
@@ -328,15 +326,20 @@ fn edit_devices(
 }
 
 /// A person's session ended: so has every presence on its row.
-fn end_presence(inner: &Inner, id: &SeatId) {
-    if let Err(error) = edit_devices(inner, id, &mut |list, _| list.end_presence()) {
+fn end_presence(inner: &Inner, level: &mut Level<'_>, id: &SeatId) {
+    if let Err(error) = edit_devices(inner, level, id, &mut |list, _| list.end_presence()) {
         tracing::warn!(seat = %id, %error, "presence not ended");
     }
 }
 
 /// A person's trust copy for `reader`, its pairing list holding only the devices admitted now.
-fn person_trust(inner: &Inner, id: &SeatId, reader: shared::Reader) -> Result<bool, BackendError> {
-    with_devices(inner, id, |held, now| {
+fn person_trust(
+    inner: &Inner,
+    level: &mut Level<'_>,
+    id: &SeatId,
+    reader: shared::Reader,
+) -> Result<bool, BackendError> {
+    with_devices(inner, level, id, |held, now| {
         let mut next = held.list.clone();
         if next.expire(now) {
             held.commit(&inner.state, id, next.clone())?;
@@ -351,8 +354,8 @@ fn person_trust(inner: &Inner, id: &SeatId, reader: shared::Reader) -> Result<bo
 /// person's own account ends nothing else, signals none of their processes and leaves the hook
 /// alone: their own login may hold pads; every presence on it ends. The owner's row stays
 /// tracked, since their own host reads its trust copy; a person's stops being served. A unit
-/// that was never started is fine.
-fn stop_unit(inner: &Inner, seat: &Seat) -> Result<(), BackendError> {
+/// that was never started is fine. `held`: the level a removal holds across the stop.
+fn stop_unit(inner: &Inner, seat: &Seat, held: Option<&mut Level<'_>>) -> Result<(), BackendError> {
     let (id, account) = (&seat.id, &seat.account);
     let unit = session::unit(account);
     if session::state(account)?.active != "inactive" {
@@ -372,7 +375,9 @@ fn stop_unit(inner: &Inner, seat: &Seat) -> Result<(), BackendError> {
         .unwrap_or_else(|e| e.into_inner())
         .remove(id);
     if kind == Own::Person {
-        end_presence(inner, id);
+        inner
+            .locks
+            .under(held, |level| end_presence(inner, level, id));
     }
     if !kind.ours() {
         return Ok(());
@@ -476,8 +481,7 @@ impl LinuxBackend {
             stops: AtomicU64::new(0),
             hook: OnceLock::new(),
             checks: Mutex::new(None),
-            level: Mutex::new(()),
-            devices: Mutex::new(HashMap::new()),
+            locks: CopyLocks::default(),
             handover: handover::Handover::default(),
             helper_off: AtomicBool::new(false),
             login_label: OnceLock::new(),
@@ -507,8 +511,7 @@ impl LinuxBackend {
                 stops: AtomicU64::new(0),
                 hook: OnceLock::new(),
                 checks: Mutex::new(None),
-                level: Mutex::new(()),
-                devices: Mutex::new(HashMap::new()),
+                locks: CopyLocks::default(),
                 handover: handover::Handover::default(),
                 helper_off: AtomicBool::new(false),
                 login_label: OnceLock::new(),
@@ -551,7 +554,8 @@ impl LinuxBackend {
             .iter()
             .filter(|s| Own::of(&s.kind) == Own::Person)
         {
-            let written = with_devices(&self.inner, &seat.id, |held, _| {
+            let mut level = self.inner.locks.level();
+            let written = with_devices(&self.inner, &mut level, &seat.id, |held, _| {
                 let admitted = held.list.admitted();
                 shared::rewrite_admitted(
                     &self.inner.box_dir,
@@ -643,7 +647,7 @@ impl LinuxBackend {
     }
 
     fn stop_unit(&self, seat: &Seat) -> Result<(), BackendError> {
-        stop_unit(&self.inner, seat)
+        stop_unit(&self.inner, seat, None)
     }
 
     /// The owner's account and what its host reads, in place: the trust copy and the environment
@@ -653,7 +657,7 @@ impl LinuxBackend {
     /// left behind for another account writes nothing and never starts. Writes under `level`.
     fn prepare_owner(&self, seat: &Seat, passwd: &accounts::Passwd) -> Result<bool, BackendError> {
         accounts::require_recorded(&self.inner.state, &seat.account)?;
-        let _level = self.inner.level.lock().unwrap_or_else(|e| e.into_inner());
+        let _level = self.inner.locks.level();
         let reader = Tracked::of(seat, passwd).reader;
         shared::refresh_owner_trust(&self.inner.box_dir, &self.inner.state, &seat.id, reader)?;
         *self.inner.owner.lock().unwrap_or_else(|e| e.into_inner()) = Some(passwd.clone());
@@ -1001,7 +1005,8 @@ impl PlatformBackend for LinuxBackend {
         if Own::of(&seat.kind) != Own::Person {
             return Err(err("not_a_person", "only a person's row lists devices"));
         }
-        edit_devices(&self.inner, &seat.id, edit)
+        let mut level = self.inner.locks.level();
+        edit_devices(&self.inner, &mut level, &seat.id, edit)
     }
 
     fn box_fingerprint(&self) -> Result<[u8; 32], BackendError> {
@@ -1043,7 +1048,7 @@ impl PlatformBackend for LinuxBackend {
             tracing::warn!(account = %passwd.name, %error, "seat's steam links not made");
         }
         let reader = shared::Reader::group(passwd.gid);
-        let level = self.inner.level.lock().unwrap_or_else(|e| e.into_inner());
+        let level = self.inner.locks.level();
         shared::refresh_trust(box_dir, state, &seat.id, reader)?;
         shared::refresh_seat_library(box_dir, state, &seat.id, reader)?;
         drop(level);
@@ -1088,13 +1093,13 @@ impl PlatformBackend for LinuxBackend {
     /// list included, and nothing of the account does. Once its files are gone, the row's lent
     /// pads are the desk's again.
     fn remove(&self, seat: &Seat) -> Result<(), BackendError> {
-        let _level = self.inner.level.lock().unwrap_or_else(|e| e.into_inner());
+        let mut level = self.inner.locks.level();
         let kind = Own::of(&seat.kind);
         // Before the unit is stopped: ending a stranger's sessions is not removing a seat.
         if kind.ours() {
             accounts::refuse_foreign(&seat.account, &seat.id)?;
         }
-        self.stop_unit(seat)?;
+        stop_unit(&self.inner, seat, Some(&mut level))?;
         self.untrack(&seat.id);
         if seat.kind.is_owner() {
             let mut owner = self.inner.owner.lock().unwrap_or_else(|e| e.into_inner());
@@ -1109,8 +1114,7 @@ impl PlatformBackend for LinuxBackend {
             }
         }
         let removed = self.remove_files(&seat.account, &seat.id, kind.ours());
-        let mut devices = self.inner.devices.lock().unwrap_or_else(|e| e.into_inner());
-        devices.remove(&seat.id);
+        level.devices().remove(&seat.id);
         if removed.is_ok() {
             self.inner.lent.release(seat);
         }
@@ -1166,7 +1170,7 @@ impl PlatformBackend for LinuxBackend {
                     unit_hook(&self.inner, &seat.account, None);
                 }
                 if kind == Own::Person {
-                    end_presence(&self.inner, &seat.id);
+                    end_presence(&self.inner, &mut self.inner.locks.level(), &seat.id);
                 }
             }
         }
@@ -1282,8 +1286,10 @@ impl PlatformBackend for LinuxBackend {
                 });
             }
             if kind == Own::Person {
-                let unreadable =
-                    with_devices(&self.inner, &seat.id, |held, _| Ok(held.unreadable.clone()))?;
+                let mut level = self.inner.locks.level();
+                let unreadable = with_devices(&self.inner, &mut level, &seat.id, |held, _| {
+                    Ok(held.unreadable.clone())
+                })?;
                 if let Some(cause) = unreadable {
                     out.push(devices::unreadable_diagnostic(&seat.id, &cause));
                 }
@@ -1397,8 +1403,8 @@ impl LinuxBackend {
         let state = &self.inner.state;
         shared::ensure_person_dirs(state, &seat.id, &passwd)?;
         let reader = shared::Reader::person(passwd.uid, passwd.gid);
-        let level = self.inner.level.lock().unwrap_or_else(|e| e.into_inner());
-        person_trust(&self.inner, &seat.id, reader)?;
+        let mut level = self.inner.locks.level();
+        person_trust(&self.inner, &mut level, &seat.id, reader)?;
         shared::refresh_seat_library(&self.inner.box_dir, state, &seat.id, reader)?;
         drop(level);
         self.inner.lent.level(seat, true, true);
@@ -1452,7 +1458,7 @@ impl LinuxBackend {
         };
         let (state, browser) = (&self.inner.state, session::browser(&self.inner.box_dir));
         let shown = shares.as_ref();
-        let level = self.inner.level.lock().unwrap_or_else(|e| e.into_inner());
+        let level = self.inner.locks.level();
         session::write_unit_files(seat, kind, passwd, state, &token, shown, &browser)?;
         drop(level);
         let (written, password) = match kind {
@@ -1598,7 +1604,7 @@ fn keep_level(inner: Weak<Inner>) {
     loop {
         std::thread::sleep(TRUST_TICK);
         let Some(inner) = inner.upgrade() else { return };
-        let level = inner.level.lock().unwrap_or_else(|e| e.into_inner());
+        let level = inner.locks.level();
         let library = refresh_box_library(&inner);
         drop(level);
         once_per_outage(library, &mut library_failing, "box library not copied");
@@ -1652,13 +1658,13 @@ fn level_seat(
     tracked: &Tracked,
     failing: &mut HashSet<SeatId>,
 ) -> bool {
-    let level = inner.level.lock().unwrap_or_else(|e| e.into_inner());
+    let mut level = inner.locks.level();
     let tracked_now = inner.running.lock().unwrap_or_else(|e| e.into_inner());
     if !tracked_now.contains_key(id) {
         return false;
     }
     drop(tracked_now);
-    let refreshed = refresh_copies(inner, id, tracked);
+    let refreshed = refresh_copies(inner, &mut level, id, tracked);
     drop(level);
     match refreshed {
         Ok(()) => {
@@ -1676,10 +1682,15 @@ fn level_seat(
 /// profile's lock, admits as presence runs out; then the environment file of a row on a person's
 /// own account; then, for a seat other than the owner's, the box's library in its trust copy.
 /// The first failure ends it.
-fn refresh_copies(inner: &Inner, id: &SeatId, tracked: &Tracked) -> Result<(), BackendError> {
+fn refresh_copies(
+    inner: &Inner,
+    level: &mut Level<'_>,
+    id: &SeatId,
+    tracked: &Tracked,
+) -> Result<(), BackendError> {
     let (box_dir, state, reader) = (&inner.box_dir, &inner.state, tracked.reader);
     match tracked.kind {
-        Own::Person => person_trust(inner, id, reader)?,
+        Own::Person => person_trust(inner, level, id, reader)?,
         Own::Owner => shared::refresh_owner_trust(box_dir, state, id, reader)?,
         Own::Seat => shared::refresh_trust(box_dir, state, id, reader)?,
     };
@@ -1834,7 +1845,7 @@ fn yield_to_the_desk(inner: &Inner, seat: &Seat) {
         return;
     }
     tracing::info!(%account, "user at the machine: ending the headless session");
-    match stop_unit(inner, seat) {
+    match stop_unit(inner, seat, None) {
         Ok(()) if seat.kind.is_owner() => user_host(account, "start"),
         Ok(()) => {}
         Err(error) => tracing::warn!(%account, %error, "headless session not ended"),
