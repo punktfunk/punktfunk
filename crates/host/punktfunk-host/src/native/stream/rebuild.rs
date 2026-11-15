@@ -1351,6 +1351,18 @@ pub(crate) mod tests {
         })
     }
 
+    /// The display change a seat's switch to `game` plans for a session built on `built`.
+    #[cfg(target_os = "linux")]
+    pub(in crate::native::stream) fn seat_switch(
+        built: Compositor,
+        game: bool,
+    ) -> Option<DisplayChange> {
+        let mut f = super::super::swap::tests::fake();
+        f.st.display.compositor = built;
+        let ask = RebuildAsk::SessionSwitch(SessionSwitch::seat(game));
+        rebuild_plan::plan(&ask, &f.st.rebuild_facts()).and_then(|p| p.display)
+    }
+
     fn idd_push(f: &mut Session) {
         f.st.plan.capture = crate::session_plan::CaptureBackend::IddPush;
     }

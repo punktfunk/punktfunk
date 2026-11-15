@@ -2218,6 +2218,70 @@ mod tests {
         }
     }
 
+    /// A seat's session as it starts to follow the seat's switches, built on `built`: whether
+    /// it ended, and the compositor of the switch it queued to catch up.
+    #[cfg(target_os = "linux")]
+    fn seat_start(
+        joined: bool,
+        built: crate::vdisplay::Compositor,
+    ) -> (
+        Option<crate::events::SessionEndReason>,
+        Option<crate::vdisplay::Compositor>,
+    ) {
+        let mut f = super::super::swap::tests::fake();
+        (f.st.display.compositor, f.st.seat_join) = (built, Some(joined));
+        f.st.spawn_session_watcher();
+        f.st.following = None;
+        let queued = f.st.ends.session_rx.try_recv().ok().map(|s| s.compositor);
+        (f.st.facts.life.reason(), queued)
+    }
+
+    /// U15: a seat's session started while the seat switched mode catches up. Its own session
+    /// queues the seat's switch, which rebuilds it on the seat's compositor. A device joined to
+    /// the seat's screen ends as `HostEnded`, and its reconnect joins the new one. A session
+    /// already in the seat's mode does neither.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_seat_switch_rebuilds_its_session_and_ends_a_joiner() {
+        use super::super::rebuild_plan::DisplayChange;
+        use crate::events::SessionEndReason::HostEnded;
+        use crate::seats::session_switch::follow;
+        use crate::vdisplay::Compositor::{Gamescope, Kwin};
+        let verdict = crate::native::tests::Verdict::Wanted;
+        for joined in [false, true] {
+            // Another test may switch the seat meanwhile: look again until no switch landed.
+            let look = || {
+                let heard = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let h = heard.clone();
+                let (during, game) = follow(Box::new(move |_| {
+                    h.store(true, Ordering::Relaxed);
+                    true
+                }));
+                let started = [Gamescope, Kwin].map(|built| seat_start(joined, built));
+                let (_, after) = follow(Box::new(|_| false));
+                drop(during);
+                (!heard.load(Ordering::Relaxed) && after == game).then_some((game, started))
+            };
+            let (game, started) = (0..50).find_map(|_| look()).expect("a look with no switch");
+            let seat = if game { Gamescope } else { Kwin };
+            for (built, (ended, queued)) in [Gamescope, Kwin].into_iter().zip(started) {
+                let missed = built != seat;
+                let want = (
+                    (joined && missed).then_some(HostEnded),
+                    (!joined && missed).then_some(seat),
+                );
+                let case = format!("{built:?}, joined {joined} ({verdict:?})");
+                assert_eq!((ended, queued), want, "{case}");
+                let rebuilds = super::super::rebuild::tests::seat_switch(built, game);
+                assert_eq!(
+                    rebuilds,
+                    missed.then_some(DisplayChange::Switch(seat)),
+                    "{case}"
+                );
+            }
+        }
+    }
+
     /// The registry's liveness vocabulary and the wire's are one set, mapped here
     /// and nowhere else. A spawn says nothing; a refusal and a blind adoption
     /// both owe the player a sentence.
