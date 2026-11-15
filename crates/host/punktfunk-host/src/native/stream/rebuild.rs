@@ -2433,6 +2433,50 @@ pub(crate) mod tests {
         (content, larger, capture)
     }
 
+    /// U11: a joiner's capture loss rebuilds at the live mode, held or alone, and nothing turns
+    /// its join off: the reopen joins the owner's display where one runs, else builds one of its
+    /// own (pf-vdisplay's pool, past this fake). It stays a joiner, and the control task's cell
+    /// takes the display the build opened.
+    #[test]
+    fn a_joiners_capture_loss_joins_again_or_builds_its_own() {
+        use crate::native::tests::Verdict;
+        let verdict = Verdict::Wanted;
+        let keyframes = Arc::new(AtomicU32::new(0));
+        for case in [Case::JoinerHeld, Case::JoinerAlone] {
+            let mut f = super::super::swap::tests::fake();
+            let (_, facts) = on_display(&mut f, case);
+            let ask = RebuildAsk::CaptureLost(None);
+            let plan = rebuild_plan::plan(&ask, &facts).expect("a loss rebuild");
+            let planned = (plan.build.clone(), plan.mode, plan.stops_joining);
+            assert_eq!(planned, (Build::CaptureLoss, ASKED, false), "{case:?}");
+            let mut joins = None;
+            let built = f.st.perform(plan, ask, |st, plan, _, _| {
+                joins = Some(st.display.vd_params.join_live);
+                // The scripted pipeline is on display generation 2.
+                script(Script::Pipeline(SMALL, 20_000), plan.rate_kbps, &keyframes)
+            });
+            assert!(matches!(built, Ok(Rebuilt::Built)), "{case:?}");
+            assert_eq!(
+                joins,
+                Some(true),
+                "{case:?} ({verdict:?}): the reopen joins"
+            );
+            assert_eq!(
+                f.display.lock().unwrap().join_live,
+                None,
+                "{case:?}: join kept"
+            );
+            assert!(f.st.display.tenure.join_live(), "{case:?}: still a joiner");
+            let cell = &f.st.shared.tenure;
+            assert!(
+                cell.held(|g| g == 2),
+                "{case:?}: held while another is on it"
+            );
+            let held_alone = cell.held(|_| false);
+            assert_eq!(held_alone, !cfg!(target_os = "linux"), "{case:?}: alone");
+        }
+    }
+
     /// An encoder on a `size` capture that frames on ingest, opened for `view` as a pipeline
     /// build opens it, and the framing it encodes.
     fn fitted(
