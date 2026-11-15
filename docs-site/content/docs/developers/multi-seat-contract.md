@@ -346,7 +346,9 @@ session by design, and display activation fails while its session is inactive.
   [Linux](#linux-seats): the ledger row keeps it, the same commands and routes change hands.
   The key is the USB device's ids and the serial or port id in its instance id. Every HID and
   XUSB devnode under a lent device carries the seat's session while the seat runs and a
-  session nobody has while it doesn't, so nobody lists a parked controller. The supervisor
+  session nobody has while it doesn't, so nobody lists a parked controller. Its keyboard and
+  mouse collections are removed while it is lent and come back with its next start: a
+  controller's desktop mode would type and point at the console whatever the tag. The supervisor
   tells the fence each seat's session as a cycle enters and leaves it. A change of holder
   restarts the USB device, which ends the last holder's open handles; a parked controller
   going live changes in place. The service lends a device only when every interface is HID,

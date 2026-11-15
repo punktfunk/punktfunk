@@ -2,7 +2,8 @@
 //! list it. A desk controller gets the console session, so a seat's HID, XUSB and XInput
 //! listings and GameInput deliveries leave it alone. A controller lent to a seat ([`hand`])
 //! gets that seat's session, or [`PARKED`] while the seat doesn't run, on every HID and XUSB
-//! devnode under its USB device.
+//! devnode under its USB device. Its keyboard and mouse collections are removed instead: a
+//! controller's desktop mode types and points at the console whatever a tag says.
 //!
 //! The service is the one writer: a process in a session can't locate a devnode tagged for
 //! another, and session 0 locates them all. A tag written after a device appears is what a
@@ -24,15 +25,16 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use anyhow::{anyhow, bail, Context, Result};
 use windows::core::{GUID, HSTRING, PCWSTR};
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
-    CM_Get_DevNode_PropertyW, CM_Get_Device_IDW, CM_Get_Device_ID_ListW,
+    CM_Get_DevNode_PropertyW, CM_Get_DevNode_Status, CM_Get_Device_IDW, CM_Get_Device_ID_ListW,
     CM_Get_Device_ID_List_SizeW, CM_Get_Device_Interface_ListW, CM_Get_Device_Interface_List_SizeW,
     CM_Get_Device_Interface_PropertyW, CM_Get_Parent, CM_Locate_DevNodeW,
     CM_Query_And_Remove_SubTreeW, CM_Register_Notification, CM_Set_DevNode_PropertyW,
-    CM_Setup_DevNode, CM_GETIDLIST_FILTER_ENUMERATOR, CM_GETIDLIST_FILTER_PRESENT,
-    CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_LOCATE_DEVNODE_NORMAL, CM_NOTIFY_ACTION,
-    CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL, CM_NOTIFY_EVENT_DATA, CM_NOTIFY_FILTER,
-    CM_NOTIFY_FILTER_0, CM_NOTIFY_FILTER_0_0, CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE,
-    CM_REMOVE_NO_RESTART, CM_SETUP_DEVNODE_READY, CR_SUCCESS, HCMNOTIFICATION, PNP_VETO_TYPE,
+    CM_Setup_DevNode, CM_DEVNODE_STATUS_FLAGS, CM_GETIDLIST_FILTER_ENUMERATOR,
+    CM_GETIDLIST_FILTER_PRESENT, CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_LOCATE_DEVNODE_NORMAL,
+    CM_NOTIFY_ACTION, CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL, CM_NOTIFY_EVENT_DATA,
+    CM_NOTIFY_FILTER, CM_NOTIFY_FILTER_0, CM_NOTIFY_FILTER_0_0,
+    CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE, CM_PROB, CM_PROB_WILL_BE_REMOVED, CM_REMOVE_NO_RESTART,
+    CM_SETUP_DEVNODE_READY, CR_SUCCESS, HCMNOTIFICATION, PNP_VETO_TYPE,
 };
 use windows::Win32::Devices::HumanInterfaceDevice::{
     HidD_FreePreparsedData, HidD_GetAttributes, HidD_GetPreparsedData, HidP_GetCaps,
@@ -56,6 +58,9 @@ const GUID_DEVINTERFACE_XUSB: GUID = GUID::from_u128(0xec87f1e3_c13b_4100_b5f7_8
 /// joystick, gamepad, multi-axis controller.
 const USAGE_PAGE_GENERIC_DESKTOP: u16 = 0x01;
 const GAME_USAGES: [u16; 3] = [0x04, 0x05, 0x08];
+/// The usages a controller's desktop mode types and points through: pointer, mouse, keyboard
+/// and keypad.
+const DESKTOP_USAGES: [u16; 4] = [0x01, 0x02, 0x06, 0x07];
 /// The first vendor-defined HID usage page.
 const USAGE_PAGE_VENDOR: u16 = 0xFF00;
 /// Valve's vendor id and its controllers: the 2015 Steam Controller on a cable, on Bluetooth
@@ -135,7 +140,8 @@ fn run() {
 /// dies and its devnodes arrive again under the new tag. Without, the tags change in place:
 /// right only when nobody could have opened it. A device that isn't plugged in is the
 /// holder's the moment it arrives. A refused restart changes nothing: the device runs on
-/// under the tags it had.
+/// under the tags it had. A device returned to the desk in place gets its keyboard and mouse
+/// collections back.
 pub fn hand(instance: &str, session: Option<u32>, restart: bool) -> Result<()> {
     run();
     let key = instance.to_ascii_uppercase();
@@ -148,6 +154,9 @@ pub fn hand(instance: &str, session: Option<u32>, restart: bool) -> Result<()> {
     };
     let was = set(session);
     if !restart {
+        if session.is_none() {
+            revive(instance);
+        }
         sweep();
         return Ok(());
     }
@@ -166,7 +175,11 @@ fn lends() -> MutexGuard<'static, BTreeMap<String, u32>> {
 /// the uninstaller: a tag never outlives the device's next start, but a pad that stays up
 /// through a punktfunk removal would otherwise keep hiding from a later console session. The
 /// fence's own skips hold here too: a redirected pad's tag and our devices' are not the fence's.
+/// Nothing is lent after it: a lent controller's keyboard and mouse collections come back, and
+/// arrivals go untagged.
 pub fn clear() {
+    CONSOLE.store(NO_SESSION, Ordering::SeqCst);
+    let lent: Vec<String> = std::mem::take(&mut *lends()).into_keys().collect();
     for (path, hid) in every_interface() {
         let Ok(id) = instance_id_of(&path) else {
             continue;
@@ -177,7 +190,8 @@ pub fn clear() {
         if is_ours(&id) || line.iter().any(|id| is_ts_hub(id)) {
             continue;
         }
-        if lent_session(&line).is_none() && hid && !is_controller_collection(&path) {
+        let was_lent = line.iter().any(|id| lent.contains(id));
+        if !was_lent && hid && !is_controller_collection(&path) {
             continue;
         }
         if let Ok(Some(_)) = get_devnode_session(&id)
@@ -185,6 +199,9 @@ pub fn clear() {
         {
             tracing::warn!(%error, devnode = %id, "desk fence not cleared");
         }
+    }
+    for instance in &lent {
+        revive(instance);
     }
 }
 
@@ -225,8 +242,9 @@ fn fence_interface(path: &str) -> Result<()> {
 }
 
 /// Tag the devnode behind `path` with its holder's session: a lent device's every HID and XUSB
-/// devnode with its lend's, a desk controller with the console's. Ours, redirected ones and
-/// other HID devices are left alone. `Ok(true)` when a tag was written and read back.
+/// devnode with its lend's, a desk controller with the console's. A lent device's keyboard
+/// and mouse collections are removed, and tagged only when that is refused. Ours, redirected
+/// ones and other HID devices are left alone. `Ok(true)` when the devnode changed.
 fn fence_path(path: &str, hid: bool) -> Result<bool> {
     let id = instance_id_of(path)?;
     if is_ours(&id) {
@@ -237,6 +255,16 @@ fn fence_path(path: &str, hid: bool) -> Result<bool> {
         return Ok(false);
     }
     let session = match lent_session(&line) {
+        Some(session) if hid && is_desktop_collection(path) => match remove(&id, locate(&id)?) {
+            Ok(()) => {
+                tracing::info!(devnode = %id, "lent controller's desktop input removed");
+                return Ok(true);
+            }
+            Err(error) => {
+                tracing::warn!(%error, "lent controller's desktop input not removed");
+                session
+            }
+        },
         Some(session) => session,
         None if hid && !is_controller_collection(path) => return Ok(false),
         None => match CONSOLE.load(Ordering::SeqCst) {
@@ -435,9 +463,26 @@ fn restart_device(instance_id: &str) -> Result<()> {
     let Ok(devinst) = locate(instance_id) else {
         return Ok(());
     };
+    let removed = remove(instance_id, devinst);
+    // A refused removal left it running; one that went through needs this to come back.
+    // SAFETY: `devinst` stays a valid devnode handle across its removal.
+    let ready = unsafe { CM_Setup_DevNode(devinst, CM_SETUP_DEVNODE_READY) };
+    removed?;
+    if ready != CR_SUCCESS {
+        bail!(
+            "restart {instance_id}: CONFIGRET {} setting it up again",
+            ready.0
+        );
+    }
+    Ok(())
+}
+
+/// Query-remove the devnode's subtree: its drivers unload and every open handle on it dies.
+/// It stays out until it is set up again, its parent restarts, a rescan or a reboot.
+fn remove(instance_id: &str, devinst: u32) -> Result<()> {
     let mut veto = PNP_VETO_TYPE(0);
     let mut by = [0u16; 260];
-    // SAFETY: `devinst` was just located; `veto` and `by` are valid out-params for the call.
+    // SAFETY: `devinst` is a located devnode; `veto` and `by` are valid out-params for the call.
     let removed = unsafe {
         CM_Query_And_Remove_SubTreeW(
             devinst,
@@ -446,25 +491,40 @@ fn restart_device(instance_id: &str) -> Result<()> {
             CM_REMOVE_NO_RESTART,
         )
     };
-    // A refused removal left it running; one that went through needs this to come back.
-    // SAFETY: `devinst` stays a valid devnode handle across its removal.
-    let ready = unsafe { CM_Setup_DevNode(devinst, CM_SETUP_DEVNODE_READY) };
     if removed != CR_SUCCESS {
         let end = by.iter().position(|&c| c == 0).unwrap_or(by.len());
         let by = String::from_utf16_lossy(&by[..end]);
         bail!(
-            "restart {instance_id}: removal refused (CONFIGRET {}, veto {} by {by:?})",
+            "remove {instance_id}: refused (CONFIGRET {}, veto {} by {by:?})",
             removed.0,
             veto.0
         );
     }
-    if ready != CR_SUCCESS {
-        bail!(
-            "restart {instance_id}: CONFIGRET {} setting it up again",
-            ready.0
-        );
-    }
     Ok(())
+}
+
+/// Set up again each devnode under the USB device `instance` that a removal took out, two
+/// levels down: an interface's collections lie under the interface.
+fn revive(instance: &str) {
+    let children = child_device_ids(instance).unwrap_or_default();
+    let below = |id: &String| child_device_ids(id).unwrap_or_default();
+    let grandchildren: Vec<String> = children.iter().flat_map(below).collect();
+    for id in children.iter().chain(&grandchildren) {
+        let Ok(devinst) = locate(id) else {
+            continue;
+        };
+        let (mut status, mut problem) = (CM_DEVNODE_STATUS_FLAGS(0), CM_PROB(0));
+        // SAFETY: `devinst` was just located; both out-params are valid for the call.
+        let read = unsafe { CM_Get_DevNode_Status(&mut status, &mut problem, devinst, 0) };
+        if read != CR_SUCCESS || problem != CM_PROB_WILL_BE_REMOVED {
+            continue;
+        }
+        // SAFETY: `devinst` is the located devnode a removal left out.
+        let ready = unsafe { CM_Setup_DevNode(devinst, CM_SETUP_DEVNODE_READY) };
+        if ready != CR_SUCCESS {
+            tracing::warn!(devnode = %id, configret = ready.0, "removed collection not set up");
+        }
+    }
 }
 
 /// The host's own virtual devices: `SWD\PUNKTFUNK\…` and `SWD\VID_…\PF_…`, tagged at creation.
@@ -481,9 +541,19 @@ fn is_ts_hub(instance_id: &str) -> bool {
 /// Whether the HID collection behind `path` is a controller's ([`is_controller`]). A device
 /// that doesn't name its ids is judged by its usage alone.
 fn is_controller_collection(path: &str) -> bool {
-    let Ok(handle) = open_query(path) else {
-        return false;
-    };
+    collection(path)
+        .is_some_and(|[vendor, product, page, usage]| is_controller(vendor, product, page, usage))
+}
+
+/// Whether the HID collection behind `path` is desktop input ([`is_desktop_input`]).
+fn is_desktop_collection(path: &str) -> bool {
+    collection(path).is_some_and(|[_, _, page, usage]| is_desktop_input(page, usage))
+}
+
+/// The vendor id, product id, usage page and usage of the HID collection behind `path`. Ids
+/// the device doesn't name read zero.
+fn collection(path: &str) -> Option<[u16; 4]> {
+    let handle = open_query(path).ok()?;
     let h = HANDLE(handle.as_raw_handle());
     let mut ids = HIDD_ATTRIBUTES {
         Size: std::mem::size_of::<HIDD_ATTRIBUTES>() as u32,
@@ -497,14 +567,14 @@ fn is_controller_collection(path: &str) -> bool {
     let mut pp = PHIDP_PREPARSED_DATA::default();
     // SAFETY: `h` is the live HID interface handle; `pp` receives an owned preparsed-data handle.
     if !unsafe { HidD_GetPreparsedData(h, &mut pp) } {
-        return false;
+        return None;
     }
     let mut caps = HIDP_CAPS::default();
     // SAFETY: `pp` is the handle just obtained (freed below); `caps` is a valid out-param.
     let st = unsafe { HidP_GetCaps(pp, &mut caps) };
     // SAFETY: `pp` came from `HidD_GetPreparsedData` and is not used after this.
     let _ = unsafe { HidD_FreePreparsedData(pp) };
-    st.0 >= 0 && is_controller(ids.VendorID, ids.ProductID, caps.UsagePage, caps.Usage)
+    (st.0 >= 0).then_some([ids.VendorID, ids.ProductID, caps.UsagePage, caps.Usage])
 }
 
 /// Whether the fence takes a HID collection: a game controller's by its usage, or the
@@ -518,6 +588,11 @@ fn is_controller(vendor: u16, product: u16, page: u16, usage: u16) -> bool {
 /// A top-level usage that names a game controller.
 fn is_game_usage(page: u16, usage: u16) -> bool {
     page == USAGE_PAGE_GENERIC_DESKTOP && GAME_USAGES.contains(&usage)
+}
+
+/// A top-level usage that types or points: what the console takes from any session's device.
+fn is_desktop_input(page: u16, usage: u16) -> bool {
+    page == USAGE_PAGE_GENERIC_DESKTOP && DESKTOP_USAGES.contains(&usage)
 }
 
 /// Open an interface path for queries only: no access rights, shared, so a game's open is
@@ -717,6 +792,12 @@ mod tests {
         assert!(!is_game_usage(1, 6), "keyboard");
         assert!(!is_game_usage(1, 2), "mouse");
         assert!(!is_game_usage(0x0C, 1), "consumer control");
+        for (usage, what) in [(1, "pointer"), (2, "mouse"), (6, "keyboard"), (7, "keypad")] {
+            assert!(is_desktop_input(1, usage), "{what}");
+        }
+        assert!(!is_desktop_input(1, 5), "gamepad");
+        assert!(!is_desktop_input(0xFF00, 1), "a vendor collection");
+        assert!(!is_desktop_input(0x0C, 1), "consumer control");
         // A Steam controller reports through a vendor collection, beside a mouse and a keyboard.
         for product in STEAM_PADS {
             assert!(is_controller(VALVE, product, 0xFF00, 1), "{product:04x}");

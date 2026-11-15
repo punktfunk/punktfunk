@@ -203,8 +203,6 @@ seats; it doesn't close it to them. So these differ from Linux:
   DirectInput or GameInput there don't list it.
 - **Xbox controllers.** Windows.Gaming.Input games on the PC's desktop still list a given Xbox
   controller.
-- **Desktop mode.** A Steam Controller's keyboard and mouse emulation reaches the PC's desktop
-  until the seat's Steam opens the controller. Keep Steam running on the seat.
 - **Sound.** The controller's own sound card stays with the PC. A DualSense's speaker and audio
   haptics don't follow it to the seat.
 - **Right after plugging in.** The PC's desktop can list the controller for a moment before it
