@@ -92,6 +92,8 @@ const REFETCH = "stops or removes a download: saves stay";
 const REFRESH = "re-reads a source the host already trusts";
 const PUBLIC = "open on the host too: a device proving its pairing";
 const SIGNS_OUT = "signs a device out of a profile: only takes access away";
+const HANDS_PAD =
+	"moves a game controller between this PC and a seat: the host gives away nothing else";
 const DEVICE_ONLY =
 	"the host answers a paired device for its own unlock, never the console";
 const VERIFIED = "fetched from its own release channel and verified";
@@ -189,6 +191,7 @@ export const GATES: readonly Route[] = [
 	open("POST", "profiles", ADMITS_NONE),
 	open("PUT", "profiles/default", SETTING),
 	gated("PUT", "profiles/door"),
+	open("PUT", "profiles/pads/{key}", HANDS_PAD),
 	gated("PUT", "profiles/seating"),
 	open("PUT", "profiles/{id}", RESEALS),
 	gated("DELETE", "profiles/{id}"),

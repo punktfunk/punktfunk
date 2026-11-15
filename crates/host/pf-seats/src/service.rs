@@ -13,6 +13,7 @@
 //! the attempt limits of [`crate::attempts`]; a Linux one runs outside the mutex too. A person's
 //! Linux row starts only through [`unlock`].
 
+mod pads;
 mod unlock;
 
 use crate::attempts::{Attempts, Outcome, Target};
@@ -126,6 +127,9 @@ impl<B: PlatformBackend> SeatService<B> {
             Command::Left { id, fingerprint } => self.left(&id, &fingerprint),
             Command::SignOut { id, fingerprint } => self.sign_out(&id, fingerprint.as_deref()),
             Command::Devices { id } => self.devices(&id),
+            Command::Pads => self.pads(),
+            Command::Lend { id, key } => self.lend(&id, &key),
+            Command::TakeBack { key } => self.take_back(&key),
         }
     }
 

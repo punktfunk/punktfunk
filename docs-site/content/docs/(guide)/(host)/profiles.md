@@ -120,6 +120,49 @@ their own stay on the box, stopped, and come back with the switch.
 their password or a device they signed in opens it. [Someone's own account](/docs/own-account)
 covers adding one, what the person sees when they connect, and signing devices out.
 
+### Give a controller plugged into the PC to a profile
+
+A controller plugged into this PC's own USB port belongs to the PC's desktop, and no seat can use
+it. Give it to one profile that has a seat, and that seat's Steam and games open the real
+controller: rumble, haptics, gyro, trackpads and its own sound card work as the hardware does them.
+
+1. Plug the controller into the PC and open **Profiles**.
+2. On the card **Controllers on this PC**, open **Used by** on the controller's row.
+3. Pick the profile. **This PC** gives it back.
+
+- **One holder.** Only that profile's seat sees the controller. The PC's desktop and every other
+  seat don't, not even for an instant after it is plugged in.
+- **Your change only.** The controller changes hands only when you change it here, and it
+  reconnects once each time.
+- **A stopped seat parks it.** While the profile's seat isn't running, nobody can use the
+  controller. It doesn't fall back to the PC; give it back, or start the seat.
+- **It stays.** A replug, a restart and an update keep it with the profile. A controller with a
+  serial number is recognised in any USB port. One without is recognised by its port, so keep it
+  in that port. Two controllers that report the same serial number are told apart by their
+  ports while both are plugged in.
+- **Your own profile.** A controller given to the owner's profile also opens at the PC's desktop
+  while you're signed in there: both are the same user.
+
+What can be given:
+
+- USB game controllers only, wheels and flight sticks included, up to four per profile. Never a
+  keyboard, a mouse, storage or any other device.
+- A wireless receiver such as a Steam Controller Puck goes as a whole, with every controller
+  connected to it.
+- Bluetooth controllers paired to the PC aren't covered.
+- A controller's built-in keyboard and mouse emulation, a Steam Controller's desktop mode, is off
+  for everyone while a profile has it.
+
+The client that shows the seat's picture never sees the controller. It can't open Punktfunk's menu
+or shortcuts in the stream, it isn't in the session's controller list or in **Diagnostics** →
+**Controllers**, and using it doesn't count as someone playing: a seat nobody streams still stops
+after **Stop an idle seat after**.
+
+On Windows a controller plugged into the PC stays with the PC; see
+[Seats on Windows](/docs/windows-seats#a-controller-plugged-into-the-pc-appears-on-a-seat). If a
+controller stops working, [Input & controllers](/docs/troubleshooting-input#my-controller-stopped-working-at-the-pc-linux)
+has the fixes.
+
 ## What a seat can do
 
 A player who picks a stopped seat sees `Getting Kid's desktop ready…` while it starts. A card's

@@ -26,10 +26,15 @@ ACTION!="remove", DEVPATH=="/devices/platform/vhci_hcd*/usb*/*", \
 # helper reads the account from its name.
 ACTION!="remove", SUBSYSTEM=="cuse", DEVPATH=="/devices/virtual/cuse/punktfunk!uinput-*", \
     IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats fence"
+# A real USB device's nodes, while a desk pad is lent: the helper hands a lent pad's nodes to
+# the seat its record names, makes a parked pad's and its keyboard and mouse nodes root's, and
+# says nothing of any device no record names.
+ACTION!="remove", SUBSYSTEMS=="usb", DEVPATH!="/devices/platform/vhci_hcd*", \
+    TEST=="/run/punktfunk/pads/lent", IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats fence"
 ACTION!="remove", SUBSYSTEM=="input|hidraw|usb|sound|tty|cuse", ENV{PF_SEAT_USER}=="?*", \
     OWNER:="$env{PF_SEAT_USER}", GROUP:="root", MODE:="0600", TAG-="uaccess", \
     ENV{ID_SEAT}="$env{PF_SEAT}", ENV{ID_MM_DEVICE_IGNORE}="1"
-ACTION!="remove", SUBSYSTEM=="input|hidraw", ENV{PF_SEAT_REFUSED}=="1", \
+ACTION!="remove", SUBSYSTEM=="input|hidraw|usb|sound|tty", ENV{PF_SEAT_REFUSED}=="1", \
     OWNER:="root", GROUP:="root", MODE:="0600", TAG-="uaccess", \
     ENV{ID_SEAT}="seat-punktfunk-refused"
 # While seats run (the pads socket exists), every other hidraw and joystick node is the box's:

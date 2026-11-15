@@ -4,11 +4,12 @@
 //! stamped node without one prints `PF_SEAT_REFUSED`, and the rule makes it root's alone. A node
 //! without a stamp prints nothing and keeps the distro's rules. A device under a vhci port is the
 //! binary's to map, by the port the supervisor recorded. A seat's uinput proxy carries its
-//! account in its name.
+//! account in its name. A node of a desk pad lent to a seat goes as its record says
+//! ([`judge_lent`]).
 
 pub mod vouch;
 
-use super::{accounts, session};
+use super::{accounts, lent, session};
 use crate::ipc::{Diagnostic, DiagnosticLevel};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
@@ -34,9 +35,19 @@ pub fn rule_installed() -> bool {
         .any(|dir| Path::new(dir).join(RULE).exists())
 }
 
-/// The doctor's rows for seat pads: the fence rule, the broker's socket, and `/dev/cuse`, which
-/// a seat's uinput proxy is made through and which must be root's alone: whoever opens it can
-/// serve a seat's node first.
+/// Whether the fence rule udev reads first runs the helper on a lent desk pad's nodes.
+fn lends_installed() -> bool {
+    let rule = RULE_DIRS
+        .iter()
+        .map(|dir| Path::new(dir).join(RULE))
+        .find(|rule| rule.exists());
+    rule.and_then(|rule| std::fs::read_to_string(rule).ok())
+        .is_some_and(|text| text.contains("pads/lent"))
+}
+
+/// The doctor's rows for seat pads: the fence rule and its line for lent desk pads, the broker's
+/// socket, and `/dev/cuse`, which a seat's uinput proxy is made through and which must be root's
+/// alone: whoever opens it can serve a seat's node first.
 pub fn diagnostics() -> Vec<Diagnostic> {
     let row = |ok: bool, code: &str, good: &str, bad: &str| Diagnostic {
         level: if ok {
@@ -54,6 +65,7 @@ pub fn diagnostics() -> Vec<Diagnostic> {
             "The seat pad fence rule isn't installed, so the box's own Steam can open a seat's \
              controllers. Reinstall the punktfunk-seats package.",
         ),
+        lending_row(lends_installed()),
         row(
             Path::new(pf_paths::seat::PADS_SOCKET).exists(),
             "pad_broker",
@@ -80,14 +92,33 @@ pub fn diagnostics() -> Vec<Diagnostic> {
     ]
 }
 
+/// The doctor's row for the rule line that hands a lent desk pad over, by whether it is there.
+fn lending_row(installed: bool) -> Diagnostic {
+    if installed {
+        Diagnostic::info(
+            "pad_lending",
+            "The rule that gives a controller to a profile is installed",
+        )
+        .worded("seatcheck_pad_lending_ok")
+    } else {
+        Diagnostic::warning(
+            "pad_lending",
+            "The installed seat rule can't give a controller to a profile, so a controller \
+             given away stays with this PC. Reinstall the punktfunk-seats package.",
+        )
+        .worded("seatcheck_pad_lending_missing")
+    }
+}
+
 /// Whether a node with this owner, group and mode opens for root alone.
 fn root_only(uid: u32, gid: u32, mode: u32) -> bool {
     uid == 0 && mode & 0o007 == 0 && (gid == 0 || mode & 0o070 == 0)
 }
 
 /// The udev program. Never fails: udev takes the lines it gets. A seat's uinput proxy names
-/// its account in its own name; any other node is [`judge`]d, and a vouched device whose
-/// account is no seat's goes to nobody.
+/// its account in its own name; any other node is [`judge`]d, and one without a seat's stamp
+/// is judged as a lent desk pad's ([`judge_lent`]). A node whose account is no seat's goes to
+/// nobody.
 pub fn run() {
     let Some(devpath) = std::env::var_os("DEVPATH") else {
         return;
@@ -99,7 +130,16 @@ pub fn run() {
         print_for(&account);
         return;
     }
-    let lines = match judge(Path::new("/sys"), vouch::trusted(), devpath) {
+    let sys = Path::new("/sys");
+    let verdict = match judge(sys, vouch::trusted(), devpath) {
+        Verdict::Nobody => {
+            let records = Path::new(lent::DIR);
+            let trusted = lent::trusted(records).then_some(records);
+            judge_lent(sys, trusted, devpath, InputId::from_env())
+        }
+        verdict => verdict,
+    };
+    let lines = match verdict {
         Verdict::Nobody => return,
         Verdict::Seat(account) => seat_lines(&account),
         Verdict::Refused => None,
@@ -110,12 +150,60 @@ pub fn run() {
 /// What the fence decides for a node.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
-    /// No seat's stamp: the distro's rules stand.
+    /// No seat's stamp and no lend: the distro's rules stand.
     Nobody,
-    /// A device the supervisor vouched for, the account's.
+    /// A device the supervisor vouched for, or a live lent pad's node: the account's.
     Seat(String),
-    /// A seat's stamp no record vouches for: root's alone.
+    /// A seat's stamp no record vouches for, or a lent pad's node no seat may have: root's alone.
     Refused,
+}
+
+/// The input classes udev gave the node, from the properties it passes the program.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InputId {
+    pub keyboard: bool,
+    pub mouse: bool,
+    pub joystick: bool,
+}
+
+impl InputId {
+    fn from_env() -> InputId {
+        let set = |name: &str| std::env::var(name).as_deref() == Ok("1");
+        InputId {
+            keyboard: set("ID_INPUT_KEYBOARD"),
+            mouse: set("ID_INPUT_MOUSE"),
+            joystick: set("ID_INPUT_JOYSTICK"),
+        }
+    }
+}
+
+/// The lend records' rule for the node at `devpath`, with sysfs at `sys` and the records in
+/// `records` (`None` when they can't be trusted). A node on a real USB bus whose device a
+/// record names by either of its keys, and not a twin of it, goes to the live holder's account.
+/// A parked pad's node,
+/// and a keyboard or mouse node of any lent pad, is root's alone: a boot keyboard or mouse
+/// interface, or input udev classes as keyboard or mouse and not as joystick. So is the
+/// device's own node, which speaks raw USB: its holder could take a keyboard interface from the
+/// kernel through it.
+pub fn judge_lent(sys: &Path, records: Option<&Path>, devpath: &str, input: InputId) -> Verdict {
+    let Some(records) = records else {
+        return Verdict::Nobody;
+    };
+    let Some((device, interface)) = lent::node_device(sys, devpath) else {
+        return Verdict::Nobody;
+    };
+    let Some(holder) = lent::holder_of(sys, records, &device) else {
+        return Verdict::Nobody;
+    };
+    let Some(class) = interface else {
+        return Verdict::Refused;
+    };
+    let desk_input =
+        lent::boot_input(class) || ((input.keyboard || input.mouse) && !input.joystick);
+    match plain(&holder) {
+        Some(account) if holder != lent::PARKED && !desk_input => Verdict::Seat(account),
+        _ => Verdict::Refused,
+    }
 }
 
 /// The fence's rule for the node at `devpath`, with sysfs at `sys` and the supervisor's records
@@ -457,6 +545,111 @@ mod tests {
         for ((uid, gid, mode), only, what) in cases {
             assert_eq!(root_only(uid, gid, mode), only, "{what}");
         }
+    }
+
+    /// A lent pad's node goes as its record says: to the live holder unless it is a keyboard or
+    /// mouse node, to nobody while parked. A device no record names, a seat's USB/IP pad, a
+    /// virtual device and records that can't be trusted change nothing.
+    #[test]
+    fn a_lent_pads_nodes_go_as_its_record_says() {
+        let desk = lent::fake::Desk::new();
+        let xhci = "pci0000:00/0000:00:14.0/usb3";
+        let ids = (0x28de, 0x1102);
+        let (keys, pointer, pad) = ([0x03, 0x01, 0x01], [0x03, 0x01, 0x02], [0x03, 0x00, 0x00]);
+        let lizard = [(keys, false), (pointer, false), (pad, true)];
+        let given = desk.plug(&format!("{xhci}/3-1"), ids, Some("SC1"), &lizard);
+        let parked = desk.plug(&format!("{xhci}/3-2"), ids, None, &lizard);
+        let keyboard = desk.plug(
+            &format!("{xhci}/3-3"),
+            (0x046d, 0xc31c),
+            None,
+            &[(keys, false)],
+        );
+        let usbip = desk.plug("platform/vhci_hcd.0/usb11/11-1", ids, Some("SC1"), &lizard);
+        let records = desk.records();
+        std::fs::create_dir_all(records).unwrap();
+        std::fs::write(records.join("usb-28de-1102-s-SC1"), "pf-seat-1\n").unwrap();
+        std::fs::write(records.join("usb-28de-1102-p-0000_00_14.0-2"), "-\n").unwrap();
+        let none = InputId::default();
+        let input = |keyboard, mouse, joystick| InputId {
+            keyboard,
+            mouse,
+            joystick,
+        };
+        let cases = [
+            (
+                &given.hidraw[2],
+                none,
+                Some("pf-seat-1"),
+                "its pad's hidraw",
+            ),
+            (
+                &given.event[2],
+                input(false, false, true),
+                Some("pf-seat-1"),
+                "its joystick",
+            ),
+            (
+                &given.event[2],
+                input(true, false, true),
+                Some("pf-seat-1"),
+                "a joystick with keys",
+            ),
+            (&given.dev, none, None, "the device's own raw USB node"),
+            (&given.hidraw[0], none, None, "a boot keyboard's hidraw"),
+            (
+                &given.event[1],
+                input(false, true, false),
+                None,
+                "the lizard pointer",
+            ),
+            (
+                &given.event[2],
+                input(true, false, false),
+                None,
+                "keys on a pad interface",
+            ),
+            (&parked.hidraw[2], none, None, "parked, named by its port"),
+        ];
+        for (devpath, input, want, what) in cases {
+            let want = want.map_or(Verdict::Refused, seat);
+            assert_eq!(
+                judge_lent(&desk.sys(), Some(records), devpath, input),
+                want,
+                "{what}"
+            );
+        }
+        let nobody = [
+            (&keyboard.event[0], Some(records), "the desk's keyboard"),
+            (&usbip.hidraw[2], Some(records), "a seat's USB/IP pad"),
+            (
+                &given.hidraw[2],
+                lent::trusted(records).then_some(records),
+                "untrusted records",
+            ),
+        ];
+        for (devpath, records, what) in nobody {
+            let verdict = judge_lent(&desk.sys(), records, devpath, none);
+            assert_eq!(verdict, Verdict::Nobody, "{what}");
+        }
+        let uhid = format!(
+            "/{}/0003:28DE:1102.0001/hidraw/hidraw1",
+            vouch::UHID_DEVICES
+        );
+        assert_eq!(
+            judge_lent(&desk.sys(), Some(records), &uhid, none),
+            Verdict::Nobody
+        );
+    }
+
+    /// The shipped rule runs the helper on USB nodes only while lend records exist, and makes a
+    /// refused node of every kind a seat's line hands over root's.
+    #[test]
+    fn the_shipped_rule_gates_on_the_lend_records() {
+        let rules = include_str!("../../../../../packaging/linux/65-punktfunk-seats.rules");
+        assert!(rules.contains(&format!("TEST==\"{}\"", lent::DIR)));
+        assert!(rules
+            .contains("SUBSYSTEM==\"input|hidraw|usb|sound|tty\", ENV{PF_SEAT_REFUSED}==\"1\""));
     }
 
     #[test]

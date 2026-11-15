@@ -571,6 +571,7 @@ mod tests {
             adopted_uid: None,
             rdp_granted: false,
             console_deny_kept: false,
+            lent: Vec::new(),
         };
         let (stopped, starting) = (seat("pfs-absent"), seat("pfs-absent-2"));
         assert!(backend.unless_stopped(&stopped).is_ok());

@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
 import { type FC, useEffect, useState } from "react";
-import { apiFetch } from "@/api/fetcher";
+import { ApiError, apiFetch } from "@/api/fetcher";
 import { useGetHostInfo } from "@/api/gen/host/host";
 import type { DoorChange } from "@/api/gen/model/doorChange";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
@@ -12,6 +12,7 @@ import {
 	endProfileSession,
 	getGetSeatingQueryKey,
 	getGetSeatsDoctorQueryKey,
+	getListDeskPadsQueryKey,
 	getListProfilesQueryKey,
 	getWindowsAccountsQueryKey,
 	setDoor,
@@ -22,7 +23,9 @@ import {
 	useDeleteProfileAvatar,
 	useGetSeating,
 	useGetSeatsDoctor,
+	useListDeskPads,
 	useListProfiles,
+	useSetDeskPadHolder,
 	useSetSeating,
 	useUpdateProfile,
 	useWindowsAccounts,
@@ -67,6 +70,17 @@ export const SectionProfiles: FC = () => {
 				q.state.data?.some((p) => p.seat?.state === "starting")
 					? 2_000
 					: 15_000,
+		},
+	});
+	// A plug or a seat start moves a controller within seconds. The poll pauses in a hidden tab
+	// (react-query's default) and stops for a host that can't lend or doesn't know the route.
+	const deskPads = useListDeskPads({
+		query: {
+			refetchInterval: (q) =>
+				q.state.data?.supported === false ||
+				(q.state.error instanceof ApiError && q.state.error.status < 500)
+					? false
+					: 3_000,
 		},
 	});
 	// The state a door switch was asked for, until the host that answers says it took.
@@ -168,6 +182,14 @@ export const SectionProfiles: FC = () => {
 		mutationFn: (v: { on: boolean; password: string }) =>
 			setDoor({ on: v.on, password: v.password } as DoorChange),
 		onSuccess: (_done, v) => setSwitching(v.on),
+	});
+	// The answer is the list after the change; a poll that was on its way would say the old one.
+	const lend = useSetDeskPadHolder({
+		mutation: {
+			onMutate: () => qc.cancelQueries({ queryKey: getListDeskPadsQueryKey() }),
+			onSuccess: (next) => qc.setQueryData(getListDeskPadsQueryKey(), next),
+			onError: failed(m.profiles_pads_failed()),
+		},
 	});
 	const act = (p: ProfileAdmin, a: SeatAct) =>
 		seatAct.mutate({ id: p.id, act: a });
@@ -292,6 +314,18 @@ export const SectionProfiles: FC = () => {
 					linux && door ? (p) => <SignedInDevices profile={p} /> : undefined
 				}
 				onLock={locks.onLock}
+				pads={
+					!deskPads.isError &&
+					deskPads.data?.supported &&
+					deskPads.data.pads.length > 0
+						? {
+								pads: deskPads.data.pads,
+								busyKey: lend.isPending ? (lend.variables?.key ?? null) : null,
+								onGive: (pad, id) =>
+									lend.mutate({ key: pad.key, data: { profile: id } }),
+							}
+						: undefined
+				}
 			/>
 			{locks.dialogs}
 			{editing && (

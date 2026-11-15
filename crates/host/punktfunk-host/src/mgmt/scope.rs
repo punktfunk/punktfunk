@@ -258,6 +258,9 @@ pub(crate) const SCOPES: &[(&str, &str, Scope)] = &[
     ("GET", "/api/v1/profiles/doctor", Scope::Box),
     ("PUT", "/api/v1/profiles/door", Scope::Box),
     ("GET", "/api/v1/profiles/enumerate", Scope::Box),
+    // The physical desk is the machine's: its controllers are the operator's to give.
+    ("GET", "/api/v1/profiles/pads", Scope::Box),
+    ("PUT", "/api/v1/profiles/pads/{key}", Scope::Box),
     ("GET", "/api/v1/profiles/seating", Scope::Box),
     ("PUT", "/api/v1/profiles/seating", Scope::Box),
     ("GET", "/api/v1/profiles/windows-accounts", Scope::Box),

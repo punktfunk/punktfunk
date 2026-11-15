@@ -122,6 +122,46 @@ pub enum Command {
     Devices {
         id: SeatId,
     },
+    /// Every game controller plugged into the box that may be lent, and every lent one.
+    Pads,
+    /// Lend the desk pad `key` to seat `id`, from the desk or from the seat that holds it.
+    /// Answers `pads` as they are after.
+    Lend {
+        id: SeatId,
+        key: String,
+    },
+    /// Return the desk pad `key` to the desk. Answers `pads` as they are after.
+    TakeBack {
+        key: String,
+    },
+}
+
+/// Who has a desk pad now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PadState {
+    /// Not lent: the box's own desktop has it.
+    Desk,
+    /// Lent, and its seat runs: that seat's account alone opens it.
+    Live,
+    /// Lent, and its seat doesn't run: nobody opens it.
+    Parked,
+}
+
+/// A game controller plugged into the box, or one a seat holds, as the console lists it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeskPad {
+    pub key: String,
+    /// What the hardware calls itself, shown and never trusted.
+    pub name: String,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    /// Plugged in now.
+    pub present: bool,
+    pub state: PadState,
+    /// The seat it is lent to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seat: Option<SeatId>,
 }
 
 /// A device asking for a person's row: its certificate's SHA-256 as 64 lowercase hex, and the
@@ -287,6 +327,9 @@ pub enum CommandResult {
     SignedOut,
     Devices {
         devices: Vec<DeviceEntry>,
+    },
+    Pads {
+        pads: Vec<DeskPad>,
     },
 }
 

@@ -7612,6 +7612,143 @@
         "x-scope": "box"
       }
     },
+    "/api/v1/profiles/pads": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "List the controllers plugged into this PC",
+        "description": "Every game controller plugged into the PC that can be given to a profile, and every one a\nprofile holds, plugged in or not. A keyboard, a mouse or any other device is never listed.\nA host that can't give controllers away answers `supported: false`. Admin lane only.",
+        "operationId": "listDeskPads",
+        "responses": {
+          "200": {
+            "description": "The controllers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeskPads"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/profiles/pads/{key}": {
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Give a controller to a profile, or back to this PC",
+        "description": "With a profile: only that profile's seat sees the controller, from its next start or at once\nwhen it runs, and this PC's own desktop and every other seat stop seeing it. With `null`: it\nplays at this PC's desktop again. Either way the controller reconnects once. A controller a\nprofile holds stays that profile's while it is unplugged; giving one away needs it plugged\nin. Answers the list as it is after. Admin lane only.",
+        "operationId": "setDeskPadHolder",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "The controller's key, from the list",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeskPadHolder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The controllers, after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeskPads"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a controller's key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The profile has no seat, holds four controllers already, the controller isn't plugged in or isn't a game controller, or this host can't give controllers away",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor didn't answer, or couldn't hand the controller over",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
     "/api/v1/profiles/seating": {
       "get": {
         "tags": [
@@ -12918,6 +13055,100 @@
               "null"
             ],
             "description": "`null` is the owner."
+          }
+        }
+      },
+      "DeskPad": {
+        "type": "object",
+        "description": "A game controller plugged into this PC, or one a profile holds.",
+        "required": [
+          "key",
+          "name",
+          "vendor_id",
+          "product_id",
+          "present",
+          "state"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Names the controller in `PUT /profiles/pads/{key}`. Stable across a replug and a restart.",
+            "example": "usb-28de-1304-s-FXA99614007BD"
+          },
+          "name": {
+            "type": "string",
+            "description": "What the hardware calls itself.",
+            "example": "Steam Controller Puck"
+          },
+          "present": {
+            "type": "boolean",
+            "description": "Plugged in now. A controller a profile holds stays listed while it is unplugged."
+          },
+          "product_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The USB product id.",
+            "example": 4868,
+            "minimum": 0
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The profile it is given to."
+          },
+          "state": {
+            "$ref": "#/components/schemas/DeskPadState"
+          },
+          "vendor_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The USB vendor id.",
+            "example": 10462,
+            "minimum": 0
+          }
+        }
+      },
+      "DeskPadHolder": {
+        "type": "object",
+        "description": "Who a controller goes to.",
+        "properties": {
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The profile to give it to. `null` gives it back to this PC."
+          }
+        }
+      },
+      "DeskPadState": {
+        "type": "string",
+        "description": "Who has a controller now.",
+        "enum": [
+          "desk",
+          "live",
+          "parked"
+        ]
+      },
+      "DeskPads": {
+        "type": "object",
+        "description": "The controllers plugged into this PC.",
+        "required": [
+          "supported",
+          "pads"
+        ],
+        "properties": {
+          "pads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeskPad"
+            }
+          },
+          "supported": {
+            "type": "boolean",
+            "description": "Whether this host can give a controller to a profile. `false` lists nothing."
           }
         }
       },

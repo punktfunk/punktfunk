@@ -9,6 +9,7 @@
 
 use anyhow::{Context, Result};
 use pf_inject::usbip;
+use pf_seats::linux::lent;
 use rustix::event::{poll, PollFd, PollFlags};
 use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
@@ -222,15 +223,11 @@ fn seat_may_bind(device: &Path, interface: &Path) -> Option<bool> {
     ))
 }
 
-/// Whether a seat's interface may bind: its device is one [`usbip::EMULATED`] lists, and it is
-/// HID, audio, CDC-ACM, CDC data or vendor-specific. A vendor interface binds by VID:PID alone,
-/// so the list keeps a NIC's driver off it; ACM stops at protocol 6, short of RNDIS's `ff`.
+/// Whether a seat's interface may bind: its device is one [`usbip::EMULATED`] lists, and its
+/// class is one a pad's may be ([`lent::interface_allowed`]). A vendor interface binds by
+/// VID:PID alone, so the list keeps a NIC's driver off it.
 fn interface_allowed(vid: u16, pid: u16, class: u8, subclass: u8, protocol: u8) -> bool {
-    usbip::EMULATED.contains(&(vid, pid))
-        && matches!(
-            (class, subclass, protocol),
-            (0x01 | 0x03 | 0x0a | 0xff, _, _) | (0x02, 0x02, 0x00..=0x06)
-        )
+    usbip::EMULATED.contains(&(vid, pid)) && lent::interface_allowed(class, subclass, protocol)
 }
 
 /// The seat whose port holds device `busid`: the port's row, when its socket is the one

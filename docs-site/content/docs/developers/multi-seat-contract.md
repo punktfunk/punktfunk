@@ -38,6 +38,7 @@ is closed unanswered.
 | `list`, `create`, `start`, `stop`, `delete`, `doctor`, `seating`, `enable`, `disable` | Both. On Linux `enable` answers like `seating`, and `disable` is refused: seats are on while the daemon runs. |
 | `adopt`, `credential` | Windows: [a seat on an existing account](#a-seat-on-an-existing-account) |
 | `adopt_owner`, `install_flatpak`, `remove_flatpak` | Linux: [the owner's row](#the-owners-row-and-the-door), box-wide Flatpaks |
+| `pads`, `lend`, `take_back` | Linux: [lent controllers](#linux-seats). Each answers `pads`. Windows answers `pads_unsupported`. |
 | `adopt_user`, `unlock`, `unlock_state`, `challenge`, `left`, `sign_out`, `devices` | Linux: [a seat on a person's own account](#a-seat-on-a-persons-own-account) |
 
 On Windows the supervisor owns the seat accounts, the Windows sessions and RDP. The console host
@@ -439,6 +440,7 @@ A row with one answer holds on both. Every other row is a difference the section
 | Plugins on a person's own account | Their seat's own runner, which the person alone switches and installs into, in their session | The same |
 | The box's titles on its seat | Steam and emulator titles it can start as its own user | Every title but those of one account's sources |
 | Emulators | Installed box-wide; config and saves are the account's | The box's copies; saves and firmware through the box host's `?profile=` |
+| A controller plugged into the box | The desk's, or [lent](#linux-seats) to one profile's seat | The desk's |
 | A seat on an existing account | Yes, opened by its password or a device key | On Windows Server |
 
 A plugin with no listener of its own, as every Windows seat's is, serves its page through its seat
@@ -516,7 +518,8 @@ the installed unit.
   it on with `services.punktfunk.seats.enable`. The SteamOS on-device build lays the same files out
   under `/opt/punktfunk` and `/etc` (`scripts/steamdeck/door.sh`).
 - **The CLI.** `punktfunk-seats list`, `create <name>`, `adopt-owner <user>`,
-  `start|stop|delete <id>`, `doctor` and `seating` send the [socket's](#the-supervisor) requests;
+  `start|stop|delete <id>`, `doctor`, `seating`, `pads`, `lend <seat id> <key>` and
+  `take-back <key>` send the [socket's](#the-supervisor) requests;
   `release-owner` deletes the owner's row and `stop-all` stops every live seat.
   `check-owner on|off <user>` sends none: it applies the switch rules below and prints
   `<uid> <home>` or `gone`.
@@ -611,6 +614,36 @@ the installed unit.
   becomes that seat user's, `0600`, on a seat of its own, so neither the box's own Steam nor
   another seat sees it, and any other stamped node is root's. While the daemon runs, every other
   hidraw node keeps its group and seat0's ACL but loses `other` access.
+- **Lent controllers.** The operator lends a controller plugged into the box to a seat: the seat's
+  ledger row keeps it, up to four, each key on one row. While a lend exists the daemon records it
+  under `/run/punktfunk/pads/lent/`, root's alone, one file per controller: the seat's user, or a
+  mark for parked. A record goes live before the seat's unit starts and parks when the seat
+  stops or fails; a deleted row gives the controller back to the desk. The key is the
+  controller's vendor, product and serial, found in any port, or its vendor, product and USB port
+  when it has no serial. A record also holds the port the lend found the controller in: while a
+  second device that carries the same key is plugged in, only the one in that port is the lent
+  one. While that directory exists, `65-punktfunk-seats.rules` runs
+  `punktfunk-seats fence` on every node of a real USB device. A lent controller's nodes become
+  the seat user's as udev creates them, `0600`, without `uaccess`, on a seat name of its own, or
+  root's alone while parked; its keyboard and mouse nodes are root's alone always, so a Steam
+  Controller's desktop mode reaches nobody, and so is the device's own node under
+  `/dev/bus/usb`, through which raw USB could take a keyboard interface from the kernel. On
+  every change of hands the daemon writes `0` then `1` to the USB device's sysfs `authorized`:
+  its drivers unbind and every open handle ends. Between the two it sends the device a `change`
+  event: the device itself stays, so only that runs the rules on its own node, and each new
+  node takes its seat from the device. A controller lent to the owner's row also opens for the
+  owner's session at the desk, the same uid. The seat host never serves it as a pad, so it is in no session's pad list and its input
+  is no presence.
+- **Lending.** The daemon reads the hardware itself and lends only a device on a real USB bus
+  that is no hub, whose every interface is HID, audio, CDC-ACM, CDC data or vendor, and that is a
+  game controller by udev's joystick class or a known receiver; what the door says about a
+  device counts for nothing. `lend {id, key}` and `take_back {key}` change hands, `pads` lists
+  the controllers plugged in and every lent one, each answering `pads`. The management API's
+  admin lane, box scope, serves `GET /api/v1/profiles/pads` and
+  `PUT /api/v1/profiles/pads/{key}` with `{"profile": "<id>"}` or `{"profile": null}`. The `PUT`
+  answers 409 for a profile with no seat, a fifth controller, or one that isn't plugged in or
+  isn't a game controller; taking back an unplugged one works. Where the host can't lend, `GET`
+  answers `supported: false`.
 - **`/dev/uinput`.** Before a seat's unit starts, the daemon serves it a CUSE device,
   `/dev/punktfunk/uinput-<user>` (the user's, `0600`), and the unit binds it over `/dev/uinput`
   for the seat's Steam Input. Each open is one real uinput device the daemon makes, 16 per seat.

@@ -285,6 +285,10 @@ export type CheckLevel = "info" | "warning" | "error"
 export const CheckLevel = Schema.Literals(["info", "warning", "error"]).annotate({ "description": "What a seat check found. An `error` stops seats from turning on.", "identifier": "CheckLevel" })
 export type DoorChange = { readonly "on": boolean } & { readonly [x: string]: Schema.Json }
 export const DoorChange = Schema.StructWithRest(Schema.Struct({ "on": Schema.Boolean.annotate({ "description": "`true` makes the box reachable without anyone logging in; `false` hands it back." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`PUT /profiles/door`.", "identifier": "DoorChange" })
+export type DeskPadState = "desk" | "live" | "parked"
+export const DeskPadState = Schema.Literals(["desk", "live", "parked"]).annotate({ "description": "Who has a controller now.", "identifier": "DeskPadState" })
+export type DeskPadHolder = { readonly "profile"?: string | null } & { readonly [x: string]: Schema.Json }
+export const DeskPadHolder = Schema.StructWithRest(Schema.Struct({ "profile": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The profile to give it to. `null` gives it back to this PC." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "Who a controller goes to.", "identifier": "DeskPadHolder" })
 export type SeatingPlatform = "windows" | "linux" | "other"
 export const SeatingPlatform = Schema.Literals(["windows", "linux", "other"]).annotate({ "identifier": "SeatingPlatform" })
 export type SeatingChange = { readonly "allow_rdp_from_network"?: boolean, readonly "enabled": boolean, readonly "prepare"?: boolean } & { readonly [x: string]: Schema.Json }
@@ -469,6 +473,8 @@ export type SeatPublic = { readonly "account"?: string | null, readonly "detail"
 export const SeatPublic = Schema.StructWithRest(Schema.Struct({ "account": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The account of a seat on an existing one, for the console's card and its Remove\nsentence. Absent for an account punktfunk made, and to a paired device." })), "detail": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The progress line while `starting`, or why while `unavailable`." })), "detail_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The host message `detail` is the English of, worded with `detail_params`." })), "detail_params": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "The values of that message's placeholders, by name." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "kind": Schema.suspend((): Schema.Codec<SeatKind> => SeatKind).annotate({ "description": "Which kind of seat it is." }), "mgmt_port": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "The management port of the host on its ledger row, for the console. Absent to a paired\ndevice, and for a profile with no row." })), "occupant": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The device playing on it while `occupied`." })), "pin": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The certificate fingerprint of the host at `port`, hex, when it is a seat's own: a\nclient dialing `port` directly pins it. Absent: the pin of this host." })), "port": Schema.Number.annotate({ "description": "The port to dial for this profile.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "state": SeatState, "take_turns": Schema.optionalKey(Schema.Boolean.annotate({ "description": "A take-turns profile: its own Windows account on the one console, not a host of its own.\nIt dials this host like the owner does, so it has no per-seat library of its own and\nremoving it leaves the Windows account alone." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A profile's seat right now.", "identifier": "SeatPublic" })
 export type SeatCheck = { readonly "code": string, readonly "id"?: string | null, readonly "level": CheckLevel, readonly "message": string, readonly "params"?: { readonly [x: string]: string }, readonly "seat_id"?: string | null, readonly "seat_name"?: string | null } & { readonly [x: string]: Schema.Json }
 export const SeatCheck = Schema.StructWithRest(Schema.Struct({ "code": Schema.String.annotate({ "description": "A stable id such as `rds_role`.", "examples": ["rds_role"] }), "id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The host message `message` is the English of, worded with `params`." })), "level": CheckLevel, "message": Schema.String.annotate({ "description": "One plain sentence for the operator." }), "params": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "The values of that message's placeholders, by name." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "seat_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The seat it is about; absent when it is about the box." })), "seat_name": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The name of the profile that plays on that seat, when one does." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One thing the seat checks found.", "identifier": "SeatCheck" })
+export type DeskPad = { readonly "key": string, readonly "name": string, readonly "present": boolean, readonly "product_id": number, readonly "profile"?: string | null, readonly "state": DeskPadState, readonly "vendor_id": number } & { readonly [x: string]: Schema.Json }
+export const DeskPad = Schema.StructWithRest(Schema.Struct({ "key": Schema.String.annotate({ "description": "Names the controller in `PUT /profiles/pads/{key}`. Stable across a replug and a restart.", "examples": ["usb-28de-1304-s-FXA99614007BD"] }), "name": Schema.String.annotate({ "description": "What the hardware calls itself.", "examples": ["Steam Controller Puck"] }), "present": Schema.Boolean.annotate({ "description": "Plugged in now. A controller a profile holds stays listed while it is unplugged." }), "product_id": Schema.Number.annotate({ "description": "The USB product id.", "examples": [4868], "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "profile": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The profile it is given to." })), "state": DeskPadState, "vendor_id": Schema.Number.annotate({ "description": "The USB vendor id.", "examples": [10462], "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A game controller plugged into this PC, or one a profile holds.", "identifier": "DeskPad" })
 export type SignedInDevice = { readonly "added_unix": number, readonly "fingerprint": string, readonly "kind": SignedInKind, readonly "last_unix": number, readonly "moonlight": boolean, readonly "name": string } & { readonly [x: string]: Schema.Json }
 export const SignedInDevice = Schema.StructWithRest(Schema.Struct({ "added_unix": Schema.Number.annotate({ "description": "When it first signed in, unix seconds.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "fingerprint": Schema.String.annotate({ "description": "SHA-256 of the device's certificate, lowercase hex." }), "kind": SignedInKind, "last_unix": Schema.Number.annotate({ "description": "When it last unlocked or rejoined, unix seconds.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "moonlight": Schema.Boolean.annotate({ "description": "A Moonlight pairing rather than a Punktfunk one. Never on a person's own account." }), "name": Schema.String.annotate({ "description": "The name it paired with." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A device signed in to a profile on a person's own Linux account, or on a locked profile's\nlist.", "identifier": "SignedInDevice" })
 export type ProfileLock = { readonly "failed_pins": number, readonly "locked": boolean, readonly "pin": boolean, readonly "shared_with"?: string | null, readonly "playing": ReadonlyArray<PlayingDevice> } & { readonly [x: string]: Schema.Json }
@@ -525,6 +531,8 @@ export type SeatsDoctor = { readonly "diagnostics": ReadonlyArray<SeatCheck>, re
 export const SeatsDoctor = Schema.StructWithRest(Schema.Struct({ "diagnostics": Schema.Array(SeatCheck), "healthy": Schema.Boolean.annotate({ "description": "No check is an `error`." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "The seat supervisor's own checks.", "identifier": "SeatsDoctor" })
 export type Seating = { readonly "allow_rdp_from_network": boolean, readonly "checks": ReadonlyArray<SeatCheck>, readonly "enabled": boolean, readonly "platform": SeatingPlatform } & { readonly [x: string]: Schema.Json }
 export const Seating = Schema.StructWithRest(Schema.Struct({ "allow_rdp_from_network": Schema.Boolean.annotate({ "description": "Windows: seats are on and the network may reach Remote Desktop. Off elsewhere." }), "checks": Schema.Array(SeatCheck).annotate({ "description": "The prerequisites, one each. Empty on `other`." }), "enabled": Schema.Boolean, "platform": Schema.suspend((): Schema.Codec<SeatingPlatform> => SeatingPlatform).annotate({ "description": "`other` has no seats to turn on; `linux` has them while the door is on." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "Whether this box runs its profiles in seats of their own, with what turning that on needs.", "identifier": "Seating" })
+export type DeskPads = { readonly "pads": ReadonlyArray<DeskPad>, readonly "supported": boolean } & { readonly [x: string]: Schema.Json }
+export const DeskPads = Schema.StructWithRest(Schema.Struct({ "pads": Schema.Array(DeskPad), "supported": Schema.Boolean.annotate({ "description": "Whether this host can give a controller to a profile. `false` lists nothing." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "The controllers plugged into this PC.", "identifier": "DeskPads" })
 export type SessionSettingsState = { readonly "configured": boolean, readonly "enforced": ReadonlyArray<string>, readonly "settings": SessionSettings } & { readonly [x: string]: Schema.Json }
 export const SessionSettingsState = Schema.StructWithRest(Schema.Struct({ "configured": Schema.Boolean.annotate({ "description": "`false` means `settings` are the built-in defaults." }), "enforced": Schema.Array(Schema.String).annotate({ "description": "Axes this build enforces. Empty with no launch path (macOS) so the console\ndoes not offer a no-op switch." }), "settings": SessionSettings }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "SessionSettingsState" })
 export type SessionRow = { readonly "access_level"?: string | null, readonly "client": string, readonly "client_name"?: string | null, readonly "hdr": boolean, readonly "id"?: number, readonly "join": boolean, readonly "link"?: null | LinkMinute, readonly "mode": string, readonly "muted": boolean, readonly "pads": ReadonlyArray<number>, readonly "phase": Phase, readonly "plane": Plane, readonly "preferred_pad_slot"?: number, readonly "preset_name"?: string | null, readonly "profile"?: null | ProfileRef, readonly "seat"?: string | null, readonly "shared_path_with"?: ReadonlyArray<number>, readonly "uptime_s": number, readonly "wire"?: number } & { readonly [x: string]: Schema.Json }
@@ -1570,6 +1578,26 @@ export type EnumerateProfiles401 = ApiError
 export const EnumerateProfiles401 = ApiError
 export type EnumerateProfiles404 = ApiError
 export const EnumerateProfiles404 = ApiError
+export type ListDeskPads200 = DeskPads
+export const ListDeskPads200 = DeskPads
+export type ListDeskPads401 = ApiError
+export const ListDeskPads401 = ApiError
+export type ListDeskPads503 = ApiError
+export const ListDeskPads503 = ApiError
+export type SetDeskPadHolderRequestJson = DeskPadHolder
+export const SetDeskPadHolderRequestJson = DeskPadHolder
+export type SetDeskPadHolder200 = DeskPads
+export const SetDeskPadHolder200 = DeskPads
+export type SetDeskPadHolder400 = ApiError
+export const SetDeskPadHolder400 = ApiError
+export type SetDeskPadHolder401 = ApiError
+export const SetDeskPadHolder401 = ApiError
+export type SetDeskPadHolder404 = ApiError
+export const SetDeskPadHolder404 = ApiError
+export type SetDeskPadHolder409 = ApiError
+export const SetDeskPadHolder409 = ApiError
+export type SetDeskPadHolder503 = ApiError
+export const SetDeskPadHolder503 = ApiError
 export type GetSeating200 = Seating
 export const GetSeating200 = Seating
 export type GetSeating401 = ApiError
@@ -3429,6 +3457,28 @@ export const make = (
       orElse: unexpectedStatus
     }))
     ),
+    "listDeskPads": (options: Parameters<Punktfunk["listDeskPads"]>[0]) => HttpClientRequest.get("/api/v1/profiles/pads").pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(ListDeskPads200),
+      "401": decodeError("ListDeskPads401", ListDeskPads401),
+      "503": decodeError("ListDeskPads503", ListDeskPads503),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "setDeskPadHolder": (key, options: Parameters<Punktfunk["setDeskPadHolder"]>[1]) => __makePathRequest(HttpClientRequest.put, [key], () => "/api/v1/profiles/pads/" + __encodePathParam(key) + "").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(SetDeskPadHolder200),
+      "400": decodeError("SetDeskPadHolder400", SetDeskPadHolder400),
+      "401": decodeError("SetDeskPadHolder401", SetDeskPadHolder401),
+      "404": decodeError("SetDeskPadHolder404", SetDeskPadHolder404),
+      "409": decodeError("SetDeskPadHolder409", SetDeskPadHolder409),
+      "503": decodeError("SetDeskPadHolder503", SetDeskPadHolder503),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
     "getSeating": (options: Parameters<Punktfunk["getSeating"]>[0]) => HttpClientRequest.get("/api/v1/profiles/seating").pipe(
       withResponse(options?.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(GetSeating200),
@@ -5144,6 +5194,26 @@ readonly "setDoor": {
 readonly "enumerateProfiles": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof EnumerateProfiles200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"EnumerateProfiles401", typeof EnumerateProfiles401.Type> | PunktfunkError<"EnumerateProfiles404", typeof EnumerateProfiles404.Type>>;
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof EnumerateProfiles200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"EnumerateProfiles401", typeof EnumerateProfiles401.Type> | PunktfunkError<"EnumerateProfiles404", typeof EnumerateProfiles404.Type>>;
+  }
+  /**
+* Every game controller plugged into the PC that can be given to a profile, and every one a
+* profile holds, plugged in or not. A keyboard, a mouse or any other device is never listed.
+* A host that can't give controllers away answers `supported: false`. Admin lane only.
+*/
+readonly "listDeskPads": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ListDeskPads200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListDeskPads401", typeof ListDeskPads401.Type> | PunktfunkError<"ListDeskPads503", typeof ListDeskPads503.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof ListDeskPads200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListDeskPads401", typeof ListDeskPads401.Type> | PunktfunkError<"ListDeskPads503", typeof ListDeskPads503.Type>>;
+  }
+  /**
+* With a profile: only that profile's seat sees the controller, from its next start or at once
+* when it runs, and this PC's own desktop and every other seat stop seeing it. With `null`: it
+* plays at this PC's desktop again. Either way the controller reconnects once. A controller a
+* profile holds stays that profile's while it is unplugged; giving one away needs it plugged
+* in. Answers the list as it is after. Admin lane only.
+*/
+readonly "setDeskPadHolder": {
+    <Config extends OperationConfig | undefined = undefined>(key: string, options: { readonly payload: typeof SetDeskPadHolderRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetDeskPadHolder200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetDeskPadHolder400", typeof SetDeskPadHolder400.Type> | PunktfunkError<"SetDeskPadHolder401", typeof SetDeskPadHolder401.Type> | PunktfunkError<"SetDeskPadHolder404", typeof SetDeskPadHolder404.Type> | PunktfunkError<"SetDeskPadHolder409", typeof SetDeskPadHolder409.Type> | PunktfunkError<"SetDeskPadHolder503", typeof SetDeskPadHolder503.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(key: string, options: { readonly payload: typeof SetDeskPadHolderRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetDeskPadHolder200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetDeskPadHolder400", typeof SetDeskPadHolder400.Type> | PunktfunkError<"SetDeskPadHolder401", typeof SetDeskPadHolder401.Type> | PunktfunkError<"SetDeskPadHolder404", typeof SetDeskPadHolder404.Type> | PunktfunkError<"SetDeskPadHolder409", typeof SetDeskPadHolder409.Type> | PunktfunkError<"SetDeskPadHolder503", typeof SetDeskPadHolder503.Type>>;
   }
   /**
 * Windows reports whether the box's seats are on and what turning them on needs: Windows
