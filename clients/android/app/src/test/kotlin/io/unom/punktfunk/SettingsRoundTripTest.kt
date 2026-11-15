@@ -34,6 +34,7 @@ class SettingsRoundTripTest {
         bitrateKbps = 80_000,
         renderScale = 0.75,
         hdrEnabled = false,
+        hdrWithoutHeadroom = true,
         tenBitSdr = true,
         compositor = 2,
         gamepad = 3,

@@ -208,6 +208,14 @@ fun SettingsScreen(
         onChange(globals)
     }
 
+    /** HDR on for a display with no headroom, on the player's yes to the warning. */
+    fun allowHdrWithoutHeadroom() {
+        val preset = scopePreset()
+        globals = globals.allowingHdrWithoutHeadroom(inPreset = preset != null)
+        onChange(globals)
+        if (preset != null) update("hdr_enabled", globals.effectiveFor(preset).copy(hdrEnabled = true))
+    }
+
     // Mic uplink — turning it on requests RECORD_AUDIO; if denied, the toggle stays off.
     val micLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -339,6 +347,7 @@ fun SettingsScreen(
                             onChange = ::update,
                             context = context,
                             onMicChange = onMicChange,
+                            onHdrWithoutHeadroom = ::allowHdrWithoutHeadroom,
                             onOpenControllers = { showControllers = true },
                             onOpenQuickActions = { showQuickActions = true },
                             onOpenLicenses = { showLicenses = true },
@@ -671,6 +680,7 @@ private fun CategoryDetail(
     onChange: (String, Settings) -> Unit,
     context: android.content.Context,
     onMicChange: (Boolean) -> Unit,
+    onHdrWithoutHeadroom: () -> Unit,
     onOpenControllers: () -> Unit,
     onOpenQuickActions: () -> Unit,
     onOpenLicenses: () -> Unit,
@@ -688,7 +698,7 @@ private fun CategoryDetail(
         if (titled) Text(stringResource(category.title), style = MaterialTheme.typography.headlineMedium)
         when (category) {
             SettingsCategory.General -> GeneralSettings(settings, onChange, onResetAll)
-            SettingsCategory.Display -> DisplaySettings(settings, onChange, context)
+            SettingsCategory.Display -> DisplaySettings(settings, onChange, context, onHdrWithoutHeadroom)
             SettingsCategory.Input -> InputSettings(settings, onChange, onOpenQuickActions, onOpenShortcuts)
             SettingsCategory.Audio -> AudioSettings(settings, onChange, onMicChange)
             SettingsCategory.Controllers -> ControllerSettings(settings, onChange, onOpenControllers)
@@ -891,7 +901,12 @@ private fun ResetAllGroup(onReset: () -> Unit) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun DisplaySettings(s: Settings, update: (String, Settings) -> Unit, context: android.content.Context) {
+private fun DisplaySettings(
+    s: Settings,
+    update: (String, Settings) -> Unit,
+    context: android.content.Context,
+    onHdrWithoutHeadroom: () -> Unit,
+) {
     val (nw, nh, nhz) = nativeDisplayMode(context, secondScreen = s.secondScreen)
     // The safe-area row carries its resolved size the same way the native row does. On a display with
     // no cutout this equals the native mode — the row stays, honestly showing that it changes nothing
@@ -1006,10 +1021,11 @@ private fun DisplaySettings(s: Settings, update: (String, Settings) -> Unit, con
     // PyroWave sets its own rate: its quality, after the codec row, stands in for Bitrate's, and
     // Bitrate offers Automatic or Fixed. The stored rate is kept for the other codecs.
     val pyrowaveOn = s.codec == "pyrowave" && pyrowaveCapable
-    // HDR is only meaningful on a panel that can present HDR10; on an SDR display the toggle is
-    // disabled (and HDR is never advertised) so the host doesn't send PQ the panel mis-tone-maps.
-    val hdrCapable = remember { displaySupportsHdr(context) }
-    val hdrOn = s.hdrEnabled && hdrCapable
+    // The toggle is off and locked without an HDR10 listing. With one but no headroom it works,
+    // and turning it on asks first: the picture comes out darker than SDR.
+    val hdrDisplay = remember { displayHdr(context) }
+    val hdrOn = s.hdrOn(hdrDisplay)
+    var hdrWarning by remember { mutableStateOf(false) }
     SettingsGroup(
         stringResource(R.string.prefs_group_picture),
         footer = stringResource(R.string.prefs_applies_next_session),
@@ -1071,12 +1087,22 @@ private fun DisplaySettings(s: Settings, update: (String, Settings) -> Unit, con
         ToggleRow(
             title = stringResource(R.string.player_hdr_enabled),
             subtitle = stringResource(
-                if (hdrCapable) R.string.player_hdr_enabled_hint else R.string.android_hdr_unsupported_hint,
+                when (hdrDisplay) {
+                    DisplayHdr.None -> R.string.android_hdr_unsupported_hint
+                    DisplayHdr.NoHeadroom -> R.string.android_hdr_no_headroom_hint
+                    DisplayHdr.Full -> R.string.player_hdr_enabled_hint
+                },
             ),
             checked = hdrOn,
-            enabled = hdrCapable,
+            enabled = hdrDisplay != DisplayHdr.None,
             field = "hdr_enabled",
-            onCheckedChange = { on -> update("hdr_enabled", s.copy(hdrEnabled = on)) },
+            onCheckedChange = { on ->
+                if (on && hdrDisplay == DisplayHdr.NoHeadroom) {
+                    hdrWarning = true
+                } else {
+                    update("hdr_enabled", s.copy(hdrEnabled = on))
+                }
+            },
         )
         // The timeline presenter's intent — the Apple client's "Prioritize" pair, same stored
         // values, so a preset written on one platform means the same thing here.
@@ -1211,6 +1237,19 @@ private fun DisplaySettings(s: Settings, update: (String, Settings) -> Unit, con
             field = "compositor",
             caption = stringResource(R.string.player_compositor_hint),
         ) { c -> update("compositor", s.copy(compositor = c)) }
+    }
+    if (hdrWarning) {
+        PunktfunkDialog(
+            title = stringResource(R.string.android_hdr_no_headroom_title),
+            onDismiss = { hdrWarning = false },
+            actions = listOf(
+                DialogAction(stringResource(R.string.android_hdr_no_headroom_confirm)) {
+                    hdrWarning = false
+                    onHdrWithoutHeadroom()
+                },
+                DialogAction(stringResource(R.string.common_cancel)) { hdrWarning = false },
+            ),
+        ) { PromptText(stringResource(R.string.android_hdr_no_headroom_body)) }
     }
 }
 

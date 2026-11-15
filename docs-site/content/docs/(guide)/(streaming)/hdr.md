@@ -115,7 +115,7 @@ The setting is **10-bit HDR**, **on by default** in every client, and can differ
 | Windows | the setting is on **and** Windows HDR is on for the monitor the stream window is on |
 | macOS, iPhone, iPad | the setting is on **and** the display is HDR-capable |
 | Apple TV | the setting is on **and** the TV is HDR-capable. The TV switches to HDR10 only with tvOS **Match Content** on; otherwise the stream is tone-mapped to SDR |
-| Android, Android TV | the setting is on. It is greyed out on a panel without HDR10 |
+| Android, Android TV | the setting is on. It is greyed out on a panel without HDR10. Where Android reports no extra brightness for HDR, it starts off and warns before it turns on: the whole picture is dimmed to fit the highlights in, and may look darker than SDR |
 | Moonlight | its own HDR toggle is on. The toggle appears when the host offers a 10-bit codec |
 
 ## 10-bit SDR

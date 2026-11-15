@@ -33,7 +33,8 @@ class SettingsFieldsTest {
     private fun moved(): Settings = Settings(
         width = 3840, height = 2160, hz = 120,
         bitrateKbps = 40_000, pyrowaveBpp = 1.0, renderScale = 0.5, videoFit = "crop", secondScreen = false,
-        hdrEnabled = false, tenBitSdr = true, compositor = 2, gamepad = 3, gamepadForwarding = false,
+        hdrEnabled = false, hdrWithoutHeadroom = true, tenBitSdr = true, compositor = 2, gamepad = 3,
+        gamepadForwarding = false,
         systemButtons = "host", guideGesture = "off", audioChannels = 6, audioFormat = AUDIO_FORMAT_LOSSLESS_96,
         codec = "av1", micEnabled = true, echoCancel = false, keepHostAudio = true, hostScreen = "second",
         statsVerbosity = StatsVerbosity.DETAILED, advancedStats = true, hudPlacement = "bottomTrailing",
