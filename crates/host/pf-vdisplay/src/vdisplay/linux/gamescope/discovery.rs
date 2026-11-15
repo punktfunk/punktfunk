@@ -618,6 +618,11 @@ fn prepend_path_dir(dir: &str, path: &str) -> String {
     }
 }
 
+/// `--mangoapp` makes gamescope exec this name from its `PATH`, which is ours plus [`REAPER_DIR`].
+pub(super) fn mangoapp_installed() -> bool {
+    which_in_path("mangoapp").is_some()
+}
+
 /// A bare name would look resolved and then fail at spawn.
 fn which_in_path(name: &str) -> Option<String> {
     which_in(&crate::with_env_lock(|| std::env::var("PATH").ok())?, name)
