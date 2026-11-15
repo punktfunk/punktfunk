@@ -198,10 +198,11 @@ const FILES: [&str; 8] = [
 /// SteamOS keeps the console's password in `web.env`, beside its session secret and bind.
 const PASSWORD_LINE: &str = "^[[:space:]]*PUNKTFUNK_UI_PASSWORD(_HASH)?=";
 const SECRET_LINE: &str = "^[[:space:]]*PUNKTFUNK_UI_SECRET=";
-/// A write as one side: stdin beside `$1`, then over it.
-const TO_DOOR: &str = r#"umask 077; cat >"$1.tmp" && mv -f "$1.tmp" "$1""#;
-const TO_OWNER: &str =
-    r#"umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1""#;
+/// A write as one side: stdin beside `$1`, which [`hand_over`] moves over it or drops.
+const TO_DOOR: &str = r#"umask 077; cat >"$1.tmp""#;
+const TO_OWNER: &str = r#"umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp""#;
+const MOVE: &str = r#"mv -f "$1.tmp" "$1""#;
+const DROP: &str = r#"rm -f "$1.tmp""#;
 /// `$1`, the owner's `web.env`, less its `$3` lines, then `$2`: the door's last password line.
 const SPLICE: &str = r#"umask 077; { grep -vE "$3" "$1" || true; } >"$1.tmp" && printf "%s\n" "$2" >>"$1.tmp" && mv -f "$1.tmp" "$1""#;
 /// What `find` hands the door's files with another group.
@@ -256,6 +257,8 @@ mod hands {
         argv: Vec<OsString>,
         out: Out,
         err: bool,
+        /// The highest exit code [`pipe_held`] counts as this stage holding.
+        fine: i32,
     }
 
     impl Cmd {
@@ -265,6 +268,7 @@ mod hands {
                 argv: words.iter().map(OsString::from).collect(),
                 out: Out::Shown,
                 err: true,
+                fine: 0,
             }
         }
 
@@ -303,12 +307,37 @@ mod hands {
             self.out = Out::Kept(limit);
             self
         }
+
+        /// `grep`'s 1, no line matched, counts as holding.
+        pub(super) fn may_match_nothing(mut self) -> Self {
+            self.fine = 1;
+            self
+        }
     }
 
     /// Runs `stages` as a shell pipeline: each one's stdout into the next one's stdin, the first
     /// on `/dev/null`. The exit code is the last stage's, as the shell's without `pipefail`; a
     /// program that doesn't start is 127. The kept stdout is the last stage's.
     pub(super) fn pipe(stages: &[Cmd]) -> (i32, Vec<u8>) {
+        let (codes, kept) = run(stages);
+        (codes.last().copied().unwrap_or(127), kept)
+    }
+
+    /// Runs `stages` as [`pipe`] does: `Err` with the code of the first stage that didn't hold.
+    pub(super) fn pipe_held(stages: &[Cmd]) -> Result<(), i32> {
+        let (codes, _) = run(stages);
+        match stages
+            .iter()
+            .zip(codes)
+            .find(|(cmd, code)| *code > cmd.fine)
+        {
+            Some((_, code)) => Err(code),
+            None => Ok(()),
+        }
+    }
+
+    /// Every stage's exit code, and the last one's kept stdout.
+    fn run(stages: &[Cmd]) -> (Vec<i32>, Vec<u8>) {
         #[cfg(test)]
         if let Some(answer) = fake(stages) {
             return answer;
@@ -355,11 +384,11 @@ mod hands {
             // A read error ends the bytes there, as a closed pipe would.
             let _ = stdout.take(limit).read_to_end(&mut kept);
         }
-        let mut code = 127;
-        for child in running {
-            code = child.map_or(127, |mut c| c.wait().map_or(1, code_of));
-        }
-        (code, kept)
+        let codes = running
+            .into_iter()
+            .map(|child| child.map_or(127, |mut c| c.wait().map_or(1, code_of)))
+            .collect();
+        (codes, kept)
     }
 
     /// The shell's `$?`: the exit code, or 128 and the signal that ended it.
@@ -371,7 +400,8 @@ mod hands {
 
     /// Each stage's answer from the installed fake, in order; `None` when none is installed.
     #[cfg(test)]
-    fn fake(stages: &[Cmd]) -> Option<(i32, Vec<u8>)> {
+    fn fake(stages: &[Cmd]) -> Option<(Vec<i32>, Vec<u8>)> {
+        let mut codes = Vec::new();
         let mut last = None;
         for cmd in stages {
             let argv: Vec<String> = cmd
@@ -380,7 +410,9 @@ mod hands {
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect();
             let args: Vec<&str> = argv[1..].iter().map(String::as_str).collect();
-            last = Some(super::super::fake::answer(&argv[0], &args)?);
+            let answer = super::super::fake::answer(&argv[0], &args)?;
+            codes.push(code_of(answer.status));
+            last = Some(answer);
         }
         let answer = last?;
         let mut stdout = answer.stdout;
@@ -388,7 +420,7 @@ mod hands {
             Out::Kept(limit) => stdout.truncate(usize::try_from(limit).unwrap_or(usize::MAX)),
             Out::Shown | Out::Hidden => stdout.clear(),
         }
-        Some((code_of(answer.status), stdout))
+        Some((codes, stdout))
     }
 }
 
@@ -568,12 +600,30 @@ fn to_door(name: &str) -> Cmd {
     as_door(&["sh", "-c", TO_DOOR, "sh"], name)
 }
 
+/// `stages` into `to`'s temp file, which the last one writes as `side`. It moves over `to` only
+/// when every stage held: a read that ended early would leave a short copy. Otherwise it is
+/// dropped and the switch ends with the code of the stage that failed.
+fn hand_over(stages: &[Cmd], side: &Side, to: &Theirs) -> Result<(), Stop> {
+    let script = |script| Cmd::by(side, &["sh", "-c", script, "sh"], Some(to), &[]);
+    match hands::pipe_held(stages) {
+        Ok(()) => must(&[script(MOVE)]),
+        Err(code) => {
+            status(script(DROP));
+            Err(Stop(u8::try_from(code).unwrap_or(1)))
+        }
+    }
+}
+
 /// `name` from the owner's folder into the box directory.
 fn take(owner: &Owner, name: &str) -> Result<(), Stop> {
     if !owner.test("-f", name) {
         return Ok(());
     }
-    must(&[owner.cat(name), to_door(name)])
+    hand_over(
+        &[owner.cat(name), to_door(name)],
+        &Side::Door,
+        &in_box(name),
+    )
 }
 
 /// `name` from the box directory back to the owner: read as the door, written as the owner, so
@@ -583,7 +633,8 @@ fn give(owner: &Owner, name: &str) -> Result<(), Stop> {
         return Ok(());
     }
     let to_owner = owner.cmd(&["sh", "-c", TO_OWNER, "sh"], name);
-    must(&[as_door(&["cat", "--"], name), to_owner])
+    let stages = [as_door(&["cat", "--"], name), to_owner];
+    hand_over(&stages, &owner.side(), &owner.file(name))
 }
 
 /// The SteamOS layout: the password lives in `web.env`, and there is no `web-password`.
@@ -597,8 +648,9 @@ fn take_password(owner: &Owner) -> Result<(), Stop> {
         return Ok(());
     }
     let lines = format!("{PASSWORD_LINE}|{SECRET_LINE}");
-    let grep = Cmd::root(&["grep", "-E", lines.as_str()]);
-    must(&[owner.cat("web.env"), grep, to_door("web-password")])
+    let grep = Cmd::root(&["grep", "-E", lines.as_str()]).may_match_nothing();
+    let stages = [owner.cat("web.env"), grep, to_door("web-password")];
+    hand_over(&stages, &Side::Door, &in_box("web-password"))
 }
 
 /// The door's last password line, spliced into a SteamOS `web.env`: the one line this process
@@ -1806,8 +1858,8 @@ mod tests {
     /// The failed call's number, then the helper's exit code, record, mark and supervisor after it.
     type Fail = (usize, u8, Option<&'static str>, bool, bool);
 
-    /// Every call of a first on and of an off fails in turn, with the helper's outcome for each.
-    /// A first on that fails before the door's ports move leaves no record or mark, asks the
+    /// Every call of a first on and of an off fails in turn. The outcome is the helper's, except
+    /// that a hand-over's read stage now fails its step and its move is a call. A first on that fails before the door's ports move leaves no record or mark, asks the
     /// supervisor to release the owner's row and leaves it as it was; an off whose hand-back
     /// fails keeps the record and the mark and starts the door again.
     #[test]
@@ -1889,6 +1941,54 @@ mod tests {
         }
     }
 
+    /// The first call that is `call`, counted from one.
+    fn nth(calls: &[String], call: &str) -> usize {
+        calls.iter().position(|c| c == call).unwrap() + 1
+    }
+
+    /// A take whose read fails in a first on leaves the box's copy as it was: the temp file goes,
+    /// nothing moves, and the on is put back.
+    #[test]
+    fn a_take_whose_read_fails_replaces_nothing() {
+        let own = "/home/alice/.config/punktfunk/native-key.pem";
+        let theirs = "/var/lib/punktfunk/native-key.pem";
+        let mut scenario = on_fresh();
+        scenario.world.fail_at = Some(nth(
+            &switch(on_fresh()).calls,
+            &format!("runuser -u alice -- cat -- {own}"),
+        ));
+        let ran = switch(scenario);
+        let drop = format!(r#"runuser -u punktfunk -- sh -c rm -f "$1.tmp" sh {theirs}"#);
+        let moved = format!(r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh {theirs}"#);
+        assert!(ran.calls.contains(&drop), "{:#?}", ran.calls);
+        assert!(!ran.calls.contains(&moved), "{:#?}", ran.calls);
+        assert_eq!(
+            (ran.exit, ran.record, ran.mark, ran.seats),
+            (7, None, false, false)
+        );
+    }
+
+    /// A give whose read fails in an off leaves the owner's file as it was, starts the door again
+    /// and keeps the record.
+    #[test]
+    fn a_give_whose_read_fails_replaces_nothing() {
+        let own = "/home/alice/.config/punktfunk/uniqueid";
+        let mut scenario = off_owner();
+        let read = "runuser -u punktfunk -- cat -- /var/lib/punktfunk/uniqueid";
+        scenario.world.fail_at = Some(nth(&switch(off_owner()).calls, read));
+        let ran = switch(scenario);
+        let drop = format!(r#"runuser -u alice -- sh -c rm -f "$1.tmp" sh {own}"#);
+        let moved = format!(r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh {own}"#);
+        assert!(ran.calls.contains(&drop), "{:#?}", ran.calls);
+        assert!(!ran.calls.contains(&moved), "{:#?}", ran.calls);
+        let start = "systemctl start --no-block punktfunk-door.service punktfunk-web-door.service";
+        assert_eq!(ran.calls.last().map(String::as_str), Some(start));
+        assert_eq!(
+            (ran.exit, ran.record.as_deref(), ran.mark),
+            (7, Some("alice"), true)
+        );
+    }
+
     /// With no fake installed the hands run real programs, as the shell runs a pipeline without
     /// `pipefail`: stdin on `/dev/null`, the last stage's code and bytes, a closed pipe past the
     /// limit.
@@ -1902,6 +2002,9 @@ mod tests {
         );
         assert_eq!(hands::pipe(&[sh("exit 3"), sh("cat")]).0, 0);
         assert_eq!(hands::pipe(&[sh("true"), sh("exit 7")]).0, 7);
+        assert_eq!(hands::pipe_held(&[sh("exit 3"), sh("cat")]), Err(3));
+        let nothing = Cmd::root(&["grep", "x"]).may_match_nothing();
+        assert_eq!(hands::pipe_held(&[sh("true"), nothing]), Ok(()));
         assert_eq!(hands::pipe(&[sh("kill -TERM $$")]).0, 128 + 15);
         let missing = Cmd::root(&["/nonexistent/door-program"]).quiet();
         assert_eq!(hands::pipe(&[missing]).0, 127);
@@ -1910,7 +2013,8 @@ mod tests {
         assert_eq!(flood, b"y\ny\ny\ny\ny\n");
     }
 
-    // The calls `door-helper` made under recording stubs, in-process ones left out.
+    // The calls `door-helper` made under recording stubs, in-process ones left out, each
+    // hand-over's write split into the write and its move.
     const ON_FRESH: &[&str] = &[
         "systemctl is-active --quiet punktfunk-seats.service",
         "getent group punktfunk-door",
@@ -1930,23 +2034,28 @@ mod tests {
         "runuser -u punktfunk -- rm -f /var/lib/punktfunk/door-on",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/native-cert.pem",
         "runuser -u alice -- cat -- /home/alice/.config/punktfunk/native-cert.pem",
-        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/native-cert.pem"#,
+        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/native-cert.pem"#,
+        r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/native-cert.pem"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/native-key.pem",
         "runuser -u alice -- cat -- /home/alice/.config/punktfunk/native-key.pem",
-        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/native-key.pem"#,
+        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/native-key.pem"#,
+        r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/native-key.pem"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/uniqueid",
         "runuser -u alice -- cat -- /home/alice/.config/punktfunk/uniqueid",
-        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/uniqueid"#,
+        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/uniqueid"#,
+        r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/uniqueid"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/punktfunk1-paired.json",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/profiles.json",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-password",
         "runuser -u alice -- cat -- /home/alice/.config/punktfunk/web-password",
-        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/web-password"#,
+        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/web-password"#,
+        r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/web-password"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-session-key",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-session-epoch",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/host-settings.json",
         "runuser -u alice -- cat -- /home/alice/.config/punktfunk/host-settings.json",
-        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/host-settings.json"#,
+        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/host-settings.json"#,
+        r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/host-settings.json"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web.env",
         "runuser -u punktfunk -- mkdir -p -m 0700 /var/lib/punktfunk/profiles",
         "runuser -u alice -- ls -1 -- /home/alice/.config/punktfunk/profiles",
@@ -1954,7 +2063,8 @@ mod tests {
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/profiles/b.png",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/profiles/alice.png",
         "runuser -u alice -- cat -- /home/alice/.config/punktfunk/profiles/alice.png",
-        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/profiles/alice.png"#,
+        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/profiles/alice.png"#,
+        r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/profiles/alice.png"#,
         "systemctl enable punktfunk-seats.service",
         "systemctl start punktfunk-seats.service",
         "punktfunk-seats adopt-owner alice",
@@ -2011,11 +2121,13 @@ mod tests {
         "runuser -u bob -- test -f /home/bob/.config/punktfunk/native-key.pem",
         "runuser -u bob -- test -f /home/bob/.config/punktfunk/uniqueid",
         "runuser -u bob -- cat -- /home/bob/.config/punktfunk/uniqueid",
-        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/uniqueid"#,
+        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/uniqueid"#,
+        r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/uniqueid"#,
         "runuser -u bob -- test -f /home/bob/.config/punktfunk/punktfunk1-paired.json",
         "runuser -u bob -- test -f /home/bob/.config/punktfunk/profiles.json",
         "runuser -u bob -- cat -- /home/bob/.config/punktfunk/profiles.json",
-        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/profiles.json"#,
+        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/profiles.json"#,
+        r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/profiles.json"#,
         "runuser -u bob -- test -f /home/bob/.config/punktfunk/web-password",
         "runuser -u bob -- test -f /home/bob/.config/punktfunk/web-session-key",
         "runuser -u bob -- test -f /home/bob/.config/punktfunk/web-session-epoch",
@@ -2051,7 +2163,8 @@ mod tests {
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/native-key.pem",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/uniqueid",
         "runuser -u alice -- cat -- /home/alice/.config/punktfunk/uniqueid",
-        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/uniqueid"#,
+        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/uniqueid"#,
+        r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/uniqueid"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/punktfunk1-paired.json",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/profiles.json",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-password",
@@ -2062,7 +2175,8 @@ mod tests {
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-password",
         "runuser -u alice -- cat -- /home/alice/.config/punktfunk/web.env",
         "grep -E ^[[:space:]]*PUNKTFUNK_UI_PASSWORD(_HASH)?=|^[[:space:]]*PUNKTFUNK_UI_SECRET=",
-        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/web-password"#,
+        r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/web-password"#,
+        r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/web-password"#,
         "runuser -u punktfunk -- mkdir -p -m 0700 /var/lib/punktfunk/profiles",
         "runuser -u alice -- ls -1 -- /home/alice/.config/punktfunk/profiles",
         "systemctl enable punktfunk-seats.service",
@@ -2082,29 +2196,36 @@ mod tests {
         "runuser -u punktfunk -- rm -f /var/lib/punktfunk/door-on",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/native-cert.pem",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/native-cert.pem",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-cert.pem"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/native-cert.pem"#,
+        r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-cert.pem"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/native-key.pem",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/native-key.pem",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-key.pem"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/native-key.pem"#,
+        r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-key.pem"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/uniqueid",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/uniqueid",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/uniqueid"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/uniqueid"#,
+        r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/uniqueid"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/punktfunk1-paired.json",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/punktfunk1-paired.json",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/punktfunk1-paired.json"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/punktfunk1-paired.json"#,
+        r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/punktfunk1-paired.json"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/profiles.json",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-session-key",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-session-epoch",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/web-session-epoch",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/web-session-epoch"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/web-session-epoch"#,
+        r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/web-session-epoch"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web.env",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-password",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/web-password",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/web-password"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/web-password"#,
+        r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/web-password"#,
         "runuser -u punktfunk -- ls -1 -- /var/lib/punktfunk/profiles",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/profiles/alice.png",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/profiles/alice.png",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/profiles/alice.png"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/profiles/alice.png"#,
+        r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/profiles/alice.png"#,
         "systemctl is-active --quiet punktfunk-seats.service",
         "punktfunk-seats stop-all",
         "punktfunk-seats release-owner",
@@ -2121,21 +2242,26 @@ mod tests {
         "runuser -u punktfunk -- rm -f /var/lib/punktfunk/door-on",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/native-cert.pem",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/native-cert.pem",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-cert.pem"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/native-cert.pem"#,
+        r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-cert.pem"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/native-key.pem",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/native-key.pem",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-key.pem"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/native-key.pem"#,
+        r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-key.pem"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/uniqueid",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/uniqueid",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/uniqueid"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/uniqueid"#,
+        r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/uniqueid"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/punktfunk1-paired.json",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/punktfunk1-paired.json",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/punktfunk1-paired.json"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/punktfunk1-paired.json"#,
+        r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/punktfunk1-paired.json"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/profiles.json",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-session-key",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-session-epoch",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/web-session-epoch",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/web-session-epoch"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/web-session-epoch"#,
+        r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/web-session-epoch"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web.env",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-password",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/web-password",
@@ -2145,7 +2271,8 @@ mod tests {
         "runuser -u punktfunk -- ls -1 -- /var/lib/punktfunk/profiles",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/profiles/alice.png",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/profiles/alice.png",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/profiles/alice.png"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/profiles/alice.png"#,
+        r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/profiles/alice.png"#,
         "systemctl is-active --quiet punktfunk-seats.service",
         "punktfunk-seats stop-all",
         "punktfunk-seats release-owner",
@@ -2211,7 +2338,7 @@ mod tests {
         "find /var/lib/punktfunk-seats/library -xdev ! -group punktfunk-door -exec chgrp -h punktfunk-door {} +",
     ];
 
-    // `door-helper`'s outcome with each call failing in turn.
+    // The outcome with each call failing in turn.
     const ON_FRESH_FAILS: &[Fail] = &[
         (1, 0, Some("alice"), true, true),
         (2, 0, Some("alice"), true, true),
@@ -2230,40 +2357,46 @@ mod tests {
         (15, 0, Some("alice"), true, true),
         (16, 0, Some("alice"), true, true),
         (17, 0, Some("alice"), true, true),
-        (18, 0, Some("alice"), true, true),
+        (18, 7, None, false, false),
         (19, 7, None, false, false),
-        (20, 0, Some("alice"), true, true),
+        (20, 7, None, false, false),
         (21, 0, Some("alice"), true, true),
         (22, 7, None, false, false),
-        (23, 0, Some("alice"), true, true),
-        (24, 0, Some("alice"), true, true),
-        (25, 7, None, false, false),
-        (26, 0, Some("alice"), true, true),
-        (27, 0, Some("alice"), true, true),
-        (28, 0, Some("alice"), true, true),
+        (23, 7, None, false, false),
+        (24, 7, None, false, false),
+        (25, 0, Some("alice"), true, true),
+        (26, 7, None, false, false),
+        (27, 7, None, false, false),
+        (28, 7, None, false, false),
         (29, 0, Some("alice"), true, true),
-        (30, 7, None, false, false),
+        (30, 0, Some("alice"), true, true),
         (31, 0, Some("alice"), true, true),
-        (32, 0, Some("alice"), true, true),
-        (33, 0, Some("alice"), true, true),
-        (34, 0, Some("alice"), true, true),
-        (35, 7, None, false, false),
+        (32, 7, None, false, false),
+        (33, 7, None, false, false),
+        (34, 7, None, false, false),
+        (35, 0, Some("alice"), true, true),
         (36, 0, Some("alice"), true, true),
-        (37, 7, None, false, false),
-        (38, 0, Some("alice"), true, true),
-        (39, 0, Some("alice"), true, true),
-        (40, 0, Some("alice"), true, true),
+        (37, 0, Some("alice"), true, true),
+        (38, 7, None, false, false),
+        (39, 7, None, false, false),
+        (40, 7, None, false, false),
         (41, 0, Some("alice"), true, true),
-        (42, 0, Some("alice"), true, true),
-        (43, 7, None, false, false),
+        (42, 7, None, false, false),
+        (43, 0, Some("alice"), true, true),
         (44, 0, Some("alice"), true, true),
-        (45, 7, None, false, false),
-        (46, 7, None, false, false),
-        (47, 0, Some("alice"), true, true),
-        (48, 0, Some("alice"), true, true),
-        (49, 0, Some("alice"), true, true),
+        (45, 0, Some("alice"), true, true),
+        (46, 0, Some("alice"), true, true),
+        (47, 7, None, false, false),
+        (48, 7, None, false, false),
+        (49, 7, None, false, false),
         (50, 0, Some("alice"), true, true),
-        (51, 7, Some("alice"), true, true),
+        (51, 7, None, false, false),
+        (52, 7, None, false, false),
+        (53, 0, Some("alice"), true, true),
+        (54, 0, Some("alice"), true, true),
+        (55, 0, Some("alice"), true, true),
+        (56, 0, Some("alice"), true, true),
+        (57, 7, Some("alice"), true, true),
     ];
 
     const ON_STEAMOS_FAILS: &[Fail] = &[
@@ -2283,9 +2416,9 @@ mod tests {
         (14, 0, Some("alice"), true, true),
         (15, 0, Some("alice"), true, true),
         (16, 0, Some("alice"), true, true),
-        (17, 0, Some("alice"), true, true),
+        (17, 7, None, false, true),
         (18, 7, None, false, true),
-        (19, 0, Some("alice"), true, true),
+        (19, 7, None, false, true),
         (20, 0, Some("alice"), true, true),
         (21, 0, Some("alice"), true, true),
         (22, 0, Some("alice"), true, true),
@@ -2294,18 +2427,20 @@ mod tests {
         (25, 0, Some("alice"), true, true),
         (26, 0, Some("alice"), true, true),
         (27, 0, Some("alice"), true, true),
-        (28, 0, Some("alice"), true, true),
+        (28, 7, None, false, true),
         (29, 7, None, false, true),
         (30, 7, None, false, true),
-        (31, 0, Some("alice"), true, true),
-        (32, 0, Some("alice"), true, true),
-        (33, 7, None, false, true),
-        (34, 7, None, false, true),
-        (35, 0, Some("alice"), true, true),
-        (36, 0, Some("alice"), true, true),
+        (31, 7, None, false, true),
+        (32, 7, None, false, true),
+        (33, 0, Some("alice"), true, true),
+        (34, 0, Some("alice"), true, true),
+        (35, 7, None, false, true),
+        (36, 7, None, false, true),
         (37, 0, Some("alice"), true, true),
         (38, 0, Some("alice"), true, true),
-        (39, 7, Some("alice"), true, true),
+        (39, 0, Some("alice"), true, true),
+        (40, 0, Some("alice"), true, true),
+        (41, 7, Some("alice"), true, true),
     ];
 
     const OFF_OWNER_FAILS: &[Fail] = &[
@@ -2314,36 +2449,43 @@ mod tests {
         (3, 0, None, false, false),
         (4, 0, None, false, false),
         (5, 0, None, false, false),
-        (6, 0, None, false, false),
+        (6, 7, Some("alice"), true, true),
         (7, 7, Some("alice"), true, true),
-        (8, 0, None, false, false),
+        (8, 7, Some("alice"), true, true),
         (9, 0, None, false, false),
         (10, 7, Some("alice"), true, true),
-        (11, 0, None, false, false),
-        (12, 0, None, false, false),
-        (13, 7, Some("alice"), true, true),
-        (14, 0, None, false, false),
-        (15, 0, None, false, false),
+        (11, 7, Some("alice"), true, true),
+        (12, 7, Some("alice"), true, true),
+        (13, 0, None, false, false),
+        (14, 7, Some("alice"), true, true),
+        (15, 7, Some("alice"), true, true),
         (16, 7, Some("alice"), true, true),
         (17, 0, None, false, false),
-        (18, 0, None, false, false),
-        (19, 0, None, false, false),
-        (20, 0, None, false, false),
-        (21, 7, Some("alice"), true, true),
+        (18, 7, Some("alice"), true, true),
+        (19, 7, Some("alice"), true, true),
+        (20, 7, Some("alice"), true, true),
+        (21, 0, None, false, false),
         (22, 0, None, false, false),
         (23, 0, None, false, false),
-        (24, 0, None, false, false),
+        (24, 7, Some("alice"), true, true),
         (25, 7, Some("alice"), true, true),
-        (26, 0, None, false, false),
+        (26, 7, Some("alice"), true, true),
         (27, 0, None, false, false),
         (28, 0, None, false, false),
         (29, 7, Some("alice"), true, true),
-        (30, 0, None, false, false),
-        (31, 1, Some("alice"), false, false),
-        (32, 1, Some("alice"), false, false),
+        (30, 7, Some("alice"), true, true),
+        (31, 7, Some("alice"), true, true),
+        (32, 0, None, false, false),
         (33, 0, None, false, false),
-        (34, 0, None, false, false),
-        (35, 0, None, false, false),
-        (36, 0, None, false, false),
+        (34, 7, Some("alice"), true, true),
+        (35, 7, Some("alice"), true, true),
+        (36, 7, Some("alice"), true, true),
+        (37, 0, None, false, false),
+        (38, 1, Some("alice"), false, false),
+        (39, 1, Some("alice"), false, false),
+        (40, 0, None, false, false),
+        (41, 0, None, false, false),
+        (42, 0, None, false, false),
+        (43, 0, None, false, false),
     ];
 }
