@@ -290,7 +290,8 @@ pub struct UsbDevice {
     pub name: String,
     /// Class, subclass and protocol of each interface.
     pub interfaces: Vec<[u8; 3]>,
-    /// A HID controller collection or an XUSB interface lies under it.
+    /// A HID controller collection or an XUSB interface is this device's own: none of a
+    /// device plugged into it, as a hub or a Bluetooth radio has.
     pub controller: bool,
 }
 
@@ -301,9 +302,9 @@ pub fn usb_devices() -> Vec<UsbDevice> {
         if hid && !is_controller_collection(&path) {
             continue;
         }
-        if let Ok(line) = instance_id_of(&path).and_then(|id| lineage(&id)) {
-            controllers.extend(line);
-        }
+        let line = instance_id_of(&path).and_then(|id| lineage(&id));
+        let device = |line: Vec<String>| line.into_iter().find(|id| usb_ids(id).is_some());
+        controllers.extend(line.ok().and_then(device));
     }
     let read = |instance: String| {
         let (vendor_id, product_id) = usb_ids(&instance)?;
@@ -775,5 +776,65 @@ mod tests {
         assert_eq!(interface_class("USB\\COMPOSITE"), None);
         assert!(is_composite("USB\\COMPOSITE"));
         assert!(!is_composite("USB\\Class_03"));
+    }
+
+    /// The HID and XUSB devnodes under the USB device `instance`, each with its session.
+    fn tags_under(instance: &str) -> Vec<(String, Option<u32>)> {
+        let top = instance.to_ascii_uppercase();
+        let under = |id: &String| lineage(id).is_ok_and(|line| line.contains(&top));
+        every_interface()
+            .into_iter()
+            .filter_map(|(path, _)| instance_id_of(&path).ok())
+            .filter(under)
+            .map(|id| {
+                let session = get_devnode_session(&id).ok().flatten();
+                (id, session)
+            })
+            .collect()
+    }
+
+    /// Whether every devnode under `instance` is back and carries `want` within eight seconds.
+    fn settles(instance: &str, want: Option<u32>) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        loop {
+            let tags = tags_under(instance);
+            if !tags.is_empty() && tags.iter().all(|(_, session)| *session == want) {
+                return true;
+            }
+            if std::time::Instant::now() > deadline {
+                println!("still {tags:?}");
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+
+    /// On a Windows box, elevated in session 0: `PF_FENCE_LIVE_DEVICE` names the instance id
+    /// of a USB HID device nobody needs for the next seconds. It restarts twice.
+    #[test]
+    #[ignore = "restarts a real USB device"]
+    fn live_a_hand_over_tags_every_devnode_and_restarts_the_device() {
+        let instance = std::env::var("PF_FENCE_LIVE_DEVICE").expect("PF_FENCE_LIVE_DEVICE");
+        for usb in usb_devices() {
+            println!("{usb:?}");
+        }
+        let listed = usb_devices();
+        let named = |usb: &&UsbDevice| usb.instance.eq_ignore_ascii_case(&instance);
+        let device = listed.iter().find(named).expect("the device is plugged in");
+        assert!(!device.interfaces.is_empty(), "its interfaces are read");
+        assert!(
+            !tags_under(&instance).is_empty(),
+            "it has a HID or XUSB devnode"
+        );
+
+        let started = std::time::Instant::now();
+        hand(&instance, Some(PARKED), true).expect("parked, with a restart");
+        println!("restart took {:?}", started.elapsed());
+        assert!(settles(&instance, Some(PARKED)), "parked on arrival");
+        println!("parked after {:?}", started.elapsed());
+        hand(&instance, Some(4242), false).expect("live, in place");
+        assert!(settles(&instance, Some(4242)), "live in place");
+        hand(&instance, None, true).expect("the desk's, with a restart");
+        assert!(settles(&instance, None), "untagged once it is the desk's");
     }
 }
