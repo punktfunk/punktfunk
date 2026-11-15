@@ -73,6 +73,8 @@ mod wire_mtu;
 
 mod control;
 mod cursor_fwd;
+/// How a session holds its display: [`geometry::Tenure`], [`geometry::Hold`].
+mod geometry;
 
 mod stream;
 #[cfg(feature = "gamestream")]
@@ -1474,19 +1476,22 @@ async fn negotiate_session(
     );
     // Live reconfigure is off for gamescope (resize must not relaunch the title),
     // `identity: per-client-mode` (resize would resolve a different slot) and a monitor
-    // mirror (physical head ignores the requested mode). The mirror is the handshake's pick: a
+    // mirror (physical head ignores the requested mode). The tenure is the handshake's: a
     // console change mid-session must not change this session's answer. A `join` session is
-    // asked at each switch (`wiring::joined_held`).
-    let mirrored = n.terms.mirrored;
+    // asked at each switch, by its display's hold.
+    let tenure = n.terms.tenure;
     let live_reconfig_ok = {
         let per_client_mode_identity = crate::vdisplay::policy::prefs()
             .configured_effective()
             .is_some_and(|e| e.identity == crate::vdisplay::policy::Identity::PerClientMode);
-        reconfig_allowed(n.terms.compositor, per_client_mode_identity, mirrored)
+        reconfig_allowed(
+            n.terms.compositor,
+            per_client_mode_identity,
+            tenure.mirrors(),
+        )
     };
-    let exact_rate_ok = handshake::runs_exact_rate(n.terms.compositor, mirrored);
-    // A mirror shares another session's capture: its format stays.
-    let format_change_ok = !mirrored;
+    let exact_rate_ok = handshake::runs_exact_rate(n.terms.compositor, tenure.mirrors());
+    let format_change_ok = tenure.may_change_format();
     let codec = crate::encode::codec_from_wire(n.welcome.codec);
     tracing::info!(
         peer = %scope.conn().remote_address(),
@@ -1550,15 +1555,13 @@ async fn wire_session(
         shared,
     } = SessionWiring::new(
         &n.welcome,
+        &n.terms.tenure,
         host.opts.source,
         crate::send_pacing::Ports::of(
             (n.host_link.iface_kind, n.host_link.link_mbps),
             (n.client_link.kind, n.client_link.mbps),
         ),
     );
-    // A joiner may not switch before its stream knows the display it joined.
-    let joined = wiring::joined_display(n.terms.joined.is_some(), None);
-    shared.joined_display.store(joined, Ordering::Relaxed);
     // Shard renegotiation only if `Hello::max_shard_payload` and not PyroWave (PyroWave pins
     // the Welcome value for the session; a mid-stream re-key would desync). Not for a browser
     // either: the driver's targets are UDP-over-IP maths, and a WebTransport datagram also
@@ -2079,14 +2082,13 @@ fn display_half(
         terms.compositor,
         terms.gamescope_route.as_ref(),
         &knobs,
-        terms.joined.as_ref().map(|(d, _)| d),
-        handshake::follows_source(&features, terms.mirrored),
+        terms.joined.as_ref(),
+        handshake::follows_source(&features, &terms.tenure),
     );
     // The content the Welcome was resolved for, not a second look at it.
     format_facts.content_hdr = format_facts
         .follows_content()
         .then_some(welcome.color.is_hdr());
-    let join_live = terms.joined.is_some();
     // Mid-stream resize counterpart; latest accepted Reconfigure wins.
     let resize_ms: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     move |common| SessionContext {
@@ -2102,7 +2104,6 @@ fn display_half(
         launch_stamp: launch.stamp,
         launch_owner: launch.owner,
         launch_outcome: lanes.launch_outcome,
-        join_live,
         frame_map: lanes.frame_map,
         #[cfg(target_os = "linux")]
         gamescope_xwayland: lanes.gamescope_xwayland,

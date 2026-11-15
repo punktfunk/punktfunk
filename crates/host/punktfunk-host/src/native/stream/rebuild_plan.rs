@@ -10,6 +10,7 @@ use super::session_watch::SessionSwitch;
 use super::swap::SwapReason;
 use crate::encode::Codec;
 use crate::native::bitrate::pyrowave_mode_kbps;
+use crate::native::geometry::{Hold, Tenure};
 use crate::session_plan::{CaptureBackend, SessionPlan};
 use crate::vdisplay::Compositor;
 use punktfunk_core::Mode;
@@ -53,15 +54,14 @@ pub(super) struct RebuildFacts {
     pub(super) follows_session: bool,
     /// A Windows IDD-push display can be mode-set in place.
     pub(super) windows: bool,
-    /// Another session holds the display: its mode stays put.
-    pub(super) shared: bool,
-    /// The session streams a display it joined (`mode_conflict: join`).
-    pub(super) joined: bool,
+    pub(super) tenure: Tenure,
+    /// Another session is on the display: its mode stays put.
+    pub(super) hold: Hold,
 }
 
 /// How the replacement is built.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Build {
+pub(in crate::native) enum Build {
     /// One build on the live display, at the capturer's own first-frame wait.
     Once,
     /// [`super::pipeline::build_pipeline_with_retry`] over these attempts.
@@ -235,7 +235,7 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
         epilogue: rebuilt,
         rollback: KEPT,
     };
-    let alone_on_joined = f.joined && !f.shared;
+    let stops_joining = f.tenure.stops_joining(f.hold);
     Some(match *ask {
         RebuildAsk::SessionSwitch(ref sw) if sw.compositor == f.compositor => return None,
         RebuildAsk::SessionSwitch(ref sw) => RebuildPlan {
@@ -250,9 +250,9 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
             },
             ..at_live
         },
-        // Another session holds the display, so its mode stays: the encoder alone frames the
+        // Another session is on the display, so its mode stays: the encoder alone frames the
         // asked size, and the client, which holds the mode it asked for, hears the one that runs.
-        RebuildAsk::Mode(mode, asked) if f.shared && mode != f.mode => {
+        RebuildAsk::Mode(mode, asked) if f.hold != Hold::Alone && mode != f.mode => {
             let framed = view_for(mode, asked, f.mode);
             if framed == view {
                 return None;
@@ -293,7 +293,7 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
             mode,
             rate_kbps: rate_at(mode, asked, f),
             trace: Some("resize"),
-            stops_joining: alone_on_joined,
+            stops_joining,
             epilogue: Epilogue {
                 tell: Some(Tell::Mode),
                 ..rebuilt
@@ -309,7 +309,7 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
             reason: SwapReason::Format,
             display: Some(DisplayChange::Format(codec)),
             trace: Some("format"),
-            stops_joining: alone_on_joined,
+            stops_joining,
             epilogue: Epilogue {
                 tell: Some(Tell::Codec),
                 screens: Screens::Rebase,
@@ -322,7 +322,7 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
             ..at_live
         },
         // A shared capture has one format for every session on it.
-        RebuildAsk::Content(_) if f.shared || f.joined => return None,
+        RebuildAsk::Content(_) if !f.tenure.follows_content(f.hold) => return None,
         // gamescope's capture node feeds one link, so the running capture stops before the
         // next one attaches: from there it is a capture loss on a display that is still up.
         RebuildAsk::Content(hdr) => RebuildPlan {
@@ -434,8 +434,8 @@ mod tests {
             seen_reassert_gen: 3,
             follows_session: true,
             windows: false,
-            shared: false,
-            joined: false,
+            tenure: Tenure::of(None, false),
+            hold: Hold::Alone,
         }
     }
 
@@ -446,12 +446,15 @@ mod tests {
         refresh_mhz: 0,
     };
 
+    /// Another session joined the session's display.
     fn shared(f: &mut RebuildFacts) {
-        f.shared = true;
+        f.hold = Hold::Shared;
     }
 
+    /// The session joined the display, alone on it.
     fn joined(f: &mut RebuildFacts) {
-        f.joined = true;
+        let at = Some((punktfunk_core::video_fit::VideoFit::Fit, (1920, 1080)));
+        f.tenure = Tenure::of(at, false);
     }
 
     /// The encoder alone on a display another session holds, framing another size; the
@@ -777,7 +780,7 @@ mod tests {
         Row {
             name: "content turned SDR on a display another session holds: nothing",
             ask: || RebuildAsk::Content(false),
-            facts: |f| f.shared = true,
+            facts: shared,
             want: || None,
         },
         Row {
@@ -935,8 +938,8 @@ mod tests {
                 "a joiner on a shared display: framed as its owner is, never a display of its own",
             ask: || RebuildAsk::Mode(SMALL, None),
             facts: |f| {
-                shared(f);
                 joined(f);
+                f.hold = Hold::Held;
             },
             want: framed,
         },

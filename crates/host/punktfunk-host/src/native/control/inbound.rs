@@ -57,7 +57,7 @@ impl ControlTask {
     /// the ask is refused at once.
     async fn on_codec_ask(&mut self, exclude: u8) -> Step {
         let mut to = None;
-        if self.task.format_change_ok && !self.task.joined_held() && self.asked == 0 {
+        if self.task.format_change_ok && !self.task.held() && self.asked == 0 {
             self.excluded |= exclude;
             let left = self.task.client_codecs & !self.excluded;
             let t = &self.task;
@@ -99,7 +99,7 @@ impl ControlTask {
             ..req
         };
         let t = &self.task;
-        let live = t.live_reconfig_ok && !t.joined_held();
+        let live = t.live_reconfig_ok && !t.held();
         let accepted = match reconfigure_ask(&req, t.codec, live, too_soon) {
             Ask::Codec(exclude) => return self.on_codec_ask(exclude).await,
             Ask::Mode(asked) => Some(asked),

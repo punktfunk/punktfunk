@@ -77,37 +77,34 @@ pub(in crate::native) struct DisplayPrep {
 }
 
 /// A virtual-display session's plan on `compositor` as the handshake settled it: its codec,
-/// depth, framing and join. Bring-up and the Welcome-time prep resolve here, so a prepared
+/// depth, framing and tenure. Bring-up and the Welcome-time prep resolve here, so a prepared
 /// pipeline is built from the plan its session runs.
 pub(super) fn resolve_plan(
     terms: &super::super::handshake::SessionTerms,
     compositor: crate::vdisplay::Compositor,
     route: Option<&crate::vdisplay::GamescopeRoute>,
 ) -> crate::session_plan::SessionPlan {
-    use super::super::handshake::{joined_view, reframe_to};
+    use super::super::handshake::reframe_to;
     plan_for(
         terms,
         terms.codec,
         &terms.verdict,
-        reframe_to(
-            terms.hello.video_fit,
-            joined_view(&terms.joined),
-            terms.view,
-        ),
-        terms.joined.is_some(),
+        reframe_to(terms.tenure.framing(), terms.view),
+        &terms.tenure,
         compositor,
         route,
     )
 }
 
 /// [`resolve_plan`] for a codec the session moved to, at the depth, HDR and chroma `v` settled
-/// for it, framed as `reframe_to` and joined as `join_live` say: what the session runs now.
+/// for it, framed as `reframe_to` says, on the display it holds as `tenure`: what the session
+/// runs now.
 pub(super) fn plan_for(
     terms: &super::super::handshake::SessionTerms,
     codec: crate::encode::Codec,
     v: &super::super::handshake::Verdict,
     reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
-    join_live: bool,
+    tenure: &crate::native::geometry::Tenure,
     compositor: crate::vdisplay::Compositor,
     route: Option<&crate::vdisplay::GamescopeRoute>,
 ) -> crate::session_plan::SessionPlan {
@@ -130,7 +127,7 @@ pub(super) fn plan_for(
         terms.cursor_forward,
         terms.slices,
     )
-    .mirroring(terms.mirrored);
+    .mirroring(tenure.mirrors());
     // After resolve: a self-painting gamescope node would otherwise get a second XFixes pointer.
     plan.gamescope_cursor = crate::session_plan::gamescope_cursor_for(
         compositor == pf_vdisplay::Compositor::Gamescope,
@@ -143,7 +140,7 @@ pub(super) fn plan_for(
         plan.wire_chunk = Some(terms.shard_payload);
     }
     plan.reframe_to = reframe_to;
-    if join_live {
+    if tenure.join_live() {
         plan.sharing_live_display()
     } else {
         plan
@@ -166,7 +163,6 @@ pub(in crate::native) fn prepare_display(
     let compositor = terms
         .compositor
         .expect("a display prep is spawned only for a resolved compositor");
-    let join_live = terms.joined.is_some();
     let plan = resolve_plan(&terms, compositor, None);
     let (_, metadata_composite) = super::cursor::composite_plan(
         &plan,
@@ -181,7 +177,7 @@ pub(in crate::native) fn prepare_display(
         client_hdr: terms.client_hdr(),
         hdr: terms.verdict.hdr,
         hw_cursor: terms.cursor_forward || metadata_composite,
-        join_live,
+        join_live: terms.tenure.join_live(),
         quit: quit.clone(),
         // Only Linux nests a launch in `create`, and Linux never preps.
         launch: None,
@@ -1084,29 +1080,31 @@ mod tests {
         terms_for(hello_at(mode(1920, 1080, 60)), crate::encode::resolve())
     }
 
-    /// A session framed for its view captures its own display; only `join_live` shares the
+    /// A session framed for its view captures its own display; only a joiner shares the
     /// owner's capture.
     #[test]
     fn a_viewed_session_is_framed_and_is_no_joiner() {
+        use crate::native::geometry::Tenure;
         use crate::session_plan::CaptureBackend;
         let view = Some((punktfunk_core::video_fit::VideoFit::Fit, (1366, 768)));
         let terms = terms();
-        let plan = |join_live| {
+        let plan = |tenure: Tenure| {
             plan_for(
                 &terms,
                 terms.codec,
                 &terms.verdict,
                 view,
-                join_live,
+                &tenure,
                 crate::vdisplay::Compositor::Kwin,
                 None,
             )
         };
-        let own = plan(false);
+        let own = plan(Tenure::of(None, false));
         assert_eq!(own.reframe_to, view);
         assert_eq!(own.capture, CaptureBackend::resolve(false));
         if cfg!(target_os = "windows") {
-            assert_eq!(plan(true).capture, CaptureBackend::Wgc);
+            let joiner = Tenure::of(view, false);
+            assert_eq!(plan(joiner).capture, CaptureBackend::Wgc);
         }
     }
 
@@ -1144,12 +1142,13 @@ mod tests {
         use crate::session_plan::{CaptureBackend, SessionTopology};
         use pf_capture::EncoderSite;
         let terms = terms();
+        let joined = Some((Default::default(), (1920, 1080)));
         let joiner = plan_for(
             &terms,
             terms.codec,
             &terms.verdict,
             None,
-            true,
+            &crate::native::geometry::Tenure::of(joined, false),
             crate::vdisplay::Compositor::Kwin,
             None,
         );

@@ -162,8 +162,8 @@ impl StreamState {
     }
 
     /// The capture side of a built pipeline, then its encoder. The plan settles on the new
-    /// capture: a joiner's rebuild can join or miss anew, and the control task learns the
-    /// display it joined. A new capturer numbers its cursor shapes from 1 again, so the last
+    /// capture: a joiner's rebuild can join or miss anew, and the control task's tenure cell
+    /// takes the new display. A new capturer numbers its cursor shapes from 1 again, so the last
     /// forwarded one is forgotten, and the clipboard follows the new capture's gamescope.
     fn adopt_pipeline(&mut self, p: Pipeline) {
         let Pipeline {
@@ -194,9 +194,7 @@ impl StreamState {
         self.live.interval = interval;
         self.live.cur_node_id = node_id;
         self.live.cur_display_gen = display_gen;
-        let joined =
-            crate::native::wiring::joined_display(self.display.vd_params.join_live, display_gen);
-        (self.shared.joined_display).store(joined, std::sync::atomic::Ordering::Relaxed);
+        self.shared.tenure.adopt(&self.display.tenure, display_gen);
         #[cfg(target_os = "linux")]
         {
             super::state::publish_gamescope_xwayland(
@@ -452,6 +450,7 @@ pub(super) mod tests {
         let hello = crate::native::handshake::tests::hello_at(mode);
         let mut terms = crate::native::handshake::tests::terms_for(hello, encoder.clone());
         terms.pyrowave_max_kbps = knobs.pyrowave_max_kbps;
+        let own = terms.tenure;
         let st = StreamState {
             facts: SessionFacts {
                 deadline: now + Duration::from_secs(60),
@@ -501,6 +500,7 @@ pub(super) mod tests {
             display: DisplayRequest {
                 vd: Box::new(NullDisplay(display.clone())),
                 compositor: crate::vdisplay::Compositor::Kwin,
+                tenure: own,
                 cursor_fwd: None,
                 cursor_client_drew: true,
                 gamescope_composite: false,
@@ -637,7 +637,7 @@ pub(super) mod tests {
                 cadence_behind_score: Default::default(),
                 client_packets_received: Default::default(),
                 cursor_client_draws: Default::default(),
-                joined_display: Default::default(),
+                tenure: Arc::new(crate::native::geometry::TenureCell::new(&own)),
             },
             ends: LoopEnds {
                 cursor_shape_tx: tokio::sync::watch::channel(None).0,

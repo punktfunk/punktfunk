@@ -464,10 +464,10 @@ impl Task {
         )
     }
 
-    /// This session streams a display it joined and may not change now, read at each ask
-    /// ([`joined_held`](super::wiring::joined_held)).
-    fn joined_held(&self) -> bool {
-        super::wiring::joined_held(self.shared.joined_display.load(Ordering::Relaxed))
+    /// The display the stream last adopted is not this session's to change now, read off the
+    /// display registry at each ask.
+    fn held(&self) -> bool {
+        self.shared.tenure.held(crate::vdisplay::registry::shared)
     }
 }
 
@@ -1130,16 +1130,17 @@ pub(crate) mod tests {
     /// display, nor off Linux; on Linux, while no other session holds that display, it may.
     #[test]
     fn a_joiner_switches_only_alone_on_linux() {
-        use super::super::wiring::{joined_display, joined_held, JOINED_UNSEEN};
-        assert_eq!(joined_display(false, Some(7)), 0);
-        assert_eq!(joined_display(true, None), JOINED_UNSEEN);
-        assert!(!joined_held(0), "its own display");
-        assert!(joined_held(JOINED_UNSEEN), "not known yet");
+        use super::super::geometry::{Tenure, TenureCell};
+        use crate::vdisplay::registry::shared;
+        let own = Tenure::of(None, false);
+        let joiner = Tenure::of(Some((Default::default(), (1280, 720))), false);
+        let cell = TenureCell::new(&joiner);
+        assert!(cell.held(shared), "not known yet");
+        cell.adopt(&own, Some(7));
+        assert!(!cell.held(|_| true), "its own display");
         // No pool entry holds generation 7, so nobody shares it.
-        assert_eq!(
-            joined_held(joined_display(true, Some(7))),
-            !cfg!(target_os = "linux")
-        );
+        cell.adopt(&joiner, Some(7));
+        assert_eq!(cell.held(shared), !cfg!(target_os = "linux"));
     }
 
     #[test]

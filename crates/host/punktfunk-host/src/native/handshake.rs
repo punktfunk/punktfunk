@@ -12,6 +12,7 @@ use super::*;
 use crate::native::bitrate::{
     audio_reserved_kbps, resolve_bitrate_kbps_for, session_pyrowave_bpp, EncDerive,
 };
+use crate::native::geometry::Tenure;
 use crate::vdisplay::policy::{DisplayTarget, Topology};
 use punktfunk_core::abr::budget::FEC_ADAPTIVE_START;
 use punktfunk_core::quic::v2::hello::{Role, RoleEcho, RoleReason, ScreenEcho, ScreenWish};
@@ -513,24 +514,17 @@ pub(super) fn kept_view(
 }
 
 /// The size a joiner shows the owner's display at.
-pub(super) fn joined_view(
-    joined: &Option<(crate::vdisplay::admission::LiveDisplay, (u32, u32))>,
-) -> Option<(u32, u32)> {
-    joined.as_ref().map(|(_, view)| *view)
+pub(super) fn joined_view(tenure: &Tenure) -> Option<(u32, u32)> {
+    tenure.framing().map(|(_, view)| view)
 }
 
-/// What the session's encoder frames for: a joiner's view at its own fit, else the client's
-/// `view` at Fit. `None` encodes the picture as captured.
+/// What the session's encoder frames for: a joiner's `framing`, else the client's `view` at
+/// Fit. `None` encodes the picture as captured.
 pub(super) fn reframe_to(
-    video_fit: u8,
-    joined_view: Option<(u32, u32)>,
+    framing: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     view: Option<(u32, u32)>,
 ) -> Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))> {
-    use punktfunk_core::video_fit::VideoFit;
-    match joined_view {
-        Some(v) => Some((VideoFit::from_wire(video_fit), v)),
-        None => view.map(|v| (VideoFit::Fit, v)),
-    }
+    framing.or(view.map(|v| (punktfunk_core::video_fit::VideoFit::Fit, v)))
 }
 
 /// How long the host holds the connection after a `Redirect` for the client to read it and
@@ -583,9 +577,10 @@ pub(in crate::native) struct SessionTerms {
     pub(in crate::native) hello: Hello,
     codec_bit: u8,
     pub(in crate::native) codec: crate::encode::Codec,
-    /// Admitted by `mode_conflict: join`: the owner's display, which this session shares, and
-    /// the size this client shows it at.
-    pub(in crate::native) joined: Option<(crate::vdisplay::admission::LiveDisplay, (u32, u32))>,
+    /// How this session holds its display.
+    pub(in crate::native) tenure: Tenure,
+    /// Admitted by `mode_conflict: join`: the owner's display, which this session shares.
+    pub(in crate::native) joined: Option<crate::vdisplay::admission::LiveDisplay>,
     /// The size this client shows its own display at, smaller than `hello.mode` ([`kept_view`]).
     /// `None` for a joiner and a mirror.
     pub(in crate::native) view: Option<(u32, u32)>,
@@ -621,8 +616,6 @@ pub(in crate::native) struct SessionTerms {
     /// What this session streams; `None` for a joiner, whose hello says `Shared`, or a synthetic
     /// source.
     screen: Option<ScreenEcho>,
-    /// `screen` is a monitor this session mirrors.
-    pub(in crate::native) mirrored: bool,
     /// The screen this session wants ([`session_screen`]), which every open re-checks.
     pub(in crate::native) wanted: Option<crate::vdisplay::policy::DisplayTarget>,
     /// The topology its own screen opens under ([`session_screen`]); rebuilds reuse it.
@@ -634,7 +627,7 @@ pub(in crate::native) struct SessionTerms {
 impl SessionTerms {
     /// The Welcome's mode at the size the encoder means to take it to, as the Welcome priced it.
     pub(in crate::native) fn picture(&self) -> punktfunk_core::Mode {
-        let view = self.view.or(joined_view(&self.joined));
+        let view = self.view.or(joined_view(&self.tenure));
         crate::session_plan::picture(self.hello.mode, view)
     }
 
@@ -691,13 +684,18 @@ pub(super) async fn negotiate(
         topology,
         role,
     } = session_screen(&n, joined.is_some(), compositor).await?;
-    let mirrored = matches!(screen, Some(ScreenEcho::Monitor(_)));
+    let fit = punktfunk_core::video_fit::VideoFit::from_wire(hello.video_fit);
+    let tenure = Tenure::of(
+        joined.as_ref().map(|(_, view)| (fit, *view)),
+        matches!(screen, Some(ScreenEcho::Monitor(_))),
+    );
+    let joined = joined.map(|(display, _)| display);
     hello.mode = deliverable_rate(
         hello.mode,
-        runs_exact_rate(compositor, joined.is_some() || mirrored),
+        runs_exact_rate(compositor, tenure.shares_capture()),
     );
-    // A joiner's view rides `joined`; a mirrored head keeps its own fit.
-    let view = view.filter(|_| joined.is_none() && !mirrored);
+    // A joiner's view rides its tenure; a mirrored head keeps its own fit.
+    let view = view.filter(|_| !tenure.shares_capture());
 
     // Library launch is resolved after Welcome into `SessionContext.launch`. Do not write
     // `PUNKTFUNK_GAMESCOPE_APP`: process env races concurrent sessions and only gamescope's bare spawn reads it.
@@ -720,8 +718,8 @@ pub(super) async fn negotiate(
         compositor,
         gamescope_route.as_ref(),
         &n.knobs,
-        joined.as_ref().map(|(d, _)| d),
-        follows_source(&n.first.features, mirrored),
+        joined.as_ref(),
+        follows_source(&n.first.features, &tenure),
     );
     let (studio_asked, owner_hdr) = (facts.studio_asked, facts.owner_hdr);
     let verdict = negotiate_video_format(facts.clone(), codec, encoder.clone(), hello.mode).await?;
@@ -756,7 +754,7 @@ pub(super) async fn negotiate(
     let pyrowave_bpp = session_pyrowave_bpp(n.first.pyrowave_bpp_x100);
     let slices = crate::session_plan::client_slices(hello.video_caps, n.first.slices);
     // Priced at the picture the encoder means to take, as every build of the session prices it.
-    let picture = crate::session_plan::picture(hello.mode, view.or(joined_view(&joined)));
+    let picture = crate::session_plan::picture(hello.mode, view.or(joined_view(&tenure)));
     let bitrate_kbps = resolve_bitrate_kbps_for(
         codec,
         hello.bitrate_kbps,
@@ -782,6 +780,7 @@ pub(super) async fn negotiate(
         hello,
         codec_bit,
         codec,
+        tenure,
         joined,
         view,
         compositor,
@@ -802,7 +801,6 @@ pub(super) async fn negotiate(
         cursor_forward: false,
         audio_kbps: 0,
         screen,
-        mirrored,
         wanted,
         topology,
         role,
@@ -1124,12 +1122,11 @@ fn server_hello(n: &Negotiation<'_>, t: &SessionTerms, welcome: Welcome) -> Serv
             crate::inject::touchpad_taps(),
         ));
     // Further screens only where this session builds displays of its own on a compositor with
-    // more than one output: not gamescope, not a joiner or a mirror.
+    // more than one output: not gamescope.
     if matches!(n.source, Punktfunk1Source::Virtual)
         && t.compositor
             .is_some_and(|c| c != crate::vdisplay::Compositor::Gamescope)
-        && t.joined.is_none()
-        && !t.mirrored
+        && t.tenure.offers_screens()
     {
         offered = offered.with(punktfunk_core::quic::v2::registry::FEATURE_SCREENS);
     }
@@ -1147,9 +1144,10 @@ fn server_hello(n: &Negotiation<'_>, t: &SessionTerms, welcome: Welcome) -> Serv
         suite,
         features: n.first.features.intersect(offered),
         profile: Some(n.resolved.id.clone()),
-        screen: match t.joined {
-            Some(_) => Some(ScreenEcho::Shared),
-            None => t.screen.clone(),
+        screen: if t.tenure.join_live() {
+            Some(ScreenEcho::Shared)
+        } else {
+            t.screen.clone()
         },
         role: t.role,
     }
@@ -1498,7 +1496,7 @@ fn welcome_host_caps(n: &Negotiation<'_>, t: &SessionTerms) -> u8 {
             t.codec,
             t.verdict.bit_depth,
             t.verdict.hdr,
-            t.joined.is_some() || t.mirrored,
+            t.tenure.shares_capture(),
             &t.encoder,
         ) {
             punktfunk_core::quic::HOST_CAP_CURSOR
@@ -1681,8 +1679,7 @@ pub(super) struct Verdict {
 }
 
 impl FormatFacts {
-    /// `owner` is the display a joiner was admitted onto. `follows` is the client's promise
-    /// to rebuild its decoder, for a session that mirrors no monitor.
+    /// `owner` is the display a joiner was admitted onto. `follows` is [`follows_source`].
     pub(super) fn of(
         hello: &Hello,
         studio_asked: crate::session_plan::StudioAsk,
@@ -1701,7 +1698,7 @@ impl FormatFacts {
             studio_asked: asked_under(owner_format, studio_asked),
             owner_hdr: owner.map(|d| d.hdr),
             owner_format,
-            follows: follows && owner.is_none(),
+            follows,
             content_hdr: None,
         }
     }
@@ -1928,12 +1925,13 @@ fn asked_under(
 }
 
 /// Whether a session's format may move with its source ([`FormatFacts::follows`]): the client
-/// rebuilds its decoder at an epoch, and the session mirrors no monitor, whose capture it shares.
+/// rebuilds its decoder at an epoch, and the capture is the session's own.
 pub(super) fn follows_source(
     features: &punktfunk_core::quic::v2::features::FeatureSet,
-    mirrored: bool,
+    tenure: &Tenure,
 ) -> bool {
-    features.has(punktfunk_core::quic::v2::registry::FEATURE_FORMAT_EPOCH) && !mirrored
+    features.has(punktfunk_core::quic::v2::registry::FEATURE_FORMAT_EPOCH)
+        && !tenure.shares_capture()
 }
 
 /// HDR the client asks for: `VIDEO_CAP_HDR`, except a joiner of an SDR display (`owner_hdr`).
@@ -2298,6 +2296,7 @@ pub(crate) mod tests {
             hello,
             codec_bit: punktfunk_core::quic::CODEC_HEVC,
             codec: crate::encode::Codec::H265,
+            tenure: Tenure::of(None, false),
             joined: None,
             view: None,
             compositor: Some(crate::vdisplay::Compositor::Mutter),
@@ -2322,7 +2321,6 @@ pub(crate) mod tests {
             cursor_forward: false,
             audio_kbps: 0,
             screen: None,
-            mirrored: false,
             wanted: None,
             topology: None,
             role: None,
@@ -2367,16 +2365,18 @@ pub(crate) mod tests {
     #[test]
     fn a_joiner_frames_for_its_view_and_a_viewer_at_fit() {
         use punktfunk_core::video_fit::VideoFit;
-        let crop = VideoFit::Crop.wire();
+        let crop = VideoFit::from_wire(VideoFit::Crop.wire());
+        let joiner = Tenure::of(Some((crop, (1280, 720))), false).framing();
         assert_eq!(
-            reframe_to(crop, Some((1280, 720)), Some((1024, 576))),
+            reframe_to(joiner, Some((1024, 576))),
             Some((VideoFit::Crop, (1280, 720)))
         );
+        let own = Tenure::of(None, false).framing();
         assert_eq!(
-            reframe_to(crop, None, Some((1366, 768))),
+            reframe_to(own, Some((1366, 768))),
             Some((VideoFit::Fit, (1366, 768)))
         );
-        assert_eq!(reframe_to(crop, None, None), None);
+        assert_eq!(reframe_to(own, None), None);
     }
 
     /// Where a Welcome's session streams: a display of its own, one capped by the operator to a
@@ -2409,18 +2409,18 @@ pub(crate) mod tests {
                 let shown = view.unwrap_or((mode.width, mode.height));
                 (mode.width, mode.height, mode.refresh_hz) =
                     (owner.width, owner.height, owner.refresh_hz);
-                Some((live_display(), shown))
+                Some((punktfunk_core::video_fit::VideoFit::Fit, shown))
             }
             _ => None,
         };
-        let mirrored = matches!(at, Welcomed::Mirror);
+        let tenure = Tenure::of(joined, matches!(at, Welcomed::Mirror));
         let exact = runs_exact_rate(
             Some(crate::vdisplay::Compositor::Mutter),
-            joined.is_some() || mirrored,
+            tenure.shares_capture(),
         );
         let mode = deliverable_rate(mode, exact);
-        let view = view.filter(|_| joined.is_none() && !mirrored);
-        let picture = crate::session_plan::picture(mode, view.or(joined_view(&joined)));
+        let view = view.filter(|_| !tenure.shares_capture());
+        let picture = crate::session_plan::picture(mode, view.or(joined_view(&tenure)));
         let kbps = resolve_bitrate_kbps_for(
             codec,
             kbps,

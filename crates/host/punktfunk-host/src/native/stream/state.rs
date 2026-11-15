@@ -226,6 +226,8 @@ pub(super) struct Live {
 pub(super) struct DisplayRequest {
     pub(super) vd: Box<dyn crate::vdisplay::VirtualDisplay>,
     pub(super) compositor: crate::vdisplay::Compositor,
+    /// How the session holds this display; `vd_params.join_live` is its request.
+    pub(super) tenure: crate::native::geometry::Tenure,
     pub(super) cursor_fwd: Option<super::super::cursor_fwd::CursorForwarder>,
     /// Starts true so the first composite request triggers the capturer hook.
     pub(super) cursor_client_drew: bool,
@@ -590,7 +592,8 @@ impl StreamState {
             // window lingers past pipeline-ready for it to cross.
             !facts.bitrate_auto && c.codec == crate::encode::Codec::PyroWave,
         );
-        let (mut display, pipe) = open_display(prepared, compositor, vd_params, cursor)?;
+        let tenure = ctx.terms.tenure;
+        let (mut display, pipe) = open_display(prepared, compositor, tenure, vd_params, cursor)?;
         let pipe = match pipe {
             Some(pipe) => pipe,
             None => build_first(&mut display, &facts, plan, c.bit_depth, bitrate_kbps, &fec)?,
@@ -642,7 +645,7 @@ impl StreamState {
             &shared,
             &plan,
             c.bit_depth,
-            ctx.join_live,
+            tenure.join_live(),
             c.client_label,
             c.client_name,
             c.controls,
@@ -709,7 +712,7 @@ impl StreamState {
             live_session,
             _watcher: None,
             #[cfg(target_os = "linux")]
-            seat_join: ctx.follows_seat.then_some(ctx.join_live),
+            seat_join: ctx.follows_seat.then_some(tenure.join_live()),
             #[cfg(target_os = "linux")]
             following: None,
             #[cfg(target_os = "linux")]
@@ -937,7 +940,7 @@ fn display_request(
         client_hdr: terms.client_hdr(),
         hdr: terms.verdict.display_hdr,
         hw_cursor: terms.cursor_forward || metadata_composite,
-        join_live: ctx.join_live,
+        join_live: terms.tenure.join_live(),
         quit: ctx.common.life.quit_flag().clone(),
         launch: ctx.launch.clone(),
         route: terms.gamescope_route.clone(),
@@ -1071,7 +1074,7 @@ fn shared_handles(ctx: &SessionContext) -> (Shared, FecState) {
         cadence_behind_score: s.cadence_behind_score.clone(),
         client_packets_received: s.client_packets_received.clone(),
         cursor_client_draws: s.cursor_client_draws.clone(),
-        joined_display: s.joined_display.clone(),
+        tenure: s.tenure.clone(),
     };
     let fec = FecState {
         requested: s.fec_requested.clone(),
@@ -1083,11 +1086,12 @@ fn shared_handles(ctx: &SessionContext) -> (Shared, FecState) {
     (shared, fec)
 }
 
-/// The session's display and its request: the Welcome-time prep's display with the pipeline it
-/// built, or one opened now with no pipeline yet.
+/// The session's display, held as `tenure`, and its request: the Welcome-time prep's display
+/// with the pipeline it built, or one opened now with no pipeline yet.
 fn open_display(
     prepared: Option<PreparedDisplay>,
     compositor: crate::vdisplay::Compositor,
+    tenure: crate::native::geometry::Tenure,
     vd_params: crate::vdisplay::SessionParams,
     (cursor_fwd, gamescope_composite, metadata_composite): CursorPlan,
 ) -> Result<(DisplayRequest, Option<Pipeline>)> {
@@ -1107,6 +1111,7 @@ fn open_display(
     let display = DisplayRequest {
         vd,
         compositor,
+        tenure,
         cursor_fwd,
         cursor_client_drew: true,
         gamescope_composite,
@@ -1175,7 +1180,7 @@ fn build_first(
 
 /// The first pipeline as the loop's live one at `mode`. The input thread's framing, the
 /// clipboard's gamescope and the portal's cursor verdict follow it, the rate it opened at is
-/// adopted, the control task learns the display it joined, and `/status` gets the mode it
+/// adopted, the control task's tenure cell takes its display, and `/status` gets the mode it
 /// delivers.
 fn first_live(
     pipe: Pipeline,
@@ -1206,8 +1211,7 @@ fn first_live(
         display.no_overlay_means_off_output =
             settle_portal_cursor(&*display.vd, &mut display.metadata_composite);
     }
-    let joined = crate::native::wiring::joined_display(display.vd_params.join_live, display_gen);
-    shared.joined_display.store(joined, Ordering::Relaxed);
+    shared.tenure.adopt(&display.tenure, display_gen);
     adopt_built_bitrate(&mut bitrate_kbps, built, &shared.live_bitrate, retarget);
     // Stats slot only — an ordinary connect is not owed a corrective Reconfigured.
     let delivered = delivered_mode(frame.width, frame.height, interval);
@@ -1830,7 +1834,9 @@ mod tests {
             arrival_poke: Arc::default(),
             offload_switch: Arc::default(),
             screens: Arc::new(crate::native::wiring::ScreenWire::new()),
-            joined_display: Arc::default(),
+            tenure: Arc::new(crate::native::geometry::TenureCell::new(
+                &crate::native::geometry::Tenure::of(None, false),
+            )),
         };
         let common = StreamCommon {
             session,
@@ -1903,7 +1909,6 @@ mod tests {
                 pad_slots: None,
             },
             launch_outcome: unbounded_channel().0,
-            join_live: false,
             frame_map: Default::default(),
             #[cfg(target_os = "linux")]
             gamescope_xwayland: Default::default(),

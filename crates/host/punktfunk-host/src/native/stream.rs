@@ -50,6 +50,9 @@ pub(crate) use self::send::reconfig_allowed;
 use self::session_watch::{session_watch_enabled, session_watcher_loop, SessionSwitch};
 pub(super) use self::state::session_client_label;
 use self::state::StreamState;
+// `geometry.rs`'s `tenure_rows` reads the rebuild plan off the stream's fake.
+#[cfg(test)]
+pub(in crate::native) use self::{rebuild::tests::tenure_plans, rebuild_plan::Build};
 // `main.rs` parses the content script; `native.rs` builds the context and dispatches.
 pub(super) use self::synth_abr::{synthetic_abr_stream, SynthAbrContext};
 pub use self::synth_abr::{Content, KeyframeAnswer, SynthAbrShape, DEFAULT_IDR_PCT};
@@ -592,8 +595,6 @@ pub(super) struct SessionContext {
     /// Where this session's launch outcome goes; the control task writes it to
     /// the client ([`punktfunk_core::quic::LaunchOutcome`]).
     pub(super) launch_outcome: crate::gamelease::OutcomeTx,
-    /// Admitted by `mode_conflict: join`: share the live display instead of creating one.
-    pub(super) join_live: bool,
     /// The encoder's framing, published for the input thread.
     pub(super) frame_map: super::input::FrameMap,
     /// The session gamescope's X displays, published for the clipboard.

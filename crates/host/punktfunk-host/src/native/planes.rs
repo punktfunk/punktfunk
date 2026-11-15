@@ -277,7 +277,7 @@ pub(super) fn spawn_planes(
 ) -> Result<()> {
     let (conn, n) = (scope.conn().clone(), &agreed.n);
     let (hello, welcome) = (&n.terms.hello, &n.welcome);
-    let joined = n.terms.joined.as_ref().map(|(d, _)| d);
+    let joined = n.terms.joined.as_ref();
     // Claiming the default mic is a PipeWire round trip under a 5 s timeout, and this runtime
     // has two workers: off them, as the launch prep.
     scope.set_planes(tokio::task::block_in_place(|| {
