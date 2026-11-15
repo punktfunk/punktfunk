@@ -82,6 +82,8 @@ pub struct WindowSample {
     /// `None` = no frame opened this window.
     pub delay: Option<DelayTrend>,
     pub decode_mean_us: Option<i64>,
+    /// Pictures `decode_mean_us` is the mean of, repeats included.
+    pub decoded: u32,
     pub encode_mean_us: Option<i64>,
     pub actual_kbps: u32,
     pub flushed: bool,
@@ -112,6 +114,7 @@ impl WindowSample {
             owd_mean_us: None,
             delay: None,
             decode_mean_us: None,
+            decoded: 0,
             encode_mean_us: None,
             actual_kbps: 0,
             flushed: false,

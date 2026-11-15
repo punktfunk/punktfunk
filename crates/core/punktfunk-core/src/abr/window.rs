@@ -421,6 +421,7 @@ impl WindowAccumulator {
                 last_us: self.shard_owd_last_us,
             }),
             decode_mean_us: mean(self.decode_sum_us, self.decode_count),
+            decoded: self.decode_count,
             encode_mean_us: mean(self.encode_sum_us, self.encode_count),
             actual_kbps,
             flushed: self.flushed,

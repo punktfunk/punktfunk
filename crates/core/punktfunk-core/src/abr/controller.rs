@@ -740,7 +740,7 @@ impl BitrateController {
             self.current_kbps,
             self.frame_budget_us,
             self.encode.down.disarmed(),
-            self.decode.headroom.disarmed(),
+            self.decode.withholds(w, self.frame_budget_us),
             self.clean_windows,
             draining,
             self.link_vouches_for(w),
@@ -3823,5 +3823,40 @@ mod tests {
             }
         }
         assert_eq!(c.decode.cap.kbps(), None);
+    }
+
+    /// Twenty pictures a window are 37.5 ms apart. A decode mean over that
+    /// gap with nothing queued is a decoder waiting on its next picture: no
+    /// verdict. Under the gap it is the decoder's own time, and a shed queue
+    /// is a decoder behind whatever the mean.
+    #[test]
+    fn a_decoder_waiting_out_a_slow_sources_gap_is_no_verdict() {
+        // (decode mean µs, queue shed, the ask)
+        for (decode_us, backlog, ask) in [
+            (40_000, false, None),
+            (30_000, false, Some(70_000)),
+            (40_000, true, Some(70_000)),
+        ] {
+            let mut c = BitrateController::new(100_000, None);
+            c.set_frame_budget(120);
+            let start = Instant::now();
+            for t in 0..6 {
+                calm_window(&mut c, ticks(start, t));
+            }
+            let asks: Vec<_> = (6..10)
+                .filter_map(|t| {
+                    c.on_window(&WindowSample {
+                        owd_mean_us: Some(10_000),
+                        decode_mean_us: Some(decode_us),
+                        decoded: 20,
+                        actual_kbps: c.current_kbps,
+                        activity: WindowActivity::Active(20),
+                        backlog,
+                        ..WindowSample::at(ticks(start, t))
+                    })
+                })
+                .collect();
+            assert_eq!(asks.first().copied(), ask, "{decode_us} µs, shed {backlog}");
+        }
     }
 }

@@ -424,6 +424,7 @@ mod tests {
                 owd_mean_us: Some(12_000),
                 delay: None,
                 decode_mean_us: None,
+                decoded: 0,
                 encode_mean_us: None,
                 actual_kbps: rate_kbps * 9 / 10,
                 flushed: false,

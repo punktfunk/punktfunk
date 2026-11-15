@@ -418,6 +418,20 @@ impl DecodeKnee {
             .note(v.decode_mean_us.filter(|_| clean), rate_kbps);
     }
 
+    /// Whether the verdict reads no decode latency this window: the driver is
+    /// stood down, or the decoder is waiting on its next picture. Under a slow
+    /// source a mean at or over the gap between pictures, with no queue shed,
+    /// is a decoder that returns each one when the next is fed: the gap is the
+    /// source's. One that works a picture at a time and takes that long is
+    /// behind, and sheds.
+    pub(super) fn withholds(&self, w: &WindowSample, budget_us: Option<i64>) -> bool {
+        let gap_us = sample::WINDOW_US / i64::from(w.decoded.max(1));
+        let waiting = !w.backlog
+            && budget_us.is_some_and(|b| !full_rate(w, b))
+            && w.decode_mean_us.is_some_and(|mean_us| mean_us >= gap_us);
+        self.headroom.disarmed() || waiting
+    }
+
     /// Past the first [`DECODE_WARMUP_WINDOWS`] windows with decoded frames.
     fn warmed_up(&self) -> bool {
         self.decoded_windows > DECODE_WARMUP_WINDOWS
