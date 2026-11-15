@@ -370,8 +370,102 @@ fn reconfigure_ask(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use crate::native::wiring::ModeAsk;
+
+    /// [`ControlTask::on_reconfigure`]'s answer to `req` from a task that holds `held`: the ask
+    /// it hands the stream thread (`None`: refused, or a codec ask), and what it holds after.
+    /// `exact` is the session's exact-rate display, `live` its live reconfigure with no held join.
+    pub(in crate::native) fn control_ask(
+        req: Reconfigure,
+        (active, view): ModeAsk,
+        codec: crate::encode::Codec,
+        exact: bool,
+        live: bool,
+    ) -> (Option<ModeAsk>, ModeAsk) {
+        let req = Reconfigure {
+            view: asked_view(&req, active, view),
+            mode: crate::native::handshake::deliverable_rate(req.mode, exact),
+            ..req
+        };
+        match reconfigure_ask(&req, codec, live, false) {
+            Ask::Mode(asked) => (Some(asked), (req.mode, asked.1)),
+            Ask::Codec(_) | Ask::Refused => (None, (active, view)),
+        }
+    }
+
+    use crate::native::handshake::tests::mode;
+
+    /// One `Reconfigure` against what the control task holds, and the ask it hands on.
+    struct AskRow {
+        name: &'static str,
+        held: ModeAsk,
+        req: Reconfigure,
+        exact: bool,
+        live: bool,
+        handed: Option<ModeAsk>,
+        held_after: ModeAsk,
+        verdict: crate::native::tests::Verdict,
+    }
+
+    #[rustfmt::skip]
+    fn ask_rows() -> Vec<AskRow> {
+        use crate::native::tests::Verdict::{D3, Wanted};
+        let (hd, uhd) = (mode(1920, 1080, 60), mode(3840, 2160, 60));
+        let viewed = (uhd, Some((1920, 1080)));
+        let req = |mode, view| Reconfigure { mode, exclude_codecs: 0, view };
+        let row = |name, held, req, (exact, live), handed, held_after, verdict| AskRow {
+            name, held, req, exact, live, handed, held_after, verdict,
+        };
+        let on = (false, true);
+        let uhd120 = mode(3840, 2160, 120);
+        let exact = punktfunk_core::Mode::exact(3840, 2160, 59_940);
+        vec![
+            row("a rate pick at the live size keeps the view in force", viewed,
+                req(uhd120, None), on, Some((uhd120, Some((1920, 1080)))),
+                (uhd120, Some((1920, 1080))), Wanted),
+            row("another size with no view clears it", viewed, req(mode(2560, 1440, 60), None),
+                on, Some((mode(2560, 1440, 60), None)), (mode(2560, 1440, 60), None), Wanted),
+            row("a view of its own replaces it", viewed, req(uhd, Some((1280, 720))), on,
+                Some((uhd, Some((1280, 720)))), (uhd, Some((1280, 720))), Wanted),
+            row("a view the mode's size clears it", viewed, req(uhd, Some((3840, 2160))), on,
+                Some((uhd, None)), (uhd, None), Wanted),
+            row("a view larger than the mode clears it", viewed, req(hd, Some((2560, 1440))), on,
+                Some((hd, None)), (hd, None), Wanted),
+            row("a fraction on a whole-hertz display asks the whole rate", viewed, req(exact, None),
+                on, Some((uhd, Some((1920, 1080)))), (uhd, Some((1920, 1080))), Wanted),
+            row("a fraction where the display runs one stays", viewed, req(exact, None),
+                (true, true), Some((exact, Some((1920, 1080)))), (exact, Some((1920, 1080))),
+                Wanted),
+            row("no live reconfigure (gamescope, a mirror, a held join): refused, nothing held \
+                 moves", viewed, req(uhd120, None), (false, false), None, viewed, Wanted),
+            row("a size no encoder takes: refused", viewed, req(mode(3841, 2160, 60), None), on,
+                None, viewed, Wanted),
+            row("a codec ask hands no mode on", viewed, Reconfigure {
+                    exclude_codecs: punktfunk_core::quic::CODEC_HEVC, ..req(uhd, None) },
+                on, None, viewed, Wanted),
+            row("after a framed resize on a shared display was corrected, a rate pick at the \
+                 told size asks no view: the task never learned the framed one", (hd, None),
+                req(mode(1920, 1080, 120), None), on, Some((mode(1920, 1080, 120), None)),
+                (mode(1920, 1080, 120), None), D3),
+        ]
+    }
+
+    /// What a control ask hands the stream thread, and the mode and view the task holds after.
+    #[test]
+    fn geometry_rows() {
+        for r in ask_rows() {
+            let got = control_ask(r.req, r.held, crate::encode::Codec::H265, r.exact, r.live);
+            assert_eq!(
+                got,
+                (r.handed, r.held_after),
+                "{} ({:?})",
+                r.name,
+                r.verdict
+            );
+        }
+    }
 
     /// A rate pick keeps the view in force; a new size, or a view of its own, does not.
     #[test]

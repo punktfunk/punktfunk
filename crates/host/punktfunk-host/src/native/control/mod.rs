@@ -1125,7 +1125,8 @@ impl OffloadGuard {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    pub(in crate::native) use super::inbound::tests::control_ask;
     use super::*;
     use punktfunk_core::quic::ProbeRequest;
 
@@ -1323,6 +1324,88 @@ mod tests {
                 exclude_codecs: 0,
             }))
         );
+    }
+
+    use crate::native::handshake::tests::mode;
+
+    /// An Automatic PyroWave session's task after its connect: the floor and pin it holds and
+    /// the picture its config names. It starts at the Welcome's `picture` of `mode`; only an
+    /// epoch-0 `Delivered`, which bring-up sends for an adopted ask alone, moves either.
+    fn after_connect(
+        mode: punktfunk_core::Mode,
+        picture: punktfunk_core::Mode,
+        delivered: Option<super::super::wiring::Delivered>,
+    ) -> ((u32, u32), Option<(u32, u32)>) {
+        let bounds = |m: &punktfunk_core::Mode| {
+            pyrowave_bounds_kbps(m, crate::encode::ChromaFormat::Yuv420, 8, 1.6, None)
+        };
+        let welcome_kbps = bounds(&picture).1;
+        let mut held = (bounds(&picture).0.min(welcome_kbps), welcome_kbps);
+        let wire = crate::session_plan::picture_field(mode, (picture.width, picture.height));
+        let mut config = Some(v2msg::StreamConfig {
+            mode,
+            picture: wire,
+            ..Default::default()
+        });
+        if let Some(d) = delivered {
+            let (width, height) = d.encoded;
+            held = bounds(&punktfunk_core::Mode {
+                width,
+                height,
+                ..d.mode
+            });
+            let _ = tell(&mut config, &d);
+        }
+        (held, config.and_then(|c| c.picture))
+    }
+
+    /// One connect: the Welcome's mode and picture, what the first build encodes, and whether
+    /// the client is told; the bounds and picture the task holds after.
+    struct ConnectRow {
+        name: &'static str,
+        mode: punktfunk_core::Mode,
+        picture: punktfunk_core::Mode,
+        encoded: (u32, u32),
+        told: bool,
+        held: ((u32, u32), Option<(u32, u32)>),
+        verdict: crate::native::tests::Verdict,
+    }
+
+    #[rustfmt::skip]
+    fn connect_rows() -> Vec<ConnectRow> {
+        use crate::native::tests::Verdict::{D4, Wanted};
+        let (hd, uhd) = (mode(1920, 1080, 60), mode(3840, 2160, 60));
+        let row = |name, mode, picture, encoded, told, held, verdict| ConnectRow {
+            name, mode, picture, encoded, told, held, verdict,
+        };
+        vec![
+            row("framed at the Welcome's view: bounds and picture at the view", uhd, hd,
+                (1920, 1080), false, ((62_208, 199_065), Some((1920, 1080))), Wanted),
+            row("a framing that fell back at connect: the task keeps the view's bounds and \
+                 picture while the stream encodes the mode", uhd, hd, (3840, 2160), false,
+                ((62_208, 199_065), Some((1920, 1080))), D4),
+            row("a mirror fitted at connect: the task keeps the mode's bounds", mode(1920, 1200, 60),
+                mode(1920, 1200, 60), (1920, 1080), false, ((69_120, 221_184), None), D4),
+            row("an ask adopted at connect is told: bounds and picture follow what it encodes",
+                uhd, hd, (1280, 720), true, ((27_648, 88_473), Some((1280, 720))), Wanted),
+        ]
+    }
+
+    /// The control task's PyroWave bounds and held picture after a connect, re-pinned or not.
+    #[test]
+    fn geometry_rows() {
+        use super::super::wiring::Delivered;
+        for r in connect_rows() {
+            let d = r.told.then_some(Delivered {
+                mode: r.mode,
+                encoded: r.encoded,
+                format: Default::default(),
+                epoch: 0,
+                corrects: false,
+            });
+            let got = after_connect(r.mode, r.picture, d);
+            assert_eq!(got, r.held, "{} ({:?})", r.name, r.verdict);
+        }
     }
 
     /// A format change is told even at the same epoch and mode; the same format twice is not.

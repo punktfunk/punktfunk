@@ -1789,6 +1789,413 @@ mod tests {
         assert_eq!(rx.try_recv().ok(), Some((60_000, AckReason::Granted)));
     }
 
+    use crate::native::handshake::tests::mode;
+
+    /// What a bring-up starts from: the Welcome's mode, rate, codec and view.
+    #[derive(Clone, Copy)]
+    struct Welcomed {
+        mode: punktfunk_core::Mode,
+        kbps: u32,
+        codec: crate::encode::Codec,
+        auto: bool,
+        view: Option<(u32, u32)>,
+    }
+
+    /// A Mutter session's context for `w` on the fake's link, whose control task accepted
+    /// `queued` before bring-up.
+    fn context(
+        f: &super::super::swap::tests::Fake,
+        w: Welcomed,
+        queued: &[crate::native::wiring::ModeAsk],
+    ) -> SessionContext {
+        use std::sync::mpsc::channel;
+        use tokio::sync::mpsc::unbounded_channel;
+        let (reconfig_tx, reconfig) = channel();
+        for ask in queued {
+            reconfig_tx.send(*ask).expect("the stream's end is open");
+        }
+        let (host_tp, _) = punktfunk_core::transport::loopback_pair(0, 0);
+        let session = punktfunk_core::session::Session::new(
+            punktfunk_core::config::Config::defaults(punktfunk_core::config::Role::Host),
+            punktfunk_core::session::MediaV2::default(),
+            Box::new(host_tp),
+        )
+        .expect("a host session");
+        let shared = crate::native::wiring::SessionShared {
+            live_bitrate: Arc::new(AtomicU32::new(w.kbps)),
+            encoder_ceiling: Arc::new(std::sync::Mutex::new(
+                crate::native::bitrate::EncoderCeiling::new(),
+            )),
+            cadence_degraded: Arc::default(),
+            cadence_behind_score: Arc::default(),
+            client_packets_received: Arc::default(),
+            fec_target: Arc::default(),
+            fec_requested: Arc::default(),
+            link_kbps: Arc::default(),
+            refuted: Arc::default(),
+            shape: Arc::default(),
+            ports: crate::send_pacing::Ports {
+                host_kbps: 0,
+                client_kbps: 0,
+            },
+            resend: Arc::default(),
+            acked: Arc::default(),
+            lossy_window: Arc::default(),
+            ramp_open: Arc::default(),
+            cursor_client_draws: Arc::default(),
+            arrival_poke: Arc::default(),
+            offload_switch: Arc::default(),
+            screens: Arc::new(crate::native::wiring::ScreenWire::new()),
+            joined_display: Arc::default(),
+        };
+        let common = StreamCommon {
+            session,
+            mode: w.mode,
+            seconds: 0,
+            life: crate::lifecycle::Lifecycle::new(),
+            counters: Default::default(),
+            ends: crate::native::wiring::StreamEnds {
+                reconfig,
+                format_rx: channel().1,
+                format_result_tx: unbounded_channel().0,
+                keyframe: channel().1,
+                rfi: channel().1,
+                bitrate_rx: channel().1,
+                shard_rx: channel().1,
+                probe_rx: channel().1,
+                probe_result_tx: unbounded_channel().0,
+                reconfig_result_tx: unbounded_channel().0,
+                retarget_tx: unbounded_channel().0,
+                gap_tx: unbounded_channel().0,
+                cursor_shape_tx: tokio::sync::watch::channel(None).0,
+                screens_rx: channel().1,
+                screen_tell_tx: unbounded_channel().0,
+            },
+            shared,
+            bitrate_kbps: w.kbps,
+            audio_reserved_kbps: 0,
+            shard_payload: 1200,
+            timing_conn: None,
+            probe_seq: false,
+            stats: f.st.facts.stats.clone(),
+            client_label: String::new(),
+            bringup: f.st.facts.bringup.clone(),
+            wire_sock: None,
+            codec: w.codec,
+            controls: crate::session_status::SessionControls::open(),
+            client_name: None,
+            hdr: false,
+            bit_depth: 8,
+            chroma: crate::encode::ChromaFormat::Yuv420,
+            color: punktfunk_core::quic::ColorInfo::SDR_BT709,
+        };
+        SessionContext {
+            common,
+            compositor: crate::vdisplay::Compositor::Mutter,
+            gamescope_route: None,
+            format_facts: f.st.facts.format_facts.clone(),
+            display_hdr: false,
+            encoder: f.st.facts.encoder.clone(),
+            host_knobs: crate::native::HostKnobs::get(),
+            knobs: f.st.facts.knobs,
+            bitrate_auto: w.auto,
+            pyrowave_bpp: 1.6,
+            conn: f.st.facts.conn.clone(),
+            cursor_forward: false,
+            streamed_au: false,
+            slices: 1,
+            launch: None,
+            launch_target: None,
+            launch_claim: None,
+            launch_stamp: None,
+            launch_owner: crate::session_launch::LaunchOwner {
+                client: String::new(),
+                fingerprint: None,
+                plane: crate::events::Plane::Native,
+                preset: None,
+                profile: None,
+                pad: punktfunk_core::config::GamepadPref::Auto,
+                pad_slots: None,
+            },
+            launch_outcome: unbounded_channel().0,
+            client_hdr: None,
+            join_live: false,
+            mirrored: false,
+            screen: None,
+            topology: None,
+            reframe_to: w
+                .view
+                .map(|v| (punktfunk_core::video_fit::VideoFit::Fit, v)),
+            frame_map: Default::default(),
+            #[cfg(target_os = "linux")]
+            gamescope_xwayland: Default::default(),
+            resize_ms: Arc::default(),
+            #[cfg(target_os = "linux")]
+            input_tx: std::sync::mpsc::sync_channel(1).0,
+            #[cfg(target_os = "linux")]
+            isolation: None,
+            #[cfg(target_os = "linux")]
+            input_route: crate::native::input::InputRoute::new(channel().0),
+            #[cfg(target_os = "linux")]
+            inj_shared_tx: channel().0,
+            #[cfg(target_os = "linux")]
+            inj_session_tx: None,
+            #[cfg(target_os = "linux")]
+            follows_seat: false,
+            screens: None,
+        }
+    }
+
+    /// What bring-up settled: the mode the first build runs at, its rate, whether it adopted an
+    /// ask; the view it frames; the ask left for the loop.
+    type Settled = (
+        (punktfunk_core::Mode, u32, bool),
+        Option<(u32, u32)>,
+        Option<crate::native::wiring::ModeAsk>,
+    );
+
+    /// Bring-up's first phases for `w` with `queued` accepted meanwhile.
+    fn settled(w: Welcomed, queued: &[crate::native::wiring::ModeAsk], prepared: bool) -> Settled {
+        let f = super::super::swap::tests::fake();
+        let ctx = context(&f, w, queued);
+        let mut plan = session_plan(&ctx);
+        let (mode, kbps, adopted) = settle_mode(&ctx, &mut plan, prepared);
+        let facts = session_facts(&ctx, &plan, mode, false);
+        assert_eq!(
+            facts.negotiated, mode,
+            "the first build runs at the settled mode"
+        );
+        let left = ctx.common.ends.reconfig.try_iter().last();
+        ((mode, kbps, adopted), plan.reframe_to.map(|(_, v)| v), left)
+    }
+
+    struct SettleRow {
+        name: &'static str,
+        welcome: Welcomed,
+        queued: Vec<crate::native::wiring::ModeAsk>,
+        prepared: bool,
+        settled: (punktfunk_core::Mode, u32, bool),
+        view: Option<(u32, u32)>,
+        left: Option<crate::native::wiring::ModeAsk>,
+        verdict: crate::native::tests::Verdict,
+    }
+
+    #[rustfmt::skip]
+    fn settle_rows() -> Vec<SettleRow> {
+        use crate::encode::Codec::{PyroWave, H265};
+        use crate::native::tests::Verdict::Wanted;
+        let (hd, qhd, uhd) = (mode(1920, 1080, 60), mode(2560, 1440, 60), mode(3840, 2160, 60));
+        let hevc = Welcomed { mode: hd, kbps: 20_000, codec: H265, auto: true, view: None };
+        let viewed = Welcomed { view: Some((1280, 720)), ..hevc };
+        let pyro = Welcomed { kbps: 199_065, codec: PyroWave, auto: false, ..hevc };
+        let pyro_auto = Welcomed { kbps: 150_000, auto: true, ..pyro };
+        let row = |name, welcome, queued: &[_], prepared, settled, view, left, verdict| SettleRow {
+            name, welcome, queued: queued.to_vec(), prepared, settled, view, left, verdict,
+        };
+        vec![
+            row("no ask: the Welcome's mode and rate", hevc, &[], false, (hd, 20_000, false), None,
+                None, Wanted),
+            row("the Welcome's mode asked again: nothing adopted", hevc, &[(hd, None)], false,
+                (hd, 20_000, false), None, None, Wanted),
+            row("a new mode asked meanwhile: built at it", hevc, &[(uhd, None)], false,
+                (uhd, 20_000, true), None, None, Wanted),
+            row("several asks: the last", hevc, &[(uhd, None), (qhd, Some((1280, 720)))], false,
+                (qhd, 20_000, true), Some((1280, 720)), None, Wanted),
+            row("a view asked at the Welcome's mode: framed at it", hevc,
+                &[(hd, Some((1280, 720)))], false, (hd, 20_000, true), Some((1280, 720)), None,
+                Wanted),
+            row("a viewed Welcome asked again with its view: nothing adopted", viewed,
+                &[(hd, Some((1280, 720)))], false, (hd, 20_000, false), Some((1280, 720)), None,
+                Wanted),
+            row("a viewed Welcome asked its mode with no view: the view cleared", viewed,
+                &[(hd, None)], false, (hd, 20_000, true), None, None, Wanted),
+            row("PyroWave: re-priced at the adopted mode", pyro, &[(uhd, None)], false,
+                (uhd, 796_262, true), None, None, Wanted),
+            row("PyroWave: re-priced at the adopted view", pyro, &[(uhd, Some((1280, 720)))], false,
+                (uhd, 88_473, true), Some((1280, 720)), None, Wanted),
+            row("PyroWave Automatic: the running rate held in the adopted bounds", pyro_auto,
+                &[(hd, Some((1280, 720)))], false, (hd, 88_473, true), Some((1280, 720)), None,
+                Wanted),
+            row("a prepared pipeline: the ask waits for the loop", hevc, &[(uhd, None)], true,
+                (hd, 20_000, false), None, Some((uhd, None)), Wanted),
+        ]
+    }
+
+    /// `settle_mode` over what the control task accepted before bring-up: the mode, rate and
+    /// view the first build runs at, and the ask a prepared pipeline leaves for the loop.
+    #[test]
+    fn geometry_rows() {
+        for r in settle_rows() {
+            let got = settled(r.welcome, &r.queued, r.prepared);
+            let want = (r.settled, r.view, r.left);
+            assert_eq!(got, want, "{} ({:?})", r.name, r.verdict);
+        }
+    }
+
+    /// U3: an ask accepted during bring-up is built once, at its mode and view, and epoch 0
+    /// is told at what it delivers and encodes.
+    #[test]
+    fn an_ask_during_bring_up_is_built_once_and_told() {
+        let (live, asked) = (mode(32, 16, 60), mode(64, 32, 60));
+        let mut f = super::super::swap::tests::fake();
+        let w = Welcomed {
+            mode: live,
+            kbps: 20_000,
+            codec: crate::encode::Codec::H265,
+            auto: true,
+            view: None,
+        };
+        let ctx = context(&f, w, &[(asked, Some((32, 16)))]);
+        let mut plan = session_plan(&ctx);
+        let (mode, kbps, adopted) = settle_mode(&ctx, &mut plan, false);
+        assert!(adopted);
+        assert_eq!(session_facts(&ctx, &plan, mode, false).negotiated, asked);
+        assert!(
+            ctx.common.ends.reconfig.try_recv().is_err(),
+            "no second build"
+        );
+        let encoded = (32, 16);
+        let pipe = first_pipeline(asked, encoded, kbps);
+        let told = connect(&mut f, pipe, (mode, kbps), adopted, &plan);
+        assert_eq!(told, (Some((asked, encoded, false)), None));
+    }
+
+    /// U3: an ask accepted while a Welcome-time prep built the display is left for the loop,
+    /// which rebuilds after bring-up; bring-up tells nothing.
+    #[test]
+    fn an_ask_during_a_prep_lands_after() {
+        let hd = mode(1920, 1080, 60);
+        let w = Welcomed {
+            mode: hd,
+            kbps: 20_000,
+            codec: crate::encode::Codec::H265,
+            auto: true,
+            view: None,
+        };
+        let ask = (mode(3840, 2160, 60), None);
+        let ((settled, _, adopted), _, left) = settled(w, &[ask], true);
+        assert_eq!((settled, adopted, left), (hd, false, Some(ask)));
+    }
+
+    /// A first pipeline at `mode` whose frames come at `mode`'s rate, encoded at `encoded`,
+    /// opened at `kbps`.
+    fn first_pipeline(mode: punktfunk_core::Mode, encoded: (u32, u32), kbps: u32) -> Pipeline {
+        let size = (mode.width, mode.height);
+        Pipeline {
+            capturer: Box::new(crate::capture::SyntheticCapturer::new(size.0, size.1, 60)),
+            enc: Box::new(super::super::swap::tests::NullEnc),
+            frame: super::super::swap::tests::frame(size),
+            interval: mode.frame_interval(),
+            node_id: 2,
+            display_gen: Some(2),
+            bitrate_kbps: kbps,
+            reframe: punktfunk_core::video_fit::Reframe {
+                source: size,
+                crop: [0, 0, size.0, size.1],
+                out: encoded,
+            },
+            #[cfg(target_os = "linux")]
+            lease: None,
+            #[cfg(target_os = "linux")]
+            panel_tick_ns: None,
+        }
+    }
+
+    /// What the control task hears at connect: the epoch-0 `Delivered` as
+    /// `(mode, encoded, corrects)`, and the rate retargeted.
+    type Told = (
+        Option<(punktfunk_core::Mode, (u32, u32), bool)>,
+        Option<u32>,
+    );
+
+    /// `StreamState::new` past its first build: the live pipeline at `(mode, kbps)`, told when
+    /// bring-up `adopted` an ask.
+    fn connect(
+        f: &mut super::super::swap::tests::Fake,
+        pipe: Pipeline,
+        (mode, kbps): (punktfunk_core::Mode, u32),
+        adopted: bool,
+        plan: &crate::session_plan::SessionPlan,
+    ) -> Told {
+        let (tell_tx, mut told) = tokio::sync::mpsc::unbounded_channel();
+        let (retarget_tx, mut retarget) = tokio::sync::mpsc::unbounded_channel();
+        let live = first_live(
+            pipe,
+            &mut f.st.display,
+            &f.st.shared,
+            mode,
+            kbps,
+            &retarget_tx,
+        );
+        if adopted {
+            tell_adopted(&tell_tx, &live, &f.st.shared, plan, 8);
+        }
+        let d = told
+            .try_recv()
+            .ok()
+            .map(|d| (d.mode, d.encoded, d.corrects));
+        (d, retarget.try_recv().ok().map(|(kbps, _)| kbps))
+    }
+
+    /// One connect: the Welcome's mode, rate and view, what the first build delivers, encodes
+    /// and opened at, and whether bring-up adopted an ask.
+    struct ConnectRow {
+        name: &'static str,
+        mode: punktfunk_core::Mode,
+        kbps: u32,
+        view: Option<(u32, u32)>,
+        delivered: punktfunk_core::Mode,
+        encoded: (u32, u32),
+        built_kbps: u32,
+        adopted: bool,
+        told: Told,
+        verdict: crate::native::tests::Verdict,
+    }
+
+    #[rustfmt::skip]
+    fn connects() -> Vec<ConnectRow> {
+        use crate::native::tests::Verdict::{D4, Wanted};
+        let (wide, small) = (mode(64, 32, 60), mode(32, 16, 60));
+        let row = |name, (mode, kbps, view), (delivered, encoded, built_kbps), adopted, told,
+                   verdict| ConnectRow {
+            name, mode, kbps, view, delivered, encoded, built_kbps, adopted, told, verdict,
+        };
+        vec![
+            row("framed as the Welcome said: nothing told", (wide, 20_000, Some((32, 16))),
+                (wide, (32, 16), 20_000), false, (None, None), Wanted),
+            row("a framing that fell back: nothing told", (wide, 20_000, Some((32, 16))),
+                (wide, (64, 32), 20_000), false, (None, None), D4),
+            row("a mirror fitted inside the Welcome's mode: nothing told", (small, 20_000, None),
+                (wide, (32, 16), 20_000), false, (None, None), D4),
+            row("a display that runs below the Welcome's rate: nothing told",
+                (wide, 20_000, None), (mode(64, 32, 30), (64, 32), 20_000), false, (None, None),
+                D4),
+            row("a first build that re-pinned its rate: the rate retargeted, the picture untold",
+                (wide, 20_000, Some((32, 16))), (wide, (64, 32), 40_000), false,
+                (None, Some(40_000)), D4),
+            row("an adopted ask: epoch 0 told at what it encodes", (wide, 20_000, Some((32, 16))),
+                (wide, (32, 16), 20_000), true, (Some((wide, (32, 16), false)), None), Wanted),
+            row("an adopted ask the display runs below: told as a correction",
+                (wide, 20_000, None), (mode(64, 32, 30), (64, 32), 20_000), true,
+                (Some((mode(64, 32, 30), (64, 32), true)), None), Wanted),
+        ]
+    }
+
+    /// The connect tell: what the control task hears of epoch 0 after bring-up's first build.
+    #[test]
+    fn connect_rows() {
+        for r in connects() {
+            let mut f = super::super::swap::tests::fake();
+            let mut plan = f.st.plan;
+            plan.reframe_to = r
+                .view
+                .map(|v| (punktfunk_core::video_fit::VideoFit::Fit, v));
+            let pipe = first_pipeline(r.delivered, r.encoded, r.built_kbps);
+            let told = connect(&mut f, pipe, (r.mode, r.kbps), r.adopted, &plan);
+            assert_eq!(told, r.told, "{} ({:?})", r.name, r.verdict);
+        }
+    }
+
     /// The registry's liveness vocabulary and the wire's are one set, mapped here
     /// and nowhere else. A spawn says nothing; a refusal and a blind adoption
     /// both owe the player a sentence.

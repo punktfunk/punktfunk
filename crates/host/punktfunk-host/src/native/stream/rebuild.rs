@@ -1101,7 +1101,7 @@ impl StreamState {
     }
 }
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::events::Plane;
 
@@ -1841,6 +1841,455 @@ mod tests {
         assert!(matches!(built, Ok(Rebuilt::Built)));
         assert_eq!(f.st.live.bitrate_kbps, at_mode);
         assert_eq!(opened.last(), Some(&((1920, 1080), enc_bps)));
+    }
+
+    /// How a scripted `open_video` answers a framed open.
+    #[derive(Clone, Copy, Debug)]
+    enum Open {
+        /// It opens, and the encoder frames on ingest.
+        Frames,
+        /// It opens, and the encoder neither crops nor scales.
+        CannotFrame,
+        /// Only an unframed open succeeds.
+        FailsFramed,
+    }
+
+    /// A scripted `open_video` on a `captured` source that answers as `how`, and the sizes it
+    /// was asked to open at.
+    fn opener(
+        how: Open,
+        captured: (u32, u32),
+        opened: &std::sync::Mutex<Vec<(u32, u32)>>,
+    ) -> impl FnMut(
+        &crate::encode::Resolved,
+        crate::encode::OpenParams,
+    ) -> Result<Box<dyn crate::encode::Encoder>>
+           + '_ {
+        use crate::session_plan::tests::Frames;
+        move |_, p| {
+            opened.lock().unwrap().push((p.width, p.height));
+            match how {
+                Open::FailsFramed if (p.width, p.height) != captured => {
+                    anyhow::bail!("no scale pass")
+                }
+                Open::CannotFrame => Ok(Box::new(Frames(false, Default::default()))),
+                _ => Ok(Box::new(Frames(true, Default::default()))),
+            }
+        }
+    }
+
+    /// The fake mid-stream at 1920×1080 and 60 Hz exactly, on its own display.
+    fn hd_session() -> Session {
+        let mut f = super::super::swap::tests::fake();
+        let hd = mode((1920, 1080), 60);
+        f.st.live.frame = frame((1920, 1080));
+        (f.st.live.cur_mode, f.st.facts.negotiated) = (hd, hd);
+        f.st.live.interval = hd.frame_interval();
+        f
+    }
+
+    /// PyroWave at 1.6 bits per pixel; `auto` runs Automatic at 150 Mbit/s.
+    fn pyrowave(f: &mut Session, auto: bool) {
+        f.st.plan.codec = crate::encode::Codec::PyroWave;
+        f.st.plan.pyrowave_bpp = 1.6;
+        f.st.facts.pyrowave = true;
+        if auto {
+            (f.st.facts.bitrate_auto, f.st.live.bitrate_kbps) = (true, 150_000);
+        }
+    }
+
+    /// `ask` performed as `StreamState::rebuild` performs it, with the encoder opened through
+    /// `how`; `shared` stands in for another session on the display. `false`: nothing built.
+    fn rebuild_with(f: &mut Session, ask: RebuildAsk, shared: bool, how: Open) -> bool {
+        let facts = RebuildFacts {
+            shared,
+            ..f.st.rebuild_facts()
+        };
+        let Some(plan) = rebuild_plan::plan(&ask, &facts) else {
+            if let RebuildAsk::Mode(asked, _) = ask {
+                f.st.publish_delivered_mode(asked);
+            }
+            return false;
+        };
+        let captured = (f.st.live.frame.width, f.st.live.frame.height);
+        let opened = std::sync::Mutex::new(Vec::new());
+        let out = f.st.perform(plan, ask, |st, plan, _, _| {
+            st.build_encoder(plan, opener(how, captured, &opened))
+        });
+        matches!(out, Ok(Rebuilt::Built))
+    }
+
+    /// Every `Delivered` the control task heard, as `(mode, encoded, corrects)`.
+    fn heard(f: &mut Session) -> Vec<(punktfunk_core::Mode, (u32, u32), bool)> {
+        std::iter::from_fn(|| f.told.try_recv().ok())
+            .map(|d| (d.mode, d.encoded, d.corrects))
+            .collect()
+    }
+
+    /// One encoder-only build for a 1280×720 view of the live 1920×1080: how its open answers,
+    /// what it was asked to open at, and the framing, rate and picture told after.
+    struct EncoderRow {
+        name: &'static str,
+        pyrowave: Option<bool>,
+        open: Open,
+        opened: Vec<(u32, u32)>,
+        encoded: (u32, u32),
+        rate_kbps: u32,
+        verdict: crate::native::tests::Verdict,
+    }
+
+    #[rustfmt::skip]
+    fn encoder_rows() -> Vec<EncoderRow> {
+        use crate::native::tests::Verdict::Wanted;
+        use Open::{CannotFrame, FailsFramed, Frames};
+        let (view, hd) = ((1280, 720), (1920, 1080));
+        let row = |name, pyrowave, open, opened: &[(u32, u32)], encoded, rate_kbps, verdict| {
+            EncoderRow { name, pyrowave, open, opened: opened.to_vec(), encoded, rate_kbps, verdict }
+        };
+        vec![
+            row("HEVC framed: the rate stands", None, Frames, &[view], view, 20_000, Wanted),
+            row("HEVC, the framed open fails: the capture, the rate stands", None, FailsFramed,
+                &[view, hd], hd, 20_000, Wanted),
+            row("HEVC, a backend that cannot frame: the capture", None, CannotFrame, &[view, hd],
+                hd, 20_000, Wanted),
+            row("PyroWave framed: priced at the view", Some(false), Frames, &[view], view, 88_473,
+                Wanted),
+            row("PyroWave, the framed open fails: re-priced at the capture", Some(false),
+                FailsFramed, &[view, hd], hd, 199_065, Wanted),
+            row("PyroWave, a backend that cannot frame: re-priced at the capture", Some(false),
+                CannotFrame, &[view, hd], hd, 199_065, Wanted),
+            row("PyroWave Automatic, the framed open fails: the running rate inside the \
+                 capture's bounds", Some(true), FailsFramed, &[view, hd], hd, 88_473, Wanted),
+        ]
+    }
+
+    /// The encoder-only build for a new view at the live mode: the size it opens at, the rate it
+    /// runs, and the picture the client hears, when the framed open works, fails or cannot frame.
+    #[test]
+    fn geometry_rows() {
+        for r in encoder_rows() {
+            let name = format!("{} ({:?})", r.name, r.verdict);
+            let mut f = hd_session();
+            if let Some(auto) = r.pyrowave {
+                pyrowave(&mut f, auto);
+            }
+            let hd = f.st.live.cur_mode;
+            let ask = RebuildAsk::Mode(hd, Some((1280, 720)));
+            let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
+            assert_eq!(plan.build, Build::Encoder, "{name}");
+            let opened = std::sync::Mutex::new(Vec::new());
+            let built = f.st.perform(plan, ask, |st, plan, _, _| {
+                st.build_encoder(plan, opener(r.open, (1920, 1080), &opened))
+            });
+            assert!(matches!(built, Ok(Rebuilt::Built)), "{name}");
+            assert_eq!(opened.into_inner().unwrap(), r.opened, "{name}: opens");
+            let encoded = f.st.shared.frame_map.lock().unwrap().out;
+            assert_eq!(encoded, r.encoded, "{name}: framing");
+            assert_eq!(f.st.live.bitrate_kbps, r.rate_kbps, "{name}: rate");
+            let told = heard(&mut f).last().map(|&(m, e, _)| (m, e));
+            assert_eq!(told, Some((hd, r.encoded)), "{name}: told");
+        }
+    }
+
+    /// A build's framing: the 16×16 capture scaled to 8×8.
+    fn framing() -> punktfunk_core::video_fit::Reframe {
+        punktfunk_core::video_fit::Reframe {
+            source: SMALL,
+            crop: [0, 0, SMALL.0, SMALL.1],
+            out: (8, 8),
+        }
+    }
+
+    /// `built` with the build's framing as [`framing`].
+    fn framed(built: Result<Built>) -> Result<Built> {
+        let mut built = built?;
+        match &mut built.next {
+            Next::Pipeline(p) => p.reframe = framing(),
+            Next::Encoder { reframe, .. } => *reframe = framing(),
+        }
+        Ok(built)
+    }
+
+    /// One swap reason and the build that lands it.
+    struct MapRow {
+        name: &'static str,
+        ask: fn() -> RebuildAsk,
+        setup: fn(&mut Session),
+        script: Script,
+        /// The client hears the new epoch.
+        told: bool,
+        verdict: crate::native::tests::Verdict,
+    }
+
+    #[rustfmt::skip]
+    fn map_rows() -> Vec<MapRow> {
+        use crate::native::tests::Verdict::Wanted;
+        let row = |name, ask, setup, script, told, verdict| MapRow {
+            name, ask, setup, script, told, verdict,
+        };
+        let pipe = Script::Pipeline(SMALL, 20_000);
+        vec![
+            row("session switch", switch as fn() -> RebuildAsk, (|_| {}) as fn(&mut Session),
+                pipe, true, Wanted),
+            row("mode switch", || RebuildAsk::Mode(mode(WIDE, 60), None), |_| {}, pipe, true,
+                Wanted),
+            row("a view alone", || RebuildAsk::Mode(ASKED, Some((8, 8))), |_| {}, Script::Encoder,
+                true, Wanted),
+            row("topology re-assert", || RebuildAsk::TopologyReassert(5), idd_push, pipe, true,
+                Wanted),
+            row("capture lost", || RebuildAsk::CaptureLost(None), |_| {}, pipe, true, Wanted),
+            row("source mode", || RebuildAsk::SourceMode(DELIVERED), |_| {}, Script::Encoder, true,
+                Wanted),
+            row("codec change", || RebuildAsk::Format(crate::encode::Codec::H264), |_| {}, pipe,
+                true, Wanted),
+            row("content turned HDR", || RebuildAsk::Content(true), |_| {}, pipe, true, Wanted),
+            row("rate the encoder could not take in place", || RebuildAsk::Bitrate(10_000),
+                |_| {}, Script::Encoder, false, Wanted),
+        ]
+    }
+
+    /// After each swap reason the input plane's frame map is the framing the build encodes, and
+    /// every epoch the swap moved is told at that encoded size.
+    #[test]
+    fn frame_map_rows() {
+        let keyframes = Arc::new(AtomicU32::new(0));
+        for r in map_rows() {
+            let name = format!("{} ({:?})", r.name, r.verdict);
+            let mut f = super::super::swap::tests::fake();
+            f.st.seen_reassert_gen = 9;
+            (r.setup)(&mut f);
+            let ask = (r.ask)();
+            let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
+            let built = f.st.perform(plan, ask, |_, plan, _, _| {
+                framed(script(r.script, plan.rate_kbps, &keyframes))
+            });
+            assert!(matches!(built, Ok(Rebuilt::Built)), "{name}");
+            assert_eq!(
+                *f.st.shared.frame_map.lock().unwrap(),
+                framing(),
+                "{name}: frame map"
+            );
+            let told = heard(&mut f);
+            assert_eq!(!told.is_empty(), r.told, "{name}: told");
+            assert!(
+                told.iter().all(|&(_, e, _)| e == (8, 8)),
+                "{name}: {told:?}"
+            );
+        }
+    }
+
+    /// U5: a capture loss and a session switch rebuild at the view the session frames, and
+    /// keep it after.
+    #[test]
+    fn the_view_survives_a_capture_loss_and_a_session_switch() {
+        use punktfunk_core::video_fit::VideoFit;
+        let view = Some((VideoFit::Fit, (8, 8)));
+        let keyframes = Arc::new(AtomicU32::new(0));
+        let lost: fn() -> RebuildAsk = || RebuildAsk::CaptureLost(None);
+        for ask in [lost, switch] {
+            let mut f = super::super::swap::tests::fake();
+            f.st.plan.reframe_to = view;
+            let ask = ask();
+            let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
+            let mut opened_for = None;
+            let built = f.st.perform(plan, ask, |st, plan, _, _| {
+                opened_for = Some(st.build_request(plan.mode, plan.rate_kbps).plan.reframe_to);
+                script(Script::Pipeline(SMALL, 20_000), plan.rate_kbps, &keyframes)
+            });
+            assert!(matches!(built, Ok(Rebuilt::Built)));
+            assert_eq!(opened_for, Some(view), "the build opens framed");
+            assert_eq!(f.st.plan.reframe_to, view, "the view stays");
+        }
+    }
+
+    /// U13: a switch into gamescope that runs the format rule for it again builds framed at the
+    /// view, keeps it, and tells the new epoch at the size it encodes.
+    #[test]
+    fn the_view_survives_a_game_mode_switch() {
+        use punktfunk_core::video_fit::VideoFit;
+        let view = Some((VideoFit::Fit, (8, 8)));
+        let keyframes = Arc::new(AtomicU32::new(0));
+        let mut f = super::super::swap::tests::fake();
+        f.st.plan.reframe_to = view;
+        f.st.facts.format_facts.follows = true;
+        let ask = switch();
+        let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
+        let mut opened_for = None;
+        let built = f.st.perform(plan, ask, |st, plan, _, _| {
+            opened_for = Some(st.build_request(plan.mode, plan.rate_kbps).plan.reframe_to);
+            framed(script(
+                Script::Pipeline(SMALL, 20_000),
+                plan.rate_kbps,
+                &keyframes,
+            ))
+        });
+        assert!(matches!(built, Ok(Rebuilt::Built)));
+        assert_eq!(f.st.display.compositor, Compositor::Gamescope);
+        assert_eq!((opened_for, f.st.plan.reframe_to), (Some(view), view));
+        let told: Vec<_> = heard(&mut f).into_iter().map(|(_, e, _)| e).collect();
+        assert_eq!(told, [(8, 8)]);
+    }
+
+    /// U8 (D3): the owner of a display another session holds asks a smaller size, which is
+    /// framed on the live mode and corrected; then a rate pick. At the told size with no view,
+    /// the ask a ring sends, it clears the framing. At the asked size it keeps it and nothing
+    /// builds. The control task holds the told mode and the view of the ask it accepted.
+    #[test]
+    fn a_refresh_ask_on_a_shared_display_keeps_the_framed_view() {
+        use crate::native::control::tests::control_ask;
+        use crate::native::tests::Verdict;
+        use punktfunk_core::quic::Reconfigure;
+        use punktfunk_core::video_fit::VideoFit;
+        let codec = crate::encode::Codec::H265;
+        let req = |mode, view| Reconfigure {
+            mode,
+            exclude_codecs: 0,
+            view,
+        };
+        let (live, small) = (mode((1920, 1080), 60), mode((1280, 720), 60));
+        let framed_720 = Some((VideoFit::Fit, (1280, 720)));
+        for (pick, rebuilds, kept, encoded, verdict) in [
+            (
+                mode((1920, 1080), 120),
+                true,
+                None,
+                (1920, 1080),
+                Verdict::D3,
+            ),
+            (
+                mode((1280, 720), 120),
+                false,
+                framed_720,
+                (1280, 720),
+                Verdict::Wanted,
+            ),
+        ] {
+            let mut f = hd_session();
+            let (asked, held) = control_ask(req(small, None), (live, None), codec, false, true);
+            let asked = asked.expect("the owner may resize");
+            assert!(rebuild_with(
+                &mut f,
+                RebuildAsk::Mode(asked.0, asked.1),
+                true,
+                Open::Frames
+            ));
+            assert_eq!(f.st.plan.reframe_to, framed_720, "framed on the live mode");
+            let told = heard(&mut f);
+            assert_eq!(told.last(), Some(&(live, (1280, 720), true)), "corrected");
+            let held = (live, held.1);
+            let (asked, _) = control_ask(req(pick, None), held, codec, false, true);
+            let asked = asked.expect("a rate pick is accepted");
+            assert_eq!(asked, (pick, None), "{pick:?}: the ask carries no view");
+            let built = rebuild_with(
+                &mut f,
+                RebuildAsk::Mode(asked.0, asked.1),
+                true,
+                Open::Frames,
+            );
+            assert_eq!(built, rebuilds, "{pick:?} ({verdict:?})");
+            assert_eq!(f.st.plan.reframe_to, kept, "{pick:?} ({verdict:?})");
+            let told = heard(&mut f);
+            assert_eq!(
+                told.last(),
+                Some(&(live, encoded, true)),
+                "{pick:?} ({verdict:?})"
+            );
+        }
+    }
+
+    /// U9: the owner of a display another session holds may change codec: the plan rebuilds as
+    /// for a display of its own, the shared display takes the new HDR verdict and the control
+    /// task hears the codec runs. A content change is refused there.
+    #[test]
+    fn an_owners_codec_change_under_a_joiner() {
+        use crate::native::tests::Verdict;
+        let verdict = Verdict::Other;
+        let mut f = super::super::swap::tests::fake();
+        f.st.display.vd_params.hdr = true;
+        let keyframes = Arc::new(AtomicU32::new(0));
+        let facts = RebuildFacts {
+            shared: true,
+            ..f.st.rebuild_facts()
+        };
+        assert!(rebuild_plan::plan(&RebuildAsk::Content(false), &facts).is_none());
+        let ask = RebuildAsk::Format(crate::encode::Codec::H264);
+        let plan = rebuild_plan::plan(&ask, &facts).expect("a codec rebuild");
+        assert_eq!(
+            plan.display,
+            Some(DisplayChange::Format(crate::encode::Codec::H264))
+        );
+        let built = f.st.perform(plan, ask, |_, plan, _, _| {
+            script(Script::Pipeline(SMALL, 20_000), plan.rate_kbps, &keyframes)
+        });
+        assert!(matches!(built, Ok(Rebuilt::Built)), "{verdict:?}");
+        assert_eq!(f.display.lock().unwrap().hdr, Some(false), "{verdict:?}");
+        assert_eq!(
+            f.codecs.try_recv().ok(),
+            Some(Some(crate::encode::Codec::H264))
+        );
+    }
+
+    /// U12: a mode switch runs no format rule at the new size: the depth and chroma stay, for a
+    /// size the format takes and for PyroWave 4:4:4 past the rate controller's block range,
+    /// where the handshake would have negotiated 4:2:0.
+    #[test]
+    fn a_mode_switch_keeps_a_format_the_new_size_takes() {
+        use crate::encode::{ChromaFormat, Codec};
+        use crate::native::tests::Verdict;
+        let keyframes = Arc::new(AtomicU32::new(0));
+        for (codec, to, verdict) in [
+            (Codec::H265, mode(WIDE, 60), Verdict::Wanted),
+            (Codec::PyroWave, mode((7680, 4320), 60), Verdict::Other),
+        ] {
+            let mut f = super::super::swap::tests::fake();
+            (f.st.plan.codec, f.st.plan.chroma) = (codec, ChromaFormat::Yuv444);
+            (f.st.plan.bit_depth, f.st.bit_depth) = (10, 10);
+            let ask = RebuildAsk::Mode(to, None);
+            let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
+            assert_eq!(plan.display, None, "{codec:?} ({verdict:?})");
+            let built = f.st.perform(plan, ask, |_, plan, _, _| {
+                script(Script::Pipeline(WIDE, 20_000), plan.rate_kbps, &keyframes)
+            });
+            assert!(matches!(built, Ok(Rebuilt::Built)), "{codec:?}");
+            let kept = (f.st.plan.chroma, f.st.plan.bit_depth, f.st.bit_depth);
+            assert_eq!(
+                kept,
+                (ChromaFormat::Yuv444, 10, 10),
+                "{codec:?} ({verdict:?})"
+            );
+        }
+    }
+
+    /// U17: a mode build that loses its capture keeps the mode and view that ran and corrects
+    /// the client; the capture loss after it rebuilds at that intent, not at the one asked.
+    #[test]
+    fn a_loss_inside_a_mode_build_retries_at_the_asked_intent() {
+        use crate::native::tests::Verdict;
+        use punktfunk_core::video_fit::VideoFit;
+        let verdict = Verdict::Other;
+        let view = Some((VideoFit::Fit, (8, 8)));
+        let keyframes = Arc::new(AtomicU32::new(0));
+        let mut f = super::super::swap::tests::fake();
+        f.st.plan.reframe_to = view;
+        let ask = RebuildAsk::Mode(mode(WIDE, 60), None);
+        let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
+        let kept = f.st.perform(plan, ask, |_, plan, _, _| {
+            script(Script::Fails, plan.rate_kbps, &keyframes)
+        });
+        assert!(matches!(kept, Ok(Rebuilt::Kept(_))));
+        assert_eq!((f.st.live.cur_mode, f.st.plan.reframe_to), (ASKED, view));
+        let told: Vec<_> = heard(&mut f).into_iter().map(|(m, _, c)| (m, c)).collect();
+        assert_eq!(told, [(DELIVERED, true)], "{verdict:?}");
+        let ask = RebuildAsk::CaptureLost(None);
+        let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
+        let mut retried = None;
+        let built = f.st.perform(plan, ask, |st, plan, _, _| {
+            let req = st.build_request(plan.mode, plan.rate_kbps);
+            retried = Some((req.mode, req.plan.reframe_to));
+            script(Script::Pipeline(SMALL, 20_000), plan.rate_kbps, &keyframes)
+        });
+        assert!(matches!(built, Ok(Rebuilt::Built)));
+        assert_eq!(retried, Some((ASKED, view)), "{verdict:?}");
     }
 
     use crate::vdisplay::Compositor;

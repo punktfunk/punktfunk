@@ -1539,6 +1539,54 @@ mod tests {
         }
     }
 
+    /// One split: the first screen's mode and the picture its encoder takes it to, and a
+    /// further screen's ask; the first's share after the set polls.
+    struct SplitRow {
+        name: &'static str,
+        first: (punktfunk_core::Mode, punktfunk_core::Mode),
+        further: Screen,
+        first_share: u16,
+        verdict: crate::native::tests::Verdict,
+    }
+
+    #[rustfmt::skip]
+    fn split_rows() -> Vec<SplitRow> {
+        use crate::native::tests::Verdict::{D5, Wanted};
+        let (one, qhd, uhd) = (mode(1920, 1080, 60), mode(2560, 1440, 60), mode(3840, 2160, 60));
+        let viewed = |mode, view| Screen { view: Some(view), ..asked(1, mode) };
+        let row = |name, first, further, first_share, verdict| SplitRow {
+            name, first, further, first_share, verdict,
+        };
+        vec![
+            row("two screens at one size: half each", (one, one), asked(1, one), 500, Wanted),
+            row("a first screen framed at its view weighs the view", (uhd, one), asked(1, one),
+                500, Wanted),
+            row("a first screen whose framing fell back weighs what it encodes", (uhd, uhd),
+                asked(1, one), 800, Wanted),
+            row("a further screen framed at its view weighs the view", (one, one),
+                viewed(qhd, (1920, 1080)), 500, Wanted),
+            row("a further screen whose framing fell back still weighs its asked view",
+                (one, one), viewed(qhd, (1920, 1080)), 500, D5),
+        ]
+    }
+
+    /// The split of the video between the first screen and a further one: the first at the
+    /// picture its encoder takes, a further one at the view it asked, whatever it encodes.
+    #[test]
+    fn geometry_rows() {
+        for r in split_rows() {
+            let (base, _frames, _told, wire) = kwin_base();
+            let (_screens_tx, screens_rx) = std::sync::mpsc::channel();
+            let (first_mode, first_picture) = r.first;
+            let list = vec![asked(0, first_mode), r.further];
+            let mut set = ScreenSet::new(base, screens_rx, list);
+            set.poll(first_mode, first_picture, None);
+            let share = wire.primary_share.load(Ordering::Relaxed);
+            set.shutdown();
+            assert_eq!(share, r.first_share, "{} ({:?})", r.name, r.verdict);
+        }
+    }
+
     /// S8-5: the first screen's new mode re-splits the video with no new list.
     #[test]
     fn s8_5_the_first_screens_new_mode_re_splits_the_video() {

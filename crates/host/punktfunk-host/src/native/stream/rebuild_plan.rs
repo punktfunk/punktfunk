@@ -1003,4 +1003,136 @@ mod tests {
             assert_eq!(plan(&(row.ask)(), &f), (row.want)(), "{}", row.name);
         }
     }
+
+    use crate::native::handshake::tests::mode;
+
+    /// How a plan builds, the mode it builds, the view `prepare` frames the build at and the
+    /// rate. `None`: nothing rebuilds.
+    type Geometry = Option<(Build, Mode, Option<(u32, u32)>, u32)>;
+
+    /// [`Geometry`] of the plan for `ask`.
+    fn geometry(ask: &RebuildAsk, f: &RebuildFacts) -> Geometry {
+        let p = plan(ask, f)?;
+        let view = match *ask {
+            RebuildAsk::Mode(asked, view) => view_for(asked, view, p.mode),
+            _ => f.plan.reframe_to.map(|(_, v)| v),
+        };
+        Some((p.build, p.mode, view, p.rate_kbps))
+    }
+
+    /// [`pyrowave`] at 1.6 bits per pixel, the rows' quality everywhere.
+    fn pyro(f: &mut RebuildFacts) {
+        pyrowave(f);
+        f.plan.pyrowave_bpp = 1.6;
+    }
+
+    /// The session frames [`LIVE`] at 1280×720.
+    fn framed_at_720(f: &mut RebuildFacts) {
+        f.plan.reframe_to = Some((punktfunk_core::video_fit::VideoFit::Fit, (1280, 720)));
+    }
+
+    /// One ask against the facts the loop runs: what its plan builds, at which mode, view and
+    /// rate.
+    struct GeometryRow {
+        name: &'static str,
+        ask: RebuildAsk,
+        facts: &'static [fn(&mut RebuildFacts)],
+        want: Geometry,
+        verdict: crate::native::tests::Verdict,
+    }
+
+    #[rustfmt::skip]
+    fn geometry_rows_table() -> Vec<GeometryRow> {
+        use crate::native::tests::Verdict::{Other, Wanted, D3};
+        use Build::{Encoder, Once};
+        let (uhd, hd120, small120) = (mode(3840, 2160, 60), mode(1920, 1080, 120), mode(1280, 720, 120));
+        let row = |name, ask, facts: &'static [fn(&mut RebuildFacts)], want: Geometry, verdict| {
+            GeometryRow { name, ask, facts, want, verdict }
+        };
+        fn auto(f: &mut RebuildFacts) {
+            (f.bitrate_auto, f.rate_kbps) = (true, 150_000);
+        }
+        fn hot(f: &mut RebuildFacts) {
+            (f.bitrate_auto, f.rate_kbps) = (true, 500_000);
+        }
+        fn gamescope(f: &mut RebuildFacts) {
+            f.compositor = Compositor::Gamescope;
+        }
+        vec![
+            row("a new mode: one build at it, no view", RebuildAsk::Mode(BIG, None), &[],
+                Some((Once, BIG, None, 20_000)), Wanted),
+            row("a new mode with a view: one build, framed at the view",
+                RebuildAsk::Mode(uhd, Some((1920, 1080))), &[],
+                Some((Once, uhd, Some((1920, 1080)), 20_000)), Wanted),
+            row("PyroWave, a new mode: priced at the mode", RebuildAsk::Mode(uhd, None), &[pyro],
+                Some((Once, uhd, None, 796_262)), Wanted),
+            row("PyroWave, a new mode with a view: priced at the view",
+                RebuildAsk::Mode(uhd, Some((1920, 1080))), &[pyro],
+                Some((Once, uhd, Some((1920, 1080)), 199_065)), Wanted),
+            row("PyroWave Automatic: the running rate held inside the view's bounds",
+                RebuildAsk::Mode(uhd, Some((1920, 1080))), &[pyro, auto],
+                Some((Once, uhd, Some((1920, 1080)), 150_000)), Wanted),
+            row("PyroWave Automatic above the view's pin: the pin",
+                RebuildAsk::Mode(uhd, Some((1920, 1080))), &[pyro, hot],
+                Some((Once, uhd, Some((1920, 1080)), 199_065)), Wanted),
+            row("a view at the live mode: the encoder alone, framed",
+                RebuildAsk::Mode(LIVE, Some((1280, 720))), &[],
+                Some((Encoder, LIVE, Some((1280, 720)), 20_000)), Wanted),
+            row("PyroWave, a view at the live mode: priced at the view",
+                RebuildAsk::Mode(LIVE, Some((1280, 720))), &[pyro],
+                Some((Encoder, LIVE, Some((1280, 720)), 88_473)), Wanted),
+            row("a rate pick that keeps the view: one build at the rate, framed as before",
+                RebuildAsk::Mode(hd120, Some((1280, 720))), &[pyro, framed_at_720],
+                Some((Once, hd120, Some((1280, 720)), 176_947)), Wanted),
+            row("a rate pick with no view: one build at the rate, the view cleared",
+                RebuildAsk::Mode(hd120, None), &[pyro, framed_at_720],
+                Some((Once, hd120, None, 398_131)), Wanted),
+            row("shared: a smaller size framed on the live mode, priced at it",
+                RebuildAsk::Mode(SMALL, None), &[pyro, shared],
+                Some((Encoder, LIVE, Some((1280, 720)), 88_473)), Wanted),
+            row("shared: a smaller size at another rate framed at the live rate",
+                RebuildAsk::Mode(small120, None), &[pyro, shared],
+                Some((Encoder, LIVE, Some((1280, 720)), 88_473)), Wanted),
+            row("shared, framed: the framed size at another rate changes nothing",
+                RebuildAsk::Mode(small120, None), &[pyro, shared, framed_at_720], None, Wanted),
+            row("shared, framed: a refresh at the told size clears the framing",
+                RebuildAsk::Mode(hd120, None), &[pyro, shared, framed_at_720],
+                Some((Encoder, LIVE, None, 199_065)), D3),
+            row("shared, framed: the told size at another rate with its view changes nothing",
+                RebuildAsk::Mode(hd120, Some((1280, 720))), &[pyro, shared, framed_at_720],
+                None, Wanted),
+            row("shared: a larger size changes nothing", RebuildAsk::Mode(BIG, None),
+                &[shared], None, Wanted),
+            row("shared, framed: a larger size clears the framing to the whole display",
+                RebuildAsk::Mode(BIG, None), &[pyro, shared, framed_at_720],
+                Some((Encoder, LIVE, None, 199_065)), Wanted),
+            row("a joiner alone: a new mode builds its own display", RebuildAsk::Mode(BIG, None),
+                &[joined], Some((Once, BIG, None, 20_000)), Wanted),
+            row("source mode: the delivered mode, the view kept, priced at it",
+                RebuildAsk::SourceMode(BIG), &[pyro, framed_at_720],
+                Some((Encoder, BIG, Some((1280, 720)), 176_947)), Wanted),
+            row("codec: the live mode and view", RebuildAsk::Format(Codec::H264),
+                &[framed_at_720], Some((Once, LIVE, Some((1280, 720)), 20_000)), Wanted),
+            row("capture lost: the live mode and view", RebuildAsk::CaptureLost(None),
+                &[pyro, framed_at_720], Some((Build::CaptureLoss, LIVE, Some((1280, 720)), 20_000)),
+                Wanted),
+            row("rate: the asked rate, the view kept", RebuildAsk::Bitrate(8_000),
+                &[framed_at_720], Some((Encoder, LIVE, Some((1280, 720)), 8_000)), Wanted),
+            row("after a switch into gamescope: a new mode still builds a display",
+                RebuildAsk::Mode(BIG, None), &[gamescope],
+                Some((Once, BIG, None, 20_000)), Other),
+        ]
+    }
+
+    /// The mode, view and rate each ask builds at.
+    #[test]
+    fn geometry_rows() {
+        for r in geometry_rows_table() {
+            let mut f = facts();
+            for set in r.facts {
+                set(&mut f);
+            }
+            assert_eq!(geometry(&r.ask, &f), r.want, "{} ({:?})", r.name, r.verdict);
+        }
+    }
 }

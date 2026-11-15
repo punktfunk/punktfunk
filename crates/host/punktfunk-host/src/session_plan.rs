@@ -662,7 +662,7 @@ pub(crate) fn open_encoder_fitted(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::encode::{ChromaFormat, Codec};
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -690,7 +690,10 @@ mod tests {
     }
 
     /// An encoder that frames on ingest when `0` says so, and records the crop it was armed with.
-    struct Frames(bool, std::sync::Arc<std::sync::Mutex<Option<[u32; 4]>>>);
+    pub(crate) struct Frames(
+        pub(crate) bool,
+        pub(crate) std::sync::Arc<std::sync::Mutex<Option<[u32; 4]>>>,
+    );
 
     impl crate::encode::Encoder for Frames {
         fn submit(&mut self, _frame: &crate::capture::CapturedFrame) -> anyhow::Result<()> {

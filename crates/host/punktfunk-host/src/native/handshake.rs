@@ -2169,7 +2169,7 @@ fn pcm_parts(n: &Negotiation<'_>) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use punktfunk_core::audio::pcm;
 
@@ -2291,7 +2291,11 @@ mod tests {
         );
     }
 
-    fn mode(width: u32, height: u32, refresh_hz: u32) -> punktfunk_core::Mode {
+    pub(in crate::native) fn mode(
+        width: u32,
+        height: u32,
+        refresh_hz: u32,
+    ) -> punktfunk_core::Mode {
         punktfunk_core::Mode {
             width,
             height,
@@ -2336,6 +2340,160 @@ mod tests {
             Some((VideoFit::Fit, (1366, 768)))
         );
         assert_eq!(reframe_to(crop, None, None), None);
+    }
+
+    /// Where a Welcome's session streams: a display of its own, one capped by the operator to a
+    /// mode, a display another session runs at its mode, or a host monitor.
+    #[derive(Clone, Copy, Debug)]
+    enum Welcomed {
+        Own,
+        Capped(punktfunk_core::Mode),
+        Joiner(punktfunk_core::Mode),
+        Mirror,
+    }
+
+    /// The Welcome's mode, rate and `ServerHello` picture for a client that asked `asked` at
+    /// `view` and `kbps`, through `negotiate`'s steps in its order on a mutter host. The cap
+    /// and the join enter as the mode they leave; PyroWave runs at 1.6 bits per pixel.
+    fn welcomed(
+        asked: punktfunk_core::Mode,
+        view: Option<(u32, u32)>,
+        codec: crate::encode::Codec,
+        kbps: u32,
+        at: Welcomed,
+    ) -> (punktfunk_core::Mode, u32, Option<(u32, u32)>) {
+        let mut mode = asked;
+        if let Welcomed::Capped(cap) = at {
+            (mode.width, mode.height, mode.refresh_hz) = (cap.width, cap.height, cap.refresh_hz);
+        }
+        let view = kept_view(view, &mode, codec);
+        let joined = match at {
+            Welcomed::Joiner(owner) => {
+                let shown = view.unwrap_or((mode.width, mode.height));
+                (mode.width, mode.height, mode.refresh_hz) =
+                    (owner.width, owner.height, owner.refresh_hz);
+                let display = crate::vdisplay::admission::LiveDisplay {
+                    compositor: Some(crate::vdisplay::Compositor::Mutter),
+                    route: None,
+                    isolation: None,
+                    audio_sink: Arc::default(),
+                    hdr: false,
+                    format: None,
+                };
+                Some((display, shown))
+            }
+            _ => None,
+        };
+        let mirrored = matches!(at, Welcomed::Mirror);
+        let exact = runs_exact_rate(
+            Some(crate::vdisplay::Compositor::Mutter),
+            joined.is_some() || mirrored,
+        );
+        let mode = deliverable_rate(mode, exact);
+        let view = view.filter(|_| joined.is_none() && !mirrored);
+        let picture = crate::session_plan::picture(mode, view.or(joined_view(&joined)));
+        let kbps = resolve_bitrate_kbps_for(
+            codec,
+            kbps,
+            &picture,
+            crate::encode::ChromaFormat::Yuv420,
+            8,
+            session_pyrowave_bpp(160),
+            None,
+        );
+        let wire = crate::session_plan::picture_field(mode, (picture.width, picture.height));
+        (mode, kbps, wire)
+    }
+
+    /// One Hello and the Welcome it gets.
+    struct WelcomeRow {
+        name: &'static str,
+        asked: punktfunk_core::Mode,
+        view: Option<(u32, u32)>,
+        codec: crate::encode::Codec,
+        kbps: u32,
+        at: Welcomed,
+        welcome: (punktfunk_core::Mode, u32, Option<(u32, u32)>),
+        verdict: crate::native::tests::Verdict,
+    }
+
+    #[rustfmt::skip]
+    fn welcome_rows() -> Vec<WelcomeRow> {
+        use crate::encode::Codec::{PyroWave, H265};
+        use crate::native::tests::Verdict::{Other, Wanted};
+        let (hd, qhd, uhd) = (mode(1920, 1080, 60), mode(2560, 1440, 60), mode(3840, 2160, 60));
+        let row = |name, asked, view, codec, kbps, at, welcome, verdict| WelcomeRow {
+            name,
+            asked,
+            view,
+            codec,
+            kbps,
+            at,
+            welcome,
+            verdict,
+        };
+        let exact = punktfunk_core::Mode::exact(1920, 1080, 59_940);
+        let own_exact = if cfg!(windows) { hd } else { exact };
+        vec![
+            row("HEVC Automatic: the host's default", hd, None, H265, 0, Welcomed::Own,
+                (hd, 20_000, None), Wanted),
+            row("HEVC Automatic with a view: not priced by size, told the view", uhd,
+                Some((1920, 1080)), H265, 0, Welcomed::Own, (uhd, 20_000, Some((1920, 1080))),
+                Wanted),
+            row("HEVC at a fixed rate: the rate stands", uhd, Some((1920, 1080)), H265, 50_000,
+                Welcomed::Own, (uhd, 50_000, Some((1920, 1080))), Wanted),
+            row("PyroWave at the mode", hd, None, PyroWave, 0, Welcomed::Own,
+                (hd, 199_065, None), Wanted),
+            row("PyroWave priced and told at its view", uhd, Some((1920, 1080)), PyroWave, 0,
+                Welcomed::Own, (uhd, 199_065, Some((1920, 1080))), Wanted),
+            row("PyroWave Fixed: the pin at the view, the client's number ignored", uhd,
+                Some((1920, 1080)), PyroWave, 80_000, Welcomed::Own,
+                (uhd, 199_065, Some((1920, 1080))), Wanted),
+            row("a view the mode's size: the mode", hd, Some((1920, 1080)), PyroWave, 0,
+                Welcomed::Own, (hd, 199_065, None), Wanted),
+            row("a view larger than the mode: the mode", hd, Some((2560, 1440)), PyroWave, 0,
+                Welcomed::Own, (hd, 199_065, None), Wanted),
+            row("a fraction on a display of its own stays where the host runs one", exact, None,
+                H265, 0, Welcomed::Own, (own_exact, 20_000, None), Wanted),
+            row("a joiner asking less: the owner's mode, priced and told at its ask",
+                mode(1280, 720, 120), None, PyroWave, 0, Welcomed::Joiner(hd),
+                (hd, 88_473, Some((1280, 720))), Wanted),
+            row("a joiner with a view: the owner's mode at that view", uhd, Some((1920, 1080)),
+                PyroWave, 0, Welcomed::Joiner(qhd), (qhd, 199_065, Some((1920, 1080))), Wanted),
+            row("a joiner at the owner's size: the mode, whole hertz", exact, None, PyroWave, 0,
+                Welcomed::Joiner(hd), (hd, 199_065, None), Wanted),
+            row("a joiner asking more than the owner runs: priced and told at a size its fit \
+                 never reaches", uhd, None, PyroWave, 0, Welcomed::Joiner(hd),
+                (hd, 796_262, Some((3840, 2160))), Other),
+            row("an HEVC joiner asking more: the default, told a picture past the mode", uhd,
+                None, H265, 0, Welcomed::Joiner(hd), (hd, 20_000, Some((3840, 2160))), Other),
+            row("a mirror: its view dropped, priced and told at the mode", hd,
+                Some((1280, 720)), PyroWave, 0, Welcomed::Mirror, (hd, 199_065, None), Wanted),
+            row("a cap keeps a view inside the capped mode", mode(3840, 2160, 120),
+                Some((1920, 1080)), PyroWave, 0, Welcomed::Capped(qhd),
+                (qhd, 199_065, Some((1920, 1080))), Wanted),
+            row("a cap to the view's size: the mode", uhd, Some((1920, 1080)), PyroWave, 0,
+                Welcomed::Capped(hd), (hd, 199_065, None), Wanted),
+            row("a cap under the view: the capped mode", uhd, Some((1920, 1080)), PyroWave, 0,
+                Welcomed::Capped(mode(1280, 720, 60)), (mode(1280, 720, 60), 88_473, None),
+                Wanted),
+        ]
+    }
+
+    /// The Welcome's mode, rate and picture for each Hello shape: HEVC and PyroWave, with and
+    /// without a view, as a joiner, as a mirror and under a cap.
+    #[test]
+    fn geometry_rows() {
+        use crate::encode::Codec::PyroWave;
+        // A host built without the PyroWave encoder takes no PyroWave size, nor its view.
+        let pyrowave = crate::encode::validate_dimensions(PyroWave, 1920, 1080).is_ok();
+        for r in welcome_rows() {
+            if r.codec == PyroWave && !pyrowave {
+                continue;
+            }
+            let got = welcomed(r.asked, r.view, r.codec, r.kbps, r.at);
+            assert_eq!(got, r.welcome, "{} ({:?}, {:?})", r.name, r.at, r.verdict);
+        }
     }
 
     /// A joiner's colour is the owner display's: an SDR display asks no HDR of an HDR client,

@@ -3536,3 +3536,14 @@ fn a_client_that_stops_reading_its_control_stream_is_closed() {
     let _ = std::fs::remove_file(&store);
     host.join().unwrap().unwrap();
 }
+
+/// What a characterisation row says of the behaviour it pins: wanted, or an accident the named
+/// decision settles. `Other` is an accident no decision covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::native) enum Verdict {
+    Wanted,
+    D3,
+    D4,
+    D5,
+    Other,
+}

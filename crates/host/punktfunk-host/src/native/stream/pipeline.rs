@@ -1387,4 +1387,116 @@ mod tests {
         // A dark console display: Windows never assigned a swap-chain. No reload.
         assert!(!is_driver_no_device(&open(SET_ENCODE_NO_DEVICE, "noswap")));
     }
+
+    use crate::native::handshake::tests::mode;
+
+    /// How a first build's encoder is framed.
+    #[derive(Clone, Copy, Debug)]
+    enum Framed {
+        /// A view of its own at Fit.
+        Own((u32, u32)),
+        /// A joiner's view at Crop.
+        Joiner((u32, u32)),
+        /// A mirrored head fitted to the negotiated mode.
+        Mirror,
+    }
+
+    /// A first build's encoder on a `captured` source for the negotiated `mode`, framed as
+    /// `framed`, whose framed open `fails`: the size it encodes and the PyroWave Fixed rate it
+    /// runs, priced at 1.6 bits per pixel at the picture the build asked.
+    fn first_encoder(
+        mode: punktfunk_core::Mode,
+        captured: (u32, u32),
+        framed: Framed,
+        fails: bool,
+    ) -> ((u32, u32), u32) {
+        use punktfunk_core::video_fit::VideoFit;
+        let mut p = plan(crate::encode::ChromaFormat::Yuv420, false, 1);
+        (p.codec, p.pyrowave_bpp) = (crate::encode::Codec::PyroWave, 1.6);
+        match framed {
+            Framed::Own(view) => p.reframe_to = Some((VideoFit::Fit, view)),
+            Framed::Joiner(view) => p.reframe_to = Some((VideoFit::Crop, view)),
+            Framed::Mirror => p.mirrored = true,
+        }
+        let cap = crate::capture::SyntheticCapturer::new(captured.0, captured.1, 60);
+        let frame = super::super::swap::tests::frame(captured);
+        let (_, reframe) = open_session_encoder_with(
+            &crate::encode::resolve(),
+            &p,
+            &cap,
+            &frame,
+            (mode.width, mode.height),
+            mode.refresh_hz,
+            |_, _| 0,
+            8,
+            None,
+            0,
+            |_, v| {
+                if fails && (v.width, v.height) != captured {
+                    anyhow::bail!("no scale pass")
+                }
+                Ok(Box::new(crate::session_plan::tests::Frames(
+                    true,
+                    Default::default(),
+                )))
+            },
+        )
+        .expect("an encoder");
+        let priced = p.picture(mode);
+        let pin = pyrowave_mode_kbps(None, &priced, &p, None);
+        (
+            reframe.out,
+            rate_at_encoded(pin, false, priced, reframe.out, &p, None),
+        )
+    }
+
+    /// One first build: the negotiated mode, the source it captures, how it is framed.
+    struct FirstRow {
+        name: &'static str,
+        mode: punktfunk_core::Mode,
+        captured: (u32, u32),
+        framed: Framed,
+        fails: bool,
+        encoded: ((u32, u32), u32),
+        verdict: crate::native::tests::Verdict,
+    }
+
+    #[rustfmt::skip]
+    fn first_rows() -> Vec<FirstRow> {
+        use crate::native::tests::Verdict::Wanted;
+        let (hd, uhd) = (mode(1920, 1080, 60), mode(3840, 2160, 60));
+        let row = |name, mode, captured, framed, fails, encoded, verdict| FirstRow {
+            name, mode, captured, framed, fails, encoded, verdict,
+        };
+        vec![
+            row("a view framed on ingest: priced at it", uhd, (3840, 2160),
+                Framed::Own((1920, 1080)), false, ((1920, 1080), 199_065), Wanted),
+            row("a view whose framed open fails: the capture, re-priced at it", uhd,
+                (3840, 2160), Framed::Own((1920, 1080)), true, ((3840, 2160), 796_262), Wanted),
+            row("a joiner's view at Crop: the centred part, scaled to it", hd, (1920, 1200),
+                Framed::Joiner((1280, 720)), false, ((1280, 720), 88_473), Wanted),
+            row("a joiner's view past the shared display: never scaled up, re-priced", hd,
+                (1920, 1080), Framed::Joiner((3840, 2160)), false, ((1920, 1080), 199_065),
+                Wanted),
+            row("a mirrored head larger than the mode: fitted inside it, re-priced",
+                mode(1920, 1200, 60), (3840, 2160), Framed::Mirror, false,
+                ((1920, 1080), 199_065), Wanted),
+            row("a mirrored head smaller than the mode: its own size, re-priced", hd,
+                (1280, 720), Framed::Mirror, false, ((1280, 720), 88_473), Wanted),
+        ]
+    }
+
+    /// A first build's encoder: the size it encodes for each framing, and the PyroWave rate
+    /// that follows those pixels.
+    #[test]
+    fn geometry_rows() {
+        for r in first_rows() {
+            let got = first_encoder(r.mode, r.captured, r.framed, r.fails);
+            assert_eq!(
+                got, r.encoded,
+                "{} ({:?}, {:?})",
+                r.name, r.framed, r.verdict
+            );
+        }
+    }
 }
