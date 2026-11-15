@@ -52,6 +52,8 @@ mod linux {
         \x20 stop-all                    stop every seat that runs or starts\n\
         \x20 check-owner on|off <account>  who may switch the door now, for door-helper:\n\
         \x20                             `on|off <uid> <home>`, `takeover <gone owner> <uid> <home>`, `gone`\n\
+        \x20 door-ports                  door-helper's port filter: the owner's host.env, then web.env,\n\
+        \x20                             on stdin into the door's copy\n\
         \x20 start <id> | stop <id> | delete <id>\n\
         \x20 pads                        the controllers plugged into this PC, and whose each is\n\
         \x20 lend <id> <key>             give a controller plugged into this PC to a seat\n\
@@ -153,6 +155,11 @@ mod linux {
             }
             "drain" => {
                 return crate::uinput::ask_to_drain().map_err(|e| format!("drain: {e}"));
+            }
+            "door-ports" => {
+                let to = std::path::Path::new(pf_seats::linux::STATE_DIR).join("host.env");
+                return pf_seats::linux::door::ports(std::io::stdin().lock(), &to)
+                    .map_err(|e| e.to_string());
             }
             "serve-usb" => {
                 pf_seats::logging::to_stderr();

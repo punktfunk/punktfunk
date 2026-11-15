@@ -98,7 +98,7 @@ recorded=$(cat "$RECORD" 2>/dev/null || true)
 # for a recorded owner whose account no longer exists. Any doubt refuses, the reason on stderr.
 checked=$("$SEATS" check-owner "$([ "$verb" = on ] && echo on || echo off)" "$user") ||
     die "'$user' can't be switched"
-gone=0 gone_owner= uid= OWN=
+gone=0 gone_owner='' uid='' OWN=''
 case $checked in
 gone) gone=1 ;;
 takeover\ *) read -r _ gone_owner uid OWN <<<"$checked" ;;
@@ -163,36 +163,7 @@ give_password() {
 # The box's ports as the owner's host.env moves them, which the door binds in its place, and the
 # console's bind, which the door's console keeps. SteamOS holds that bind in web.env, read last.
 # Taken at each door start: the owner's files stay theirs, and the door never writes a port.
-PORT_LINE='^[[:space:]]*PUNKTFUNK_(MGMT_BIND|NATIVE_PORT|UI_BIND)[[:space:]]*='
-
-# Stdin's port lines into $PORTS, where only root writes: the last line per key, unquoted, and
-# only when its value is address characters. Nothing else reaches the file.
-to_ports() {
-    { grep -E "$PORT_LINE" || true; } | awk -v q="'" '
-    {
-        eq = index($0, "=")
-        key = substr($0, 1, eq - 1)
-        gsub(/[[:space:]]/, "", key)
-        value = substr($0, eq + 1)
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-        first = substr(value, 1, 1)
-        if (length(value) > 1 && (first == "\"" || first == q) && substr(value, length(value)) == first)
-            value = substr(value, 2, length(value) - 2)
-        last[key] = value
-    }
-    END {
-        split("PUNKTFUNK_MGMT_BIND PUNKTFUNK_NATIVE_PORT PUNKTFUNK_UI_BIND", keys, " ")
-        for (i = 1; i <= 3; i++) {
-            if (!(keys[i] in last)) continue
-            rest = last[keys[i]]
-            gsub(/[0-9A-Za-z.:%_-]|\[|\]/, "", rest)
-            if (last[keys[i]] != "" && rest == "") print keys[i] "=" last[keys[i]]
-        }
-    }' >"$PORTS.tmp"
-    chmod 0644 "$PORTS.tmp"
-    mv -f "$PORTS.tmp" "$PORTS"
-}
-
+# `door-ports` keeps only the port lines, in $PORTS, where only root writes.
 take_ports() {
     # Their files out of reach, as a home that isn't mounted yet: the last copy stays.
     as_user test -d "$OWN" || return 0
@@ -200,7 +171,7 @@ take_ports() {
     {
         as_user cat -- "$OWN/host.env" 2>/dev/null || true
         as_user cat -- "$OWN/web.env" 2>/dev/null || true
-    } | to_ports
+    } | "$SEATS" door-ports
 }
 
 safe_name() {
@@ -348,7 +319,7 @@ ports)
     legacy_mark
     # The copy the door kept in $BOX before $PORTS: filtered the same way, once, then removed.
     if [ ! -e "$PORTS" ]; then
-        as_door cat -- "$BOX/host.env" 2>/dev/null | to_ports
+        as_door cat -- "$BOX/host.env" 2>/dev/null | "$SEATS" door-ports
         as_door rm -f "$BOX/host.env" || true
     fi
     [ "$gone" = 1 ] || take_ports

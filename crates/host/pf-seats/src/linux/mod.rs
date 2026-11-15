@@ -24,7 +24,7 @@
 
 mod accounts;
 mod devices;
-mod door;
+pub mod door;
 #[cfg(test)]
 mod fake;
 pub mod fence;
