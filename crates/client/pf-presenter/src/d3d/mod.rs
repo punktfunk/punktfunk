@@ -702,6 +702,7 @@ fn decode_facts(device: &ID3D11Device5, desc: &DXGI_ADAPTER_DESC1) -> VulkanDeco
         f_synchronization2: false,
         f_shader_int16: false,
         f_storage_buffer8: false,
+        f_storage_buffer16: false,
         f_subgroup_size_control: false,
         f_compute_full_subgroups: false,
         f_shader_float16: false,

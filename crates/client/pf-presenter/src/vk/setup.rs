@@ -1351,6 +1351,7 @@ fn decode_export(
         f_synchronization2: caps.synchronization2,
         f_shader_int16: caps.pyrowave_ok,
         f_storage_buffer8: caps.pyrowave_ok,
+        f_storage_buffer16: false,
         f_subgroup_size_control: caps.pyrowave_ok,
         f_compute_full_subgroups: caps.pyrowave_ok,
         f_shader_float16: caps.pyrowave_ok && caps.shader_float16,

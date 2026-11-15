@@ -21,6 +21,7 @@
 //! device, which outlives the decoder; `pw_dev`, `pw_dec`, the rings, `cmds` and the
 //! timeline are this decoder's own; the shared queue is touched only under `queue_lock`.
 
+pub mod features;
 mod payload;
 
 use crate::video_color::ColorDesc;
@@ -124,6 +125,12 @@ fn au_dims(au: &[u8], aligned: bool, wire_window: usize) -> Option<(u32, u32)> {
     seq_header_dims(&win[4..4 + used])
 }
 
+/// The Vulkan version the lane runs the device at: the one its creator reports, capped at
+/// the newest this lane uses.
+fn device_api(vkd: &VulkanDecodeDevice) -> u32 {
+    vkd.api_version.min(vk::API_VERSION_1_3)
+}
+
 /// Content-equivalent reconstruction of the presenter device's create-infos, pinned for
 /// the `pyrowave_device` lifetime. Heap boxes: moving `Hold` moves only pointers.
 struct Hold {
@@ -135,10 +142,7 @@ struct Hold {
     instance_ci: Box<vk::InstanceCreateInfo<'static>>,
     _queue_prio: Box<[f32; 1]>,
     _queue_cis: Vec<vk::DeviceQueueCreateInfo<'static>>,
-    _feat2: Box<vk::PhysicalDeviceFeatures2<'static>>,
-    _v11: Box<vk::PhysicalDeviceVulkan11Features<'static>>,
-    _v12: Box<vk::PhysicalDeviceVulkan12Features<'static>>,
-    _v13: Box<vk::PhysicalDeviceVulkan13Features<'static>>,
+    _features: features::Chain,
     device_ci: Box<vk::DeviceCreateInfo<'static>>,
 }
 
@@ -149,8 +153,8 @@ impl Hold {
         let dev_ext_names = vkd.device_extensions.clone();
         let dev_ext_ptrs: Vec<*const c_char> = dev_ext_names.iter().map(|c| c.as_ptr()).collect();
 
-        let mut app_info =
-            Box::new(vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3));
+        // pyrowave runs the device at the lower of this and the device's own version.
+        let mut app_info = Box::new(vk::ApplicationInfo::default().api_version(device_api(vkd)));
         let mut instance_ci = Box::new(vk::InstanceCreateInfo::default());
         instance_ci.p_application_info = &mut *app_info;
         instance_ci.enabled_extension_count = inst_ext_ptrs.len() as u32;
@@ -175,30 +179,23 @@ impl Hold {
         }
 
         // Facts the presenter enabled at device create; pyrowave keys its paths off these.
-        let mut feat2 = Box::new(vk::PhysicalDeviceFeatures2::default());
-        feat2.features.shader_int16 = vkd.f_shader_int16 as u32;
-        let mut v11 = Box::new(
-            vk::PhysicalDeviceVulkan11Features::default()
-                .sampler_ycbcr_conversion(vkd.f_sampler_ycbcr),
-        );
-        let mut v12 = Box::new(
-            vk::PhysicalDeviceVulkan12Features::default()
-                .timeline_semaphore(vkd.f_timeline_semaphore)
-                .storage_buffer8_bit_access(vkd.f_storage_buffer8)
-                .shader_float16(vkd.f_shader_float16),
-        );
-        let mut v13 = Box::new(
-            vk::PhysicalDeviceVulkan13Features::default()
-                .synchronization2(vkd.f_synchronization2)
-                .subgroup_size_control(vkd.f_subgroup_size_control)
-                .compute_full_subgroups(vkd.f_compute_full_subgroups),
-        );
-        feat2.p_next = &mut *v11 as *mut _ as *mut c_void;
-        v11.p_next = &mut *v12 as *mut _ as *mut c_void;
-        v12.p_next = &mut *v13 as *mut _ as *mut c_void;
+        let mut chain = features::Chain::new(device_api(vkd), |name| {
+            dev_ext_names.iter().any(|e| e.as_c_str() == name)
+        });
+        chain.enable(features::Facts {
+            int16: vkd.f_shader_int16,
+            storage8: vkd.f_storage_buffer8,
+            storage16: vkd.f_storage_buffer16,
+            float16: vkd.f_shader_float16,
+            timeline: vkd.f_timeline_semaphore,
+            size_control: vkd.f_subgroup_size_control,
+            full_subgroups: vkd.f_compute_full_subgroups,
+            sync2: vkd.f_synchronization2,
+            sampler_ycbcr: vkd.f_sampler_ycbcr,
+        });
 
         let mut device_ci = Box::new(vk::DeviceCreateInfo::default());
-        device_ci.p_next = &*feat2 as *const _ as *const c_void;
+        device_ci.p_next = chain.as_ptr();
         device_ci.queue_create_info_count = queue_cis.len() as u32;
         device_ci.p_queue_create_infos = queue_cis.as_ptr();
         device_ci.enabled_extension_count = dev_ext_ptrs.len() as u32;
@@ -213,10 +210,7 @@ impl Hold {
             instance_ci,
             _queue_prio: queue_prio,
             _queue_cis: queue_cis,
-            _feat2: feat2,
-            _v11: v11,
-            _v12: v12,
-            _v13: v13,
+            _features: chain,
             device_ci,
         }
     }
@@ -264,6 +258,8 @@ pub struct PyroWavePlanarFrame {
 /// drop before the device does.
 pub struct DecodeTimeline {
     device: ash::Device,
+    /// The extension's entry points, on a device below 1.2 where the core ones are absent.
+    khr: Option<ash::khr::timeline_semaphore::Device>,
     sem: vk::Semaphore,
 }
 
@@ -272,16 +268,30 @@ impl DecodeTimeline {
     pub fn wait(&self, turn: u64, timeout: Duration) -> Result<()> {
         let sems = [self.sem];
         let values = [turn];
+        let info = vk::SemaphoreWaitInfo::default()
+            .semaphores(&sems)
+            .values(&values);
+        let timeout = timeout.as_nanos() as u64;
         // SAFETY: `sem` is this timeline's live semaphore; the wait info borrows locals.
         unsafe {
-            self.device.wait_semaphores(
-                &vk::SemaphoreWaitInfo::default()
-                    .semaphores(&sems)
-                    .values(&values),
-                timeout.as_nanos() as u64,
-            )
+            match &self.khr {
+                Some(khr) => khr.wait_semaphores(&info, timeout),
+                None => self.device.wait_semaphores(&info, timeout),
+            }
         }
         .context("pyrowave decode timeline")
+    }
+
+    /// The last turn whose decode is done.
+    fn done(&self) -> u64 {
+        // SAFETY: `sem` is this timeline's live semaphore.
+        unsafe {
+            match &self.khr {
+                Some(khr) => khr.get_semaphore_counter_value(self.sem),
+                None => self.device.get_semaphore_counter_value(self.sem),
+            }
+        }
+        .unwrap_or(0)
     }
 }
 
@@ -495,6 +505,8 @@ pub struct PyroWaveDecoder {
     /// The iDWT runs as fragment passes into the planes, pyrowave's pick for the GPU
     /// (Mali, Qualcomm's driver), when the plane format takes colour attachments.
     fragment: bool,
+    /// The layout those passes hold the planes in: sync2's where the device has it.
+    attachment_layout: vk::ImageLayout,
     /// Per slot: written once. First use transitions from UNDEFINED, later ones from
     /// GENERAL.
     initialized: [bool; RING],
@@ -748,6 +760,8 @@ impl PyroWaveDecoder {
         );
         let timeline = Arc::new(DecodeTimeline {
             device: device.clone(),
+            khr: (device_api(vkd) < vk::API_VERSION_1_2)
+                .then(|| ash::khr::timeline_semaphore::Device::new(&instance, &device)),
             sem,
         });
         Ok(PyroWaveDecoder {
@@ -759,6 +773,11 @@ impl PyroWaveDecoder {
             pw_dec,
             ring,
             fragment,
+            attachment_layout: if vkd.f_synchronization2 {
+                vk::ImageLayout::ATTACHMENT_OPTIMAL
+            } else {
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
+            },
             initialized: [false; RING],
             retired: Vec::new(),
             next: 0,
@@ -1053,9 +1072,7 @@ impl PyroWaveDecoder {
 
     /// Let go of AUs whose decode is done, so their slots go back to the reassembler early.
     fn release_done(&mut self) {
-        // SAFETY: `sem` is this decoder's live timeline semaphore.
-        let done =
-            unsafe { self.device.get_semaphore_counter_value(self.timeline.sem) }.unwrap_or(0);
+        let done = self.timeline.done();
         for (au, &turn) in self.inflight.iter_mut().zip(&self.slot_turn) {
             if turn <= done {
                 *au = None;
@@ -1283,28 +1300,27 @@ impl PyroWaveDecoder {
         };
         // Every reader of a decoded slot (same queue): CSC sampling, or the native lane's
         // chroma pass and luma copy.
-        let readers = vk::PipelineStageFlags2::FRAGMENT_SHADER
-            | vk::PipelineStageFlags2::COMPUTE_SHADER
-            | vk::PipelineStageFlags2::COPY;
-        // pyrowave's render passes take the planes in ATTACHMENT_OPTIMAL and leave them there.
+        let readers = vk::PipelineStageFlags::FRAGMENT_SHADER
+            | vk::PipelineStageFlags::COMPUTE_SHADER
+            | vk::PipelineStageFlags::TRANSFER;
+        // pyrowave's render passes take the planes in the attachment layout and leave them
+        // there. Which one follows sync2, as in Granite.
         let (write_stage, write_access, write_layout) = if self.fragment {
             (
-                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-                vk::ImageLayout::ATTACHMENT_OPTIMAL,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                self.attachment_layout,
             )
         } else {
             (
-                vk::PipelineStageFlags2::COMPUTE_SHADER,
-                vk::AccessFlags2::SHADER_STORAGE_WRITE,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::AccessFlags::SHADER_WRITE,
                 vk::ImageLayout::GENERAL,
             )
         };
         let to_write = |img| {
-            vk::ImageMemoryBarrier2::default()
-                .src_stage_mask(readers)
-                .src_access_mask(vk::AccessFlags2::NONE)
-                .dst_stage_mask(write_stage)
+            vk::ImageMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::empty())
                 .dst_access_mask(write_access)
                 .old_layout(old_layout)
                 .new_layout(write_layout)
@@ -1315,9 +1331,14 @@ impl PyroWaveDecoder {
         let pre: Vec<_> = imgs.iter().map(|&i| to_write(i)).collect();
         // SAFETY: `cmd` is recording (begun above); `pre` names this decoder's ring images.
         unsafe {
-            dev.cmd_pipeline_barrier2(
+            dev.cmd_pipeline_barrier(
                 cmd,
-                &vk::DependencyInfo::default().image_memory_barriers(&pre),
+                readers,
+                write_stage,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &pre,
             )
         };
 
@@ -1376,15 +1397,9 @@ impl PyroWaveDecoder {
         // Decode writes → every reader, in GENERAL: what their descriptors and copies use.
         // The native lane's own barrier waits on compute only, so this one covers it.
         let to_read = |img| {
-            vk::ImageMemoryBarrier2::default()
-                .src_stage_mask(write_stage)
+            vk::ImageMemoryBarrier::default()
                 .src_access_mask(write_access)
-                .dst_stage_mask(readers)
-                .dst_access_mask(
-                    vk::AccessFlags2::SHADER_SAMPLED_READ
-                        | vk::AccessFlags2::SHADER_STORAGE_READ
-                        | vk::AccessFlags2::TRANSFER_READ,
-                )
+                .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::TRANSFER_READ)
                 .old_layout(write_layout)
                 .new_layout(vk::ImageLayout::GENERAL)
                 .image(img)
@@ -1393,9 +1408,14 @@ impl PyroWaveDecoder {
         let post: Vec<_> = imgs.iter().map(|&i| to_read(i)).collect();
         // SAFETY: `cmd` is still recording; `post` names this decoder's ring images.
         unsafe {
-            dev.cmd_pipeline_barrier2(
+            dev.cmd_pipeline_barrier(
                 cmd,
-                &vk::DependencyInfo::default().image_memory_barriers(&post),
+                write_stage,
+                readers,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &post,
             );
             dev.end_command_buffer(cmd)?;
         }
