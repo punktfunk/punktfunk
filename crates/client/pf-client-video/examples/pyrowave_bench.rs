@@ -10,6 +10,10 @@
 //! `PYROWAVE_BENCH_LOAD=<ms>` adds what a presenter adds: a full-size pass on the
 //! graphics queue every that many milliseconds, timed from submit to done.
 //! `PYROWAVE_BENCH_QUEUE=compute` decodes on the compute-only family instead.
+//!
+//! `PYROWAVE_BENCH_API=1.1` (or `1.2`) asks the instance for that version, so a current GPU
+//! runs the path an older device takes. `PYROWAVE_BENCH_HIDE=<substring>` treats matching
+//! device extensions as absent, `synchronization2` for one.
 
 #[cfg(not(any(target_os = "linux", windows)))]
 fn main() {
@@ -27,7 +31,7 @@ mod bench {
     use ash::vk;
     use ash::vk::Handle as _;
     use pf_client_video::video_color::ColorDesc;
-    use pf_client_video::video_pyrowave::PyroWaveDecoder;
+    use pf_client_video::video_pyrowave::{features, PyroWaveDecoder};
     use pf_client_video::video_vk::{QueueLock, VulkanDecodeDevice};
     use std::time::{Duration, Instant};
 
@@ -232,7 +236,12 @@ mod bench {
 
         // SAFETY: loads the system Vulkan loader; nothing else holds it.
         let entry = unsafe { ash::Entry::load() }?;
-        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
+        let instance_api = match std::env::var("PYROWAVE_BENCH_API").as_deref() {
+            Ok("1.1") => vk::API_VERSION_1_1,
+            Ok("1.2") => vk::API_VERSION_1_2,
+            _ => vk::API_VERSION_1_3,
+        };
+        let app = vk::ApplicationInfo::default().api_version(instance_api);
         // SAFETY: the create-info is a local that outlives the call.
         let instance = unsafe {
             entry.create_instance(
@@ -276,25 +285,38 @@ mod bench {
             Ok("compute") => compute_qf.context("no compute-only queue family")?,
             _ => gfx_qf,
         };
-        let mut have12 = vk::PhysicalDeviceVulkan12Features::default();
-        let mut have = vk::PhysicalDeviceFeatures2::default().push_next(&mut have12);
-        // SAFETY: as above; the chain is two locals.
-        unsafe { instance.get_physical_device_features2(pdev, &mut have) };
-        let float16 = have12.shader_float16 == vk::TRUE;
-
-        // The feature set the presenter enables for the wavelet lane (`vk/setup.rs`).
-        let mut v12 = vk::PhysicalDeviceVulkan12Features::default()
-            .timeline_semaphore(true)
-            .storage_buffer8_bit_access(true)
-            .shader_float16(float16);
-        let mut v13 = vk::PhysicalDeviceVulkan13Features::default()
-            .synchronization2(true)
-            .subgroup_size_control(true)
-            .compute_full_subgroups(true);
-        let mut feat = vk::PhysicalDeviceFeatures2::default()
-            .features(vk::PhysicalDeviceFeatures::default().shader_int16(true))
-            .push_next(&mut v12)
-            .push_next(&mut v13);
+        let api = props.api_version.min(instance_api);
+        let hide = std::env::var("PYROWAVE_BENCH_HIDE")
+            .ok()
+            .filter(|h| !h.is_empty());
+        // SAFETY: as above.
+        let offered = unsafe { instance.enumerate_device_extension_properties(pdev) }?;
+        let has = |want: &std::ffi::CStr| {
+            !hide
+                .as_deref()
+                .is_some_and(|h| want.to_string_lossy().contains(h))
+                && offered
+                    .iter()
+                    .any(|e| e.extension_name_as_c_str().is_ok_and(|n| n == want))
+        };
+        let exts = features::extensions(api, has)
+            .context("the adapter lacks an extension PyroWave decode needs at this version")?;
+        // What the wavelet lane turns on: every fact the device has of the set.
+        let mut feat = features::Chain::new(api, has);
+        // SAFETY: as above; the chain outlives the call.
+        unsafe { instance.get_physical_device_features2(pdev, feat.head()) };
+        let facts = feat.facts();
+        anyhow::ensure!(
+            facts.decodes(),
+            "the adapter lacks a feature PyroWave decode needs: {facts:?}"
+        );
+        let facts = features::Facts {
+            sampler_ycbcr: false,
+            ..facts
+        };
+        feat.enable(facts);
+        let float16 = facts.float16;
+        let ext_ptrs: Vec<_> = exts.iter().map(|n| n.as_ptr()).collect();
         let prio = [1.0f32];
         let mut queue_families = vec![gfx_qf];
         queue_families.extend(compute_qf);
@@ -306,16 +328,12 @@ mod bench {
                     .queue_priorities(&prio)
             })
             .collect();
+        let mut device_ci = vk::DeviceCreateInfo::default()
+            .queue_create_infos(&queues)
+            .enabled_extension_names(&ext_ptrs);
+        device_ci.p_next = feat.as_ptr();
         // SAFETY: the create-info and its chain are locals that outlive the call.
-        let device = unsafe {
-            instance.create_device(
-                pdev,
-                &vk::DeviceCreateInfo::default()
-                    .queue_create_infos(&queues)
-                    .push_next(&mut feat),
-                None,
-            )
-        }?;
+        let device = unsafe { instance.create_device(pdev, &device_ci, None) }?;
 
         let vkd = VulkanDecodeDevice {
             get_instance_proc_addr: entry.static_fn().get_instance_proc_addr as usize,
@@ -328,18 +346,19 @@ mod bench {
             decode_qf: qf,
             decode_video_caps: 0,
             instance_extensions: Vec::new(),
-            device_extensions: Vec::new(),
+            device_extensions: exts.iter().map(|&n| n.to_owned()).collect(),
             f_sampler_ycbcr: false,
             f_timeline_semaphore: true,
-            f_synchronization2: true,
+            f_synchronization2: facts.sync2,
             video_decode: false,
             pyrowave_decode: true,
             f_shader_int16: true,
             f_storage_buffer8: true,
+            f_storage_buffer16: facts.storage16,
             f_subgroup_size_control: true,
             f_compute_full_subgroups: true,
             f_shader_float16: float16,
-            api_version: props.api_version,
+            api_version: api,
             queue_families,
             d3d11_import: false,
             dmabuf_import: false,
@@ -366,8 +385,12 @@ mod bench {
         let mean = aus.iter().map(|a| a.0.len()).sum::<usize>() / aus.len();
         println!(
             "{name}: {w}x{h} {bits}-bit, {} AUs, mean {mean} bytes, float16={float16}, \
-             decode on family {qf} (graphics {gfx_qf}, compute {compute_qf:?})",
-            aus.len()
+             Vulkan {}.{}, sync2={}, decode on family {qf} (graphics {gfx_qf}, \
+             compute {compute_qf:?})",
+            aus.len(),
+            vk::api_version_major(api),
+            vk::api_version_minor(api),
+            facts.sync2
         );
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let load = std::env::var("PYROWAVE_BENCH_LOAD")

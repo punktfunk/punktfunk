@@ -172,17 +172,19 @@ pub struct VulkanDecodeDevice {
     /// Vulkan Video decode is usable (queue + extensions + features). The bundle
     /// exists without it; gate the Vulkan rung on this, not on `Some`.
     pub video_decode: bool,
-    /// PyroWave decode is usable (Vulkan 1.3 + `shaderInt16` / 8-bit storage /
-    /// subgroup size control). Gates the `CODEC_PYROWAVE` advertisement.
+    /// PyroWave decode is usable (`shaderInt16`, 8-bit storage, subgroup size control,
+    /// timeline semaphores). Gates the `CODEC_PYROWAVE` advertisement.
     pub pyrowave_decode: bool,
     /// Feature facts the pyrowave pinned create-info reconstruction mirrors
     /// so it can share this `VkDevice`.
     pub f_shader_int16: bool,
     pub f_storage_buffer8: bool,
+    pub f_storage_buffer16: bool,
     pub f_subgroup_size_control: bool,
     pub f_compute_full_subgroups: bool,
     pub f_shader_float16: bool,
-    /// `VkPhysicalDeviceProperties::apiVersion` of the presenter's device.
+    /// `VkPhysicalDeviceProperties::apiVersion` of the presenter's device, or the lower
+    /// version its instance asked for.
     pub api_version: u32,
     /// Queue families the device was created with (one queue each, priority 1.0). Mirrored by reconstruction.
     pub queue_families: Vec<u32>,

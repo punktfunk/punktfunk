@@ -6,23 +6,24 @@
 //! PyroWave is Vulkan compute, so the lane brings up its own device and presents from it
 //! (`super::present`). Nothing here touches the MediaCodec path.
 //!
-//! The feature set is not ours to choose — it mirrors `pf-presenter`'s probe exactly
-//! (`crates/client/pf-presenter/src/vk/setup.rs`), because pyrowave 0.4.0 reconstructs the
-//! create-infos from what we report and reads those features to pick its kernels. A
-//! device that misses one is not a slower device, it is a device the codec refuses.
+//! The feature set is not ours to choose: pyrowave reconstructs the create-infos from what
+//! we report and reads those features to pick its kernels. A device that misses one is
+//! not a slower device, it is a device the codec refuses. The floor is Vulkan 1.1 with
+//! each later feature's extension ([`features`]).
 
 use anyhow::{anyhow, bail, Result};
 use ash::vk;
+use pf_client_video::video_pyrowave::features;
 use pf_client_video::video_vk::{QueueLock, VulkanDecodeDevice};
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 
 /// Instance extensions, in creation order. `VulkanDecodeDevice::instance_extensions` must
 /// list exactly these — pyrowave replays them and a mismatch is a wrong answer, not an error.
 const INSTANCE_EXTS: [&std::ffi::CStr; 2] =
     [ash::khr::surface::NAME, ash::khr::android_surface::NAME];
 
-/// Device extensions, same contract: the swapchain, plus [`BUFFER_EXTS`] where all three are
-/// offered. Decode and CSC are core 1.3.
+/// Device extensions, same contract: the swapchain, [`BUFFER_EXTS`] where all three are
+/// offered, and the codec's own below the version that made its features core.
 const DEVICE_EXTS: [&std::ffi::CStr; 1] = [ash::khr::swapchain::NAME];
 
 /// What presenting through `AHardwareBuffer`s takes: import, hand-over to the compositor, and
@@ -69,13 +70,14 @@ pub(super) struct PyroDevice {
 }
 
 /// The compute feature set pyrowave's kernels need, read off a physical device.
-///
-/// Vulkan 1.3 is a hard floor (the kernels are 1.3 core compute), and each feature below
-/// is used unconditionally by some path in the codec. `float16` is the one exception —
-/// preferred, not required — so it is reported separately.
 struct FeatureProbe {
     ok: bool,
-    float16: bool,
+    /// What the device has of the set. `float16` and `sync2` are preferred, not required.
+    facts: features::Facts,
+    /// The codec's extensions to enable on this device.
+    exts: Vec<&'static CStr>,
+    /// The version the device may use: its own, capped at the instance's.
+    api: u32,
     api_version: u32,
     vendor_id: u32,
     name: String,
@@ -89,30 +91,35 @@ fn probe_features(instance: &ash::Instance, pdev: vk::PhysicalDevice) -> Feature
         .device_name_as_c_str()
         .map(|c| c.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let mut f12 = vk::PhysicalDeviceVulkan12Features::default();
-    let mut f13 = vk::PhysicalDeviceVulkan13Features::default();
-    let mut f2 = vk::PhysicalDeviceFeatures2::default()
-        .push_next(&mut f12)
-        .push_next(&mut f13);
-    // SAFETY: read-only query; the pNext chain locals outlive the call.
-    unsafe { instance.get_physical_device_features2(pdev, &mut f2) };
-    // Copy before the chained structs are read: `f2` mutably borrows them.
-    let shader_int16 = f2.features.shader_int16;
-    let ok = props.api_version >= vk::API_VERSION_1_3
-        && shader_int16 == vk::TRUE
-        && f12.storage_buffer8_bit_access == vk::TRUE
-        && f12.timeline_semaphore == vk::TRUE
-        && f13.subgroup_size_control == vk::TRUE
-        && f13.compute_full_subgroups == vk::TRUE
-        && f13.synchronization2 == vk::TRUE;
+    let api = props.api_version.min(INSTANCE_API);
+    // SAFETY: read-only query on a live physical device.
+    let offered =
+        unsafe { instance.enumerate_device_extension_properties(pdev) }.unwrap_or_default();
+    let has = |want: &CStr| {
+        offered
+            .iter()
+            .any(|e| e.extension_name_as_c_str().is_ok_and(|n| n == want))
+    };
+    let exts = features::extensions(api, has);
+    let mut chain = features::Chain::new(api, has);
+    // SAFETY: read-only query; the chain holds only structs this version and these
+    // extensions define, and outlives the call.
+    unsafe { instance.get_physical_device_features2(pdev, chain.head()) };
+    let facts = chain.facts();
     FeatureProbe {
-        ok,
-        float16: f12.shader_float16 == vk::TRUE,
+        ok: props.api_version >= features::MIN_API && exts.is_some() && facts.decodes(),
+        facts,
+        exts: exts.unwrap_or_default(),
+        api,
         api_version: props.api_version,
         vendor_id: props.vendor_id,
         name,
     }
 }
+
+/// The version the instance asks for. A 1.1 loader accepts it and the device then runs at
+/// its own version.
+const INSTANCE_API: u32 = vk::API_VERSION_1_3;
 
 /// Create the instance both the probe and the real bring-up use.
 ///
@@ -120,7 +127,7 @@ fn probe_features(instance: &ash::Instance, pdev: vk::PhysicalDevice) -> Feature
 /// features only, and asking for `VK_KHR_android_surface` there would fail bring-up on a
 /// driver that has the codec's compute but not the window system entry point.
 fn create_instance(entry: &ash::Entry, with_surface: bool) -> Result<ash::Instance> {
-    let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
+    let app = vk::ApplicationInfo::default().api_version(INSTANCE_API);
     let ptrs: Vec<*const std::ffi::c_char> = if with_surface {
         INSTANCE_EXTS.iter().map(|n| n.as_ptr()).collect()
     } else {
@@ -153,7 +160,7 @@ pub(crate) fn pyrowave_capable() -> bool {
     let instance = match create_instance(&entry, false) {
         Ok(i) => i,
         Err(e) => {
-            log::info!("pyro: Vulkan 1.3 instance refused ({e}) — PyroWave unavailable");
+            log::info!("pyro: Vulkan instance refused ({e}) — PyroWave unavailable");
             return false;
         }
     };
@@ -212,8 +219,8 @@ impl PyroDevice {
                 break;
             }
         }
-        let (pdev, qf, probe) = chosen
-            .ok_or_else(|| anyhow!("no Vulkan 1.3 device here decodes PyroWave and presents"))?;
+        let (pdev, qf, probe) =
+            chosen.ok_or_else(|| anyhow!("no Vulkan device here decodes PyroWave and presents"))?;
 
         let prio = [1.0f32];
         let queue_ci = [vk::DeviceQueueCreateInfo::default()
@@ -230,28 +237,22 @@ impl PyroDevice {
         let exts: Vec<&std::ffi::CStr> = DEVICE_EXTS
             .iter()
             .chain(buffers.then_some(BUFFER_EXTS.iter()).into_iter().flatten())
+            .chain(probe.exts.iter())
             .copied()
             .collect();
         let ext_ptrs: Vec<*const std::ffi::c_char> = exts.iter().map(|n| n.as_ptr()).collect();
-        // Exactly the probe's conjuncts, enabled. `shader_float16` rides along when the
-        // driver has it: pyrowave picks a half-precision kernel path off it, and reporting
-        // it enabled when it is not would make the codec choose a path the device refuses.
-        let mut f12 = vk::PhysicalDeviceVulkan12Features::default()
-            .timeline_semaphore(true)
-            .storage_buffer8_bit_access(true)
-            .shader_float16(probe.float16);
-        let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
-            .synchronization2(true)
-            .subgroup_size_control(true)
-            .compute_full_subgroups(true);
-        let mut f2 = vk::PhysicalDeviceFeatures2::default()
-            .push_next(&mut f12)
-            .push_next(&mut f13);
-        f2.features.shader_int16 = vk::TRUE;
-        let dev_ci = vk::DeviceCreateInfo::default()
+        // Exactly what the probe found, enabled. Reporting a feature on when it is not
+        // would make the codec choose a path the device refuses.
+        let facts = features::Facts {
+            sampler_ycbcr: false,
+            ..probe.facts
+        };
+        let mut chain = features::Chain::new(probe.api, |name| exts.contains(&name));
+        chain.enable(facts);
+        let mut dev_ci = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_ci)
-            .enabled_extension_names(&ext_ptrs)
-            .push_next(&mut f2);
+            .enabled_extension_names(&ext_ptrs);
+        dev_ci.p_next = chain.as_ptr();
         // SAFETY: every builder above is a local that outlives the call; the returned
         // device is owned by this struct and destroyed in its `Drop`.
         let device = unsafe { instance.create_device(pdev, &dev_ci, None) }
@@ -260,11 +261,12 @@ impl PyroDevice {
         let queue = unsafe { device.get_device_queue(qf, 0) };
 
         log::info!(
-            "pyro: {} on Vulkan {}.{} — PyroWave decode + present (float16: {})",
+            "pyro: {} on Vulkan {}.{} — PyroWave decode + present (float16: {}, sync2: {})",
             probe.name,
             vk::api_version_major(probe.api_version),
             vk::api_version_minor(probe.api_version),
-            probe.float16
+            facts.float16,
+            facts.sync2
         );
 
         let vkd = VulkanDecodeDevice {
@@ -284,14 +286,15 @@ impl PyroDevice {
             device_extensions: exts.iter().map(|n| CString::from(*n)).collect(),
             f_sampler_ycbcr: false,
             f_timeline_semaphore: true,
-            f_synchronization2: true,
+            f_synchronization2: facts.sync2,
             video_decode: false,
             pyrowave_decode: true,
             f_shader_int16: true,
             f_storage_buffer8: true,
+            f_storage_buffer16: facts.storage16,
             f_subgroup_size_control: true,
             f_compute_full_subgroups: true,
-            f_shader_float16: probe.float16,
+            f_shader_float16: facts.float16,
             api_version: probe.api_version,
             queue_families: vec![qf],
             d3d11_import: false,

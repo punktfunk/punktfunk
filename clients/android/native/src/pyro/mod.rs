@@ -15,7 +15,7 @@
 //! next one is clean — the same call the Apple port made. What remains is receive →
 //! decode → present.
 //!
-//! Android only. [`available`] answers for the whole lane: the device needs Vulkan 1.3 and
+//! Android only. [`available`] answers for the whole lane: the device needs Vulkan 1.1 and
 //! the codec's compute features.
 
 #[cfg(target_os = "android")]
