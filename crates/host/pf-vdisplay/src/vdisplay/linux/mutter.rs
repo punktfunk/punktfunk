@@ -820,8 +820,8 @@ async fn connect(
     let (conn, rd_session, sc_session) = open_rd_sc().await?;
 
     // Pin WxH@Hz via RecordVirtual "modes" (Mutter ≥ 47) when refresh
-    // is >60 Hz; at ≤60 Mutter's PipeWire-derived 60 Hz default is
-    // already correct. A remembered scale alone still rides that default.
+    // is not Mutter's PipeWire-derived 60 Hz default: above it, or not
+    // whole. A remembered scale alone still rides that default.
     let mut rec: HashMap<&str, Value> = HashMap::new();
     rec.insert(
         "cursor-mode",
@@ -831,11 +831,16 @@ async fn connect(
             CURSOR_EMBEDDED
         }),
     );
-    if mode.refresh_hz > 60 || preferred_scale.is_some() {
+    // A rate with a fraction is pinned too: 59.94 Hz is not the 60 Hz default.
+    let pin_rate = mode.refresh_hz > 60 || mode.millihz() % 1000 != 0;
+    if pin_rate || preferred_scale.is_some() {
         let mut vmode: HashMap<&str, Value> = HashMap::new();
         vmode.insert("size", Value::from((mode.width, mode.height)));
-        if mode.refresh_hz > 60 {
-            vmode.insert("refresh-rate", Value::from(mode.refresh_hz as f64));
+        if pin_rate {
+            vmode.insert(
+                "refresh-rate",
+                Value::from(f64::from(mode.millihz()) / 1000.0),
+            );
         }
         if let Some(scale) = preferred_scale {
             vmode.insert("preferred-scale", Value::from(scale));

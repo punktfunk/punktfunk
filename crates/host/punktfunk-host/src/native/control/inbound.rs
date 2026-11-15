@@ -92,8 +92,10 @@ impl ControlTask {
         let too_soon = self
             .last_accepted_switch
             .is_some_and(|t| now.duration_since(t) < MIN_SWITCH_INTERVAL);
+        let exact = self.task.exact_rate_ok;
         let req = Reconfigure {
             view: asked_view(&req, self.active, self.active_view),
+            mode: crate::native::handshake::deliverable_rate(req.mode, exact),
             ..req
         };
         let t = &self.task;

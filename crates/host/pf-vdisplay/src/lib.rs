@@ -151,6 +151,15 @@ impl Compositor {
         )
     }
 
+    /// Runs its virtual display at a rate that is not whole hertz, 59.94 Hz say. Every other
+    /// backend gets the whole rate; the session still paces at the exact one.
+    pub fn runs_fractional_rates(self) -> bool {
+        matches!(
+            self,
+            Compositor::Wlroots | Compositor::Hyprland | Compositor::Mutter
+        )
+    }
+
     /// Makes the streamed screen the desktop's main one under `primary`. The tiling backends
     /// only focus it, so there `primary` is `extend` (`exclusive_wanted`).
     pub fn has_primary(self) -> bool {

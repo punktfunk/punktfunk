@@ -685,6 +685,10 @@ pub(super) async fn negotiate(
         role,
     } = session_screen(&n, joined.is_some(), compositor).await?;
     let mirrored = matches!(screen, Some(ScreenEcho::Monitor(_)));
+    hello.mode = deliverable_rate(
+        hello.mode,
+        runs_exact_rate(compositor, joined.is_some() || mirrored),
+    );
     // A joiner's view rides `joined`; a mirrored head keeps its own fit.
     let view = view.filter(|_| joined.is_none() && !mirrored);
 
@@ -1281,6 +1285,28 @@ fn settle_bitrate(hello: &mut Hello, codec_bit: u8) {
             codec = punktfunk_core::hud::codec_label(codec_bit),
             "stored rate was for PyroWave — this session runs Automatic"
         );
+    }
+}
+
+/// Whether a session's own display on `compositor` runs a rate that is not whole hertz. A
+/// shared display runs its owner's rate. A Windows host's frames are gated in the display
+/// driver's encode thread, which counts whole hertz. No display at all paces as asked.
+pub(crate) fn runs_exact_rate(
+    compositor: Option<crate::vdisplay::Compositor>,
+    shared: bool,
+) -> bool {
+    !cfg!(windows) && !shared && compositor.is_none_or(|c| c.runs_fractional_rates())
+}
+
+/// `mode` at a rate this session delivers: its fraction where the display runs one
+/// ([`runs_exact_rate`]), whole hertz elsewhere. A fraction left over from before a cap or a
+/// join moved the whole rate names another rate and goes either way.
+pub(crate) fn deliverable_rate(mode: punktfunk_core::Mode, exact: bool) -> punktfunk_core::Mode {
+    let stated = mode.stating(mode.refresh_mhz);
+    if exact {
+        stated
+    } else {
+        stated.at_millihz(stated.refresh_hz.saturating_mul(1000))
     }
 }
 
@@ -2135,6 +2161,32 @@ fn pcm_parts(n: &Negotiation<'_>) -> bool {
 mod tests {
     use super::*;
     use punktfunk_core::audio::pcm;
+
+    /// A session keeps the fraction it asked for where its own display runs it, and loses one
+    /// that names another rate. A whole-hertz backend, a shared display and a Windows host
+    /// answer whole hertz.
+    #[test]
+    fn a_session_streams_at_a_rate_the_host_delivers() {
+        use crate::vdisplay::Compositor::{Gamescope, Hyprland, Kwin, Mutter, Wlroots};
+        let asked = punktfunk_core::Mode::exact(1920, 1080, 59_940);
+        let whole = punktfunk_core::Mode::exact(1920, 1080, 60_000);
+        assert_eq!(deliverable_rate(asked, true), asked);
+        assert_eq!(deliverable_rate(asked, false), whole);
+        // A cap moved 120 Hz down to 60: 119.88 is no fraction of that.
+        let mut capped = punktfunk_core::Mode::exact(1920, 1080, 119_880);
+        capped.refresh_hz = 60;
+        assert_eq!(deliverable_rate(capped, true), whole);
+        assert_eq!(deliverable_rate(whole, true), whole);
+
+        for c in [Wlroots, Hyprland, Mutter] {
+            assert_eq!(runs_exact_rate(Some(c), false), !cfg!(windows), "{c:?}");
+            assert!(!runs_exact_rate(Some(c), true), "{c:?} shared");
+        }
+        for c in [Kwin, Gamescope] {
+            assert!(!runs_exact_rate(Some(c), false), "{c:?}");
+        }
+        assert_eq!(runs_exact_rate(None, false), !cfg!(windows));
+    }
 
     /// A rate stored for PyroWave reads as Automatic once the host lands on HEVC: the session
     /// resolves the host's default, and every later `== 0` test (the governor, a rebuild's

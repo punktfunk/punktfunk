@@ -468,7 +468,7 @@ pub(super) fn is_permanent_build_error(chain: &str) -> bool {
 }
 
 /// Session mode with refresh × the display multiple ([`HostConfig::vdisplay_hz_mult_for`]) for
-/// the `compositor` that creates the display. Wire rate is still [`pacing_hz`]. DWM composes on
+/// the `compositor` that creates the display. Wire rate is still [`pacing_interval`]. DWM composes on
 /// the display's own fixed tick, which the automatic multiple is for; KWin's unpaced cast records
 /// each commit, so it gets none. gamescope paints on the game's commit, so a multiple would only
 /// raise its frame limit: none there, set or not.
@@ -483,9 +483,29 @@ pub(super) fn display_mode_for(
     } else {
         pf_host_config::config().vdisplay_hz_mult_for(session.refresh_hz, cfg!(windows))
     };
-    punktfunk_core::Mode {
-        refresh_hz: session.refresh_hz.saturating_mul(mult).min(0xffff),
-        ..session
+    let fractional = pf_vdisplay::Compositor::all()
+        .iter()
+        .any(|c| c.runs_fractional_rates() && c.id() == compositor);
+    // A backend that takes the fraction runs the multiple of the exact rate, 119.88 Hz under
+    // a 59.94 Hz session. The others keep whole hertz, so their modes compare as they did.
+    let mhz = if fractional {
+        session.millihz()
+    } else {
+        session.refresh_hz.saturating_mul(1000)
+    };
+    session.at_millihz(mhz.saturating_mul(mult).min(0xffff * 1000))
+}
+
+/// One frame of a session at `session`'s rate, or at `effective_hz` when the display runs
+/// below it. The session's own rate keeps its fraction.
+pub(super) fn pacing_interval(
+    session: punktfunk_core::Mode,
+    effective_hz: u32,
+) -> std::time::Duration {
+    if effective_hz == session.refresh_hz {
+        session.frame_interval()
+    } else {
+        std::time::Duration::from_secs_f64(1.0 / effective_hz.max(1) as f64)
     }
 }
 
@@ -761,6 +781,14 @@ fn attach_pipeline(
         mode.refresh_hz,
     );
     let effective_hz = pacing_hz(mode.refresh_hz, achieved_hz);
+    if mode.millihz() % 1000 != 0 {
+        tracing::info!(
+            session_mhz = mode.millihz(),
+            display_mhz = display_mode.millihz(),
+            paced_hz = effective_hz,
+            "session rate with a fraction"
+        );
+    }
     // A mirrored KWin head is still KWin's stream: its id 0 hides the pointer.
     let cursor_id0_hides = vd.producer() == pf_vdisplay::Compositor::Kwin.id();
     let producer_is_gamescope = is_gamescope(vd.as_ref());
@@ -851,7 +879,7 @@ fn attach_pipeline(
             "encoder chroma disagrees with the negotiated Welcome — the client was told the other value"
         );
     }
-    let interval = std::time::Duration::from_secs_f64(1.0 / effective_hz.max(1) as f64);
+    let interval = pacing_interval(mode, effective_hz);
     Ok(Pipeline {
         capturer,
         enc,
@@ -872,6 +900,26 @@ fn attach_pipeline(
 mod tests {
     use super::*;
     use crate::capture::Capturer;
+
+    /// A session at an exact rate is delivered at it: the mode read back off the interval is the
+    /// mode asked, so no corrective ack goes out. Every millihertz below 1 kHz survives the trip.
+    #[test]
+    fn a_fractional_rate_survives_the_interval() {
+        use crate::native::{delivered_mode, interval_mhz};
+        for mhz in [23_976u32, 59_800, 59_940, 119_880, 143_856, 239_760, 60_000] {
+            let asked = punktfunk_core::Mode::exact(2560, 1440, mhz);
+            let interval = pacing_interval(asked, asked.refresh_hz);
+            assert_eq!(delivered_mode(2560, 1440, interval), asked, "{mhz} mHz");
+        }
+        for mhz in (1_000u32..1_000_000).step_by(997) {
+            let asked = punktfunk_core::Mode::exact(64, 64, mhz);
+            assert_eq!(interval_mhz(asked.frame_interval()), mhz);
+        }
+        // A display that runs below the session paces at its own whole rate.
+        let asked = punktfunk_core::Mode::exact(2560, 1440, 119_880);
+        let capped = delivered_mode(2560, 1440, pacing_interval(asked, 60));
+        assert_eq!(capped, punktfunk_core::Mode::exact(2560, 1440, 60_000));
+    }
 
     /// Encodes nothing.
     struct NullEnc;
@@ -1162,6 +1210,30 @@ mod tests {
             60,
             "gamescope paints on commit: no multiplier"
         );
+    }
+
+    /// A 59.94 Hz session gets a 59.94 Hz display where the compositor runs one, and the whole
+    /// rate elsewhere: a mode with a fraction is another mode to a backend that compares them.
+    #[test]
+    fn only_a_backend_that_runs_fractions_gets_one() {
+        let session = punktfunk_core::Mode::exact(2560, 1440, 59_940);
+        let mult = |c| pf_host_config::config().vdisplay_hz_mult_for(60, cfg!(windows)) * c;
+        for id in ["wlroots", "hyprland", "mutter"] {
+            assert_eq!(
+                display_mode_for(session, id).millihz(),
+                mult(59_940),
+                "{id}"
+            );
+        }
+        for id in ["kwin", "niri", "umbriel", "windows"] {
+            let display = display_mode_for(session, id);
+            assert_eq!(
+                (display.millihz(), display.refresh_mhz),
+                (mult(60_000), 0),
+                "{id}"
+            );
+        }
+        assert_eq!(display_mode_for(session, "gamescope").refresh_mhz, 0);
     }
 
     #[test]

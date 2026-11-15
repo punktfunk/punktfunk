@@ -245,7 +245,7 @@ fn live_mode_pack_roundtrips_and_interval_recovers_hz() {
     // `interval` is 1/effective_hz — the round-trip recovers the integer rate.
     for hz in [24u32, 30, 60, 75, 90, 120, 144, 165, 240] {
         let interval = std::time::Duration::from_secs_f64(1.0 / hz as f64);
-        assert_eq!(interval_hz(interval), hz);
+        assert_eq!(interval_mhz(interval), hz * 1000);
     }
 }
 

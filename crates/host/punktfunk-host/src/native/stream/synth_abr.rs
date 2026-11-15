@@ -373,7 +373,8 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
         })
         .context("spawn send thread")?;
 
-    let interval = std::time::Duration::from_nanos(1_000_000_000 / u64::from(fps));
+    // The session's exact rate: 59.94 frames a second where the client asked for that.
+    let interval = mode.frame_interval();
     let started = std::time::Instant::now();
     // The ramp's opening `SetBitrate` lands while the pipeline is still
     // building, so the first frame must already be sized by it.

@@ -330,11 +330,12 @@ impl VirtualDisplay for WlrootsDisplay {
         self.last_output = Some(name.clone());
 
         // Client mode is also the refresh clock; without it the output produces no frames.
+        // sway reads the rate as a decimal, so a 59.94 Hz session gets a 59.94 Hz clock.
         let m = format!(
             "{}x{}@{}Hz",
             mode.width,
             mode.height,
-            mode.refresh_hz.max(1)
+            punktfunk_core::config::hz_decimal(mode.millihz().max(1000))
         );
         swaymsg(&["output", &name, "mode", "--custom", &m])
             .with_context(|| format!("swaymsg output {name} mode --custom {m}"))?;

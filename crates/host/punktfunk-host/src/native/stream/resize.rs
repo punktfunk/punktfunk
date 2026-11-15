@@ -1,7 +1,7 @@
 //! The Windows in-place resize: mode-set the live monitor, restore its presentation, open only
 //! the encoder. Also the topology re-assert recovery, which is the same path with a liveness gate.
 
-use super::pipeline::{display_mode_for, open_session_encoder, pacing_hz};
+use super::pipeline::{display_mode_for, open_session_encoder, pacing_hz, pacing_interval};
 use super::state::StreamState;
 use super::swap::Next;
 use super::*;
@@ -213,7 +213,7 @@ impl StreamState {
                 }
             },
         };
-        let interval = std::time::Duration::from_secs_f64(1.0 / effective_hz.max(1) as f64);
+        let interval = pacing_interval(new_mode, effective_hz);
         trace.mark("encoder_open");
         Some(Next::Encoder {
             enc,
