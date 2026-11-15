@@ -304,10 +304,12 @@ enum SettingsOptions {
             .filter { seen.insert("\($0.w)x\($0.h)").inserted }
     }
 
-    /// A refresh rate's label: `0` is Native.
+    /// A refresh rate's label: `0` is Native, named with the rate it asks for on this display.
+    @MainActor
     static func refreshLabel(_ hz: Int) -> String {
-        hz == 0
-            ? String(localized: L10n.playerRefreshHzNative) : L10n.commonHz(value: String(hz))
+        guard hz == 0 else { return L10n.commonHz(value: String(hz)) }
+        let asked = max(NativeDisplay.refreshMilliHz, 30_000)
+        return L10n.playerRefreshHzNativeRate(hz: RefreshRate.label(milliHz: asked))
     }
 
     /// A typed "2560 × 1440" (any separator) through the shared rule; nil without two numbers.

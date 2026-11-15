@@ -38,6 +38,21 @@ final class HudLineTests: XCTestCase {
         XCTAssertEqual(name((1_920, 1_080))[0].role, .primary)
     }
 
+    /// The core names an exact rate in the mode line, and the rewrite has to find that line.
+    func testModeLineKeepsAnExactRate() {
+        let lines = [
+            PunktfunkConnection.HudLine(role: .primary, text: "3840×2160@59.94 · 60 fps"),
+        ]
+        let mode: (width: UInt32, height: UInt32, refreshHz: UInt32) = (3_840, 2_160, 60)
+        let host = L10n.overlayHostRenders(width: "3840", height: "2160")
+        let named = PunktfunkConnection.HudLine.naming(
+            picture: (1_920, 1_080), mode: mode, milliHz: 59_940, in: lines)
+        XCTAssertEqual(named.map(\.text), ["1920×1080@59.94 · \(host) · 60 fps"])
+        XCTAssertEqual(RefreshRate.statsLabel(milliHz: 59_800), "59.80")
+        XCTAssertEqual(RefreshRate.statsLabel(milliHz: 120_000), "120")
+        XCTAssertEqual(RefreshRate.statsLabel(milliHz: 23_976), "23.98")
+    }
+
     func testCycleRequestNamesItsSession() {
         let key = DefaultsKey.statsVerbosity
         let saved = UserDefaults.standard.string(forKey: key)
