@@ -684,7 +684,7 @@
 	"player_resolution_aspect_screen": "Aspect ratio entry: this device's own screen shape, when no standard ratio fits it.",
 	"player_resolution_aspect_safe_area": "Aspect ratio entry: this device's screen minus its camera cutout.",
 	"player_refresh_hz_native": "Option of Refresh rate: the display's own rate.",
-	"player_refresh_hz_native_rate": "Android: the Native option with the rate it resolves to. {hz}: whole hertz.",
+	"player_refresh_hz_native_rate": "The Native option with the rate it resolves to. {hz}: the display's rate in hertz, whole (\"60\") or with two decimals (\"59.94\").",
 	"player_refresh_hz_hint": "Native is the option name.",
 	"player_bitrate_kbps_automatic": "Option of Bitrate: the rate adapts on its own.",
 	"player_bitrate_kbps_fixed": "Option of Bitrate under the PyroWave codec: always the rate the quality needs.",

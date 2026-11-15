@@ -240,14 +240,14 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
         res_combo.into()
     };
     let (hz_names, hz_i) = {
+        // Named with its rate once the display probe has answered.
+        let native = ctx.probes.lock().unwrap().native;
         let names: Vec<String> = REFRESH
             .iter()
-            .map(|&r| {
-                if r == 0 {
-                    client::player_refresh_hz_native().into()
-                } else {
-                    common::common_hz(r)
-                }
+            .map(|&r| match (r, native) {
+                (0, Some(native)) => pf_client_core::settings::native_refresh_label(native),
+                (0, None) => client::player_refresh_hz_native().into(),
+                (r, _) => common::common_hz(r),
             })
             .collect();
         let i = REFRESH.iter().position(|&r| r == s.refresh_hz).unwrap_or(0);

@@ -171,16 +171,72 @@ fn primary_mode() -> Option<punktfunk_core::Mode> {
             &mut dm,
         )
     };
-    (ok.as_bool() && dm.dmPelsWidth > 0).then_some(punktfunk_core::Mode {
-        width: dm.dmPelsWidth,
-        height: dm.dmPelsHeight,
-        // 0 and 1 are "the hardware's default".
-        refresh_hz: if dm.dmDisplayFrequency > 1 {
-            dm.dmDisplayFrequency
-        } else {
-            60
-        },
-        refresh_mhz: 0,
+    if !ok.as_bool() || dm.dmPelsWidth == 0 {
+        return None;
+    }
+    // 0 and 1 are "the hardware's default".
+    let whole = if dm.dmDisplayFrequency > 1 {
+        dm.dmDisplayFrequency
+    } else {
+        60
+    };
+    // DEVMODEW cuts 59.94 Hz to 59: the display path states the rate it cut.
+    let mhz = primary_refresh_mhz()
+        .filter(|m| m.abs_diff(whole.saturating_mul(1000)) < 1000)
+        .unwrap_or(whole.saturating_mul(1000));
+    Some(punktfunk_core::Mode::exact(
+        dm.dmPelsWidth,
+        dm.dmPelsHeight,
+        mhz,
+    ))
+}
+
+/// The primary display's exact rate in millihertz, off the active path whose source sits at
+/// the desktop's origin. `None` when Windows names no such path.
+fn primary_refresh_mhz() -> Option<u32> {
+    use windows::Win32::wingdi::{
+        DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE, DISPLAYCONFIG_PATH_INFO,
+        QDC_ONLY_ACTIVE_PATHS,
+    };
+    use windows::Win32::winuser::{GetDisplayConfigBufferSizes, QueryDisplayConfig};
+    let flags = QDC_ONLY_ACTIVE_PATHS as u32;
+    let (mut np, mut nm) = (0u32, 0u32);
+    // SAFETY: both counts are live locals the call fills.
+    if unsafe { GetDisplayConfigBufferSizes(flags, &mut np, &mut nm) } != 0 || np == 0 {
+        return None;
+    }
+    let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); np as usize];
+    let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); nm as usize];
+    // SAFETY: each array holds the count passed beside it, and the call writes no more. The
+    // topology id is only written under `QDC_DATABASE_CURRENT`, so null is allowed here.
+    let rc = unsafe {
+        QueryDisplayConfig(
+            flags,
+            &mut np,
+            paths.as_mut_ptr(),
+            &mut nm,
+            modes.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    paths.truncate(np as usize);
+    modes.truncate(nm as usize);
+    paths.iter().find_map(|p| {
+        // SAFETY: without `QDC_VIRTUAL_MODE_AWARE` the union is this one index.
+        let idx = unsafe { p.sourceInfo.Anonymous.modeInfoIdx } as usize;
+        let source = modes
+            .get(idx)
+            .filter(|m| m.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE)?;
+        // SAFETY: `infoType` names the union's source member.
+        let at = unsafe { source.Anonymous.sourceMode.position };
+        let rate = p.targetInfo.refreshRate;
+        (at.x == 0 && at.y == 0 && rate.Denominator > 0).then(|| {
+            let den = u64::from(rate.Denominator);
+            ((u64::from(rate.Numerator) * 1000 + den / 2) / den) as u32
+        })
     })
 }
 

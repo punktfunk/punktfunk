@@ -225,14 +225,12 @@ impl std::ops::Deref for Wire {
     }
 }
 
+/// `WxHxFPS`. The rate may carry a fraction: `1920x1080x59.94` asks for 59.94 Hz.
 fn parse_mode(m: &str) -> Option<Mode> {
     let mut it = m.split('x');
-    Some(Mode {
-        width: it.next()?.parse().ok()?,
-        height: it.next()?.parse().ok()?,
-        refresh_hz: it.next()?.parse().ok()?,
-        refresh_mhz: 0,
-    })
+    let (width, height) = (it.next()?.parse().ok()?, it.next()?.parse().ok()?);
+    let hz: f64 = it.next()?.parse().ok()?;
+    (hz.is_finite() && hz >= 0.0).then(|| Mode::exact(width, height, (hz * 1000.0).round() as u32))
 }
 
 /// This probe's identity. The same files as the desktop client, including
