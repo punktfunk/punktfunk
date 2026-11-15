@@ -2292,6 +2292,194 @@ pub(crate) mod tests {
         assert_eq!(retried, Some((ASKED, view)), "{verdict:?}");
     }
 
+    /// Who holds the display a session streams.
+    #[derive(Clone, Copy, Debug)]
+    enum Tenure {
+        /// Its own, alone.
+        Own,
+        /// Its own, which another session joined.
+        OwnShared,
+        /// One it joined, whose generation its stream has not seen.
+        JoinerHeld,
+        /// One it joined, which no other session holds now.
+        JoinerAlone,
+        /// A host monitor.
+        Mirror,
+    }
+
+    /// A display generation no registry tracks.
+    const UNTRACKED_GEN: u64 = 0x5EED_0007;
+
+    /// A tenure's answers that sit behind the host OS.
+    #[derive(Debug, PartialEq)]
+    struct OsAnswers {
+        /// The control task hands a mode switch on.
+        resize: bool,
+        /// The control task hands a codec change on.
+        codec: bool,
+        /// The plan of a larger mode: how it builds and whether it stops joining.
+        larger: Option<(Build, bool)>,
+        /// A fractional rate survives the Welcome, then the control task's asks.
+        exact: (bool, bool),
+        /// The cursor forwards as on a display of the session's own; `false`: never.
+        cursor_as_own: bool,
+        capture: crate::session_plan::CaptureBackend,
+    }
+
+    /// One tenure: the answers every host gives, then each OS's.
+    struct TenureRow {
+        tenure: Tenure,
+        /// A content change rebuilds.
+        content: bool,
+        /// The format rule runs again when the source moves.
+        follows: bool,
+        join_live: bool,
+        linux: OsAnswers,
+        windows: OsAnswers,
+        verdict: crate::native::tests::Verdict,
+    }
+
+    #[rustfmt::skip]
+    fn tenures() -> Vec<TenureRow> {
+        use crate::native::tests::Verdict::Wanted;
+        use crate::session_plan::CaptureBackend::{IddPush, Portal, Wgc};
+        use Tenure::*;
+        let os = |resize, codec, larger, exact, cursor_as_own, capture| OsAnswers {
+            resize, codec, larger, exact, cursor_as_own, capture,
+        };
+        let row = |tenure, content, follows, join_live, linux, windows, verdict| TenureRow {
+            tenure, content, follows, join_live, linux, windows, verdict,
+        };
+        let once = || Some((Build::Once, false));
+        vec![
+            row(Own, true, true, false,
+                os(true, true, once(), (true, true), true, Portal),
+                os(true, true, once(), (false, false), true, IddPush), Wanted),
+            row(OwnShared, false, true, false,
+                os(true, true, None, (true, true), true, Portal),
+                os(true, true, None, (false, false), true, IddPush), Wanted),
+            row(JoinerHeld, false, false, true,
+                os(false, false, None, (false, true), true, Portal),
+                os(false, false, None, (false, false), false, Wgc), Wanted),
+            row(JoinerAlone, false, false, true,
+                os(true, true, Some((Build::Once, true)), (false, true), true, Portal),
+                os(false, false, None, (false, false), false, Wgc), Wanted),
+            row(Mirror, true, false, false,
+                os(false, false, once(), (false, false), true, Portal),
+                os(false, false, once(), (false, false), false, Wgc), Wanted),
+        ]
+    }
+
+    /// The fake on `tenure`'s display: whether the control task holds it (`joined_held`), and
+    /// the facts the rebuild plan reads, with the registry's share of an owned display.
+    fn on_display(f: &mut Session, tenure: Tenure) -> (bool, RebuildFacts) {
+        use crate::native::wiring::{joined_display, joined_held};
+        let joined = matches!(tenure, Tenure::JoinerHeld | Tenure::JoinerAlone);
+        let generation = (!matches!(tenure, Tenure::JoinerHeld)).then_some(UNTRACKED_GEN);
+        f.st.display.vd_params.join_live = joined;
+        f.st.live.cur_display_gen = generation;
+        f.st.plan.mirrored = matches!(tenure, Tenure::Mirror);
+        let facts = f.st.rebuild_facts();
+        let facts = RebuildFacts {
+            shared: facts.shared || matches!(tenure, Tenure::OwnShared),
+            ..facts
+        };
+        (joined_held(joined_display(joined, generation)), facts)
+    }
+
+    /// `tenure`'s answers on this host: content, follows and `join_live`, then the OS's. The
+    /// control task's gates compose as `native.rs` sets them and `inbound.rs` reads them.
+    fn tenure_answers(tenure: Tenure) -> ((bool, bool, bool), OsAnswers) {
+        use crate::encode::{ChromaFormat, Codec};
+        use crate::native::handshake::{cursor_forward, follows_source, runs_exact_rate};
+        use punktfunk_core::quic::v2::{features::FeatureSet, registry::FEATURE_FORMAT_EPOCH};
+        let mut f = super::super::swap::tests::fake();
+        let (held, facts) = on_display(&mut f, tenure);
+        let (joined, mirrored) = (f.st.display.vd_params.join_live, f.st.plan.mirrored);
+        let compositor = Some(Compositor::Mutter);
+        let owner = joined.then(crate::native::handshake::tests::live_display);
+        let features = FeatureSet::default().with(FEATURE_FORMAT_EPOCH);
+        let follows = crate::native::handshake::FormatFacts::of(
+            &crate::native::handshake::tests::hello_at(ASKED),
+            Default::default(),
+            compositor,
+            None,
+            &f.st.facts.knobs,
+            owner.as_ref(),
+            follows_source(&features, mirrored),
+        )
+        .follows;
+        let content = rebuild_plan::plan(&RebuildAsk::Content(true), &facts).is_some();
+        let larger = rebuild_plan::plan(&RebuildAsk::Mode(mode(WIDE, 60), None), &facts)
+            .map(|p| (p.build, p.stops_joining));
+        let cursor = |worker| {
+            let caps = punktfunk_core::quic::CLIENT_CAP_CURSOR;
+            cursor_forward(
+                caps,
+                compositor,
+                Codec::H265,
+                8,
+                false,
+                worker,
+                &f.st.facts.encoder,
+            )
+        };
+        // The handshake marks a joiner's and a mirror's session as a capture worker's.
+        let worker = joined || mirrored;
+        let cursor_as_own = if cfg!(target_os = "linux") {
+            cursor(worker) == cursor(false)
+        } else {
+            !worker || cursor(worker)
+        };
+        let capture = super::super::pipeline::resolve_plan(
+            &f.st.facts.encoder,
+            8,
+            false,
+            ChromaFormat::Yuv420,
+            Codec::H265,
+            Default::default(),
+            false,
+            1,
+            Compositor::Mutter,
+            None,
+            0.0,
+            1200,
+            None,
+            joined,
+            mirrored,
+        )
+        .capture;
+        let os = OsAnswers {
+            resize: crate::native::stream::reconfig_allowed(compositor, false, mirrored) && !held,
+            codec: !mirrored && !held,
+            larger,
+            exact: (
+                runs_exact_rate(compositor, joined || mirrored),
+                runs_exact_rate(compositor, mirrored),
+            ),
+            cursor_as_own,
+            capture,
+        };
+        ((content, follows, joined), os)
+    }
+
+    /// Each tenure's answers: whether it may resize, change codec or follow content, whether
+    /// its format follows the source, its cursor and its capture. Every host checks the first
+    /// three; Linux and Windows each check their own answers to the rest.
+    #[test]
+    fn tenure_rows() {
+        for r in tenures() {
+            let name = format!("{:?} ({:?})", r.tenure, r.verdict);
+            let (portable, os) = tenure_answers(r.tenure);
+            assert_eq!(portable, (r.content, r.follows, r.join_live), "{name}");
+            if cfg!(target_os = "linux") {
+                assert_eq!(os, r.linux, "{name} on Linux");
+            } else if cfg!(target_os = "windows") {
+                assert_eq!(os, r.windows, "{name} on Windows");
+            }
+        }
+    }
+
     use crate::vdisplay::Compositor;
     use std::collections::VecDeque;
 

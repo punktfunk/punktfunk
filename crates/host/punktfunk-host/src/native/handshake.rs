@@ -2247,29 +2247,10 @@ pub(crate) mod tests {
     fn a_pyrowave_rate_on_an_hevc_session_is_automatic() {
         use punktfunk_core::quic::{CODEC_HEVC, CODEC_PYROWAVE};
         let mut hello = Hello {
-            mode: punktfunk_core::Mode {
-                width: 1920,
-                height: 1080,
-                refresh_hz: 60,
-                refresh_mhz: 0,
-            },
-            compositor: punktfunk_core::config::CompositorPref::Auto,
-            gamepad: punktfunk_core::config::GamepadPref::Auto,
             bitrate_kbps: 80_000,
-            name: None,
-            launch: None,
-            video_caps: 0,
-            audio_channels: 2,
             video_codecs: CODEC_HEVC | CODEC_PYROWAVE,
             preferred_codec: CODEC_PYROWAVE,
-            display_hdr: None,
-            client_caps: 0,
-            max_shard_payload: 0,
-            audio_rate_hz: punktfunk_core::audio::SAMPLE_RATE_HZ,
-            audio_bits: pcm::BITS_16,
-            audio_layout: 0,
-            video_fit: 0,
-            audio_bitstreams: 0,
+            ..hello_at(mode(1920, 1080, 60))
         };
         let mut on_pyrowave = hello.clone();
         settle_bitrate(&mut on_pyrowave, CODEC_PYROWAVE);
@@ -2301,6 +2282,43 @@ pub(crate) mod tests {
             height,
             refresh_hz,
             refresh_mhz: 0,
+        }
+    }
+
+    /// A client's `Hello` for `mode`, at Automatic, offering HEVC alone.
+    pub(in crate::native) fn hello_at(mode: punktfunk_core::Mode) -> Hello {
+        use punktfunk_core::config::{CompositorPref, GamepadPref};
+        Hello {
+            mode,
+            compositor: CompositorPref::Auto,
+            gamepad: GamepadPref::Auto,
+            bitrate_kbps: 0,
+            name: None,
+            launch: None,
+            video_caps: 0,
+            audio_channels: 2,
+            video_codecs: punktfunk_core::quic::CODEC_HEVC,
+            preferred_codec: punktfunk_core::quic::CODEC_HEVC,
+            display_hdr: None,
+            client_caps: 0,
+            max_shard_payload: 0,
+            audio_rate_hz: punktfunk_core::audio::SAMPLE_RATE_HZ,
+            audio_bits: pcm::BITS_16,
+            audio_layout: 0,
+            video_fit: 0,
+            audio_bitstreams: 0,
+        }
+    }
+
+    /// The display a joiner was admitted onto: Mutter's, lit in SDR, its format not known.
+    pub(in crate::native) fn live_display() -> crate::vdisplay::admission::LiveDisplay {
+        crate::vdisplay::admission::LiveDisplay {
+            compositor: Some(crate::vdisplay::Compositor::Mutter),
+            route: None,
+            isolation: None,
+            audio_sink: Arc::default(),
+            hdr: false,
+            format: None,
         }
     }
 
@@ -2372,15 +2390,7 @@ pub(crate) mod tests {
                 let shown = view.unwrap_or((mode.width, mode.height));
                 (mode.width, mode.height, mode.refresh_hz) =
                     (owner.width, owner.height, owner.refresh_hz);
-                let display = crate::vdisplay::admission::LiveDisplay {
-                    compositor: Some(crate::vdisplay::Compositor::Mutter),
-                    route: None,
-                    isolation: None,
-                    audio_sink: Arc::default(),
-                    hdr: false,
-                    format: None,
-                };
-                Some((display, shown))
+                Some((live_display(), shown))
             }
             _ => None,
         };
