@@ -14,8 +14,9 @@
   --gamepad` consumes (per-driver .inf/.cat/.dll + one shared punktfunk-driver.cer).
 
   Output (-Out): pf_gamepad.{dll,inf,cat} + pf_xusb.{dll,inf,cat} + pf_mouse.{dll,inf,cat} +
-  punktfunk-driver.cer. (pf_mouse is the resident virtual HID pointer, not a gamepad - it shares
-  this pipeline + the --gamepad install path.)
+  pf_touchpad.{dll,inf,cat} + punktfunk-driver.cer. (pf_mouse is the resident virtual HID pointer
+  and pf_touchpad the per-session virtual touchpad, not gamepads - they share this pipeline + the
+  --gamepad install path.)
 
 .EXAMPLE
   pwsh -File build-gamepad-drivers.ps1 -Out C:\t\gamepad
@@ -52,6 +53,8 @@ $drivers = @(
     # (`driver install --gamepad` adds every staged .inf): the resident virtual HID mouse that
     # keeps SM_MOUSEPRESENT true so DWM composites a cursor on headless hosts.
     @{ crate = 'pf-mouse';     dll = 'pf_mouse.dll';     inx = 'pf-mouse\pf_mouse.inx';         inf = 'pf_mouse.inf';     cat = 'pf_mouse.cat' }
+    # The per-session virtual Precision Touchpad, on the same pipeline and install path.
+    @{ crate = 'pf-touchpad';  dll = 'pf_touchpad.dll';  inx = 'pf-touchpad\pf_touchpad.inx';   inf = 'pf_touchpad.inf';  cat = 'pf_touchpad.cat' }
 )
 foreach ($d in $drivers) {
     if (-not (Test-Path (Join-Path $DriversDir $d.inx))) { throw "no $($d.inx) under $DriversDir" }

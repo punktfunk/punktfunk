@@ -69,6 +69,12 @@ fn client_features(p: &ConnectParams) -> crate::quic::v2::features::FeatureSet {
         .with(registry::FEATURE_CLEAR_PLACEMENT)
         .with(registry::FEATURE_SCROLL_AXIS_UNITS)
         .with(registry::FEATURE_PCM_PARTS);
+    // Triage switch: `PUNKTFUNK_TOUCHPAD=0` keeps the whole touchpad plane off.
+    if crate::env_on("PUNKTFUNK_TOUCHPAD") != Some(false) {
+        set = set
+            .with(registry::FEATURE_TOUCHPAD)
+            .with(registry::FEATURE_TOUCHPAD_TAPS);
+    }
     if p.rebuilds_decoder {
         set = set.with(registry::FEATURE_FORMAT_EPOCH);
     }
@@ -414,6 +420,7 @@ async fn dial(
                 screen: server.screen.clone(),
                 role: server.role,
                 scroll_axis_units: server.features.has(registry::FEATURE_SCROLL_AXIS_UNITS),
+                features: server.features,
                 picture: server.picture,
             },
         ))))

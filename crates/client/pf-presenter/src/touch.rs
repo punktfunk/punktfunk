@@ -14,6 +14,10 @@
 //! SDL delivers one finger transition per event, so this machine keeps every
 //! live finger and recomputes the centroid. Positions are physical window
 //! pixels so ballistics port from Android 1:1; timestamps are milliseconds.
+//!
+//! [`FrameMode`]: `trackpad` toward a host that presents a touchpad. The fingers reach the
+//! host as contacts and its OS makes motion and scroll. This machine still runs the local
+//! gestures; its clicks reach the wire only toward a host that does not tap.
 
 use std::collections::HashMap;
 
@@ -475,6 +479,18 @@ impl Gestures {
         Some(acts)
     }
 
+    /// A local gesture owns the fingers down: the twist has armed. The host must not have them.
+    pub fn keeps(&self) -> bool {
+        self.dial.is_some_and(|d| d.armed)
+    }
+
+    /// The wire saw none of this gesture's scroll (frame mode ended mid-gesture): the next
+    /// delta opens its axis with `Begin`, and a take-back returns only what was sent.
+    fn scroll_unsent(&mut self) {
+        self.scroll_axes = [false; 2];
+        self.provisional = (0, 0);
+    }
+
     /// The twist is over (a finger lifted or a third landed). An armed-but-uncommitted
     /// ring winds back in; a committed ring stays open for the UI.
     fn end_dial(&mut self, _lift: bool) -> Vec<Act> {
@@ -628,6 +644,145 @@ impl Gestures {
             self.carry.1 -= out_y as f32;
         }
         acts
+    }
+}
+
+/// One SDL finger event. SDL never batches fingers in a single event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FingerPhase {
+    Down,
+    Move,
+    Up,
+    /// The OS took the touch away; no `Up` follows.
+    Cancel,
+}
+
+/// Contacts a touchscreen forwards to the host's touchpad. A third finger takes the gesture
+/// back, so three-finger taps stay the client's.
+pub const FRAME_CONTACTS: u8 = 2;
+
+/// Logical pixels per inch a touchscreen is assumed to have: SDL 3.4 reports no physical size.
+const LOGICAL_PPI: f32 = 160.0;
+
+/// The view in tenths of a millimetre, from its window pixels and display scale at
+/// [`LOGICAL_PPI`]. A Steam Deck (1280×800 at scale 1) reads 203×127 mm; its panel is
+/// 151×94 mm, so the host sees strokes 1.35× as long.
+pub fn view_dmm(px: (u32, u32), scale: f32) -> (u16, u16) {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let dmm = |v: u32| (v as f32 / scale / LOGICAL_PPI * 254.0).round() as u16;
+    (dmm(px.0), dmm(px.1))
+}
+
+/// One update of core's touch surface: every finger down, `x`/`y` as fractions of the view,
+/// and whether a local gesture keeps them from the host.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SurfaceUpdate {
+    pub touches: Vec<(u64, f32, f32)>,
+    pub keep: bool,
+}
+
+/// Frame mode: `trackpad` toward a host that presents a touchpad. The fingers go to the
+/// host's touchpad; the gesture machine keeps running for the local gestures and
+/// [`FrameMode::sends`] filters what it puts on the wire. Off, every act passes and no
+/// surface update is made.
+#[derive(Debug, Default)]
+pub struct FrameMode {
+    on: bool,
+    /// The host OS clicks on a tap (`FEATURE_TOUCHPAD_TAPS`), so the client sends no buttons.
+    host_taps: bool,
+    /// Fingers down, in landing order.
+    fingers: Vec<(u64, f32, f32)>,
+}
+
+impl FrameMode {
+    /// Whether frame mode runs. Inverted scroll is the player's pick, and the host's touchpad
+    /// scrolls by the host's own setting, so inverting keeps the gesture machine's scroll.
+    pub fn wanted(trackpad: bool, host_presents: bool, invert_scroll: bool) -> bool {
+        trackpad && host_presents && !invert_scroll
+    }
+
+    /// Turning on returns the announce: an update with no touches. Turning off forgets the
+    /// fingers and lets every act of `g` through again, mid-gesture too.
+    pub fn set(&mut self, on: bool, host_taps: bool, g: &mut Gestures) -> Option<SurfaceUpdate> {
+        let announce = (on && !self.on).then(SurfaceUpdate::default);
+        if self.on && !on {
+            self.fingers.clear();
+            g.scroll_unsent();
+        }
+        self.on = on;
+        self.host_taps = host_taps;
+        announce
+    }
+
+    pub fn on(&self) -> bool {
+        self.on
+    }
+
+    /// Core retracts tap-like lifts: the client makes the clicks.
+    pub fn retracts_taps(&self) -> bool {
+        !self.host_taps
+    }
+
+    /// Whether a gesture act reaches the wire. The host makes motion and scroll from the
+    /// contacts, and clicks itself when it taps.
+    pub fn sends(&self, act: &Act) -> bool {
+        match act {
+            _ if !self.on => true,
+            Act::MoveRel { .. } | Act::MoveAbs(_) | Act::Scroll { .. } => false,
+            Act::Button { .. } => !self.host_taps,
+            Act::CycleStats | Act::Dial { .. } | Act::DialCommit | Act::DialCancel => true,
+        }
+    }
+
+    /// A finger event the gesture machine has taken; `keep` is [`Gestures::keeps`]. `None`
+    /// when off or for a finger that never landed here.
+    pub fn finger(
+        &mut self,
+        phase: FingerPhase,
+        id: u64,
+        x: f32,
+        y: f32,
+        keep: bool,
+    ) -> Option<SurfaceUpdate> {
+        if !self.on {
+            return None;
+        }
+        let at = self.fingers.iter().position(|f| f.0 == id);
+        match (phase, at) {
+            (FingerPhase::Down, None) => self.fingers.push((id, x, y)),
+            (FingerPhase::Down | FingerPhase::Move, Some(i)) => self.fingers[i] = (id, x, y),
+            (FingerPhase::Up | FingerPhase::Cancel, Some(i)) => {
+                self.fingers.remove(i);
+            }
+            _ => return None,
+        }
+        Some(self.update(keep))
+    }
+
+    /// Take every finger back from the host as a kept gesture, then lift them all. Nothing
+    /// while off.
+    pub fn release(&mut self) -> Vec<SurfaceUpdate> {
+        if !self.on {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if !self.fingers.is_empty() {
+            out.push(self.update(true));
+            self.fingers.clear();
+        }
+        out.push(self.update(false));
+        out
+    }
+
+    fn update(&self, keep: bool) -> SurfaceUpdate {
+        SurfaceUpdate {
+            touches: self.fingers.clone(),
+            keep,
+        }
     }
 }
 
@@ -1287,6 +1442,386 @@ mod tests {
         let _ = g.down(3, 80.0, 50.0, ABS, 1010.0);
         let _ = g.up(3, 1020.0); // second finger came and went: no press
         assert!(g.tick(1600.0).is_empty());
+    }
+
+    /// The gesture machine and frame mode fed as `Capture` feeds them: the machine first,
+    /// then the surface with its claim. Positions are px of a 1280×720 view.
+    struct Rig {
+        g: Gestures,
+        frames: FrameMode,
+        all: Vec<Act>,
+        wire: Vec<Act>,
+        surface: Vec<SurfaceUpdate>,
+    }
+
+    impl Rig {
+        fn new(frame_mode: Option<bool>) -> Rig {
+            let mut r = Rig {
+                g: Gestures::new(true),
+                frames: FrameMode::default(),
+                all: Vec::new(),
+                wire: Vec::new(),
+                surface: Vec::new(),
+            };
+            if let Some(host_taps) = frame_mode {
+                r.set_frames(true, host_taps);
+                assert_eq!(
+                    r.surface.pop(),
+                    Some(SurfaceUpdate::default()),
+                    "entering announces the surface"
+                );
+            }
+            r
+        }
+
+        /// `Capture::set_frames`: a new decision, or a refused update turning it off.
+        fn set_frames(&mut self, on: bool, host_taps: bool) {
+            let announce = self.frames.set(on, host_taps, &mut self.g);
+            self.surface.extend(announce);
+        }
+
+        fn finger(&mut self, phase: FingerPhase, id: u64, x: f32, y: f32, t: f64) {
+            let acts = match phase {
+                FingerPhase::Down => self.g.down(id, x, y, ABS, t),
+                FingerPhase::Move => self.g.motion(id, x, y, ABS, t),
+                FingerPhase::Up => self.g.up(id, t),
+                FingerPhase::Cancel => {
+                    if self.frames.on() {
+                        let acts = self.g.reset();
+                        self.surface.extend(self.frames.release());
+                        self.take(acts);
+                    }
+                    return;
+                }
+            };
+            let keep = self.g.keeps();
+            self.surface
+                .extend(self.frames.finger(phase, id, x / 1280.0, y / 720.0, keep));
+            self.take(acts);
+        }
+
+        fn tick(&mut self, t: f64) {
+            let acts = self.g.tick(t);
+            self.take(acts);
+        }
+
+        fn take(&mut self, acts: Vec<Act>) {
+            self.all.extend(acts.iter().copied());
+            self.wire
+                .extend(acts.into_iter().filter(|a| self.frames.sends(a)));
+        }
+
+        /// Tap, drag, two-finger scroll, two-finger tap, long-press drag, tap-drag and a
+        /// three-finger tap. Returns how many finger events it made.
+        fn tour(&mut self) -> usize {
+            use FingerPhase::{Down, Move, Up};
+            let mut n = 0;
+            let mut f = |r: &mut Rig, p, id, x, y, t| {
+                n += 1;
+                r.finger(p, id, x, y, t);
+            };
+            f(self, Down, 1, 50.0, 50.0, 0.0);
+            f(self, Up, 1, 50.0, 50.0, 40.0);
+            f(self, Down, 2, 100.0, 100.0, 1000.0);
+            f(self, Move, 2, 140.0, 100.0, 1016.0);
+            f(self, Up, 2, 140.0, 100.0, 1032.0);
+            f(self, Down, 3, 100.0, 200.0, 2000.0);
+            f(self, Down, 4, 140.0, 200.0, 2002.0);
+            for step in 1..=10 {
+                let y = 200.0 - 2.0 * step as f32;
+                f(self, Move, 3, 100.0, y, 2000.0 + 10.0 * step as f64);
+                f(self, Move, 4, 140.0, y, 2001.0 + 10.0 * step as f64);
+            }
+            f(self, Up, 3, 100.0, 180.0, 2200.0);
+            f(self, Up, 4, 140.0, 180.0, 2201.0);
+            f(self, Down, 5, 50.0, 50.0, 3000.0);
+            f(self, Down, 6, 80.0, 52.0, 3005.0);
+            f(self, Up, 5, 50.0, 50.0, 3040.0);
+            f(self, Up, 6, 80.0, 52.0, 3042.0);
+            f(self, Down, 7, 50.0, 50.0, 4000.0);
+            self.tick(4520.0);
+            f(self, Move, 7, 90.0, 50.0, 4620.0);
+            f(self, Up, 7, 90.0, 50.0, 4700.0);
+            f(self, Down, 8, 300.0, 300.0, 5000.0);
+            f(self, Up, 8, 300.0, 300.0, 5010.0);
+            f(self, Down, 9, 302.0, 301.0, 5100.0);
+            f(self, Move, 9, 340.0, 301.0, 5120.0);
+            f(self, Up, 9, 340.0, 301.0, 5140.0);
+            for (id, x) in [(10, 50.0), (11, 80.0), (12, 110.0)] {
+                f(self, Down, id, x, 50.0, 6000.0 + x as f64);
+            }
+            for id in 10..=12 {
+                f(self, Up, id, 0.0, 0.0, 6200.0 + id as f64);
+            }
+            n
+        }
+    }
+
+    fn is_button(a: &Act) -> bool {
+        matches!(a, Act::Button { .. })
+    }
+
+    #[test]
+    fn frame_mode_off_sends_every_act_and_no_surface() {
+        let mut r = Rig::new(None);
+        r.tour();
+        assert_eq!(r.wire, r.all);
+        assert!(r.surface.is_empty());
+        // The tour exercises every wire act the filter could drop.
+        let kinds: [fn(&Act) -> bool; 3] = [
+            |a| matches!(a, Act::MoveRel { .. }),
+            |a| matches!(a, Act::Scroll { .. }),
+            is_button,
+        ];
+        for kind in kinds {
+            assert!(r.all.iter().any(kind), "{:?}", r.all);
+        }
+        assert!(r.all.contains(&Act::CycleStats));
+        let mut off = FrameMode::default();
+        assert!(off.release().is_empty());
+        assert_eq!(off.set(false, true, &mut Gestures::new(true)), None);
+    }
+
+    #[test]
+    fn toward_a_tapping_host_only_local_acts_reach_the_wire() {
+        let mut r = Rig::new(Some(true));
+        let events = r.tour();
+        assert_eq!(r.wire, vec![Act::CycleStats], "{:?}", r.wire);
+        // Every finger event reaches the surface, and the last lift leaves it empty.
+        assert_eq!(r.surface.len(), events);
+        assert_eq!(r.surface.last(), Some(&SurfaceUpdate::default()));
+        assert_eq!(r.surface.iter().map(|u| u.touches.len()).max(), Some(3));
+        assert!(!r.frames.retracts_taps());
+    }
+
+    #[test]
+    fn toward_a_host_that_does_not_tap_the_clicks_still_reach_the_wire() {
+        let mut r = Rig::new(Some(false));
+        r.tour();
+        let clicks: Vec<Act> = r
+            .all
+            .iter()
+            .copied()
+            .filter(|a| is_button(a) || *a == Act::CycleStats)
+            .collect();
+        // Tap, two-finger tap, long-press drag, tap then tap-drag: five presses.
+        assert_eq!(clicks.iter().filter(|a| is_button(a)).count(), 10);
+        assert_eq!(r.wire, clicks);
+        assert!(r.frames.retracts_taps());
+    }
+
+    #[test]
+    fn the_surface_gets_every_finger_down() {
+        let mut f = FrameMode::default();
+        let _ = f.set(true, true, &mut Gestures::new(true));
+        let at = |touches: &[(u64, f32, f32)]| SurfaceUpdate {
+            touches: touches.to_vec(),
+            keep: false,
+        };
+        assert_eq!(
+            f.finger(FingerPhase::Down, 7, 0.1, 0.2, false),
+            Some(at(&[(7, 0.1, 0.2)]))
+        );
+        assert_eq!(
+            f.finger(FingerPhase::Down, 9, 0.5, 0.5, false),
+            Some(at(&[(7, 0.1, 0.2), (9, 0.5, 0.5)]))
+        );
+        assert_eq!(
+            f.finger(FingerPhase::Move, 7, 0.2, 0.3, false),
+            Some(at(&[(7, 0.2, 0.3), (9, 0.5, 0.5)]))
+        );
+        // A finger that landed before frame mode saw it stays off the surface.
+        assert_eq!(f.finger(FingerPhase::Move, 4, 0.9, 0.9, false), None);
+        assert_eq!(f.finger(FingerPhase::Up, 4, 0.9, 0.9, false), None);
+        assert_eq!(
+            f.finger(FingerPhase::Up, 7, 0.2, 0.3, false),
+            Some(at(&[(9, 0.5, 0.5)]))
+        );
+        assert_eq!(
+            f.finger(FingerPhase::Cancel, 9, 0.5, 0.5, false),
+            Some(at(&[]))
+        );
+    }
+
+    #[test]
+    fn an_armed_twist_keeps_its_fingers_from_the_host() {
+        let mut r = Rig::new(Some(false));
+        let c = (120.0, 200.0);
+        let (p1, p2) = twisted(c, 0.0);
+        r.finger(FingerPhase::Down, 1, p1.0, p1.1, 0.0);
+        r.finger(FingerPhase::Down, 2, p2.0, p2.1, 2.0);
+        for step in 1..=3 {
+            let (p1, p2) = twisted(c, 7.0 * step as f32);
+            r.finger(FingerPhase::Move, 1, p1.0, p1.1, 10.0 * step as f64);
+            r.finger(FingerPhase::Move, 2, p2.0, p2.1, 10.0 * step as f64 + 1.0);
+        }
+        // 7° has not armed; the 14° sample arms on the second finger's move and keeps.
+        let keeps: Vec<bool> = r.surface.iter().map(|u| u.keep).collect();
+        assert_eq!(keeps, [false, false, false, false, false, true, true, true]);
+        assert!(
+            r.wire.iter().all(|a| matches!(a, Act::Dial { .. })),
+            "{:?}",
+            r.wire
+        );
+        assert!(!r.wire.is_empty());
+    }
+
+    #[test]
+    fn a_cancel_takes_every_finger_back_and_ends_the_gesture() {
+        let mut r = Rig::new(Some(false));
+        r.finger(FingerPhase::Down, 1, 100.0, 360.0, 0.0);
+        r.finger(FingerPhase::Down, 2, 200.0, 360.0, 5.0);
+        r.surface.clear();
+        r.finger(FingerPhase::Cancel, 1, 100.0, 360.0, 30.0);
+        assert_eq!(
+            r.surface,
+            vec![
+                SurfaceUpdate {
+                    touches: vec![(1, 100.0 / 1280.0, 0.5), (2, 200.0 / 1280.0, 0.5)],
+                    keep: true,
+                },
+                SurfaceUpdate::default(),
+            ]
+        );
+        // The rest of the touch is gone too: no click, no surface update.
+        r.finger(FingerPhase::Move, 2, 220.0, 360.0, 40.0);
+        r.finger(FingerPhase::Up, 2, 220.0, 360.0, 50.0);
+        assert_eq!(r.surface.len(), 2);
+        assert!(r.wire.is_empty(), "{:?}", r.wire);
+        // Off, a cancel changes nothing.
+        let mut off = Rig::new(None);
+        off.finger(FingerPhase::Down, 1, 100.0, 360.0, 0.0);
+        off.finger(FingerPhase::Cancel, 1, 100.0, 360.0, 30.0);
+        off.finger(FingerPhase::Up, 1, 100.0, 360.0, 40.0);
+        assert_eq!(off.wire, off.all);
+        assert_eq!(off.all.len(), 2, "the lift still clicks: {:?}", off.all);
+    }
+
+    #[test]
+    fn a_release_takes_every_finger_back_then_lifts() {
+        let mut f = FrameMode::default();
+        let _ = f.set(true, false, &mut Gestures::new(true));
+        let _ = f.finger(FingerPhase::Down, 1, 0.5, 0.5, false);
+        assert_eq!(
+            f.release(),
+            vec![
+                SurfaceUpdate {
+                    touches: vec![(1, 0.5, 0.5)],
+                    keep: true,
+                },
+                SurfaceUpdate::default(),
+            ]
+        );
+        assert_eq!(f.release(), vec![SurfaceUpdate::default()]);
+    }
+
+    #[test]
+    fn inverted_scroll_keeps_frame_mode_off() {
+        assert!(FrameMode::wanted(true, true, false));
+        assert!(!FrameMode::wanted(true, true, true));
+        assert!(!FrameMode::wanted(true, false, false));
+        assert!(!FrameMode::wanted(false, true, false));
+    }
+
+    #[test]
+    fn inverting_mid_stroke_hands_the_finger_back_to_the_gesture_machine() {
+        use FingerPhase::{Down, Move, Up};
+        let mut r = Rig::new(Some(true));
+        r.finger(Down, 1, 100.0, 100.0, 0.0);
+        r.finger(Move, 1, 140.0, 100.0, 16.0);
+        assert!(r.wire.is_empty());
+        let updates = r.surface.len();
+        // The player turns inverted scroll on and the decision is made again.
+        r.set_frames(FrameMode::wanted(true, true, true), true);
+        r.finger(Move, 1, 180.0, 100.0, 32.0);
+        assert!(
+            matches!(r.wire.as_slice(), [Act::MoveRel { dx, .. }] if *dx > 0),
+            "the same finger moves the pointer: {:?}",
+            r.wire
+        );
+        r.finger(Up, 1, 180.0, 100.0, 48.0);
+        assert_eq!(r.surface.len(), updates, "nothing more reaches the surface");
+        // Turned off again: the announce, and the next tap is the host's.
+        r.set_frames(FrameMode::wanted(true, true, false), true);
+        assert_eq!(r.surface.last(), Some(&SurfaceUpdate::default()));
+        r.wire.clear();
+        r.finger(Down, 2, 50.0, 50.0, 1000.0);
+        r.finger(Up, 2, 50.0, 50.0, 1040.0);
+        assert!(r.wire.is_empty(), "{:?}", r.wire);
+        assert_eq!(r.surface.len(), updates + 3);
+    }
+
+    #[test]
+    fn a_refused_update_mid_scroll_opens_the_scroll_on_the_wire() {
+        use FingerPhase::{Down, Move, Up};
+        let mut r = Rig::new(Some(true));
+        r.finger(Down, 1, 100.0, 200.0, 0.0);
+        r.finger(Down, 2, 140.0, 200.0, 2.0);
+        let pan = |r: &mut Rig, steps: std::ops::RangeInclusive<i32>| {
+            for step in steps {
+                let y = 200.0 - 2.0 * step as f32;
+                r.finger(Move, 1, 100.0, y, 10.0 * f64::from(step));
+                r.finger(Move, 2, 140.0, y, 10.0 * f64::from(step) + 1.0);
+            }
+        };
+        pan(&mut r, 1..=15);
+        assert!(r.wire.is_empty(), "{:?}", r.wire);
+        // `Capture` turns frame mode off on a refused update.
+        r.set_frames(false, false);
+        pan(&mut r, 16..=17);
+        r.finger(Up, 1, 100.0, 166.0, 200.0);
+        r.finger(Up, 2, 140.0, 166.0, 201.0);
+        assert_eq!(
+            r.wire.first(),
+            Some(&Act::Scroll {
+                axis: 0,
+                delta: 256,
+                phase: TouchScrollPhase::Begin,
+            })
+        );
+        assert_eq!(net_scroll(&r.wire), (1024, 0), "only what moved since");
+        assert_eq!(
+            r.wire.last(),
+            Some(&Act::Scroll {
+                axis: 0,
+                delta: 0,
+                phase: TouchScrollPhase::End,
+            })
+        );
+    }
+
+    #[test]
+    fn a_refused_update_mid_tap_sends_back_no_unsent_scroll() {
+        use FingerPhase::{Down, Move, Up};
+        let mut r = Rig::new(Some(true));
+        r.finger(Down, 1, 100.0, 200.0, 0.0);
+        r.finger(Down, 2, 140.0, 200.0, 2.0);
+        r.finger(Move, 1, 100.0, 196.0, 10.0);
+        r.finger(Move, 2, 140.0, 196.0, 11.0);
+        r.set_frames(false, false);
+        r.finger(Up, 1, 100.0, 196.0, 40.0);
+        r.finger(Up, 2, 140.0, 196.0, 41.0);
+        assert_eq!(
+            r.wire,
+            vec![
+                Act::Button {
+                    gs: BTN_RIGHT,
+                    down: true
+                },
+                Act::Button {
+                    gs: BTN_RIGHT,
+                    down: false
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn the_view_size_counts_160_logical_pixels_per_inch() {
+        assert_eq!(view_dmm((1280, 800), 1.0), (2032, 1270));
+        assert_eq!(view_dmm((2560, 1600), 2.0), (2032, 1270));
+        assert_eq!(view_dmm((1280, 800), f32::NAN), (2032, 1270));
+        assert_eq!(view_dmm((0, 0), 1.0), (0, 0));
     }
 
     #[test]

@@ -20,13 +20,29 @@ internal class StreamUi(
     initialVerbosity: StatsVerbosity,
     initialInvertScroll: Boolean = false,
     private val applyInvertScroll: (Boolean) -> Boolean = { NativeBridge.nativeSetInvertScroll(handle, it) },
+    /** The stream passes [HostTouchpad.read]; without it no source sends frames. */
+    private val readTouchpad: () -> HostTouchpad = { HostTouchpad.NONE },
 ) {
     var invertScroll by mutableStateOf(initialInvertScroll)
         private set
 
+    /** The host's touchpad as core answers it. Core reads the invert flag into that answer, so it
+     *  is read only after the flag reaches core: at [seed] and after each change of it. */
+    var touchpad by mutableStateOf(HostTouchpad.NONE)
+        private set
+
+    /** Session start: the invert flag reaches core, then the touchpad is read. */
+    fun seed() {
+        applyInvertScroll(invertScroll)
+        touchpad = readTouchpad()
+    }
+
     fun setScrollInverted(inverted: Boolean) {
         if (accessGrants and SessionAccess.POINTER == 0 || inverted == invertScroll) return
-        if (applyInvertScroll(inverted)) invertScroll = inverted
+        if (applyInvertScroll(inverted)) {
+            invertScroll = inverted
+            touchpad = readTouchpad()
+        }
     }
 
     /** The session's grants (per-client access), the courtesy mirror of what the host enforces. */

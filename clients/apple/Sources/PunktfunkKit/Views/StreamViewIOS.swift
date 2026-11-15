@@ -4,7 +4,8 @@
 // Direct fingers follow the touch-input model: `touch` forwards wire touches to a host that
 // injects them, mapped through the video placement into host-mode pixels, and the other models
 // drive TouchMouse. A Pencil takes the pen plane toward a pen-capable host and is a finger
-// otherwise. A mouse or trackpad is a pointer and never forwards as a touch.
+// otherwise. A mouse or trackpad is a pointer and never forwards as a touch. Toward a touchpad
+// host, Trackpad mode's fingers and the trackpad's pinch go out as touchpad contacts.
 //
 // Locked (full-screen, frontmost, pointer capture allowed; see PointerLockChain): GCMouse drives
 // motion and buttons for every connected mouse and the system hides the cursor. Unlocked (Stage
@@ -257,6 +258,12 @@ public final class StreamViewController: StreamViewControllerBase {
             setCaptured(captureEnabled)
             #else
             inputCapture?.setForwarding(captureEnabled)
+            #endif
+            #if os(iOS)
+            if isViewLoaded {
+                streamView.touchTrusted = captureEnabled
+                streamView.syncTouchpadFrames()
+            }
             #endif
         }
     }
@@ -619,6 +626,26 @@ public final class StreamViewController: StreamViewControllerBase {
         streamView.onScroll = { [weak self] dx, dy, source, phase in
             self?.inputCapture?.sendScroll(dx: dx, dy: dy, source: source, phase: phase)
         }
+        #if os(iOS)
+        // Toward a touchpad host, Trackpad mode's fingers are its contacts (`refreshTouchpad`).
+        streamView.touchpadHost = { [weak connection] in
+            (connection?.hostPresentsTouchpad ?? false, connection?.hostTapsClick ?? false)
+        }
+        streamView.touchTrusted = captureEnabled
+        streamView.onTouchpadSurface = { [weak connection] touches, keep, retractTaps, size, timeUs in
+            connection?.touchpadSurface(
+                touches, maxContacts: 2, keep: keep, retractTaps: retractTaps,
+                widthDmm: size.width, heightDmm: size.height, timeUs: timeUs)
+        }
+        // The trackpad's pinch is pointer input like its scroll: it begins only while captured
+        // (a pinch held back here is not a refusal), and its end always goes.
+        streamView.onTouchpadPinch = { [weak self, weak connection] phase, scale, rotation in
+            guard self?.captured == true || phase == UInt8(PUNKTFUNK_PINCH_END) else { return true }
+            return connection?.sendTouchpadPinch(phase: phase, scale: scale, rotation: rotation)
+                ?? false
+        }
+        streamView.refreshTouchpad()
+        #endif
     }
 
     /// The app, scene, pointer-lock, ring and keyboard notifications a session follows.
@@ -688,6 +715,9 @@ public final class StreamViewController: StreamViewControllerBase {
             forName: .punktfunkRingOpen, object: nil, queue: .main
         ) { [weak self] note in
             guard let self else { return }
+            #if os(iOS)
+            self.streamView.syncTouchpadFrames() // the ring may have switched the touch mode
+            #endif
             let open = (note.object as? NSNumber)?.boolValue == true
             if open, self.view.window?.windowScene?.activationState != .foregroundActive { return }
             guard self.ringHoldsPointer != open else { return }
@@ -720,6 +750,12 @@ public final class StreamViewController: StreamViewControllerBase {
             self.streamView.setSoftKeyboardVisible(show ?? !self.streamView.isFirstResponder)
         })
         #if os(iOS)
+        // The scroll inversion changed, and with it whether core takes touchpad contacts.
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .punktfunkTouchpadChanged, object: connection, queue: .main
+        ) { [weak self] _ in
+            self?.streamView.refreshTouchpad()
+        })
         // A monitor plugged in or pulled mid-session takes the picture or hands it back.
         observers.append(NotificationCenter.default.addObserver(
             forName: ExternalDisplay.didChange, object: nil, queue: .main
@@ -805,6 +841,11 @@ public final class StreamViewController: StreamViewControllerBase {
         // Release anything the touch-driven mouse still holds (a mid-drag session end) while
         // onTouchEvent can still deliver the button-up.
         streamView.resetTouchInput()
+        #if os(iOS)
+        streamView.onTouchpadSurface = nil // after reset — the frame lifting every finger rides it
+        streamView.onTouchpadPinch = nil
+        streamView.touchpadHost = nil
+        #endif
         streamView.onTouchEvent = nil
         streamView.onDial = nil
         TouchInputMode.sessionOverride = nil // the ring's mid-stream switch dies with the session
@@ -1196,6 +1237,9 @@ public final class StreamViewController: StreamViewControllerBase {
             guard captured else { return }
             inputCapture?.setForwarding(false)
             captured = false
+            #if os(iOS)
+            streamView.endTouchpadPinch()
+            #endif
             // Hand the chain back: released means Escape is the system's again, and staying first
             // responder for a stream that no longer owns input would sit in front of SwiftUI focus.
             if isFirstResponder { resignFirstResponder() }
@@ -1346,6 +1390,27 @@ final class StreamLayerUIView: UIView {
     )?
     /// The two-finger twist turning the quick-action ring, or the passthrough edge pull.
     var onDial: ((DialEvent) -> Void)?
+    #if os(iOS)
+    /// Reads the host's touchpad now: it presents one, and its OS clicks on taps.
+    var touchpadHost: (() -> (presents: Bool, taps: Bool))?
+    /// No trust prompt is up: touch may reach the host.
+    var touchTrusted = false
+    /// Every finger down as touchpad contacts: whether the twist keeps them, whether core takes
+    /// taps back, the view in tenths of a millimetre, the capture time in µs. Answers forwarded
+    /// or not, nil when core refused the call.
+    var onTouchpadSurface: (
+        (_ touches: [PunktfunkSurfaceTouch], _ keep: Bool, _ retractTaps: Bool,
+         _ size: (width: UInt16, height: UInt16), _ timeUs: UInt64) -> Bool?
+    )?
+    /// The trackpad's pinch: a `PUNKTFUNK_PINCH_*` phase, scale and rotation since it began.
+    /// False when core refused it.
+    var onTouchpadPinch: ((_ phase: UInt8, _ scale: Float, _ rotation: Float) -> Bool)?
+    /// Frame mode and the host's touchpad it follows (`refreshTouchpad`, `syncTouchpadFrames`).
+    private var frames = FrameMode()
+    /// The trackpad pinch under way, nil when none, and the two recognizers that make it.
+    private var trackpadPinch: (scale: CGFloat, rotation: CGFloat)?
+    private var transformRecognizers: [UIGestureRecognizer] = []
+    #endif
 
     /// Wire touch ids per active direct UITouch; ids are reused after the touch ends.
     private var touchIDs: [ObjectIdentifier: UInt32] = [:]
@@ -1355,10 +1420,18 @@ final class StreamLayerUIView: UIView {
     /// GameStream button held per active indirect-pointer touch (one click/drag session);
     /// released when that touch ends.
     private var pointerButtons: [ObjectIdentifier: UInt32] = [:]
-    /// Touch-driven mouse for the trackpad/pointer `TouchInputMode`s (see TouchMouse.swift).
+    /// Touch-driven mouse for the trackpad/pointer `TouchInputMode`s (see TouchMouse.swift). In
+    /// frame mode the host makes motion and scroll from the contacts, so only what
+    /// `FrameMode.passes` allows goes out.
     private lazy var touchMouse: TouchMouse = {
         let mouse = TouchMouse()
-        mouse.send = { [weak self] event in self?.onTouchEvent?(event) }
+        mouse.send = { [weak self] event in
+            guard let self else { return }
+            #if os(iOS)
+            guard self.frames.passes(event) else { return }
+            #endif
+            self.onTouchEvent?(event)
+        }
         mouse.hostPoint = { [weak self] point in self?.hostPoint(from: point) }
         mouse.onKeyboardGesture = { [weak self] show in self?.setSoftKeyboardVisible(show) }
         mouse.onDial = { [weak self] event in self?.onDial?(event) }
@@ -1391,10 +1464,17 @@ final class StreamLayerUIView: UIView {
     }()
 
     /// Release anything the touch-driven mouse holds and forget gesture state — session stop.
+    /// The touch mouse resets first, while frame mode still filters what it releases.
     func resetTouchInput() {
         touchMouse.reset()
         mutedMouse.reset()
         pencil.reset() // leaves range → the host lifts anything still inked
+        #if os(iOS)
+        endTouchpadPinch()
+        touchTrusted = false
+        syncTouchpadFrames() // the lift, while the session's surface sink is still set
+        frames.refresh(presents: false, taps: false)
+        #endif
         fingerRoute = nil
         setSoftKeyboardVisible(false) // a stream that's gone takes its keyboard with it
     }
@@ -1452,6 +1532,18 @@ final class StreamLayerUIView: UIView {
         let pencilInteraction = UIPencilInteraction()
         pencilInteraction.delegate = pencil
         addInteraction(pencilInteraction)
+        // The trackpad's pinch and rotation. The delegate admits transform events alone, so a
+        // finger pinch never reaches them, and they never cancel the view's touches.
+        let transforms: [UIGestureRecognizer] = [
+            UIPinchGestureRecognizer(target: self, action: #selector(handleTrackpadTransform)),
+            UIRotationGestureRecognizer(target: self, action: #selector(handleTrackpadTransform)),
+        ]
+        for recognizer in transforms {
+            recognizer.delegate = self
+            recognizer.cancelsTouchesInView = false
+            addGestureRecognizer(recognizer)
+        }
+        transformRecognizers = transforms
         #endif
         backgroundColor = .black
     }
@@ -1505,11 +1597,21 @@ final class StreamLayerUIView: UIView {
         if !fingers.isEmpty { forwardFingers(fingers, kind: kind) }
     }
 
+    /// The fingers' touch-input model: the gesture's latch, else the setting, with `touch`
+    /// falling back to the trackpad engine toward a host that injects no touches.
+    private var fingerMode: TouchInputMode {
+        let mode = fingerRoute ?? TouchInputMode.current(settings)
+        return mode == .touch && !touchPassthroughEnabled ? .trackpad : mode
+    }
+
     /// Route direct fingers by the touch-input model, latched for the whole gesture:
-    /// passthrough → real wire touches; trackpad/pointer/off → a TouchMouse gesture engine.
+    /// passthrough → real wire touches; trackpad/pointer/off → a TouchMouse gesture engine. In
+    /// frame mode every event also sends the fingers down as contacts, after the engine.
     private func forwardFingers(_ touches: Set<UITouch>, kind: TouchKind) {
-        var mode = fingerRoute ?? TouchInputMode.current(settings)
-        if mode == .touch, !touchPassthroughEnabled { mode = .trackpad }
+        #if os(iOS)
+        if fingerRoute == nil { syncTouchpadFrames() } // a mode switch applies from a gesture's start
+        #endif
+        let mode = fingerMode
         fingerRoute = mode
         switch mode {
         case .touch:
@@ -1526,11 +1628,103 @@ final class StreamLayerUIView: UIView {
             case .down: mouse.began(touches, in: self, trackpad: mode != .pointer)
             case .move: mouse.moved(touches, in: self)
             case .up: mouse.ended(touches, in: self)
-            case .cancel: mouse.cancelled(touches)
+            case .cancel:
+                #if os(iOS)
+                // A cancelled touch is no tap on the host either: core takes the gesture back.
+                if frames.on { sendTouchpadFrame(at: touches, keep: true) }
+                #endif
+                mouse.cancelled(touches)
             }
+            #if os(iOS)
+            if frames.on { sendTouchpadFrame(at: touches, keep: touchMouse.holdsFingers) }
+            #endif
         }
         if touchIDs.isEmpty, touchMouse.isIdle, mutedMouse.isIdle { fingerRoute = nil }
     }
+
+    #if os(iOS)
+    /// Reads the host's touchpad again (session start, each change of the scroll inversion) and
+    /// follows it. Gone, a pinch under way is forgotten: core lifted what was down.
+    func refreshTouchpad() {
+        let host = touchpadHost?() ?? (presents: false, taps: false)
+        frames.refresh(presents: host.presents, taps: host.taps)
+        if !host.presents { trackpadPinch = nil }
+        syncTouchpadFrames()
+    }
+
+    /// Frame mode: Trackpad mode toward a touchpad host, touch trusted, the view in a window. An
+    /// edge sends one frame with no touches, the announce or the lift, while the host has a pad.
+    func syncTouchpadFrames() {
+        if frames.sync(trusted: touchTrusted, inWindow: window != nil, mode: fingerMode) {
+            surface([], keep: false, at: ProcessInfo.processInfo.systemUptime)
+        }
+    }
+
+    /// Every finger the touch mouse holds, as fractions of the view, at the batch's capture time.
+    private func sendTouchpadFrame(at touches: Set<UITouch>, keep: Bool) {
+        let size = bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+        let contacts = touchMouse.fingers.map { key, point in
+            TouchpadContacts.touch(id: UInt64(UInt(bitPattern: key)), at: point, in: size)
+        }
+        let time = touches.map(\.timestamp).max() ?? ProcessInfo.processInfo.systemUptime
+        surface(contacts, keep: keep, at: time)
+    }
+
+    /// One surface update. A refused call hands the fingers and the trackpad back to today's
+    /// paths until `refreshTouchpad`, so no finger stays muted while core takes nothing.
+    private func surface(_ touches: [PunktfunkSurfaceTouch], keep: Bool, at time: TimeInterval) {
+        let answer = onTouchpadSurface?(
+            touches, keep, !frames.touchpad.taps, touchpadSize, TouchpadContacts.micros(time))
+        if answer == nil { dropTouchpad() }
+    }
+
+    private func dropTouchpad() {
+        frames.refused()
+        trackpadPinch = nil
+    }
+
+    /// The view in tenths of a millimetre, at its idiom's screen density.
+    private var touchpadSize: (width: UInt16, height: UInt16) {
+        let ppi = TouchpadContacts.screenPointsPerInch(
+            pad: UIDevice.current.userInterfaceIdiom == .pad)
+        return (
+            TouchpadContacts.dmm(bounds.width, pointsPerInch: ppi),
+            TouchpadContacts.dmm(bounds.height, pointsPerInch: ppi))
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        syncTouchpadFrames() // a view leaves nothing down on the host's pad
+    }
+
+    /// The trackpad's pinch and rotation as one pinch on the host's touchpad, each cumulative
+    /// since it began. It ends when both recognizers have. A refusal drops the touchpad.
+    @objc private func handleTrackpadTransform(_ g: UIGestureRecognizer) {
+        guard frames.touchpad.presents else { return }
+        let live = { (r: UIGestureRecognizer) in r.state == .began || r.state == .changed }
+        var now = trackpadPinch ?? (scale: 1, rotation: 0)
+        if live(g), let pinch = g as? UIPinchGestureRecognizer { now.scale = pinch.scale }
+        if live(g), let turn = g as? UIRotationGestureRecognizer { now.rotation = turn.rotation }
+        let phase: UInt8
+        if transformRecognizers.contains(where: live) {
+            phase = UInt8(trackpadPinch == nil ? PUNKTFUNK_PINCH_BEGIN : PUNKTFUNK_PINCH_UPDATE)
+            trackpadPinch = now
+        } else {
+            guard trackpadPinch != nil else { return }
+            phase = UInt8(PUNKTFUNK_PINCH_END)
+            trackpadPinch = nil
+        }
+        if onTouchpadPinch?(phase, Float(now.scale), Float(now.rotation)) == false { dropTouchpad() }
+    }
+
+    /// Lifts the trackpad pinch under way: capture released, session stop.
+    func endTouchpadPinch() {
+        guard let pinch = trackpadPinch else { return }
+        trackpadPinch = nil
+        _ = onTouchpadPinch?(UInt8(PUNKTFUNK_PINCH_END), Float(pinch.scale), Float(pinch.rotation))
+    }
+    #endif
 
     /// An indirect-pointer touch is a button-held click/drag session: forward its position as
     /// an absolute cursor move and its button as a mouse button (down on begin, up on end).
@@ -1679,8 +1873,16 @@ final class StreamLayerUIView: UIView {
         case .cancelled, .failed: phase = PUNKTFUNK_SCROLL_PHASE_CANCEL
         default: return // .possible — nothing yet
         }
-        let t = g.translation(in: self)
+        var t = g.translation(in: self)
         g.setTranslation(.zero, in: self)
+        #if os(iOS)
+        // A trackpad pinch under way owns the fingers: its scroll moves nothing, a stop still closes.
+        if trackpadPinch != nil {
+            guard phase == PUNKTFUNK_SCROLL_PHASE_END || phase == PUNKTFUNK_SCROLL_PHASE_CANCEL
+            else { return }
+            t = .zero
+        }
+        #endif
         // A stop's last translation rides out as movement first (ScrollCapture splits it);
         // the discrete fallback claims no boundary at all.
         let wirePhase = source == PUNKTFUNK_SCROLL_SOURCE_CONTINUOUS
@@ -1855,6 +2057,21 @@ extension StreamLayerUIView: UIKeyInput {
         onTouchEvent?(.key(0x08, down: true)) // VK_BACK
         onTouchEvent?(.key(0x08, down: false))
     }
+}
+#endif
+
+#if os(iOS)
+extension StreamLayerUIView: UIGestureRecognizerDelegate {
+    /// The pinch and rotation recognizers see the trackpad's transform events alone (iPadOS
+    /// 13.4+), and only toward a touchpad host. Finger touches never reach them.
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
+        frames.touchpad.presents && event.type == .transform
+    }
+
+    /// Pinch and rotation run together, and beside every other recognizer on the view.
+    func gestureRecognizer(
+        _ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool { true }
 }
 #endif
 #endif

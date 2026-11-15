@@ -411,6 +411,137 @@ pub unsafe extern "C" fn punktfunk_connection_send_pen(
     })
 }
 
+/// Send the whole touchpad as one `0xCC/0x06` frame (`design/touchpad-passthrough.md`). Send
+/// one with no contacts when the source appears, and one on every change after. Core stamps
+/// the sequence and repeats the last frame every 100 ms while a contact or the button is down.
+/// Gate on [`punktfunk_connection_host_touchpad`]; without it this is `Unsupported`.
+/// `InvalidArg` on a count above `PUNKTFUNK_TOUCHPAD_MAX_CONTACTS`, an unknown state bit, an id
+/// above `PUNKTFUNK_TOUCHPAD_MAX_ID` or one id twice.
+///
+/// # Safety
+/// `c` is a valid connection handle; `frame` is null or points to a readable
+/// [`PunktfunkTouchpadFrame`].
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_send_touchpad(
+    c: *mut PunktfunkConnection,
+    frame: *const PunktfunkTouchpadFrame,
+) -> PunktfunkStatus {
+    with_conn!(c => {
+        // SAFETY: caller pointer, null or readable; copied before use.
+        let Some(frame) = (unsafe { frame.as_ref() }).copied() else {
+            return PunktfunkStatus::NullPointer;
+        };
+        let Some((n, contacts)) = frame.to_contacts() else {
+            return PunktfunkStatus::InvalidArg;
+        };
+        status_of(c.inner.send_touchpad(
+            frame.button != 0,
+            frame.width_dmm,
+            frame.height_dmm,
+            &contacts[..n],
+        ))
+    })
+}
+
+/// An OS pinch and rotation as two fingers on the host's touchpad, for a source that gives no
+/// finger positions. `scale` and `rotation` (radians, clockwise) are cumulative since
+/// `PUNKTFUNK_PINCH_BEGIN`; `PUNKTFUNK_PINCH_END` lifts both. `Unsupported` without
+/// [`punktfunk_connection_host_touchpad`]; `InvalidArg` on an unknown phase or a value that is
+/// not finite.
+///
+/// # Safety
+/// `c` is a valid connection handle.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_send_touchpad_pinch(
+    c: *mut PunktfunkConnection,
+    phase: u8,
+    scale: f32,
+    rotation: f32,
+) -> PunktfunkStatus {
+    use punktfunk_core::quic::PinchPhase;
+    with_conn!(c => {
+        let phase = match phase {
+            PUNKTFUNK_PINCH_BEGIN => PinchPhase::Begin,
+            PUNKTFUNK_PINCH_UPDATE => PinchPhase::Update,
+            PUNKTFUNK_PINCH_END => PinchPhase::End,
+            _ => return PunktfunkStatus::InvalidArg,
+        };
+        status_of(c.inner.send_touchpad_pinch(phase, scale, rotation))
+    })
+}
+
+/// Every touch on a touch surface now, on the host's touchpad. Core forwards up to
+/// `max_contacts` (`1..=5`); more touches (a `count` above five is fine), or `keep` when the
+/// client's OS or app claims the gesture, take a forwarded gesture back from the host.
+/// `retract_taps`: this source makes its own clicks from taps, so the host must not. The
+/// surface is `width_dmm` × `height_dmm` tenths of a millimetre. `time_us` is the platform's
+/// capture time of these touches in µs, monotonic, on one epoch across calls; `0` takes core's
+/// clock now. The host presents the frames at it. Call on every change, and once with
+/// `count = 0` when the source appears.
+///
+/// `*forwarded` true: core owns this update; do not also turn these touches into pointer or
+/// scroll. False: the gesture is the caller's until an update with no touches, and on any
+/// error. `Unsupported` without [`punktfunk_connection_host_touchpad`]; `InvalidArg` on a
+/// coordinate that is not finite or one `id` twice.
+///
+/// # Safety
+/// `c` is a valid connection handle; `touches` points to `count` readable
+/// [`PunktfunkSurfaceTouch`]es, or is null when `count` is 0; `forwarded` is null or writable.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn punktfunk_connection_touchpad_surface(
+    c: *mut PunktfunkConnection,
+    touches: *const PunktfunkSurfaceTouch,
+    count: u8,
+    max_contacts: u8,
+    button: bool,
+    keep: bool,
+    retract_taps: bool,
+    width_dmm: u16,
+    height_dmm: u16,
+    time_us: u64,
+    forwarded: *mut bool,
+) -> PunktfunkStatus {
+    // SAFETY: the caller passes `forwarded` null or writable for one value.
+    unsafe { put(forwarded, false) };
+    with_conn!(c => {
+        if touches.is_null() && count != 0 {
+            return PunktfunkStatus::NullPointer;
+        }
+        let raw = if count == 0 {
+            &[][..]
+        } else {
+            // SAFETY: non-null here; the caller makes it readable for `count` touches, borrowed
+            // for this call only.
+            unsafe { std::slice::from_raw_parts(touches, usize::from(count)) }
+        };
+        let touches: Vec<_> = raw
+            .iter()
+            .map(|t| punktfunk_core::client::SurfaceTouch { id: t.id, x: t.x, y: t.y })
+            .collect();
+        match c.inner.touchpad_surface(
+            &touches,
+            max_contacts,
+            button,
+            keep,
+            retract_taps,
+            width_dmm,
+            height_dmm,
+            time_us,
+        ) {
+            Ok(owned) => {
+                // SAFETY: as above.
+                unsafe { put(forwarded, owned) };
+                PunktfunkStatus::Ok
+            }
+            Err(e) => e.status(),
+        }
+    })
+}
+
 /// Currently active session mode — Welcome's, until an accepted
 /// [`punktfunk_connection_request_mode`] switches it. Safe any time after connect.
 ///
@@ -482,5 +613,40 @@ mod tests {
             }
             other => panic!("expected HidReport, got {other:?}"),
         }
+    }
+
+    /// The C frame's caps are the wire's, and an embedder's frame is read strictly.
+    #[test]
+    fn a_touchpad_frame_is_read_strictly() {
+        use punktfunk_core::quic::{TOUCHPAD_MAX_CONTACTS, TOUCHPAD_MAX_ID};
+        assert_eq!(
+            PUNKTFUNK_TOUCHPAD_MAX_CONTACTS as usize,
+            TOUCHPAD_MAX_CONTACTS
+        );
+        assert_eq!(PUNKTFUNK_TOUCHPAD_MAX_ID, TOUCHPAD_MAX_ID);
+        let finger = PunktfunkTouchpadContact {
+            id: 4,
+            state: PUNKTFUNK_TOUCHPAD_TIP,
+            x: 7,
+            y: 9,
+        };
+        let mut frame = PunktfunkTouchpadFrame {
+            width_dmm: 700,
+            height_dmm: 1500,
+            button: 1,
+            count: 1,
+            contacts: [finger; 5],
+        };
+        let (n, contacts) = frame.to_contacts().unwrap();
+        assert_eq!(n, 1);
+        let c = contacts[0];
+        assert_eq!((c.id, c.tip, c.confident, c.x, c.y), (4, true, false, 7, 9));
+        frame.contacts[0].state = 0x04;
+        assert!(frame.to_contacts().is_none(), "unknown state bit");
+        frame.contacts[0].state = PUNKTFUNK_TOUCHPAD_CONFIDENT;
+        frame.count = 6;
+        assert!(frame.to_contacts().is_none(), "count above five");
+        assert_eq!(std::mem::size_of::<PunktfunkTouchpadFrame>(), 36);
+        assert_eq!(std::mem::size_of::<PunktfunkSurfaceTouch>(), 16);
     }
 }

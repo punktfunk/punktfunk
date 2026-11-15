@@ -104,7 +104,7 @@ From `packaging/windows/drivers`, as in
 ```powershell
 ..\drivers-cargo.ps1 'test --locked -p pf-umdf-util'
 ..\drivers-cargo.ps1 'test --locked -p pf-vdisplay --lib'
-..\drivers-cargo.ps1 'clippy --locked -p pf-umdf-util -p pf-xusb -p pf-gamepad -p pf-mouse -p wdk-iddcx -p pf-vdisplay --all-targets -- -D warnings'
+..\drivers-cargo.ps1 'clippy --locked -p pf-umdf-util -p pf-xusb -p pf-gamepad -p pf-mouse -p pf-touchpad -p wdk-iddcx -p pf-vdisplay --all-targets -- -D warnings'
 ```
 
 ## Run a host from source against a client

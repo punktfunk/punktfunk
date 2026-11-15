@@ -716,6 +716,8 @@ pub(super) enum ClientInput {
     /// 0xCC/0x05 stylus batches, diffed into a per-session virtual tablet
     /// (`design/pen-tablet-input.md`).
     Pen(punktfunk_core::quic::PenBatch),
+    /// 0xCC/0x06 touchpad frames, presented on a per-session virtual touchpad.
+    Touchpad(punktfunk_core::quic::TouchpadFrame),
     /// A captured Steam Controller's serial and feature replies, off the control stream.
     PadIdentity(punktfunk_core::quic::PadIdentity),
 }
@@ -729,7 +731,7 @@ fn is_activity(input: &ClientInput) -> bool {
         ClientInput::Event(ev) => ev.kind != InputKind::GamepadState,
         ClientInput::Rich(RichInput::Touchpad { .. } | RichInput::TouchpadEx { .. }) => true,
         ClientInput::Rich(_) | ClientInput::PadIdentity(_) => false,
-        ClientInput::Pen(_) => true,
+        ClientInput::Pen(_) | ClientInput::Touchpad(_) => true,
     }
 }
 
@@ -1144,10 +1146,10 @@ fn declare_pad(
     }
 }
 
-/// The session's one `read_datagram` loop (two would race): 0xCB mic, 0xCC rich and pen, 0xC8
-/// input, magics disjoint. Each is tested against the live grant mask before it is offered, and a
-/// full queue drops rather than block the mic and this reader. The client's feedback goes to the
-/// control task. Ends with the connection.
+/// The session's one `read_datagram` loop (two would race): 0xCB mic, 0xCC rich, pen and
+/// touchpad, 0xC8 input, magics disjoint. Each is tested against the live grant mask before it
+/// is offered, and a full queue drops rather than block the mic and this reader. The client's
+/// feedback goes to the control task. Ends with the connection.
 pub(super) fn spawn_datagram_reader(
     conn: super::link::SessionLink,
     grants: Arc<AtomicU32>,
@@ -1181,7 +1183,7 @@ pub(super) fn spawn_datagram_reader(
                     continue;
                 }
             };
-            // One relaxed load per datagram; test before offering. Mic/rich/pen by plane tag;
+            // One relaxed load per datagram; test before offering. Mic/rich/pen/touchpad by tag;
             // 0xC8 through `classify`.
             let mask = grants.load(Ordering::Relaxed);
             if let Some((seq, pts, opus)) = punktfunk_core::quic::decode_mic_datagram(&d) {
@@ -1212,6 +1214,14 @@ pub(super) fn spawn_datagram_reader(
                 }
                 n.input_rich.fetch_add(1, Ordering::Relaxed);
                 if !offer(&input_tx, ClientInput::Pen(pen)) {
+                    break;
+                }
+            } else if let Some(frame) = punktfunk_core::quic::TouchpadFrame::decode(&d) {
+                if !denied.permitted(mask, GrantClass::Pointer) {
+                    continue;
+                }
+                n.input_rich.fetch_add(1, Ordering::Relaxed);
+                if !offer(&input_tx, ClientInput::Touchpad(frame)) {
                     break;
                 }
             } else if let Some(mut ev) = InputEvent::decode(&d) {
@@ -1277,6 +1287,7 @@ struct InputLoop {
     /// Its route is the injector every pointer and key goes to.
     held: Held,
     pen: PenSession,
+    touchpad: crate::touchpad_sink::TouchpadSink,
 }
 
 impl InputLoop {
@@ -1322,11 +1333,11 @@ impl InputLoop {
         }
     }
 
-    /// [`Pads::feedback_poll_interval`], at most 100 ms while the pen is in range so
-    /// [`PenSession::check_timeout`] meets its 200 ms deadline.
+    /// [`Pads::feedback_poll_interval`], at most 100 ms while the pen is in range or a touchpad
+    /// contact is down, so their timeouts meet the 200 ms deadline.
     fn poll_interval(&self) -> std::time::Duration {
         let poll = self.pads.feedback_poll_interval();
-        if self.pen.active() {
+        if self.pen.active() || self.touchpad.active() {
             poll.min(std::time::Duration::from_millis(100))
         } else {
             poll
@@ -1342,8 +1353,8 @@ impl InputLoop {
 
     /// One item off the datagram reader. A person acting drops a standing suspend veto before
     /// the grant tests: a denied event still means someone is here. The guards repeat
-    /// dispatch's grant test: an arm that creates a virtual pad, tablet or pad-audio streamer
-    /// stays unreachable if an upstream filter regresses. A missed grant drops the item.
+    /// dispatch's grant test: an arm that creates a virtual pad, tablet, touchpad or pad-audio
+    /// streamer stays unreachable if an upstream filter regresses. A missed grant drops the item.
     fn on_input(&mut self, input: ClientInput) {
         use punktfunk_core::quic::{GRANT_GAMEPAD, GRANT_POINTER};
         if is_activity(&input) {
@@ -1359,6 +1370,9 @@ impl InputLoop {
                 &batch,
                 &self.frame_map.lock().unwrap_or_else(|e| e.into_inner()),
             )),
+            ClientInput::Touchpad(frame) if mask & GRANT_POINTER != 0 => {
+                self.touchpad.apply(&frame)
+            }
             ClientInput::Event(ev) if mask & punktfunk_core::quic::classify(ev.kind).bit() != 0 => {
                 self.on_event(ev)
             }
@@ -1477,10 +1491,11 @@ impl InputLoop {
         let _ = self.held.route.send(ev);
     }
 
-    /// Every wake, after its input: the pen's timeout, the feedback pump, the heartbeat, the
-    /// slot report and the rumble leases.
+    /// Every wake, after its input: the pen's and touchpad's timeouts, the feedback pump, the
+    /// heartbeat, the slot report and the rumble leases.
     fn on_tick(&mut self) {
         self.pen.check_timeout();
+        self.touchpad.check_timeout();
         self.pump_feedback();
         // Held-steady UHID pads send no wire events; heartbeat re-emits. Xbox is a no-op.
         self.pads.heartbeat();
@@ -1529,13 +1544,15 @@ impl InputLoop {
         }
     }
 
-    /// Session end. Ink lifts (buttons → tip → proximity) and the held set lets go on the
-    /// injector, which outlives the session: a client that vanishes mid-press is undone here.
+    /// Session end. Ink lifts (buttons → tip → proximity), touchpad contacts lift, and the held
+    /// set lets go on the injector, which outlives the session: a client that vanishes
+    /// mid-press is undone here.
     /// The pads and their OS slots go before the streamer join, which can sit ~5 s on a quiet
     /// endpoint, so a session that preempted this one claims them inside its 1.5 s grace.
     fn finish(self) {
         let InputLoop {
             mut pen,
+            mut touchpad,
             mut held,
             pads,
             mut pad_streams,
@@ -1544,6 +1561,7 @@ impl InputLoop {
             ..
         } = self;
         pen.release_all();
+        touchpad.force_release();
         let ups = held.held.release();
         if !ups.is_empty() {
             tracing::debug!(
@@ -1613,6 +1631,7 @@ pub(super) fn input_thread(
             route: inj_tx,
         },
         pen: PenSession::new(),
+        touchpad: crate::touchpad_sink::TouchpadSink::new(),
         granted: grants.load(Ordering::Relaxed),
         conn,
         pad_audio_on,

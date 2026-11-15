@@ -47,6 +47,38 @@ pub unsafe extern "C" fn punktfunk_connection_host_caps2(
     conn_out!(c, caps => c.inner.host_caps2())
 }
 
+/// `true` when the host presents touchpad frames as a touchpad of its own: test it before
+/// [`punktfunk_connection_send_touchpad`]. With the player's Invert scroll direction on, the
+/// client keeps its own scroll path, so the host's touchpad is not used: read this again after
+/// [`punktfunk_connection_set_invert_scroll`].
+///
+/// # Safety
+/// `c` is a valid connection handle; `presents` is writable (NULL is skipped).
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_host_touchpad(
+    c: *const PunktfunkConnection,
+    presents: *mut bool,
+) -> PunktfunkStatus {
+    conn_out!(c, presents => c.inner.host_presents_touchpad())
+}
+
+/// `true` when the host OS turns a tap on that touchpad into a click. A source with no button
+/// of its own (a touchscreen) then sends no clicks of its own. When `false` it keeps making its
+/// clicks and passes `retract_taps = true`, so the host never adds a second one. `false`
+/// whenever [`punktfunk_connection_host_touchpad`] is.
+///
+/// # Safety
+/// `c` is a valid connection handle; `taps` is writable (NULL is skipped).
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_host_touchpad_taps(
+    c: *const PunktfunkConnection,
+    taps: *mut bool,
+) -> PunktfunkStatus {
+    conn_out!(c, taps => c.inner.host_taps_click())
+}
+
 /// Live `PUNKTFUNK_GRANT_*` mask (`design/per-client-access.md`). Latest
 /// `AccessUpdate` wins; hosts that omit it read `PUNKTFUNK_GRANT_ALL`. Courtesy
 /// only — the host enforces. Poll; do not cache for the session.

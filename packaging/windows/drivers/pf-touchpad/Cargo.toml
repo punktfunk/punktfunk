@@ -1,0 +1,33 @@
+# pf-touchpad - punktfunk virtual Precision Touchpad UMDF2 HID minidriver.
+# A member of the in-tree drivers workspace, built, signed and staged with pf-mouse.
+[package]
+name = "pf-touchpad"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+description = "punktfunk virtual Precision Touchpad UMDF2 HID minidriver"
+
+[package.metadata.wdk.driver-model]
+driver-type = "UMDF"
+umdf-version-major = 2
+target-umdf-version-minor = 31
+
+[lib]
+crate-type = ["cdylib"]
+
+[build-dependencies]
+wdk-build.workspace = true
+
+[dependencies]
+wdk-sys.workspace = true
+pf-driver-proto.workspace = true
+pf-umdf-util.workspace = true
+
+[features]
+default = ["hid"]
+hid = ["wdk-sys/hid"]
+nightly = ["wdk-sys/nightly"]
+
+[lints]
+workspace = true

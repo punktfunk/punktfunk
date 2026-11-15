@@ -47,10 +47,13 @@ pub mod sc1_ble;
 pub mod sc2;
 mod screens;
 use crate::rumble;
+/// cbindgen:ignore
+mod touch_surface;
 mod worker;
 
 pub use self::planes::AudioPacket;
 pub use self::probe::ProbeOutcome;
+pub use self::touch_surface::SurfaceTouch;
 pub use crate::reanchor::{FLUSH_COOLDOWN, NO_VIDEO_RETRY};
 
 #[cfg(feature = "l10n")]
@@ -264,6 +267,14 @@ pub struct NativeClient {
     /// Pre-encoded 0xCC bytes ([`RichInput`] and [`crate::quic::PenBatch`]). Worker forwards;
     /// a new 0xCC kind never touches the pump.
     rich_input_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    /// Touchpad frames, unstamped; the touchpad task owns `seq` and the repeat.
+    touchpad_tx: tokio::sync::mpsc::UnboundedSender<crate::quic::TouchpadFrame>,
+    /// The surface and the pinch helper, which share the host pad. Held while queueing, so
+    /// frames reach the touchpad task in the order the state machine made them.
+    touch_sources: Mutex<touch_surface::TouchpadSources>,
+    /// The embedder's capture clock minus core's, wrapping, from its last stamped surface
+    /// update. Frames core stamps itself then share one timeline with the embedder's.
+    touch_clock_skew: AtomicU64,
     /// Touchpad contacts of controller-mouse pads, for the input task's pointer.
     pad_touch_tx: tokio::sync::mpsc::UnboundedSender<pad_touch::Contact>,
     /// Per wire pad: what of a Steam Controller 2's raw reports reaches the host.
@@ -279,6 +290,8 @@ pub struct NativeClient {
     pen_seq: AtomicU16,
     /// The host's offer. The pub fields below are copies of it, read by embedders.
     welcome: crate::quic::Welcome,
+    /// The native features in force (`ServerHello::features`).
+    features: crate::quic::v2::features::FeatureSet,
     pub host_caps: u8,
     pub host_caps2: u8,
     /// `0` when the host did not advertise a management port.
@@ -745,6 +758,7 @@ impl NativeClient {
         let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<InputEvent>();
         let (mic_tx, mic_rx) = tokio::sync::mpsc::channel::<(u32, u64, Vec<u8>)>(MIC_QUEUE);
         let (rich_input_tx, rich_input_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (touchpad_tx, touchpad_rx) = tokio::sync::mpsc::unbounded_channel();
         let (pad_touch_tx, pad_touch_rx) =
             tokio::sync::mpsc::unbounded_channel::<pad_touch::Contact>();
         let (ctrl_tx, ctrl_rx) = tokio::sync::mpsc::channel::<CtrlRequest>(CTRL_QUEUE);
@@ -790,6 +804,7 @@ impl NativeClient {
                     input_rx,
                     mic_rx,
                     rich_input_rx,
+                    touchpad_rx,
                     pad_touch_rx,
                     ctrl_rx,
                     ctrl_tx: ctrl_tx_pump,
@@ -850,6 +865,9 @@ impl NativeClient {
             last_input_ms: AtomicU64::new(0),
             mic_tx,
             rich_input_tx,
+            touchpad_tx,
+            touch_sources: Mutex::default(),
+            touch_clock_skew: AtomicU64::new(0),
             pad_touch_tx,
             sc2: Mutex::default(),
             ctrl_tx,
@@ -857,6 +875,7 @@ impl NativeClient {
             next_xfer_id: AtomicU32::new(1),
             pen_seq: AtomicU16::new(0),
             welcome,
+            features: negotiated.features,
             host_caps: welcome.host_caps,
             host_caps2: welcome.host_caps2,
             mgmt_port: welcome.mgmt_port,
@@ -2064,9 +2083,19 @@ impl NativeClient {
         Ok(())
     }
 
-    /// Change scroll direction for this session at the shared outbound seam.
+    /// Change scroll direction for this session at the shared outbound seam. While it is on the
+    /// host's touchpad is not used ([`Self::host_presents_touchpad`]): turning it on lifts
+    /// whatever that pad holds.
     pub fn set_invert_scroll(&self, invert: bool) {
+        let mut sources = self.touch_sources.lock().unwrap();
         self.shared.scroll_invert.store(invert, Ordering::Relaxed);
+        if !invert {
+            return;
+        }
+        if let Some(lift) = sources.release() {
+            // A closed session has no pad left to lift.
+            let _ = self.queue_touchpad(self.stamp_now(lift));
+        }
     }
 
     pub fn invert_scroll(&self) -> bool {
@@ -2171,6 +2200,151 @@ impl NativeClient {
         let seq = self.pen_seq.fetch_add(1, Ordering::Relaxed);
         self.rich_input_tx
             .send(crate::quic::PenBatch::new(seq, samples).encode())
+            .map_err(|_| PunktfunkError::Closed)
+    }
+
+    /// The host presents touchpad frames as a touchpad of its own (`FEATURE_TOUCHPAD`), read
+    /// live. With the player's Invert scroll direction on, the client keeps its own scroll path,
+    /// so the host's touchpad is not used.
+    pub fn host_presents_touchpad(&self) -> bool {
+        touchpad_use(self.features, self.invert_scroll()).0
+    }
+
+    /// The host OS turns a tap on that touchpad into a click (`FEATURE_TOUCHPAD_TAPS`), read
+    /// live and never without [`Self::host_presents_touchpad`]. A source with no button of its
+    /// own then sends no clicks; otherwise it makes them and retracts its taps.
+    pub fn host_taps_click(&self) -> bool {
+        touchpad_use(self.features, self.invert_scroll()).1
+    }
+
+    /// The whole touchpad now (`0xCC/0x06`): every contact down, the button, the surface in
+    /// tenths of a millimetre (`0` unknown). Send one with no contacts when the source appears.
+    /// Core stamps `seq` and repeats the last frame every
+    /// [`TOUCHPAD_REPEAT_MS`](crate::quic::TOUCHPAD_REPEAT_MS) while a contact or the button is
+    /// down. Nothing leaves without the pointer grant. A touch surface uses
+    /// [`Self::touchpad_surface`] instead.
+    ///
+    /// `Unsupported` without [`Self::host_presents_touchpad`]; `InvalidArg` on more than
+    /// [`TOUCHPAD_MAX_CONTACTS`](crate::quic::TOUCHPAD_MAX_CONTACTS) contacts, an id above
+    /// [`TOUCHPAD_MAX_ID`](crate::quic::TOUCHPAD_MAX_ID) or one id twice.
+    pub fn send_touchpad(
+        &self,
+        button: bool,
+        width_dmm: u16,
+        height_dmm: u16,
+        contacts: &[crate::quic::TouchpadContact],
+    ) -> Result<()> {
+        let frame = crate::quic::TouchpadFrame::new(0, button, width_dmm, height_dmm, contacts)
+            .ok_or(PunktfunkError::InvalidArg(
+                "touchpad frame needs at most five contacts with distinct ids 0..=31",
+            ))?;
+        let mut sources = self.touch_sources.lock().unwrap();
+        self.touchpad_granted()?;
+        self.queue_touchpad(self.stamp_now(sources.raw(frame)))
+    }
+
+    /// Every touch on a touch surface now, `x`/`y` in `0.0..=1.0` of a surface `width_dmm` ×
+    /// `height_dmm` tenths of a millimetre. Core forwards up to `max_contacts` (`1..=5`) as
+    /// touchpad contacts; more touches, or `keep` (the client's OS or app claimed the
+    /// gesture), take a forwarded gesture back from the host. `retract_taps`: this source makes
+    /// its own clicks from taps, so a tap-like lift is doubted and the host does not click too.
+    /// Call it on every change, and once with no touches when the source appears. `time_us` is
+    /// the platform's capture time of these touches, monotonic, any epoch kept across calls;
+    /// `0` takes core's clock now. The host presents the frames at it.
+    ///
+    /// `true`: core owns this update; do not also turn these touches into pointer or scroll.
+    /// `false`: the gesture is the embedder's until an update with no touches, which is
+    /// `false` too. `Unsupported` like [`Self::send_touchpad`]; `InvalidArg` on a coordinate
+    /// that is not finite or one platform id twice.
+    #[allow(clippy::too_many_arguments)]
+    pub fn touchpad_surface(
+        &self,
+        touches: &[SurfaceTouch],
+        max_contacts: u8,
+        button: bool,
+        keep: bool,
+        retract_taps: bool,
+        width_dmm: u16,
+        height_dmm: u16,
+        time_us: u64,
+    ) -> Result<bool> {
+        let mut sources = self.touch_sources.lock().unwrap();
+        self.touchpad_granted()?;
+        if time_us != 0 {
+            let skew = time_us.wrapping_sub(self.born.elapsed().as_micros() as u64);
+            self.touch_clock_skew.store(skew, Ordering::Relaxed);
+        }
+        let time_us = touch_surface::capture_us(time_us, || self.touch_clock_us());
+        let (frames, forwarded) = sources.surface(
+            touches,
+            max_contacts,
+            button,
+            keep,
+            retract_taps,
+            width_dmm,
+            height_dmm,
+            time_us,
+        )?;
+        for frame in frames {
+            self.queue_touchpad(frame)?;
+        }
+        Ok(forwarded)
+    }
+
+    /// An OS pinch and rotation as two fingers on the host's touchpad
+    /// ([`crate::quic::pinch_frame`]): `scale` and `rotation` (radians, clockwise) are
+    /// cumulative since `Begin`; `End` lifts both. A `Begin` while a surface touch is down or
+    /// its gesture is kept is ignored, with all that follows it until the next `Begin`; a
+    /// surface touch ends a live pinch. Refused like [`Self::send_touchpad`], and `InvalidArg`
+    /// on a value that is not finite.
+    pub fn send_touchpad_pinch(
+        &self,
+        phase: crate::quic::PinchPhase,
+        scale: f32,
+        rotation: f32,
+    ) -> Result<()> {
+        if !scale.is_finite() || !rotation.is_finite() {
+            return Err(PunktfunkError::InvalidArg(
+                "pinch scale and rotation must be finite",
+            ));
+        }
+        let mut sources = self.touch_sources.lock().unwrap();
+        self.touchpad_granted()?;
+        match sources.pinch(phase, scale, rotation) {
+            Some(frame) => self.queue_touchpad(self.stamp_now(frame)),
+            None => Ok(()),
+        }
+    }
+
+    /// Core's clock for touchpad capture times, on the embedder's timeline once it has
+    /// stamped a surface update: a pinch and a touch then never read as two clocks to the host.
+    fn touch_clock_us(&self) -> u64 {
+        let skew = self.touch_clock_skew.load(Ordering::Relaxed);
+        (self.born.elapsed().as_micros() as u64).wrapping_add(skew)
+    }
+
+    fn stamp_now(&self, frame: crate::quic::TouchpadFrame) -> crate::quic::TouchpadFrame {
+        frame.stamped(crate::quic::touchpad_scan_time(self.touch_clock_us()))
+    }
+
+    /// Run under the `touch_sources` lock, so no frame passes it after
+    /// [`Self::set_invert_scroll`] lifts the pad.
+    fn touchpad_granted(&self) -> Result<()> {
+        if self.host_presents_touchpad() {
+            Ok(())
+        } else {
+            Err(PunktfunkError::Unsupported(
+                "host touchpad not granted, or scroll inverted",
+            ))
+        }
+    }
+
+    fn queue_touchpad(&self, frame: crate::quic::TouchpadFrame) -> Result<()> {
+        if frame.is_active() {
+            self.stamp_input();
+        }
+        self.touchpad_tx
+            .send(frame)
             .map_err(|_| PunktfunkError::Closed)
     }
 
@@ -2305,6 +2479,35 @@ mod expires_in_tests {
         assert_eq!(expires_in_secs(Some(100), 100), 1);
         assert_eq!(expires_in_secs(Some(50), 100), 1);
         assert_eq!(expires_in_secs(Some(u64::MAX), 0), u32::MAX);
+    }
+}
+
+/// Whether the host's touchpad is used, and whether its OS clicks on taps. The player's Invert
+/// scroll direction can't reach the host's own scrolling, so it turns both off.
+fn touchpad_use(features: crate::quic::v2::features::FeatureSet, invert: bool) -> (bool, bool) {
+    use crate::quic::v2::registry::{FEATURE_TOUCHPAD, FEATURE_TOUCHPAD_TAPS};
+    let used = features.has(FEATURE_TOUCHPAD) && !invert;
+    (used, used && features.has(FEATURE_TOUCHPAD_TAPS))
+}
+
+#[cfg(test)]
+mod touchpad_use_tests {
+    use super::touchpad_use;
+    use crate::quic::v2::features::FeatureSet;
+    use crate::quic::v2::registry::{FEATURE_TOUCHPAD, FEATURE_TOUCHPAD_TAPS};
+
+    #[test]
+    fn invert_scroll_turns_the_host_touchpad_off_and_back_on() {
+        let granted = FeatureSet::default()
+            .with(FEATURE_TOUCHPAD)
+            .with(FEATURE_TOUCHPAD_TAPS);
+        assert_eq!(touchpad_use(granted, false), (true, true));
+        assert_eq!(touchpad_use(granted, true), (false, false));
+        assert_eq!(touchpad_use(granted, false), (true, true), "and back");
+        let no_taps = FeatureSet::default().with(FEATURE_TOUCHPAD);
+        assert_eq!(touchpad_use(no_taps, false), (true, false));
+        let taps_alone = FeatureSet::default().with(FEATURE_TOUCHPAD_TAPS);
+        assert_eq!(touchpad_use(taps_alone, false), (false, false));
     }
 }
 

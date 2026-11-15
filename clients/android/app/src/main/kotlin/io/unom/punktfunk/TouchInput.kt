@@ -3,6 +3,7 @@ package io.unom.punktfunk
 import android.os.SystemClock
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
+import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerInputScope
@@ -86,7 +87,8 @@ internal object TouchTuning {
  *  * trackpad (default): the cursor STAYS where it is on touch-down and moves by the finger's
  *    relative delta (MouseMove) with mild pointer acceleration — swipe to nudge, lift and
  *    re-swipe to walk it across, tap to click where it is. This is what makes the cursor
- *    reachable on a small screen.
+ *    reachable on a small screen. Toward a host with a touchpad of its own the fingers go there
+ *    instead ([TouchpadFrames]) and the host OS moves the cursor.
  *  * direct (opt-out): the cursor jumps to the finger and follows it (MouseMoveAbs,
  *    host-normalized against the overlay size), the old "direct pointing" behaviour.
  *
@@ -254,27 +256,35 @@ internal suspend fun PointerInputScope.streamTouchInput(
      *  thresholds); a lone finger passes unconsumed to whatever scrolls beneath, and no click,
      *  cursor move or tap is ever synthesized. */
     dialOnly: Boolean = false,
+    /** Frame mode, read as each gesture starts: every finger goes to the host's touchpad after
+     *  the gesture machine has seen it, and of the machine's own output only clicks still go
+     *  ([FrameModeSink]). A refused update ends it until the decision is read anew. */
+    frames: () -> TouchpadFrames? = { null },
     onCycleStats: () -> Unit,
     onKeyboard: (show: Boolean) -> Unit,
     onDial: (DialEvent) -> Unit,
 ) {
+    var refused: TouchpadFrames? = null
     var lastTapUp = 0L
     var lastTapX = 0f
     var lastTapY = 0f
     awaitEachGesture {
         val down = awaitFirstFingerDown(stylus, video)
+        val feed = frames()?.takeIf { it !== refused }?.let { SurfaceFeed(it, stylus, sink) }
+        val wire = feed?.wire ?: sink
         // A touch landing just after a quick tap nearby = tap-and-drag: hold the left
         // button for this whole gesture (laptop-trackpad convention).
         val isDrag = down.uptimeMillis - lastTapUp < TAP_DRAG_MS &&
             abs(down.position.x - lastTapX) < TAP_SLOP && abs(down.position.y - lastTapY) < TAP_SLOP
         lastTapUp = 0L // consume the arming either way
         val g = Gesture(
-            sink, down, trackpad, density, dialOnly, size.height, onDial, onKeyboard,
+            wire, down, trackpad, density, dialOnly, size.height, onDial, onKeyboard,
         ) { video().at(size) }
         // Direct mode jumps the cursor to the finger; trackpad mode leaves it put (the
         // whole point — you nudge it with swipes instead).
         if (!trackpad) g.moveAbs(down.position.x, down.position.y)
         if (isDrag) g.holdButton()
+        feed?.send(currentEvent, size, keep = false)
         var upTime = down.uptimeMillis
         try {
             while (true) {
@@ -292,26 +302,30 @@ internal suspend fun PointerInputScope.streamTouchInput(
                     continue
                 }
                 stylus?.intercept(ev, video().at(size))
+                // A new decision mid-gesture: the rest of it takes the path without frames.
+                if (feed != null && frames() !== feed.frames) feed.wire.framing = false
                 val pressed = ev.changes.filter { it.pressed && !isStylus(it, stylus) }
                     .sortedBy { it.id.value }
                 if (pressed.isEmpty()) {
                     g.pairEnded()
+                    feed?.send(ev, size, keep = false)
                     upTime = ev.changes.firstOrNull()?.uptimeMillis ?: upTime
                     break
                 }
                 if (g.step(pressed)) ev.changes.forEach { it.consume() }
+                feed?.send(ev, size, g.keeps())
             }
             if (g.tap()) {
                 g.rollBackProvisional() // a tap's jitter must not leave the page nudged
                 when {
                     g.maxFingers >= 3 -> onCycleStats() // in-stream HUD verbosity cycle
                     g.maxFingers == 2 -> { // two-finger tap → right click
-                        sink.button(3, true)
-                        sink.button(3, false)
+                        wire.button(3, true)
+                        wire.button(3, false)
                     }
                     else -> { // tap → left click (at the cursor's current spot), arm tap-drag
-                        sink.button(1, true)
-                        sink.button(1, false)
+                        wire.button(1, true)
+                        wire.button(1, false)
                         lastTapUp = upTime
                         lastTapX = down.position.x
                         lastTapY = down.position.y
@@ -322,6 +336,44 @@ internal suspend fun PointerInputScope.streamTouchInput(
             }
         } finally {
             g.release() // end a held drag exactly once, teardown mid-drag included
+            if (feed?.wire?.framing == false) refused = feed.frames
+        }
+    }
+}
+
+/** Fingers read per update; the JNI side reads as many. Past the contact limit the count alone
+ *  keeps a gesture, so more need not be listed. */
+private const val SURFACE_MAX_TOUCHES = 16
+
+/**
+ * One gesture's frame mode: each pointer event as updates, every finger down with x/y in 0…1 of
+ * the view, its batched samples first, each at its own capture time to the millisecond Compose
+ * reports. A refused update turns [wire] back to the path without frames for the rest of it.
+ */
+private class SurfaceFeed(val frames: TouchpadFrames, private val stylus: StylusStream?, sink: TouchSink) {
+    val wire = FrameModeSink(sink, frames.hostTaps)
+    private val ids = LongArray(SURFACE_MAX_TOUCHES)
+    private val xs = FloatArray(SURFACE_MAX_TOUCHES)
+    private val ys = FloatArray(SURFACE_MAX_TOUCHES)
+
+    fun send(ev: PointerEvent, view: IntSize, keep: Boolean) {
+        val w = view.width
+        val h = view.height
+        if (!wire.framing || w <= 0 || h <= 0) return
+        val down = ev.changes.filter { it.pressed && !isStylus(it, stylus) }.take(SURFACE_MAX_TOUCHES)
+        down.forEachIndexed { i, c -> ids[i] = c.id.value }
+        val batched = down.minOfOrNull { it.historical.size } ?: 0
+        for (k in 0..batched) {
+            down.forEachIndexed { i, c ->
+                val at = if (k < batched) c.historical[k].position else c.position
+                xs[i] = at.x / w
+                ys[i] = at.y / h
+            }
+            val ms = if (k < batched) down[0].historical[k].uptimeMillis else ev.changes.firstOrNull()?.uptimeMillis
+            if (!frames.surface(down.size, ids, xs, ys, keep, (ms ?: SystemClock.uptimeMillis()) * 1000, w, h)) {
+                wire.framing = false
+                return
+            }
         }
     }
 }
@@ -441,6 +493,10 @@ private class Gesture(
 
     /** Nothing disqualified a tap: the finish classifies it by [maxFingers]. */
     fun tap() = !dialOnly && !dragHeld && !moved
+
+    /** The twist armed, so the ring owns these fingers, not the host's touchpad. Three or more
+     *  fingers need no flag: the contact limit keeps them. */
+    fun keeps() = dialArmed
 
     /** Every finger lifted: a twist short of commit winds the ring back in. */
     fun pairEnded() {

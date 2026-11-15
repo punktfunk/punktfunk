@@ -59,6 +59,12 @@ pub trait InputInjector {
     fn on_deadline(&mut self) -> Result<()> {
         Ok(())
     }
+
+    /// How many moves a backlog of adjacent relative motion stays. 1 sums it into one. A
+    /// backend whose OS reads each report's size for its pointer curve keeps them apart.
+    fn motion_reports(&self) -> usize {
+        1
+    }
 }
 
 /// Preferred injection backend. Variants are per-OS so [`open`] cannot name a backend the
@@ -525,6 +531,17 @@ pub fn pen_supported() -> bool {
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub fn pen_supported() -> bool {
     false
+}
+
+/// Whether this host presents touchpad frames on a virtual touchpad (`FEATURE_TOUCHPAD`).
+/// Welcome-time; the backend decides ([`touchpad::supported`]).
+pub fn touchpad_supported() -> bool {
+    touchpad::supported()
+}
+
+/// Whether the host OS turns a tap on that touchpad into a click (`FEATURE_TOUCHPAD_TAPS`).
+pub fn touchpad_taps() -> bool {
+    touchpad::taps()
 }
 
 /// Result of [`uinput_probe`].
@@ -1146,6 +1163,34 @@ pub mod pen {
             bail!("no pen injection backend on this platform")
         }
         pub fn apply_batch(&mut self, _transitions: &[punktfunk_core::quic::PenTransition]) {}
+    }
+}
+/// Per-session uinput multitouch touchpad the native touchpad plane presents frames on.
+#[cfg(target_os = "linux")]
+#[path = "inject/linux/touchpad.rs"]
+pub mod touchpad;
+/// Per-session Precision Touchpad (HID) the native touchpad plane presents frames on.
+#[cfg(target_os = "windows")]
+#[path = "inject/windows/touchpad_windows.rs"]
+pub mod touchpad;
+/// Stub — no virtual touchpad elsewhere. `supported()` is false, so no host offers the feature
+/// and no frames arrive.
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub mod touchpad {
+    use anyhow::{bail, Result};
+    use punktfunk_core::quic::PadState;
+    pub fn supported() -> bool {
+        false
+    }
+    pub fn taps() -> bool {
+        false
+    }
+    pub struct VirtualTouchpad;
+    impl VirtualTouchpad {
+        pub fn create() -> Result<VirtualTouchpad> {
+            bail!("no virtual touchpad backend on this platform")
+        }
+        pub fn apply(&mut self, _pad: &PadState) {}
     }
 }
 #[cfg(target_os = "linux")]

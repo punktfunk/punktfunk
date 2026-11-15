@@ -18,9 +18,12 @@
 //! is relative-only; those sessions pin to capture ([`Capture::new`] `abs_ok`).
 
 use crate::keymap_sdl;
-use crate::touch::{Abs, Act, Gestures, TouchScrollPhase};
+use crate::touch::{
+    view_dmm, Abs, Act, FingerPhase, FrameMode, Gestures, SurfaceUpdate, TouchScrollPhase,
+    FRAME_CONTACTS,
+};
 use pf_client_core::trust::{MouseMode, TouchMode};
-use punktfunk_core::client::NativeClient;
+use punktfunk_core::client::{NativeClient, SurfaceTouch};
 use punktfunk_core::input::scroll::{ScrollAccumulator, ScrollEvent, ScrollPhase, ScrollSource};
 use punktfunk_core::input::{InputEvent, InputKind};
 use punktfunk_core::quic::{GRANT_KEYBOARD, GRANT_POINTER};
@@ -66,14 +69,6 @@ impl Act {
     }
 }
 
-/// One SDL finger event. SDL never batches fingers in a single event.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum FingerPhase {
-    Down,
-    Move,
-    Up,
-}
-
 pub struct Capture {
     connector: Arc<NativeClient>,
     captured: bool,
@@ -104,9 +99,20 @@ pub struct Capture {
     touch_slots: HashMap<u64, u32>,
     touch_mode: TouchMode,
     gestures: Gestures,
+    /// On in Trackpad toward a host that presents a touchpad.
+    frames: FrameMode,
+    /// The stream view: window pixels, and tenths of a millimetre for the touch surface.
+    view_px: (u32, u32),
+    view_dmm: (u16, u16),
     /// Session access mask: the capture gate. Core drops refused events on send.
     /// Live via [`Capture::set_grants`].
     grants: u32,
+}
+
+/// SDL's clock in µs: the clock every finger event's timestamp is on.
+fn sdl_now_us() -> u64 {
+    // SAFETY: a clock read with no arguments; SDL documents it safe from any thread.
+    unsafe { sdl3::sys::timer::SDL_GetTicksNS() / 1000 }
 }
 
 fn send(connector: &NativeClient, kind: InputKind, code: u32, x: i32, y: i32, flags: u32) {
@@ -123,7 +129,8 @@ fn send(connector: &NativeClient, kind: InputKind, code: u32, x: i32, y: i32, fl
 impl Capture {
     /// Without `abs_ok` the desktop model is unavailable and `mouse_mode`
     /// silently resolves to capture. `invert_scroll` seeds the live core
-    /// setting; [`NativeClient::set_invert_scroll`] changes it later.
+    /// setting; [`NativeClient::set_invert_scroll`] changes it later, and the caller
+    /// then calls [`Self::follow_touch_mode`]. Frame mode is decided here first.
     pub fn new(
         connector: Arc<NativeClient>,
         touch_mode: TouchMode,
@@ -132,8 +139,9 @@ impl Capture {
         abs_ok: bool,
         grants: u32,
     ) -> Capture {
+        // Before the frame-mode decision below: core offers the touchpad only uninverted.
         connector.set_invert_scroll(invert_scroll);
-        Capture {
+        let mut cap = Capture {
             connector,
             captured: false,
             user_released: false,
@@ -149,13 +157,71 @@ impl Capture {
             touch_slots: HashMap::new(),
             touch_mode,
             gestures: Gestures::new(touch_mode != TouchMode::Pointer),
+            frames: FrameMode::default(),
+            view_px: (0, 0),
+            view_dmm: (0, 0),
             grants,
+        };
+        cap.follow_touch_mode();
+        cap
+    }
+
+    /// The stream view's window pixels and display scale: the gesture ballistics' density
+    /// and the touch surface's size.
+    pub fn set_touch_view(&mut self, px: (u32, u32), scale: f32) {
+        self.gestures.set_density(scale);
+        self.view_px = px;
+        self.view_dmm = view_dmm(px, scale);
+    }
+
+    /// Decide frame mode again ([`FrameMode::wanted`]). Call it when the touch mode or the
+    /// scroll direction changes.
+    pub fn follow_touch_mode(&mut self) {
+        let c = &self.connector;
+        let on = FrameMode::wanted(
+            self.touch_mode == TouchMode::Trackpad,
+            c.host_presents_touchpad(),
+            c.invert_scroll(),
+        );
+        let taps = c.host_taps_click();
+        self.set_frames(on, taps);
+    }
+
+    /// [`FrameMode::set`], and the announce on entering.
+    fn set_frames(&mut self, on: bool, host_taps: bool) {
+        if let Some(announce) = self.frames.set(on, host_taps, &mut self.gestures) {
+            self.send_surface(&[announce], sdl_now_us());
         }
     }
 
-    /// Physical px per DIP for gesture ballistics — the window's display scale.
-    pub fn set_touch_density(&mut self, pixels_per_dip: f32) {
-        self.gestures.set_density(pixels_per_dip);
+    /// Core's touch surface, update by update. `t_us` is on SDL's clock, the one finger
+    /// events carry, so the host presents each frame when the finger moved. A refused
+    /// update ends frame mode until the next decision, so no finger goes unheard.
+    fn send_surface(&mut self, updates: &[SurfaceUpdate], t_us: u64) {
+        let (w, h) = self.view_dmm;
+        let retract = self.frames.retracts_taps();
+        for u in updates {
+            let touches: Vec<SurfaceTouch> = u
+                .touches
+                .iter()
+                .map(|&(id, x, y)| SurfaceTouch { id, x, y })
+                .collect();
+            let sent = self.connector.touchpad_surface(
+                &touches,
+                FRAME_CONTACTS,
+                false,
+                u.keep,
+                retract,
+                w,
+                h,
+                t_us,
+            );
+            if let Err(e) = sent {
+                tracing::info!(error = %e, "touchpad surface update refused");
+                self.set_frames(false, false);
+                return;
+            }
+        }
     }
 
     pub fn captured(&self) -> bool {
@@ -268,11 +334,14 @@ impl Capture {
         }
     }
 
+    /// The gesture ends: its owed scroll cancels go out, and in frame mode the host gives up
+    /// every finger as a taken-back gesture. Held buttons release separately.
     fn reset_touch_gestures(&mut self) {
-        // Held buttons release separately; reset emits only the gesture's owed scroll cancels.
         for act in self.gestures.reset() {
             self.apply_touch_act(act);
         }
+        let updates = self.frames.release();
+        self.send_surface(&updates, sdl_now_us());
     }
 
     /// Close scroll axes a native capture path left open. Runs before the local
@@ -523,25 +592,29 @@ impl Capture {
         }
     }
 
-    /// `wx`/`wy` are physical window pixels (trackpad ballistics); `abs` is the
-    /// frame position under the video fit (pointer / passthrough). `Touch` goes on the
-    /// wire; `Trackpad`/`Pointer`/`Off` drive the gesture engine. Returns run-loop
-    /// intents (`CycleStats`, dial); everything else is sent here, or dropped under `Off`.
+    /// `x`/`y` are fractions of the view ([`Self::set_touch_view`]); `abs` is the frame
+    /// position under the video fit (pointer / passthrough); `t_ns` is the SDL event's
+    /// timestamp. `Touch` goes on the wire; `Trackpad`/`Pointer`/`Off` drive the gesture
+    /// engine, and frame mode then hands core every finger. Returns run-loop intents
+    /// (`CycleStats`, dial); everything else is sent here, or dropped under `Off`.
     pub fn dispatch_finger(
         &mut self,
         phase: FingerPhase,
         id: u64,
-        wx: f32,
-        wy: f32,
+        x: f32,
+        y: f32,
         abs: Abs,
-        t_ms: f64,
+        t_ns: u64,
     ) -> Vec<Act> {
+        let (wx, wy) = (x * self.view_px.0 as f32, y * self.view_px.1 as f32);
+        let t_ms = t_ns as f64 / 1_000_000.0;
         match self.touch_mode {
             TouchMode::Touch => {
                 match phase {
                     FingerPhase::Down => self.on_touch_down(id, abs.x, abs.y, abs.w, abs.h),
                     FingerPhase::Move => self.on_touch_move(id, abs.x, abs.y, abs.w, abs.h),
                     FingerPhase::Up => self.on_touch_up(id),
+                    FingerPhase::Cancel => {}
                 }
                 Vec::new()
             }
@@ -555,7 +628,20 @@ impl Capture {
                     FingerPhase::Down => self.gestures.down(id, wx, wy, abs, t_ms),
                     FingerPhase::Move => self.gestures.motion(id, wx, wy, abs, t_ms),
                     FingerPhase::Up => self.gestures.up(id, t_ms),
+                    // Only frame mode reads a cancel: the OS took the touches, so the
+                    // gesture ends and the host gives every finger back.
+                    FingerPhase::Cancel => {
+                        if self.frames.on() {
+                            self.release_contacts();
+                            self.reset_touch_gestures();
+                        }
+                        return Vec::new();
+                    }
                 };
+                let keep = self.gestures.keeps();
+                if let Some(u) = self.frames.finger(phase, id, x, y, keep) {
+                    self.send_surface(&[u], (t_ns / 1000).max(1));
+                }
                 acts.into_iter()
                     .filter_map(|act| self.apply_touch_act(act))
                     .collect()
@@ -568,12 +654,13 @@ impl Capture {
     }
 
     /// Mid-stream model switch. Flush held buttons/touches first — a drag
-    /// must not survive — then restart the gesture engine.
+    /// must not survive — then restart the gesture engine and follow frame mode in or out.
     pub fn set_touch_mode(&mut self, mode: TouchMode) {
         self.release_contacts();
         self.reset_touch_gestures();
         self.touch_mode = mode;
         self.gestures = Gestures::new(mode != TouchMode::Pointer);
+        self.follow_touch_mode();
     }
 
     /// Down in order, up in reverse so modifiers stay held until the last key.
@@ -609,13 +696,14 @@ impl Capture {
 
     /// Track button holds in `held_buttons` so capture release flushes a
     /// tap-drag. Returns [`Act::CycleStats`] and dial intents to the run loop;
-    /// under [`TouchMode::Off`] every other act is dropped.
+    /// under [`TouchMode::Off`] every other act is dropped, and in frame mode
+    /// whatever [`FrameMode::sends`] refuses.
     fn apply_touch_act(&mut self, act: Act) -> Option<Act> {
         match act {
             Act::CycleStats | Act::Dial { .. } | Act::DialCommit | Act::DialCancel => {
                 return Some(act)
             }
-            _ if self.touch_mode == TouchMode::Off => {}
+            _ if self.touch_mode == TouchMode::Off || !self.frames.sends(&act) => {}
             Act::Button { gs, down } => {
                 if down {
                     self.flush_motion(); // the press lands where the cursor now is

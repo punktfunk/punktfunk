@@ -414,6 +414,24 @@ fn pen_reaches(compositor: Option<crate::vdisplay::Compositor>) -> bool {
     compositor != Some(crate::vdisplay::Compositor::Gamescope)
 }
 
+/// The touchpad features a session on `compositor` gets: the pad where the injector has one
+/// and the pen reaches ([`pen_reaches`]: gamescope gets neither), taps only beside it.
+fn touchpad_offer(
+    compositor: Option<crate::vdisplay::Compositor>,
+    supported: bool,
+    taps: bool,
+) -> punktfunk_core::quic::v2::features::FeatureSet {
+    use punktfunk_core::quic::v2::registry::{FEATURE_TOUCHPAD, FEATURE_TOUCHPAD_TAPS};
+    let mut set = punktfunk_core::quic::v2::features::FeatureSet::default();
+    if supported && pen_reaches(compositor) {
+        set = set.with(FEATURE_TOUCHPAD);
+        if taps {
+            set = set.with(FEATURE_TOUCHPAD_TAPS);
+        }
+    }
+    set
+}
+
 /// [`Hello::preferred_codec`] for the negotiation line. `none` is auto; a byte this build
 /// does not know is `unknown` rather than blank.
 fn codec_pref_label(preferred: u8) -> &'static str {
@@ -1093,7 +1111,12 @@ fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello
         .with(punktfunk_core::quic::v2::registry::FEATURE_AUDIO_EPOCH)
         .with(punktfunk_core::quic::v2::registry::FEATURE_SCROLL_AXIS_UNITS)
         .with(punktfunk_core::quic::v2::registry::FEATURE_STUDIO_RANGE)
-        .with(punktfunk_core::quic::v2::registry::FEATURE_STUDIO_RANGE_HDR);
+        .with(punktfunk_core::quic::v2::registry::FEATURE_STUDIO_RANGE_HDR)
+        .union(touchpad_offer(
+            t.compositor,
+            crate::inject::touchpad_supported(),
+            crate::inject::touchpad_taps(),
+        ));
     // Further screens only where this session builds displays of its own on a compositor with
     // more than one output: not gamescope, not a joiner or a mirror.
     if matches!(n.source, Punktfunk1Source::Virtual)
@@ -2409,6 +2432,26 @@ mod tests {
             assert!(pen_reaches(Some(c)), "{c:?}");
         }
         assert!(pen_reaches(None));
+    }
+
+    /// The touchpad goes where the pen does, and taps never without the pad.
+    #[test]
+    fn touchpad_offer_follows_the_pen_and_the_backend() {
+        use crate::vdisplay::Compositor;
+        use punktfunk_core::quic::v2::registry::{FEATURE_TOUCHPAD, FEATURE_TOUCHPAD_TAPS};
+        let kwin = touchpad_offer(Some(Compositor::Kwin), true, true);
+        assert!(kwin.has(FEATURE_TOUCHPAD) && kwin.has(FEATURE_TOUCHPAD_TAPS));
+        let no_taps = touchpad_offer(None, true, false);
+        assert!(no_taps.has(FEATURE_TOUCHPAD) && !no_taps.has(FEATURE_TOUCHPAD_TAPS));
+        let empty = punktfunk_core::quic::v2::features::FeatureSet::default();
+        assert_eq!(
+            touchpad_offer(Some(Compositor::Gamescope), true, true),
+            empty
+        );
+        assert_eq!(
+            touchpad_offer(Some(Compositor::Windows), false, true),
+            empty
+        );
     }
 
     /// The negotiation line names the preference, and a preference that lost says which

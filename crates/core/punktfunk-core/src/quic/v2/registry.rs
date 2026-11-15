@@ -271,6 +271,14 @@ pub const FEATURE_UNLOCK_FOLLOWS: u32 = 43;
 /// ([`AUDIO_PCM_PARTS_MAGIC`](crate::quic::AUDIO_PCM_PARTS_MAGIC)), which the client joins
 /// before its decoder. A host sends parts only to a client that sets it.
 pub const FEATURE_PCM_PARTS: u32 = 44;
+/// Both ends: the host presents `TouchpadFrame`s (rich kind `0x06`) on a virtual touchpad of its
+/// own, so the host OS owns pointer speed, scrolling and gestures. A client sends frames only
+/// under it.
+pub const FEATURE_TOUCHPAD: u32 = 45;
+/// Host, beside [`FEATURE_TOUCHPAD`]: the host OS turns a tap on that touchpad into a click.
+/// Without it a source with no button of its own makes its own clicks and retracts its taps.
+/// The client offers it to read it.
+pub const FEATURE_TOUCHPAD_TAPS: u32 = 46;
 
 #[cfg(test)]
 mod tests {
@@ -315,6 +323,8 @@ mod tests {
         ("FEATURE_PROFILE_UNLOCK", FEATURE_PROFILE_UNLOCK),
         ("FEATURE_UNLOCK_FOLLOWS", FEATURE_UNLOCK_FOLLOWS),
         ("FEATURE_PCM_PARTS", FEATURE_PCM_PARTS),
+        ("FEATURE_TOUCHPAD", FEATURE_TOUCHPAD),
+        ("FEATURE_TOUCHPAD_TAPS", FEATURE_TOUCHPAD_TAPS),
     ];
 
     /// Every close and stop code either wire uses: v1's live on, and v2 adds its own.

@@ -102,6 +102,28 @@
 // [`PunktfunkPenSample::distance`] sentinel: no hover-distance reading.
 #define PUNKTFUNK_PEN_DISTANCE_UNKNOWN 65535
 
+// [`PunktfunkTouchpadContact::state`] bit: the finger touches the surface.
+#define PUNKTFUNK_TOUCHPAD_TIP 1
+
+// [`PunktfunkTouchpadContact::state`] bit: a real finger. Clear it for one frame, then lift
+// the contact, to take a gesture back: the host treats the contact as accidental.
+#define PUNKTFUNK_TOUCHPAD_CONFIDENT 2
+
+// Most contacts in one [`PunktfunkTouchpadFrame`].
+#define PUNKTFUNK_TOUCHPAD_MAX_CONTACTS 5
+
+// Highest [`PunktfunkTouchpadContact::id`].
+#define PUNKTFUNK_TOUCHPAD_MAX_ID 31
+
+// [`punktfunk_connection_send_touchpad_pinch`] phase: the pinch starts.
+#define PUNKTFUNK_PINCH_BEGIN 0
+
+// [`punktfunk_connection_send_touchpad_pinch`] phase: the pinch moves.
+#define PUNKTFUNK_PINCH_UPDATE 1
+
+// [`punktfunk_connection_send_touchpad_pinch`] phase: the pinch ends or is cancelled.
+#define PUNKTFUNK_PINCH_END 2
+
 // Compositor preference for [`punktfunk_connect_ex`]. `AUTO` lets the host pick.
 // A concrete value is honored only if that backend is available now; else auto-detect.
 // Resolved choice is on `Welcome`.
@@ -456,7 +478,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 72
+#define PUNKTFUNK_ABI_VERSION 73
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -2111,6 +2133,47 @@ typedef struct {
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
+// One finger on the client's touchpad surface.
+typedef struct {
+    // Stable for the life of the contact, `0..=PUNKTFUNK_TOUCHPAD_MAX_ID`, unique in a frame.
+    uint8_t id;
+    // `PUNKTFUNK_TOUCHPAD_*` bits. Unknown bits are rejected (`InvalidArg`).
+    uint8_t state;
+    // `0..=65535` across the surface, origin top-left.
+    uint16_t x;
+    // `0..=65535` down the surface.
+    uint16_t y;
+} PunktfunkTouchpadContact;
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// The whole touchpad at one instant ([`punktfunk_connection_send_touchpad`]). A contact
+// absent from a frame has lifted.
+typedef struct {
+    // The surface in tenths of a millimetre; `0` is unknown and the host assumes 100 × 60 mm.
+    uint16_t width_dmm;
+    uint16_t height_dmm;
+    // `1` while the pad's button is pressed, else `0`.
+    uint8_t button;
+    // Contacts in `contacts`, `0..=PUNKTFUNK_TOUCHPAD_MAX_CONTACTS`.
+    uint8_t count;
+    PunktfunkTouchpadContact contacts[5];
+} PunktfunkTouchpadFrame;
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// One touch on a touch surface ([`punktfunk_connection_touchpad_surface`]).
+typedef struct {
+    // The platform's identity for the touch, stable while it is down.
+    uint64_t id;
+    // `0.0..=1.0` across the surface, origin top-left. Must be finite; outside values clamp.
+    float x;
+    // `0.0..=1.0` down the surface.
+    float y;
+} PunktfunkSurfaceTouch;
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
 // One advertised clipboard format passed to [`punktfunk_connection_clipboard_offer`].
 typedef struct {
     // NUL-terminated UTF-8 wire MIME (e.g. `text/plain;charset=utf-8`). ≤ 128 bytes on the wire.
@@ -3154,7 +3217,9 @@ PunktfunkStatus punktfunk_connection_cycle_pad_mouse(PunktfunkConnection *c,
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
-// Change scroll direction for this session at the shared outbound seam.
+// Change scroll direction for this session at the shared outbound seam. While it is on the
+// host's touchpad is not used ([`punktfunk_connection_host_touchpad`]): turning it on lifts
+// whatever that pad holds.
 //
 // # Safety
 // `c` is a valid connection handle. Callable from any thread.
@@ -3621,6 +3686,67 @@ PunktfunkStatus punktfunk_connection_send_pen(PunktfunkConnection *c,
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
+// Send the whole touchpad as one `0xCC/0x06` frame (`design/touchpad-passthrough.md`). Send
+// one with no contacts when the source appears, and one on every change after. Core stamps
+// the sequence and repeats the last frame every 100 ms while a contact or the button is down.
+// Gate on [`punktfunk_connection_host_touchpad`]; without it this is `Unsupported`.
+// `InvalidArg` on a count above `PUNKTFUNK_TOUCHPAD_MAX_CONTACTS`, an unknown state bit, an id
+// above `PUNKTFUNK_TOUCHPAD_MAX_ID` or one id twice.
+//
+// # Safety
+// `c` is a valid connection handle; `frame` is null or points to a readable
+// [`PunktfunkTouchpadFrame`].
+PunktfunkStatus punktfunk_connection_send_touchpad(PunktfunkConnection *c,
+                                                   const PunktfunkTouchpadFrame *frame);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// An OS pinch and rotation as two fingers on the host's touchpad, for a source that gives no
+// finger positions. `scale` and `rotation` (radians, clockwise) are cumulative since
+// `PUNKTFUNK_PINCH_BEGIN`; `PUNKTFUNK_PINCH_END` lifts both. `Unsupported` without
+// [`punktfunk_connection_host_touchpad`]; `InvalidArg` on an unknown phase or a value that is
+// not finite.
+//
+// # Safety
+// `c` is a valid connection handle.
+PunktfunkStatus punktfunk_connection_send_touchpad_pinch(PunktfunkConnection *c,
+                                                         uint8_t phase,
+                                                         float scale,
+                                                         float rotation);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// Every touch on a touch surface now, on the host's touchpad. Core forwards up to
+// `max_contacts` (`1..=5`); more touches (a `count` above five is fine), or `keep` when the
+// client's OS or app claims the gesture, take a forwarded gesture back from the host.
+// `retract_taps`: this source makes its own clicks from taps, so the host must not. The
+// surface is `width_dmm` × `height_dmm` tenths of a millimetre. `time_us` is the platform's
+// capture time of these touches in µs, monotonic, on one epoch across calls; `0` takes core's
+// clock now. The host presents the frames at it. Call on every change, and once with
+// `count = 0` when the source appears.
+//
+// `*forwarded` true: core owns this update; do not also turn these touches into pointer or
+// scroll. False: the gesture is the caller's until an update with no touches, and on any
+// error. `Unsupported` without [`punktfunk_connection_host_touchpad`]; `InvalidArg` on a
+// coordinate that is not finite or one `id` twice.
+//
+// # Safety
+// `c` is a valid connection handle; `touches` points to `count` readable
+// [`PunktfunkSurfaceTouch`]es, or is null when `count` is 0; `forwarded` is null or writable.
+PunktfunkStatus punktfunk_connection_touchpad_surface(PunktfunkConnection *c,
+                                                      const PunktfunkSurfaceTouch *touches,
+                                                      uint8_t count,
+                                                      uint8_t max_contacts,
+                                                      bool button,
+                                                      bool keep,
+                                                      bool retract_taps,
+                                                      uint16_t width_dmm,
+                                                      uint16_t height_dmm,
+                                                      uint64_t time_us,
+                                                      bool *forwarded);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
 // Currently active session mode — Welcome's, until an accepted
 // [`punktfunk_connection_request_mode`] switches it. Safe any time after connect.
 //
@@ -3668,6 +3794,28 @@ PunktfunkStatus punktfunk_connection_host_caps(const PunktfunkConnection *c, uin
 // # Safety
 // `c` is a valid connection handle; `caps` is writable (NULL is skipped).
 PunktfunkStatus punktfunk_connection_host_caps2(const PunktfunkConnection *c, uint8_t *caps);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// `true` when the host presents touchpad frames as a touchpad of its own: test it before
+// [`punktfunk_connection_send_touchpad`]. With the player's Invert scroll direction on, the
+// client keeps its own scroll path, so the host's touchpad is not used: read this again after
+// [`punktfunk_connection_set_invert_scroll`].
+//
+// # Safety
+// `c` is a valid connection handle; `presents` is writable (NULL is skipped).
+PunktfunkStatus punktfunk_connection_host_touchpad(const PunktfunkConnection *c, bool *presents);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// `true` when the host OS turns a tap on that touchpad into a click. A source with no button
+// of its own (a touchscreen) then sends no clicks of its own. When `false` it keeps making its
+// clicks and passes `retract_taps = true`, so the host never adds a second one. `false`
+// whenever [`punktfunk_connection_host_touchpad`] is.
+//
+// # Safety
+// `c` is a valid connection handle; `taps` is writable (NULL is skipped).
+PunktfunkStatus punktfunk_connection_host_touchpad_taps(const PunktfunkConnection *c, bool *taps);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

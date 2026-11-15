@@ -79,6 +79,8 @@ windows = { version = "0.62", features = [
     "Win32_System_Memory",
     # The xinputhid service probe: a filter service PnP cannot resolve kills the devnode.
     "Win32_System_Registry",
+    # The session user's token, whose hive holds their touchpad settings.
+    "Win32_System_RemoteDesktop",
     "Win32_System_IO",
     # The HID selftest's hidden window and low-level hooks.
     "Win32_System_LibraryLoader",

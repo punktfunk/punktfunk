@@ -291,6 +291,8 @@ pub(crate) struct WorkerArgs {
     pub(crate) mic_rx: tokio::sync::mpsc::Receiver<(u32, u64, Vec<u8>)>,
     /// Pre-encoded `0xCC` datagrams — rich input and pen batches share this queue.
     pub(crate) rich_input_rx: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    /// Touchpad frames for the touchpad task, which stamps `seq` and repeats them.
+    pub(crate) touchpad_rx: tokio::sync::mpsc::UnboundedReceiver<crate::quic::TouchpadFrame>,
     /// Touchpad contacts of controller-mouse pads; the input task turns them into pointer motion.
     pub(crate) pad_touch_rx: tokio::sync::mpsc::UnboundedReceiver<super::pad_touch::Contact>,
     pub(crate) ctrl_rx: tokio::sync::mpsc::Receiver<CtrlRequest>,

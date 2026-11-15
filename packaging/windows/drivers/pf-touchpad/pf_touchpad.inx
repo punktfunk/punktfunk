@@ -1,0 +1,75 @@
+;/*++
+; punktfunk virtual Precision Touchpad - UMDF2 HID minidriver INF.
+; Same skeleton as pf_mouse.inx (the WDK vhidmini2 UMDF2 shape).
+; Depends on MsHidUmdf.inf (build >= 22000).
+;--*/
+[Version]
+Signature="$WINDOWS NT$"
+Class=HIDClass
+ClassGuid={745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider=%ProviderString%
+CatalogFile=pf_touchpad.cat
+PnpLockdown=1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1=%Disk_Description%,,,
+
+[SourceDisksFiles]
+pf_touchpad.dll=1
+
+[Manufacturer]
+%ManufacturerString%=pf, NT$ARCH$.10.0...22000
+
+[pf.NT$ARCH$.10.0...22000]
+; `pf_touchpad` is the id the host's SwDeviceCreate'd per-session devnode carries.
+%DeviceDesc%=pfTouchpad, pf_touchpad
+
+[pfTouchpad.NT]
+CopyFiles=UMDriverCopy
+Include=MsHidUmdf.inf
+Needs=MsHidUmdf.NT
+Include=WUDFRD.inf
+Needs=WUDFRD_LowerFilter.NT
+
+[pfTouchpad.NT.hw]
+Include=MsHidUmdf.inf
+Needs=MsHidUmdf.NT.hw
+Include=WUDFRD.inf
+Needs=WUDFRD_LowerFilter.NT.hw
+
+[pfTouchpad.NT.Services]
+Include=MsHidUmdf.inf
+Needs=MsHidUmdf.NT.Services
+Include=WUDFRD.inf
+Needs=WUDFRD_LowerFilter.NT.Services
+
+[pfTouchpad.NT.Filters]
+Include=WUDFRD.inf
+Needs=WUDFRD_LowerFilter.NT.Filters
+
+[pfTouchpad.NT.Wdf]
+UmdfService="pf_touchpad", pf_touchpad_Install
+UmdfServiceOrder=pf_touchpad
+UmdfKernelModeClientPolicy=AllowKernelModeClients
+UmdfFileObjectPolicy=AllowNullAndUnknownFileObjects
+UmdfMethodNeitherAction=Copy
+UmdfFsContextUsePolicy=CanUseFsContext2
+; One WUDFHost per touchpad: the driver's statics are per device.
+UmdfHostProcessSharing=ProcessSharingDisabled
+
+[pf_touchpad_Install]
+UmdfLibraryVersion=$UMDFVERSION$
+ServiceBinary="%13%\pf_touchpad.dll"
+
+[UMDriverCopy]
+pf_touchpad.dll
+
+[Strings]
+ProviderString     ="Punktfunk"
+ManufacturerString ="Punktfunk"
+ClassName          ="HID device"
+Disk_Description   ="Punktfunk Touchpad Installation Disk"
+DeviceDesc         ="Punktfunk Virtual Touchpad"

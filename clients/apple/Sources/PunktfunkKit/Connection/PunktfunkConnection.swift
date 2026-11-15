@@ -935,6 +935,28 @@ public final class PunktfunkConnection: @unchecked Sendable {
         hostCaps2 & UInt8(PUNKTFUNK_HOST_CAP2_TOUCH) != 0
     }
 
+    /// The host presents touchpad contacts on a touchpad of its own (`FEATURE_TOUCHPAD`), the
+    /// gate for ``touchpadSurface(_:maxContacts:keep:retractTaps:widthDmm:heightDmm:timeUs:)``.
+    /// Live: core reads false while scroll is inverted, since the host's pad scrolls by the
+    /// host's own setting. `.punktfunkTouchpadChanged` follows each change of the inversion.
+    public var hostPresentsTouchpad: Bool {
+        withLiveHandle(or: false) { h in
+            var presents = false
+            _ = punktfunk_connection_host_touchpad(h, &presents)
+            return presents
+        }
+    }
+
+    /// The host OS turns a tap on that touchpad into a click (`FEATURE_TOUCHPAD_TAPS`). Live, as
+    /// ``hostPresentsTouchpad`` is.
+    public var hostTapsClick: Bool {
+        withLiveHandle(or: false) { h in
+            var taps = false
+            _ = punktfunk_connection_host_touchpad_taps(h, &taps)
+            return taps
+        }
+    }
+
     /// The session started on a screen another device opened and sized
     /// (`punktfunk_connection_shares_screen`). As it started: that device may leave later.
     public private(set) var sharesScreen = false
@@ -1083,12 +1105,15 @@ public final class PunktfunkConnection: @unchecked Sendable {
 
     /// Live scroll inversion at the connection's one outbound seam — seeded from
     /// `settings.invertScroll` at connect; a mid-session change calls this, never a
-    /// per-event reseed. False when the session is gone.
+    /// per-event reseed. False when the session is gone. A change posts
+    /// `.punktfunkTouchpadChanged`: an inverted session keeps the host's touchpad off.
     @discardableResult
     public func setInvertScroll(_ invert: Bool) -> Bool {
-        return withLiveHandle(or: false) { h in
+        let set = withLiveHandle(or: false) { h in
             return punktfunk_connection_set_invert_scroll(h, invert) == statusOK
         }
+        if set { NotificationCenter.default.post(name: .punktfunkTouchpadChanged, object: self) }
+        return set
     }
 
     /// Whether this stream holds the screen awake right now: always with `keepAwake` (the
@@ -2273,6 +2298,39 @@ public final class PunktfunkConnection: @unchecked Sendable {
         }
     }
 
+    /// Every touch on a touch surface now, as the host touchpad's contacts (`x`/`y` fractions of
+    /// the surface, origin top-left). `retractTaps`: this source makes its own clicks from taps.
+    /// `timeUs`: the touches' capture time, on one monotonic epoch across calls. True: core
+    /// forwarded the update, so these touches make no pointer or scroll here too. False: the
+    /// gesture is the caller's until an update with no touches. Nil: core refused the call
+    /// (no touchpad now, no pointer grant, a closed session), and the caller takes today's path.
+    public func touchpadSurface(
+        _ touches: [PunktfunkSurfaceTouch], maxContacts: UInt8, keep: Bool, retractTaps: Bool,
+        widthDmm: UInt16, heightDmm: UInt16, timeUs: UInt64
+    ) -> Bool? {
+        withLiveHandle(or: nil) { h in
+            guard granted(Self.grantPointer, handle: h) else { return nil }
+            var forwarded = false
+            let rc = touches.withUnsafeBufferPointer { buf in
+                punktfunk_connection_touchpad_surface(
+                    h, buf.baseAddress, UInt8(clamping: buf.count), maxContacts, false, keep,
+                    retractTaps, widthDmm, heightDmm, timeUs, &forwarded)
+            }
+            return rc == statusOK ? forwarded : nil
+        }
+    }
+
+    /// A trackpad's pinch and rotation as two fingers on the host's touchpad: `phase` one of
+    /// `PUNKTFUNK_PINCH_*`, `scale` and `rotation` (radians, clockwise) cumulative since its begin.
+    /// False when core refused it, as ``touchpadSurface`` answers nil.
+    @discardableResult
+    public func sendTouchpadPinch(phase: UInt8, scale: Float, rotation: Float) -> Bool {
+        withLiveHandle(or: false) { h in
+            guard granted(Self.grantPointer, handle: h) else { return false }
+            return punktfunk_connection_send_touchpad_pinch(h, phase, scale, rotation) == statusOK
+        }
+    }
+
     /// Signal a **deliberate** user-initiated quit before ``close()``: the connection closes with
     /// `QUIT_CLOSE_CODE` (81) so the host tears the session down immediately instead of holding the
     /// keep-alive linger for a reconnect. Call only from an explicit "Disconnect" action — NOT from a
@@ -2850,4 +2908,10 @@ public final class PunktfunkConnection: @unchecked Sendable {
             }
         }.get()
     }
+}
+
+extension Notification.Name {
+    /// The connection (`object`) changed its scroll inversion, so `hostPresentsTouchpad` may read
+    /// differently and every touchpad source decides again. Posted on the caller's thread.
+    static let punktfunkTouchpadChanged = Notification.Name("io.unom.punktfunk.touchpad-changed")
 }

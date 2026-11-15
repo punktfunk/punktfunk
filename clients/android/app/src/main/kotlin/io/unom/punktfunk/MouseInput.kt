@@ -4,9 +4,11 @@ import android.os.Build
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
+import android.view.View
 import androidx.annotation.RequiresApi
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.isExternalDevice
+import kotlin.math.roundToInt
 
 /** How long after a mouse Back edge a system Back is that button's own echo. */
 private const val BACK_ECHO_MS = 300L
@@ -101,7 +103,7 @@ internal fun isTouchpadScrollDown(ev: MotionEvent): Boolean =
  * host. Events reach this class from MainActivity's dispatch overrides (uncaptured) and the
  * capture view's captured-pointer listener.
  */
-class MouseForwarder(
+class MouseForwarder internal constructor(
     private val handle: Long,
     private val captureWanted: Boolean,
     /** `ViewConfiguration.scaledVerticalScrollFactor` — axis units → pixels for a touchpad. */
@@ -115,6 +117,9 @@ class MouseForwarder(
      * `onPicture` 1 or 0: a point on a bar clamps to the picture's edge. `null` before layout.
      */
     private val frameAt: (Float, Float) -> IntArray?,
+    /** The host's touchpad as last read ([StreamUi.touchpad]): while it presents, a captured
+     *  touchpad sends it every contact. Read as each gesture starts. */
+    private val touchpad: () -> HostTouchpad = { HostTouchpad.NONE },
 ) {
     /** Capture plumbing, owned by StreamScreen (the focusable capture view). */
     var onRequestCapture: (() -> Unit)? = null
@@ -228,13 +233,15 @@ class MouseForwarder(
      * Captured-pointer events (the view holds [android.view.View.requestPointerCapture]). A mouse
      * reports [InputDevice.SOURCE_MOUSE_RELATIVE], its x/y ARE the deltas, and DOWN/UP carry that
      * report's motion too. A touchpad reports [InputDevice.SOURCE_TOUCHPAD] with absolute finger
-     * positions; one finger moves by its [MotionEvent.AXIS_RELATIVE_X]/Y, and its clicks are
-     * buttons. Batched samples are included either way.
+     * positions: toward a host with a touchpad of its own every contact goes there ([padFrame]),
+     * else one finger moves by its [MotionEvent.AXIS_RELATIVE_X]/Y and its clicks are buttons.
+     * Batched samples are included either way.
      */
     fun onCapturedPointer(ev: MotionEvent): Boolean {
         // A revocation or the ring is racing the release of the grab.
         if (!pointerGranted || suspended) return true
         if (ev.isFromSource(InputDevice.SOURCE_TOUCHPAD)) {
+            if (padFrame(ev)) return true
             when (ev.actionMasked) {
                 MotionEvent.ACTION_SCROLL -> wheel(ev)
                 MotionEvent.ACTION_MOVE -> if (ev.pointerCount == 1) {
@@ -254,6 +261,97 @@ class MouseForwarder(
             MotionEvent.ACTION_SCROLL -> wheel(ev)
         }
         return true
+    }
+
+    /** This gesture's pad axes when its contacts go to the host's touchpad; set on its first
+     *  finger, cleared on the last lift. */
+    private var pad: PadAxes? = null
+    private var padW = 0
+    private var padH = 0
+    private var padHeld = false
+    /** The decision core refused an update under; its gestures take the path without frames. */
+    private var padRefused: HostTouchpad? = null
+    private val padIds = LongArray(PAD_MAX_TOUCHES)
+    private val padXs = FloatArray(PAD_MAX_TOUCHES)
+    private val padYs = FloatArray(PAD_MAX_TOUCHES)
+
+    /** A captured touchpad's contacts go to the host's touchpad now. */
+    private fun padOn(): Boolean = touchpad().let { it.presents && it !== padRefused }
+
+    /**
+     * A captured touchpad's event as the host's touchpad (design/touchpad-passthrough.md §4):
+     * every finger, the pad's press as the frame's button, batched samples at their own times.
+     * `false` for a gesture that began without frames or the device's ranges, and from a refused
+     * update on: the path above takes the event.
+     */
+    private fun padFrame(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) pad = if (padOn()) padAxes(ev.device) else null
+        val axes = pad ?: return false
+        padW = axes.widthDmm
+        padH = axes.heightDmm
+        val button = ev.buttonState and MotionEvent.BUTTON_PRIMARY != 0
+        // pos: a batched sample, or historySize for the event itself; skip: a pointer lifting.
+        fun send(pos: Int, skip: Int = -1, keep: Boolean = false): Boolean {
+            val now = pos == ev.historySize
+            var n = 0
+            for (i in 0 until ev.pointerCount) {
+                if (i == skip || n == PAD_MAX_TOUCHES) continue
+                padIds[n] = ev.getPointerId(i).toLong()
+                padXs[n] = ((if (now) ev.getX(i) else ev.getHistoricalX(i, pos)) - axes.x0) / axes.w
+                padYs[n] = ((if (now) ev.getY(i) else ev.getHistoricalY(i, pos)) - axes.y0) / axes.h
+                n++
+            }
+            return padSurface(n, button, keep, (if (now) ev.eventTime else ev.getHistoricalEventTime(pos)) * 1000)
+        }
+        val sent = when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_MOVE,
+            MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE,
+            -> (0..ev.historySize).all { send(it) }
+            MotionEvent.ACTION_POINTER_UP -> send(ev.historySize, skip = ev.actionIndex)
+            MotionEvent.ACTION_UP -> padSurface(0, button, false, ev.eventTime * 1000).also { pad = null }
+            // Android cancels a contact it took for a palm: taken back, so the host never taps on it.
+            MotionEvent.ACTION_CANCEL -> (send(ev.historySize, keep = true) && padSurface(0, false, false, ev.eventTime * 1000))
+                .also { pad = null }
+            else -> true
+        }
+        if (!sent) regrab() // the grab drops back to the mode without frames
+        return sent
+    }
+
+    /** One update to the host's touchpad. `false`: core refused it, and frames stop until the
+     *  host's touchpad is read anew. */
+    private fun padSurface(count: Int, button: Boolean, keep: Boolean, timeUs: Long): Boolean {
+        padHeld = count > 0 || button
+        val answer = NativeBridge.nativeTouchpadSurface(
+            handle, padIds, padXs, padYs, count, PAD_MAX_CONTACTS, button, keep,
+            retractTaps = false, widthDmm = padW, heightDmm = padH, timeUs = timeUs,
+        )
+        if (answer != NativeBridge.SURFACE_REFUSED) return true
+        padRefused = touchpad()
+        pad = null
+        padHeld = false
+        return false
+    }
+
+    /** The host's touchpad was read anew ([StreamUi.touchpad]). Contacts already sent are core's
+     *  to lift; a grab takes the mode that matches, and announces the touchpad when it is on. */
+    fun touchpadChanged() {
+        pad = null
+        padHeld = false
+        if (!captured) return
+        regrab()
+        announcePad()
+    }
+
+    /** From API 37 the grab's mode decides what a touchpad reports, so a held grab asks again;
+     *  a grab the ring holds released asks when the ring closes. */
+    private fun regrab() {
+        if (captured && !suspended && Build.VERSION.SDK_INT >= 37) onRequestCapture?.invoke()
+    }
+
+    /** With a touchpad attached, the host's touchpad is ready before the first finger lands. */
+    private fun announcePad() {
+        if (padOn() && hasTouchpad()) padSurface(0, false, false, SystemClock.uptimeMillis() * 1000)
     }
 
     /** Relative motion off `ev`'s [axisX]/[axisY], history included, whole pixels only. */
@@ -298,6 +396,17 @@ class MouseForwarder(
         captured = has
         // Losing the grab (focus loss, chord) must not leave buttons held on the host.
         if (!has) flushButtons()
+        if (has) announcePad()
+    }
+
+    /** Grabs the pointer on [v]. From API 37 a plain grab reports a touchpad as a relative mouse,
+     *  so while its contacts go to the host's touchpad the grab asks for them absolute. */
+    fun grab(v: View) {
+        if (padOn() && Build.VERSION.SDK_INT >= 37) {
+            v.requestPointerCapture(View.POINTER_CAPTURE_MODE_ABSOLUTE)
+        } else {
+            v.requestPointerCapture()
+        }
     }
 
     /** The ring opens (`true`) or closes: lift what is held, hand the pointer to it, take it back. */
@@ -422,8 +531,39 @@ class MouseForwarder(
         }
     }
 
+    /** Lifts every held button, and every contact on the host's touchpad. */
     private fun flushButtons() {
         heldButtons.forEach { NativeBridge.nativeSendPointerButton(handle, it, false) }
         heldButtons.clear()
+        pad = null
+        if (padHeld) padSurface(0, false, false, SystemClock.uptimeMillis() * 1000)
     }
 }
+
+/** Contacts a captured touchpad forwards: as many as the host's touchpad takes. */
+private const val PAD_MAX_CONTACTS = 5
+
+/** Pointers read per update; the JNI side reads as many. */
+private const val PAD_MAX_TOUCHES = 16
+
+/** True when a touchpad is attached. */
+private fun hasTouchpad(): Boolean = InputDevice.getDeviceIds().any { id ->
+    InputDevice.getDevice(id)?.supportsSource(InputDevice.SOURCE_TOUCHPAD) == true
+}
+
+/** A captured touchpad's axes in device units: where x and y start and how far they run, and its
+ *  size in tenths of a millimetre. */
+private class PadAxes(val x0: Float, val w: Float, val y0: Float, val h: Float, val widthDmm: Int, val heightDmm: Int)
+
+/** [dev]'s captured-touchpad axes, or `null` when it reports none. */
+private fun padAxes(dev: InputDevice?): PadAxes? {
+    val x = dev?.getMotionRange(MotionEvent.AXIS_X, InputDevice.SOURCE_TOUCHPAD)?.takeIf { it.range > 0f }
+    val y = dev?.getMotionRange(MotionEvent.AXIS_Y, InputDevice.SOURCE_TOUCHPAD)?.takeIf { it.range > 0f }
+    if (x == null || y == null) return null
+    return PadAxes(x.min, x.range, y.min, y.range, padDmm(x.range, x.resolution), padDmm(y.range, y.resolution))
+}
+
+/** A pad side [span] device units long at [resolution] units per millimetre, in tenths of a
+ *  millimetre; `0` (unknown) when the device gives no resolution. */
+internal fun padDmm(span: Float, resolution: Float): Int =
+    if (span > 0f && resolution > 0f) (span * 10f / resolution).roundToInt().coerceAtMost(65535) else 0

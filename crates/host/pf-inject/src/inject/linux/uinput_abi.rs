@@ -170,6 +170,19 @@ pub(crate) fn input_event(type_: u16, code: u16, value: i32) -> [u8; INPUT_EVENT
     ev
 }
 
+/// [`input_event`] at `time_us` on `CLOCK_MONOTONIC`.
+pub(crate) fn input_event_at(
+    time_us: u64,
+    type_: u16,
+    code: u16,
+    value: i32,
+) -> [u8; INPUT_EVENT_LEN] {
+    let mut ev = input_event(type_, code, value);
+    ev[..8].copy_from_slice(&(time_us / 1_000_000).to_ne_bytes());
+    ev[8..16].copy_from_slice(&(time_us % 1_000_000).to_ne_bytes());
+    ev
+}
+
 /// `(type, code, value)` of an event read back from the node.
 fn parse_input_event(ev: &[u8; INPUT_EVENT_LEN]) -> (u16, u16, i32) {
     (
@@ -372,8 +385,15 @@ impl UinputDevice {
     /// Events gather until the frame's `SYN_REPORT`, then go out as one write, or one datagram
     /// on a relay.
     pub(crate) fn emit(&mut self, type_: u16, code: u16, value: i32) {
+        self.emit_at(0, type_, code, value);
+    }
+
+    /// [`emit`](Self::emit) at `time_us` on `CLOCK_MONOTONIC`. Linux 6.5+ keeps a time from the
+    /// last 10 s that is not in the future; any other time, zero included, or an older kernel
+    /// leaves the kernel's own stamp at the `SYN_REPORT`.
+    pub(crate) fn emit_at(&mut self, time_us: u64, type_: u16, code: u16, value: i32) {
         self.batch
-            .extend_from_slice(&input_event(type_, code, value));
+            .extend_from_slice(&input_event_at(time_us, type_, code, value));
         if type_ != EV_SYN && self.batch.len() < BATCH_MAX {
             return;
         }
@@ -627,6 +647,15 @@ mod tests {
             parse_input_event(&input_event(0x15, 0x50, -7)),
             (0x15, 0x50, -7)
         );
+    }
+
+    #[test]
+    fn a_stamped_event_carries_seconds_then_microseconds() {
+        let ev = input_event_at(12_345_678, EV_ABS, 0x35, 7);
+        assert_eq!(ev[..8], 12u64.to_ne_bytes());
+        assert_eq!(ev[8..16], 345_678u64.to_ne_bytes());
+        assert_eq!(parse_input_event(&ev), (EV_ABS, 0x35, 7));
+        assert_eq!(input_event_at(0, EV_KEY, 1, 1), input_event(EV_KEY, 1, 1));
     }
 
     #[test]
