@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "generation": 373,
+  "seats": [
+    {
+      "id": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+      "name": "Ada",
+      "account": "pf_seat1",
+      "display_slot": 12,
+      "native_port": 9779,
+      "mgmt_port": 47995,
+      "autostart": false,
+      "runtime": {
+        "state": "failed",
+        "detail": "Punktfunk didn't start on the seat. The seat's log has the cause.",
+        "detail_id": "seatline_host_failed"
+      },
+      "fingerprint": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    },
+    {
+      "id": "1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b",
+      "name": "Ben",
+      "account": "pf_seat2",
+      "display_slot": 13,
+      "native_port": 9780,
+      "mgmt_port": 47996,
+      "autostart": false,
+      "runtime": {
+        "state": "stopped"
+      },
+      "fingerprint": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+    }
+  ]
+}

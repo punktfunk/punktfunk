@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "generation": 374,
+  "seats": [
+    {
+      "id": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+      "name": "Ada",
+      "account": "pf_seat1",
+      "display_slot": 12,
+      "native_port": 9779,
+      "mgmt_port": 47995,
+      "autostart": true,
+      "runtime": {
+        "state": "stopped"
+      },
+      "fingerprint": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    },
+    {
+      "id": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d",
+      "name": "Bärbel",
+      "account": "Bärbel Ott",
+      "display_slot": 13,
+      "native_port": 9780,
+      "mgmt_port": 47996,
+      "autostart": false,
+      "runtime": {
+        "state": "running"
+      },
+      "fingerprint": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3",
+      "adopted_sid": "S-1-5-21-1-2-3-1001",
+      "rdp_granted": true,
+      "console_deny_kept": true
+    }
+  ]
+}

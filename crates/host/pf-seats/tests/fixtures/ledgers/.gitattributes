@@ -1,0 +1,2 @@
+# Compared byte for byte by a test that also runs on Windows: no eol conversion.
+*.json -text

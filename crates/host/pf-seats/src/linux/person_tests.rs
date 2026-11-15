@@ -306,6 +306,143 @@ fn only_a_made_seat_is_ours_to_end() {
     }
 }
 
+/// What every rule about a row's kind answers, each in the words of the sites that decide it.
+#[derive(Debug, PartialEq)]
+struct Rules {
+    owner: bool,
+    /// On a person's own account: the console's release wording.
+    person: bool,
+    /// Starts only on its person's proof: no autostart, keep-warm, door or dial start.
+    proof: bool,
+    /// Keep-warm may start it and the idle stop end it.
+    upkeep: bool,
+    own: Own,
+    ours: bool,
+    yields: bool,
+    /// Windows: an account the supervisor made, marked by comment.
+    windows_ours: bool,
+    /// Windows: the host runs with `PUNKTFUNK_SEAT_OWN_ACCOUNT`.
+    own_marker: bool,
+    uid: Option<u32>,
+    sid: Option<String>,
+    /// Release takes the account out of Remote Desktop Users, and takes the console deny off.
+    release: (bool, bool),
+}
+
+fn rules(seat: &Seat) -> Rules {
+    let own = Own::of(seat);
+    Rules {
+        owner: seat.owner,
+        person: seat.adopted(),
+        proof: seat.adopted_uid.is_some(),
+        upkeep: !seat.owner && seat.adopted_uid.is_none(),
+        own,
+        ours: own.ours(),
+        yields: own.yields_to_the_desk(),
+        windows_ours: seat.adopted_sid.is_none(),
+        own_marker: seat.adopted_sid.is_some(),
+        uid: seat.adopted_uid.or(seat.owner_uid),
+        sid: seat.adopted_sid.clone(),
+        release: (seat.rdp_granted, seat.releases_console_deny()),
+    }
+}
+
+/// One row per kind: a made seat, the owner's, a person's own Linux and Windows account.
+#[test]
+fn row_kind_policy_table() {
+    const SID: &str = "S-1-5-21-1-2-3-1001";
+    let made = Seat {
+        adopted_uid: None,
+        ..person()
+    };
+    let owner = Seat {
+        owner: true,
+        owner_uid: Some(1000),
+        adopted_uid: None,
+        ..person()
+    };
+    let windows = Seat {
+        adopted_uid: None,
+        adopted_sid: Some(SID.into()),
+        rdp_granted: true,
+        console_deny_kept: true,
+        ..person()
+    };
+    let table = [
+        (
+            made,
+            Rules {
+                owner: false,
+                person: false,
+                proof: false,
+                upkeep: true,
+                own: Own::Seat,
+                ours: true,
+                yields: false,
+                windows_ours: true,
+                own_marker: false,
+                uid: None,
+                sid: None,
+                release: (false, true),
+            },
+        ),
+        (
+            owner,
+            Rules {
+                owner: true,
+                person: false,
+                proof: false,
+                upkeep: false,
+                own: Own::Owner,
+                ours: false,
+                yields: true,
+                windows_ours: true,
+                own_marker: false,
+                uid: Some(1000),
+                sid: None,
+                release: (false, true),
+            },
+        ),
+        (
+            person(),
+            Rules {
+                owner: false,
+                person: true,
+                proof: true,
+                upkeep: false,
+                own: Own::Person,
+                ours: false,
+                yields: true,
+                windows_ours: true,
+                own_marker: false,
+                uid: Some(1500),
+                sid: None,
+                release: (false, true),
+            },
+        ),
+        (
+            windows,
+            Rules {
+                owner: false,
+                person: true,
+                proof: false,
+                upkeep: true,
+                own: Own::Seat,
+                ours: true,
+                yields: false,
+                windows_ours: false,
+                own_marker: true,
+                uid: None,
+                sid: Some(SID.into()),
+                release: (true, false),
+            },
+        ),
+    ];
+    for (seat, expected) in table {
+        assert_eq!(rules(&seat), expected, "{seat:?}");
+    }
+}
+
 /// The login helper gives the session the shell the passwd row names, and none for a user that
 /// doesn't exist.
 #[test]

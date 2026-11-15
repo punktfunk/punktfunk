@@ -868,6 +868,35 @@ fn a_failed_save_is_not_loaded_later() {
     assert_eq!(store.load().unwrap().generation, 1);
 }
 
+/// Every ledger in `tests/fixtures/ledgers` loads and saves to its own bytes: a ledger an
+/// installed box holds reads unchanged, and a downgrade reads what this build writes. The two
+/// `-box` files are copies from a Bazzite box and a Windows seats VM, ids and pins replaced.
+#[test]
+fn a_ledger_loads_and_saves_byte_for_byte() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ledgers");
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let store = LedgerStore::open(temp.path()).unwrap();
+        store.root().write_atomic(LEDGER_FILE, &bytes).unwrap();
+        let ledger = store.load().unwrap();
+        store.save(&ledger).unwrap();
+        let saved = std::fs::read(temp.path().join(LEDGER_FILE)).unwrap();
+        assert!(
+            saved == bytes,
+            "{} changed in a load and save",
+            path.display()
+        );
+        seen += 1;
+    }
+    assert!(seen >= 4, "the fixtures are gone: {seen}");
+}
+
 #[cfg(unix)]
 #[test]
 fn persistence_rejects_linked_roots_and_ledger_files() {

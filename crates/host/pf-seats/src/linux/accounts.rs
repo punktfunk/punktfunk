@@ -917,6 +917,18 @@ mod tests {
         assert_eq!(require_person(&seat("root", 0)).unwrap().uid, 0);
     }
 
+    /// The owner's row is no person's, even with its account on the very uid it recorded.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_owner_row_is_never_a_person_s() {
+        let mut owner = Ledger::new().allocate_owner("root").unwrap();
+        owner.owner_uid = Some(0);
+        assert_eq!(
+            require_person(&owner).unwrap_err().code,
+            "account_not_owned"
+        );
+    }
+
     /// A miss means gone only where no passwd source could have been silent.
     #[test]
     fn only_local_passwd_sources_let_a_miss_mean_gone() {
