@@ -36,11 +36,30 @@ the stream fullscreen and in front.
 Wheels, touchpads, touchscreens and controllers all scroll the host, with no setting to tune.
 A flick's glide is the one your device produced, on every host. On GNOME, Sway and Hyprland a
 touchpad scrolls host apps by the pixel, like a local one. KDE, gamescope and Windows take only
-wheel steps from a remote device, so apps there move a touchpad scroll in lines or ticks.
+wheel steps from a remote device, so apps there move a touchpad scroll in lines or ticks. Fingers
+on [the host's touchpad](#the-hosts-touchpad) scroll by the host's own touchpad settings instead.
 
 **Invert scroll direction** reverses every scroll you send, the controller mouse's included. To
 flip it for one stream, open the dial's centre sheet and choose **Input → Invert scroll
 direction**; your saved settings stay as they are.
+
+## The host's touchpad
+
+A Windows host, and a Linux host outside gamescope, show these fingers to their OS as a touchpad
+of their own:
+
+| Your device | What reaches the host's touchpad |
+|---|---|
+| A touchscreen in **Trackpad** mode | Up to two fingers |
+| A Mac's trackpad, with **Mouse input** on **Capture (games)** | Up to two fingers. Clicks stay your Mac's |
+| An Android device's touchpad, with the mouse captured | Every finger and the pad's press |
+| An iPad's trackpad | Pinch and rotate. Its motion and scroll stay a mouse's |
+
+The host makes the pointer motion, the scrolling and the zoom from them, by its own touchpad
+settings: pointer speed, scroll direction, tap to click. Change those on the host.
+
+With **Invert scroll direction** on, your fingers stay off the host's touchpad and scroll as
+that setting says.
 
 ## Touch modes
 
@@ -68,6 +87,10 @@ Trackpad and Direct pointer share these gestures:
 | Two-finger twist | Open the [quick-action dial](/docs/shortcuts#the-quick-action-dial) |
 
 In **Off**, only the last three work.
+
+In **Trackpad** mode on [the host's touchpad](#the-hosts-touchpad), a Windows host with tap to
+click on makes the clicks itself. Its touchpad settings decide what a tap and a two-finger tap
+do, a double tap and drag holds the left button, and press and hold does nothing.
 
 Touch passthrough depends on the host:
 
