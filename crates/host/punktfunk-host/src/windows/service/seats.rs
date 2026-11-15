@@ -9,6 +9,7 @@
 //! the service.
 
 use super::*;
+use pf_seats::seat_pads::{Hardware, Holder, UsbPad};
 use pf_seats::windows::pipe::{wake, PipeServer};
 use pf_seats::{SeatService, WindowsBackend};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,6 +21,35 @@ const RDP_LOCAL_TICK_SECS: u64 = 300;
 pub(super) struct SeatsSlot {
     stop: Arc<AtomicBool>,
     backend: Option<WindowsBackend>,
+}
+
+/// The box's USB devices and the desk fence over them, for the pads a seat is lent.
+struct DeskPads;
+
+impl Hardware for DeskPads {
+    fn present(&self) -> Vec<UsbPad> {
+        let pad = |usb: pf_inject::desk_fence::UsbDevice| UsbPad {
+            instance: usb.instance,
+            vendor_id: usb.vendor_id,
+            product_id: usb.product_id,
+            name: usb.name,
+            interfaces: usb.interfaces,
+            controller: usb.controller,
+        };
+        pf_inject::desk_fence::usb_devices()
+            .into_iter()
+            .map(pad)
+            .collect()
+    }
+
+    fn hand(&self, instance: &str, holder: Holder, restart: bool) -> Result<(), String> {
+        let session = match holder {
+            Holder::Desk => None,
+            Holder::Parked => Some(pf_inject::desk_fence::PARKED),
+            Holder::Session(session) => Some(session),
+        };
+        pf_inject::desk_fence::hand(instance, session, restart).map_err(|e| format!("{e:#}"))
+    }
 }
 
 impl SeatsSlot {
@@ -44,6 +74,7 @@ impl SeatsSlot {
                 };
             }
         };
+        backend.equip_pads(Arc::new(DeskPads), &service.ledger());
         let loop_stop = Arc::clone(&stop);
         let loop_backend = backend.clone();
         let spawned = std::thread::Builder::new()

@@ -22,11 +22,12 @@ mod supervisor;
 mod util;
 mod wts;
 
-use crate::backend::{Adopted, BackendError, PlatformBackend};
+use crate::backend::{Adopted, BackendError, PlatformBackend, PresentPad};
 use crate::doctor::{report_rows, seat_rows, BoxFacts, SeatFacts};
 use crate::ipc::{Diagnostic, DiagnosticLevel, SeatingStatus};
 use crate::model::{Ledger, RuntimeStatus, Seat};
 use crate::persistence::SecretRoot;
+use crate::seat_pads::{Hardware, Lent};
 use crate::secret::Secret;
 use accounts::AccountManager;
 pub use accounts::{seats_group_sid, SEATS_GROUP};
@@ -68,6 +69,8 @@ pub struct WindowsBackend {
     /// The seats a stop reached since their last start: a start reads its own seat's between
     /// its steps.
     stopped: Arc<Mutex<HashSet<String>>>,
+    /// The desk pads lent to rows. Without [`Self::equip_pads`] lending is unsupported.
+    lent: Arc<Lent>,
 }
 
 /// The profile folder of the local account `account`, where its own emulator data lives. `None`
@@ -157,14 +160,27 @@ impl WindowsBackend {
             .map_err(|error| io_error("seat_root", "open hardened seat root", error))?;
         let credentials = CredentialStore::new(root.clone());
         let accounts = AccountManager::new(credentials);
-        let supervisor = Supervisor::new(root.clone(), accounts.clone(), host_path.clone());
+        let lent = Arc::<Lent>::default();
+        let supervisor = Supervisor::new(
+            root.clone(),
+            accounts.clone(),
+            host_path.clone(),
+            Arc::clone(&lent),
+        );
         Ok(Self {
             root,
             host_path,
             accounts,
             supervisor,
             stopped: Arc::default(),
+            lent,
         })
+    }
+
+    /// Gives lending the box's USB devices and their fence, and parks the pads `ledger` lends.
+    /// For the service's start, before any seat does.
+    pub fn equip_pads(&self, hardware: Arc<dyn Hardware>, ledger: &Ledger) {
+        self.lent.equip(hardware, ledger);
     }
 
     pub fn stop_all(&self) {
@@ -276,6 +292,7 @@ impl PlatformBackend for WindowsBackend {
         }
         let _ = self.supervisor.stop(seat)?;
         self.accounts.delete(seat)?;
+        self.lent.release(seat);
         for parent in ["hosts", "temp"] {
             let dir = self
                 .root
@@ -364,6 +381,18 @@ impl PlatformBackend for WindowsBackend {
             allow_rdp_from_network: enable::rdp_from_network(),
             checks: checks.collect(),
         })
+    }
+
+    fn desk_pads(&self, ledger: &Ledger) -> Result<Vec<PresentPad>, BackendError> {
+        self.lent.desk_pads(ledger)
+    }
+
+    fn lendable_pad(&self, key: &str, _ledger: &Ledger) -> Result<PresentPad, BackendError> {
+        self.lent.lendable_pad(key)
+    }
+
+    fn settle_pads(&self, ledger: &Ledger, _keys: &[String]) -> Result<(), BackendError> {
+        self.lent.settle(ledger)
     }
 }
 
