@@ -80,6 +80,7 @@
 	"apierr_door_no_owner": "Este host no tiene un host del propietario que responda a eso. Desactiva y vuelve a activar «Accesible sin iniciar sesión».",
 	"apierr_door_no_owner_account": "Este host no tiene un propietario al que devolver sus archivos.",
 	"apierr_door_not_in_update_group": "Añade antes a {user} al grupo punktfunk-update: sudo usermod -aG punktfunk-update {user}",
+	"apierr_door_on_for_other": "«Accesible sin iniciar sesión» está activado para {owner}. Desactívalo primero desde esa cuenta.",
 	"apierr_door_own_user_unknown": "No se pudo determinar con qué cuenta se ejecuta este host.",
 	"apierr_door_switch_failed": "No se pudo iniciar el cambio. Revisa el registro del host.",
 	"apierr_door_switch_not_allowed": "Esta cuenta no tiene permiso para hacer el cambio. Añádela al grupo punktfunk-update y vuelve a intentarlo.",

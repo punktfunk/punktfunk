@@ -80,6 +80,7 @@
 	"apierr_door_no_owner": "Cet hôte n’a pas d’hôte de propriétaire pour y répondre. Désactivez puis réactivez « Accessible sans connexion ».",
 	"apierr_door_no_owner_account": "Cet hôte n’a pas de propriétaire à qui rendre ses fichiers.",
 	"apierr_door_not_in_update_group": "Ajoutez d’abord l’utilisateur {user} au groupe punktfunk-update : sudo usermod -aG punktfunk-update {user}",
+	"apierr_door_on_for_other": "« Accessible sans connexion » est activé pour {owner}. Désactivez-le d’abord depuis ce compte.",
 	"apierr_door_own_user_unknown": "Impossible de déterminer sous quel compte cet hôte s’exécute.",
 	"apierr_door_switch_failed": "Impossible de lancer le basculement. Consultez le journal de l’hôte.",
 	"apierr_door_switch_not_allowed": "Ce compte n’est pas autorisé à le basculer. Ajoutez-le au groupe punktfunk-update, puis réessayez.",

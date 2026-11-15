@@ -70,11 +70,13 @@ pub(super) fn admit(
             Ok(Switchable::Account(_)) => Err(err(
                 "door_on_for_other",
                 format!("the door is on for {owner}: turn it off from that account first"),
-            )),
+            )
+            .param("owner", owner)),
             Err(doubt) => Err(err(
                 "door_on_for_other",
                 format!("the door is on for {owner}: {}", doubt.message),
-            )),
+            )
+            .param("owner", owner)),
         },
         (true, Switchable::Account(to), _) => Ok(Admit::On(to)),
         (false, found, Some(owner)) if owner == user => Ok(match found {
@@ -412,13 +414,17 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&to).unwrap(), kept);
     }
 
-    /// A doubt about the recorded owner refuses with its cause in the line.
+    /// A doubt about the recorded owner refuses with its cause in the line. Either refusal names
+    /// the owner for the console's sentence.
     #[test]
-    fn an_uncertain_owner_s_doubt_reaches_the_refusal() {
+    fn a_refused_on_names_the_owner_and_any_doubt() {
         let refused = admit(true, "bob", Some("erin"), look).unwrap_err();
         assert_eq!(
             refused.message,
             "the door is on for erin: can't tell if 'erin' is gone"
         );
+        assert_eq!(refused.params["owner"], "erin");
+        let refused = admit(true, "bob", Some("alice"), look).unwrap_err();
+        assert_eq!(refused.params["owner"], "alice");
     }
 }

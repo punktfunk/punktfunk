@@ -80,6 +80,7 @@
 	"apierr_door_no_owner": "Dieser Host hat keinen Host des Besitzers, der darauf antworten kann. Schalte „Ohne Anmeldung erreichbar“ aus und wieder ein.",
 	"apierr_door_no_owner_account": "Dieser Host hat keinen Besitzer, dem er seine Dateien zurückgeben kann.",
 	"apierr_door_not_in_update_group": "Füge {user} zuerst der Gruppe punktfunk-update hinzu: sudo usermod -aG punktfunk-update {user}",
+	"apierr_door_on_for_other": "„Ohne Anmeldung erreichbar“ ist gerade für {owner} an. Schalte es zuerst über dieses Konto aus.",
 	"apierr_door_own_user_unknown": "Es ließ sich nicht feststellen, unter welchem Konto dieser Host läuft.",
 	"apierr_door_switch_failed": "Das Umschalten ließ sich nicht starten. Prüfe das Host-Log.",
 	"apierr_door_switch_not_allowed": "Dieses Konto darf es nicht umschalten. Füge es der Gruppe punktfunk-update hinzu und versuch es dann erneut.",
