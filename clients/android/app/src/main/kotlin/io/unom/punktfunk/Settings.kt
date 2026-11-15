@@ -46,8 +46,9 @@ data class Settings(
      */
     val hdrEnabled: Boolean = true,
     /**
-     * The player read the darker-picture warning and keeps HDR on a display with no headroom
-     * ([DisplayHdr.NoHeadroom]). Off until then, so [hdrEnabled]'s default lights no HDR there.
+     * The player's yes to the darker-picture warning on a display with no headroom
+     * ([DisplayHdr.NoHeadroom]), asked once. Off until then, so [hdrEnabled]'s default lights
+     * no HDR there. The console writes the same key.
      */
     val hdrWithoutHeadroom: Boolean = false,
     /**
@@ -620,11 +621,11 @@ fun Settings.hdrOn(display: DisplayHdr): Boolean = hdrEnabled && when (display) 
 }
 
 /**
- * The defaults after the player's yes to HDR without headroom. Until the first yes every scope
- * shows HDR off, so a yes given [inPreset] keeps the defaults as they showed; the preset pins on.
+ * The defaults after the player's yes to HDR without headroom, asked once. Until then every
+ * scope shows HDR off, so a yes given [inPreset] leaves the defaults off; the preset pins on.
  */
 internal fun Settings.allowingHdrWithoutHeadroom(inPreset: Boolean): Settings =
-    copy(hdrWithoutHeadroom = true, hdrEnabled = !inPreset || hdrOn(DisplayHdr.NoHeadroom))
+    copy(hdrWithoutHeadroom = true, hdrEnabled = !inPreset)
 
 /** [displayHdr] for the display the picture is on; an unreachable display reads as [DisplayHdr.None]. */
 fun displayHdr(context: Context): DisplayHdr {

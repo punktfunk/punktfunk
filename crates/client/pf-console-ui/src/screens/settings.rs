@@ -418,6 +418,18 @@ impl SettingsScreen {
                     ListMsg::None => pulse,
                 };
             }
+            RowId::Hdr if hdr_asks_first(ctx) => {
+                return match msg {
+                    ListMsg::Activate | ListMsg::Adjust(1..) => {
+                        fx.push(Screen::Prompt(
+                            super::prompt::PromptScreen::hdr_without_headroom(Default::default()),
+                        ));
+                        pulse
+                    }
+                    ListMsg::Adjust(_) => Some(MenuPulse::Boundary),
+                    ListMsg::None => pulse,
+                };
+            }
             RowId::ResetSettings => {
                 return match msg {
                     ListMsg::Activate => {

@@ -1022,7 +1022,7 @@ private fun DisplaySettings(
     // Bitrate offers Automatic or Fixed. The stored rate is kept for the other codecs.
     val pyrowaveOn = s.codec == "pyrowave" && pyrowaveCapable
     // The toggle is off and locked without an HDR10 listing. With one but no headroom it works,
-    // and turning it on asks first: the picture comes out darker than SDR.
+    // and turning it on asks first, once: the picture comes out darker than SDR.
     val hdrDisplay = remember { displayHdr(context) }
     val hdrOn = s.hdrOn(hdrDisplay)
     var hdrWarning by remember { mutableStateOf(false) }
@@ -1089,7 +1089,7 @@ private fun DisplaySettings(
             subtitle = stringResource(
                 when (hdrDisplay) {
                     DisplayHdr.None -> R.string.android_hdr_unsupported_hint
-                    DisplayHdr.NoHeadroom -> R.string.android_hdr_no_headroom_hint
+                    DisplayHdr.NoHeadroom -> R.string.player_hdr_enabled_no_headroom_hint
                     DisplayHdr.Full -> R.string.player_hdr_enabled_hint
                 },
             ),
@@ -1097,7 +1097,7 @@ private fun DisplaySettings(
             enabled = hdrDisplay != DisplayHdr.None,
             field = "hdr_enabled",
             onCheckedChange = { on ->
-                if (on && hdrDisplay == DisplayHdr.NoHeadroom) {
+                if (on && hdrDisplay == DisplayHdr.NoHeadroom && !s.hdrWithoutHeadroom) {
                     hdrWarning = true
                 } else {
                     update("hdr_enabled", s.copy(hdrEnabled = on))
@@ -1240,16 +1240,16 @@ private fun DisplaySettings(
     }
     if (hdrWarning) {
         PunktfunkDialog(
-            title = stringResource(R.string.android_hdr_no_headroom_title),
+            title = stringResource(R.string.player_hdr_enabled_no_headroom_title),
             onDismiss = { hdrWarning = false },
             actions = listOf(
-                DialogAction(stringResource(R.string.android_hdr_no_headroom_confirm)) {
+                DialogAction(stringResource(R.string.player_hdr_enabled_no_headroom_confirm)) {
                     hdrWarning = false
                     onHdrWithoutHeadroom()
                 },
                 DialogAction(stringResource(R.string.common_cancel)) { hdrWarning = false },
             ),
-        ) { PromptText(stringResource(R.string.android_hdr_no_headroom_body)) }
+        ) { PromptText(stringResource(R.string.player_hdr_enabled_no_headroom_body)) }
     }
 }
 

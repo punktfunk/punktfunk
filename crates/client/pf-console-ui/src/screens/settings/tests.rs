@@ -2544,3 +2544,99 @@ fn the_licences_row_opens_the_console_screen_on_webos() {
         if matches!(**b, Screen::Licenses(_))));
     assert_eq!(fx.cmds, vec![crate::model::ConsoleCmd::LoadLicenses]);
 }
+
+/// A display with no headroom reads HDR Off and asks before it turns on, once: the yes is
+/// stored, HDR turns on, and the row is a plain switch from then on.
+#[test]
+fn hdr_asks_once_on_a_display_without_headroom() {
+    let store = crate::store::SnapshotStore::new(Settings::default(), Vec::new());
+    let mut settings = Settings::default();
+    let library = crate::library::LibraryShared::default();
+    let device = crate::screens::Device {
+        platform: crate::platform::Platform::Android,
+        hdr_no_headroom: true,
+        ..crate::screens::Device::test()
+    };
+    let mut ctx = Ctx {
+        device: &device,
+        store: &store,
+        ..Ctx::test(&mut settings, &library)
+    };
+    let value = |ctx: &Ctx| {
+        row_spec(RowId::Hdr, ctx, &[], &Default::default())
+            .value
+            .unwrap()
+    };
+    assert!(ctx.settings.hdr_enabled, "the stored default is on");
+    assert_eq!(value(&ctx), "Off");
+    assert!(detail(RowId::Hdr, &ctx).contains("darker than SDR"));
+
+    let mut s = SettingsScreen::with_presets(Vec::new());
+    s.tab = TABS
+        .iter()
+        .position(|(s, _)| *s == Section::Display)
+        .expect("the Display section");
+    let ids = s.row_ids(&ctx);
+    s.list.cursor = ids
+        .iter()
+        .position(|r| *r == RowId::Hdr)
+        .expect("the HDR row");
+    let mut fx = Outbox::default();
+    s.apply_row(ListMsg::Activate, None, &ids, &mut ctx, &mut fx);
+    let Some(crate::screens::Nav::Push(asked)) = fx.nav.take() else {
+        panic!("the row asks first");
+    };
+    let Screen::Prompt(mut prompt) = *asked else {
+        panic!("the question is a prompt");
+    };
+    assert!(hdr_asks_first(&ctx), "asking stores nothing");
+
+    prompt.menu(MenuEvent::Confirm, &mut ctx, &mut fx);
+    assert!(!hdr_asks_first(&ctx));
+    assert_eq!(value(&ctx), "On");
+    assert!(store.snapshot().0.hdr_enabled);
+
+    // Off and back on, with no second question.
+    let mut fx = Outbox::default();
+    s.apply_row(ListMsg::Adjust(-1), None, &ids, &mut ctx, &mut fx);
+    assert_eq!(value(&ctx), "Off");
+    s.apply_row(ListMsg::Activate, None, &ids, &mut ctx, &mut fx);
+    assert_eq!(value(&ctx), "On");
+    assert!(fx.nav.is_none());
+}
+
+/// A preset's yes pins HDR on in the preset and leaves the device's own HDR off.
+#[test]
+fn a_presets_hdr_yes_leaves_the_device_off() {
+    use crate::screens::preset::{PresetDraft, Scope};
+    let store = crate::store::SnapshotStore::new(Settings::default(), Vec::new());
+    let mut settings = Settings::default();
+    let library = crate::library::LibraryShared::default();
+    let device = crate::screens::Device {
+        platform: crate::platform::Platform::Android,
+        hdr_no_headroom: true,
+        ..crate::screens::Device::test()
+    };
+    let mut ctx = Ctx {
+        device: &device,
+        store: &store,
+        ..Ctx::test(&mut settings, &library)
+    };
+    let draft = std::sync::Arc::new(std::sync::Mutex::new(PresetDraft {
+        id: "p1".into(),
+        name: "Living room".into(),
+        overlay: Default::default(),
+    }));
+    let mut fx = Outbox::default();
+    allow_hdr_without_headroom(&Scope::Preset(draft.clone()), &mut ctx, &mut fx);
+    assert!(!hdr_asks_first(&ctx));
+    assert!(
+        !store.snapshot().0.hdr_enabled,
+        "the device's own HDR stays off"
+    );
+    assert_eq!(draft.lock().unwrap().overlay.hdr_enabled, Some(true));
+    assert!(matches!(
+        fx.cmds[..],
+        [crate::model::ConsoleCmd::SavePreset { .. }]
+    ));
+}

@@ -56,18 +56,11 @@ class DisplayHdrTest {
         assertTrue(after.hdrOn(DisplayHdr.NoHeadroom))
     }
 
-    /** A first yes inside a preset leaves the defaults off, though the stored default was on. */
+    /** A yes inside a preset leaves the defaults off, though the stored default was on. */
     @Test
-    fun aFirstYesInAPresetLeavesTheDefaultsOff() {
+    fun aYesInAPresetLeavesTheDefaultsOff() {
         val after = Settings().allowingHdrWithoutHeadroom(inPreset = true)
         assertTrue(after.hdrWithoutHeadroom)
         assertFalse(after.hdrOn(DisplayHdr.NoHeadroom))
-    }
-
-    /** A later yes inside a preset keeps defaults that already showed HDR on. */
-    @Test
-    fun aLaterYesInAPresetKeepsTheDefaultsOn() {
-        val after = Settings(hdrWithoutHeadroom = true).allowingHdrWithoutHeadroom(inPreset = true)
-        assertTrue(after.hdrOn(DisplayHdr.NoHeadroom))
     }
 }
