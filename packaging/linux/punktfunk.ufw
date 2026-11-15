@@ -29,7 +29,7 @@ ports=9777/udp|9778:9786/udp|5353/udp|47990/tcp
 [punktfunk-gamestream]
 title=punktfunk host (GameStream/Moonlight)
 description=GameStream/Moonlight compatibility ports (opt-in, trusted LAN only)
-ports=47984,47989,48010/tcp|47998:48010/udp|5353/udp
+ports=47984,47989,48010/tcp|47998:48000/udp|5353/udp
 
 # The mgmt REST API (TCP 47990, in the punktfunk-native profile above) binds all interfaces by
 # default so paired clients can browse the game library over mTLS. Off-loopback it exposes ONLY the
