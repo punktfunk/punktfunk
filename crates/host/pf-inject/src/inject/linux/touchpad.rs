@@ -24,9 +24,10 @@ use crate::uinput_abi::{
 };
 use anyhow::Result;
 use punktfunk_core::quic::{
-    PadContact, PadState, TOUCHPAD_MAX_CONTACTS, TOUCHPAD_PAD_MAX_X, TOUCHPAD_PAD_MAX_Y,
+    PadContact, PadState, ScanClock, TOUCHPAD_MAX_CONTACTS, TOUCHPAD_PAD_MAX_X, TOUCHPAD_PAD_MAX_Y,
     TOUCHPAD_UNITS_PER_MM,
 };
+use std::time::Instant;
 
 const ABS_X: u16 = 0x00;
 const ABS_Y: u16 = 0x01;
@@ -212,10 +213,37 @@ impl Encoder {
     }
 }
 
+/// The least step between two frames' report times: a doubt and its lift share a capture time.
+/// libinput drops the tap at 0, 1 or 100 µs alike.
+const REPORT_STEP_US: u64 = 1;
+
+/// Report times in µs on `CLOCK_MONOTONIC`: each state at its capture time on the host's clock,
+/// so libinput measures the finger's own speed however the frames arrived. Strictly increasing.
+#[derive(Default)]
+struct ReportClock {
+    scan: ScanClock,
+    last_us: u64,
+}
+
+impl ReportClock {
+    /// A state captured at `scan_time` and applied at `now`. `now_us` is read after `now`, so
+    /// the result is never in the kernel's future.
+    fn stamp(&mut self, scan_time: u16, now: Instant, now_us: u64) -> u64 {
+        let at = self.scan.host_time(scan_time, now);
+        self.next(now_us.saturating_sub(now.duration_since(at).as_micros() as u64))
+    }
+
+    fn next(&mut self, us: u64) -> u64 {
+        self.last_us = us.max(self.last_us + REPORT_STEP_US);
+        self.last_us
+    }
+}
+
 /// Per-session uinput touchpad.
 pub struct VirtualTouchpad {
     dev: UinputDevice,
     enc: Encoder,
+    clock: ReportClock,
     events: Vec<Event>,
 }
 
@@ -267,15 +295,22 @@ impl VirtualTouchpad {
         Ok(VirtualTouchpad {
             dev,
             enc: Encoder::default(),
+            clock: ReportClock::default(),
             events: Vec::new(),
         })
     }
 
+    /// Every frame carries the state's capture time. A kernel before 6.5 stamps arrival.
     pub fn apply(&mut self, pad: &PadState) {
+        let now = Instant::now();
+        let mut time = self.clock.stamp(pad.scan_time, now, crate::monotonic_us());
         self.events.clear();
         self.enc.state(pad, &mut self.events);
-        for &(type_, code, value) in &self.events {
-            self.dev.emit(type_, code, value);
+        for (i, &(type_, code, value)) in self.events.iter().enumerate() {
+            self.dev.emit_at(time, type_, code, value);
+            if type_ == EV_SYN && i + 1 < self.events.len() {
+                time = self.clock.next(time);
+            }
         }
     }
 }
@@ -283,7 +318,7 @@ impl VirtualTouchpad {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use punktfunk_core::quic::{TouchpadContact, TouchpadFrame};
+    use punktfunk_core::quic::{touchpad_scan_time, TouchpadContact, TouchpadFrame};
     use std::thread::sleep;
     use std::time::{Duration, Instant};
 
@@ -310,8 +345,13 @@ mod tests {
     }
 
     fn pad(button: bool, contacts: &[TouchpadContact]) -> PadState {
+        stamped(button, contacts, 0)
+    }
+
+    fn stamped(button: bool, contacts: &[TouchpadContact], scan_time: u16) -> PadState {
         TouchpadFrame::new(0, button, 3200, 2400, contacts)
             .unwrap()
+            .stamped(scan_time)
             .to_pad()
     }
 
@@ -444,6 +484,62 @@ mod tests {
         assert!(run(&mut e, false, &[next]).contains(&(EV_ABS, ABS_MT_TOOL_TYPE, MT_TOOL_FINGER)));
     }
 
+    #[test]
+    fn report_times_follow_capture_and_only_increase() {
+        let (t0, mut c) = (Instant::now(), ReportClock::default());
+        let ms = Duration::from_millis;
+        assert_eq!(c.stamp(0, t0, 1_000_000), 1_000_000, "at arrival");
+        // Captured 8 ms apart, both arriving 16 ms in: spaced as captured.
+        assert_eq!(c.stamp(80, t0 + ms(16), 1_016_000), 1_008_000);
+        assert_eq!(c.stamp(160, t0 + ms(16), 1_016_000), 1_016_000);
+        // A doubt and its lift share a capture time; the lift still comes later.
+        let lift = c.stamp(160, t0 + ms(17), 1_017_000);
+        assert_eq!(lift, 1_016_000 + REPORT_STEP_US);
+        assert_eq!(c.next(5), lift + REPORT_STEP_US, "never backwards");
+    }
+
+    /// The kernel keeps the written times (Linux 6.5+): states that arrive together read back
+    /// from the event node spaced as they were captured.
+    #[test]
+    #[ignore = "needs /dev/uinput, the device's /dev/input node and Linux 6.5+"]
+    fn a_real_touchpad_reports_capture_times() {
+        use crate::uinput_abi::INPUT_EVENT_LEN;
+        use std::io::Read;
+        use std::os::fd::AsFd;
+
+        let mut pad = VirtualTouchpad::create().expect("create the uinput touchpad");
+        let sys = format!("/sys/class/input/{}", pad.dev.sysname().unwrap());
+        let node = std::fs::read_dir(sys)
+            .unwrap()
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .find(|n| n.starts_with("event"))
+            .unwrap();
+        sleep(Duration::from_millis(200));
+        let mut evdev = crate::uapi::open_nonblock(&format!("/dev/input/{node}")).unwrap();
+        // EVIOCSCLOCKID: read back on the clock written.
+        let mut clock = libc::CLOCK_MONOTONIC.to_ne_bytes();
+        crate::uapi::ioctl_with(evdev.as_fd(), 0x4004_45a0, &mut clock).unwrap();
+
+        let at = |mm: f32| [finger(0, mm, 100.0)];
+        pad.apply(&stamped(false, &at(100.0), 0));
+        sleep(Duration::from_millis(30));
+        for i in 1..=3u16 {
+            pad.apply(&stamped(false, &at(100.0 + f32::from(i)), 100 * i));
+        }
+        let mut buf = [0u8; 64 * INPUT_EVENT_LEN];
+        let n = evdev.read(&mut buf).unwrap();
+        let word = |ev: &[u8], at: usize| i64::from_ne_bytes(ev[at..at + 8].try_into().unwrap());
+        let syn: Vec<i64> = buf[..n]
+            .chunks_exact(INPUT_EVENT_LEN)
+            .filter(|ev| ev[16..18] == EV_SYN.to_ne_bytes())
+            .map(|ev| word(ev, 0) * 1_000_000 + word(ev, 8))
+            .collect();
+        let gaps: Vec<i64> = syn.windows(2).map(|w| w[1] - w[0]).collect();
+        eprintln!("SYN_REPORT at {syn:?} µs, gaps {gaps:?}");
+        assert_eq!(gaps.len(), 3);
+        assert!(gaps.iter().all(|g| (g - 10_000).abs() < 50), "10 ms apart");
+    }
+
     /// Plays states on a real device, a frame per 8 ms, and names each step on stderr. Attach
     /// in the first five seconds: `libinput debug-events --enable-tap --device /dev/input/eventN`.
     struct Player {
@@ -468,8 +564,13 @@ mod tests {
             eprintln!("{:8.3} s  {name}", self.t0.elapsed().as_secs_f32());
         }
 
+        /// The capture time of a state made now, as a client stamps it.
+        fn scan(&self) -> u16 {
+            touchpad_scan_time(self.t0.elapsed().as_micros() as u64)
+        }
+
         fn show(&mut self, button: bool, contacts: &[TouchpadContact]) {
-            self.pad.apply(&pad(button, contacts));
+            self.pad.apply(&stamped(button, contacts, self.scan()));
             sleep(Duration::from_millis(8));
         }
 
@@ -572,10 +673,11 @@ mod tests {
         p.show(false, &[taken_back(c)]);
         p.show(false, &[]);
 
-        p.step("c) tap taken back, lift back to back");
+        p.step("c) tap taken back, lift back to back, one capture time");
         p.tap(&[c]);
-        p.pad.apply(&pad(false, &[taken_back(c)]));
-        p.pad.apply(&pad(false, &[]));
+        let scan = p.scan();
+        p.pad.apply(&stamped(false, &[taken_back(c)], scan));
+        p.pad.apply(&stamped(false, &[], scan));
 
         p.step("d0) two-finger tap");
         p.tap(&pair);
@@ -593,6 +695,48 @@ mod tests {
         p.step("e) one finger right 30 mm");
         p.glide(&[c], &[finger(0, 190.0, 120.0)], 30);
         p.show(false, &[]);
+        sleep(Duration::from_secs(1));
+    }
+
+    /// Sleeps most of the way, then spins: arrivals 0.2 ms apart need better than `sleep`.
+    fn wait_until(deadline: Instant) {
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            if left > Duration::from_micros(300) {
+                sleep(left - Duration::from_micros(200));
+            } else {
+                std::hint::spin_loop();
+            }
+        }
+    }
+
+    /// Eight 50 mm strokes right at 125 mm/s, captured every 8 ms then every 4 ms, each
+    /// delivered evenly, in pairs 1 ms or 0.2 ms apart, or in bursts of four. libinput should
+    /// move the pointer 50 mm every time.
+    #[test]
+    #[ignore = "needs /dev/uinput; plays bunched strokes for libinput debug-events"]
+    fn a_real_touchpad_keeps_bunched_strokes_whole() {
+        let mut p = Player::new();
+        for period in [8000u64, 4000] {
+            for (label, group, gap) in [
+                ("evenly", 1u64, 0u64),
+                ("in pairs 1 ms apart", 2, 1000),
+                ("in pairs 0.2 ms apart", 2, 200),
+                ("in bursts of four", 4, 0),
+            ] {
+                p.step(&format!("every {} ms, {label}", period / 1000));
+                let frames = 400_000 / period;
+                let (start, base) = (Instant::now(), p.t0.elapsed().as_micros() as u64);
+                for i in 0..=frames {
+                    let last = ((i / group + 1) * group - 1).min(frames);
+                    let arrival = last * period + (i % group) * gap;
+                    wait_until(start + Duration::from_micros(arrival));
+                    let x = 100.0 + (i * period) as f32 * 0.000_125;
+                    let scan = touchpad_scan_time(base + i * period);
+                    p.pad.apply(&stamped(false, &[finger(0, x, 100.0)], scan));
+                }
+                p.show(false, &[]);
+            }
+        }
         sleep(Duration::from_secs(1));
     }
 }
