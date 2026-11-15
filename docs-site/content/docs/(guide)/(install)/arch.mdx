@@ -39,7 +39,8 @@ sudo usermod -aG punktfunk "$USER"   # virtual Steam Deck controller
 
 ## 4. Start it
 
-From a terminal inside your desktop session. On Arch the plugin runner isn't started for you:
+From a terminal inside your desktop session. The install already enabled the plugin runner for
+every user; this starts it with the host and the console:
 
 ```sh
 systemctl --user enable --now punktfunk-host punktfunk-web punktfunk-scripting
