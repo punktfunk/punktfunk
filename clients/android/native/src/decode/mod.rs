@@ -25,17 +25,12 @@ mod vsync;
 pub(crate) use crate::codec_format::codec_mime;
 use async_loop::run_async;
 pub(crate) use setup::codec_label;
-// Shared with the PyroWave lane, which exists only where the codec is built (see `crate::pyro`).
-#[cfg(target_pointer_width = "64")]
+// Shared with the PyroWave lane (`crate::pyro`).
 pub(crate) use async_loop::start_hint;
-// The PyroWave lane's `ASurfaceControl` present, 64-bit only like the lane.
-#[cfg(target_pointer_width = "64")]
+// The PyroWave lane's `ASurfaceControl` present.
 pub(crate) use async_loop::DecodeEvent;
-#[cfg(target_pointer_width = "64")]
 pub(crate) use latency::{note_received_frame, now_realtime_ns};
-#[cfg(target_pointer_width = "64")]
 pub(crate) use setup::boost_thread_priority;
-#[cfg(target_pointer_width = "64")]
 pub(crate) use sink::asc_backend_selected;
 
 use crate::bring_up::ranked_for;

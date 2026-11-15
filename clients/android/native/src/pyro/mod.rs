@@ -15,18 +15,17 @@
 //! next one is clean — the same call the Apple port made. What remains is receive →
 //! decode → present.
 //!
-//! 64-bit only, mirroring `pyrowave-sys`: on armeabi-v7a the codec is not built (Vulkan's
-//! armv7 calling convention has no bindgen form), and those boxes have neither the link
-//! nor the Vulkan 1.3 device this needs. [`available`] answers for the whole lane.
+//! Android only. [`available`] answers for the whole lane: the device needs Vulkan 1.3 and
+//! the codec's compute features.
 
-#[cfg(all(target_os = "android", target_pointer_width = "64"))]
+#[cfg(target_os = "android")]
 mod asc;
-#[cfg(all(target_os = "android", target_pointer_width = "64"))]
+#[cfg(target_os = "android")]
 mod device;
-#[cfg(all(target_os = "android", target_pointer_width = "64"))]
+#[cfg(target_os = "android")]
 mod present;
 
-#[cfg(all(target_os = "android", target_pointer_width = "64"))]
+#[cfg(target_os = "android")]
 mod imp {
     use super::{asc, device::PyroDevice, present::Present};
     use anyhow::{anyhow, Result};
@@ -476,27 +475,13 @@ mod imp {
     }
 }
 
-#[cfg(all(target_os = "android", target_pointer_width = "64"))]
+#[cfg(target_os = "android")]
 pub(crate) use imp::{available, run};
 
-/// Off 64-bit Android the codec is not built (see the module docs), so the lane is absent and
-/// the client never advertises `CODEC_PYROWAVE`. Ungated — `nativePyrowaveCapable` is one of
-/// the JNI entry points that links into the host workspace build too.
-#[cfg(not(all(target_os = "android", target_pointer_width = "64")))]
+/// Off Android the lane is absent and the client never advertises `CODEC_PYROWAVE`.
+/// Ungated — `nativePyrowaveCapable` is one of the JNI entry points that links into the
+/// host workspace build too.
+#[cfg(not(target_os = "android"))]
 pub(crate) fn available() -> bool {
     false
-}
-
-/// 32-bit Android only: unreachable behind [`available`], and here so the dispatch in
-/// `crate::decode` needs no `cfg` of its own. Not built off Android at all, where there is no
-/// `ndk` crate to name the window with (and no decode module to call it).
-#[cfg(all(target_os = "android", not(target_pointer_width = "64")))]
-pub(crate) fn run(
-    _client: std::sync::Arc<punktfunk_core::client::NativeClient>,
-    _window: ndk::native_window::NativeWindow,
-    _shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    _stats: std::sync::Arc<crate::stats::VideoStats>,
-    _opts: crate::decode::DecodeOptions,
-) {
-    log::error!("pyro: PyroWave is not built for this ABI — the session has no video");
 }
