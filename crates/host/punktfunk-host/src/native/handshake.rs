@@ -2147,6 +2147,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             },
             compositor: punktfunk_core::config::CompositorPref::Auto,
             gamepad: punktfunk_core::config::GamepadPref::Auto,
@@ -2191,6 +2192,7 @@ mod tests {
             width,
             height,
             refresh_hz,
+            refresh_mhz: 0,
         }
     }
 

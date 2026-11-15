@@ -641,6 +641,7 @@ fn committed_mode_or(key: CcdTargetKey, requested: Mode) -> Mode {
         width,
         height,
         refresh_hz,
+        refresh_mhz: 0,
     }
 }
 
@@ -3010,6 +3011,7 @@ mod tests {
             width,
             height,
             refresh_hz,
+            refresh_mhz: 0,
         }
     }
 

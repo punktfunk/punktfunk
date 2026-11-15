@@ -70,6 +70,7 @@ mod linux {
                 width: W,
                 height: H,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .context("create the virtual output")?;
         println!("cursor-probe: node_id = {}", vout.node_id);

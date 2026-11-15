@@ -702,6 +702,7 @@ fn native_mode(device: &crate::screens::Device) -> punktfunk_core::Mode {
             width,
             height,
             refresh_hz: 60,
+            refresh_mhz: 0,
         }
     })
 }

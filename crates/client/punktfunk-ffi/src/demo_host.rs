@@ -192,6 +192,7 @@ fn demo_mode(asked: Mode) -> Mode {
             0 => MAX_REFRESH_HZ,
             hz => hz.min(MAX_REFRESH_HZ),
         },
+        refresh_mhz: 0,
     }
 }
 
@@ -550,12 +551,14 @@ mod tests {
             width: 3840,
             height: 2160,
             refresh_hz: 120,
+            refresh_mhz: 0,
         });
         assert_eq!((m.width, m.height, m.refresh_hz), (1920, 1080, 60));
         let m = demo_mode(Mode {
             width: 2732,
             height: 2048,
             refresh_hz: 0,
+            refresh_mhz: 0,
         });
         assert!(m.width <= MAX_WIDTH && m.height <= MAX_HEIGHT);
         assert_eq!((m.width % 2, m.height % 2, m.refresh_hz), (0, 0, 60));
@@ -563,6 +566,7 @@ mod tests {
             width: 1280,
             height: 720,
             refresh_hz: 30,
+            refresh_mhz: 0,
         });
         assert_eq!((m.width, m.height, m.refresh_hz), (1280, 720, 30));
     }
@@ -594,6 +598,7 @@ mod tests {
             width: 1280,
             height: 720,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let client =
             punktfunk_core::client::NativeClient::connect(punktfunk_core::client::ConnectParams {

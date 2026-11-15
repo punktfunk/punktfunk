@@ -1106,6 +1106,7 @@ mod tests {
             width: 2048,
             height: 1152,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let mut p = plan(crate::encode::ChromaFormat::Yuv420, false, 1);
         p.reframe_to = Some((punktfunk_core::video_fit::VideoFit::Fit, (1366, 768)));
@@ -1143,6 +1144,7 @@ mod tests {
             width: 2560,
             height: 1440,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let cfg = pf_host_config::config();
         let display = display_mode_for(session, "kwin");

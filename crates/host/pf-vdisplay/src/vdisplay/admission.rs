@@ -1052,6 +1052,7 @@ mod tests {
                     width: MODE.0,
                     height: MODE.1,
                     refresh_hz: MODE.2,
+                    refresh_mhz: 0,
                 };
                 crate::registry::acquire(&mut fake.boxed(), mode, Arc::default(), None).unwrap()
             };

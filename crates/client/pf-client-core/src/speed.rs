@@ -77,6 +77,7 @@ fn connect_for_probe(
         width: 1280,
         height: 720,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
     NativeClient::connect(ConnectParams {
         // The DEVICE-FREE answer, not `decodable_codecs_for`: this connect creates no

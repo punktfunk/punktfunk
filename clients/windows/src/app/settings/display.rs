@@ -393,6 +393,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         });
         s.pyrowave_quality_lines(native, probes.link)
     };

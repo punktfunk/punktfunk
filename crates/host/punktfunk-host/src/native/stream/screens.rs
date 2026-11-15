@@ -896,6 +896,7 @@ mod tests {
                 width,
                 height,
                 refresh_hz,
+                refresh_mhz: 0,
             },
             ..Default::default()
         };
@@ -931,6 +932,7 @@ mod tests {
             width,
             height,
             refresh_hz,
+            refresh_mhz: 0,
         }
     }
 

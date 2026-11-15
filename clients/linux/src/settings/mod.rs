@@ -57,6 +57,7 @@ fn native_mode(window: &gtk::Widget) -> punktfunk_core::Mode {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
     };
     let g = m.geometry();
@@ -65,6 +66,7 @@ fn native_mode(window: &gtk::Widget) -> punktfunk_core::Mode {
         width: px(g.width()),
         height: px(g.height()),
         refresh_hz: ((m.refresh_rate().max(0) + 500) / 1000) as u32,
+        refresh_mhz: 0,
     }
 }
 

@@ -895,6 +895,7 @@ mod pool {
                     width: 1920,
                     height: 1080,
                     refresh_hz: 60,
+                    refresh_mhz: 0,
                 },
                 backend,
                 identity_slot: None,
@@ -989,6 +990,7 @@ mod pool {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             };
             let live = |generation, name: Option<&str>| {
                 let mut e = test_entry("hyprland", generation, None);
@@ -1263,11 +1265,13 @@ mod pool {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             };
             let other = Mode {
                 width: 1280,
                 height: 720,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             };
             let mut e = test_entry("gamescope", 1, None);
             e.mode = other;
@@ -1328,11 +1332,13 @@ mod pool {
                 width: 1280,
                 height: 720,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             };
             let kept = Mode {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 120,
+                refresh_mhz: 0,
             };
             let sdr = (false, false);
             assert_eq!(park_mode_for(&[], sdr, record, false), Some(record));
@@ -1409,6 +1415,7 @@ mod pool {
                     width: w,
                     height: 1080,
                     refresh_hz: 60,
+                    refresh_mhz: 0,
                 },
                 identity_slot: slot,
                 state: "active",
@@ -2758,6 +2765,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let fake = FakeDisplay::new("pf-vdisplay");
         let quit = Arc::new(AtomicBool::new(false));
@@ -2781,6 +2789,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             };
             super::acquire(&mut fake.boxed(), mode, quit(), None).expect("create");
             fake.script(|s| s.ownership = crate::DisplayOwnership::External);

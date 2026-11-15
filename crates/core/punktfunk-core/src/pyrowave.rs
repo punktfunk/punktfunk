@@ -293,6 +293,7 @@ mod tests {
             width: 3840,
             height: 2160,
             refresh_hz: 120,
+            refresh_mhz: 0,
         };
         let px = 3840 * 2160 * 120;
         // 0.5 bpp is Steam's 500 Mbps ceiling at 4K120.

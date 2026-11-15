@@ -378,6 +378,7 @@ mod tests {
             width,
             height,
             refresh_hz,
+            refresh_mhz: 0,
         };
         let ask = |m, view| Reconfigure {
             mode: m,
@@ -410,6 +411,7 @@ mod tests {
             width: 2048,
             height: 1152,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let req = |view, exclude_codecs| Reconfigure {
             mode,

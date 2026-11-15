@@ -74,6 +74,7 @@ impl PunktfunkScreen {
                 width: self.width,
                 height: self.height,
                 refresh_hz: self.refresh_hz,
+                refresh_mhz: 0,
             },
             x: self.x,
             y: self.y,

@@ -1128,6 +1128,7 @@ mod tests {
             width: WIDE.0,
             height: WIDE.1,
             refresh_hz: 60,
+            refresh_mhz: 0,
         }
     }
 
@@ -1282,6 +1283,7 @@ mod tests {
             width,
             height,
             refresh_hz,
+            refresh_mhz: 0,
         }
     }
 

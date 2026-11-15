@@ -109,10 +109,11 @@ pub fn even(x: f64) -> u32 {
 /// The mode a device asks for once `o` is applied to `mode`, the size it would ask on its own.
 ///
 /// `lines` replaces the height and the width follows `mode`'s aspect; capped at `native`'s
-/// lines unless `beyond_screen`. `hz` is capped at `native`'s. A zero in `native` means
-/// unknown and caps nothing (the host clamps with no panel in view). Then both axes scale down
-/// to `codec_max` together. A field the override leaves unset leaves `mode` alone — a device's
-/// own choice above its panel is not this function's business.
+/// lines unless `beyond_screen`. `hz` is capped at `native`'s, and a rate that lands on the
+/// cap takes the panel's exact one. A zero in `native` means unknown and caps nothing (the
+/// host clamps with no panel in view). Then both axes scale down to `codec_max` together. A
+/// field the override leaves unset leaves `mode` alone — a device's own choice above its
+/// panel is not this function's business.
 pub fn fit(mode: Mode, native: Mode, o: &GameOverrides, codec_max: u32) -> Mode {
     let mut out = mode;
     if let Some(lines) = o.lines {
@@ -127,11 +128,20 @@ pub fn fit(mode: Mode, native: Mode, o: &GameOverrides, codec_max: u32) -> Mode 
         }
     }
     if let Some(hz) = o.hz {
-        out.refresh_hz = if native.refresh_hz == 0 {
+        let hz = if native.refresh_hz == 0 {
             hz
         } else {
             hz.min(native.refresh_hz)
         };
+        // A rate capped at the panel's is the panel's exact one; any other is whole.
+        if hz != out.refresh_hz {
+            out.refresh_hz = hz;
+            out.refresh_mhz = if hz == native.refresh_hz {
+                native.refresh_mhz
+            } else {
+                0
+            };
+        }
     }
     let longest = out.width.max(out.height);
     if longest > codec_max && longest > 0 {
@@ -152,6 +162,7 @@ mod tests {
             width: n(0),
             height: n(1),
             refresh_hz: n(2),
+            refresh_mhz: 0,
         }
     }
 
@@ -183,6 +194,20 @@ mod tests {
             assert_eq!(got, mode(&row["expect"]), "{}", row["why"]);
             assert!(got.width % 2 == 0 && got.height % 2 == 0, "{}", row["why"]);
         }
+    }
+
+    /// A rate override keeps the panel's fraction only where it lands on the panel's rate.
+    #[test]
+    fn a_rate_override_is_whole_below_the_panel() {
+        let native = Mode::exact(1920, 1080, 119_880);
+        let rate = |hz| GameOverrides {
+            hz: Some(hz),
+            ..GameOverrides::default()
+        };
+        assert_eq!(fit(native, native, &rate(60), 8192).millihz(), 60_000);
+        assert_eq!(fit(native, native, &rate(240), 8192), native);
+        let picked = Mode::exact(1920, 1080, 60_000);
+        assert_eq!(fit(picked, native, &rate(240), 8192), native);
     }
 
     #[test]

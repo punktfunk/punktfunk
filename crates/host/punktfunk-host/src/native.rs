@@ -2738,6 +2738,7 @@ fn delivered_mode(
         width: frame_width,
         height: frame_height,
         refresh_hz: interval_hz(interval),
+        refresh_mhz: 0,
     }
 }
 

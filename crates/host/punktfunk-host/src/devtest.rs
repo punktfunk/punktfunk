@@ -641,6 +641,7 @@ pub fn mirror_test(args: &[String]) -> Result<()> {
         width: target.width,
         height: target.height,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
     let vout = vd.create(mode).context("open the mirror display")?;
     println!(

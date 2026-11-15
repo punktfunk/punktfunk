@@ -1646,6 +1646,7 @@ mod tests {
         width: 1920,
         height: 1080,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
 
     /// A resize promotes the new virtual monitor while the old one still
@@ -1833,6 +1834,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let mut vd = MutterDisplay::new().expect("construct the Mutter backend");
         let out = vd.create(mode).expect("create the Mutter virtual monitor");

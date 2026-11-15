@@ -534,6 +534,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let mut p = ConnectParams::new("couch-pc", 9777, mode, Duration::from_secs(1));
         assert!(!client_features(&p).has(FEATURE_SCREENS));
@@ -558,6 +559,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let mut p = ConnectParams::new("couch-pc", 9777, mode, Duration::from_secs(1));
         assert!(!client_features(&p).has(FEATURE_PROFILE_UNLOCK));
@@ -570,6 +572,7 @@ mod tests {
             width: 1280,
             height: 720,
             refresh_hz: 60,
+            refresh_mhz: 0,
         }
     }
 
@@ -731,6 +734,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let mut p = ConnectParams::new("couch-pc", 9777, mode, Duration::from_secs(1));
         assert!(!client_features(&p).has(FEATURE_STUDIO_RANGE));

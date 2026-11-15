@@ -248,6 +248,7 @@ pub(super) fn resize_tick(
                 width: w,
                 height: h,
                 refresh_hz: m.refresh_hz,
+                refresh_mhz: 0,
             };
             if c.request_mode_view(mode, view).is_err() {
                 tracing::warn!("mode-switch request dropped — control channel closed");
@@ -1079,6 +1080,7 @@ impl Shell {
                         width,
                         height,
                         refresh_hz,
+                        refresh_mhz: 0,
                     }) {
                         tracing::warn!(error = %e, "ring: mode request");
                     }

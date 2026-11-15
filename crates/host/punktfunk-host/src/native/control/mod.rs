@@ -1277,6 +1277,7 @@ mod tests {
             width,
             height: 720,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let d = |epoch, width: u32, corrects| Delivered {
             mode: mode(width),

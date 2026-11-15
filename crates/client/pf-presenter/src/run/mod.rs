@@ -645,6 +645,7 @@ fn native_mode(w: i32, h: i32, pixel_density: f32, refresh_rate: f32) -> Mode {
         width: px(w),
         height: px(h),
         refresh_hz: refresh_rate.round().max(0.0) as u32,
+        refresh_mhz: 0,
     }
 }
 

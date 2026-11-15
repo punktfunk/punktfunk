@@ -1585,6 +1585,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("create virtual display");
         assert_eq!(vout.preferred_mode, Some((1920, 1080, 60)));
@@ -1646,6 +1647,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("create virtual display");
         let wc = vout.win_capture.as_ref().expect("no capture target");
@@ -1849,6 +1851,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("create member 1");
         thread::sleep(Duration::from_secs(2));
@@ -1869,6 +1872,7 @@ mod tests {
                 width: 1280,
                 height: 720,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("create member 2");
         thread::sleep(Duration::from_secs(2));
@@ -2023,6 +2027,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("create virtual display");
         thread::sleep(Duration::from_secs(2));
@@ -2068,6 +2073,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("create virtual display");
         let t1 = first
@@ -2083,6 +2089,7 @@ mod tests {
                 width: 2356,
                 height: 1332,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("in-place resize acquire");
         let resize_ms = t0.elapsed().as_millis();

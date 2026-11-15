@@ -1438,6 +1438,7 @@ mod tests {
             width,
             height,
             refresh_hz,
+            refresh_mhz: 0,
         };
         let name = format!("Virtual-{}", super::VOUT_NAME);
         let mut vd = KwinDisplay::new().unwrap();

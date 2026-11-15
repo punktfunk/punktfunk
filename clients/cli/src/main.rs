@@ -1832,6 +1832,7 @@ from the config directory for a true factory reset."
             width: 1280,
             height: 720,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let params = punktfunk_core::client::ConnectParams {
             name: Some(punktfunk_core::client::device_name()),

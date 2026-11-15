@@ -520,6 +520,7 @@ impl Settings {
             width,
             height,
             refresh_hz: pick(self.refresh_hz, native.refresh_hz.max(30)),
+            refresh_mhz: 0,
         }
     }
 
@@ -1383,6 +1384,7 @@ mod tests {
             width: 3840,
             height: 2160,
             refresh_hz: 120,
+            refresh_mhz: 0,
         };
         let sdr = Settings {
             hdr_enabled: false,

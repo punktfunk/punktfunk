@@ -762,6 +762,7 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         width,
         height,
         refresh_hz,
+        refresh_mhz: 0,
     };
     // Requested surround layout (2 = stereo / 6 = 5.1 / 8 = 7.1); anything else is stereo. The
     // host clamps it and echoes the resolved count in `connector.audio_channels`, which drives the
@@ -939,6 +940,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestMode
             width: width as u32,
             height: height as u32,
             refresh_hz: refresh_hz as u32,
+            refresh_mhz: 0,
         };
         if view_width < 0 || view_height < 0 {
             return session.client.request_mode(mode).is_ok();

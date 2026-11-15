@@ -180,6 +180,7 @@ fn primary_mode() -> Option<punktfunk_core::Mode> {
         } else {
             60
         },
+        refresh_mhz: 0,
     })
 }
 

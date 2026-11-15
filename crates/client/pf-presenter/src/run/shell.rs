@@ -183,6 +183,7 @@ impl Shell {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         });
 
         let event_pump = sdl

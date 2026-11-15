@@ -567,6 +567,21 @@ pub unsafe extern "C" fn punktfunk_connection_mode(
     })
 }
 
+/// The active session mode's exact rate in millihertz: `59940` at 59.94 Hz, `60000` at
+/// 60 Hz. What the host delivers, so a host that takes no fraction answers the whole rate.
+/// Safe any time after connect.
+///
+/// # Safety
+/// `c` is a valid connection handle; `refresh_mhz` is null or writable.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_refresh_mhz(
+    c: *const PunktfunkConnection,
+    refresh_mhz: *mut u32,
+) -> PunktfunkStatus {
+    conn_out!(c, refresh_mhz => c.inner.mode().millihz())
+}
+
 /// Virtual gamepad the host resolved (`PUNKTFUNK_GAMEPAD_*`; Welcome echo of
 /// [`punktfunk_connect_ex2`]). `AUTO` = a host that didn't say — assume X-Box 360,
 /// no HID-output. Safe any time after connect.

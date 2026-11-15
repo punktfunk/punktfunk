@@ -619,6 +619,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         use crate::encode::{ChromaFormat, Codec};
         // A client that sends no quality gets the host's row: ~1.6 bpp, not 20 Mbps.
@@ -658,6 +659,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         assert_eq!(
             session_pyrowave_bpp(0),
@@ -712,6 +714,7 @@ mod tests {
             width: 3840,
             height: 2160,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         assert_eq!(
             pyrowave_mode_kbps(None, &uhd, &plan, None),
@@ -726,6 +729,7 @@ mod tests {
             width: 64,
             height: 64,
             refresh_hz: 1,
+            refresh_mhz: 0,
         };
         assert_eq!(
             resolve_bitrate_kbps_for(
@@ -750,6 +754,7 @@ mod tests {
             width: 5120,
             height: 1440,
             refresh_hz: 240,
+            refresh_mhz: 0,
         };
         let host = session_pyrowave_bpp(0);
         let pin = |requested, mode: &Mode, chroma, depth, ceiling: Option<u32>| {
@@ -777,6 +782,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         assert_eq!(
             pin(0, &small, ChromaFormat::Yuv420, 8, link),
@@ -805,11 +811,13 @@ mod tests {
             width: 3840,
             height: 2160,
             refresh_hz: 120,
+            refresh_mhz: 0,
         };
         let fhd = Mode {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let px = 3840 * 2160 * 120;
         assert_eq!(bounds(&uhd, none), (px / 2 / 1000, px / 1000 * 16 / 10));

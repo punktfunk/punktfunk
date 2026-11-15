@@ -231,6 +231,7 @@ fn parse_mode(m: &str) -> Option<Mode> {
         width: it.next()?.parse().ok()?,
         height: it.next()?.parse().ok()?,
         refresh_hz: it.next()?.parse().ok()?,
+        refresh_mhz: 0,
     })
 }
 
@@ -255,6 +256,7 @@ fn parse_argv(argv: Vec<String>) -> Args {
         width: 1280,
         height: 720,
         refresh_hz: 60,
+        refresh_mhz: 0,
     });
     let remode = get("--remode").and_then(|s| {
         let (m, secs) = s.split_once(':')?;

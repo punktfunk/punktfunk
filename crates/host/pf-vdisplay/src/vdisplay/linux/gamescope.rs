@@ -1465,6 +1465,7 @@ mod tests {
                 width: 2560,
                 height: 1440,
                 refresh_hz: 120,
+                refresh_mhz: 0,
             },
             60,
             "60,120",

@@ -256,6 +256,7 @@ fn delivered_mode_reports_captured_dims_and_triggers_corrective_ack() {
         width: 2560,
         height: 1440,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
 
     // Honored: captured frame matches the request → no corrective ack.
@@ -270,7 +271,8 @@ fn delivered_mode_reports_captured_dims_and_triggers_corrective_ack() {
         punktfunk_core::Mode {
             width: 1920,
             height: 1080,
-            refresh_hz: 60
+            refresh_hz: 60,
+            refresh_mhz: 0
         }
     );
 
@@ -566,6 +568,7 @@ fn a_synthetic_abr_session_registers_while_it_streams() {
         width: 1280,
         height: 720,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
     let client = NativeClient::connect(ConnectParams {
         preset: punktfunk_core::quic::SessionPreset::new("dock-1", "Docked"),
@@ -674,6 +677,7 @@ fn clipboard_control_and_fetch_decline_over_session() {
         width: 1280,
         height: 720,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
     let client = NativeClient::connect(ConnectParams::new(
         "127.0.0.1",
@@ -772,6 +776,7 @@ fn synthetic_session(
         width: 1280,
         height: 720,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
     let client = NativeClient::connect(params(ConnectParams::new(
         "127.0.0.1",
@@ -860,6 +865,7 @@ fn a_refused_mode_switch_is_counted() {
         width: 1281,
         height: 721,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
     client.request_mode(odd).unwrap();
     assert!(
@@ -943,6 +949,7 @@ fn a_reconnect_waits_for_the_release_not_a_timer() {
                     width: 1280,
                     height: 720,
                     refresh_hz: 60,
+                    refresh_mhz: 0,
                 },
                 std::time::Duration::from_secs(10),
             )
@@ -1182,6 +1189,7 @@ fn delegated_approval_admits_after_knock() {
         width: 1280,
         height: 720,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
 
     // Approve while the client is still parked.
@@ -1416,6 +1424,7 @@ fn pairing_ceremony_and_gate() {
         width: 1280,
         height: 720,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
 
     // 1: anonymous session on a pairing-required host → rejected.
@@ -1625,6 +1634,7 @@ fn plain_hello(
             width: 1280,
             height: 720,
             refresh_hz: 60,
+            refresh_mhz: 0,
         },
         compositor: CompositorPref::Auto,
         gamepad: GamepadPref::Auto,
@@ -1943,6 +1953,7 @@ fn launch_refused_without_grant_but_session_admitted() {
         width: 1280,
         height: 720,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
 
     // 1: launch without LAUNCH → typed pre-handshake refusal (`NativeClient` has no Debug).
@@ -2015,6 +2026,7 @@ fn a_profile_is_resolved_in_the_handshake() {
                     width: 1280,
                     height: 720,
                     refresh_hz: 60,
+                    refresh_mhz: 0,
                 },
                 std::time::Duration::from_secs(10),
             )
@@ -2062,6 +2074,7 @@ fn the_server_hello_answers_a_screen_wish() {
             width: 1280,
             height: 720,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let timeout = std::time::Duration::from_secs(10);
         let client = NativeClient::connect(ConnectParams {
@@ -2116,6 +2129,7 @@ fn unknown_launch_reaches_the_client_as_a_refusal() {
                 width: 1280,
                 height: 720,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             },
             std::time::Duration::from_secs(10),
         )
@@ -2311,6 +2325,7 @@ fn expired_record_knocks_into_pending_and_reapproval_regrants() {
                 width: 1280,
                 height: 720,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             },
             std::time::Duration::from_secs(15),
         )

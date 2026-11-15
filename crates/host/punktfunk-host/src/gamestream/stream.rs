@@ -709,6 +709,7 @@ fn open_gs_mirror_source(
             width: cfg.width,
             height: cfg.height,
             refresh_hz: cfg.fps,
+            refresh_mhz: 0,
         })
         .context("start mirroring the pinned monitor")?;
     let plan = gs_session_plan(cfg, metadata_cursor);
@@ -890,6 +891,7 @@ fn open_gs_virtual_source(
             width,
             height,
             refresh_hz,
+            refresh_mhz: 0,
         },
         // Quit App / management stop / game exit skip linger; only a real drop lingers.
         life.quit.clone(),

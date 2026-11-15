@@ -511,6 +511,7 @@ impl Driver {
                     width,
                     height,
                     refresh_hz,
+                    refresh_mhz: 0,
                 };
                 let floor = crate::pyrowave::kbps_for(
                     &mode,
@@ -1289,6 +1290,7 @@ mod tests {
             width: 3840,
             height: 2160,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let floor = crate::pyrowave::kbps_for(&mode, false, 8, crate::pyrowave::BPP_FLOOR);
         let at = Instant::now();

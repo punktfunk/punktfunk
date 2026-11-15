@@ -2458,6 +2458,7 @@ mod tests {
         width: 1920,
         height: 1080,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
 
     /// A fake `hyprctl`: logs each call to `$HOME/hyprctl.log`, refuses `output create`, lists
