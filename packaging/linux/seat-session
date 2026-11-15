@@ -189,18 +189,30 @@ EOF
 }
 
 # The owner's settings, under the seat contract: the files PUNKTFUNK_OWNER_ENV names (a NixOS
-# module's settings, which its user unit takes as EnvironmentFile), then host.env, each read as
-# data by read_env_file. The contract's variables keep the values the supervisor wrote. A file the
-# owner can't read is skipped.
+# module's settings), then host.env, each read as data by read_env_file. The variables the
+# contract file ($1, else the unit's own) names keep its values, but for the token. With no
+# contract to read, no owner file is; an owner file it can't read is skipped.
 load_owner_settings() {
-    local file key extra=()
+    local contract=${1-} file key extra=()
     local -A keep=()
-    read -ra extra <<<"${PUNKTFUNK_OWNER_ENV:-}"
-    for key in PUNKTFUNK_SEAT_SESSION PUNKTFUNK_SEAT_ID PUNKTFUNK_SEAT_OWNER PUNKTFUNK_TRUST_DIR \
-        PUNKTFUNK_PAIRING PUNKTFUNK_NATIVE_PORT PUNKTFUNK_MGMT_BIND PUNKTFUNK_MDNS \
-        PUNKTFUNK_WEBTRANSPORT PUNKTFUNK_WEBTRANSPORT_PORT PUNKTFUNK_WEBTRANSPORT_ORIGINS; do
+    # The runtime directory is /run/punktfunk-seat-<instance>, the unit's %i like the contract's.
+    if [[ -z $contract && ${RUNTIME_DIRECTORY-} =~ ^/run/punktfunk-seat-([^/]+)$ ]]; then
+        contract=/run/punktfunk/seats/${BASH_REMATCH[1]}.env
+    fi
+    # Names only: the sed pattern is the whole parser, and nothing in the file runs.
+    while IFS= read -r key; do
+        [[ $key == PUNKTFUNK_MGMT_TOKEN ]] || keep[$key]="${!key-}"
+    done < <(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$contract" 2>/dev/null)
+    if ((${#keep[@]} == 0)); then
+        echo "seat-session: no seat contract at '$contract'; the owner's settings stay unread" >&2
+        return 0
+    fi
+    # The contract leaves these two out when the box sets none, and the owner's own must not
+    # stand in: they stay what the unit gave, empty if unset.
+    for key in PUNKTFUNK_WEBTRANSPORT_PORT PUNKTFUNK_WEBTRANSPORT_ORIGINS; do
         keep[$key]="${!key-}"
     done
+    read -ra extra <<<"${PUNKTFUNK_OWNER_ENV:-}"
     for file in "${extra[@]}" "$HOME/.config/punktfunk/host.env"; do
         [[ -r "$file" ]] && read_env_file "$file"
     done
@@ -473,6 +485,16 @@ EOF
     load_owner_settings "$contract"
     got=$(punktfunk_env)
     [[ $got == "$want" ]] || { diff <(echo "$want") <(echo "$got") >&2; exit 1; }
+    # The runtime directory's instance names the contract. Another shape names none, and a
+    # contract that isn't there leaves the owner's files unread; the seat still starts.
+    unset PUNKTFUNK_HOST_NAME
+    read_with() { RUNTIME_DIRECTORY=$1 load_owner_settings 2>&1; echo "${PUNKTFUNK_HOST_NAME-unset}"; }
+    [[ $(read_with /run/punktfunk-seat-gone) == *"at '/run/punktfunk/seats/gone.env'"*unset ]] ||
+        { echo "seat-session self-test: the runtime directory doesn't name the contract" >&2; exit 1; }
+    for dir in /run/punktfunk-seat- /run/punktfunk-seat-a/b /tmp/punktfunk-seat-a ''; do
+        [[ $(read_with "$dir") == *"at ''"*unset ]] ||
+            { echo "seat-session self-test: '$dir' names a contract" >&2; exit 1; }
+    done
     exit 0
 fi
 
