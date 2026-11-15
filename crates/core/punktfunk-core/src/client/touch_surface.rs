@@ -253,13 +253,15 @@ fn validate(touches: &[SurfaceTouch]) -> Result<()> {
     }
 }
 
-/// The surface and the pinch helper over the one host pad. A pinch begins only while the
-/// surface is idle; a surface touch ends a live pinch first.
+/// The surface, the pinch helper and raw frames over the one host pad. A pinch begins only
+/// while the surface is idle; a surface touch ends a live pinch first.
 #[derive(Debug, Default)]
 pub(crate) struct TouchpadSources {
     surface: TouchSurface,
     /// `Begin` took the pad; `End` or a surface touch gives it back.
     pinch: bool,
+    /// The last frame out of any source: what the host's pad holds.
+    sent: Option<TouchpadFrame>,
 }
 
 impl TouchpadSources {
@@ -293,7 +295,9 @@ impl TouchpadSources {
             height_dmm,
             time_us,
         )?;
-        Ok((ended.into_iter().chain(frames).collect(), forwarded))
+        let frames: Vec<_> = ended.into_iter().chain(frames).collect();
+        self.sent = frames.last().copied().or(self.sent);
+        Ok((frames, forwarded))
     }
 
     /// The pinch's frame, or `None` while the surface holds the pad: a `Begin` then is
@@ -312,7 +316,26 @@ impl TouchpadSources {
             PinchPhase::Update => self.pinch,
             PinchPhase::End => std::mem::take(&mut self.pinch),
         };
-        live.then(|| pinch_frame(phase, scale, rotation))
+        let frame = live.then(|| pinch_frame(phase, scale, rotation));
+        self.sent = frame.or(self.sent);
+        frame
+    }
+
+    /// A whole frame from the embedder's own touchpad, passed through.
+    pub(crate) fn raw(&mut self, frame: TouchpadFrame) -> TouchpadFrame {
+        self.sent = Some(frame);
+        frame
+    }
+
+    /// The all-lifted frame when the host's pad holds anything, then every source starts over:
+    /// the surface's next update announces it again.
+    pub(crate) fn release(&mut self) -> Option<TouchpadFrame> {
+        let lift = self
+            .sent
+            .filter(TouchpadFrame::is_active)
+            .map(|f| f.lifted());
+        *self = Self::default();
+        lift
     }
 }
 
@@ -673,5 +696,42 @@ mod tests {
             "a kept gesture holds the pad"
         );
         assert!(p.pinch(PinchPhase::End, 1.0, 0.0).is_none());
+    }
+
+    /// A held touch, a live pinch or a raw frame down: one plain lift, and the surface starts
+    /// over. Nothing down: nothing.
+    #[test]
+    fn a_release_lifts_what_the_host_holds_once() {
+        let lifted = |f: TouchpadFrame| f.contacts().is_empty() && !f.button && !f.is_active();
+        let mut p = TouchpadSources::default();
+        assert_eq!(p.release(), None, "never used");
+        sources(&mut p, &[t(1, 0.5, 0.5)]);
+        let lift = p.release().unwrap();
+        assert!(lifted(lift) && (lift.width_dmm, lift.height_dmm) == (W, H));
+        assert_eq!(p.release(), None, "once");
+        assert_eq!(
+            sources(&mut p, &[]).0.len(),
+            1,
+            "the surface announces again"
+        );
+        assert_eq!(p.release(), None, "an idle surface holds nothing");
+
+        p.pinch(PinchPhase::Begin, 1.0, 0.0).unwrap();
+        assert!(lifted(p.release().unwrap()), "a live pinch");
+        assert_eq!(
+            p.pinch(PinchPhase::Update, 1.2, 0.0),
+            None,
+            "and it is over"
+        );
+
+        let finger = TouchpadContact {
+            id: 0,
+            tip: true,
+            confident: true,
+            x: 1,
+            y: 1,
+        };
+        p.raw(TouchpadFrame::new(0, true, W, H, &[finger]).unwrap());
+        assert!(lifted(p.release().unwrap()), "a raw frame");
     }
 }

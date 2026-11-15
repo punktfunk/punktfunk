@@ -69,7 +69,9 @@ pub unsafe extern "C" fn punktfunk_connection_cycle_pad_mouse(
     })
 }
 
-/// Change scroll direction for this session at the shared outbound seam.
+/// Change scroll direction for this session at the shared outbound seam. While it is on the
+/// host's touchpad is not used ([`punktfunk_connection_host_touchpad`]): turning it on lifts
+/// whatever that pad holds.
 ///
 /// # Safety
 /// `c` is a valid connection handle. Callable from any thread.

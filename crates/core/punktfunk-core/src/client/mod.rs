@@ -2083,9 +2083,19 @@ impl NativeClient {
         Ok(())
     }
 
-    /// Change scroll direction for this session at the shared outbound seam.
+    /// Change scroll direction for this session at the shared outbound seam. While it is on the
+    /// host's touchpad is not used ([`Self::host_presents_touchpad`]): turning it on lifts
+    /// whatever that pad holds.
     pub fn set_invert_scroll(&self, invert: bool) {
+        let mut sources = self.touch_sources.lock().unwrap();
         self.shared.scroll_invert.store(invert, Ordering::Relaxed);
+        if !invert {
+            return;
+        }
+        if let Some(lift) = sources.release() {
+            // A closed session has no pad left to lift.
+            let _ = self.queue_touchpad(self.stamp_now(lift));
+        }
     }
 
     pub fn invert_scroll(&self) -> bool {
@@ -2193,20 +2203,18 @@ impl NativeClient {
             .map_err(|_| PunktfunkError::Closed)
     }
 
-    /// The host presents touchpad frames as a touchpad of its own (`FEATURE_TOUCHPAD`).
+    /// The host presents touchpad frames as a touchpad of its own (`FEATURE_TOUCHPAD`), read
+    /// live. With the player's Invert scroll direction on, the client keeps its own scroll path,
+    /// so the host's touchpad is not used.
     pub fn host_presents_touchpad(&self) -> bool {
-        self.features
-            .has(crate::quic::v2::registry::FEATURE_TOUCHPAD)
+        touchpad_use(self.features, self.invert_scroll()).0
     }
 
-    /// The host OS turns a tap on that touchpad into a click (`FEATURE_TOUCHPAD_TAPS`). A source
-    /// with no button of its own then sends no clicks; otherwise it makes them and retracts its
-    /// taps.
+    /// The host OS turns a tap on that touchpad into a click (`FEATURE_TOUCHPAD_TAPS`), read
+    /// live and never without [`Self::host_presents_touchpad`]. A source with no button of its
+    /// own then sends no clicks; otherwise it makes them and retracts its taps.
     pub fn host_taps_click(&self) -> bool {
-        self.host_presents_touchpad()
-            && self
-                .features
-                .has(crate::quic::v2::registry::FEATURE_TOUCHPAD_TAPS)
+        touchpad_use(self.features, self.invert_scroll()).1
     }
 
     /// The whole touchpad now (`0xCC/0x06`): every contact down, the button, the surface in
@@ -2230,8 +2238,9 @@ impl NativeClient {
             .ok_or(PunktfunkError::InvalidArg(
                 "touchpad frame needs at most five contacts with distinct ids 0..=31",
             ))?;
+        let mut sources = self.touch_sources.lock().unwrap();
         self.touchpad_granted()?;
-        self.queue_touchpad(self.stamp_now(frame))
+        self.queue_touchpad(self.stamp_now(sources.raw(frame)))
     }
 
     /// Every touch on a touch surface now, `x`/`y` in `0.0..=1.0` of a surface `width_dmm` ×
@@ -2259,13 +2268,13 @@ impl NativeClient {
         height_dmm: u16,
         time_us: u64,
     ) -> Result<bool> {
+        let mut sources = self.touch_sources.lock().unwrap();
         self.touchpad_granted()?;
         if time_us != 0 {
             let skew = time_us.wrapping_sub(self.born.elapsed().as_micros() as u64);
             self.touch_clock_skew.store(skew, Ordering::Relaxed);
         }
         let time_us = touch_surface::capture_us(time_us, || self.touch_clock_us());
-        let mut sources = self.touch_sources.lock().unwrap();
         let (frames, forwarded) = sources.surface(
             touches,
             max_contacts,
@@ -2299,8 +2308,8 @@ impl NativeClient {
                 "pinch scale and rotation must be finite",
             ));
         }
-        self.touchpad_granted()?;
         let mut sources = self.touch_sources.lock().unwrap();
+        self.touchpad_granted()?;
         match sources.pinch(phase, scale, rotation) {
             Some(frame) => self.queue_touchpad(self.stamp_now(frame)),
             None => Ok(()),
@@ -2318,12 +2327,14 @@ impl NativeClient {
         frame.stamped(crate::quic::touchpad_scan_time(self.touch_clock_us()))
     }
 
+    /// Run under the `touch_sources` lock, so no frame passes it after
+    /// [`Self::set_invert_scroll`] lifts the pad.
     fn touchpad_granted(&self) -> Result<()> {
         if self.host_presents_touchpad() {
             Ok(())
         } else {
             Err(PunktfunkError::Unsupported(
-                "host did not grant FEATURE_TOUCHPAD",
+                "host touchpad not granted, or scroll inverted",
             ))
         }
     }
@@ -2468,6 +2479,35 @@ mod expires_in_tests {
         assert_eq!(expires_in_secs(Some(100), 100), 1);
         assert_eq!(expires_in_secs(Some(50), 100), 1);
         assert_eq!(expires_in_secs(Some(u64::MAX), 0), u32::MAX);
+    }
+}
+
+/// Whether the host's touchpad is used, and whether its OS clicks on taps. The player's Invert
+/// scroll direction can't reach the host's own scrolling, so it turns both off.
+fn touchpad_use(features: crate::quic::v2::features::FeatureSet, invert: bool) -> (bool, bool) {
+    use crate::quic::v2::registry::{FEATURE_TOUCHPAD, FEATURE_TOUCHPAD_TAPS};
+    let used = features.has(FEATURE_TOUCHPAD) && !invert;
+    (used, used && features.has(FEATURE_TOUCHPAD_TAPS))
+}
+
+#[cfg(test)]
+mod touchpad_use_tests {
+    use super::touchpad_use;
+    use crate::quic::v2::features::FeatureSet;
+    use crate::quic::v2::registry::{FEATURE_TOUCHPAD, FEATURE_TOUCHPAD_TAPS};
+
+    #[test]
+    fn invert_scroll_turns_the_host_touchpad_off_and_back_on() {
+        let granted = FeatureSet::default()
+            .with(FEATURE_TOUCHPAD)
+            .with(FEATURE_TOUCHPAD_TAPS);
+        assert_eq!(touchpad_use(granted, false), (true, true));
+        assert_eq!(touchpad_use(granted, true), (false, false));
+        assert_eq!(touchpad_use(granted, false), (true, true), "and back");
+        let no_taps = FeatureSet::default().with(FEATURE_TOUCHPAD);
+        assert_eq!(touchpad_use(no_taps, false), (true, false));
+        let taps_alone = FeatureSet::default().with(FEATURE_TOUCHPAD_TAPS);
+        assert_eq!(touchpad_use(taps_alone, false), (false, false));
     }
 }
 

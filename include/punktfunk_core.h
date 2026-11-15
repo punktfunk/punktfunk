@@ -3217,7 +3217,9 @@ PunktfunkStatus punktfunk_connection_cycle_pad_mouse(PunktfunkConnection *c,
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
-// Change scroll direction for this session at the shared outbound seam.
+// Change scroll direction for this session at the shared outbound seam. While it is on the
+// host's touchpad is not used ([`punktfunk_connection_host_touchpad`]): turning it on lifts
+// whatever that pad holds.
 //
 // # Safety
 // `c` is a valid connection handle. Callable from any thread.
@@ -3796,7 +3798,9 @@ PunktfunkStatus punktfunk_connection_host_caps2(const PunktfunkConnection *c, ui
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
 // `true` when the host presents touchpad frames as a touchpad of its own: test it before
-// [`punktfunk_connection_send_touchpad`]. Fixed for the session.
+// [`punktfunk_connection_send_touchpad`]. With the player's Invert scroll direction on, the
+// client keeps its own scroll path, so the host's touchpad is not used: read this again after
+// [`punktfunk_connection_set_invert_scroll`].
 //
 // # Safety
 // `c` is a valid connection handle; `presents` is writable (NULL is skipped).
@@ -3806,8 +3810,8 @@ PunktfunkStatus punktfunk_connection_host_touchpad(const PunktfunkConnection *c,
 #if defined(PUNKTFUNK_FEATURE_QUIC)
 // `true` when the host OS turns a tap on that touchpad into a click. A source with no button
 // of its own (a touchscreen) then sends no clicks of its own. When `false` it keeps making its
-// clicks and passes `retract_taps = true`, so the host never adds a second one. Fixed for the
-// session.
+// clicks and passes `retract_taps = true`, so the host never adds a second one. `false`
+// whenever [`punktfunk_connection_host_touchpad`] is.
 //
 // # Safety
 // `c` is a valid connection handle; `taps` is writable (NULL is skipped).
