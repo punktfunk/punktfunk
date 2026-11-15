@@ -1045,6 +1045,10 @@ impl Shell {
                     .filter(|c| c.access_grants() & punktfunk_core::quic::GRANT_POINTER != 0)
                 {
                     c.set_invert_scroll(!c.invert_scroll());
+                    // Inverted scroll keeps the fingers off the host's touchpad.
+                    if let Some(cap) = &mut st.capture {
+                        cap.follow_touch_mode();
+                    }
                 }
             }
             RingCommand::CycleTouchMode => {

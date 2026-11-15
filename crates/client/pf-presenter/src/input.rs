@@ -129,8 +129,8 @@ fn send(connector: &NativeClient, kind: InputKind, code: u32, x: i32, y: i32, fl
 impl Capture {
     /// Without `abs_ok` the desktop model is unavailable and `mouse_mode`
     /// silently resolves to capture. `invert_scroll` seeds the live core
-    /// setting; [`NativeClient::set_invert_scroll`] changes it later. A Trackpad
-    /// session toward a host that presents a touchpad starts in frame mode.
+    /// setting; [`NativeClient::set_invert_scroll`] changes it later, and the caller
+    /// then calls [`Self::follow_touch_mode`]. Frame mode is decided here first.
     pub fn new(
         connector: Arc<NativeClient>,
         touch_mode: TouchMode,
@@ -139,6 +139,7 @@ impl Capture {
         abs_ok: bool,
         grants: u32,
     ) -> Capture {
+        // Before the frame-mode decision below: core offers the touchpad only uninverted.
         connector.set_invert_scroll(invert_scroll);
         let mut cap = Capture {
             connector,
@@ -173,17 +174,30 @@ impl Capture {
         self.view_dmm = view_dmm(px, scale);
     }
 
-    /// Frame mode is on in Trackpad toward a host that presents a touchpad. Entering
-    /// announces the surface; leaving takes every finger back from the host.
-    fn follow_touch_mode(&mut self) {
-        let on = self.touch_mode == TouchMode::Trackpad && self.connector.host_presents_touchpad();
-        let updates = self.frames.set(on, self.connector.host_taps_click());
-        self.send_surface(&updates, sdl_now_us());
+    /// Decide frame mode again ([`FrameMode::wanted`]). Call it when the touch mode or the
+    /// scroll direction changes.
+    pub fn follow_touch_mode(&mut self) {
+        let c = &self.connector;
+        let on = FrameMode::wanted(
+            self.touch_mode == TouchMode::Trackpad,
+            c.host_presents_touchpad(),
+            c.invert_scroll(),
+        );
+        let taps = c.host_taps_click();
+        self.set_frames(on, taps);
+    }
+
+    /// [`FrameMode::set`], and the announce on entering.
+    fn set_frames(&mut self, on: bool, host_taps: bool) {
+        if let Some(announce) = self.frames.set(on, host_taps, &mut self.gestures) {
+            self.send_surface(&[announce], sdl_now_us());
+        }
     }
 
     /// Core's touch surface, update by update. `t_us` is on SDL's clock, the one finger
-    /// events carry, so the host presents each frame when the finger moved.
-    fn send_surface(&self, updates: &[SurfaceUpdate], t_us: u64) {
+    /// events carry, so the host presents each frame when the finger moved. A refused
+    /// update ends frame mode until the next decision, so no finger goes unheard.
+    fn send_surface(&mut self, updates: &[SurfaceUpdate], t_us: u64) {
         let (w, h) = self.view_dmm;
         let retract = self.frames.retracts_taps();
         for u in updates {
@@ -192,7 +206,7 @@ impl Capture {
                 .iter()
                 .map(|&(id, x, y)| SurfaceTouch { id, x, y })
                 .collect();
-            let _ = self.connector.touchpad_surface(
+            let sent = self.connector.touchpad_surface(
                 &touches,
                 FRAME_CONTACTS,
                 false,
@@ -202,6 +216,11 @@ impl Capture {
                 h,
                 t_us,
             );
+            if let Err(e) = sent {
+                tracing::info!(error = %e, "touchpad surface update refused");
+                self.set_frames(false, false);
+                return;
+            }
         }
     }
 
