@@ -12,8 +12,10 @@
 //! `PYROWAVE_BENCH_QUEUE=compute` decodes on the compute-only family instead.
 //!
 //! `PYROWAVE_BENCH_API=1.1` (or `1.2`) asks the instance for that version, so a current GPU
-//! runs the path an older device takes. `PYROWAVE_BENCH_HIDE=<substring>` treats matching
-//! device extensions as absent, `synchronization2` for one.
+//! runs the path an older device takes. `PYROWAVE_BENCH_HIDE=<substring>[,…]` treats matching
+//! device extensions as absent: `timeline,8bit` at 1.1 is a device with neither.
+//! `PYROWAVE_BENCH_PIPELINE=1` decodes as the Android lane does: AUs go through the payload
+//! ring, frames queue up to the plane ring's depth, and a second thread waits for each.
 
 #[cfg(not(any(target_os = "linux", windows)))]
 fn main() {
@@ -294,21 +296,24 @@ mod bench {
         let has = |want: &std::ffi::CStr| {
             !hide
                 .as_deref()
-                .is_some_and(|h| want.to_string_lossy().contains(h))
+                .is_some_and(|h| h.split(',').any(|h| want.to_string_lossy().contains(h)))
                 && offered
                     .iter()
                     .any(|e| e.extension_name_as_c_str().is_ok_and(|n| n == want))
         };
-        let exts = features::extensions(api, has)
-            .context("the adapter lacks an extension PyroWave decode needs at this version")?;
+        let exts = features::extensions(api, has).map_err(|missing| {
+            anyhow::anyhow!("the adapter lacks {missing:?}, which PyroWave decode needs here")
+        })?;
         // What the wavelet lane turns on: every fact the device has of the set.
         let mut feat = features::Chain::new(api, has);
         // SAFETY: as above; the chain outlives the call.
         unsafe { instance.get_physical_device_features2(pdev, feat.head()) };
         let facts = feat.facts();
+        // SAFETY: as above.
+        let limits = unsafe { features::Limits::read(&instance, pdev, api, has) };
         anyhow::ensure!(
-            facts.decodes(),
-            "the adapter lacks a feature PyroWave decode needs: {facts:?}"
+            facts.decodes() && limits.decode(facts.storage8),
+            "the adapter lacks something PyroWave decode needs: {facts:?} {limits:?}"
         );
         let facts = features::Facts {
             sampler_ycbcr: false,
@@ -348,12 +353,12 @@ mod bench {
             instance_extensions: Vec::new(),
             device_extensions: exts.iter().map(|&n| n.to_owned()).collect(),
             f_sampler_ycbcr: false,
-            f_timeline_semaphore: true,
+            f_timeline_semaphore: facts.timeline,
             f_synchronization2: facts.sync2,
             video_decode: false,
             pyrowave_decode: true,
             f_shader_int16: true,
-            f_storage_buffer8: true,
+            f_storage_buffer8: facts.storage8,
             f_storage_buffer16: facts.storage16,
             f_subgroup_size_control: true,
             f_compute_full_subgroups: true,
@@ -385,13 +390,31 @@ mod bench {
         let mean = aus.iter().map(|a| a.0.len()).sum::<usize>() / aus.len();
         println!(
             "{name}: {w}x{h} {bits}-bit, {} AUs, mean {mean} bytes, float16={float16}, \
-             Vulkan {}.{}, sync2={}, decode on family {qf} (graphics {gfx_qf}, \
-             compute {compute_qf:?})",
+             Vulkan {}.{}, sync2={}, timeline={}, storage8={}, decode on family {qf} \
+             (graphics {gfx_qf}, compute {compute_qf:?})",
             aus.len(),
             vk::api_version_major(api),
             vk::api_version_minor(api),
-            facts.sync2
+            facts.sync2,
+            facts.timeline,
+            facts.storage8
         );
+        // As the Android lane runs: the loop waits for no frame, another thread does.
+        let pipeline = std::env::var_os("PYROWAVE_BENCH_PIPELINE").is_some();
+        if pipeline {
+            // The device outlives the decoder here, so the ring needs nothing kept alive.
+            dec.enable_in_place(std::sync::Arc::new(()))?;
+        }
+        let retire = pipeline.then(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<u64>();
+            let timeline = dec.timeline();
+            let waiter = std::thread::spawn(move || {
+                rx.iter()
+                    .filter(|&turn| timeline.wait(turn, Duration::from_millis(500)).is_err())
+                    .count()
+            });
+            (tx, waiter)
+        });
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let load = std::env::var("PYROWAVE_BENCH_LOAD")
             .ok()
@@ -418,7 +441,10 @@ mod bench {
                     let t = Instant::now();
                     let out = dec.decode_frame(&data[range.clone()], *aligned, *complete)?;
                     if let Some(f) = &out {
-                        dec.wait_ready(f)?;
+                        match &retire {
+                            Some((tx, _)) => tx.send(f.turn)?,
+                            None => dec.wait_ready(f)?,
+                        }
                     }
                     if timed {
                         if out.is_none() {
@@ -472,6 +498,12 @@ mod bench {
                 pct(&v, 100),
                 v.len()
             );
+        }
+        // The waiter holds the timeline, which goes before the device does.
+        if let Some((tx, waiter)) = retire {
+            drop(tx);
+            let late = waiter.join().expect("retire thread");
+            println!("retire: {late} waits timed out");
         }
         drop(dec);
         // SAFETY: the decoder is gone and idled the queue on drop; nothing else uses these.

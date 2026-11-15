@@ -17,9 +17,10 @@ const SYNC2: &CStr = c"VK_KHR_synchronization2";
 /// The lowest device version the lane runs on.
 pub const MIN_API: u32 = vk::API_VERSION_1_1;
 
-/// What the codec and this lane turn on. `storage16`, `float16`, `sync2` and
-/// `sampler_ycbcr` are optional: pyrowave picks other paths without them. Its
-/// storage-buffer kernels read 16-bit words, so `storage16` goes on wherever it exists.
+/// What the codec and this lane turn on. Only `int16` and the two subgroup facts are
+/// required: pyrowave picks other paths without the rest, and the decoder fences its
+/// submits without `timeline`. Its storage-buffer kernels read 16-bit words, so
+/// `storage16` goes on wherever it exists.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Facts {
     pub int16: bool,
@@ -34,38 +35,99 @@ pub struct Facts {
 }
 
 impl Facts {
-    /// The device decodes PyroWave on this lane.
+    /// The device has every feature the decoder needs. [`Limits::decode`] is the other half.
     pub fn decodes(&self) -> bool {
-        self.int16 && self.storage8 && self.timeline && self.size_control && self.full_subgroups
+        self.int16 && self.size_control && self.full_subgroups
+    }
+}
+
+/// The device properties pyrowave's decoder checks when it opens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Limits {
+    pub subgroup_ops: vk::SubgroupFeatureFlags,
+    pub min_subgroup: u32,
+    pub max_subgroup: u32,
+    /// Stages that take a pinned subgroup size.
+    pub sized_stages: vk::ShaderStageFlags,
+    pub max_texel_elements: u32,
+}
+
+impl Limits {
+    /// Read off `pdev`, usable at `api`. `has` answers whether the device offers an extension.
+    ///
+    /// # Safety
+    ///
+    /// `pdev` is a physical device of the live `instance`.
+    pub unsafe fn read(
+        instance: &ash::Instance,
+        pdev: vk::PhysicalDevice,
+        api: u32,
+        has: impl Fn(&CStr) -> bool,
+    ) -> Limits {
+        let mut subgroup = vk::PhysicalDeviceSubgroupProperties::default();
+        let mut sizes = vk::PhysicalDeviceSubgroupSizeControlProperties::default();
+        let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut subgroup);
+        if api >= vk::API_VERSION_1_3 || has(SIZE_CONTROL) {
+            props = props.push_next(&mut sizes);
+        }
+        // SAFETY: fn contract; the chain is locals this version and extension define.
+        unsafe { instance.get_physical_device_properties2(pdev, &mut props) };
+        let max_texel_elements = props.properties.limits.max_texel_buffer_elements;
+        Limits {
+            subgroup_ops: subgroup.supported_operations,
+            min_subgroup: sizes.min_subgroup_size,
+            max_subgroup: sizes.max_subgroup_size,
+            sized_stages: sizes.required_subgroup_size_stages,
+            max_texel_elements,
+        }
+    }
+
+    /// pyrowave's own open-time checks: six subgroup operation classes, 4 to 128 lanes, and
+    /// without 8-bit storage a payload it can read as a 16 M-element texel buffer.
+    pub fn decode(&self, storage8: bool) -> bool {
+        use vk::SubgroupFeatureFlags as F;
+        let ops = F::BASIC | F::VOTE | F::ARITHMETIC | F::BALLOT | F::SHUFFLE | F::SHUFFLE_RELATIVE;
+        let (lo, hi) = (4, 128);
+        // Every size the device has, or one the compute stage can be pinned to.
+        let lanes = (lo <= self.min_subgroup && self.max_subgroup <= hi)
+            || (lo <= self.max_subgroup
+                && self.min_subgroup <= hi
+                && self.sized_stages.contains(vk::ShaderStageFlags::COMPUTE));
+        self.subgroup_ops.contains(ops)
+            && lanes
+            && (storage8 || self.max_texel_elements >= 16 * 1024 * 1024)
     }
 }
 
 /// Device extensions to enable for a device usable at `api`: each feature's extension below
 /// the version that made it core. `has` answers whether the device offers one.
 ///
-/// `None` when a required one is missing. Below 1.2 pyrowave's render passes need
+/// `Err` names a required one that is missing. Below 1.2 pyrowave's render passes need
 /// `VK_KHR_create_renderpass2`.
-pub fn extensions(api: u32, has: impl Fn(&CStr) -> bool) -> Option<Vec<&'static CStr>> {
+pub fn extensions(
+    api: u32,
+    has: impl Fn(&CStr) -> bool,
+) -> Result<Vec<&'static CStr>, &'static CStr> {
     let mut out = Vec::new();
+    let mut missing = None;
     let mut take = |name: &'static CStr, required: bool| {
-        let offered = has(name);
-        if offered {
+        if has(name) {
             out.push(name);
+        } else if required {
+            missing = Some(name);
         }
-        offered || !required
     };
-    let mut ok = true;
     if api < vk::API_VERSION_1_2 {
-        ok &= take(RENDERPASS2, true);
-        ok &= take(TIMELINE, true);
-        ok &= take(STORAGE8, true);
+        take(RENDERPASS2, true);
+        take(TIMELINE, false);
+        take(STORAGE8, false);
         take(FLOAT16, false);
     }
     if api < vk::API_VERSION_1_3 {
-        ok &= take(SIZE_CONTROL, true);
+        take(SIZE_CONTROL, true);
         take(SYNC2, false);
     }
-    ok.then_some(out)
+    missing.map_or(Ok(out), Err)
 }
 
 /// One `VkPhysicalDeviceFeatures2` chain. Boxed, so the links survive a move.
@@ -289,6 +351,69 @@ mod tests {
         );
         c.enable(ALL);
         assert!(c.facts().decodes());
+        // 1.1 with neither timeline semaphores nor 8-bit storage: still a decoder.
+        let c = Chain::new(vk::API_VERSION_1_1, |n| {
+            n == RENDERPASS2 || n == SIZE_CONTROL
+        });
+        assert_eq!(
+            stypes(&c),
+            [
+                S::PHYSICAL_DEVICE_FEATURES_2,
+                S::PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES,
+                S::PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
+                S::PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES,
+            ]
+        );
+        let bare = Facts {
+            timeline: false,
+            storage8: false,
+            ..ALL
+        };
+        assert!(bare.decodes());
+    }
+
+    #[test]
+    fn limits_follow_pyrowaves_open_checks() {
+        use vk::SubgroupFeatureFlags as F;
+        // A Tegra X1: 32 lanes, no pinned sizes, a 2^27-element texel buffer.
+        let x1 = Limits {
+            subgroup_ops: F::from_raw(0x1FF),
+            min_subgroup: 32,
+            max_subgroup: 32,
+            sized_stages: vk::ShaderStageFlags::empty(),
+            max_texel_elements: 1 << 27,
+        };
+        assert!(x1.decode(false));
+        // Without 8-bit storage the texel buffer has to be large.
+        let small = Limits {
+            max_texel_elements: 65536,
+            ..x1
+        };
+        assert!(!small.decode(false) && small.decode(true));
+        // One lane per subgroup is no subgroup.
+        let scalar = Limits {
+            min_subgroup: 1,
+            max_subgroup: 1,
+            ..x1
+        };
+        assert!(!scalar.decode(true));
+        // 1 to 64 lanes: usable only where compute takes a pinned size.
+        let wide = Limits {
+            min_subgroup: 1,
+            max_subgroup: 64,
+            ..x1
+        };
+        assert!(!wide.decode(true));
+        let pinned = Limits {
+            sized_stages: vk::ShaderStageFlags::COMPUTE,
+            ..wide
+        };
+        assert!(pinned.decode(true));
+        let no_shuffle = Limits {
+            subgroup_ops: F::BASIC | F::VOTE | F::ARITHMETIC | F::BALLOT,
+            ..x1
+        };
+        assert!(!no_shuffle.decode(true));
     }
 
     #[test]
@@ -308,16 +433,28 @@ mod tests {
     #[test]
     fn a_missing_required_extension_refuses_the_device() {
         let names = |api, has: &dyn Fn(&CStr) -> bool| extensions(api, has);
-        assert_eq!(names(vk::API_VERSION_1_3, &|_| false), Some(vec![]));
+        assert_eq!(names(vk::API_VERSION_1_3, &|_| false), Ok(vec![]));
         assert_eq!(
             names(vk::API_VERSION_1_2, &|_| true),
-            Some(vec![SIZE_CONTROL, SYNC2])
+            Ok(vec![SIZE_CONTROL, SYNC2])
         );
-        assert_eq!(names(vk::API_VERSION_1_2, &|n| n == SYNC2), None);
+        assert_eq!(
+            names(vk::API_VERSION_1_2, &|n| n == SYNC2),
+            Err(SIZE_CONTROL)
+        );
         assert_eq!(
             names(vk::API_VERSION_1_1, &|n| n != SYNC2 && n != FLOAT16),
-            Some(vec![RENDERPASS2, TIMELINE, STORAGE8, SIZE_CONTROL])
+            Ok(vec![RENDERPASS2, TIMELINE, STORAGE8, SIZE_CONTROL])
         );
-        assert_eq!(names(vk::API_VERSION_1_1, &|n| n != TIMELINE), None);
+        // Neither timeline semaphores nor 8-bit storage: the device still opens.
+        assert_eq!(
+            names(vk::API_VERSION_1_1, &|n| n == RENDERPASS2
+                || n == SIZE_CONTROL),
+            Ok(vec![RENDERPASS2, SIZE_CONTROL])
+        );
+        assert_eq!(
+            names(vk::API_VERSION_1_1, &|n| n != RENDERPASS2),
+            Err(RENDERPASS2)
+        );
     }
 }

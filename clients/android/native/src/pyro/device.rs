@@ -72,8 +72,12 @@ pub(super) struct PyroDevice {
 /// The compute feature set pyrowave's kernels need, read off a physical device.
 struct FeatureProbe {
     ok: bool,
-    /// What the device has of the set. `float16` and `sync2` are preferred, not required.
+    /// What the device has of the set. Only `int16` and the subgroup facts are required.
     facts: features::Facts,
+    /// The properties pyrowave checks when it opens a decoder.
+    limits: features::Limits,
+    /// A required extension the device does not offer.
+    missing: Option<&'static CStr>,
     /// The codec's extensions to enable on this device.
     exts: Vec<&'static CStr>,
     /// The version the device may use: its own, capped at the instance's.
@@ -106,9 +110,16 @@ fn probe_features(instance: &ash::Instance, pdev: vk::PhysicalDevice) -> Feature
     // extensions define, and outlives the call.
     unsafe { instance.get_physical_device_features2(pdev, chain.head()) };
     let facts = chain.facts();
+    // SAFETY: `pdev` is a physical device of the live `instance`.
+    let limits = unsafe { features::Limits::read(instance, pdev, api, has) };
     FeatureProbe {
-        ok: props.api_version >= features::MIN_API && exts.is_some() && facts.decodes(),
+        ok: props.api_version >= features::MIN_API
+            && exts.is_ok()
+            && facts.decodes()
+            && limits.decode(facts.storage8),
         facts,
+        limits,
+        missing: exts.as_ref().err().copied(),
         exts: exts.unwrap_or_default(),
         api,
         api_version: props.api_version,
@@ -168,12 +179,16 @@ pub(crate) fn pyrowave_capable() -> bool {
     let devices = unsafe { instance.enumerate_physical_devices() }.unwrap_or_default();
     let capable = devices.iter().any(|&pdev| {
         let p = probe_features(&instance, pdev);
+        // Everything the verdict rests on, so a "false" in a user's log names its reason.
         log::info!(
-            "pyro: {} (Vulkan {}.{}) pyrowave-capable: {}",
+            "pyro: {} (Vulkan {}.{}) pyrowave-capable: {}; {:?}; {:?}; missing extension: {:?}",
             p.name,
             vk::api_version_major(p.api_version),
             vk::api_version_minor(p.api_version),
-            p.ok
+            p.ok,
+            p.facts,
+            p.limits,
+            p.missing
         );
         p.ok
     });
@@ -261,12 +276,15 @@ impl PyroDevice {
         let queue = unsafe { device.get_device_queue(qf, 0) };
 
         log::info!(
-            "pyro: {} on Vulkan {}.{} — PyroWave decode + present (float16: {}, sync2: {})",
+            "pyro: {} on Vulkan {}.{} — PyroWave decode + present (float16: {}, sync2: {}, \
+             timeline: {}, storage8: {})",
             probe.name,
             vk::api_version_major(probe.api_version),
             vk::api_version_minor(probe.api_version),
             facts.float16,
-            facts.sync2
+            facts.sync2,
+            facts.timeline,
+            facts.storage8
         );
 
         let vkd = VulkanDecodeDevice {
@@ -285,12 +303,12 @@ impl PyroDevice {
             instance_extensions: INSTANCE_EXTS.iter().map(|n| CString::from(*n)).collect(),
             device_extensions: exts.iter().map(|n| CString::from(*n)).collect(),
             f_sampler_ycbcr: false,
-            f_timeline_semaphore: true,
+            f_timeline_semaphore: facts.timeline,
             f_synchronization2: facts.sync2,
             video_decode: false,
             pyrowave_decode: true,
             f_shader_int16: true,
-            f_storage_buffer8: true,
+            f_storage_buffer8: facts.storage8,
             f_storage_buffer16: facts.storage16,
             f_subgroup_size_control: true,
             f_compute_full_subgroups: true,
