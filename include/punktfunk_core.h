@@ -3718,8 +3718,10 @@ PunktfunkStatus punktfunk_connection_send_touchpad_pinch(PunktfunkConnection *c,
 // `max_contacts` (`1..=5`); more touches (a `count` above five is fine), or `keep` when the
 // client's OS or app claims the gesture, take a forwarded gesture back from the host.
 // `retract_taps`: this source makes its own clicks from taps, so the host must not. The
-// surface is `width_dmm` × `height_dmm` tenths of a millimetre. Call on every change, and
-// once with `count = 0` when the source appears.
+// surface is `width_dmm` × `height_dmm` tenths of a millimetre. `time_us` is the platform's
+// capture time of these touches in µs, monotonic, on one epoch across calls; `0` takes core's
+// clock now. The host presents the frames at it. Call on every change, and once with
+// `count = 0` when the source appears.
 //
 // `*forwarded` true: core owns this update; do not also turn these touches into pointer or
 // scroll. False: the gesture is the caller's until an update with no touches, and on any
@@ -3738,6 +3740,7 @@ PunktfunkStatus punktfunk_connection_touchpad_surface(PunktfunkConnection *c,
                                                       bool retract_taps,
                                                       uint16_t width_dmm,
                                                       uint16_t height_dmm,
+                                                      uint64_t time_us,
                                                       bool *forwarded);
 #endif
 

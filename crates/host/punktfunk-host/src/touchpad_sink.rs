@@ -208,9 +208,13 @@ mod tests {
             confident: false,
             ..finger(900)
         };
-        s.apply(&frame(1, &[tomb]));
+        s.apply(&frame(1, &[tomb]).stamped(4321));
         let states = &applied(&s)[1..];
         assert_eq!(states.len(), 2);
+        assert!(
+            states.iter().all(|p| p.scan_time == 4321),
+            "both at the capture time"
+        );
         let doubt = states[0].contacts()[0];
         assert_eq!((doubt.tip, doubt.confident), (true, false));
         assert_eq!(

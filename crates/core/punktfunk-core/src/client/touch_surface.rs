@@ -10,8 +10,8 @@
 
 use crate::error::{PunktfunkError, Result};
 use crate::quic::{
-    pinch_frame, PinchPhase, TouchpadContact, TouchpadFrame, TOUCHPAD_ASSUMED_DMM,
-    TOUCHPAD_MAX_CONTACTS,
+    pinch_frame, touchpad_scan_time, PinchPhase, TouchpadContact, TouchpadFrame,
+    TOUCHPAD_ASSUMED_DMM, TOUCHPAD_MAX_CONTACTS,
 };
 
 /// A lift this soon after landing may be a tap on the host. At or above every host OS's own
@@ -60,7 +60,8 @@ pub(crate) struct TouchSurface {
     held: Vec<Held>,
     /// Tombstones, oldest first, each with the time it stops riding frames.
     tombs: Vec<(TouchpadContact, u64)>,
-    /// The last frame emitted; `None` before the announce.
+    /// The last frame emitted, without its scan time, so an unchanged update stays quiet
+    /// whenever it comes; `None` before the announce.
     last: Option<TouchpadFrame>,
 }
 
@@ -68,7 +69,8 @@ impl TouchSurface {
     /// The frames to send for this update, and whether core owns it. `false` means the
     /// gesture is the embedder's until an update with no touches. `max_contacts` clamps to
     /// `1..=5`; more touches than that, or `keep`, claims the gesture for the embedder.
-    /// `now_ms` is monotonic. `InvalidArg` on a non-finite coordinate or one platform id twice.
+    /// `time_us` is the touches' monotonic capture time: the frames' scan time, and the clock
+    /// tap age and tombstones run on. `InvalidArg` on a non-finite coordinate or one id twice.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn update(
         &mut self,
@@ -79,9 +81,12 @@ impl TouchSurface {
         retract_taps: bool,
         width_dmm: u16,
         height_dmm: u16,
-        now_ms: u64,
+        time_us: u64,
     ) -> Result<(Vec<TouchpadFrame>, bool)> {
         validate(touches)?;
+        let now_ms = time_us / 1000;
+        let scan_time = touchpad_scan_time(time_us);
+        let stamp = |f: TouchpadFrame| f.stamped(scan_time);
         self.tombs.retain(|&(_, until)| now_ms < until);
         if self.kept {
             self.kept = !touches.is_empty();
@@ -91,7 +96,10 @@ impl TouchSurface {
         if !touches.is_empty() && (keep || touches.len() > max) {
             self.kept = true;
             self.held.clear();
-            return Ok((self.take_back(now_ms).into_iter().collect(), false));
+            return Ok((
+                self.take_back(now_ms).map(stamp).into_iter().collect(),
+                false,
+            ));
         }
         let lifted = self.track(touches, width_dmm, height_dmm, now_ms);
         if retract_taps {
@@ -104,7 +112,7 @@ impl TouchSurface {
             return Ok((Vec::new(), true));
         }
         self.last = Some(frame);
-        Ok((vec![frame], true))
+        Ok((vec![stamp(frame)], true))
     }
 
     /// A touch is down or the gesture is the embedder's.
@@ -211,6 +219,15 @@ impl TouchSurface {
     }
 }
 
+/// The embedder's capture time, or core's clock when it gave none (`0`).
+pub(crate) fn capture_us(given_us: u64, core_us: impl FnOnce() -> u64) -> u64 {
+    if given_us == 0 {
+        core_us()
+    } else {
+        given_us
+    }
+}
+
 /// The surface in millimetres; an unknown one is [`TOUCHPAD_ASSUMED_DMM`].
 fn surface_mm(width_dmm: u16, height_dmm: u16) -> (f32, f32) {
     let (w, h) = if width_dmm == 0 || height_dmm == 0 {
@@ -247,7 +264,7 @@ pub(crate) struct TouchpadSources {
 
 impl TouchpadSources {
     /// [`TouchSurface::update`]. An update with no touches during a pinch sends nothing, or
-    /// its empty frame would lift the pinch's fingers.
+    /// its empty frame would lift the pinch's fingers. A pinch it ends ends at its time.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn surface(
         &mut self,
@@ -258,13 +275,14 @@ impl TouchpadSources {
         retract_taps: bool,
         width_dmm: u16,
         height_dmm: u16,
-        now_ms: u64,
+        time_us: u64,
     ) -> Result<(Vec<TouchpadFrame>, bool)> {
         validate(touches)?;
         if self.pinch && touches.is_empty() {
             return Ok((Vec::new(), true));
         }
-        let ended = std::mem::take(&mut self.pinch).then(|| pinch_frame(PinchPhase::End, 1.0, 0.0));
+        let ended = std::mem::take(&mut self.pinch)
+            .then(|| pinch_frame(PinchPhase::End, 1.0, 0.0).stamped(touchpad_scan_time(time_us)));
         let (frames, forwarded) = self.surface.update(
             touches,
             max_contacts,
@@ -273,7 +291,7 @@ impl TouchpadSources {
             retract_taps,
             width_dmm,
             height_dmm,
-            now_ms,
+            time_us,
         )?;
         Ok((ended.into_iter().chain(frames).collect(), forwarded))
     }
@@ -344,7 +362,8 @@ mod tests {
         c: Call,
     ) -> (Vec<TouchpadFrame>, bool) {
         let (max, b, k, r, w, h) = (c.max, c.button, c.keep, c.retract, c.w, c.h);
-        s.update(touches, max, b, k, r, w, h, now_ms).unwrap()
+        s.update(touches, max, b, k, r, w, h, now_ms * 1000)
+            .unwrap()
     }
 
     fn step(s: &mut TouchSurface, touches: &[SurfaceTouch]) -> (Vec<TouchpadFrame>, bool) {
@@ -495,6 +514,30 @@ mod tests {
         }
         assert!(bad(&mut s, &[t(1, 0.5, 0.5), t(1, 0.6, 0.5)]));
         assert!(s.last.is_none() && !s.busy(), "nothing moved");
+    }
+
+    /// The capture time rides each frame as its scan time; the pinch a touch ends ends then
+    /// too. An unchanged update later sends nothing.
+    #[test]
+    fn frames_carry_the_capture_time() {
+        let mut s = TouchSurface::default();
+        let (out, _) = run(&mut s, &[t(1, 0.5, 0.5)], 1234, PLAIN);
+        assert_eq!(out[0].scan_time, 12_340);
+        assert_eq!(run(&mut s, &[t(1, 0.5, 0.5)], 1300, PLAIN), (vec![], true));
+        let (out, _) = run(&mut s, &[t(1, 0.6, 0.5)], 7000, PLAIN);
+        assert_eq!(out[0].scan_time, touchpad_scan_time(7_000_000), "wraps");
+        let (out, _) = run(&mut s, &[t(1, 0.6, 0.5)], 7010, KEEP);
+        assert_eq!(out[0].scan_time, 4_564, "a take-back too");
+
+        let mut p = TouchpadSources::default();
+        p.pinch(PinchPhase::Begin, 1.0, 0.0).unwrap();
+        let (out, _) = p
+            .surface(&[t(7, 0.5, 0.5)], 2, false, false, false, W, H, 2_000_500)
+            .unwrap();
+        assert_eq!((out[0].scan_time, out[1].scan_time), (20_005, 20_005));
+
+        assert_eq!(capture_us(0, || 42), 42, "no time given: core's clock");
+        assert_eq!(capture_us(7, || unreachable!()), 7);
     }
 
     #[test]

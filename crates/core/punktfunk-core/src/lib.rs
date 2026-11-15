@@ -118,7 +118,7 @@ pub const ABI_VERSION: u32 = 73;
 /// FNV-1a of the generated `include/punktfunk_core.h` without comments or the version define.
 /// `gen-headers`'s `abi_header_hash` test fails on a change; update this beside `ABI_VERSION`.
 /// cbindgen:ignore
-pub const ABI_HEADER_HASH: u64 = 0xb1e4_e6a7_be16_e566;
+pub const ABI_HEADER_HASH: u64 = 0xb23b_8578_9e3d_78b1;
 
 #[cfg(test)]
 mod env_tests {

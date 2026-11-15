@@ -8,13 +8,15 @@
 //!
 //! The host keeps state in a [`TouchpadTracker`] and maps each frame onto the virtual pad
 //! ([`TouchpadFrame::to_pad`]): a millimetre on the client is a millimetre on the pad, centred,
-//! scaled down only when the surface is larger. [`pinch_frame`] turns an OS pinch into two
-//! fingers for a source that gives no finger positions.
+//! scaled down only when the surface is larger. Each frame carries its capture time, which
+//! [`ScanClock`] maps onto the host's clock. [`pinch_frame`] turns an OS pinch into two fingers
+//! for a source that gives no finger positions.
 //!
 //! Send only under `FEATURE_TOUCHPAD`. Wire, pad and sources: `design/touchpad-passthrough.md`.
 
 use super::datagram::{RICH_INPUT_MAGIC, RICH_TOUCHPAD_FRAME};
 use super::pen::pen_seq_newer;
+use std::time::{Duration, Instant};
 
 pub const TOUCHPAD_MAX_CONTACTS: usize = 5;
 /// Contact ids run `0..=TOUCHPAD_MAX_ID`.
@@ -37,8 +39,8 @@ pub const TOUCHPAD_PAD_MAX_Y: u16 = TOUCHPAD_PAD_HEIGHT_MM * TOUCHPAD_UNITS_PER_
 /// The surface, in tenths of a millimetre, of a frame that says `0`: 100 × 60 mm.
 pub const TOUCHPAD_ASSUMED_DMM: (u16, u16) = (1000, 600);
 
-/// `[0xCC][0x06][u16 seq][flags][u16 width_dmm][u16 height_dmm][count]`.
-const HEADER_LEN: usize = 10;
+/// `[0xCC][0x06][u16 seq][flags][u16 scan_time][u16 width_dmm][u16 height_dmm][count]`.
+const HEADER_LEN: usize = 12;
 /// `[id][state][u16 x][u16 y]`.
 const CONTACT_LEN: usize = 6;
 const FLAG_BUTTON: u8 = 0x01;
@@ -66,15 +68,19 @@ impl TouchpadContact {
     }
 }
 
-/// `[0xCC][0x06][u16 seq LE][u8 flags][u16 width_dmm LE][u16 height_dmm LE][u8 count]` +
-/// `count` × `[u8 id][u8 state][u16 x LE][u16 y LE]`. Flags bit 0 is the button; state bit 0
-/// tip, bit 1 confident; other bits are ignored. A contact absent from a frame has lifted; one
-/// listed as a tombstone lifted by accident, which one frame says whole.
+/// `[0xCC][0x06][u16 seq LE][u8 flags][u16 scan_time LE][u16 width_dmm LE][u16 height_dmm LE]`
+/// `[u8 count]` + `count` × `[u8 id][u8 state][u16 x LE][u16 y LE]`. Flags bit 0 is the button;
+/// state bit 0 tip, bit 1 confident; other bits are ignored. A contact absent from a frame has
+/// lifted; one listed as a tombstone lifted by accident, which one frame says whole.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TouchpadFrame {
     /// Wrapping; the host applies only a newer one.
     pub seq: u16,
     pub button: bool,
+    /// When the client captured this frame, in 100 µs units, wrapping: a Precision Touchpad's
+    /// Scan Time unit. The host presents with it, not with the arrival, which Wi-Fi bunches.
+    /// [`Self::new`] leaves it `0`; see [`touchpad_scan_time`].
+    pub scan_time: u16,
     /// The client's surface in tenths of a millimetre; `0` is unknown.
     pub width_dmm: u16,
     pub height_dmm: u16,
@@ -104,6 +110,7 @@ impl TouchpadFrame {
         Some(TouchpadFrame {
             seq,
             button,
+            scan_time: 0,
             width_dmm,
             height_dmm,
             count: contacts.len() as u8,
@@ -125,11 +132,26 @@ impl TouchpadFrame {
         self.contacts().iter().any(TouchpadContact::is_tombstone)
     }
 
-    /// Every contact lifted and the button up, on the same surface. Unused slots stay at their
-    /// default, as `new` leaves them, so two equal pads compare equal.
+    /// Every contact lifted and the button up, on the same surface and scan time. Unused slots
+    /// stay at their default, as `new` leaves them, so two equal pads compare equal.
     pub fn lifted(&self) -> TouchpadFrame {
-        TouchpadFrame::new(self.seq, false, self.width_dmm, self.height_dmm, &[])
+        self.with_contacts(false, &[])
             .expect("no contacts is a valid frame")
+    }
+
+    /// This frame captured at `scan_time`.
+    pub fn stamped(mut self, scan_time: u16) -> TouchpadFrame {
+        self.scan_time = scan_time;
+        self
+    }
+
+    /// The same frame, surface and scan time with another button and contacts.
+    fn with_contacts(&self, button: bool, contacts: &[TouchpadContact]) -> Option<TouchpadFrame> {
+        let f = TouchpadFrame::new(self.seq, button, self.width_dmm, self.height_dmm, contacts)?;
+        Some(TouchpadFrame {
+            scan_time: self.scan_time,
+            ..f
+        })
     }
 
     pub fn encode(&self) -> Vec<u8> {
@@ -137,6 +159,7 @@ impl TouchpadFrame {
         out.extend_from_slice(&[RICH_INPUT_MAGIC, RICH_TOUCHPAD_FRAME]);
         out.extend_from_slice(&self.seq.to_le_bytes());
         out.push(if self.button { FLAG_BUTTON } else { 0 });
+        out.extend_from_slice(&self.scan_time.to_le_bytes());
         out.extend_from_slice(&self.width_dmm.to_le_bytes());
         out.extend_from_slice(&self.height_dmm.to_le_bytes());
         out.push(self.count);
@@ -157,7 +180,7 @@ impl TouchpadFrame {
             return None;
         }
         let u16at = |o: usize| u16::from_le_bytes([b[o], b[o + 1]]);
-        let count = usize::from(b[9]);
+        let count = usize::from(b[HEADER_LEN - 1]);
         if count > TOUCHPAD_MAX_CONTACTS || b.len() < HEADER_LEN + count * CONTACT_LEN {
             return None;
         }
@@ -172,13 +195,17 @@ impl TouchpadFrame {
                 y: u16at(o + 4),
             };
         }
-        TouchpadFrame::new(
+        let f = TouchpadFrame::new(
             u16at(2),
             b[4] & FLAG_BUTTON != 0,
-            u16at(5),
             u16at(7),
+            u16at(9),
             &contacts[..count],
-        )
+        )?;
+        Some(TouchpadFrame {
+            scan_time: u16at(5),
+            ..f
+        })
     }
 
     /// This frame's touching contacts on the virtual pad, in pad units. The surface keeps its
@@ -211,10 +238,16 @@ impl TouchpadFrame {
         }
         PadState {
             button: self.button,
+            scan_time: self.scan_time,
             count: count as u8,
             contacts,
         }
     }
+}
+
+/// A monotonic capture time in µs as a frame's [`TouchpadFrame::scan_time`].
+pub fn touchpad_scan_time(time_us: u64) -> u16 {
+    (time_us / 100) as u16
 }
 
 /// One contact on the virtual pad: `x` in `0..=TOUCHPAD_PAD_MAX_X`, `y` in
@@ -233,6 +266,10 @@ pub struct PadContact {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PadState {
     pub button: bool,
+    /// The client's capture time, 100 µs units, wrapping ([`ScanClock`] maps it onto the
+    /// host's clock). A doubt before its lift and a forced release repeat their frame's time,
+    /// so a backend makes its own report times strictly increasing.
+    pub scan_time: u16,
     count: u8,
     contacts: [PadContact; TOUCHPAD_MAX_CONTACTS],
 }
@@ -285,8 +322,8 @@ impl TouchpadTracker {
         let mut contacts: Vec<_> = frame.contacts().iter().filter(|c| c.tip).copied().collect();
         contacts.extend(doubted);
         contacts.sort_by_key(|c| c.id);
-        let (button, w, h) = (frame.button, frame.width_dmm, frame.height_dmm);
-        TouchpadFrame::new(frame.seq, button, w, h, &contacts)
+        frame
+            .with_contacts(frame.button, &contacts)
             .into_iter()
             .chain([*frame])
             .collect()
@@ -307,6 +344,57 @@ impl TouchpadTracker {
         let lifted = self.last.filter(TouchpadFrame::is_active)?.lifted();
         self.last = Some(lifted);
         Some(lifted)
+    }
+}
+
+/// More than this between frames, or a capture step this large or backwards, starts a new
+/// stroke: the clocks may have drifted, or the client switched to a source on another clock.
+const SCAN_STROKE_BREAK: Duration = Duration::from_secs(1);
+
+/// Scan times onto the host's clock with no added latency, for a backend that stamps reports:
+/// the capture time plus the smallest delay seen this stroke, so the least-delayed frame sets
+/// the mapping and frames that arrive bunched come out spaced as they were captured. A result
+/// is never later than its arrival nor earlier than the one before; arrivals must not go back.
+#[derive(Debug, Default)]
+pub struct ScanClock {
+    stroke: Option<ScanStroke>,
+}
+
+#[derive(Debug)]
+struct ScanStroke {
+    scan: u16,
+    /// Capture time since the stroke's first frame.
+    capture: Duration,
+    /// Host time of that first capture: the smallest arrival − capture seen.
+    origin: Instant,
+    arrival: Instant,
+    out: Instant,
+}
+
+impl ScanClock {
+    pub fn host_time(&mut self, scan_time: u16, arrival: Instant) -> Instant {
+        if let Some(s) = self.stroke.as_mut() {
+            let step = Duration::from_micros(u64::from(scan_time.wrapping_sub(s.scan)) * 100);
+            let gap = arrival.saturating_duration_since(s.arrival);
+            if step <= SCAN_STROKE_BREAK && gap <= SCAN_STROKE_BREAK {
+                s.scan = scan_time;
+                s.capture += step;
+                if let Some(origin) = arrival.checked_sub(s.capture) {
+                    s.origin = s.origin.min(origin);
+                }
+                s.arrival = arrival;
+                s.out = (s.origin + s.capture).min(arrival).max(s.out);
+                return s.out;
+            }
+        }
+        self.stroke = Some(ScanStroke {
+            scan: scan_time,
+            capture: Duration::ZERO,
+            origin: arrival,
+            arrival,
+            out: arrival,
+        });
+        arrival
     }
 }
 
@@ -382,10 +470,20 @@ mod tests {
             &[finger(0, 100, 200), taken_back, hover],
         )
         .unwrap();
+        let f = TouchpadFrame {
+            scan_time: 0xBEEF,
+            ..f
+        };
         let d = f.encode();
-        assert_eq!(&d[..2], &[RICH_INPUT_MAGIC, RICH_TOUCHPAD_FRAME]);
+        // magic, kind, seq, flags, scan_time, width, height, count
+        let head = [
+            0xCC, 0x06, 0xFE, 0xFF, 0x01, 0xEF, 0xBE, 0xD2, 0x04, 0x37, 0x02, 3,
+        ];
+        assert_eq!(d[..HEADER_LEN], head);
         assert_eq!(d.len(), HEADER_LEN + 3 * CONTACT_LEN);
         assert_eq!(TouchpadFrame::decode(&d), Some(f));
+        assert_eq!(f.lifted().scan_time, 0xBEEF);
+        assert_eq!(f.to_pad().scan_time, 0xBEEF);
 
         let empty = TouchpadFrame::new(1, false, 0, 0, &[]).unwrap();
         assert_eq!(TouchpadFrame::decode(&empty.encode()), Some(empty));
@@ -400,7 +498,7 @@ mod tests {
         assert!(TouchpadFrame::decode(&d[..d.len() - 1]).is_none(), "torn");
         assert!(TouchpadFrame::decode(&d[..HEADER_LEN - 1]).is_none());
         let mut six = d.clone();
-        six[9] = 6;
+        six[HEADER_LEN - 1] = 6;
         six.extend_from_slice(&[5, STATE_TIP, 0, 0, 0, 0]);
         assert!(TouchpadFrame::decode(&six).is_none(), "count above five");
         let mut dup = d.clone();
@@ -520,11 +618,78 @@ mod tests {
         let mut t = TouchpadTracker::default();
         t.apply(&frame(0, &[finger(0, 100, 200)]));
         // Frame 1, the first tombstone, never arrived.
-        let out = t.apply(&frame(2, &[tombstone(0), finger(1, 5, 5)]));
+        let carried = TouchpadFrame {
+            scan_time: 77,
+            ..frame(2, &[tombstone(0), finger(1, 5, 5)])
+        };
+        let out = t.apply(&carried);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].contacts()[0].id, 0);
         assert!(!out[0].contacts()[0].confident && out[0].contacts()[0].tip);
         assert_eq!(out[1].to_pad().contacts()[0].id, 1);
+        assert_eq!(
+            (out[0].scan_time, out[1].scan_time),
+            (77, 77),
+            "the doubt keeps its time"
+        );
+        assert_eq!(t.force_release().unwrap().scan_time, 77);
+    }
+
+    fn us(n: u64) -> Duration {
+        Duration::from_micros(n)
+    }
+
+    /// Captured 8 ms apart, the last three arriving within 0.4 ms: they come out 8 ms apart.
+    #[test]
+    fn bunched_frames_come_out_spaced_as_captured() {
+        let (base, mut c) = (Instant::now(), ScanClock::default());
+        let arrivals = [10_000, 35_000, 35_200, 35_400];
+        for (i, a) in arrivals.iter().enumerate() {
+            let t = c.host_time(1000 + 80 * i as u16, base + us(*a));
+            assert_eq!(t - base, us(10_000 + 8_000 * i as u64), "frame {i}");
+        }
+    }
+
+    #[test]
+    fn a_late_frame_moves_nothing_and_results_never_pass_arrival_or_go_back() {
+        let (base, mut c) = (Instant::now(), ScanClock::default());
+        let delays = [5_000, 5_000, 50_000, 5_000, 1_000, 30_000, 500];
+        let mut last = base;
+        for (i, d) in delays.iter().enumerate() {
+            let captured = 8_000 * i as u64;
+            let arrival = base + us(captured + d);
+            let t = c.host_time(80 * i as u16, arrival);
+            assert!(t <= arrival && t >= last, "frame {i}");
+            if i < 4 {
+                assert_eq!(t - base, us(captured + 5_000), "the least delay sets it");
+            }
+            last = t;
+        }
+    }
+
+    #[test]
+    fn a_pause_a_step_back_and_the_wrap() {
+        let (base, mut c) = (Instant::now(), ScanClock::default());
+        c.host_time(100, base);
+        let after = base + us(1_500_000);
+        assert_eq!(
+            c.host_time(180, after),
+            after,
+            "a pause starts a new stroke"
+        );
+        let back = after + us(10_000);
+        assert_eq!(c.host_time(90, back), back, "so does a step back");
+
+        let (base, mut c) = (Instant::now(), ScanClock::default());
+        c.host_time(u16::MAX - 40, base + us(5_000));
+        let t = c.host_time(40, base + us(30_000));
+        assert_eq!(t - base, us(13_100), "81 counts past the wrap");
+    }
+
+    #[test]
+    fn a_capture_time_in_microseconds_becomes_a_scan_time() {
+        assert_eq!(touchpad_scan_time(1_234_567), 12_345);
+        assert_eq!(touchpad_scan_time(6_553_600), 0, "wraps");
     }
 
     #[test]

@@ -2226,7 +2226,7 @@ impl NativeClient {
                 "touchpad frame needs at most five contacts with distinct ids 0..=31",
             ))?;
         self.touchpad_granted()?;
-        self.queue_touchpad(frame)
+        self.queue_touchpad(self.stamp_now(frame))
     }
 
     /// Every touch on a touch surface now, `x`/`y` in `0.0..=1.0` of a surface `width_dmm` ×
@@ -2234,7 +2234,9 @@ impl NativeClient {
     /// touchpad contacts; more touches, or `keep` (the client's OS or app claimed the
     /// gesture), take a forwarded gesture back from the host. `retract_taps`: this source makes
     /// its own clicks from taps, so a tap-like lift is doubted and the host does not click too.
-    /// Call it on every change, and once with no touches when the source appears.
+    /// Call it on every change, and once with no touches when the source appears. `time_us` is
+    /// the platform's capture time of these touches, monotonic, any epoch kept across calls;
+    /// `0` takes core's clock now. The host presents the frames at it.
     ///
     /// `true`: core owns this update; do not also turn these touches into pointer or scroll.
     /// `false`: the gesture is the embedder's until an update with no touches, which is
@@ -2250,9 +2252,10 @@ impl NativeClient {
         retract_taps: bool,
         width_dmm: u16,
         height_dmm: u16,
+        time_us: u64,
     ) -> Result<bool> {
         self.touchpad_granted()?;
-        let now_ms = self.born.elapsed().as_millis() as u64;
+        let time_us = touch_surface::capture_us(time_us, || self.touch_clock_us());
         let mut sources = self.touch_sources.lock().unwrap();
         let (frames, forwarded) = sources.surface(
             touches,
@@ -2262,7 +2265,7 @@ impl NativeClient {
             retract_taps,
             width_dmm,
             height_dmm,
-            now_ms,
+            time_us,
         )?;
         for frame in frames {
             self.queue_touchpad(frame)?;
@@ -2290,9 +2293,18 @@ impl NativeClient {
         self.touchpad_granted()?;
         let mut sources = self.touch_sources.lock().unwrap();
         match sources.pinch(phase, scale, rotation) {
-            Some(frame) => self.queue_touchpad(frame),
+            Some(frame) => self.queue_touchpad(self.stamp_now(frame)),
             None => Ok(()),
         }
+    }
+
+    /// Core's clock for touchpad capture times: µs since the connect.
+    fn touch_clock_us(&self) -> u64 {
+        self.born.elapsed().as_micros() as u64
+    }
+
+    fn stamp_now(&self, frame: crate::quic::TouchpadFrame) -> crate::quic::TouchpadFrame {
+        frame.stamped(crate::quic::touchpad_scan_time(self.touch_clock_us()))
     }
 
     fn touchpad_granted(&self) -> Result<()> {
