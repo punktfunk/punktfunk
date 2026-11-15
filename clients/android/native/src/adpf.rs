@@ -152,10 +152,6 @@ impl HintSession {
 
     /// Report one frame split into CPU and GPU time (API 35). `start_ns` is
     /// `CLOCK_MONOTONIC`. Below API 35 the total goes through [`HintSession::report_actual`].
-    #[cfg_attr(
-        not(target_pointer_width = "64"),
-        expect(dead_code, reason = "only the 64-bit PyroWave lane calls it")
-    )]
     pub fn report_work(&self, start_ns: i64, total_ns: i64, cpu_ns: i64, gpu_ns: i64) {
         let Some(w) = self.api.work.as_ref().filter(|_| !self.work.is_null()) else {
             return self.report_actual(total_ns);

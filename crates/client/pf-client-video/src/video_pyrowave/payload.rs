@@ -190,11 +190,11 @@ impl PayloadRing {
     /// What pyrowave wraps for its payload.
     pub(super) fn as_pw(&self) -> pw::pyrowave_payload_memory {
         pw::pyrowave_payload_memory {
-            buffer: self.buffer.as_raw() as usize as pw::VkBuffer,
+            buffer: pw_handle(self.buffer.as_raw()),
             size: self.size as u64,
             copy_reserve: HEAD as u64,
             host: self.host.as_ptr().cast(),
-            linear: self.linear.map(|i| i.as_raw() as usize as pw::VkImage),
+            linear: self.linear.map(|i| pw_handle(i.as_raw())),
             rows: self.rows,
         }
     }
@@ -288,4 +288,15 @@ impl Drop for RingSlot {
             .unwrap_or_else(|e| e.into_inner())
             .push(self.index);
     }
+}
+
+/// A non-dispatchable handle as the bindings spell it: a pointer on 64-bit targets, `u64`
+/// on 32-bit ones, where a detour through `usize` drops the upper half.
+#[cfg(target_pointer_width = "64")]
+pub(super) fn pw_handle<T>(raw: u64) -> *mut T {
+    raw as usize as *mut T
+}
+#[cfg(not(target_pointer_width = "64"))]
+pub(super) fn pw_handle(raw: u64) -> u64 {
+    raw
 }

@@ -89,13 +89,11 @@ pub mod video_d3d11;
 pub mod video_d3d11_native;
 // PyroWave: Vulkan compute on the device the frame is presented from (no fds, no dmabuf,
 // no D3D11 interop). Linux + Windows + Android + PS5; Apple Metal is a separate port.
-// 64-bit Android only, mirroring pyrowave-sys's own gate: Vulkan's armv7 calling
-// convention has no bindgen representation, so the sys crate is an empty stub there.
 #[cfg(all(
     any(
         target_os = "linux",
         windows,
-        all(target_os = "android", target_pointer_width = "64"),
+        target_os = "android",
         all(target_os = "freebsd", target_vendor = "sie"),
         target_os = "horizon"
     ),

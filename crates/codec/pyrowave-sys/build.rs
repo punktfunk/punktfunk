@@ -1,17 +1,14 @@
 //! Build the vendored PyroWave codec (C++/Vulkan compute) as static archives via
 //! CMake and generate bindings over its C API (`pyrowave.h`).
 //!
-//! Linux, Windows, and 64-bit Android — the targets whose hosts/clients run the
+//! Linux, Windows and Android — the targets whose hosts/clients run the
 //! Vulkan codec path (design/pyrowave-codec-plan.md §5). Other targets get an empty
 //! bindings file so the workspace builds everywhere (the Apple client is a native
 //! Metal port, §4.7 — it never links this crate).
 //!
-//! 32-bit Android is stubbed with them. The C++ builds fine there, but Vulkan's
-//! armv7 calling convention (`__attribute__((pcs("aapcs-vfp")))` on every VKAPI
-//! entry point) has no bindgen representation, and it panics rather than skipping
-//! it. Nothing is lost: armeabi-v7a is the 32-bit TV-stick ABI, and those boxes
-//! have neither the link nor the Vulkan 1.3 device this codec needs. The gate is
-//! mirrored by `target_pointer_width` cfgs in src/lib.rs and pf-client-core.
+//! Vulkan's function-pointer types stay out of bindgen and are declared by hand.
+//! On armeabi-v7a they carry `pcs("aapcs-vfp")`, which bindgen panics on. The API
+//! names one, and it takes no float, so `extern "C"` passes its arguments the same.
 //!
 //! Everything compiles from the committed vendor tree: no network, no system
 //! pyrowave, no pkg-config — CI, MSVC, and the offline flatpak builder all get
@@ -30,16 +27,15 @@ fn main() {
     let bindings_path = out.join("bindings.rs");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let bits64 = env::var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap_or_default() == "64";
     // The PS5 homebrew title: RADV is linked into it, and Granite takes the title's own
     // GetInstanceProcAddr, so no loader is opened. cmake-rs reads CMAKE_TOOLCHAIN_FILE_<target>.
     let ps5 = env::var("CARGO_CFG_TARGET_VENDOR").as_deref() == Ok("sie");
     let build_here =
-        target_os == "linux" || target_os == "windows" || (target_os == "android" && bits64) || ps5;
+        target_os == "linux" || target_os == "windows" || target_os == "android" || ps5;
     if !build_here {
         std::fs::write(
             &bindings_path,
-            "// pyrowave-sys: Linux/Windows/64-bit-Android/PS5 only, empty on this target\n",
+            "// pyrowave-sys: Linux/Windows/Android/PS5 only, empty on this target\n",
         )
         .unwrap();
         return;
@@ -121,6 +117,12 @@ fn main() {
         .allowlist_function("pyrowave_.*")
         .allowlist_type("pyrowave_.*")
         .allowlist_var("PYROWAVE_.*")
+        .blocklist_type("PFN_vk.*")
+        .raw_line("pub type PFN_vkVoidFunction = Option<unsafe extern \"C\" fn()>;")
+        .raw_line(
+            "pub type PFN_vkGetInstanceProcAddr = Option<unsafe extern \"C\" fn(\
+             instance: VkInstance, pName: *const ::std::os::raw::c_char) -> PFN_vkVoidFunction>;",
+        )
         // The Vk* handles/structs the API mentions come along via the allowlist
         // closure; they are ABI-identical to ash's, callers cast at the seam.
         .derive_default(true)

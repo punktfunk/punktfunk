@@ -1330,7 +1330,7 @@ impl PyroWaveDecoder {
             pw::VkFormat_VK_FORMAT_R8_UNORM
         };
         let plane = |img: vk::Image, w: u32, h: u32| pw::pyrowave_image_view {
-            image: img.as_raw() as usize as pw::VkImage,
+            image: payload::pw_handle(img.as_raw()),
             width: w,
             height: h,
             image_format: fmt,
