@@ -437,6 +437,77 @@ impl PunktfunkPenSample {
     }
 }
 
+/// [`PunktfunkTouchpadContact::state`] bit: the finger touches the surface.
+pub const PUNKTFUNK_TOUCHPAD_TIP: u8 = 0x01;
+/// [`PunktfunkTouchpadContact::state`] bit: a real finger. Clear it for one frame, then lift
+/// the contact, to take a gesture back: the host treats the contact as accidental.
+pub const PUNKTFUNK_TOUCHPAD_CONFIDENT: u8 = 0x02;
+/// Most contacts in one [`PunktfunkTouchpadFrame`].
+pub const PUNKTFUNK_TOUCHPAD_MAX_CONTACTS: u32 = 5;
+/// Highest [`PunktfunkTouchpadContact::id`].
+pub const PUNKTFUNK_TOUCHPAD_MAX_ID: u8 = 31;
+/// [`punktfunk_connection_send_touchpad_pinch`] phase: the pinch starts.
+pub const PUNKTFUNK_PINCH_BEGIN: u8 = 0;
+/// [`punktfunk_connection_send_touchpad_pinch`] phase: the pinch moves.
+pub const PUNKTFUNK_PINCH_UPDATE: u8 = 1;
+/// [`punktfunk_connection_send_touchpad_pinch`] phase: the pinch ends or is cancelled.
+pub const PUNKTFUNK_PINCH_END: u8 = 2;
+
+/// One finger on the client's touchpad surface.
+#[cfg(feature = "quic")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PunktfunkTouchpadContact {
+    /// Stable for the life of the contact, `0..=PUNKTFUNK_TOUCHPAD_MAX_ID`, unique in a frame.
+    pub id: u8,
+    /// `PUNKTFUNK_TOUCHPAD_*` bits. Unknown bits are rejected (`InvalidArg`).
+    pub state: u8,
+    /// `0..=65535` across the surface, origin top-left.
+    pub x: u16,
+    /// `0..=65535` down the surface.
+    pub y: u16,
+}
+
+/// The whole touchpad at one instant ([`punktfunk_connection_send_touchpad`]). A contact
+/// absent from a frame has lifted.
+#[cfg(feature = "quic")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PunktfunkTouchpadFrame {
+    /// The surface in tenths of a millimetre; `0` is unknown and the host assumes 100 × 60 mm.
+    pub width_dmm: u16,
+    pub height_dmm: u16,
+    /// `1` while the pad's button is pressed, else `0`.
+    pub button: u8,
+    /// Contacts in `contacts`, `0..=PUNKTFUNK_TOUCHPAD_MAX_CONTACTS`.
+    pub count: u8,
+    pub contacts: [PunktfunkTouchpadContact; 5],
+}
+
+#[cfg(feature = "quic")]
+impl PunktfunkTouchpadFrame {
+    /// `None` on a count above five or an unknown state bit. Core checks the ids.
+    fn to_contacts(self) -> Option<(usize, [punktfunk_core::quic::TouchpadContact; 5])> {
+        let known = PUNKTFUNK_TOUCHPAD_TIP | PUNKTFUNK_TOUCHPAD_CONFIDENT;
+        let n = usize::from(self.count);
+        let raw = self.contacts.get(..n)?;
+        let mut out = [punktfunk_core::quic::TouchpadContact::default(); 5];
+        for (slot, c) in out.iter_mut().zip(raw) {
+            if c.state & !known != 0 {
+                return None;
+            }
+            *slot = punktfunk_core::quic::TouchpadContact {
+                id: c.id,
+                tip: c.state & PUNKTFUNK_TOUCHPAD_TIP != 0,
+                confident: c.state & PUNKTFUNK_TOUCHPAD_CONFIDENT != 0,
+                x: c.x,
+                y: c.y,
+            };
+        }
+        Some((n, out))
+    }
+}
+
 /// Compositor preference for [`punktfunk_connect_ex`]. `AUTO` lets the host pick.
 /// A concrete value is honored only if that backend is available now; else auto-detect.
 /// Resolved choice is on `Welcome`.

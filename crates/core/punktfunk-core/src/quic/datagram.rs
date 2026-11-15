@@ -330,6 +330,9 @@ pub(super) const RICH_HID_REPORT: u8 = 0x04;
 /// returns `None` here so a pre-pen host drops it as unknown-kind. Listed so 0xCC
 /// kind bytes stay unique.
 pub(super) const RICH_PEN: u8 = 0x05;
+/// Touchpad plane ([`TouchpadFrame`](super::touchpad::TouchpadFrame)), outside
+/// [`RichInput`] like [`RICH_PEN`]: frames go to the session's virtual touchpad.
+pub(super) const RICH_TOUCHPAD_FRAME: u8 = 0x06;
 
 /// Longest raw HID report on [`RichInput::HidReport`] / [`HidOutput::HidRaw`].
 /// Valve interrupt/feature reports are 64 bytes.

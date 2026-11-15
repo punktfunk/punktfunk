@@ -264,6 +264,8 @@ pub struct NativeClient {
     /// Pre-encoded 0xCC bytes ([`RichInput`] and [`crate::quic::PenBatch`]). Worker forwards;
     /// a new 0xCC kind never touches the pump.
     rich_input_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    /// Touchpad frames, unstamped; the touchpad task owns `seq` and the repeat.
+    touchpad_tx: tokio::sync::mpsc::UnboundedSender<crate::quic::TouchpadFrame>,
     /// Touchpad contacts of controller-mouse pads, for the input task's pointer.
     pad_touch_tx: tokio::sync::mpsc::UnboundedSender<pad_touch::Contact>,
     /// Per wire pad: what of a Steam Controller 2's raw reports reaches the host.
@@ -279,6 +281,8 @@ pub struct NativeClient {
     pen_seq: AtomicU16,
     /// The host's offer. The pub fields below are copies of it, read by embedders.
     welcome: crate::quic::Welcome,
+    /// The native features in force (`ServerHello::features`).
+    features: crate::quic::v2::features::FeatureSet,
     pub host_caps: u8,
     pub host_caps2: u8,
     /// `0` when the host did not advertise a management port.
@@ -745,6 +749,7 @@ impl NativeClient {
         let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<InputEvent>();
         let (mic_tx, mic_rx) = tokio::sync::mpsc::channel::<(u32, u64, Vec<u8>)>(MIC_QUEUE);
         let (rich_input_tx, rich_input_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (touchpad_tx, touchpad_rx) = tokio::sync::mpsc::unbounded_channel();
         let (pad_touch_tx, pad_touch_rx) =
             tokio::sync::mpsc::unbounded_channel::<pad_touch::Contact>();
         let (ctrl_tx, ctrl_rx) = tokio::sync::mpsc::channel::<CtrlRequest>(CTRL_QUEUE);
@@ -790,6 +795,7 @@ impl NativeClient {
                     input_rx,
                     mic_rx,
                     rich_input_rx,
+                    touchpad_rx,
                     pad_touch_rx,
                     ctrl_rx,
                     ctrl_tx: ctrl_tx_pump,
@@ -850,6 +856,7 @@ impl NativeClient {
             last_input_ms: AtomicU64::new(0),
             mic_tx,
             rich_input_tx,
+            touchpad_tx,
             pad_touch_tx,
             sc2: Mutex::default(),
             ctrl_tx,
@@ -857,6 +864,7 @@ impl NativeClient {
             next_xfer_id: AtomicU32::new(1),
             pen_seq: AtomicU16::new(0),
             welcome,
+            features: negotiated.features,
             host_caps: welcome.host_caps,
             host_caps2: welcome.host_caps2,
             mgmt_port: welcome.mgmt_port,
@@ -2171,6 +2179,76 @@ impl NativeClient {
         let seq = self.pen_seq.fetch_add(1, Ordering::Relaxed);
         self.rich_input_tx
             .send(crate::quic::PenBatch::new(seq, samples).encode())
+            .map_err(|_| PunktfunkError::Closed)
+    }
+
+    /// The host presents touchpad frames as a touchpad of its own (`FEATURE_TOUCHPAD`).
+    pub fn host_presents_touchpad(&self) -> bool {
+        self.features
+            .has(crate::quic::v2::registry::FEATURE_TOUCHPAD)
+    }
+
+    /// The host OS turns a tap on that touchpad into a click (`FEATURE_TOUCHPAD_TAPS`). A source
+    /// with no button of its own sends frames only toward this.
+    pub fn host_taps_click(&self) -> bool {
+        self.host_presents_touchpad()
+            && self
+                .features
+                .has(crate::quic::v2::registry::FEATURE_TOUCHPAD_TAPS)
+    }
+
+    /// The whole touchpad now (`0xCC/0x06`): every contact down, the button, the surface in
+    /// tenths of a millimetre (`0` unknown). Send one with no contacts when the source appears.
+    /// Core stamps `seq` and repeats the last frame every
+    /// [`TOUCHPAD_REPEAT_MS`](crate::quic::TOUCHPAD_REPEAT_MS) while a contact or the button is
+    /// down. Nothing leaves without the pointer grant.
+    ///
+    /// `Unsupported` without [`Self::host_presents_touchpad`]; `InvalidArg` on more than
+    /// [`TOUCHPAD_MAX_CONTACTS`](crate::quic::TOUCHPAD_MAX_CONTACTS) contacts, an id above
+    /// [`TOUCHPAD_MAX_ID`](crate::quic::TOUCHPAD_MAX_ID) or one id twice.
+    pub fn send_touchpad(
+        &self,
+        button: bool,
+        width_dmm: u16,
+        height_dmm: u16,
+        contacts: &[crate::quic::TouchpadContact],
+    ) -> Result<()> {
+        let frame = crate::quic::TouchpadFrame::new(0, button, width_dmm, height_dmm, contacts)
+            .ok_or(PunktfunkError::InvalidArg(
+                "touchpad frame needs at most five contacts with distinct ids 0..=31",
+            ))?;
+        self.send_touchpad_frame(frame)
+    }
+
+    /// An OS pinch and rotation as two fingers on the host's touchpad
+    /// ([`crate::quic::pinch_frame`]): `scale` and `rotation` (radians, clockwise) are
+    /// cumulative since `Begin`; `End` lifts both. Refused like [`Self::send_touchpad`], and
+    /// `InvalidArg` on a value that is not finite.
+    pub fn send_touchpad_pinch(
+        &self,
+        phase: crate::quic::PinchPhase,
+        scale: f32,
+        rotation: f32,
+    ) -> Result<()> {
+        if !scale.is_finite() || !rotation.is_finite() {
+            return Err(PunktfunkError::InvalidArg(
+                "pinch scale and rotation must be finite",
+            ));
+        }
+        self.send_touchpad_frame(crate::quic::pinch_frame(phase, scale, rotation))
+    }
+
+    fn send_touchpad_frame(&self, frame: crate::quic::TouchpadFrame) -> Result<()> {
+        if !self.host_presents_touchpad() {
+            return Err(PunktfunkError::Unsupported(
+                "host did not grant FEATURE_TOUCHPAD",
+            ));
+        }
+        if frame.is_active() {
+            self.stamp_input();
+        }
+        self.touchpad_tx
+            .send(frame)
             .map_err(|_| PunktfunkError::Closed)
     }
 

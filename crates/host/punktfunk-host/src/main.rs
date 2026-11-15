@@ -133,6 +133,7 @@ mod https;
 // `pf-inject` at `crate::inject::*`, and the aim of its absolute mapping at a captured head.
 mod inject;
 mod pen_sink;
+mod touchpad_sink;
 // Unix wall clock every stored deadline and event stamp reads.
 mod clock;
 // Compositor + gamescope route for a connect, shared by the native and GameStream planes.

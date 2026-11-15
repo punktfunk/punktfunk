@@ -21,6 +21,9 @@ mod datagram;
 mod handshake;
 mod pairing;
 mod pen;
+/// The C surface is `punktfunk-ffi`'s own touchpad types, not these.
+/// cbindgen:ignore
+mod touchpad;
 mod wire;
 
 /// The `punktfunk/2` codecs (ALPN `pkf2`). Ungated like the v1 vocabulary: the browser speaks it too.
@@ -56,6 +59,7 @@ pub use datagram::*;
 pub use handshake::*;
 pub use pairing::*;
 pub use pen::*;
+pub use touchpad::*;
 
 // Close codes + [`RejectReason`] live in `crate::reject` (ungated: the error enum
 // names them even without `quic`) and re-export here next to QUIT/APP_EXITED.

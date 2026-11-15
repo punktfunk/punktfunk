@@ -54,6 +54,8 @@ pub(crate) struct Negotiated {
     pub(crate) role: Option<crate::quic::v2::hello::RoleEcho>,
     /// The host counts axis-unit scroll (`FEATURE_SCROLL_AXIS_UNITS`).
     pub(crate) scroll_axis_units: bool,
+    /// The native features in force (`ServerHello::features`).
+    pub(crate) features: crate::quic::v2::features::FeatureSet,
     /// The size the host encodes the Welcome's mode at; `None` encodes the mode.
     pub(crate) picture: Option<(u32, u32)>,
 }

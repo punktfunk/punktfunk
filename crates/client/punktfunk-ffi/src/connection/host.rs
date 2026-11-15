@@ -47,6 +47,34 @@ pub unsafe extern "C" fn punktfunk_connection_host_caps2(
     conn_out!(c, caps => c.inner.host_caps2())
 }
 
+/// `true` when the host presents touchpad frames as a touchpad of its own: test it before
+/// [`punktfunk_connection_send_touchpad`]. Fixed for the session.
+///
+/// # Safety
+/// `c` is a valid connection handle; `presents` is writable (NULL is skipped).
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_host_touchpad(
+    c: *const PunktfunkConnection,
+    presents: *mut bool,
+) -> PunktfunkStatus {
+    conn_out!(c, presents => c.inner.host_presents_touchpad())
+}
+
+/// `true` when the host OS turns a tap on that touchpad into a click. A source with no button
+/// of its own (a touchscreen) sends frames only when this is set. Fixed for the session.
+///
+/// # Safety
+/// `c` is a valid connection handle; `taps` is writable (NULL is skipped).
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_host_touchpad_taps(
+    c: *const PunktfunkConnection,
+    taps: *mut bool,
+) -> PunktfunkStatus {
+    conn_out!(c, taps => c.inner.host_taps_click())
+}
+
 /// Live `PUNKTFUNK_GRANT_*` mask (`design/per-client-access.md`). Latest
 /// `AccessUpdate` wins; hosts that omit it read `PUNKTFUNK_GRANT_ALL`. Courtesy
 /// only — the host enforces. Poll; do not cache for the session.

@@ -22,6 +22,7 @@ mod datagram_task;
 mod handshake;
 mod input_task;
 mod rx_gap;
+mod touchpad_task;
 
 /// What the control task tells the data pump, in arrival order. The pump drains the channel
 /// once per iteration.
@@ -126,6 +127,7 @@ pub(super) async fn run_pump(mut args: WorkerArgs) {
         input_rx,
         mut mic_rx,
         mut rich_input_rx,
+        touchpad_rx,
         pad_touch_rx,
         ctrl_rx,
         ctrl_tx,
@@ -301,6 +303,12 @@ pub(super) async fn run_pump(mut args: WorkerArgs) {
             let _ = rich_conn.send_datagram(d);
         }
     });
+
+    tokio::spawn(touchpad_task::run(
+        conn.clone(),
+        touchpad_rx,
+        shared.clone(),
+    ));
 
     // ABR encode signal ([`EncodeLatAcc`]): datagram task samples 0xCF; pump drains a window mean.
     let encode_lat = Arc::new(Mutex::new(super::frame_channel::EncodeLatAcc::default()));
