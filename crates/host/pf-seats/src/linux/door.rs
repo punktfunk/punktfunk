@@ -5,9 +5,9 @@
 //!
 //! No root code here opens a path in a home or in the box directory. Such a path is a
 //! [`hands::Theirs`], which only [`hands::Cmd::by`] turns into an argument, behind
-//! `runuser -u <side> --`; the bytes pass root's process only where the helper's shell held them
-//! too: the port lines, and the password line spliced back into `web.env`. Root writes only its
-//! own files in the state directory: the record, the mark and the port file. Every program runs
+//! `runuser -u <side> --`; their bytes pass root's process in two places only: the port lines,
+//! and the password line spliced back into `web.env`. Root writes only its own files in the
+//! state directory: the record, the mark and the port file. Every program runs
 //! through [`hands::pipe`], which the tests fake, so each path is a table and each step can fail:
 //! `the_door_s_on_runs_exactly_these` and its twins, `a_failed_step_puts_the_box_back`,
 //! `no_door_step_touches_their_path_as_root`.
@@ -16,7 +16,6 @@ use super::accounts::{Passwd, Switchable};
 use super::err;
 use crate::backend::BackendError;
 use std::ffi::OsStr;
-use std::fmt;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -30,7 +29,7 @@ const PORT_KEYS: [&str; 3] = [
 /// The most [`ports`] reads: the owner's two env files, theirs to make any size.
 const MAX_PORT_INPUT: u64 = 1 << 20;
 
-/// Whom a switch is for, as [`super::check_owner`] prints it.
+/// Whom a switch is for.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Admit {
     /// On for this account: the first time, or again.
@@ -41,19 +40,6 @@ pub(super) enum Admit {
     Off(Passwd),
     /// Off for the recorded owner, whose account no longer exists.
     Gone,
-}
-
-impl fmt::Display for Admit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Admit::On(p) => write!(f, "on {} {}", p.uid, p.home.display()),
-            Admit::Takeover { gone, to } => {
-                write!(f, "takeover {gone} {} {}", to.uid, to.home.display())
-            }
-            Admit::Off(p) => write!(f, "off {} {}", p.uid, p.home.display()),
-            Admit::Gone => f.write_str("gone"),
-        }
-    }
 }
 
 /// Whether `user` may switch the door `on` or off while root's record names `recorded`. `look`
@@ -1135,6 +1121,20 @@ mod tests {
     use std::path::PathBuf;
     use std::rc::Rc;
 
+    /// An answer as one line, for `door_admission_table`.
+    impl std::fmt::Display for Admit {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Admit::On(p) => write!(f, "on {} {}", p.uid, p.home.display()),
+                Admit::Takeover { gone, to } => {
+                    write!(f, "takeover {gone} {} {}", to.uid, to.home.display())
+                }
+                Admit::Off(p) => write!(f, "off {} {}", p.uid, p.home.display()),
+                Admit::Gone => f.write_str("gone"),
+            }
+        }
+    }
+
     fn passwd(name: &str, uid: u32) -> Passwd {
         Passwd {
             name: name.into(),
@@ -1858,10 +1858,11 @@ mod tests {
     /// The failed call's number, then the helper's exit code, record, mark and supervisor after it.
     type Fail = (usize, u8, Option<&'static str>, bool, bool);
 
-    /// Every call of a first on and of an off fails in turn. The outcome is the helper's, except
-    /// that a hand-over's read stage now fails its step and its move is a call. A first on that fails before the door's ports move leaves no record or mark, asks the
-    /// supervisor to release the owner's row and leaves it as it was; an off whose hand-back
-    /// fails keeps the record and the mark and starts the door again.
+    /// Every call of a first on and of an off fails in turn. A hand-over's read that fails ends
+    /// its step, and its move is a call of its own. A first on that fails before the door's
+    /// ports move leaves no record or mark, asks the supervisor to release the owner's row and
+    /// leaves it as it was; an off whose hand-back fails keeps the record and the mark and
+    /// starts the door again.
     #[test]
     fn a_failed_step_puts_the_box_back() {
         let rows: [(&str, Make, &[Fail]); 3] = [

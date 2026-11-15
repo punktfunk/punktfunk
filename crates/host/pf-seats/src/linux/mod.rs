@@ -85,11 +85,12 @@ pub fn recorded_owner() -> Option<String> {
     accounts::recorded_owner(Path::new(STATE_DIR))
 }
 
-/// Whether `account` may switch the door `on` or off now, by the record root keeps: the
-/// `door::admit` line `check-owner` prints. The error's code says which rule refused it.
-pub fn check_owner(account: &str, on: bool) -> Result<String, BackendError> {
+/// Whether `account` may switch the door `on` or off now, by the record root keeps
+/// ([`door::admit`]). The owner's host asks before it starts a switch; the error's code says
+/// which rule refused it.
+pub fn check_owner(account: &str, on: bool) -> Result<(), BackendError> {
     let recorded = recorded_owner();
-    door::admit(on, account, recorded.as_deref(), accounts::switchable).map(|a| a.to_string())
+    door::admit(on, account, recorded.as_deref(), accounts::switchable).map(drop)
 }
 
 /// A seat has this long to bring up its compositor and open the host's management port.
