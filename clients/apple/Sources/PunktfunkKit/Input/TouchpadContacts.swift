@@ -2,7 +2,8 @@
 // their fingers on the host's touchpad through `PunktfunkConnection.touchpadSurface`. A surface
 // in tenths of a millimetre, a touch as a fraction of it, a platform timestamp in µs, what the
 // touch mouse still sends while a touchscreen's fingers travel as contacts (frame mode), and what
-// a captured Mac trackpad sends beside its contacts.
+// a captured Mac trackpad sends beside its contacts. Both decide again when core's touchpad
+// changes (`.punktfunkTouchpadChanged`) and fall back to today's path when core refuses a call.
 //
 // The capture halves: StreamViewIOS.swift (touchscreen frames, the iPad trackpad's pinch) and
 // StreamView.swift (the Mac trackpad). TouchpadContactsTests pins this file.
@@ -69,6 +70,40 @@ enum TouchpadContacts {
     }
 }
 
+/// Whether a touchscreen's fingers travel as the host touchpad's contacts (frame mode). The
+/// host's touchpad is read at `refresh`: session start and each change of the scroll inversion,
+/// which core answers with no touchpad. A refused call drops it until the next `refresh`, so a
+/// finger is never muted while core takes nothing.
+struct FrameMode {
+    /// The host's touchpad as last read: it presents one, and its OS clicks on taps.
+    private(set) var touchpad = (presents: false, taps: false)
+    private(set) var on = false
+
+    mutating func refresh(presents: Bool, taps: Bool) {
+        touchpad = (presents, taps)
+    }
+
+    /// Follows the inputs. True: this edge sends one frame with no touches, the announce or the
+    /// lift, which only a host still presenting its pad takes.
+    mutating func sync(trusted: Bool, inWindow: Bool, mode: TouchInputMode) -> Bool {
+        let want = touchpad.presents && trusted && inWindow && mode == .trackpad
+        guard want != on else { return false }
+        on = want
+        return touchpad.presents
+    }
+
+    /// Core refused a touchpad call: today's path until the next `refresh`.
+    mutating func refused() {
+        touchpad = (false, false)
+        on = false
+    }
+
+    /// Whether the touch mouse's `event` goes out (`TouchpadContacts.passes` while on).
+    func passes(_ event: PunktfunkInputEvent) -> Bool {
+        !on || TouchpadContacts.passes(event, hostTapsClick: touchpad.taps)
+    }
+}
+
 #if os(macOS)
 /// What a captured Mac trackpad sends beside its contacts. While core forwards them, none of its
 /// motion and none of its precise scroll; a scroll gesture the host took keeps its momentum too.
@@ -77,9 +112,20 @@ struct TrackpadContactGate {
     private(set) var forwarding = false
     /// The scroll gesture under way is the host's, through its momentum tail.
     private var hostScroll = false
+    /// Core refused the last update: the trackpad takes today's paths until capture decides again.
+    private(set) var refused = false
 
-    mutating func noteSurface(forwarded: Bool, fingers: Int) {
-        forwarding = forwarded && fingers > 0
+    /// The trackpad's fingers become contacts only in the capture model toward a host whose
+    /// touchpad is live (core reads none while scroll is inverted).
+    static func engages(hostPresentsTouchpad: Bool, desktopMouse: Bool) -> Bool {
+        hostPresentsTouchpad && !desktopMouse
+    }
+
+    /// Core's answer to an update with `fingers` down: forwarded or not, nil when refused.
+    mutating func noteSurface(_ answer: Bool?, fingers: Int) {
+        refused = answer == nil
+        forwarding = answer == true && fingers > 0
+        if refused { hostScroll = false }
     }
 
     /// Whether to hold this scroll event back. A counted wheel is a mouse's and always goes.

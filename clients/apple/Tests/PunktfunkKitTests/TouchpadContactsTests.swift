@@ -59,6 +59,56 @@ final class TouchpadContactsTests: XCTestCase {
         }
     }
 
+    /// Core reads no touchpad while scroll is inverted: frame mode follows each read.
+    func testFrameModeFollowsTheInversion() {
+        let motion = PunktfunkInputEvent.mouseMove(dx: 3, dy: 1)
+        var frames = FrameMode()
+        frames.refresh(presents: true, taps: true) // inversion off
+        XCTAssertTrue(frames.sync(trusted: true, inWindow: true, mode: .trackpad)) // the announce
+        XCTAssertTrue(frames.on)
+        XCTAssertFalse(frames.passes(motion))
+
+        frames.refresh(presents: false, taps: false) // inversion on
+        XCTAssertFalse(frames.sync(trusted: true, inWindow: true, mode: .trackpad)) // core lifted
+        XCTAssertFalse(frames.on)
+        XCTAssertTrue(frames.passes(motion))
+        XCTAssertTrue(frames.passes(.mouseButton(1, down: true)))
+
+        frames.refresh(presents: true, taps: false) // off again
+        XCTAssertTrue(frames.sync(trusted: true, inWindow: true, mode: .trackpad))
+        XCTAssertFalse(frames.passes(motion))
+        XCTAssertTrue(frames.passes(.mouseButton(1, down: true))) // the client makes taps
+    }
+
+    func testFrameModeNeedsTrackpadModeTrustAndAWindow() {
+        var frames = FrameMode()
+        frames.refresh(presents: true, taps: true)
+        for mode in [TouchInputMode.pointer, .touch, .off] {
+            XCTAssertFalse(frames.sync(trusted: true, inWindow: true, mode: mode))
+        }
+        XCTAssertFalse(frames.sync(trusted: false, inWindow: true, mode: .trackpad))
+        XCTAssertFalse(frames.sync(trusted: true, inWindow: false, mode: .trackpad))
+        XCTAssertFalse(frames.on)
+        XCTAssertTrue(frames.sync(trusted: true, inWindow: true, mode: .trackpad))
+        XCTAssertTrue(frames.sync(trusted: false, inWindow: true, mode: .trackpad)) // the lift
+        XCTAssertFalse(frames.on)
+    }
+
+    /// A refused call unmutes the touch mouse at once and holds until the next read.
+    func testARefusedCallFallsBackUntilTheNextRead() {
+        var frames = FrameMode()
+        frames.refresh(presents: true, taps: true)
+        _ = frames.sync(trusted: true, inWindow: true, mode: .trackpad)
+        frames.refused()
+        XCTAssertFalse(frames.on)
+        XCTAssertTrue(frames.passes(.mouseMove(dx: 1, dy: 0)))
+        // A later gesture start does not bring it back; a fresh read of the host does.
+        XCTAssertFalse(frames.sync(trusted: true, inWindow: true, mode: .trackpad))
+        XCTAssertFalse(frames.on)
+        frames.refresh(presents: true, taps: true)
+        XCTAssertTrue(frames.sync(trusted: true, inWindow: true, mode: .trackpad))
+    }
+
     /// The twist arms, and keeps the pair from the host, only before the pair travels away.
     func testTheTwistKeepsTheFingersOnlyBeforeTheyTravel() {
         let start = CGVector(dx: 100, dy: 0)
@@ -99,7 +149,7 @@ final class TrackpadContactGateTests: XCTestCase {
         let phases: [NSEvent.Phase] = [[], .mayBegin, .began, .changed, .stationary, .ended, .cancelled]
         for forwarded in [false, true] {
             var gate = TrackpadContactGate()
-            gate.noteSurface(forwarded: forwarded, fingers: 0)
+            gate.noteSurface(forwarded, fingers: 0)
             XCTAssertFalse(gate.forwarding)
             for precise in [false, true] {
                 for phase in phases {
@@ -114,20 +164,20 @@ final class TrackpadContactGateTests: XCTestCase {
     func testMotionStaysHomeOnlyWhileContactsAreForwarded() {
         var gate = TrackpadContactGate()
         XCTAssertFalse(gate.forwarding)
-        gate.noteSurface(forwarded: true, fingers: 1)
+        gate.noteSurface(true, fingers: 1)
         XCTAssertTrue(gate.forwarding)
-        gate.noteSurface(forwarded: true, fingers: 0) // the last finger lifted
+        gate.noteSurface(true, fingers: 0) // the last finger lifted
         XCTAssertFalse(gate.forwarding)
-        gate.noteSurface(forwarded: false, fingers: 3) // handed back: today's paths
+        gate.noteSurface(false, fingers: 3) // handed back: today's paths
         XCTAssertFalse(gate.forwarding)
     }
 
     func testAForwardedScrollIsTheHostsThroughItsMomentum() {
         var gate = TrackpadContactGate()
-        gate.noteSurface(forwarded: true, fingers: 2)
+        gate.noteSurface(true, fingers: 2)
         XCTAssertTrue(gate.dropsScroll(precise: true, phase: .began, momentumPhase: []))
         XCTAssertTrue(gate.dropsScroll(precise: true, phase: .changed, momentumPhase: []))
-        gate.noteSurface(forwarded: true, fingers: 0)
+        gate.noteSurface(true, fingers: 0)
         XCTAssertTrue(gate.dropsScroll(precise: true, phase: .ended, momentumPhase: []))
         XCTAssertTrue(gate.dropsScroll(precise: true, phase: [], momentumPhase: .began))
         XCTAssertTrue(gate.dropsScroll(precise: true, phase: [], momentumPhase: .changed))
@@ -140,25 +190,46 @@ final class TrackpadContactGateTests: XCTestCase {
     func testAScrollThatBeganBeforeTheContactsIsStillTheHosts() {
         var gate = TrackpadContactGate()
         XCTAssertFalse(gate.dropsScroll(precise: true, phase: .began, momentumPhase: []))
-        gate.noteSurface(forwarded: true, fingers: 2)
+        gate.noteSurface(true, fingers: 2)
         XCTAssertTrue(gate.dropsScroll(precise: true, phase: .changed, momentumPhase: []))
-        gate.noteSurface(forwarded: true, fingers: 0)
+        gate.noteSurface(true, fingers: 0)
         XCTAssertTrue(gate.dropsScroll(precise: true, phase: [], momentumPhase: .began))
     }
 
     func testAHandedBackScrollFlowsAsToday() {
         var gate = TrackpadContactGate()
-        gate.noteSurface(forwarded: false, fingers: 3)
+        gate.noteSurface(false, fingers: 3)
         XCTAssertFalse(gate.dropsScroll(precise: true, phase: .began, momentumPhase: []))
         XCTAssertFalse(gate.dropsScroll(precise: true, phase: .changed, momentumPhase: []))
-        gate.noteSurface(forwarded: false, fingers: 0)
+        gate.noteSurface(false, fingers: 0)
         XCTAssertFalse(gate.dropsScroll(precise: true, phase: .ended, momentumPhase: []))
         XCTAssertFalse(gate.dropsScroll(precise: true, phase: [], momentumPhase: .began))
     }
 
+    /// Contacts only in the capture model toward a live touchpad, which inversion turns off.
+    func testTheTrackpadEngagesOnlyTowardALiveTouchpad() {
+        XCTAssertTrue(TrackpadContactGate.engages(hostPresentsTouchpad: true, desktopMouse: false))
+        XCTAssertFalse(TrackpadContactGate.engages(hostPresentsTouchpad: false, desktopMouse: false))
+        XCTAssertFalse(TrackpadContactGate.engages(hostPresentsTouchpad: true, desktopMouse: true))
+    }
+
+    /// A refused call suppresses nothing, mid-scroll included, and says so for the opt-out.
+    func testARefusedCallSuppressesNothing() {
+        var gate = TrackpadContactGate()
+        gate.noteSurface(true, fingers: 2)
+        XCTAssertTrue(gate.dropsScroll(precise: true, phase: .began, momentumPhase: []))
+        gate.noteSurface(nil, fingers: 2)
+        XCTAssertTrue(gate.refused)
+        XCTAssertFalse(gate.forwarding)
+        XCTAssertFalse(gate.dropsScroll(precise: true, phase: .changed, momentumPhase: []))
+        XCTAssertFalse(gate.dropsScroll(precise: true, phase: [], momentumPhase: .began))
+        gate.noteSurface(false, fingers: 3)
+        XCTAssertFalse(gate.refused)
+    }
+
     func testAWheelIsNeverTheTrackpads() {
         var gate = TrackpadContactGate()
-        gate.noteSurface(forwarded: true, fingers: 2)
+        gate.noteSurface(true, fingers: 2)
         XCTAssertFalse(gate.dropsScroll(precise: false, phase: [], momentumPhase: []))
     }
 }

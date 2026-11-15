@@ -341,6 +341,15 @@ public final class StreamLayerView: NSView {
             default: break
             }
         })
+        // The session's scroll inversion changed, and with it whether core takes trackpad contacts.
+        appObservers.append(NotificationCenter.default.addObserver(
+            forName: .punktfunkTouchpadChanged, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, self.captured, let conn = self.connection,
+                  note.object as AnyObject === conn else { return }
+            self.setTrackpadContacts(TrackpadContactGate.engages(
+                hostPresentsTouchpad: conn.hostPresentsTouchpad, desktopMouse: self.desktopMouse))
+        })
         // The quick-action ring is SwiftUI ABOVE this layer, so a grabbed pointer can never click
         // one of its buttons — release for as long as it is up, and take capture back when it
         // closes. Without the second half a glance at the ring would cost the game its pointer
@@ -623,7 +632,8 @@ public final class StreamLayerView: NSView {
         // already armed, so the monitor only ever sees genuine post-engage input.
         installMouseMonitor()
         captured = true
-        setTrackpadContacts(!desktopMouse && connection.hostPresentsTouchpad)
+        setTrackpadContacts(TrackpadContactGate.engages(
+            hostPresentsTouchpad: connection.hostPresentsTouchpad, desktopMouse: desktopMouse))
         window?.makeFirstResponder(self)
         window?.invalidateCursorRects(for: self) // desktop model: hide-over-view engages
         notifyCaptureChange(true)
@@ -931,8 +941,8 @@ public final class StreamLayerView: NSView {
     }
 
     /// Opts the view into the trackpad's touches (`allowedTouchTypes` gains `.indirect`), or back
-    /// out. Out lifts every finger still on the host's pad. AppKit latches a touch sequence to the
-    /// view under the pointer, which capture parks mid-view.
+    /// out. Out lifts every finger still on the host's pad, unless the pad is gone (core lifted
+    /// it). AppKit latches a touch sequence to the view under the pointer, parked mid-view.
     private func setTrackpadContacts(_ on: Bool) {
         if on, touchTypesBeforeContacts == nil {
             touchTypesBeforeContacts = allowedTouchTypes
@@ -940,7 +950,9 @@ public final class StreamLayerView: NSView {
         } else if !on, let before = touchTypesBeforeContacts {
             allowedTouchTypes = before
             touchTypesBeforeContacts = nil
-            if !trackpadIDs.isEmpty { sendTrackpad([], at: ProcessInfo.processInfo.systemUptime) }
+            if !trackpadIDs.isEmpty, connection?.hostPresentsTouchpad == true {
+                sendTrackpad([], at: ProcessInfo.processInfo.systemUptime)
+            }
             trackpadIDs.removeAll()
             trackpadGate = TrackpadContactGate()
         }
@@ -982,13 +994,18 @@ public final class StreamLayerView: NSView {
         sendTrackpad(contacts, at: event.timestamp)
     }
 
-    /// The Mac clicks on its own taps, so core takes every tap back from the host.
+    /// The Mac clicks on its own taps, so core takes every tap back from the host. A refused call
+    /// opts the view out: today's paths carry the trackpad until capture or the inversion decides.
     private func sendTrackpad(_ contacts: [PunktfunkSurfaceTouch], at time: TimeInterval) {
-        let forwarded = connection?.touchpadSurface(
+        let answer = connection?.touchpadSurface(
             contacts, maxContacts: 2, keep: false, retractTaps: true,
             widthDmm: trackpadDmm.width, heightDmm: trackpadDmm.height,
-            timeUs: TouchpadContacts.micros(time)) ?? false
-        trackpadGate.noteSurface(forwarded: forwarded, fingers: contacts.count)
+            timeUs: TouchpadContacts.micros(time))
+        trackpadGate.noteSurface(answer, fingers: contacts.count)
+        if trackpadGate.refused {
+            trackpadIDs.removeAll() // core takes nothing now, a lift included
+            setTrackpadContacts(false)
+        }
     }
 
     /// One host-pixel point on the negotiated output, with the surface dimensions the host
