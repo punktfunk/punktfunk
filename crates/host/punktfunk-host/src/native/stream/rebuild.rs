@@ -1101,7 +1101,7 @@ impl StreamState {
     }
 }
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
     use crate::events::Plane;
 
@@ -2477,6 +2477,165 @@ pub(crate) mod tests {
             } else if cfg!(target_os = "windows") {
                 assert_eq!(os, r.windows, "{name} on Windows");
             }
+        }
+    }
+
+    /// An encoder on a `size` capture that frames on ingest, opened for `view` as a pipeline
+    /// build opens it, and the framing it encodes.
+    fn fitted(
+        size: (u32, u32),
+        view: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
+    ) -> Result<(
+        Box<dyn crate::encode::Encoder>,
+        punktfunk_core::video_fit::Reframe,
+    )> {
+        crate::session_plan::open_encoder_fitted(size, size, view, false, |_| {
+            let crop = Default::default();
+            Ok(Box::new(crate::session_plan::tests::Frames(true, crop)))
+        })
+    }
+
+    /// A full build at the plan's mode, framed for the view `prepare` set.
+    fn display_built(st: &StreamState, plan: &RebuildPlan) -> Result<Built> {
+        let size = (plan.mode.width, plan.mode.height);
+        let (enc, reframe) = fitted(
+            size,
+            st.build_request(plan.mode, plan.rate_kbps).plan.reframe_to,
+        )?;
+        let pipeline = Pipeline {
+            capturer: Box::new(crate::capture::SyntheticCapturer::new(size.0, size.1, 60)),
+            enc,
+            frame: frame(size),
+            interval: plan.mode.frame_interval(),
+            node_id: 2,
+            display_gen: st.live.cur_display_gen,
+            bitrate_kbps: plan.rate_kbps,
+            reframe,
+            #[cfg(target_os = "linux")]
+            lease: None,
+            #[cfg(target_os = "linux")]
+            panel_tick_ns: None,
+        };
+        Ok(Built::pipeline(pipeline, None))
+    }
+
+    /// A vector's `[w, h, hz]` mode.
+    fn vector_mode(v: &serde_json::Value) -> punktfunk_core::Mode {
+        let n = |i: usize| v[i].as_u64().expect("a whole number") as u32;
+        mode((n(0), n(1)), n(2))
+    }
+
+    /// A vector's `[w, h]` size, `None` for `null`.
+    fn vector_size(v: &serde_json::Value) -> Option<(u32, u32)> {
+        let a = v.as_array()?;
+        let n = |i: usize| a[i].as_u64().expect("a whole number") as u32;
+        Some((n(0), n(1)))
+    }
+
+    /// `row` run through today's functions: the control task's answer to the ask, then the
+    /// rebuild it plans and performs on the fake. Its `build`, `kept` and `told`, as the
+    /// vector file spells them.
+    fn vector_run(row: &serde_json::Value) -> serde_json::Value {
+        use crate::native::control::tests::control_ask;
+        use punktfunk_core::quic::Reconfigure;
+        use punktfunk_core::video_fit::VideoFit;
+        use serde_json::json;
+        let tenure = match row["tenure"].as_str() {
+            Some("own") => Tenure::Own,
+            Some("shared") => Tenure::OwnShared,
+            Some("joiner-held") => Tenure::JoinerHeld,
+            Some("joiner-alone") => Tenure::JoinerAlone,
+            t => panic!("tenure {t:?}"),
+        };
+        let mut f = hd_session();
+        if row["codec"] == "pyrowave" {
+            pyrowave(&mut f, false);
+        }
+        let live = vector_mode(&row["live"]["mode"]);
+        let size = (live.width, live.height);
+        f.st.live.frame = frame(size);
+        (f.st.live.cur_mode, f.st.facts.negotiated) = (live, live);
+        f.st.live.interval = live.frame_interval();
+        let view = vector_size(&row["live"]["view"]).map(|v| (VideoFit::Fit, v));
+        f.st.plan.reframe_to = view;
+        *f.st.shared.frame_map.lock().unwrap() = fitted(size, view).expect("the live framing").1;
+        let (held, facts) = on_display(&mut f, tenure);
+        let req = Reconfigure {
+            mode: vector_mode(&row["ask"]["mode"]),
+            exclude_codecs: 0,
+            view: vector_size(&row["ask"]["view"]),
+        };
+        let hold = (
+            vector_mode(&row["hold"]["mode"]),
+            vector_size(&row["hold"]["view"]),
+        );
+        let exact = crate::native::handshake::runs_exact_rate(Some(Compositor::Mutter), false);
+        let (asked, _) = control_ask(req, hold, f.st.plan.codec, exact, !held);
+        let build = match asked {
+            None => "refused",
+            Some((mode, view)) => match rebuild_plan::plan(&RebuildAsk::Mode(mode, view), &facts) {
+                None => {
+                    f.st.publish_delivered_mode(mode);
+                    "none"
+                }
+                Some(plan) => {
+                    let encoder = plan.build == Build::Encoder;
+                    let opened = std::sync::Mutex::new(Vec::new());
+                    let built =
+                        f.st.perform(plan, RebuildAsk::Mode(mode, view), |st, plan, _, _| {
+                            if encoder {
+                                st.build_encoder(plan, opener(Open::Frames, size, &opened))
+                            } else {
+                                display_built(st, plan)
+                            }
+                        });
+                    assert!(matches!(built, Ok(Rebuilt::Built)), "{}", row["name"]);
+                    if encoder {
+                        "encoder"
+                    } else {
+                        "display"
+                    }
+                }
+            },
+        };
+        let told = heard(&mut f).last().map_or(serde_json::Value::Null, |&(m, e, c)| {
+            json!({"mode": [m.width, m.height, m.refresh_hz], "picture": [e.0, e.1], "corrects": c})
+        });
+        let kept = f.st.live.cur_mode;
+        json!({
+            "build": build,
+            "kept": {
+                "mode": [kept.width, kept.height, kept.refresh_hz],
+                "view": f.st.plan.reframe_to.map(|(_, v)| [v.0, v.1]),
+            },
+            "told": told,
+        })
+    }
+
+    /// The mode-and-view ask rule, rules 1 to 4, as `clients/shared/mode-view-vectors.json`
+    /// pins it for every reader.
+    #[test]
+    fn mode_view_vectors() {
+        let raw = include_str!("../../../../../../clients/shared/mode-view-vectors.json");
+        let file: serde_json::Value = serde_json::from_str(raw).expect("vector file parses");
+        let pyrowave_runs =
+            crate::encode::validate_dimensions(crate::encode::Codec::PyroWave, 1920, 1080).is_ok();
+        for row in file["rows"].as_array().expect("rows") {
+            let name = format!("{} ({})", row["name"], row["verdict"]);
+            let host_skips = match row["only"].as_str() {
+                Some("linux") => !cfg!(target_os = "linux"),
+                Some("windows") => !cfg!(target_os = "windows"),
+                _ => false,
+            };
+            if host_skips || (row["codec"] == "pyrowave" && !pyrowave_runs) {
+                continue;
+            }
+            let want = serde_json::json!({
+                "build": row["build"],
+                "kept": row["kept"],
+                "told": row["told"],
+            });
+            assert_eq!(vector_run(row), want, "{name}");
         }
     }
 
