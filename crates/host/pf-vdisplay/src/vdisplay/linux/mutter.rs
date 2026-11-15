@@ -210,7 +210,7 @@ impl VirtualDisplay for MutterDisplay {
         if let Some(scale) = remembered_scale {
             tracing::info!(scale, "mutter: reapplying the client's saved display scale");
         }
-        let (setup_tx, setup_rx) = std::sync::mpsc::channel::<Result<u32, String>>();
+        let (setup_tx, setup_rx) = std::sync::mpsc::channel::<Result<Reported, String>>();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         // Sender lives as long as the session thread. Drop waits on
@@ -254,7 +254,7 @@ impl VirtualDisplay for MutterDisplay {
 
         // 45 s: a session queued on TOPOLOGY_LOCK must outwait a sibling
         // (~10 s stream + 6 s connector + apply) plus its own handshake.
-        let node_id = match setup_rx.recv_timeout(Duration::from_secs(45)) {
+        let (node_id, rate_mhz) = match setup_rx.recv_timeout(Duration::from_secs(45)) {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => bail!("Mutter virtual monitor failed: {e}"),
             Err(_) => bail!("timed out creating the Mutter virtual monitor"),
@@ -265,11 +265,13 @@ impl VirtualDisplay for MutterDisplay {
             h = mode.height,
             "Mutter virtual monitor ready"
         );
-        Ok(VirtualOutput::owned(
+        let mut out = VirtualOutput::owned(
             node_id,
             Some((mode.width, mode.height, mode.refresh_hz)),
             Box::new(guard),
-        ))
+        );
+        out.refresh_mhz = rate_mhz;
+        Ok(out)
     }
 }
 
@@ -314,7 +316,7 @@ impl Drop for StopGuard {
 // executor (see TOPOLOGY_LOCK).
 #[allow(clippy::await_holding_lock, clippy::too_many_arguments)]
 fn session_thread(
-    setup_tx: Sender<Result<u32, String>>,
+    setup_tx: Sender<Result<Reported, String>>,
     stop: Arc<AtomicBool>,
     mode: Mode,
     first_in_group: bool,
@@ -590,7 +592,7 @@ pub(crate) fn stream_existing_output(
     connector: &str,
     hw_cursor: bool,
 ) -> Result<crate::mirror::MirrorStream> {
-    let (setup_tx, setup_rx) = std::sync::mpsc::channel::<Result<u32, String>>();
+    let (setup_tx, setup_rx) = std::sync::mpsc::channel::<Result<Reported, String>>();
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = stop.clone();
     let connector_thread = connector.to_string();
@@ -602,7 +604,7 @@ pub(crate) fn stream_existing_output(
     // rather than leaving a RecordMonitor cast on a real head.
     let guard = crate::proc::StopFlag(stop);
     let node_id = match setup_rx.recv_timeout(Duration::from_secs(20)) {
-        Ok(Ok(v)) => v,
+        Ok(Ok((node_id, _))) => node_id,
         Ok(Err(e)) => bail!("Mutter monitor mirror failed: {e}"),
         Err(_) => bail!("timed out recording the Mutter output {connector:?}"),
     };
@@ -620,7 +622,7 @@ pub(crate) fn stream_existing_output(
 /// D-Bus connection behind a mirrored-monitor cast. Drop of the opener's
 /// keepalive is what stops it.
 fn mirror_thread(
-    setup_tx: Sender<Result<u32, String>>,
+    setup_tx: Sender<Result<Reported, String>>,
     stop: Arc<AtomicBool>,
     connector: String,
     hw_cursor: bool,
@@ -778,6 +780,7 @@ async fn start_and_await_node(
         _sc_session: sc_session,
         _conn: conn,
         node_id,
+        rate_mhz: None,
     })
 }
 
@@ -785,8 +788,11 @@ async fn start_and_await_node(
 /// already gave up (`recv_timeout`), so nothing will drop this keepalive.
 /// Unwind here rather than park forever holding the D-Bus connection
 /// that *is* the monitor's lifetime. `false` = stop now.
-async fn report_node(setup_tx: &Sender<Result<u32, String>>, session: &MutterSession) -> bool {
-    if setup_tx.send(Ok(session.node_id)).is_ok() {
+async fn report_node(setup_tx: &Sender<Result<Reported, String>>, session: &MutterSession) -> bool {
+    if setup_tx
+        .send(Ok((session.node_id, session.rate_mhz)))
+        .is_ok()
+    {
         return true;
     }
     tracing::warn!(
@@ -805,6 +811,40 @@ struct MutterSession {
     _sc_session: zbus::Proxy<'static>,
     _conn: zbus::Connection,
     node_id: u32,
+    /// The rate a virtual monitor runs, in millihertz. `None` for a mirrored head.
+    rate_mhz: Option<u32>,
+}
+
+/// What a session thread hands its opener: the PipeWire node and [`MutterSession::rate_mhz`].
+type Reported = (u32, Option<u32>);
+
+/// The first GNOME whose `RecordVirtual` takes `modes`. An older one ignores the key and
+/// runs the monitor at whole hertz.
+const MODES_SINCE: u32 = 47;
+
+/// Whether this Mutter runs a virtual monitor at the rate `RecordVirtual` names. A shell
+/// that does not state its version counts as one that cannot.
+async fn pins_modes(conn: &zbus::Connection) -> bool {
+    let shell = zbus::Proxy::new(
+        conn,
+        "org.gnome.Shell",
+        "/org/gnome/Shell",
+        "org.gnome.Shell",
+    );
+    let version: Option<String> = match shell.await {
+        Ok(shell) => shell.get_property("ShellVersion").await.ok(),
+        Err(_) => None,
+    };
+    version.as_deref().is_some_and(shell_pins_modes)
+}
+
+/// [`pins_modes`] for a `ShellVersion` string: `47.1`, `48.rc`, `3.38.4`.
+fn shell_pins_modes(version: &str) -> bool {
+    let major = version
+        .split('.')
+        .next()
+        .and_then(|v| v.parse::<u32>().ok());
+    major.is_some_and(|major| major >= MODES_SINCE)
 }
 
 /// Four-step handshake (module docs). `preferred_scale` is the client's
@@ -853,7 +893,15 @@ async fn connect(
         .await
         .context("Session.RecordVirtual")?;
 
-    start_and_await_node(conn, rd_session, sc_session, stream_path).await
+    // An older Mutter ran the whole rate whatever fraction the key named.
+    let rate_mhz = if pins_modes(&conn).await {
+        mode.millihz()
+    } else {
+        mode.refresh_hz.saturating_mul(1000)
+    };
+    let mut session = start_and_await_node(conn, rd_session, sc_session, stream_path).await?;
+    session.rate_mhz = Some(rate_mhz);
+    Ok(session)
 }
 
 // Promote the RecordVirtual output via DisplayConfig.ApplyMonitorsConfig.
@@ -1501,8 +1549,8 @@ mod tests {
     }
 
     use super::{
-        keep_head_layout, pick_keep_mode, pick_virtual, scale_baseline, snap_integral_scale,
-        HashMap, LogicalMonitor, Mode, MonitorInfo, OwnedValue, Value,
+        keep_head_layout, pick_keep_mode, pick_virtual, scale_baseline, shell_pins_modes,
+        snap_integral_scale, HashMap, LogicalMonitor, Mode, MonitorInfo, OwnedValue, Value,
     };
 
     // (id, w, h, refresh, is_current, is_preferred)
@@ -1515,6 +1563,20 @@ mod tests {
         pref: bool,
     ) -> (String, i32, i32, f64, bool, bool) {
         (id.to_string(), w, h, hz, cur, pref)
+    }
+
+    #[test]
+    fn only_gnome_47_on_pins_a_virtual_monitors_rate() {
+        for (version, pins) in [
+            ("47.0", true),
+            ("48.rc", true),
+            ("51", true),
+            ("46.3.1", false),
+            ("3.38.4", false),
+            ("", false),
+        ] {
+            assert_eq!(shell_pins_modes(version), pins, "{version:?}");
+        }
     }
 
     #[test]

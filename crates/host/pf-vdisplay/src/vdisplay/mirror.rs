@@ -161,6 +161,7 @@ impl MirrorDisplay {
         let dims = (target.width, target.height, refresh_hz(target.refresh_mhz));
         let claim = Streaming::claim(&target.connector, self.device.clone());
         let mut out = VirtualOutput::owned(0, Some(dims), Box::new(claim));
+        out.refresh_mhz = Some(target.refresh_mhz);
         out.win_capture = Some(pf_frame::dxgi::WinCaptureTarget {
             adapter_luid: head.key.adapter_luid,
             gdi_name: head.gdi_name.clone(),
@@ -242,6 +243,7 @@ impl MirrorDisplay {
         let claim = Streaming::claim(&target.connector, self.device.clone());
         let keepalive = Box::new((stream.keepalive, claim));
         let mut out = VirtualOutput::owned(stream.node_id, Some(dims), keepalive);
+        out.refresh_mhz = Some(target.refresh_mhz);
         out.remote_fd = stream.remote_fd;
         out.ownership = DisplayOwnership::External;
         // Host aims input; this crate must not depend on pf-inject. Connector equals

@@ -373,8 +373,9 @@ impl VirtualDisplay for KwinDisplay {
         );
         // `final_dims` ends up as the request unless CVT shrinks the width
         // ([`CVT_H_GRANULARITY`]) or KWin kept a stored slot we could not move. It is
-        // `preferred_mode` — capturer gate and encoder both key on it.
-        let (final_dims, expect_exact_dims, achieved_hz) = if want_high {
+        // `preferred_mode` — capturer gate and encoder both key on it. `ran_mhz` is the
+        // rate the output runs: a custom mode's read-back, else KWin's 60 Hz birth mode.
+        let (final_dims, expect_exact_dims, achieved_hz, ran_mhz) = if want_high {
             // Both resolvers address the output by the size it is at, and KWin's stored
             // setup can move it off its birth size before we ever look. Ask where it is.
             let at = crate::kwin::mgmt::actual_dims(mgmt.as_mut(), &our_prefix)
@@ -392,7 +393,7 @@ impl VirtualDisplay for KwinDisplay {
             }
             // Install+select the high-refresh custom mode; the kscreen half addresses ours
             // by the kscreen id it resolved, which later position applies reuse.
-            let want = (width, height, mode.refresh_hz);
+            let want = (width, height, mode.millihz());
             let active = match outputs::custom_mode(mgmt.as_mut(), &name, &our_prefix, at, want) {
                 Resolved::InProcess(active) => Some(active),
                 Resolved::Kscreen((addr, active)) => {
@@ -404,8 +405,8 @@ impl VirtualDisplay for KwinDisplay {
             // Accept only our custom mode (exact height, width at or just below). That
             // also proves we left the sacrificial birth size so the stream will renegotiate.
             match active {
-                Some((aw, ah, ahz)) if mode_satisfies((aw, ah), width, height) => {
-                    ((aw, ah), true, ahz)
+                Some((aw, ah, amhz)) if mode_satisfies((aw, ah), width, height) => {
+                    ((aw, ah), true, ((amhz + 500) / 1000).max(1), amhz)
                 }
                 other => {
                     // Install rejected: stuck at sacrificial size. Recreate at the real
@@ -436,13 +437,21 @@ impl VirtualDisplay for KwinDisplay {
                     // the session streams whatever `kwinoutputconfig.json` restored.
                     let (dims, exact) =
                         verify_or_reassert(mgmt.as_mut(), &our_prefix, width, height);
-                    (dims, exact, 60)
+                    (dims, exact, 60, BIRTH_MHZ)
                 }
             }
         } else {
-            // ≤60 Hz installs no mode, so nothing here learned what KWin built.
+            // ≤60 Hz changes no size, so nothing here learned what KWin built.
             let (dims, exact) = verify_or_reassert(mgmt.as_mut(), &our_prefix, width, height);
-            (dims, exact, mode.refresh_hz)
+            // The output stays near 60 Hz so a slow client never throttles the desktop. A
+            // rate with a fraction runs at its own multiple there: 59.94 under 29.97.
+            let mhz = mode.millihz().max(1000);
+            let want = match mhz % 1000 {
+                0 => BIRTH_MHZ,
+                _ => mhz * (BIRTH_MHZ / mhz).max(1),
+            };
+            let ran = crate::kwin::mgmt::settle_rate(mgmt.as_mut(), &our_prefix, dims, want);
+            (dims, exact, mode.refresh_hz, ran.unwrap_or(BIRTH_MHZ))
         };
         self.apply_topology(mgmt.as_mut(), &name, &our_prefix, final_dims, &pre_enabled);
         self.watch = mgmt;
@@ -452,11 +461,15 @@ impl VirtualDisplay for KwinDisplay {
             // Dropping it releases the output: the worker's Wayland connection goes with it.
             Box::new(stop),
         );
+        out.refresh_mhz = Some(ran_mhz);
         out.expect_exact_dims = expect_exact_dims;
         out.input_output = Some(our_prefix);
         Ok(out)
     }
 }
+
+/// The rate KWin gives a virtual output it creates, in millihertz.
+const BIRTH_MHZ: u32 = 60_000;
 
 /// Delay after create/teardown before re-checking outputs KWin's stored setup switched
 /// off. The stored setup is not synchronous with our reads; the immediate pass catches
@@ -653,7 +666,7 @@ fn verify_or_reassert(
             );
             // 60 Hz, not the client's rate: only the size is wrong here, and a 30 fps client
             // would install 30 Hz and throttle the compositor.
-            match mgmt::set_custom_mode(sess, our_prefix, aw, ah, width, height, 60) {
+            match mgmt::set_custom_mode(sess, our_prefix, aw, ah, width, height, BIRTH_MHZ) {
                 Ok((cw, ch, _)) if mode_satisfies((cw, ch), width, height) => {
                     tracing::info!(
                         active_w = cw,
