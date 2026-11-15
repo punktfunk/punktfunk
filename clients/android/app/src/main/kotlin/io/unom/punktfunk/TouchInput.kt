@@ -256,20 +256,22 @@ internal suspend fun PointerInputScope.streamTouchInput(
      *  thresholds); a lone finger passes unconsumed to whatever scrolls beneath, and no click,
      *  cursor move or tap is ever synthesized. */
     dialOnly: Boolean = false,
-    /** Frame mode: every finger goes to the host's touchpad after the gesture machine has seen
-     *  it, and of the machine's own output only clicks still go ([FrameModeSink]). */
-    frames: TouchpadFrames? = null,
+    /** Frame mode, read as each gesture starts: every finger goes to the host's touchpad after
+     *  the gesture machine has seen it, and of the machine's own output only clicks still go
+     *  ([FrameModeSink]). A refused update ends it until the decision is read anew. */
+    frames: () -> TouchpadFrames? = { null },
     onCycleStats: () -> Unit,
     onKeyboard: (show: Boolean) -> Unit,
     onDial: (DialEvent) -> Unit,
 ) {
-    val wire = frames?.let { FrameModeSink(sink, it.hostTaps) } ?: sink
-    val feed = frames?.let { SurfaceFeed(it, stylus) }
+    var refused: TouchpadFrames? = null
     var lastTapUp = 0L
     var lastTapX = 0f
     var lastTapY = 0f
     awaitEachGesture {
         val down = awaitFirstFingerDown(stylus, video)
+        val feed = frames()?.takeIf { it !== refused }?.let { SurfaceFeed(it, stylus, sink) }
+        val wire = feed?.wire ?: sink
         // A touch landing just after a quick tap nearby = tap-and-drag: hold the left
         // button for this whole gesture (laptop-trackpad convention).
         val isDrag = down.uptimeMillis - lastTapUp < TAP_DRAG_MS &&
@@ -300,6 +302,8 @@ internal suspend fun PointerInputScope.streamTouchInput(
                     continue
                 }
                 stylus?.intercept(ev, video().at(size))
+                // A new decision mid-gesture: the rest of it takes the path without frames.
+                if (feed != null && frames() !== feed.frames) feed.wire.framing = false
                 val pressed = ev.changes.filter { it.pressed && !isStylus(it, stylus) }
                     .sortedBy { it.id.value }
                 if (pressed.isEmpty()) {
@@ -332,6 +336,7 @@ internal suspend fun PointerInputScope.streamTouchInput(
             }
         } finally {
             g.release() // end a held drag exactly once, teardown mid-drag included
+            if (feed?.wire?.framing == false) refused = feed.frames
         }
     }
 }
@@ -341,10 +346,12 @@ internal suspend fun PointerInputScope.streamTouchInput(
 private const val SURFACE_MAX_TOUCHES = 16
 
 /**
- * One pointer event as frame-mode updates: every finger down with x/y in 0…1 of the view, its
- * batched samples first, each at its own capture time to the millisecond Compose reports.
+ * One gesture's frame mode: each pointer event as updates, every finger down with x/y in 0…1 of
+ * the view, its batched samples first, each at its own capture time to the millisecond Compose
+ * reports. A refused update turns [wire] back to the path without frames for the rest of it.
  */
-private class SurfaceFeed(private val frames: TouchpadFrames, private val stylus: StylusStream?) {
+private class SurfaceFeed(val frames: TouchpadFrames, private val stylus: StylusStream?, sink: TouchSink) {
+    val wire = FrameModeSink(sink, frames.hostTaps)
     private val ids = LongArray(SURFACE_MAX_TOUCHES)
     private val xs = FloatArray(SURFACE_MAX_TOUCHES)
     private val ys = FloatArray(SURFACE_MAX_TOUCHES)
@@ -352,23 +359,22 @@ private class SurfaceFeed(private val frames: TouchpadFrames, private val stylus
     fun send(ev: PointerEvent, view: IntSize, keep: Boolean) {
         val w = view.width
         val h = view.height
-        if (w <= 0 || h <= 0) return
+        if (!wire.framing || w <= 0 || h <= 0) return
         val down = ev.changes.filter { it.pressed && !isStylus(it, stylus) }.take(SURFACE_MAX_TOUCHES)
         down.forEachIndexed { i, c -> ids[i] = c.id.value }
         val batched = down.minOfOrNull { it.historical.size } ?: 0
-        for (k in 0 until batched) {
+        for (k in 0..batched) {
             down.forEachIndexed { i, c ->
-                xs[i] = c.historical[k].position.x / w
-                ys[i] = c.historical[k].position.y / h
+                val at = if (k < batched) c.historical[k].position else c.position
+                xs[i] = at.x / w
+                ys[i] = at.y / h
             }
-            frames.surface(down.size, ids, xs, ys, keep, down[0].historical[k].uptimeMillis * 1000, w, h)
+            val ms = if (k < batched) down[0].historical[k].uptimeMillis else ev.changes.firstOrNull()?.uptimeMillis
+            if (!frames.surface(down.size, ids, xs, ys, keep, (ms ?: SystemClock.uptimeMillis()) * 1000, w, h)) {
+                wire.framing = false
+                return
+            }
         }
-        down.forEachIndexed { i, c ->
-            xs[i] = c.position.x / w
-            ys[i] = c.position.y / h
-        }
-        val at = ev.changes.firstOrNull()?.uptimeMillis ?: SystemClock.uptimeMillis()
-        frames.surface(down.size, ids, xs, ys, keep, at * 1000, w, h)
     }
 }
 

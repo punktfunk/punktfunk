@@ -782,7 +782,8 @@ object NativeBridge {
     /**
      * Whether the host presents a touchpad of its own (`FEATURE_TOUCHPAD`): a touch surface then
      * sends its contacts through [nativeTouchpadSurface] instead of mouse motion and scroll
-     * (design/touchpad-passthrough.md §4). Fixed for the session. False on `0`.
+     * (design/touchpad-passthrough.md §4). Live: false while [nativeSetInvertScroll] is on, so
+     * read it after that flag is set and again whenever it changes. False on `0`.
      */
     external fun nativeHostPresentsTouchpad(handle: Long): Boolean
 
@@ -800,7 +801,8 @@ object NativeBridge {
      * [retractTaps]: this source clicks on taps itself. [widthDmm]×[heightDmm] is the surface in
      * tenths of a millimetre (`0` unknown); [timeUs] the touches' capture time on the uptime
      * clock. Call on every change and once with no touches when the source appears or goes.
-     * `true` when core forwarded the update; `false` leaves the gesture to the caller.
+     * Answers [SURFACE_FORWARDED], [SURFACE_KEPT] (the gesture is the caller's) or
+     * [SURFACE_REFUSED]: no frames land now, so the source takes the path it has without them.
      */
     external fun nativeTouchpadSurface(
         handle: Long,
@@ -815,7 +817,16 @@ object NativeBridge {
         widthDmm: Int,
         heightDmm: Int,
         timeUs: Long,
-    ): Boolean
+    ): Int
+
+    /** [nativeTouchpadSurface]: core refused the update; also a gone session or a bad call. */
+    const val SURFACE_REFUSED = 0
+
+    /** [nativeTouchpadSurface]: core took the update and the gesture is the caller's. */
+    const val SURFACE_KEPT = 1
+
+    /** [nativeTouchpadSurface]: core took the update and forwarded it. */
+    const val SURFACE_FORWARDED = 2
 
     /**
      * One stylus batch of STATE-FULL samples (the pen plane; design/pen-tablet-input.md §7):

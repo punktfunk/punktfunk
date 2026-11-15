@@ -335,12 +335,28 @@ fn surface_dmm(dmm: jint) -> u16 {
     dmm.clamp(0, jint::from(u16::MAX)) as u16
 }
 
+/// `nativeTouchpadSurface`'s answer: core refused the call (also a gone session, a short array or
+/// a JNI failure, which change nothing). `0` so the JNI default reads as a refusal.
+const SURFACE_REFUSED: jint = 0;
+/// Core took the update and the gesture is Kotlin's (kept).
+const SURFACE_KEPT: jint = 1;
+/// Core took the update and forwarded it.
+const SURFACE_FORWARDED: jint = 2;
+
+/// The status Kotlin reads for core's answer to one update.
+fn surface_status(answer: punktfunk_core::error::Result<bool>) -> jint {
+    match answer {
+        Ok(true) => SURFACE_FORWARDED,
+        Ok(false) => SURFACE_KEPT,
+        Err(_) => SURFACE_REFUSED,
+    }
+}
+
 /// `NativeBridge.nativeTouchpadSurface(handle, ids, xs, ys, count, maxContacts, button, keep,
 /// retractTaps, widthDmm, heightDmm, timeUs)` — every touch down on a touch surface now, as
 /// [`NativeClient::touchpad_surface`](punktfunk_core::client::NativeClient::touchpad_surface)
-/// takes it: the first `count` platform ids with x/y in 0..1 of the surface. `true` when core
-/// forwarded the update; `false` (also on a refused call or a short array, which change nothing)
-/// leaves the gesture to Kotlin.
+/// takes it: the first `count` platform ids with x/y in 0..1 of the surface. Answers
+/// [`surface_status`]: refused, kept (the gesture is Kotlin's), or forwarded.
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeTouchpadSurface(
@@ -358,8 +374,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeTouchpadSur
     width_dmm: jint,
     height_dmm: jint,
     time_us: jlong,
-) -> jboolean {
-    env.with_env(|env| -> jni::errors::Result<jboolean> {
+) -> jint {
+    env.with_env(|env| -> jni::errors::Result<jint> {
         let n = surface_count(count);
         let mut id = [0i64; SURFACE_JNI_MAX_TOUCHES];
         let mut x = [0f32; SURFACE_JNI_MAX_TOUCHES];
@@ -368,10 +384,10 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeTouchpadSur
             || xs.get_region(env, 0, &mut x[..n]).is_err()
             || ys.get_region(env, 0, &mut y[..n]).is_err()
         {
-            return Ok(false);
+            return Ok(SURFACE_REFUSED);
         }
         let Some(h) = SESSIONS.get(handle) else {
-            return Ok(false);
+            return Ok(SURFACE_REFUSED);
         };
         let touches: [SurfaceTouch; SURFACE_JNI_MAX_TOUCHES] =
             std::array::from_fn(|i| SurfaceTouch {
@@ -379,7 +395,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeTouchpadSur
                 x: x[i],
                 y: y[i],
             });
-        let forwarded = h.client.touchpad_surface(
+        let answer = h.client.touchpad_surface(
             &touches[..n],
             max_contacts.clamp(0, jint::from(u8::MAX)) as u8,
             button,
@@ -389,7 +405,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeTouchpadSur
             surface_dmm(height_dmm),
             u64::try_from(time_us).unwrap_or(0),
         );
-        Ok(forwarded.unwrap_or(false))
+        Ok(surface_status(answer))
     })
     .resolve::<LogErrorAndDefault>()
 }
@@ -1135,6 +1151,20 @@ mod tests {
         for &(name, count, want) in CASES {
             assert_eq!(surface_count(count), want, "{name}");
         }
+    }
+
+    #[test]
+    fn a_refusal_reads_apart_from_a_kept_gesture() {
+        use punktfunk_core::PunktfunkError;
+        assert_eq!(surface_status(Ok(true)), SURFACE_FORWARDED);
+        assert_eq!(surface_status(Ok(false)), SURFACE_KEPT);
+        let refused = Err(PunktfunkError::Unsupported("no touchpad"));
+        assert_eq!(surface_status(refused), SURFACE_REFUSED);
+        assert_eq!(
+            SURFACE_REFUSED,
+            jint::default(),
+            "a JNI failure reads as a refusal"
+        );
     }
 
     #[test]

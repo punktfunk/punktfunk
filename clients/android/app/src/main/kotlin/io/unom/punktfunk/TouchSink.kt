@@ -39,16 +39,46 @@ internal object DroppedTouchSink : TouchSink {
 /**
  * Frame mode's wire filter (design/touchpad-passthrough.md §4): the host's touchpad derives
  * pointer motion and scroll from the contacts, so only the gesture machine's clicks go, and only
- * toward a host that does not click on taps itself.
+ * toward a host that does not click on taps itself. With [framing] off everything goes, as
+ * without frames; a release goes only for a press that went.
  */
 internal class FrameModeSink(private val wire: TouchSink, private val hostTaps: Boolean) : TouchSink {
-    override fun pointerMove(dx: Int, dy: Int) = Unit
-    override fun pointerAbs(x: Int, y: Int, w: Int, h: Int) = Unit
-    override fun button(button: Int, down: Boolean) {
-        if (!hostTaps) wire.button(button, down)
+    var framing = true
+    private val held = mutableSetOf<Int>()
+
+    override fun pointerMove(dx: Int, dy: Int) {
+        if (!framing) wire.pointerMove(dx, dy)
     }
-    override fun scroll(axis: Int, delta: Int, source: Int, phase: Int) = Unit
-    override fun touch(id: Int, kind: Int, x: Int, y: Int, w: Int, h: Int) = Unit
+    override fun pointerAbs(x: Int, y: Int, w: Int, h: Int) {
+        if (!framing) wire.pointerAbs(x, y, w, h)
+    }
+    override fun button(button: Int, down: Boolean) {
+        if (framing && hostTaps) return
+        if (down) held += button else if (!held.remove(button)) return
+        wire.button(button, down)
+    }
+    override fun scroll(axis: Int, delta: Int, source: Int, phase: Int) {
+        if (!framing) wire.scroll(axis, delta, source, phase)
+    }
+    override fun touch(id: Int, kind: Int, x: Int, y: Int, w: Int, h: Int) {
+        if (!framing) wire.touch(id, kind, x, y, w, h)
+    }
+}
+
+/**
+ * The host's touchpad as core answers it at one read. Core answers no while the player's
+ * invert-scroll is on, since the host's touchpad scrolls by the host's own setting; each read is
+ * a new decision, so a source that saw a refusal tries again only after the next read.
+ */
+internal class HostTouchpad(val presents: Boolean, val taps: Boolean) {
+    companion object {
+        val NONE = HostTouchpad(presents = false, taps = false)
+
+        fun read(handle: Long): HostTouchpad {
+            val presents = NativeBridge.nativeHostPresentsTouchpad(handle)
+            return HostTouchpad(presents, presents && NativeBridge.nativeHostTapsClick(handle))
+        }
+    }
 }
 
 /** The stream view as the host's touchpad: every finger on it, on every change. */
@@ -59,9 +89,9 @@ internal interface TouchpadFrames {
     /**
      * Every finger down now: the first [count] [ids] with [xs]/[ys] in 0…1 of a [w]×[h] px view,
      * origin top-left. [keep] while a local gesture owns them; [timeUs] is their capture time on
-     * the uptime clock.
+     * the uptime clock. `false`: core refused it, and the view takes its path without frames.
      */
-    fun surface(count: Int, ids: LongArray, xs: FloatArray, ys: FloatArray, keep: Boolean, timeUs: Long, w: Int, h: Int)
+    fun surface(count: Int, ids: LongArray, xs: FloatArray, ys: FloatArray, keep: Boolean, timeUs: Long, w: Int, h: Int): Boolean
 
     /** No finger down: announces the surface when frame mode starts and lifts every contact when it ends. */
     fun idle(w: Int, h: Int) = surface(0, NO_IDS, NO_XY, NO_XY, false, SystemClock.uptimeMillis() * 1000, w, h)
@@ -94,15 +124,15 @@ internal class NativeTouchpadFrames(
     private val resources: Resources,
     private val onPointer: () -> Unit = {},
 ) : TouchpadFrames {
-    override fun surface(count: Int, ids: LongArray, xs: FloatArray, ys: FloatArray, keep: Boolean, timeUs: Long, w: Int, h: Int) {
+    override fun surface(count: Int, ids: LongArray, xs: FloatArray, ys: FloatArray, keep: Boolean, timeUs: Long, w: Int, h: Int): Boolean {
         if (count > 0) onPointer()
         val m = resources.displayMetrics
-        NativeBridge.nativeTouchpadSurface(
+        return NativeBridge.nativeTouchpadSurface(
             handle, ids, xs, ys, count, SCREEN_MAX_CONTACTS,
             button = false, keep = keep, retractTaps = !hostTaps,
             widthDmm = pxToDmm(w, m.xdpi, m.densityDpi), heightDmm = pxToDmm(h, m.ydpi, m.densityDpi),
             timeUs = timeUs,
-        )
+        ) != NativeBridge.SURFACE_REFUSED
     }
 }
 

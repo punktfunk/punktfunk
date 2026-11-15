@@ -39,11 +39,15 @@ class TouchpadFramesTest {
 
     private data class Update(val ids: List<Long>, val xs: List<Float>, val keep: Boolean, val timeUs: Long, val w: Int, val h: Int)
 
-    private class Pad(override val hostTaps: Boolean) : TouchpadFrames {
+    /** A recording surface; core refuses every update from the [refuseFrom]th on. */
+    private class Pad(override val hostTaps: Boolean, private val refuseFrom: Int = Int.MAX_VALUE) : TouchpadFrames {
         val updates = mutableListOf<Update>()
-        override fun surface(count: Int, ids: LongArray, xs: FloatArray, ys: FloatArray, keep: Boolean, timeUs: Long, w: Int, h: Int) {
+        var calls = 0
+        override fun surface(count: Int, ids: LongArray, xs: FloatArray, ys: FloatArray, keep: Boolean, timeUs: Long, w: Int, h: Int): Boolean {
             assertTrue((0 until count).all { xs[it] in 0f..1f && ys[it] in 0f..1f })
+            if (calls++ >= refuseFrom) return false
             updates += Update(ids.take(count), xs.take(count), keep, timeUs, w, h)
+            return true
         }
         fun counts() = updates.map { it.ids.size }
     }
@@ -52,7 +56,11 @@ class TouchpadFramesTest {
     private var stats = 0
     private val dial = mutableListOf<DialEvent>()
 
-    private fun compose(pad: Pad) {
+    /** The decision the gesture layer reads as each gesture starts. */
+    private var current: Pad? = null
+
+    private fun compose(pad: Pad?) {
+        current = pad
         compose.mainClock.autoAdvance = false
         compose.setContent {
             Box(
@@ -61,12 +69,19 @@ class TouchpadFramesTest {
                         sink = wire, stylus = null,
                         video = { VideoFrame(io.unom.punktfunk.kit.VideoFit.FIT, 0, 0) },
                         trackpad = true,
-                        frames = pad,
+                        frames = { current },
                         onCycleStats = { stats++ }, onKeyboard = {}, onDial = { dial += it },
                     )
                 },
             )
         }
+    }
+
+    private fun drag() = touch {
+        advanceEventTime(400) // past the tap-drag window
+        down(center)
+        repeat(5) { moveBy(Offset(20f, 0f), delayMillis = 10) }
+        up()
     }
 
     private fun touch(block: androidx.compose.ui.test.TouchInjectionScope.() -> Unit) {
@@ -78,11 +93,7 @@ class TouchpadFramesTest {
     fun aDragSendsContactsAtTheirOwnTimesAndNoMotion() {
         val pad = Pad(hostTaps = true)
         compose(pad)
-        touch {
-            down(center)
-            repeat(5) { moveBy(Offset(20f, 0f), delayMillis = 10) }
-            up()
-        }
+        drag()
         assertEquals(emptyList<String>(), wire.log)
         assertEquals(listOf(1, 1, 1, 1, 1, 1, 0), pad.counts())
         val held = pad.updates.dropLast(1)
@@ -189,6 +200,106 @@ class TouchpadFramesTest {
             val want = if (hostTaps) emptyList() else listOf("btn 1 down", "btn 1 up")
             assertEquals("hostTaps $hostTaps", want, out.log)
         }
+    }
+
+    @Test
+    fun withFramingOffEverythingGoesButAReleaseWithoutItsPress() {
+        val out = Wire()
+        val sink = FrameModeSink(out, hostTaps = true)
+        sink.button(1, true) // a long press, kept home while framing
+        sink.framing = false
+        sink.pointerMove(3, 4)
+        sink.scroll(0, 256, ScrollWire.SOURCE_TOUCH, ScrollWire.PHASE_UPDATE)
+        sink.button(1, false)
+        sink.button(3, true)
+        sink.button(3, false)
+        assertEquals(listOf("move 3 4", "scroll 0 256", "btn 3 down", "btn 3 up"), out.log)
+    }
+
+    @Test
+    fun aRefusedUpdateHandsTheGestureBackUntilTheNextDecision() {
+        val pad = Pad(hostTaps = true, refuseFrom = 2)
+        compose(pad)
+        drag()
+        assertEquals("the down and the first move", 2, pad.updates.size)
+        assertEquals("nothing after the refusal", 3, pad.calls)
+        assertTrue(wire.log.isNotEmpty() && wire.log.all { it.startsWith("move ") && it.split(" ")[1].toInt() > 0 })
+
+        wire.log.clear()
+        touch { advanceEventTime(400); down(center); advanceEventTime(50); up() }
+        assertEquals("the refused decision is not tried again", 3, pad.calls)
+        assertEquals(listOf("btn 1 down", "btn 1 up"), wire.log)
+
+        val next = Pad(hostTaps = true)
+        current = next
+        wire.log.clear()
+        drag()
+        assertEquals(emptyList<String>(), wire.log)
+        assertEquals(listOf(1, 1, 1, 1, 1, 1, 0), next.counts())
+    }
+
+    @Test
+    fun aDecisionTurnedOffTakesTheOldPathFromTheNextGesture() {
+        val pad = Pad(hostTaps = true)
+        compose(pad)
+        drag()
+        assertEquals(emptyList<String>(), wire.log)
+        val calls = pad.calls
+        current = null
+        drag()
+        assertEquals(calls, pad.calls)
+        assertTrue(wire.log.isNotEmpty() && wire.log.all { it.startsWith("move ") })
+    }
+
+    @Test
+    fun aDecisionTurnedOffMidGestureHandsTheRestBackWithoutAsking() {
+        val pad = Pad(hostTaps = true)
+        compose(pad)
+        touch { advanceEventTime(400); down(center); repeat(2) { moveBy(Offset(20f, 0f), delayMillis = 10) } }
+        current = null
+        touch { repeat(3) { moveBy(Offset(20f, 0f), delayMillis = 10) }; up() }
+        assertEquals("the down and two moves, no refused call", 3, pad.calls)
+        assertEquals(3, wire.log.size)
+        assertTrue(wire.log.all { it.startsWith("move ") })
+    }
+
+    /** Core answers no touchpad while its invert flag is on; the fake here does the same. */
+    private fun ui(initialInvert: Boolean, order: MutableList<String>, apply: Boolean = true): StreamUi {
+        var coreInvert: Boolean? = null
+        return StreamUi(
+            0, intArrayOf(io.unom.punktfunk.kit.SessionAccess.ALL, 0), StatsVerbosity.entries.first(), initialInvert,
+            applyInvertScroll = { order += "apply $it"; if (apply) coreInvert = it; apply },
+            readTouchpad = { order += "read"; (coreInvert == false).let { HostTouchpad(it, it) } },
+        )
+    }
+
+    @Test
+    fun theDecisionIsReadAfterCoreHasTheInvertFlagAndAgainOnEveryChange() {
+        val order = mutableListOf<String>()
+        val ui = ui(initialInvert = true, order)
+        assertTrue("nothing read before the seed", order.isEmpty() && !ui.touchpad.presents)
+        ui.seed()
+        assertEquals(listOf("apply true", "read"), order)
+        assertTrue("invert on: no frames", !ui.touchpad.presents)
+        ui.setScrollInverted(false)
+        assertTrue("invert off: frames", ui.touchpad.presents && ui.touchpad.taps)
+        val on = ui.touchpad
+        ui.setScrollInverted(true)
+        assertTrue(!ui.touchpad.presents && !ui.touchpad.taps)
+        ui.setScrollInverted(false)
+        assertTrue("each read is a new decision", ui.touchpad.presents && ui.touchpad !== on)
+        assertEquals(listOf("apply true", "read", "apply false", "read", "apply true", "read", "apply false", "read"), order)
+    }
+
+    @Test
+    fun anInvertChangeCoreRefusedKeepsTheDecision() {
+        val order = mutableListOf<String>()
+        val ui = ui(initialInvert = false, order, apply = false)
+        ui.seed()
+        val seeded = ui.touchpad
+        ui.setScrollInverted(true)
+        assertTrue(ui.touchpad === seeded)
+        assertEquals(listOf("apply false", "read", "apply true"), order)
     }
 
     @Test

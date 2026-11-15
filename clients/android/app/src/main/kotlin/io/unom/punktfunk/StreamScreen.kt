@@ -133,8 +133,14 @@ fun StreamScreen(
     // state). Full control + permanent — the only state an old host or an old native lib ever
     // reports — gates nothing and draws nothing: today's look, unchanged.
     val initialAccess = remember(handle) { NativeBridge.nativeAccessState(handle) }
-    // The Compose state the session's peripherals write (see [StreamUi]).
-    val ui = remember(handle) { StreamUi(handle, initialAccess, initialSettings.statsVerbosity, initialSettings.invertScroll) }
+    // The Compose state the session's peripherals write (see [StreamUi]). Seeded here, before any
+    // source reads the host's touchpad: core answers that from the invert flag.
+    val ui = remember(handle) {
+        StreamUi(
+            handle, initialAccess, initialSettings.statsVerbosity, initialSettings.invertScroll,
+            readTouchpad = { HostTouchpad.read(handle) },
+        ).also { it.seed() }
+    }
 
     LaunchedEffect(ui.micHint) {
         if (ui.micHint != null) {
@@ -241,10 +247,6 @@ fun StreamScreen(
     val hasTouch = remember {
         context.packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)
     }
-    // Seed once per handle; the in-stream control must survive recomposition.
-    LaunchedEffect(handle) {
-        NativeBridge.nativeSetInvertScroll(handle, ui.invertScroll)
-    }
     // A roam: the default network or its addresses changed. The socket already follows it; the
     // nudge tells the host now instead of at the next datagram.
     DisposableEffect(handle) {
@@ -346,20 +348,24 @@ fun StreamScreen(
     }
 
     // Frame mode (design/touchpad-passthrough.md §4): toward a host with a touchpad of its own,
-    // Trackpad mode sends every finger to it. Empty updates announce the surface when frame mode
-    // starts and lift every contact when it ends.
-    val hostPad = remember(handle) {
-        if (NativeBridge.nativeHostPresentsTouchpad(handle)) {
-            NativeTouchpadFrames(handle, NativeBridge.nativeHostTapsClick(handle), context.resources, peripherals::handBack)
+    // Trackpad mode sends every finger to it. Each read of the host's touchpad is a new decision;
+    // the gesture layer takes it at the next gesture. Empty updates announce the surface when
+    // frame mode starts and lift every contact when it ends, unless core no longer presents it.
+    val touchpad = ui.touchpad
+    val frames = remember(touchpad, pointerOk, touchMode) {
+        if (touchpad.presents && hasTouch && pointerOk && touchMode == TouchMode.TRACKPAD) {
+            NativeTouchpadFrames(handle, touchpad.taps, context.resources, peripherals::handBack)
         } else {
             null
         }
     }
-    val frames = hostPad.takeIf { hasTouch && pointerOk && touchMode == TouchMode.TRACKPAD }
+    val liveFrames by rememberUpdatedState(frames)
     DisposableEffect(frames) {
         frames?.idle(containerSize.width, containerSize.height)
-        onDispose { frames?.idle(containerSize.width, containerSize.height) }
+        onDispose { if (ui.touchpad.presents) frames?.idle(containerSize.width, containerSize.height) }
     }
+    // The captured touchpad decides per gesture; a new decision also re-grabs and announces.
+    LaunchedEffect(touchpad) { activity?.mouseForwarder?.touchpadChanged() }
 
     // The twist and the three-finger tap live in the pointer touch models only — passthrough gives
     // every finger to the host verbatim — and need a screen plus the POINTER grant.
@@ -834,7 +840,7 @@ fun StreamScreen(
                                 stylus,
                                 frame,
                                 trackpad = touchMode != TouchMode.POINTER,
-                                frames = frames,
+                                frames = { liveFrames },
                                 onCycleStats = { ui.statsVerbosity = ui.statsVerbosity.next() },
                                 onKeyboard = showKeyboard,
                                 // The two-finger twist turns the quick-action ring, frame by frame.
