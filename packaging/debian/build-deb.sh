@@ -249,7 +249,7 @@ DEPENDS="$SHDEPS, libei1, pipewire, wireplumber, punktfunk-seats (= $VERSION)"
 # Architecture:all .deb; Recommends so `apt install punktfunk-host` pulls it by default, while a
 # headless/encoding-only box can opt out with --no-install-recommends.
 # punktfunk-scripting = the plugin/script runner (host automation on bun). Recommends so it's pulled
-# by default; its systemd --user unit ships disabled (inert until you add scripts/plugins).
+# by default; its postinst enables the systemd --user unit for every user on a first install.
 # punktfunk-gamescope = HDR, the real mode and the cursor in a gamescope session. Recommends because
 # the repo carries no build for Ubuntu 24.04; apt skips a recommend it can't find.
 RECOMMENDS="gamescope, punktfunk-gamescope, pipewire-pulse, mesa-va-drivers, intel-media-va-driver, punktfunk-web, punktfunk-scripting"

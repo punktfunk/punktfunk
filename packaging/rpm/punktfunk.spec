@@ -138,8 +138,8 @@ Recommends:     intel-media-driver
 # it doesn't (a COPR build without `--with web` simply has no punktfunk-web to satisfy).
 Recommends:     punktfunk-web
 # The plugin/script runner (host automation on bun). Same weak-dep story: pulled where it exists,
-# harmless where a `--with scripting`-less build didn't produce it. Its systemd --user unit ships
-# disabled — the runner is inert until you add scripts/plugins.
+# harmless where a `--with scripting`-less build didn't produce it. Its post-install scriptlet
+# enables the systemd --user unit for every user on a first install.
 Recommends:     punktfunk-scripting
 # Profile seats and Reachable without logging in (a root supervisor, shipped off). Pinned: the host
 # and the supervisor speak one socket protocol, so they move together.
@@ -607,8 +607,8 @@ cat > %{buildroot}%{_bindir}/punktfunk-scripting <<'WRAP'
 exec /usr/libexec/punktfunk-bun/bun /usr/share/punktfunk-scripting/runner-cli.js "$@"
 WRAP
 chmod 0755 %{buildroot}%{_bindir}/punktfunk-scripting
-# systemd --user unit — installed but NOT auto-enabled (opt-in; the runner is inert until you add
-# scripts/plugins). Enable with `systemctl --user enable --now punktfunk-scripting`.
+# systemd --user unit. The post-install scriptlet below enables it for every user on a first install;
+# `systemctl --user mask punktfunk-scripting` opts a user out.
 install -Dm0644 scripts/punktfunk-scripting.service %{buildroot}%{_userunitdir}/punktfunk-scripting.service
 install -Dm0644 scripts/punktfunk-scripting-seat@.service \
   %{buildroot}%{_userunitdir}/punktfunk-scripting-seat@.service

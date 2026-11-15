@@ -8,8 +8,8 @@
 # bundle: we `bun build` the runner CLI into ONE self-contained JS (effect + the SDK inlined; the
 # dynamic plugin import stays a runtime import), so there is no node_modules to ship. The host's
 # punktfunk-host .deb Recommends this so a default `apt install punktfunk-host` pulls the runner too;
-# its systemd --user unit is installed but NOT auto-enabled (the runner is inert until you add
-# scripts/plugins — enable it with `systemctl --user enable --now punktfunk-scripting`).
+# its systemd --user unit is enabled for every user on the first install (the postinst below), and
+# `systemctl --user mask punktfunk-scripting` opts a user out.
 #
 # Usage: VERSION=0.0.1~ci42.gdeadbee [DEB_ARCH=amd64] bash packaging/debian/build-scripting-deb.sh
 # Output: dist/punktfunk-scripting_<version>_<arch>.deb
