@@ -770,9 +770,13 @@ struct Deleted {
 }
 
 /// Deletes the made seat `account`: its unit up, its user tracked, its pad live and its proxy
-/// hook set. With `files` its environment file and drop-ins stand under `/run` as its last start
-/// left them.
-fn delete_a_made_seat(account: &str, id: &str, uid: u32, files: bool) -> Deleted {
+/// hook set. `before` sets up what else stands when it goes.
+fn delete_a_made_seat(
+    account: &str,
+    id: &str,
+    uid: u32,
+    before: impl FnOnce(&Rig, &Seat),
+) -> Deleted {
     let mut rig = rig();
     rig.backend = rig.backend.on_unit(logged_hook());
     let seat = Seat {
@@ -787,17 +791,7 @@ fn delete_a_made_seat(account: &str, id: &str, uid: u32, files: bool) -> Deleted
     ] {
         std::fs::create_dir_all(dir).unwrap();
     }
-    if files {
-        let dropin = session::dropin_dir(account).join("binds.conf");
-        for file in [
-            session::env_path(account),
-            dropin,
-            session::manager_dropin(uid),
-        ] {
-            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-            std::fs::write(file, "x\n").unwrap();
-        }
-    }
+    before(&rig, &seat);
     rig.backend.track(&seat.id, Tracked::of(&seat, &found));
     rig.backend.inner.lent.level(&seat, true, true);
     assert_eq!(
@@ -858,7 +852,7 @@ const DELETE: [&str; 17] = [
 #[test]
 #[cfg_attr(not(target_os = "linux"), ignore = "reads /proc, which only Linux has")]
 fn a_made_seat_s_delete_runs_exactly_these() {
-    let deleted = delete_a_made_seat("pf-seat-6", DELETED_ID, DELETED_UID, false);
+    let deleted = delete_a_made_seat("pf-seat-6", DELETED_ID, DELETED_UID, |_, _| {});
     let (rig, seat) = (&deleted.rig, &deleted.seat);
     assert_eq!(deleted.calls, expect(&DELETE, "pf-seat-6", DELETED_UID));
     assert_eq!(deleted.tracked_at_stop, [true]);
@@ -880,7 +874,17 @@ fn a_made_seat_s_delete_runs_exactly_these() {
 fn a_made_seat_s_delete_takes_its_files_under_run_and_reloads() {
     let _alone = RUN.lock().unwrap_or_else(|e| e.into_inner());
     clear_run("pf-seat-7", MADE_UID);
-    let deleted = delete_a_made_seat("pf-seat-7", MADE_ID, MADE_UID, true);
+    let deleted = delete_a_made_seat("pf-seat-7", MADE_ID, MADE_UID, |_, _| {
+        let dropin = session::dropin_dir("pf-seat-7").join("binds.conf");
+        for file in [
+            session::env_path("pf-seat-7"),
+            dropin,
+            session::manager_dropin(MADE_UID),
+        ] {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "x\n").unwrap();
+        }
+    });
     let left = [
         session::env_path("pf-seat-7"),
         session::dropin_dir("pf-seat-7"),
@@ -891,6 +895,44 @@ fn a_made_seat_s_delete_takes_its_files_under_run_and_reloads() {
     let reload = [&DELETE[..], &["systemctl daemon-reload"]].concat();
     assert_eq!(deleted.calls, expect(&reload, "pf-seat-7", MADE_UID));
     assert!(left.is_empty(), "{left:?}");
+}
+
+/// A made seat's delete on a box whose owner's row is prepared: the owner's Steam is known
+/// without a look at every account, and the seat's folders on the drives of its libraries go
+/// first, as the owner.
+#[test]
+#[ignore = "needs root and Linux: hands the owner's Steam to the owner, reads /proc"]
+fn a_made_seat_s_delete_forgets_its_folders_on_the_owner_s_library_drives() {
+    let deleted = delete_a_made_seat("pf-seat-6", DELETED_ID, DELETED_UID, |rig, seat| {
+        let owner = accounts::parse_passwd(&owner_passwd("pfowner", &rig.home)).unwrap();
+        let steam = rig.home.join(".local/share/Steam");
+        let anchor = steam.join(crate::steam::SEAT_ROOTS).join(seat.id.as_str());
+        std::fs::create_dir_all(&anchor).unwrap();
+        std::fs::create_dir_all(steam.join("steamapps")).unwrap();
+        let list = "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"/elsewhere\"\n\t}\n}\n";
+        std::fs::write(steam.join("steamapps/libraryfolders.vdf"), list).unwrap();
+        std::os::unix::fs::chown(&steam, Some(OWNER_UID), Some(OWNER_UID)).unwrap();
+        *rig.backend.inner.owner.lock().unwrap() = Some(owner);
+    });
+    let home = deleted.rig.home.display().to_string();
+    let calls: Vec<_> = (deleted.calls.iter())
+        .map(|call| call.replace(&home, "<home>"))
+        .collect();
+
+    let owner = format!("setpriv --reuid {OWNER_UID} --regid {OWNER_UID} --clear-groups");
+    let seats = "<home>/.local/share/Steam/.punktfunk-seats";
+    let forget = [
+        format!("{owner} rm -rf -- {seats}/{DELETED_ID}"),
+        format!("{owner} rmdir -- {seats}"),
+    ];
+    let known: Vec<_> = DELETE[..9] // up to the hook, then no look at every account
+        .iter()
+        .map(|line| (*line).to_owned())
+        .chain(forget)
+        .chain(DELETE[10..].iter().map(|line| (*line).to_owned()))
+        .collect();
+    let known: Vec<&str> = known.iter().map(String::as_str).collect();
+    assert_eq!(calls, expect(&known, "pf-seat-6", DELETED_UID));
 }
 
 /// The owner's (or another ordinary user's) account, at `home`.
