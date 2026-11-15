@@ -41,11 +41,11 @@ pub mod unlock;
 #[cfg(windows)]
 pub mod windows;
 
-pub use backend::{BackendError, PlatformBackend, UnsupportedBackend};
+pub use backend::{BackendError, PlatformBackend, PresentPad, UnsupportedBackend};
 pub use ipc::{Command, CommandResult, Request, Response};
 #[cfg(target_os = "linux")]
 pub use linux::LinuxBackend;
-pub use model::{CreateSeat, Ledger, RuntimeState, RuntimeStatus, Seat, SeatId};
+pub use model::{CreateSeat, Ledger, LentPad, RuntimeState, RuntimeStatus, Seat, SeatId};
 pub use persistence::{LedgerStore, SecretRoot, StoreError};
 pub use secret::Secret;
 pub use service::SeatService;

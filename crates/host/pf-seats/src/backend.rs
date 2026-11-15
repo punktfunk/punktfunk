@@ -142,6 +142,50 @@ pub trait PlatformBackend: Send + Sync + 'static {
     fn remove_flatpak(&self, _id: &str, _purge: bool) -> Result<(), BackendError> {
         Err(no_flatpaks())
     }
+
+    /// Every game controller plugged into the box that may be lent, and every plugged-in one a
+    /// row of `ledger` holds.
+    fn desk_pads(&self, _ledger: &Ledger) -> Result<Vec<PresentPad>, BackendError> {
+        Err(no_lending())
+    }
+
+    /// The plugged-in pad `key` names, when it may be lent: a game controller and nothing else.
+    /// A key a row of `ledger` lends names the pad that lend does. The backend reads the
+    /// hardware itself; nothing the caller says about it counts.
+    fn lendable_pad(&self, _key: &str, _ledger: &Ledger) -> Result<PresentPad, BackendError> {
+        Err(no_lending())
+    }
+
+    /// Hands each of `keys` to the holder `ledger` names now, the desk when no row lends it, and
+    /// ends what its last holder had open. The service saved `ledger` first and holds `ops`.
+    ///
+    /// Between changes the backend keeps each row's pads level with its seat on its own: live
+    /// before [`Self::start`] runs anything of the seat's, parked once [`Self::stop`] or a
+    /// failure ends it ([`Self::reconcile`]), the desk's again after [`Self::remove`].
+    fn settle_pads(&self, _ledger: &Ledger, _keys: &[String]) -> Result<(), BackendError> {
+        Err(no_lending())
+    }
+}
+
+/// A game controller plugged into the box, as the backend reads it now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PresentPad {
+    /// [`crate::model::valid_pad_key`] holds for it.
+    pub key: String,
+    /// What the hardware calls itself, cleaned by [`crate::model::pad_name`].
+    pub name: String,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    /// Where it is plugged in, for [`crate::model::LentPad::port`].
+    pub port: Option<String>,
+}
+
+fn no_lending() -> BackendError {
+    BackendError::new(
+        "pads_unsupported",
+        "Giving a controller to a profile isn't available on this system.",
+    )
+    .said("pads_unsupported")
 }
 
 /// What [`PlatformBackend::adopt_account`] found and changed on a person's account. The row keeps

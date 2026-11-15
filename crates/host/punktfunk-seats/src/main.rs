@@ -262,6 +262,15 @@ mod linux {
                     );
                 }
             }
+            CommandResult::Pads { pads } => {
+                for pad in pads {
+                    let seat = pad.seat.map_or_else(|| "-".to_owned(), |id| id.to_string());
+                    println!(
+                        "{} {:?} present={} {seat} {:?}",
+                        pad.key, pad.state, pad.present, pad.name
+                    );
+                }
+            }
             CommandResult::Deleted { id } => println!("{id} deleted"),
             CommandResult::Flatpak { id, version } => {
                 println!("{id} {}", version.as_deref().unwrap_or("-"));

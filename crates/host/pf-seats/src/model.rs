@@ -64,6 +64,50 @@ pub fn valid_owner_account(value: &str) -> bool {
         })
 }
 
+/// Desk pads one seat may hold.
+pub const MAX_LENT_PADS: usize = 4;
+pub const MAX_PAD_KEY_LEN: usize = 128;
+pub const MAX_PAD_NAME_LEN: usize = 64;
+
+/// A desk pad lent to a seat: a game controller plugged into the box that only this seat's
+/// account opens. `key` is what the backend minted for the hardware and finds it by again after
+/// a replug or a reboot. The name and the USB ids are what it read at the lend, shown while the
+/// pad is unplugged. `port` is where it found the pad then: while a second device carries the
+/// same key, only the one there is the lent pad.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LentPad {
+    pub key: String,
+    pub name: String,
+    #[serde(default)]
+    pub vendor_id: u16,
+    #[serde(default)]
+    pub product_id: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<String>,
+}
+
+/// Whether `key` can name a desk pad: letters, digits, `.`, `_` and `-`, starting with a letter
+/// or digit, at most [`MAX_PAD_KEY_LEN`] long. The key lands in a file name and a URL path.
+pub fn valid_pad_key(key: &str) -> bool {
+    let mut bytes = key.bytes();
+    key.len() <= MAX_PAD_KEY_LEN
+        && bytes.next().is_some_and(|b| b.is_ascii_alphanumeric())
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// A pad's name as a row keeps it: controls dropped, trimmed, cut at [`MAX_PAD_NAME_LEN`]
+/// characters, and `Controller` when nothing is left. The text comes from the hardware.
+pub fn pad_name(raw: &str) -> String {
+    let clean: String = raw.chars().filter(|c| !c.is_control()).collect();
+    let name: String = clean.trim().chars().take(MAX_PAD_NAME_LEN).collect();
+    let name = name.trim_end();
+    if name.is_empty() {
+        "Controller".to_owned()
+    } else {
+        name.to_owned()
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct SeatId(String);
@@ -229,6 +273,9 @@ pub struct Seat {
     /// The account held `SeDenyInteractiveLogonRight` before adopt; release leaves it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub console_deny_kept: bool,
+    /// The desk pads lent to this seat, at most [`MAX_LENT_PADS`]. A key is on one row only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lent: Vec<LentPad>,
 }
 
 impl Seat {
@@ -298,6 +345,7 @@ impl Ledger {
         let mut uids = HashSet::new();
         let mut slots = HashSet::new();
         let mut ports = HashSet::new();
+        let mut pads = HashSet::new();
         if self.seats.iter().filter(|seat| seat.owner).count() > 1 {
             return Err(ValidationError::Duplicate {
                 kind: "owner",
@@ -348,8 +396,52 @@ impl Ledger {
             unique(&mut slots, seat.display_slot, "display slot")?;
             unique(&mut ports, seat.native_port, "port")?;
             unique(&mut ports, seat.mgmt_port, "port")?;
+            if seat.lent.len() > MAX_LENT_PADS {
+                return Err(ValidationError::TooManyPads(seat.lent.len()));
+            }
+            for pad in &seat.lent {
+                let port = pad.port.as_deref().is_none_or(valid_pad_key);
+                if !valid_pad_key(&pad.key) || !port || pad_name(&pad.name) != pad.name {
+                    return Err(ValidationError::InvalidPad);
+                }
+                unique(&mut pads, pad.key.clone(), "lent pad")?;
+            }
         }
         Ok(())
+    }
+
+    /// The seat `key` is lent to.
+    pub fn holder_of(&self, key: &str) -> Option<&Seat> {
+        self.seats
+            .iter()
+            .find(|seat| seat.lent.iter().any(|pad| pad.key == key))
+    }
+
+    /// Lends `pad` to seat `id`, taking it from the row that held it. `false`: no such seat.
+    /// A seat that holds [`MAX_LENT_PADS`] already is refused, and nothing changes.
+    pub fn lend(&mut self, id: &SeatId, pad: LentPad) -> Result<bool, ValidationError> {
+        let mut next = self.clone();
+        next.take_back(&pad.key);
+        let Some(seat) = next.seats.iter_mut().find(|seat| &seat.id == id) else {
+            return Ok(false);
+        };
+        seat.lent.push(pad);
+        next.validate()?;
+        *self = next;
+        Ok(true)
+    }
+
+    /// Takes `key` off the row that holds it. `false`: no row did.
+    pub fn take_back(&mut self, key: &str) -> bool {
+        let before = self.lent_count();
+        for seat in &mut self.seats {
+            seat.lent.retain(|pad| pad.key != key);
+        }
+        before != self.lent_count()
+    }
+
+    fn lent_count(&self) -> usize {
+        self.seats.iter().map(|seat| seat.lent.len()).sum()
     }
 
     pub fn allocate(&mut self, request: CreateSeat) -> Result<Seat, ValidationError> {
@@ -438,6 +530,7 @@ impl Ledger {
             adopted_uid,
             rdp_granted: false,
             console_deny_kept: false,
+            lent: Vec::new(),
         };
         self.insert(seat.clone())?;
         Ok(seat)
@@ -511,6 +604,12 @@ pub enum ValidationError {
     Duplicate { kind: &'static str, value: String },
     #[error("runtime status detail exceeds 512 bytes")]
     RuntimeDetailTooLong,
+    #[error("a seat may hold at most four lent pads, got {0}")]
+    TooManyPads(usize),
+    #[error(
+        "a lent pad needs a key and a port of letters, digits, '.', '_' or '-', and a clean name"
+    )]
+    InvalidPad,
     #[error("no free {0} remains")]
     NoAllocation(&'static str),
 }
@@ -1111,6 +1210,7 @@ mod tests {
                 adopted_uid: None,
                 rdp_granted: false,
                 console_deny_kept: false,
+                lent: Vec::new(),
             })
             .collect();
         assert!(matches!(
