@@ -347,48 +347,66 @@ impl TouchpadTracker {
     }
 }
 
-/// More than this between frames, or a capture step this large or backwards, starts a new
-/// stroke: the clocks may have drifted, or the client switched to a source on another clock.
-const SCAN_STROKE_BREAK: Duration = Duration::from_secs(1);
+/// The scan time's period: 65536 counts of 100 µs.
+const SCAN_WRAP: Duration = Duration::from_micros(6_553_600);
+
+/// A capture step further than this from its arrival gap restarts the clock: the client switched
+/// to a source on another clock. A frame delayed that much more is a stall the host has lifted.
+const SCAN_RESTART: Duration = Duration::from_millis(500);
+
+/// The offset leaks upward, µs per s of arrival gap, so a raised network floor and clock drift
+/// are followed. Fast for a gap's first second; after it, about the most two clocks drift, so a
+/// minute's pause costs a burst 6 ms of its spacing.
+const SCAN_LEAK_FLOWING: u32 = 500;
+const SCAN_LEAK_PAUSED: u32 = 100;
 
 /// Scan times onto the host's clock with no added latency, for a backend that stamps reports:
-/// the capture time plus the smallest delay seen this stroke, so the least-delayed frame sets
-/// the mapping and frames that arrive bunched come out spaced as they were captured. A result
-/// is never later than its arrival nor earlier than the one before; arrivals must not go back.
+/// the capture time plus the smallest delay seen, so the least-delayed frame sets the mapping
+/// and frames that arrive bunched come out spaced as they were captured, after a pause too. A
+/// result is never later than its arrival nor earlier than the one before; arrivals must not go
+/// back.
 #[derive(Debug, Default)]
 pub struct ScanClock {
-    stroke: Option<ScanStroke>,
+    state: Option<ScanState>,
 }
 
 #[derive(Debug)]
-struct ScanStroke {
+struct ScanState {
     scan: u16,
-    /// Capture time since the stroke's first frame.
+    /// Capture time since the first frame, unwrapped.
     capture: Duration,
-    /// Host time of that first capture: the smallest arrival − capture seen.
+    /// Host time of that first capture: the smallest arrival − capture seen, leaked upward.
     origin: Instant,
+    /// When `scan` first arrived. A repeat of it moves nothing.
     arrival: Instant,
     out: Instant,
 }
 
 impl ScanClock {
     pub fn host_time(&mut self, scan_time: u16, arrival: Instant) -> Instant {
-        if let Some(s) = self.stroke.as_mut() {
-            let step = Duration::from_micros(u64::from(scan_time.wrapping_sub(s.scan)) * 100);
+        let Some(s) = self.state.as_mut() else {
+            return self.restart(scan_time, arrival);
+        };
+        if scan_time != s.scan {
             let gap = arrival.saturating_duration_since(s.arrival);
-            if step <= SCAN_STROKE_BREAK && gap <= SCAN_STROKE_BREAK {
-                s.scan = scan_time;
-                s.capture += step;
-                if let Some(origin) = arrival.checked_sub(s.capture) {
-                    s.origin = s.origin.min(origin);
-                }
-                s.arrival = arrival;
-                s.out = (s.origin + s.capture).min(arrival).max(s.out);
-                return s.out;
+            let Some(step) = scan_step(scan_time.wrapping_sub(s.scan), gap) else {
+                return self.restart(scan_time, arrival);
+            };
+            s.scan = scan_time;
+            s.capture += step;
+            s.origin += scan_leak(gap);
+            if let Some(origin) = arrival.checked_sub(s.capture) {
+                s.origin = s.origin.min(origin);
             }
+            s.arrival = arrival;
         }
-        self.stroke = Some(ScanStroke {
-            scan: scan_time,
+        s.out = (s.origin + s.capture).min(arrival).max(s.out);
+        s.out
+    }
+
+    fn restart(&mut self, scan: u16, arrival: Instant) -> Instant {
+        self.state = Some(ScanState {
+            scan,
             capture: Duration::ZERO,
             origin: arrival,
             arrival,
@@ -396,6 +414,21 @@ impl ScanClock {
         });
         arrival
     }
+}
+
+/// The offset's rise over an arrival gap.
+fn scan_leak(gap: Duration) -> Duration {
+    let flowing = gap.min(Duration::from_secs(1));
+    (flowing * SCAN_LEAK_FLOWING + (gap - flowing) * SCAN_LEAK_PAUSED) / 1_000_000
+}
+
+/// The capture step of `counts` plus whole wraps that lies closest to the arrival gap, or `None`
+/// when even that one is further than [`SCAN_RESTART`] from it.
+fn scan_step(counts: u16, gap: Duration) -> Option<Duration> {
+    let ahead = Duration::from_micros(u64::from(counts) * 100);
+    let wraps = (gap.saturating_sub(ahead) + SCAN_WRAP / 2).as_micros() / SCAN_WRAP.as_micros();
+    let step = ahead + SCAN_WRAP * wraps as u32;
+    (step.abs_diff(gap) <= SCAN_RESTART).then_some(step)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -639,6 +672,11 @@ mod tests {
         Duration::from_micros(n)
     }
 
+    /// Within 50 µs: the leak moves results a few µs per frame.
+    fn near(t: Duration, want: u64) -> bool {
+        t.abs_diff(us(want)) < us(50)
+    }
+
     /// Captured 8 ms apart, the last three arriving within 0.4 ms: they come out 8 ms apart.
     #[test]
     fn bunched_frames_come_out_spaced_as_captured() {
@@ -646,7 +684,7 @@ mod tests {
         let arrivals = [10_000, 35_000, 35_200, 35_400];
         for (i, a) in arrivals.iter().enumerate() {
             let t = c.host_time(1000 + 80 * i as u16, base + us(*a));
-            assert_eq!(t - base, us(10_000 + 8_000 * i as u64), "frame {i}");
+            assert!(near(t - base, 10_000 + 8_000 * i as u64), "frame {i}");
         }
     }
 
@@ -661,29 +699,83 @@ mod tests {
             let t = c.host_time(80 * i as u16, arrival);
             assert!(t <= arrival && t >= last, "frame {i}");
             if i < 4 {
-                assert_eq!(t - base, us(captured + 5_000), "the least delay sets it");
+                assert!(near(t - base, captured + 5_000), "the least delay sets it");
             }
             last = t;
         }
     }
 
+    /// A stroke across the wrap, a pause, then five frames captured 8 ms apart that arrive
+    /// bunched, the last still 10 ms late: they come out 8 ms apart, not at their arrival.
     #[test]
-    fn a_pause_a_step_back_and_the_wrap() {
+    fn a_burst_after_a_pause_comes_out_spaced_as_captured() {
+        for pause in [5_000_000, 60_000_000] {
+            let (base, mut c) = (Instant::now(), ScanClock::default());
+            let scan = |captured: u64| (u64::from(u16::MAX - 10) + captured / 100) as u16;
+            for i in 0..25 {
+                c.host_time(scan(8_000 * i), base + us(8_000 * i + 5_000));
+            }
+            let start = 8_000 * 24 + pause;
+            let mut last = None;
+            for i in 0..5 {
+                let arrival = base + us(start + 32_000 + 15_000 + 200 * i);
+                let t = c.host_time(scan(start + 8_000 * i), arrival);
+                assert!(t + us(4_000) <= arrival, "pause {pause}, frame {i}");
+                if let Some(last) = last {
+                    assert!(near(t - last, 8_000), "pause {pause}, frame {i}");
+                }
+                last = Some(t);
+            }
+        }
+    }
+
+    /// A held finger repeats its frame's capture time; the next capture unwraps from when that
+    /// time first arrived.
+    #[test]
+    fn repeats_of_a_held_frame_move_nothing() {
+        let (base, mut c) = (Instant::now(), ScanClock::default());
+        c.host_time(1000, base + us(5_000));
+        for i in 1..=40 {
+            c.host_time(1000, base + us(5_000 + 100_000 * i));
+        }
+        let arrival = base + us(4_000_000 + 5_000 + 15_000);
+        let t = c.host_time(1000 + 40_000, arrival);
+        assert!(t + us(10_000) <= arrival, "4 s on, still mapped");
+    }
+
+    /// The client's clock 100 ppm fast or slow, 1 s strokes and 2 s pauses for five minutes,
+    /// 0 to 1.9 ms of jitter: results stay within 4 ms of arrival.
+    #[test]
+    fn drift_either_way_keeps_the_lag_bounded() {
+        for ppm in [-100.0, 100.0] {
+            let (base, mut c) = (Instant::now(), ScanClock::default());
+            let mut last = base;
+            for i in 0..10_000u64 {
+                let true_us = (i / 100) * 3_000_000 + (i % 100) * 10_000;
+                let captured = (true_us as f64 * (1.0 + ppm * 1e-6)) as u64;
+                let arrival = base + us(true_us + 5_000 + (i * 7 % 20) * 100);
+                let t = c.host_time(touchpad_scan_time(captured), arrival);
+                assert!(t <= arrival && t >= last, "{ppm} ppm, frame {i}");
+                assert!(i < 100 || arrival - t < us(4_000), "{ppm} ppm, frame {i}");
+                last = t;
+            }
+        }
+    }
+
+    #[test]
+    fn a_source_switch_or_a_step_back_restarts_and_the_wrap_does_not() {
         let (base, mut c) = (Instant::now(), ScanClock::default());
         c.host_time(100, base);
-        let after = base + us(1_500_000);
-        assert_eq!(
-            c.host_time(180, after),
-            after,
-            "a pause starts a new stroke"
-        );
-        let back = after + us(10_000);
-        assert_eq!(c.host_time(90, back), back, "so does a step back");
+        c.host_time(180, base + us(8_000));
+        let switch = base + us(18_000);
+        assert_eq!(c.host_time(30_180, switch), switch, "3 s ahead in 10 ms");
+        let back = switch + us(10_000);
+        assert_eq!(c.host_time(30_170, back), back, "a step back");
 
         let (base, mut c) = (Instant::now(), ScanClock::default());
         c.host_time(u16::MAX - 40, base + us(5_000));
         let t = c.host_time(40, base + us(30_000));
-        assert_eq!(t - base, us(13_100), "81 counts past the wrap");
+        assert!(near(t - base, 13_100), "81 counts past the wrap");
     }
 
     #[test]

@@ -62,7 +62,9 @@ pub unsafe extern "C" fn punktfunk_connection_host_touchpad(
 }
 
 /// `true` when the host OS turns a tap on that touchpad into a click. A source with no button
-/// of its own (a touchscreen) sends frames only when this is set. Fixed for the session.
+/// of its own (a touchscreen) then sends no clicks of its own. When `false` it keeps making its
+/// clicks and passes `retract_taps = true`, so the host never adds a second one. Fixed for the
+/// session.
 ///
 /// # Safety
 /// `c` is a valid connection handle; `taps` is writable (NULL is skipped).

@@ -275,9 +275,9 @@ pub const FEATURE_PCM_PARTS: u32 = 44;
 /// own, so the host OS owns pointer speed, scrolling and gestures. A client sends frames only
 /// under it.
 pub const FEATURE_TOUCHPAD: u32 = 45;
-/// Host, beside [`FEATURE_TOUCHPAD`]: the host OS turns a tap on that touchpad into a click. A
-/// source with no button of its own needs it before it sends frames. The client offers it to
-/// read it.
+/// Host, beside [`FEATURE_TOUCHPAD`]: the host OS turns a tap on that touchpad into a click.
+/// Without it a source with no button of its own makes its own clicks and retracts its taps.
+/// The client offers it to read it.
 pub const FEATURE_TOUCHPAD_TAPS: u32 = 46;
 
 #[cfg(test)]

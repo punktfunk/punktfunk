@@ -2196,7 +2196,8 @@ impl NativeClient {
     }
 
     /// The host OS turns a tap on that touchpad into a click (`FEATURE_TOUCHPAD_TAPS`). A source
-    /// with no button of its own sends frames only toward this.
+    /// with no button of its own then sends no clicks; otherwise it makes them and retracts its
+    /// taps.
     pub fn host_taps_click(&self) -> bool {
         self.host_presents_touchpad()
             && self
