@@ -54,6 +54,8 @@ mod linux {
         \x20                             `on|off <uid> <home>`, `takeover <gone owner> <uid> <home>`, `gone`\n\
         \x20 door-ports                  door-helper's port filter: the owner's host.env, then web.env,\n\
         \x20                             on stdin into the door's copy\n\
+        \x20 door on|off <account>       switch Reachable without logging in, for door-helper (root)\n\
+        \x20 door ports                  the recorded owner's ports, at each door start (root)\n\
         \x20 start <id> | stop <id> | delete <id>\n\
         \x20 pads                        the controllers plugged into this PC, and whose each is\n\
         \x20 lend <id> <key>             give a controller plugged into this PC to a seat\n\
@@ -80,6 +82,12 @@ mod linux {
             if verb == pf_seats::linux::loopback::VERB {
                 return ExitCode::from(pf_seats::linux::loopback::run(account));
             }
+        }
+        // No flags here: the user is data from a door unit's instance name.
+        if let [verb, rest @ ..] = args.as_slice()
+            && verb == "door"
+        {
+            return ExitCode::from(pf_seats::linux::door::main(rest));
         }
         // No flags here: every word is data from a seat unit's drop-in.
         if let [verb, check, mount, options, source, stage] = args.as_slice()
