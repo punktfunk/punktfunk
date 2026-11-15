@@ -24,7 +24,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::sys::now_monotonic_ns;
-use crate::vsync_grid::{onto_panel_grid, pick_timeline, smoothed_period, FrameTimeline};
+use crate::vsync_grid::{
+    next_vsync, onto_panel_grid, pick_timeline, smoothed_period, FrameTimeline,
+};
 
 /// State the choreographer thread publishes and the decode loop reads. All monotonic ns.
 pub(super) struct VsyncShared {
@@ -59,6 +61,16 @@ impl VsyncShared {
     /// The panel's own refresh period (0 = unknown) — for the pf-present line's decomposition.
     pub(super) fn panel_period_ns(&self) -> i64 {
         self.panel_period_ns.load(Ordering::Relaxed)
+    }
+
+    /// The first vsync past `after_ns` on the callback grid, `None` while it is unmeasured:
+    /// where a release without a timeline frees its slot.
+    pub(super) fn next_vsync_ns(&self, after_ns: i64) -> Option<i64> {
+        next_vsync(
+            self.last_vsync_ns.load(Ordering::Relaxed),
+            self.period_ns(),
+            after_ns,
+        )
     }
 
     /// SurfaceFlinger's own lead: the latest timeline's expected present minus its deadline,

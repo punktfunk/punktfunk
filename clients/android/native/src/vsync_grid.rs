@@ -67,6 +67,16 @@ pub(crate) fn onto_panel_grid(
     t
 }
 
+/// The first vsync past `after_ns` on the callback grid: `last_vsync_ns` stepped by whole
+/// `period_ns`. `None` before the first callback (0) or a measured period.
+pub(crate) fn next_vsync(last_vsync_ns: i64, period_ns: i64, after_ns: i64) -> Option<i64> {
+    if last_vsync_ns <= 0 || period_ns <= 0 {
+        return None;
+    }
+    let k = after_ns.saturating_sub(last_vsync_ns).div_euclid(period_ns) + 1;
+    Some(last_vsync_ns + k * period_ns)
+}
+
 /// The vsync period after one callback, or `None` to keep `old_ns`. The observed period is the
 /// spacing of the first two timelines (exact, straight from the platform), else the delta of
 /// successive callbacks (jittery), and counts only within 24..500 Hz. An observation moves the
@@ -222,6 +232,23 @@ mod tests {
         ];
         for (name, t, panel, floor, want) in rows {
             assert_eq!(onto_panel_grid(t, panel, floor), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_next_vsync_is_the_first_grid_point_past_the_instant() {
+        // (name, last vsync, period, after, result)
+        let rows = [
+            ("inside the period", 100, 16, 105, Some(116)),
+            ("on a vsync, the one after", 100, 16, 100, Some(116)),
+            ("one before the next", 100, 16, 115, Some(116)),
+            ("callbacks skipped", 100, 16, 150, Some(164)),
+            ("a callback stamped ahead of now", 100, 16, 99, Some(100)),
+            ("no callback yet", 0, 16, 105, None),
+            ("no period measured", 100, 0, 105, None),
+        ];
+        for (name, last, period, after, want) in rows {
+            assert_eq!(next_vsync(last, period, after), want, "{name}");
         }
     }
 

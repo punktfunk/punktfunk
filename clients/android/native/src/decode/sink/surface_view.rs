@@ -6,8 +6,8 @@
 //! (`Stage2Pipeline.swift`, `.deadline` pacing), holds frames in a [`Store`] and releases them
 //! under a [`TimelineBudget`], each timed to the platform's own frame timeline (API 33+, via
 //! [`VsyncShared::next_target`]) so the latch phase is deterministic instead of inheriting
-//! network and decode jitter. On API 31/32 the release is ASAP and only the budget uses the
-//! measured period.
+//! network and decode jitter. Below API 33 the release is ASAP and the budget reopens on the
+//! callback grid.
 //!
 //! `adb shell setprop debug.punktfunk.presenter arrival` selects the arrival path instead: the
 //! newest ready buffer releases at once, unbudgeted — the on-device A/B needs no rebuild. The
@@ -318,11 +318,10 @@ impl Timeline {
         if released.is_err() {
             return false; // the buffer is gone either way; nothing to book-keep
         }
-        let period = clock.map(|c| c.period_ns()).filter(|&p| p > 0);
         self.budget.released(
             now_mono_ns,
             target.map(|t| t.expected_present_ns),
-            period,
+            clock.and_then(|c| c.next_vsync_ns(now_mono_ns)),
             &mut self.counters,
         );
         if !self.downrated {
