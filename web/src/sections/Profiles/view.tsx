@@ -55,6 +55,7 @@ import { seatCheckText, seatDetail } from "@/lib/host-messages";
 import type { Loadable } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
+import { DeskPadsCard, type PadLending } from "./deskPadsCard";
 import {
 	LockAction,
 	type LockCard,
@@ -158,6 +159,8 @@ export const ProfilesView: FC<{
 	devices?: (p: ProfileAdmin) => ReactNode;
 	/** Opens the lock dialog of `holder`, the profile whose lock a card shows. */
 	onLock?: (holder: string, locked: boolean) => void;
+	/** A host that can give a controller to a profile, with one plugged in: **Controllers on this PC**. */
+	pads?: PadLending;
 }> = ({
 	profiles,
 	onAdd,
@@ -170,6 +173,7 @@ export const ProfilesView: FC<{
 	door,
 	devices,
 	onLock,
+	pads,
 }) => {
 	const list = profiles.data ?? [];
 	const ownerName = list.find((p) => p.owner)?.display_name ?? "";
@@ -222,6 +226,7 @@ export const ProfilesView: FC<{
 							))}
 						</CardContent>
 					</Card>
+					{pads && <DeskPadsCard {...pads} profiles={list} />}
 					{seats?.doctor && <DoctorFooter line={seats.doctor} />}
 				</QueryState>
 			</div>

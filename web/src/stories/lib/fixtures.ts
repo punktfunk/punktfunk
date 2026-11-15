@@ -4,6 +4,7 @@ import type { AvailableCompositor } from "@/api/gen/model/availableCompositor";
 import type { Capture } from "@/api/gen/model/capture";
 import type { CaptureMeta } from "@/api/gen/model/captureMeta";
 import type { CustomPreset } from "@/api/gen/model/customPreset";
+import type { DeskPad } from "@/api/gen/model/deskPad";
 import type { DisplayPolicy } from "@/api/gen/model/displayPolicy";
 import type { EffectivePolicy } from "@/api/gen/model/effectivePolicy";
 import type { GameEntry } from "@/api/gen/model/gameEntry";
@@ -813,6 +814,58 @@ export const profilesDoor: ProfileAdmin[] = [
 		seat: { state: "ready", port: 9780, kind: "desktop" },
 		last_used_unix: accessNowUnix - 7 * 86_400,
 		default: false,
+	},
+];
+
+/**
+ * Controllers on a Windows box (`profilesWindows`): one at this PC and a twin of it Leon plays
+ * with, a DualSense parked on Oma's stopped seat, Kid's Deck live, and Oma's Pro Controller
+ * unplugged.
+ */
+export const deskPads: DeskPad[] = [
+	{
+		key: "usb-045e-0b13-s-3A7F10",
+		name: "Xbox Wireless Controller",
+		vendor_id: 0x045e,
+		product_id: 0x0b13,
+		present: true,
+		state: "desk",
+	},
+	{
+		key: "usb-045e-0b13-s-B20E41",
+		name: "Xbox Wireless Controller",
+		vendor_id: 0x045e,
+		product_id: 0x0b13,
+		present: true,
+		state: "live",
+		profile: "7e1f3b5d9a2c",
+	},
+	{
+		key: "usb-054c-0ce6-s-94C2D1",
+		name: "DualSense Wireless Controller",
+		vendor_id: 0x054c,
+		product_id: 0x0ce6,
+		present: true,
+		state: "parked",
+		profile: "3d5f7b9a1c3e",
+	},
+	{
+		key: "usb-28de-1205-s-5E81A0",
+		name: "Steam Deck Controller",
+		vendor_id: 0x28de,
+		product_id: 0x1205,
+		present: true,
+		state: "live",
+		profile: "9a3f1c2b7e40",
+	},
+	{
+		key: "usb-057e-2009-s-C70B33",
+		name: "Pro Controller",
+		vendor_id: 0x057e,
+		product_id: 0x2009,
+		present: false,
+		state: "parked",
+		profile: "3d5f7b9a1c3e",
 	},
 ];
 

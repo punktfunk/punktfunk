@@ -12,6 +12,7 @@ import {
 	SeatsDialog,
 } from "@/sections/Profiles/view";
 import {
+	deskPads,
 	profilesDoor,
 	profilesEvery,
 	profilesOne,
@@ -105,6 +106,28 @@ export const WindowsEveryState: Story = {
 	args: {
 		profiles: { data: profilesWindows, isLoading: false, error: null },
 		seats,
+	},
+};
+
+/** **Controllers on this PC**: one at this PC, a twin of it live on Leon's seat, a DualSense
+ * waiting for Oma's desktop, Kid's Deck live, and Oma's Pro Controller unplugged. */
+export const ControllersOnThisPC: Story = {
+	args: {
+		profiles: { data: profilesWindows, isLoading: false, error: null },
+		seats,
+		pads: { pads: deskPads, busyKey: null, onGive: noop },
+	},
+};
+
+/** A change is on its way for the DualSense: its select waits, the rest don't. */
+export const ControllerChanging: Story = {
+	args: {
+		...ControllersOnThisPC.args,
+		pads: {
+			pads: deskPads,
+			busyKey: "usb-054c-0ce6-s-94C2D1",
+			onGive: noop,
+		},
 	},
 };
 

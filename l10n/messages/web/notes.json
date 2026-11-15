@@ -1523,6 +1523,7 @@
 	"profiles_game_exit_host_keep": "Line under that option while it is picked: the host keeps streaming the desktop when a game exits.",
 	"profiles_game_exit_own_desktop": "Line in the edit dialog of a person who plays on their own Linux account, where this is fixed. name: that person.",
 	"profiles_edit_title": "Title of the dialog the pencil on a profile row opens when it holds more than the name: the name and what a game's exit does.",
+	"profiles_pads_parked": "Gray line under a controller's name on the Profiles page, when the controller is plugged in and given to a profile whose desktop isn't running. name: that profile's name.",
 	"display_preset_default_hint": "Line under the 'Default' preset card.",
 	"display_preset_gaming_rig_hint": "Line under the 'Headless box' preset card. Host has no monitor; whoever connects next takes over.",
 	"display_preset_hotdesk_hint": "Line under the 'Hot-desk' preset card.",
