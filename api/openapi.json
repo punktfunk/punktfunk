@@ -13115,7 +13115,7 @@
           },
           "game_session": {
             "$ref": "#/components/schemas/GameSession",
-            "description": "Game-launch routing. Orthogonal to `preset`; `#[serde(default)]` is\n`Auto` so older `display-settings.json` files stay untouched."
+            "description": "Game-launch routing. Orthogonal to `preset`; `#[serde(default)]` is\n`Dedicated`. A saved file always names its value and keeps it."
           },
           "identity": {
             "$ref": "#/components/schemas/Identity"

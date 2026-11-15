@@ -127,7 +127,8 @@ export const BehaviourPicker: FC<BehaviourPickerProps> = ({
 								...policy,
 								preset: "custom",
 								...p.fields,
-								game_session: p.game_session ?? policy.game_session ?? "auto",
+								game_session:
+									p.game_session ?? policy.game_session ?? "dedicated",
 							})
 						}
 						actions={
@@ -272,7 +273,10 @@ export const CustomiseDialog: FC<{
 					<DialogTitle>{m.display_customise()}</DialogTitle>
 				</DialogHeader>
 				<PolicyQuestions
-					value={{ ...effective, game_session: policy.game_session ?? "auto" }}
+					value={{
+						...effective,
+						game_session: policy.game_session ?? "dedicated",
+					}}
 					axes={HOST_AXES.filter((a) => enforced.includes(a))}
 					onSet={set}
 					busy={busy}

@@ -172,10 +172,11 @@ pub struct Layout {
 pub enum GameSession {
     /// Launch rides the box's current session (managed Steam, bare spawn,
     /// or the live desktop on KWin/Mutter/wlroots).
-    #[default]
     Auto,
     /// Own headless gamescope at the client's mode, game only. Degrades to
-    /// `auto` when gamescope is missing.
+    /// `auto` when gamescope is missing. The default: KWin and Mutter virtual
+    /// outputs carry no HDR, and gamescope does.
+    #[default]
     Dedicated,
 }
 
@@ -312,7 +313,7 @@ pub struct DisplayPolicy {
     #[serde(default = "default_max_displays")]
     pub max_displays: u32,
     /// Game-launch routing. Orthogonal to `preset`; `#[serde(default)]` is
-    /// `Auto` so older `display-settings.json` files stay untouched.
+    /// `Dedicated`. A saved file always names its value and keeps it.
     #[serde(default)]
     pub game_session: GameSession,
     /// Default for a launch whose library entry names no `on_window.workspace`.
@@ -1727,14 +1728,14 @@ mod tests {
         let json = serde_json::to_string(&preset).unwrap();
         assert_eq!(serde_json::from_str::<CustomPreset>(&json).unwrap(), preset);
 
-        // Catalog written before `game_session` still loads (defaults to `Auto`).
+        // Catalog written before `game_session` still loads (defaults to `Dedicated`).
         let legacy: CustomPreset = serde_json::from_value(serde_json::json!({
             "id": "x",
             "name": "Legacy",
             "fields": serde_json::to_value(preset_fields(Preset::Default).unwrap()).unwrap(),
         }))
         .unwrap();
-        assert_eq!(legacy.game_session, GameSession::Auto);
+        assert_eq!(legacy.game_session, GameSession::Dedicated);
     }
 
     #[test]
@@ -2461,7 +2462,7 @@ mod tests {
         assert_eq!(c.fields.max_displays, default_max_displays());
         assert_eq!(c.fields.keep_alive, KeepAlive::Duration { seconds: 10 });
         assert_eq!(c.fields.topology, Topology::Auto);
-        assert_eq!(c.game_session, GameSession::Auto);
+        assert_eq!(c.game_session, GameSession::Dedicated);
         assert_eq!(read.presets[0].fields.max_displays, 2);
     }
 

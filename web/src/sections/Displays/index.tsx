@@ -173,7 +173,7 @@ export const SectionDisplays: FC = () => {
 				data: {
 					name,
 					fields: effective,
-					game_session: policy?.game_session ?? "auto",
+					game_session: policy?.game_session ?? "dedicated",
 				},
 			},
 			{ onSuccess: invalidate },
@@ -195,7 +195,7 @@ export const SectionDisplays: FC = () => {
 				data: {
 					name,
 					fields: p.fields,
-					game_session: p.game_session ?? "auto",
+					game_session: p.game_session ?? "dedicated",
 				},
 			},
 			{ onSuccess: invalidate },
@@ -346,7 +346,7 @@ export const SectionDisplays: FC = () => {
 													data: {
 														name: p.name,
 														fields: effective,
-														game_session: policy.game_session ?? "auto",
+														game_session: policy.game_session ?? "dedicated",
 													},
 												},
 												{ onSuccess: invalidate },

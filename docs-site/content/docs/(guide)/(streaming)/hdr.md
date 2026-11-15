@@ -38,7 +38,10 @@ and forces it off for an SDR session; Windows' own **Use HDR** switch doesn't ma
 
 ### Linux + gamescope
 
-The Linux route to HDR on KDE and GNOME, and in Game Mode everywhere.
+The Linux route to HDR on KDE and GNOME, and in Game Mode everywhere. On KDE and GNOME, start the
+game from the client's library: it opens in its own gamescope
+([Dedicated game sessions](/docs/virtual-displays#dedicated-game-sessions), the default). A
+desktop stream stays SDR.
 
 1. Have **`punktfunk-gamescope`**; stock gamescope captures 8-bit. The host packages install it;
    [HDR on gamescope](/docs/gamescope#hdr-on-gamescope) covers every distro.
