@@ -324,6 +324,43 @@ fn a_stop_ends_only_its_own_seat_s_start() {
     assert_eq!(ended.code, "seat_stopped", "its own seat's stop");
 }
 
+/// A person's stop untracks its user before the unit stops, so the pad broker refuses it while
+/// the unit ends. The owner's row stays tracked across the stop: it lives with the row.
+#[test]
+fn a_stop_untracks_a_person_before_its_unit_stops() {
+    let rig = rig();
+    for (seat, uid, tracked) in [
+        (row("pfowner", OWNER_ID, true, None), OWNER_UID, true),
+        (
+            row("pfperson", PERSON_ID, false, Some(PERSON_UID)),
+            PERSON_UID,
+            false,
+        ),
+    ] {
+        let passwd = format!("{0}:x:{uid}:{uid}::{1}:/bin/sh\n", seat.account, "/h");
+        let found = accounts::parse_passwd(&passwd).unwrap();
+        rig.backend.track(&seat.id, Tracked::of(&seat, &found));
+        let at_stop = Arc::new(Mutex::new(Vec::new()));
+        let (inner, id, log) = (
+            Arc::clone(&rig.backend.inner),
+            seat.id.clone(),
+            Arc::clone(&at_stop),
+        );
+        let machine = machine(passwd, &[ACTIVE], Arc::default());
+        let _fake = fake::install(move |program, args| {
+            if let ("systemctl", ["stop", _]) = (program, args) {
+                log.lock()
+                    .unwrap()
+                    .push(inner.running.lock().unwrap().contains_key(&id));
+            }
+            machine(program, args)
+        });
+        rig.backend.stop(&seat).unwrap();
+        assert_eq!(*at_stop.lock().unwrap(), [tracked], "{}", seat.account);
+        assert_eq!(rig.backend.running_account(uid).is_some(), tracked);
+    }
+}
+
 /// A person's start with their unit already up writes nothing under `/run` and keeps its token:
 /// it refreshes the row's copies, then waits on the unit, which here ends.
 #[test]
@@ -865,17 +902,17 @@ const DELETE: [&str; 17] = [
     "getent passwd ACCOUNT",
 ];
 
-/// A made seat's delete: the foreign-user check first, then the unit stops while the seat is
-/// still tracked, its user is ended and the proxy hook lets go, the account goes with its home,
-/// the seat's directories go, and its lent pad is the desk's again. `/proc` decides when the user
-/// is gone, so this runs where Linux does.
+/// A made seat's delete: the foreign-user check first, then the seat is untracked before its unit
+/// stops, its user is ended and the proxy hook lets go, the account goes with its home, the
+/// seat's directories go, and its lent pad is the desk's again. `/proc` decides when the user is
+/// gone, so this runs where Linux does.
 #[test]
 #[cfg_attr(not(target_os = "linux"), ignore = "reads /proc, which only Linux has")]
 fn a_made_seat_s_delete_runs_exactly_these() {
     let deleted = delete_a_made_seat("pf-seat-6", DELETED_ID, DELETED_UID, |_, _| {});
     let (rig, seat) = (&deleted.rig, &deleted.seat);
     assert_eq!(deleted.calls, expect(&DELETE, "pf-seat-6", DELETED_UID));
-    assert_eq!(deleted.tracked_at_stop, [true]);
+    assert_eq!(deleted.tracked_at_stop, [false]);
     assert_eq!(rig.backend.running_account(DELETED_UID), None);
     for gone in [
         shared::seat_dir(&rig.state, &seat.id),

@@ -349,11 +349,12 @@ fn person_trust(
     })
 }
 
-/// Stops `seat`'s unit if it is up, then crosses `edge`, a stop or a removal: what runs inside the
-/// unit falls, a made seat's user ends so nothing it started under its own manager survives, then
-/// what runs outside falls ([`beside::act`]). A row on a person's own account ends nothing else
-/// and signals none of their processes. A unit that was never started is fine. `held`: the level
-/// a removal holds across the stop.
+/// Stops `seat`'s unit if it is up, crossing `edge` around it, a stop or a removal: what runs
+/// inside the unit falls first, so the pad broker refuses its user while it ends; then the unit
+/// stops, a made seat's user ends so nothing it started under its own manager survives, and what
+/// runs outside falls ([`beside::act`]). A row on a person's own account ends nothing else and
+/// signals none of their processes. A unit that was never started is fine. `held`: the level a
+/// removal holds across the stop.
 fn stop_unit(
     inner: &Inner,
     seat: &Seat,
@@ -362,13 +363,14 @@ fn stop_unit(
 ) -> Result<(), BackendError> {
     let account = &seat.account;
     let unit = session::unit(account);
-    if session::state(account)?.active != "inactive" {
+    let up = session::state(account)?.active != "inactive";
+    inner.cross(seat, None, edge, Ring::Inner, held.as_deref_mut())?;
+    if up {
         run("systemctl_failed", "systemctl", &["stop", &unit])?;
     }
     // A failed unit keeps its state until reset, and would read as failed after a stop.
     let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
     inner.acl_dirty.store(true, Ordering::SeqCst);
-    inner.cross(seat, None, edge, Ring::Inner, held.as_deref_mut())?;
     // Only the seat's own user is ended; a stranger of the same name keeps its sessions.
     let ended = match Own::of(&seat.kind) {
         Own::Seat => {
