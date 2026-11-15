@@ -217,7 +217,8 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
         // the fast pipeline, and the toggle's "off" is the conservative configuration throughout.
         val frameParts = settings.lowLatencyMode && partialFrame
         // A codec, and 10-bit, only where a hardware decoder takes them at this mode.
-        val decode = VideoDecoders.probe(DecodeNeed(w, h, hz, hdrEnabled || tenBitSdr))
+        val need = DecodeNeed(w, h, hz, hdrEnabled || tenBitSdr)
+        val decode = VideoDecoders.probe(need)
         val codecBits = decode.codecBits
         // Automatic codec: AV1 beat HEVC by ~1.2 ms end-to-end (NP3 ↔ RTX 4090), so "Automatic"
         // prefers AV1 when its bit is set AND the device lacks FEATURE_PartialFrame — a
@@ -227,13 +228,16 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
             ?: if (codecBits and 4 != 0 && !partialFrame) 4 else 0
         // The connect-time capability readout (`adb logcat -s pf.caps`): the P2 slice pipeline
         // is client-inert unless BOTH probes pass — this line says which decoder failed one.
-        Log.i(
-            "pf.caps",
-            VideoDecoders.capsReport() +
-                " → multiSlice=$multiSlice parts=$frameParts studioRange=$studioRange" +
-                " codecs=$codecBits tenBit=${decode.tenBit} prefer=$preferredCodec" +
-                " (lowLatency=${settings.lowLatencyMode})",
-        )
+        val caps = VideoDecoders.capsReport() +
+            " → multiSlice=$multiSlice parts=$frameParts studioRange=$studioRange" +
+            " codecs=$codecBits tenBit=${decode.tenBit} prefer=$preferredCodec" +
+            " (lowLatency=${settings.lowLatencyMode})"
+        Log.i("pf.caps", caps)
+        // `Log` never reaches a "Send logs" bundle; the ring does.
+        runCatching {
+            NativeBridge.nativeLogCaps(caps)
+            NativeBridge.nativeLogCaps("decoders at ${w}x$h@$hz: ${VideoDecoders.census(need)}")
+        }
         val request = ConnectRequest(
             host = spec.host, port = spec.port, width = w, height = h, refreshHz = hz,
             viewWidth = view?.first ?: 0, viewHeight = view?.second ?: 0,

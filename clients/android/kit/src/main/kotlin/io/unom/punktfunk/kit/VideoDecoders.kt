@@ -165,10 +165,39 @@ object VideoDecoders {
         }
     }
 
+    /**
+     * Every decoder for H.264, HEVC and AV1 as one line for the log bundle: hardware or not,
+     * whether it takes [need], its declared top bitrate and its latency features. It says why a
+     * codec was not advertised and what the pick's maker claims for it.
+     */
+    fun census(need: DecodeNeed): String {
+        val infos = codecInfos() ?: return "codec list unavailable"
+        val trust = pointsTrusted(infos)
+        return listOf("video/avc", "video/hevc", "video/av01").joinToString("  ") { mime ->
+            val rows = infos.filter { !it.isEncoder }.mapNotNull { info ->
+                val caps = runCatching { info.getCapabilitiesForType(mime) }.getOrNull()
+                    ?: return@mapNotNull null
+                val hw = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && info.isHardwareAccelerated
+                val has = { feature: String ->
+                    runCatching { caps.isFeatureSupported(feature) }.getOrDefault(false)
+                }
+                val features = listOfNotNull(
+                    "lowLatency".takeIf { has(CodecCapabilities.FEATURE_LowLatency) },
+                    "partialFrame".takeIf { has(CodecCapabilities.FEATURE_PartialFrame) },
+                    "tunneled".takeIf { has(CodecCapabilities.FEATURE_TunneledPlayback) },
+                ).joinToString("+")
+                val mbps = caps.videoCapabilities?.bitrateRange?.upper?.div(1_000_000)
+                "${info.name} ${if (hw) "hw" else "sw"} fits=${fits(caps, need, trust)}" +
+                    " maxMbps=${mbps ?: "?"} [$features]"
+            }
+            "${mime.removePrefix("video/")}: ${rows.joinToString("; ").ifEmpty { "none" }}"
+        }
+    }
+
     /** Substrings of the vendor parameter names worth a line in the connect log. */
     private val VENDOR_KEY_HINTS = listOf(
         "fence", "slice", "early", "picture-order", "low-latency", "lowlatency", "boost",
-        "display-delay", "dpb",
+        "display-delay", "dpb", "lowdelay", "low-delay", "reorder",
     )
     private val vendorKeyCache = HashMap<String, String>()
 
