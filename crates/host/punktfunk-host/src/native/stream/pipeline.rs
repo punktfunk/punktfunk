@@ -1304,7 +1304,6 @@ mod tests {
         // A mirrored head is asked for no rate: it runs its own.
         let display = display_mode_for(session, "mirror");
         assert_eq!((display.millihz(), display.refresh_mhz), (mult(60_000), 0));
-        assert_eq!(display_mode_for(session, "gamescope").refresh_mhz, 0);
     }
 
     #[test]

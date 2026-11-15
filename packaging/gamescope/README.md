@@ -51,6 +51,8 @@ The patches here add the missing half, and nothing else. See
 | `0038-punktfunk-stamp-pfhdr35-on-the-3.17.0-base.patch` | Stamp `+pfhdr35`, so a banner tells this base from 3.16.31 | **No** — ours only, as `0005` |
 | `0039-layer-report-the-window-as-an-X11-surface-s-extent-r.patch` | The WSI layer reports an X11 window's size as its surface's minimum, maximum and current extent, as an X11 driver does. It replaced only the current extent and left the Wayland surface's 1x1 minimum. Proton's fullscreen hack sizes its swapchain from the minimum and turns on for every DPI-scaled window, so a game in a prefix above 96 DPI drew into 1x1 and rebuilt its swapchain every frame | **Yes** — upstream's layer gives Proton the same 1x1 |
 | `0040-punktfunk-stamp-pfhdr36.patch` | Stamp `+pfhdr36`, so a banner shows whether the box has `0039` | **No** — ours only, as `0005` |
+| `0041-steamcompmgr-run-a-refresh-that-has-a-fraction-to-th.patch` | `-r` reads a decimal, so 59.94 reaches the vblank timer as 59940 mHz. Under adaptive sync the frame limiter takes the refresh's own cycle for a target that divides it, where it built a whole-hertz cycle: 59.94 fps under a 59.94 Hz display | **Yes** — a client panel at 59.94 Hz drops a frame every 17 s against a 60 Hz session |
+| `0042-punktfunk-stamp-pfhdr37.patch` | Stamp `+pfhdr37`: an older gamescope refuses `-r 59.94` and does not start, so the host passes a fraction only from this level | **No** — ours only, as `0005` |
 
 ### Why the headless patch matters
 
@@ -163,10 +165,11 @@ The number is a **monotonic patch-set revision**, so one probe answers every cap
 | `+pfhdr34` | …and a private `gamescope-capture` node beside the one Steam reads; the host captures it when present |
 | `+pfhdr35` | …on upstream 3.17.0, which carries 31 itself, with a native Wayland app's popups and subsurfaces in the capture (no new capability) |
 | `+pfhdr36` | …and a DPI-scaled Wine game draws at its window's size instead of 1x1 (no new capability) |
+| `+pfhdr37` | …and a refresh with a fraction runs to the millihertz: `-r 59.94`, and the frame limiter paces off it |
 
 Require `+pfhdr10` for headless `--adaptive-sync` with a CLI cap: `+pfhdr9` clears that cap
 on the first paint unless Steam or a control command supplies an override. The Arch package is
-`3.17.0.pfhdr36-1`; its build checks the complete upstream version and capability level.
+`3.17.0.pfhdr37-1`; its build checks the complete upstream version and capability level.
 
 Bump it whenever a patch adds or changes something the host must know about before it spawns.
 

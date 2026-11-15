@@ -42,8 +42,9 @@ pub use discovery::HdrContent;
 pub(crate) use discovery::{
     display_presenting, foreign_gamescope_running, game_session_exited,
     gamescope_can_composite_cursor, gamescope_captures_sdr10, gamescope_hdr_capable,
-    gamescope_offers_tiled_capture, gamescope_planar_capture_in_vram, is_available,
-    steam_appid_from_launch, wait_for_steam_game_exit, xwayland_cursor_targets, SteamGameWatch,
+    gamescope_offers_tiled_capture, gamescope_planar_capture_in_vram, gamescope_runs_exact_rates,
+    is_available, steam_appid_from_launch, wait_for_steam_game_exit, xwayland_cursor_targets,
+    SteamGameWatch,
 };
 pub(crate) use heads::list_monitors;
 pub(crate) use splash::run as splash_run;
@@ -329,15 +330,7 @@ impl GamescopeDisplay {
         }
         let inst = SPAWN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let log = spawn_log_path(inst);
-        let child = spawn(
-            mode.width,
-            mode.height,
-            mode.refresh_hz.max(1),
-            app,
-            inst,
-            self.hdr,
-            self.isolation.as_ref(),
-        )?;
+        let child = spawn(mode, app, inst, self.hdr, self.isolation.as_ref())?;
         let mut proc = GamescopeProc {
             child,
             log: log.clone(),
@@ -384,6 +377,7 @@ impl GamescopeDisplay {
             Some((mode.width, mode.height, mode.refresh_hz)),
             Box::new(proc),
         );
+        out.refresh_mhz = Some(session_mhz(mode));
         out.ownership = DisplayOwnership::Spawned;
         // From the same log `wait_for_node` just read. `None` only if gamescope changed the line;
         // every discovery then falls back to unscoped, which is what it did before seats.
@@ -434,7 +428,8 @@ fn attach_output(node_id: u32, mode: Mode, own: bool) -> VirtualOutput {
         node_id,
         remote_fd: None,
         preferred_mode: Some((w, h, hz)),
-        refresh_mhz: None,
+        // Somebody else's gamescope: it runs the whole rate it was started at.
+        refresh_mhz: Some(hz.saturating_mul(1000)),
         keepalive: Box::new(()),
         ownership: DisplayOwnership::External,
         reused_gen: None,
@@ -590,7 +585,8 @@ fn managed_output(node_id: u32, mode: Mode) -> VirtualOutput {
         node_id,
         remote_fd: None,
         preferred_mode: Some((mode.width, mode.height, mode.refresh_hz)),
-        refresh_mhz: None,
+        // The session's own launcher starts gamescope, with `-r` in whole hertz.
+        refresh_mhz: Some(mode.refresh_hz.saturating_mul(1000)),
         keepalive: Box::new(()),
         ownership: DisplayOwnership::SessionManaged,
         reused_gen: None,

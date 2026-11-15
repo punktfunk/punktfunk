@@ -51,6 +51,12 @@ pub(super) fn argv_u32(argv: &[String], names: &[&str]) -> Option<u32> {
     flag_value(argv, names)?.parse().ok()
 }
 
+/// A refresh flag's value in whole hertz. It may be a decimal: `59.940` reads 60.
+fn argv_hz(argv: &[String], names: &[&str]) -> Option<u32> {
+    let hz: f64 = flag_value(argv, names)?.parse().ok()?;
+    (hz.is_finite() && hz >= 0.0).then(|| hz.round() as u32)
+}
+
 /// `-W`/`-H` of one argv. `None` if either is missing — also the compositor vs helper filter.
 pub(super) fn gamescope_output_size(argv: &[String]) -> Option<(u32, u32)> {
     match (
@@ -168,7 +174,7 @@ fn mode_mismatch(want_w: u32, want_h: u32, want_hz: u32, argvs: &[Vec<String>]) 
     }
     let rates: Vec<u32> = argvs
         .iter()
-        .filter_map(|a| argv_u32(a, &["-r", "--nested-refresh"]))
+        .filter_map(|a| argv_hz(a, &["-r", "--nested-refresh"]))
         .collect();
     if !rates.contains(&want_hz) {
         lost.push(match rates.as_slice() {

@@ -2167,9 +2167,7 @@ mod tests {
     /// answer whole hertz.
     #[test]
     fn a_session_streams_at_a_rate_the_host_delivers() {
-        use crate::vdisplay::Compositor::{
-            Gamescope, Hyprland, Kwin, Mutter, Niri, Umbriel, Wlroots,
-        };
+        use crate::vdisplay::Compositor::{Hyprland, Kwin, Mutter, Niri, Umbriel, Wlroots};
         let asked = punktfunk_core::Mode::exact(1920, 1080, 59_940);
         let whole = punktfunk_core::Mode::exact(1920, 1080, 60_000);
         assert_eq!(deliverable_rate(asked, true), asked);
@@ -2184,7 +2182,6 @@ mod tests {
             assert!(runs_exact_rate(Some(c), false), "{c:?}");
             assert!(!runs_exact_rate(Some(c), true), "{c:?} shared");
         }
-        assert!(!runs_exact_rate(Some(Gamescope), false));
         assert!(runs_exact_rate(None, false));
     }
 
