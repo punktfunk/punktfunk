@@ -489,8 +489,10 @@ mod tests {
         let (t0, mut c) = (Instant::now(), ReportClock::default());
         let ms = Duration::from_millis;
         assert_eq!(c.stamp(0, t0, 1_000_000), 1_000_000, "at arrival");
-        // Captured 8 ms apart, both arriving 16 ms in: spaced as captured.
-        assert_eq!(c.stamp(80, t0 + ms(16), 1_016_000), 1_008_000);
+        // Captured 8 ms apart, both arriving 16 ms in: spaced as captured. The scan clock drifts
+        // toward arrival by a few microseconds over that time, never past it.
+        let first = c.stamp(80, t0 + ms(16), 1_016_000);
+        assert!((1_008_000..1_008_050).contains(&first), "{first}");
         assert_eq!(c.stamp(160, t0 + ms(16), 1_016_000), 1_016_000);
         // A doubt and its lift share a capture time; the lift still comes later.
         let lift = c.stamp(160, t0 + ms(17), 1_017_000);
