@@ -160,7 +160,7 @@ fn a_start_that_loses_the_unit_s_state_stops_the_unit() {
         ("systemctl", ["show", ..]) if shows.replace(shows.get() + 1) == 0 => (1, String::new()),
         _ => base(program, args),
     });
-    let asked = rig.backend.inner.stops.load(Ordering::SeqCst);
+    let asked = rig.backend.stops(&rig.seat.id);
     let failed = rig.backend.wait_ready(&rig.seat, asked, false).unwrap_err();
     assert_eq!(failed.code, "systemctl_failed");
     assert_eq!(fake::calls(), [SHOW, SHOW, STOP, RESET]);

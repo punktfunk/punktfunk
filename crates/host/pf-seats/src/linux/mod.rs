@@ -67,7 +67,7 @@ use beside::{Act, Beside, Edge, Ring};
 use level::{CopyLocks, Level};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -161,8 +161,8 @@ struct Inner {
     door_gid: OnceLock<u32>,
     /// A seat stopped since the ACL mask was last repaired.
     acl_dirty: AtomicBool,
-    /// Stops asked of any seat so far. A start that sees it move gives up.
-    stops: AtomicU64,
+    /// Stops asked of each seat so far. A start that sees its seat's count move gives up.
+    stops: Mutex<HashMap<SeatId, u64>>,
     /// What the binary runs beside a seat's unit ([`LinuxBackend::on_unit`]).
     hook: OnceLock<UnitHook>,
     /// The prerequisite checks `Seating` last answered with, and when they ran.
@@ -585,7 +585,7 @@ impl LinuxBackend {
             owner: Mutex::new(None),
             door_gid: OnceLock::new(),
             acl_dirty: AtomicBool::new(false),
-            stops: AtomicU64::new(0),
+            stops: Mutex::default(),
             hook: OnceLock::new(),
             checks: Mutex::new(None),
             locks: CopyLocks::default(),
@@ -615,7 +615,7 @@ impl LinuxBackend {
                 owner: Mutex::new(None),
                 door_gid: OnceLock::new(),
                 acl_dirty: AtomicBool::new(false),
-                stops: AtomicU64::new(0),
+                stops: Mutex::default(),
                 hook: OnceLock::new(),
                 checks: Mutex::new(None),
                 locks: CopyLocks::default(),
@@ -774,9 +774,21 @@ impl LinuxBackend {
         self.serving(seat) && (!seat.kind.is_owner() || session::ready_path(&seat.account).exists())
     }
 
-    /// Fails when a stop has been asked since `asked`, the count a start began at.
-    fn stopped_since(&self, asked: u64) -> Result<(), BackendError> {
-        if self.inner.stops.load(Ordering::SeqCst) == asked {
+    /// How many stops were asked of `id` so far.
+    fn stops(&self, id: &SeatId) -> u64 {
+        let stops = self.inner.stops.lock().unwrap_or_else(|e| e.into_inner());
+        stops.get(id).copied().unwrap_or(0)
+    }
+
+    /// Counts a stop of `id`: a start of it in flight gives up.
+    fn ask_stop(&self, id: &SeatId) {
+        let mut stops = self.inner.stops.lock().unwrap_or_else(|e| e.into_inner());
+        *stops.entry(id.clone()).or_default() += 1;
+    }
+
+    /// Fails when a stop of `id` has been asked since `asked`, the count its start began at.
+    fn stopped_since(&self, id: &SeatId, asked: u64) -> Result<(), BackendError> {
+        if self.stops(id) == asked {
             return Ok(());
         }
         Err(err("seat_stopped", "the seat was stopped while it started"))
@@ -788,7 +800,7 @@ impl LinuxBackend {
     fn wait_ready(&self, seat: &Seat, asked: u64, login: bool) -> Result<(), BackendError> {
         let deadline = Instant::now() + START_TIMEOUT;
         let failure = loop {
-            if let Err(stopped) = self.stopped_since(asked) {
+            if let Err(stopped) = self.stopped_since(&seat.id, asked) {
                 break stopped;
             }
             let state = match session::state(&seat.account) {
@@ -1060,7 +1072,7 @@ impl PlatformBackend for LinuxBackend {
     }
 
     fn start(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
-        let asked = self.inner.stops.load(Ordering::SeqCst);
+        let asked = self.stops(&seat.id);
         self.start_row(seat, asked, None)
     }
 
@@ -1074,7 +1086,7 @@ impl PlatformBackend for LinuxBackend {
         if Own::of(&seat.kind) != Own::Person {
             return self.start(seat);
         }
-        let asked = self.inner.stops.load(Ordering::SeqCst);
+        let asked = self.stops(&seat.id);
         self.start_row(seat, asked, Some(password))
     }
 
@@ -1082,7 +1094,7 @@ impl PlatformBackend for LinuxBackend {
     /// unless the owner's own login hosts the row. A host in that login stays: it isn't the
     /// unit's. The status is read for the pads alone.
     fn stop(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
-        self.inner.stops.fetch_add(1, Ordering::SeqCst);
+        self.ask_stop(&seat.id);
         self.stop_unit(seat)?;
         if !seat.lent.is_empty() {
             let live = self.status(seat).is_ok_and(|s| lent::runs(&s.state));
@@ -1489,7 +1501,7 @@ impl LinuxBackend {
             Own::Person => self.person_login(seat, password)?,
             Own::Owner | Own::Seat => (None, None),
         };
-        self.stopped_since(asked)?;
+        self.stopped_since(&seat.id, asked)?;
         let unit = session::unit(&seat.account);
         if kind.ours() {
             // A manager already up (the last run's, or a linger's from boot) lacks this start's
@@ -1567,7 +1579,7 @@ impl LinuxBackend {
         passwd: &accounts::Passwd,
         asked: u64,
     ) -> Result<RuntimeStatus, BackendError> {
-        self.stopped_since(asked)?;
+        self.stopped_since(&seat.id, asked)?;
         let unit = session::unit(&seat.account);
         let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
         run("systemctl_failed", "systemctl", &["start", &unit])?;
@@ -1580,7 +1592,7 @@ impl LinuxBackend {
     fn wait_port(&self, seat: &Seat, asked: u64) -> Result<(), BackendError> {
         let deadline = Instant::now() + START_TIMEOUT;
         while !self.serving(seat) {
-            self.stopped_since(asked)?;
+            self.stopped_since(&seat.id, asked)?;
             if Instant::now() >= deadline {
                 return Err(err(
                     "start_timeout",
@@ -1951,14 +1963,6 @@ mod tests {
             passwd: &accounts::Passwd,
         ) -> Result<bool, BackendError> {
             self.inner.copies(seat, Own::Owner, passwd, None)
-        }
-
-        pub(super) fn start_owner(
-            &self,
-            seat: &Seat,
-            asked: u64,
-        ) -> Result<RuntimeStatus, BackendError> {
-            self.start_row(seat, asked, None)
         }
     }
 

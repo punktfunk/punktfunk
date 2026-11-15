@@ -304,6 +304,26 @@ fn an_owner_s_or_person_s_stop_runs_exactly_these() {
     }
 }
 
+/// A stop asked of one seat ends only that seat's start: another's start in flight goes on to its
+/// unit's end, and a stop of its own seat ends it.
+#[test]
+fn a_stop_ends_only_its_own_seat_s_start() {
+    let rig = rig();
+    let (other, starting) = (
+        row("pfowner", OWNER_ID, true, None),
+        row("pfperson", PERSON_ID, false, Some(PERSON_UID)),
+    );
+    let passwd = owner_passwd("pfowner", &rig.home);
+    let _fake = fake::install(machine(passwd, &[FAILED], Arc::default()));
+    let asked = rig.backend.stops(&starting.id);
+    rig.backend.stop(&other).unwrap();
+    let ended = rig.backend.wait_ready(&starting, asked, false).unwrap_err();
+    assert_eq!(ended.code, "seat_exited", "the other seat's stop");
+    rig.backend.stop(&starting).unwrap();
+    let ended = rig.backend.wait_ready(&starting, asked, false).unwrap_err();
+    assert_eq!(ended.code, "seat_stopped", "its own seat's stop");
+}
+
 /// A person's start with their unit already up writes nothing under `/run` and keeps its token:
 /// it refreshes the row's copies, then waits on the unit, which here ends.
 #[test]
@@ -1052,8 +1072,9 @@ fn the_owner_s_start_at_the_desk_starts_its_own_host() {
     let machine = machine(passwd, &[INACTIVE], Arc::default());
     let _fake = fake::install(with_a_login_at_the_desk(machine, "pfowner"));
 
-    let asked = rig.backend.inner.stops.fetch_add(1, Ordering::SeqCst);
-    let ended = rig.backend.start_owner(&seat, asked).unwrap_err();
+    let asked = rig.backend.stops(&seat.id);
+    rig.backend.ask_stop(&seat.id);
+    let ended = rig.backend.start_row(&seat, asked, None).unwrap_err();
     let calls = calls_from(0);
     let written = session::env_path("pfowner").exists();
     clear_run("pfowner", OWNER_UID);
