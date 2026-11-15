@@ -6,7 +6,7 @@
     "clients/linux": 2,
     "clients/windows": 2,
     "crates/client/pf-client-core": 15,
-    "crates/client/pf-client-video": 19,
+    "crates/client/pf-client-video": 21,
     "crates/client/pf-console-ui": 1,
     "crates/client/punktfunk-ffi": 111,
     "crates/codec/pf-libva": 7,
