@@ -83,8 +83,7 @@ pub(crate) struct TimelineBudget {
 
 /// The one release in flight.
 struct InFlight {
-    /// The release target's expected present minus the margin, or `release + period` without a
-    /// timeline.
+    /// The predicted latch [`TimelineBudget::released`] works out.
     reopen_at_ns: i64,
     released_at_ns: i64,
 }
@@ -234,17 +233,20 @@ impl TimelineBudget {
     /// `expected_present_ns − margin`, when the slot frees for the next refresh: not the
     /// `deadline` (it can already be past, piling two releases on one vsync) and not the
     /// present (a period late, capping the rate near half the panel). Without a timeline the
-    /// prediction is one measured `period_ns` after the release.
+    /// prediction is `next_vsync_ns`, the callback grid's next vsync. A period counted from the
+    /// release instead carries each release's wait for a loop pass into the next, and a source
+    /// at the panel's rate never catches up. With no grid either: one 120 Hz frame on.
     pub(crate) fn released(
         &mut self,
         now_ns: i64,
         expected_present_ns: Option<i64>,
-        period_ns: Option<i64>,
+        next_vsync_ns: Option<i64>,
         c: &mut Counters,
     ) {
         let reopen_at_ns = expected_present_ns
             .map(|e| e - self.margin_ns)
-            .unwrap_or(now_ns + period_ns.unwrap_or(FALLBACK_PERIOD_NS));
+            .or(next_vsync_ns)
+            .unwrap_or(now_ns + FALLBACK_PERIOD_NS);
         self.inflight = Some(InFlight {
             reopen_at_ns,
             released_at_ns: now_ns,
@@ -357,6 +359,7 @@ impl AscBudget {
 mod tests {
     use super::super::{frame_interval_ns, PresentPriority};
     use super::*;
+    use crate::vsync_grid::next_vsync;
 
     const P: i64 = 8_333_333;
     const T: i64 = 987_000_000_000;
@@ -422,15 +425,17 @@ mod tests {
             frame_of(b.pick(&mut s, reopen, P, PENDING, false, &mut c)),
             Some(2)
         );
-        // No timeline: one measured period after the release, or one 120 Hz frame.
-        b.released(reopen, None, Some(2 * P), &mut c);
+        // No timeline: the grid's next vsync, however late in the period the release came, or
+        // one 120 Hz frame after the release with no grid either.
+        let vsync = reopen + P / 4;
+        b.released(reopen, None, Some(vsync), &mut c);
         s.push(3, 0, T, &mut c, drop);
         assert_eq!(
-            frame_of(b.pick(&mut s, reopen + 2 * P - 1, P, PENDING, false, &mut c)),
+            frame_of(b.pick(&mut s, vsync - 1, P, PENDING, false, &mut c)),
             None
         );
         assert_eq!(
-            frame_of(b.pick(&mut s, reopen + 2 * P, P, PENDING, false, &mut c)),
+            frame_of(b.pick(&mut s, vsync, P, PENDING, false, &mut c)),
             Some(3)
         );
         b.released(T, None, None, &mut c);
@@ -440,6 +445,67 @@ mod tests {
             Some(4)
         );
         assert_eq!((c.released, c.forced), (3, 0));
+    }
+
+    /// A minute of a 60.00 fps source through the latency store and this budget with no timeline
+    /// and no confirms. The callback grid runs at 59.88 Hz and its tick reaches the loop 0.1 to
+    /// 0.7 ms late; the loop passes on a decoded frame, a tick and its 5 ms wake. `reopen` maps
+    /// (now, last vsync) to the prediction a release hands the budget. Returns (released, evicted).
+    fn minute(reopen: impl Fn(i64, i64) -> Option<i64>) -> (u64, u64) {
+        const SOURCE: i64 = 16_666_666;
+        const WAKE: i64 = 5_000_000;
+        let mut s: Store<u32> = Store::new(PresentPriority::Latency, SOURCE, true);
+        let mut b = TimelineBudget::new(None);
+        let mut c = Counters::default();
+        let mut rng: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut noise = move |span: i64| {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng >> 16) as i64 % span
+        };
+        let (mut frame, mut tick) = (0i64, 1i64);
+        let mut frame_at = T + noise(2_000_000);
+        let mut tick_at = T + PANEL + 100_000 + noise(600_000);
+        let (mut last_pass, mut last_vsync) = (T, T);
+        while frame < 3600 {
+            let now = frame_at.min(tick_at).min(last_pass + WAKE);
+            if now == tick_at {
+                last_vsync = T + tick * PANEL;
+                tick += 1;
+                tick_at = T + tick * PANEL + 100_000 + noise(600_000);
+                b.on_vsync();
+            }
+            if now == frame_at {
+                let pts_us = (frame * SOURCE / 1000) as u64;
+                s.push(frame as u32, pts_us, now, &mut c, drop);
+                frame += 1;
+                frame_at = T + frame * SOURCE + noise(2_000_000);
+            }
+            last_pass = now;
+            let pick = b.pick(&mut s, now, PANEL, ledger(0, false), false, &mut c);
+            if pick.frame.is_some() {
+                b.released(now, None, reopen(now, last_vsync), &mut c);
+            }
+        }
+        (c.released, c.skipped)
+    }
+
+    /// One callback period of a panel that states 60 Hz and runs at 59.88.
+    const PANEL: i64 = 16_700_000;
+
+    #[test]
+    fn a_source_at_the_panel_rate_is_shown_whole_without_a_timeline() {
+        let (released, evicted) = minute(|now, last_vsync| next_vsync(last_vsync, PANEL, now));
+        // 60.00 on 59.88 is seven surplus frames a minute, and they are all it costs.
+        assert!(evicted <= 8, "{evicted} evicted");
+        assert!(released >= 3590, "{released} released");
+        // A period counted from the release never gets back the wait for a pass.
+        let (released, evicted) = minute(|now, _| Some(now + PANEL));
+        assert!(
+            released < 3300 && evicted > 300,
+            "{released} released, {evicted} evicted"
+        );
     }
 
     #[test]
