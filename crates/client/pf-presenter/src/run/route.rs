@@ -118,6 +118,18 @@ pub(crate) fn keyboard_grab(on: bool, inhibit: bool, keyboard: bool) -> bool {
     on && inhibit && keyboard
 }
 
+/// Whether the client's own UI keeps the pads off the wire: focus lost, Gaming Mode's
+/// overlay open, or a capture the player let go. `capture` is a live capture's
+/// `(can engage, engaged)`. One that can't engage, on grants without pointer and keyboard,
+/// was never let go.
+pub(crate) fn pad_mask(
+    focus_lost: bool,
+    overlay_open: bool,
+    capture: Option<(bool, bool)>,
+) -> bool {
+    focus_lost || overlay_open || capture == Some((true, false))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,6 +241,26 @@ mod tests {
         ];
         for (name, (on, inhibit, keyboard), want) in rows {
             assert_eq!(keyboard_grab(on, inhibit, keyboard), want, "{name}");
+        }
+    }
+
+    /// The pads are the host's unless the client's UI wants them or the player let go.
+    #[test]
+    fn pads_leave_the_wire_for_the_ui_or_a_released_capture() {
+        const ON: Option<(bool, bool)> = Some((true, true));
+        const NEVER: Option<(bool, bool)> = Some((false, false));
+        #[rustfmt::skip]
+        let rows = [
+            ("a released capture masks the pads", (false, false, Some((true, false))), true),
+            ("an engaged capture sends them", (false, false, ON), false),
+            ("no capture yet sends them", (false, false, None), false),
+            ("focus loss masks them", (true, false, ON), true),
+            ("Gaming Mode's overlay masks them", (false, true, ON), true),
+            ("controller-only access sends them", (false, false, NEVER), false),
+            ("controller-only access loses them with focus", (true, false, NEVER), true),
+        ];
+        for (name, (focus_lost, overlay_open, capture), want) in rows {
+            assert_eq!(pad_mask(focus_lost, overlay_open, capture), want, "{name}");
         }
     }
 }

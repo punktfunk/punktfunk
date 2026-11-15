@@ -508,11 +508,11 @@ impl Shell {
         // Remembered, not applied: the ring is a third owner of this same mask and is only
         // known further down. Applying here too gave one boolean two latches, and whichever
         // fell last unmasked the pads while the other still wanted them masked.
-        let capture_active = stream
+        let capture = stream
             .as_ref()
             .and_then(|st| st.capture.as_ref())
-            .map(Capture::captured);
-        ui_wants_pad_mask(self.focus_lost, overlay_now, capture_active)
+            .map(|cap| (cap.can_capture(), cap.captured()));
+        crate::route::pad_mask(self.focus_lost, overlay_now, capture)
     }
 
     /// Drain forwarded cursor shape/state and drive the local OS cursor — only
@@ -793,14 +793,6 @@ fn kind_of(event: &Event, chord: bool) -> Kind {
         }
         _ => Kind::Other,
     }
-}
-
-pub(super) fn ui_wants_pad_mask(
-    focus_lost: bool,
-    overlay_open: bool,
-    capture_active: Option<bool>,
-) -> bool {
-    focus_lost || overlay_open || capture_active == Some(false)
 }
 
 /// One SDL mouse/touch event as the overlay wants it: swapchain pixels. `None` for
@@ -1157,15 +1149,6 @@ mod tests {
         assert!(!is_warp_device(b"xwayland-relative-pointer:13"));
         assert!(!is_warp_device(b"xwayland-pointer-gestures:13"));
         assert!(!is_warp_device(b"Logitech USB Receiver"));
-    }
-
-    #[test]
-    fn released_capture_masks_pads_until_capture_returns() {
-        assert!(ui_wants_pad_mask(false, false, Some(false)));
-        assert!(!ui_wants_pad_mask(false, false, Some(true)));
-        assert!(!ui_wants_pad_mask(false, false, None));
-        assert!(ui_wants_pad_mask(true, false, Some(true)));
-        assert!(ui_wants_pad_mask(false, true, Some(true)));
     }
 
     #[test]
