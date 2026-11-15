@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: unom <packages@unom.io>
+Date: Sun, 15 Nov 2026 14:43:37 +0100
+Subject: [PATCH 39/40] layer: report the window as an X11 surface's extent
+ range
+
+The layer presents an X11 window through a Wayland surface, whose
+capabilities allow any extent from 1x1. The layer already replaced
+currentExtent with the window's size and refuses a swapchain of any
+other size, but left minImageExtent at 1x1 and maxImageExtent at the
+device limit.
+
+Proton's fullscreen hack sizes its real swapchain from minImageExtent,
+as an X11 driver reports min == max == current. It turns on for every
+DPI-scaled window, so a game in a prefix above 96 DPI rendered into a
+1x1 swapchain that was out of date at once and rebuilt each frame.
+
+Report the window's size as min, max and current extent, as X11 does.
+---
+ layer/VkLayer_FROG_gamescope_wsi.cpp | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/layer/VkLayer_FROG_gamescope_wsi.cpp b/layer/VkLayer_FROG_gamescope_wsi.cpp
+index 5c208b7..f85dac0 100644
+--- a/layer/VkLayer_FROG_gamescope_wsi.cpp
++++ b/layer/VkLayer_FROG_gamescope_wsi.cpp
+@@ -270,6 +270,15 @@ namespace GamescopeWSILayer {
+     return false;
+   }
+ 
++  // An X11 swapchain must match its window, and X11 drivers say so with min == max == current.
++  // The Wayland surface underneath reports a 1x1 minimum, and Proton's fullscreen hack sizes
++  // its swapchain from the minimum: a DPI-scaled game then renders into one pixel.
++  static void setWindowExtent(VkSurfaceCapabilitiesKHR &caps, VkExtent2D extent) {
++    caps.currentExtent = extent;
++    caps.minImageExtent = extent;
++    caps.maxImageExtent = extent;
++  }
++
+   static uint32_t getMinImageCount() {
+     static uint32_t s_minImageCount = []() -> uint32_t {
+       if (auto minCount = parseEnv<uint32_t>("GAMESCOPE_WSI_MIN_IMAGE_COUNT")) {
+@@ -1201,7 +1210,7 @@ namespace GamescopeWSILayer {
+         if (!rect)
+           return VK_ERROR_SURFACE_LOST_KHR;
+ 
+-        pSurfaceCapabilities->currentExtent = rect->extent;
++        setWindowExtent(*pSurfaceCapabilities, rect->extent);
+       }
+       pSurfaceCapabilities->minImageCount = getMinImageCount();
+ 
+@@ -1244,7 +1253,7 @@ namespace GamescopeWSILayer {
+         if (!rect)
+           return VK_ERROR_SURFACE_LOST_KHR;
+ 
+-        pSurfaceCapabilities->surfaceCapabilities.currentExtent = rect->extent;
++        setWindowExtent(pSurfaceCapabilities->surfaceCapabilities, rect->extent);
+       }
+       pSurfaceCapabilities->surfaceCapabilities.minImageCount = getMinImageCount();
+       if (auto *timing = vkroots::FindInChainMutable<VkPresentTimingSurfaceCapabilitiesEXT>(pSurfaceCapabilities)) {

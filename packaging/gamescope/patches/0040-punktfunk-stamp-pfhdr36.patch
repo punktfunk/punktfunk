@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: unom <packages@unom.io>
+Date: Sun, 15 Nov 2026 14:43:47 +0100
+Subject: [PATCH 40/40] punktfunk: stamp pfhdr36
+
+A DPI-scaled game showed nothing in a session before the layer fix, and
+nothing else tells a box with the fix from one without. A new level puts
+the difference on the banner for field triage. No new capability.
+---
+ src/meson.build | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index 518b6e6..655138b 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -228,7 +228,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr33 — …written into a storage buffer, so its bytes sit where the export says
+ #   +pfhdr34 — …and a private reliable capture node beside the public one Steam reads
+ #   +pfhdr35 — …on upstream 3.17.0 (31 is upstream there)
+-version_tag = vcs_tag + '+pfhdr35' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr36 — …and the WSI layer reports an X11 window's size as its extent range
++version_tag = vcs_tag + '+pfhdr36' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
