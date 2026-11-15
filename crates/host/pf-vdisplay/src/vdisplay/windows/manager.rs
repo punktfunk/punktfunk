@@ -1644,6 +1644,7 @@ impl VirtualDisplayManager {
         VirtualOutput {
             node_id: 0,
             preferred_mode: Some((mon.mode.width, mon.mode.height, mon.mode.refresh_hz)),
+            refresh_mhz: None,
             win_capture: mon.target(),
             pool_gen: Some(mon.generation),
             keepalive: Box::new(MonitorLease {

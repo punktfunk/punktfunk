@@ -468,7 +468,7 @@ pub(super) fn is_permanent_build_error(chain: &str) -> bool {
 }
 
 /// Session mode with refresh × the display multiple ([`HostConfig::vdisplay_hz_mult_for`]) for
-/// the `compositor` that creates the display. Wire rate is still [`pacing_interval`]. DWM composes on
+/// the `compositor` that creates the display. Wire rate is still [`stream_mhz`]. DWM composes on
 /// the display's own fixed tick, which the automatic multiple is for; KWin's unpaced cast records
 /// each commit, so it gets none. gamescope paints on the game's commit, so a multiple would only
 /// raise its frame limit: none there, set or not.
@@ -483,9 +483,7 @@ pub(super) fn display_mode_for(
     } else {
         pf_host_config::config().vdisplay_hz_mult_for(session.refresh_hz, cfg!(windows))
     };
-    let fractional = pf_vdisplay::Compositor::all()
-        .iter()
-        .any(|c| c.runs_fractional_rates() && c.id() == compositor);
+    let fractional = pf_vdisplay::runs_fractional_rates(compositor);
     // A backend that takes the fraction runs the multiple of the exact rate, 119.88 Hz under
     // a 59.94 Hz session. The others keep whole hertz, so their modes compare as they did.
     let mhz = if fractional {
@@ -496,27 +494,56 @@ pub(super) fn display_mode_for(
     session.at_millihz(mhz.saturating_mul(mult).min(0xffff * 1000))
 }
 
-/// One frame of a session at `session`'s rate, or at `effective_hz` when the display runs
-/// below it. The session's own rate keeps its fraction.
-pub(super) fn pacing_interval(
-    session: punktfunk_core::Mode,
-    effective_hz: u32,
-) -> std::time::Duration {
-    if effective_hz == session.refresh_hz {
-        session.frame_interval()
+/// What a display runs, as its backend reports it: whole hertz, and the exact rate in
+/// millihertz. With no read-back, a display at the whole rate it was `asked` for runs the
+/// mode asked, fraction and all.
+pub(super) fn display_rate(
+    vout: &crate::vdisplay::VirtualOutput,
+    asked: punktfunk_core::Mode,
+) -> (u32, u32) {
+    let hz = vout
+        .preferred_mode
+        .map(|(_, _, hz)| hz)
+        .filter(|&hz| hz > 0)
+        .unwrap_or(asked.refresh_hz);
+    let mhz = match vout.refresh_mhz {
+        Some(mhz) if mhz > 0 => mhz,
+        _ if hz == asked.refresh_hz => asked.millihz(),
+        _ => hz.saturating_mul(1000),
+    };
+    (hz, mhz)
+}
+
+/// The rate a session streams at over a display that runs `display_mhz`, in millihertz.
+///
+/// A display at the session's whole rate, or at a multiple of it, sets the cadence: the
+/// stream runs at the display's own rate over that multiple, 59.94 Hz off a 119.88 Hz
+/// display and 60 off a 120 Hz one whatever fraction the session asked. Any other display
+/// is paced at the lower of the two rates. Overdrive is display-only.
+pub(super) fn stream_mhz(session: punktfunk_core::Mode, display_mhz: u32) -> u32 {
+    let nominal = session.refresh_hz.max(1).saturating_mul(1000);
+    let k = (display_mhz.saturating_add(nominal / 2) / nominal).max(1);
+    let per = display_mhz.saturating_add(k / 2) / k;
+    if per.saturating_add(500) / 1000 == session.refresh_hz {
+        per
     } else {
-        std::time::Duration::from_secs_f64(1.0 / effective_hz.max(1) as f64)
+        display_mhz.min(session.millihz()).max(1000)
     }
+}
+
+/// Whole hertz of a rate in millihertz, for the encoder and the capture offer.
+pub(super) fn whole_hz(mhz: u32) -> u32 {
+    (mhz.saturating_add(500) / 1000).max(1)
+}
+
+/// One frame at `mhz`.
+pub(super) fn frame_interval(mhz: u32) -> std::time::Duration {
+    std::time::Duration::from_nanos(punktfunk_core::config::millihz_period_ns(mhz))
 }
 
 /// The virtual display is gamescope's: it paints on the game's commit.
 pub(super) fn is_gamescope(vd: &dyn crate::vdisplay::VirtualDisplay) -> bool {
     vd.name() == pf_vdisplay::Compositor::Gamescope.id()
-}
-
-/// Pace and encode at min(session, achieved). Overdrive is display-only.
-pub(super) fn pacing_hz(session_hz: u32, achieved_hz: u32) -> u32 {
-    achieved_hz.min(session_hz).max(1)
 }
 
 /// Log a display that runs below the rate the session asked. A mirrored head
@@ -769,23 +796,20 @@ fn attach_pipeline(
     let lease = OutputLease::of(&vout);
     let pool_gen = vout.pool_gen;
     let node_id = vout.node_id;
-    let achieved_hz = vout
-        .preferred_mode
-        .map(|(_, _, hz)| hz)
-        .filter(|&hz| hz > 0)
-        .unwrap_or(display_mode.refresh_hz);
+    let (achieved_hz, display_mhz) = display_rate(&vout, display_mode);
     report_achieved_hz(
         vout.ownership,
         display_mode.refresh_hz,
         achieved_hz,
         mode.refresh_hz,
     );
-    let effective_hz = pacing_hz(mode.refresh_hz, achieved_hz);
-    if mode.millihz() % 1000 != 0 {
+    let rate_mhz = stream_mhz(mode, display_mhz);
+    let effective_hz = whole_hz(rate_mhz);
+    if rate_mhz % 1000 != 0 || mode.millihz() % 1000 != 0 {
         tracing::info!(
             session_mhz = mode.millihz(),
-            display_mhz = display_mode.millihz(),
-            paced_hz = effective_hz,
+            display_mhz,
+            stream_mhz = rate_mhz,
             "session rate with a fraction"
         );
     }
@@ -879,7 +903,7 @@ fn attach_pipeline(
             "encoder chroma disagrees with the negotiated Welcome — the client was told the other value"
         );
     }
-    let interval = pacing_interval(mode, effective_hz);
+    let interval = frame_interval(rate_mhz);
     Ok(Pipeline {
         capturer,
         enc,
@@ -908,17 +932,65 @@ mod tests {
         use crate::native::{delivered_mode, interval_mhz};
         for mhz in [23_976u32, 59_800, 59_940, 119_880, 143_856, 239_760, 60_000] {
             let asked = punktfunk_core::Mode::exact(2560, 1440, mhz);
-            let interval = pacing_interval(asked, asked.refresh_hz);
+            let interval = frame_interval(stream_mhz(asked, mhz));
             assert_eq!(delivered_mode(2560, 1440, interval), asked, "{mhz} mHz");
         }
         for mhz in (1_000u32..1_000_000).step_by(997) {
             let asked = punktfunk_core::Mode::exact(64, 64, mhz);
             assert_eq!(interval_mhz(asked.frame_interval()), mhz);
         }
-        // A display that runs below the session paces at its own whole rate.
+        // A display that runs below the session paces at its own rate.
         let asked = punktfunk_core::Mode::exact(2560, 1440, 119_880);
-        let capped = delivered_mode(2560, 1440, pacing_interval(asked, 60));
+        let capped = delivered_mode(2560, 1440, frame_interval(stream_mhz(asked, 60_000)));
         assert_eq!(capped, punktfunk_core::Mode::exact(2560, 1440, 60_000));
+    }
+
+    /// The stream runs at the display's own cadence where the display runs the session's
+    /// whole rate or a multiple, and is told so: a display that stayed at 60 Hz under a
+    /// 59.94 Hz ask delivers 60, and a head at 59.951 Hz delivers that to a 60 Hz ask.
+    #[test]
+    fn the_stream_takes_the_displays_exact_rate() {
+        let mode = |mhz| punktfunk_core::Mode::exact(1920, 1080, mhz);
+        for (session, display, stream) in [
+            (59_940, 59_940, 59_940),
+            (59_940, 60_000, 60_000),
+            (60_000, 59_951, 59_951),
+            (59_940, 119_880, 59_940),
+            (59_940, 120_000, 60_000),
+            (60_000, 120_000, 60_000),
+            (57_500, 57_500, 57_500),
+            (143_856, 143_856, 143_856),
+            (30_000, 59_940, 29_970),
+            // No whole multiple: the lower of the two.
+            (60_000, 143_856, 60_000),
+            (120_000, 60_000, 60_000),
+            (120_000, 59_940, 59_940),
+            (60_000, 90_000, 60_000),
+            (60_000, 0, 1_000),
+        ] {
+            assert_eq!(
+                stream_mhz(mode(session), display),
+                stream,
+                "{session} over {display}"
+            );
+        }
+    }
+
+    /// A backend's read-back is the display's rate; without one the display runs the mode
+    /// asked when it reports that mode's whole hertz.
+    #[test]
+    fn a_display_without_a_read_back_runs_the_mode_asked() {
+        let asked = punktfunk_core::Mode::exact(1920, 1080, 59_940);
+        let mut out =
+            crate::vdisplay::VirtualOutput::owned(0, Some((1920, 1080, 60)), Box::new(()));
+        assert_eq!(display_rate(&out, asked), (60, 59_940));
+        out.refresh_mhz = Some(60_000);
+        assert_eq!(display_rate(&out, asked), (60, 60_000));
+        out.refresh_mhz = None;
+        out.preferred_mode = Some((1920, 1080, 30));
+        assert_eq!(display_rate(&out, asked), (30, 30_000));
+        out.preferred_mode = None;
+        assert_eq!(display_rate(&out, asked), (60, 59_940));
     }
 
     /// Encodes nothing.
@@ -1178,12 +1250,16 @@ mod tests {
 
     #[test]
     fn pacing_never_exceeds_the_session_rate_or_the_display() {
-        assert_eq!(pacing_hz(120, 120), 120);
-        assert_eq!(pacing_hz(120, 60), 60);
-        assert_eq!(pacing_hz(60, 120), 60);
-        assert_eq!(pacing_hz(120, 240), 120);
-        assert_eq!(pacing_hz(60, 90), 60);
-        assert_eq!(pacing_hz(60, 0), 1);
+        let whole = |session: u32, display: u32| {
+            let mode = punktfunk_core::Mode::exact(1920, 1080, session * 1000);
+            whole_hz(stream_mhz(mode, display * 1000))
+        };
+        assert_eq!(whole(120, 120), 120);
+        assert_eq!(whole(120, 60), 60);
+        assert_eq!(whole(60, 120), 60);
+        assert_eq!(whole(120, 240), 120);
+        assert_eq!(whole(60, 90), 60);
+        assert_eq!(whole(60, 0), 1);
     }
 
     #[test]

@@ -151,13 +151,12 @@ impl Compositor {
         )
     }
 
-    /// Runs its virtual display at a rate that is not whole hertz, 59.94 Hz say. Every other
-    /// backend gets the whole rate; the session still paces at the exact one.
+    /// Runs its virtual display at a rate that is not whole hertz ([`runs_fractional_rates`]).
     pub fn runs_fractional_rates(self) -> bool {
-        matches!(
-            self,
-            Compositor::Wlroots | Compositor::Hyprland | Compositor::Mutter
-        )
+        runs_fractional_rates(match self {
+            Compositor::Windows => "pf-vdisplay",
+            other => other.id(),
+        })
     }
 
     /// Makes the streamed screen the desktop's main one under `primary`. The tiling backends
@@ -239,6 +238,13 @@ impl Compositor {
             Compositor::Umbriel,
         ]
     }
+}
+
+/// Whether the backend named `backend` ([`VirtualDisplay::name`]) runs its virtual display at
+/// a rate that is not whole hertz, 59.94 Hz say. Any other backend is asked for whole hertz
+/// and a session on it is told so, so its modes compare as whole ones.
+pub fn runs_fractional_rates(backend: &str) -> bool {
+    matches!(backend, "wlroots" | "hyprland" | "mutter")
 }
 
 /// Backends usable now: gamescope if its binary exists, plus the live or pinned

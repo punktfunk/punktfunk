@@ -331,6 +331,8 @@ mod pool {
         pub(super) keepalive: Box<dyn Send>,
         pub(super) node_id: u32,
         pub(super) preferred_mode: Option<(u32, u32, u32)>,
+        /// [`VirtualOutput::refresh_mhz`] as the backend reported it at create.
+        pub(super) refresh_mhz: Option<u32>,
         /// Compositor output name ([`VirtualOutput::output_name`]). Kept across
         /// reuse so the reused head answers with the same name as a fresh create.
         pub(super) output_name: Option<String>,
@@ -553,6 +555,12 @@ mod pool {
     impl Entry {
         pub(super) fn group(&self) -> String {
             group_key(self.backend, self.ownership, self.generation)
+        }
+
+        /// The rate this display runs, in millihertz: what its backend reported, else the
+        /// mode it was last set to.
+        pub(super) fn rate_mhz(&self) -> u32 {
+            self.refresh_mhz.unwrap_or(self.mode.millihz())
         }
     }
 
@@ -888,6 +896,7 @@ mod pool {
                 keepalive: Box::new(()),
                 node_id: 0,
                 preferred_mode: None,
+                refresh_mhz: None,
                 output_name: None,
                 input_output: None,
                 join_name: None,
@@ -1892,7 +1901,7 @@ mod linux {
     #[allow(clippy::too_many_arguments)]
     fn output_for(
         node_id: u32,
-        preferred_mode: Option<(u32, u32, u32)>,
+        (preferred_mode, refresh_mhz): (Option<(u32, u32, u32)>, Option<u32>),
         (output_name, input_output): (Option<String>, Option<String>),
         seat: Option<String>,
         generation: u64,
@@ -1908,6 +1917,7 @@ mod linux {
                 slept_at: crate::suspend::slept(),
             }),
         );
+        out.refresh_mhz = refresh_mhz;
         // Same head as at create, so it answers with the same name.
         out.output_name = output_name;
         out.input_output = input_output;
@@ -2183,6 +2193,7 @@ mod linux {
             let from = e.mode;
             e.mode = mode;
             e.preferred_mode = Some((mode.width, mode.height, mode.refresh_hz));
+            e.refresh_mhz = None;
             tracing::info!(
                 backend,
                 node_id,
@@ -2210,7 +2221,7 @@ mod linux {
         }
         output_for(
             node_id,
-            e.preferred_mode,
+            (e.preferred_mode, Some(e.rate_mhz())),
             (e.output_name.clone(), e.input_output.clone()),
             e.seat.clone(),
             generation,
@@ -2238,6 +2249,7 @@ mod linux {
         let identity_slot = vd.last_identity_slot();
         let node_id = real.node_id;
         let preferred_mode = real.preferred_mode;
+        let refresh_mhz = real.refresh_mhz;
         let output_name = real.output_name.clone();
         // KWin and Mutter report their cast name apart from `output_name`, which drives
         // input aiming and direct capture. The rest cast by the output name.
@@ -2258,6 +2270,7 @@ mod linux {
             keepalive: real.keepalive,
             node_id,
             preferred_mode,
+            refresh_mhz,
             output_name: output_name.clone(),
             input_output: real.input_output.clone(),
             join_name,
@@ -2328,7 +2341,7 @@ mod linux {
         }
         let mut out = output_for(
             node_id,
-            preferred_mode,
+            (preferred_mode, refresh_mhz),
             (output_name, real.input_output.clone()),
             real.seat.clone(),
             generation,
@@ -2371,7 +2384,7 @@ mod linux {
             );
             let out = output_for(
                 e.node_id,
-                e.preferred_mode,
+                (e.preferred_mode, Some(e.rate_mhz())),
                 (e.output_name.clone(), e.input_output.clone()),
                 e.seat.clone(),
                 e.generation,

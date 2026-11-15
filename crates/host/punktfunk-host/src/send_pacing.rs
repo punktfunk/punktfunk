@@ -653,18 +653,6 @@ impl CaptureCredit {
     }
 }
 
-/// What the credit gate holds a source to: `interval`, or one frame of the next whole rate
-/// above a fractional one. A 59.94 Hz session gates at 60: its display's own cadence holds
-/// the rate, and a gate at 59.94 would hold back every frame of a display that runs 60.
-pub(crate) fn gate_interval(interval: Duration) -> Duration {
-    let ns = (interval.as_nanos() as u64).max(1);
-    let mhz = (1_000_000_000_000 + ns / 2) / ns;
-    if mhz % 1000 == 0 {
-        return interval;
-    }
-    Duration::from_nanos(1_000_000_000_000 / ((mhz / 1000 + 1) * 1000))
-}
-
 /// Repeats at the keep-alive cadence before the idle backoff, about 190 ms at 120 Hz: on CBR
 /// they sharpen a still picture.
 pub(crate) const IDLE_REPEATS: u32 = 15;
@@ -791,7 +779,7 @@ pub(crate) fn wait_tick_or_au(
         let not_before = match fresh {
             Some(t_cap) => {
                 credit.busy = t_cap.elapsed();
-                credit.next_grab(t_cap, gate_interval(interval))
+                credit.next_grab(t_cap, interval)
             }
             None => {
                 credit.note_repeat();
@@ -1342,21 +1330,6 @@ mod tests {
             now = grab;
         }
         grabs
-    }
-
-    /// A whole rate gates at its own interval; a fractional one a frame of the whole rate
-    /// above it, so a display that runs 60 Hz is never held to 59.94.
-    #[test]
-    fn a_fractional_rate_gates_at_the_whole_rate_above_it() {
-        for hz in [24u32, 30, 60, 75, 90, 120, 144, 165, 240] {
-            let whole = Duration::from_secs_f64(1.0 / f64::from(hz));
-            assert_eq!(gate_interval(whole), whole, "{hz} Hz");
-        }
-        let at = |mhz: u64| Duration::from_nanos(1_000_000_000_000 / mhz);
-        assert_eq!(gate_interval(at(59_940)), at(60_000));
-        assert_eq!(gate_interval(at(119_880)), at(120_000));
-        assert_eq!(gate_interval(at(60_400)), at(61_000));
-        assert!(gate_interval(at(59_940)) < at(59_940));
     }
 
     #[test]

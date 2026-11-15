@@ -481,6 +481,7 @@ impl VirtualDisplay for HyprlandDisplay {
             node_id,
             remote_fd,
             preferred_mode: Some((mode.width, mode.height, mode.refresh_hz)),
+            refresh_mhz: None,
             keepalive,
             ownership: DisplayOwnership::Owned,
             reused_gen: None,
