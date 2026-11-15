@@ -38,7 +38,7 @@ is closed unanswered.
 | `list`, `create`, `start`, `stop`, `delete`, `doctor`, `seating`, `enable`, `disable` | Both. On Linux `enable` answers like `seating`, and `disable` is refused: seats are on while the daemon runs. |
 | `adopt`, `credential` | Windows: [a seat on an existing account](#a-seat-on-an-existing-account) |
 | `adopt_owner`, `install_flatpak`, `remove_flatpak` | Linux: [the owner's row](#the-owners-row-and-the-door), box-wide Flatpaks |
-| `pads`, `lend`, `take_back` | Linux: [lent controllers](#linux-seats). Each answers `pads`. Windows answers `pads_unsupported`. |
+| `pads`, `lend`, `take_back` | Lent controllers, on [Linux](#linux-seats) and on [Windows](#a-windows-seat-host). Each answers `pads`. |
 | `adopt_user`, `unlock`, `unlock_state`, `challenge`, `left`, `sign_out`, `devices` | Linux: [a seat on a person's own account](#a-seat-on-a-persons-own-account) |
 
 On Windows the supervisor owns the seat accounts, the Windows sessions and RDP. The console host
@@ -333,13 +333,27 @@ session by design, and display activation fails while its session is inactive.
   carries the host's session id (`DEVPKEY_Device_SessionId`), so another session can't list it,
   open it or receive its input. A pad the host can't fence is not created. The box has 16 pad
   indices; each host takes the lowest one that no other host's pad holds.
-- **The desk's controllers are the desk's.** The box's host, which runs in the console session,
-  writes that session into every physical game controller present and into each one that
-  arrives, so a seat's HID, XUSB and XInput listings and its GameInput deliveries leave them
-  alone; a device a Remote Desktop session redirected in keeps its own session. The tag is wiped
-  by the device's next start and written again on its arrival; the service's stop and the
-  uninstaller clear it. What Windows still shows a seat:
+- **The desk's controllers are the desk's.** The service writes the console session into every
+  physical game controller present and into each one that arrives, so a seat's HID, XUSB and
+  XInput listings and its GameInput deliveries leave them alone; a device a Remote Desktop
+  session redirected in keeps its own session. The tag is wiped by the device's next start and
+  written again on its arrival; a new console session moves it, and the service's stop and the
+  uninstaller clear it. The service is the one writer: a process in a session can't locate a
+  devnode tagged for another session, and session 0 locates them all. What Windows still shows
+  a seat:
   [Seats on Windows](/docs/windows-seats#a-controller-plugged-into-the-pc-appears-on-a-seat).
+- **Lent controllers.** The operator lends a controller plugged into the box to a seat, as on
+  [Linux](#linux-seats): the ledger row keeps it, the same commands and routes change hands.
+  The key is the USB device's ids and the serial or port id in its instance id. Every HID and
+  XUSB devnode under a lent device carries the seat's session while the seat runs and a
+  session nobody has while it doesn't, so nobody lists a parked controller. The supervisor
+  tells the fence each seat's session as a cycle enters and leaves it. A change of holder
+  restarts the USB device, which ends the last holder's open handles; a parked controller
+  going live changes in place. The service lends a device only when every interface is HID,
+  audio, CDC-ACM, CDC data or vendor and a game controller's HID collection or an XUSB
+  interface lies under it. The tag hides and does not deny: the console's Raw Input, an open
+  of a known path and WGI's Xbox listing still reach a lent controller, and its audio
+  endpoints stay the console's.
 - **Its pads' audio is its own.** A Remote Desktop session lists only what its listener's audio
   endpoint enumerator returns. Through the seat listener, that is Remote Audio plus one
   "Wireless Controller" render endpoint per DualSense the seat host serves, in that pad's container
@@ -440,7 +454,7 @@ A row with one answer holds on both. Every other row is a difference the section
 | Plugins on a person's own account | Their seat's own runner, which the person alone switches and installs into, in their session | The same |
 | The box's titles on its seat | Steam and emulator titles it can start as its own user | Every title but those of one account's sources |
 | Emulators | Installed box-wide; config and saves are the account's | The box's copies; saves and firmware through the box host's `?profile=` |
-| A controller plugged into the box | The desk's, or [lent](#linux-seats) to one profile's seat | The desk's |
+| A controller plugged into the box | The desk's, or [lent](#linux-seats) to one profile's seat | The desk's, or [lent](#a-windows-seat-host) to one profile's seat |
 | A seat on an existing account | Yes, opened by its password or a device key | On Windows Server |
 
 A plugin with no listener of its own, as every Windows seat's is, serves its page through its seat
