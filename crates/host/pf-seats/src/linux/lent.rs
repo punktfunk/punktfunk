@@ -8,6 +8,7 @@
 //! lent is read from sysfs and udev's database, never from the caller.
 
 use super::fence::vouch::put;
+use crate::backend::{pad_handover, pad_not_a_controller, pad_not_present};
 use crate::backend::{BackendError, PresentPad};
 use crate::model::{pad_name, valid_pad_key, Ledger, LentPad, RuntimeState, Seat};
 use std::collections::BTreeMap;
@@ -27,15 +28,7 @@ pub(super) const PARKED: &str = "-";
 const RECEIVERS: [(u16, u16); 3] = [(0x28de, 0x1304), (0x28de, 0x1305), (0x28de, 0x1142)];
 const HUB_CLASS: u8 = 0x09;
 
-/// Whether a USB interface of this class, subclass and protocol may belong to a pad a seat
-/// holds: HID, audio, CDC-ACM, CDC data or vendor-specific. ACM stops at protocol 6, short of
-/// RNDIS's `ff`.
-pub fn interface_allowed(class: u8, subclass: u8, protocol: u8) -> bool {
-    matches!(
-        (class, subclass, protocol),
-        (0x01 | 0x03 | 0x0a | 0xff, _, _) | (0x02, 0x02, 0x00..=0x06)
-    )
-}
+pub use crate::model::pad_interface_allowed as interface_allowed;
 
 /// Whether an interface is a boot keyboard or a boot mouse.
 pub(super) fn boot_input(class: [u8; 3]) -> bool {
@@ -356,16 +349,9 @@ fn holder(seat: &Seat, live: bool) -> &str {
     }
 }
 
-fn refused(code: &str, sentence: &str) -> BackendError {
-    BackendError::new(code, sentence).said(code)
-}
-
 fn handover(step: &str, error: &io::Error) -> BackendError {
     tracing::warn!(%error, step, "desk pad not handed over");
-    refused(
-        "pad_handover",
-        "Couldn't hand the controller over. Unplug it, plug it back in, then try again.",
-    )
+    pad_handover()
 }
 
 /// The lend records and the hardware they name, all under one root: `/` in service.
@@ -447,16 +433,10 @@ impl Lent {
             .find(|pad| pad.key == key)
             .and_then(|pad| pad.port.as_deref());
         let Some(named) = all.iter().find(|usb| usb.lent_as(key, port, &all)) else {
-            return Err(refused(
-                "pad_not_present",
-                "That controller isn't plugged in. Plug it in, then try again.",
-            ));
+            return Err(pad_not_present());
         };
         if !self.lendable(named) {
-            return Err(refused(
-                "pad_not_a_controller",
-                "Only game controllers can be given to a profile.",
-            ));
+            return Err(pad_not_a_controller());
         }
         Ok(named.pad(key.to_owned()))
     }
