@@ -26,12 +26,7 @@ pub(super) struct SessionFacts {
     /// another size.
     pub(super) negotiated: punktfunk_core::Mode,
     pub(super) bitrate_auto: bool,
-    pub(super) audio_reserved_kbps: u32,
-    pub(super) shard_payload: u16,
-    /// PyroWave: parity rides each frame's head ([`EncDerive::pyrowave_hz`]), and an
-    /// explicit-rate stream paces at the link.
-    ///
-    /// [`EncDerive::pyrowave_hz`]: crate::native::bitrate::EncDerive::pyrowave_hz
+    /// PyroWave: an explicit-rate stream paces at the link.
     pub(super) pyrowave: bool,
     pub(super) streamed_wire: bool,
     pub(super) perf: bool,

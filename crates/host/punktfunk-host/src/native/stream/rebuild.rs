@@ -1885,6 +1885,9 @@ mod tests {
         f.st.plan.codec = crate::encode::Codec::PyroWave;
         f.st.plan.pyrowave_bpp = 1.6;
         f.st.facts.pyrowave = true;
+        Arc::get_mut(&mut f.st.facts.terms)
+            .expect("the fake holds the only terms")
+            .codec = crate::encode::Codec::PyroWave;
         if auto {
             (f.st.facts.bitrate_auto, f.st.live.bitrate_kbps) = (true, 150_000);
         }

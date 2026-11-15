@@ -246,22 +246,53 @@ pub(crate) fn fec_pct(target: u8) -> u8 {
 /// taken at each encoder touch. Stream loop re-derives when the live target moves.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct EncDerive {
-    pub(super) audio_kbps: u32,
-    pub(super) shard_payload: u16,
+    audio_kbps: u32,
+    shard_payload: u16,
     /// The adaptive-FEC target, [`FEC_WHOLE_FRAME`] included.
-    pub(super) fec_target: u8,
+    fec_target: u8,
     /// PyroWave at this refresh rate: parity rides the frame's head, and its tail too under
     /// [`FEC_WHOLE_FRAME`] ([`pyrowave_parity_pct`]). `None`: every block carries the percent.
-    pub(super) pyrowave_hz: Option<u32>,
+    pyrowave_hz: Option<u32>,
     /// This encoder's share of the session's video, per mille: [`SHARE_ALL`] alone, less while
     /// further screens' encoders split the budget with it.
-    pub(super) share_permille: u16,
+    share_permille: u16,
 }
 
 /// [`EncDerive::share_permille`] of a session with one screen.
 pub(super) const SHARE_ALL: u16 = 1000;
 
 impl EncDerive {
+    /// The derivation for `terms`' session at the refresh rate `hz` its encoder runs, the
+    /// adaptive-FEC target `fec_target` and this encoder's `share_permille` of the video. Only a
+    /// PyroWave session keeps `hz`: the codec it was negotiated with, as the Welcome states it.
+    pub(super) fn new(
+        terms: &super::handshake::SessionTerms,
+        hz: u32,
+        fec_target: u8,
+        share_permille: u16,
+    ) -> Self {
+        EncDerive {
+            audio_kbps: terms.audio_kbps,
+            shard_payload: terms.shard_payload as u16,
+            fec_target,
+            pyrowave_hz: (terms.codec == crate::encode::Codec::PyroWave).then_some(hz),
+            share_permille,
+        }
+    }
+
+    pub(super) fn fec_target(&self) -> u8 {
+        self.fec_target
+    }
+
+    pub(super) fn share_permille(&self) -> u16 {
+        self.share_permille
+    }
+
+    #[cfg(test)]
+    pub(super) fn pyrowave_hz(&self) -> Option<u32> {
+        self.pyrowave_hz
+    }
+
     /// The share of the wire parity takes at `budget_kbps`, as the budget prices it.
     fn parity_pct(&self, budget_kbps: u32) -> u8 {
         match self.pyrowave_hz {

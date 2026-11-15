@@ -149,7 +149,7 @@ impl StreamState {
         if why.rereads_enc_src() {
             self.live.enc_src = enc_src_of(&self.live.frame);
         }
-        self.live.applied_share = self.enc_now().share_permille;
+        self.live.applied_share = self.enc_now().share_permille();
         // The new encoder opened on an IDR: the keyframe cooldown counts from it, and a host
         // repair it covers is owed no longer.
         self.clock.last_forced_idr = Some(std::time::Instant::now());
@@ -463,8 +463,6 @@ pub(super) mod tests {
                 conn,
                 negotiated: mode,
                 bitrate_auto: false,
-                audio_reserved_kbps: 0,
-                shard_payload: 1200,
                 pyrowave: false,
                 streamed_wire: false,
                 perf: false,

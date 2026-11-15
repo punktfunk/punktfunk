@@ -103,7 +103,8 @@ pub(super) struct ScreenBase {
     pub(super) params: crate::vdisplay::SessionParams,
     pub(super) plan: crate::session_plan::SessionPlan,
     pub(super) bit_depth: u8,
-    pub(super) enc_of: EncDerive,
+    /// The first screen's refresh rate: a PyroWave frame's head parity is per frame.
+    pub(super) hz: u32,
     pub(super) fec_target: Arc<AtomicU8>,
     /// The session's wire budget, kbps: every screen encodes at its share of it.
     pub(super) live_bitrate: Arc<AtomicU32>,
@@ -720,11 +721,12 @@ fn position_of(display_gen: Option<u64>) -> Option<(i32, i32)> {
 
 /// The rate derivation at this screen's share and the FEC in force.
 fn enc_of(base: &ScreenBase, run: &ScreenRun) -> EncDerive {
-    EncDerive {
-        fec_target: base.fec_target.load(Ordering::Relaxed),
-        share_permille: run.share.load(Ordering::Relaxed),
-        ..base.enc_of
-    }
+    EncDerive::new(
+        &base.terms,
+        base.hz,
+        base.fec_target.load(Ordering::Relaxed),
+        run.share.load(Ordering::Relaxed),
+    )
 }
 
 /// One pipeline's frames, at its own cadence, until stopped or its capture is lost. A screen
@@ -769,9 +771,8 @@ fn stream_screen(
             last_key = std::time::Instant::now();
         }
         let now_rate = (base.live_bitrate.load(Ordering::Relaxed), enc_of(base, run));
-        if (now_rate.0, now_rate.1.share_permille, now_rate.1.fec_target)
-            != (rate.0, rate.1.share_permille, rate.1.fec_target)
-        {
+        let key = |r: &(u32, EncDerive)| (r.0, r.1.share_permille(), r.1.fec_target());
+        if key(&now_rate) != key(&rate) {
             rate = now_rate;
             enc.reconfigure_bitrate(u64::from(rate.1.enc_kbps(rate.0)) * 1000);
         }
@@ -956,11 +957,13 @@ mod tests {
         let (send, frames) = std::sync::mpsc::sync_channel(3);
         let (tell, told) = tokio::sync::mpsc::unbounded_channel();
         let wire = Arc::new(ScreenWire::new());
+        let mut terms = crate::native::handshake::tests::terms_for(
+            crate::native::handshake::tests::hello_at(mode(1920, 1080, 60)),
+            crate::encode::resolve(),
+        );
+        (terms.audio_kbps, terms.shard_payload) = (512, 1408);
         let base = ScreenBase {
-            terms: Arc::new(crate::native::handshake::tests::terms_for(
-                crate::native::handshake::tests::hello_at(mode(1920, 1080, 60)),
-                crate::encode::resolve(),
-            )),
+            terms: Arc::new(terms),
             compositor: crate::vdisplay::Compositor::Kwin,
             params: crate::vdisplay::SessionParams {
                 screen: None,
@@ -996,13 +999,7 @@ mod tests {
                 studio_asked: crate::session_plan::StudioAsk::default(),
             },
             bit_depth: 8,
-            enc_of: EncDerive {
-                audio_kbps: 512,
-                shard_payload: 1408,
-                fec_target: 10,
-                pyrowave_hz: None,
-                share_permille: SHARE_ALL,
-            },
+            hz: 60,
             fec_target: Arc::new(AtomicU8::new(10)),
             live_bitrate: Arc::new(AtomicU32::new(40_000)),
             send: Arc::new(send),

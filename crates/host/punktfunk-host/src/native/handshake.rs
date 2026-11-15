@@ -1174,15 +1174,13 @@ fn prepare_at_welcome(
         client_identity: n.conn.peer_fingerprint(),
         // `bitrate_kbps` is the wire budget; the prep encoder opens at the derived video
         // rate, snapshotted at Welcome's initial FEC percent. The FEC watcher re-derives.
-        enc_of: EncDerive {
-            audio_kbps: audio_reserved_kbps(welcome),
-            shard_payload: welcome.shard_payload,
-            fec_target: welcome.fec.fec_percent,
-            pyrowave_hz: (t.codec == crate::encode::Codec::PyroWave)
-                .then_some(welcome.mode.refresh_hz),
-            // Further screens build after Welcome and take their shares then.
-            share_permille: super::bitrate::SHARE_ALL,
-        },
+        // Further screens build after Welcome and take their shares then.
+        enc_of: EncDerive::new(
+            t,
+            t.hello.mode.refresh_hz,
+            welcome.fec.fec_percent,
+            super::bitrate::SHARE_ALL,
+        ),
     };
     super::stream::spawn_display_prep(
         prep,

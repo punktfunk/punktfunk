@@ -349,17 +349,20 @@ pub(in crate::native) fn video_format(
 impl StreamState {
     /// The encoder-rate derivation for an adaptive-FEC target.
     pub(super) fn enc_derive(&self, fec: u8) -> EncDerive {
-        EncDerive {
-            audio_kbps: self.facts.audio_reserved_kbps,
-            shard_payload: self.facts.shard_payload,
-            fec_target: fec,
-            pyrowave_hz: self.facts.pyrowave.then_some(self.live.cur_mode.refresh_hz),
-            share_permille: self
-                .shared
+        self.enc_derive_at(self.live.cur_mode.refresh_hz, fec)
+    }
+
+    /// [`Self::enc_derive`] for an encoder that runs at `hz`: a build at another mode.
+    fn enc_derive_at(&self, hz: u32, fec: u8) -> EncDerive {
+        EncDerive::new(
+            &self.facts.terms,
+            hz,
+            fec,
+            self.shared
                 .screen_wire
                 .primary_share
                 .load(Ordering::Relaxed),
-        }
+        )
     }
 
     /// Follow the further screens: the client's list, their layout, and the first screen's
@@ -416,10 +419,7 @@ impl StreamState {
             params: self.display.vd_params.clone(),
             plan: self.plan,
             bit_depth: self.bit_depth,
-            enc_of: EncDerive {
-                share_permille: crate::native::bitrate::SHARE_ALL,
-                ..self.enc_now()
-            },
+            hz: self.live.cur_mode.refresh_hz,
             fec_target: self.fec.target.clone(),
             live_bitrate: self.shared.live_bitrate.clone(),
             send,
@@ -440,14 +440,11 @@ impl StreamState {
             self.plan,
             self.bit_depth,
         );
-        let enc_of = EncDerive {
-            share_permille: crate::native::bitrate::SHARE_ALL,
-            ..self.enc_now()
-        };
+        let hz = self.live.cur_mode.refresh_hz;
         if let Some(set) = self.screens.as_mut() {
             set.rebase(|b| {
-                (b.compositor, b.params, b.plan, b.bit_depth, b.enc_of) =
-                    (compositor, params, plan, bit_depth, enc_of);
+                (b.compositor, b.params, b.plan, b.bit_depth, b.hz) =
+                    (compositor, params, plan, bit_depth, hz);
             });
         }
     }
@@ -471,10 +468,7 @@ impl StreamState {
             bitrate_kbps,
             bitrate_auto: self.facts.bitrate_auto,
             bit_depth: self.bit_depth,
-            enc_of: EncDerive {
-                pyrowave_hz: self.facts.pyrowave.then_some(mode.refresh_hz),
-                ..self.enc_now()
-            },
+            enc_of: self.enc_derive_at(mode.refresh_hz, self.fec.target.load(Ordering::Relaxed)),
             plan: self.plan,
             wire_seq_base: self.clock.next_au(),
             screen: 0,
@@ -1041,8 +1035,6 @@ fn session_facts(
         conn: ctx.conn.clone(),
         negotiated: mode,
         bitrate_auto: ctx.terms.bitrate_auto(),
-        audio_reserved_kbps: c.audio_reserved_kbps,
-        shard_payload: c.shard_payload,
         pyrowave: plan.codec == crate::encode::Codec::PyroWave,
         streamed_wire,
         perf: pf_host_config::config().perf,
@@ -1160,13 +1152,12 @@ fn build_first(
         bitrate_kbps,
         bitrate_auto: facts.bitrate_auto,
         bit_depth,
-        enc_of: EncDerive {
-            audio_kbps: facts.audio_reserved_kbps,
-            shard_payload: facts.shard_payload,
-            fec_target: fec.target.load(Ordering::Relaxed),
-            pyrowave_hz: facts.pyrowave.then_some(mode.refresh_hz),
-            share_permille: crate::native::bitrate::SHARE_ALL,
-        },
+        enc_of: EncDerive::new(
+            &facts.terms,
+            mode.refresh_hz,
+            fec.target.load(Ordering::Relaxed),
+            crate::native::bitrate::SHARE_ALL,
+        ),
         plan,
         wire_seq_base: 0,
         screen: 0,
@@ -1691,12 +1682,15 @@ mod tests {
     fn a_rebuild_prices_parity_at_the_mode_it_builds() {
         let mut f = super::super::swap::tests::fake();
         f.st.facts.pyrowave = true;
+        Arc::get_mut(&mut f.st.facts.terms)
+            .expect("the fake holds the only terms")
+            .codec = crate::encode::Codec::PyroWave;
         let to = punktfunk_core::Mode {
             refresh_hz: f.st.live.cur_mode.refresh_hz * 2,
             ..f.st.live.cur_mode
         };
         let req = f.st.build_request(to, f.st.live.bitrate_kbps);
-        assert_eq!(req.enc_of.pyrowave_hz, Some(to.refresh_hz));
+        assert_eq!(req.enc_of.pyrowave_hz(), Some(to.refresh_hz));
     }
 
     /// A swapped-in encoder opened at the first screen's share in force, whatever the swap's
