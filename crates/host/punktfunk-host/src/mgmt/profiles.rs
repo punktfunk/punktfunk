@@ -639,7 +639,7 @@ pub(super) fn refused((status, error): Refusal) -> Response {
 }
 
 /// The status a supervisor refusal reads as, and its sentence for the console.
-fn seat_error(e: SeatError) -> Refusal {
+pub(super) fn seat_error(e: SeatError) -> Refusal {
     let status = match e.code {
         ErrorCode::Capacity => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::Conflict => StatusCode::CONFLICT,
@@ -685,7 +685,11 @@ fn backend_status(message: &str) -> StatusCode {
             | "account_not_ordinary"
             | "account_is_owner"
             | "account_taken"
-            | "unlock_required",
+            | "unlock_required"
+            | "pad_not_present"
+            | "pad_not_a_controller"
+            | "pads_full"
+            | "pads_unsupported",
         ) => StatusCode::CONFLICT,
         _ => StatusCode::SERVICE_UNAVAILABLE,
     }

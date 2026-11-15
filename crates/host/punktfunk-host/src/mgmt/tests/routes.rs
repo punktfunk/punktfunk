@@ -75,6 +75,9 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         // Moving the box's host between the owner's session and a system service is root work
         // the operator starts: neither lane.
         ("PUT", "/api/v1/profiles/door", false, false),
+        // The physical desk is the box's: only the operator gives a controller away.
+        ("GET", "/api/v1/profiles/pads", false, false),
+        ("PUT", "/api/v1/profiles/pads/{key}", false, false),
         ("POST", "/api/v1/profiles", false, false),
         ("PUT", "/api/v1/profiles/default", false, false),
         ("PUT", "/api/v1/profiles/{id}", false, false),
@@ -763,6 +766,8 @@ fn every_route_has_a_side_on_the_door() {
         ("GET", "/api/v1/profiles/doctor", true),
         ("GET", "/api/v1/profiles/windows-accounts", true),
         ("PUT", "/api/v1/profiles/door", true),
+        ("GET", "/api/v1/profiles/pads", true),
+        ("PUT", "/api/v1/profiles/pads/{key}", true),
         ("GET", "/api/v1/profiles/enumerate", true),
         ("GET", "/api/v1/profiles/seating", true),
         ("PUT", "/api/v1/profiles/seating", true),
