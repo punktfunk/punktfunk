@@ -82,6 +82,17 @@ enum TouchTuning {
     static func accel(forSpeed speed: CGFloat) -> CGFloat {
         min(1 + accelGain * max(speed - accelSpeedFloor, 0), accelMax)
     }
+
+    /// The pair's turn from `a` to `b` in degrees, signed: + is clockwise on a y-down screen.
+    static func twistDegrees(from a: CGVector, to b: CGVector) -> CGFloat {
+        atan2(a.dx * b.dy - a.dy * b.dx, a.dx * b.dx + a.dy * b.dy) * 180 / .pi
+    }
+
+    /// An undecided pair that turned `degrees` with its centroid `travel` pt from where it formed
+    /// becomes the twist. The twist's fingers are the client's, never the host touchpad's.
+    static func twistArms(degrees: CGFloat, travel: CGFloat) -> Bool {
+        travel < dialSlop && abs(degrees) >= dialArmDeg
+    }
 }
 
 #if os(iOS) || os(visionOS)
@@ -127,6 +138,10 @@ final class TouchMouse {
 
     /// No gesture in flight (all fingers up) — the view uses this to release its mode latch.
     var isIdle: Bool { !sessionActive && lastPos.isEmpty }
+    /// Every finger down now, by identity, in view points: the view's touchpad contacts.
+    var fingers: [ObjectIdentifier: CGPoint] { lastPos }
+    /// The twist armed, so this gesture's fingers are the client's, not the host touchpad's.
+    var holdsFingers: Bool { dial?.armed == true }
 
     private var trackpad = true
     /// Last known position per active finger (identity key) — kept because moved events only
@@ -236,10 +251,7 @@ final class TouchMouse {
         guard var d = dial, d.armed || !scrollLocked,
               let a = lastPos[d.keys.0], let b = lastPos[d.keys.1]
         else { return false }
-        let v = CGVector(dx: b.x - a.x, dy: b.y - a.y)
-        let cross = d.vec.dx * v.dy - d.vec.dy * v.dx
-        let dot = d.vec.dx * v.dx + d.vec.dy * v.dy
-        let phi = atan2(cross, dot) * 180 / .pi // signed; + = clockwise on a y-down screen
+        let phi = Tuning.twistDegrees(from: d.vec, to: CGVector(dx: b.x - a.x, dy: b.y - a.y))
         let c = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
         if !d.armed {
             let travel = hypot(c.x - d.anchor.x, c.y - d.anchor.y)
@@ -250,7 +262,7 @@ final class TouchMouse {
                 return false
             }
             // Undecided: the scroll goes out now, provisionally.
-            if abs(phi) < Tuning.dialArmDeg { return false }
+            if !Tuning.twistArms(degrees: phi, travel: travel) { return false }
             rollBackProvisional()
             d.armed = true
             moved = true // a twist is never a tap…

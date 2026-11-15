@@ -7,7 +7,8 @@
 // loss, and NEVER engaged by mere app activation (the click that activates the window may
 // be a title-bar drag or a resize — warping the cursor there is exactly the intrusiveness
 // this design removes). While released, nothing is forwarded to the host and the local
-// cursor is free.
+// cursor is free. Captured in the capture model toward a touchpad host, the trackpad's fingers
+// also reach the host's touchpad as contacts (TouchpadContacts.swift).
 //
 // StreamViewIOS.swift is the twin for the touch platforms, a UIViewControllerRepresentable.
 
@@ -229,6 +230,15 @@ public final class StreamLayerView: NSView {
     private var desktopMouse = false
     /// Wire buttons whose press reached the host; only their releases follow. Main-thread only.
     private var pressedButtons = Set<UInt32>()
+    /// The view's touch types before the trackpad's fingers became the host touchpad's contacts
+    /// (captured, capture model, touchpad host); nil while they are not. Main-thread only.
+    private var touchTypesBeforeContacts: NSTouch.TouchTypeMask?
+    /// A wire id per finger down (`NSTouch.identity`), the last id given, the pad in tenths of a
+    /// millimetre, and what the trackpad sends beside its contacts. Main-thread only.
+    private var trackpadIDs: [NSObject: UInt64] = [:]
+    private var lastTrackpadID: UInt64 = 0
+    private var trackpadDmm: (width: UInt16, height: UInt16) = (0, 0)
+    private var trackpadGate = TrackpadContactGate()
     /// Cursor channel (M2): the host forwards shape/state and WE draw the pointer. Active
     /// when the Welcome carried `HOST_CAP_CURSOR` (only sessions that advertised the client
     /// cap get it). Shapes cache by serial; state is latest-wins. Main-thread only.
@@ -466,12 +476,16 @@ public final class StreamLayerView: NSView {
     /// (±1 per notch → ×120, v120); a precise surface reports distance in points — DIP on
     /// the wire — and keeps its own `phase`/`momentumPhase` lifecycle. Signs pass through
     /// as-is, preserving the user's local natural-scrolling preference; the connection's
-    /// outbound seam applies the Punktfunk inversion setting on top.
+    /// outbound seam applies the Punktfunk inversion setting on top. While the trackpad's
+    /// contacts reach the host's touchpad, the host makes their scroll (`TrackpadContactGate`).
     public override func scrollWheel(with event: NSEvent) {
         guard captured, let inputCapture else {
             super.scrollWheel(with: event)
             return
         }
+        if touchTypesBeforeContacts != nil, trackpadGate.dropsScroll(
+            precise: event.hasPreciseScrollingDeltas,
+            phase: event.phase, momentumPhase: event.momentumPhase) { return }
         guard let (source, phase) = Self.scrollWireShape(
             precise: event.hasPreciseScrollingDeltas,
             phase: event.phase, momentumPhase: event.momentumPhase) else { return }
@@ -609,6 +623,7 @@ public final class StreamLayerView: NSView {
         // already armed, so the monitor only ever sees genuine post-engage input.
         installMouseMonitor()
         captured = true
+        setTrackpadContacts(!desktopMouse && connection.hostPresentsTouchpad)
         window?.makeFirstResponder(self)
         window?.invalidateCursorRects(for: self) // desktop model: hide-over-view engages
         notifyCaptureChange(true)
@@ -617,6 +632,7 @@ public final class StreamLayerView: NSView {
 
     private func releaseCapture() {
         guard captured else { return }
+        setTrackpadContacts(false)
         removeMouseMonitor()
         cursorCapture.release()
         inputCapture?.setForwarding(false)
@@ -841,8 +857,8 @@ public final class StreamLayerView: NSView {
     /// no `acceptsMouseMovedEvents`, tracking area or responder chain, and with the cursor
     /// frozen mid-view every such event belongs here. All four motion types are covered, so
     /// motion keeps flowing through a button-held drag. Relative motion is the mouse's own
-    /// counts, see `rawMotion(of:)`. Events are returned: the cursor is frozen, so they are
-    /// inert locally.
+    /// counts, see `rawMotion(of:)`, held back while the trackpad's contacts reach the host's
+    /// touchpad. Events are returned: the cursor is frozen, so they are inert locally.
     ///
     /// Coalescing is off while installed. AppKit otherwise merges the moves that queue behind
     /// a busy main thread, and the host gets fewer, larger steps than the mouse reported.
@@ -872,7 +888,7 @@ public final class StreamLayerView: NSView {
                     if let p = self.hostPoint(from: event) {
                         ic.sendMouseAbs(x: p.x, y: p.y, surfaceWidth: p.w, surfaceHeight: p.h)
                     }
-                } else {
+                } else if !self.trackpadGate.forwarding {
                     let counts = Self.rawMotion(of: event)
                     ic.sendMotion(dx: counts.dx, dy: counts.dy)
                 }
@@ -912,6 +928,67 @@ public final class StreamLayerView: NSView {
             window?.acceptsMouseMovedEvents = saved
             savedAcceptsMouseMoved = nil
         }
+    }
+
+    /// Opts the view into the trackpad's touches (`allowedTouchTypes` gains `.indirect`), or back
+    /// out. Out lifts every finger still on the host's pad. AppKit latches a touch sequence to the
+    /// view under the pointer, which capture parks mid-view.
+    private func setTrackpadContacts(_ on: Bool) {
+        if on, touchTypesBeforeContacts == nil {
+            touchTypesBeforeContacts = allowedTouchTypes
+            allowedTouchTypes.insert(.indirect)
+        } else if !on, let before = touchTypesBeforeContacts {
+            allowedTouchTypes = before
+            touchTypesBeforeContacts = nil
+            if !trackpadIDs.isEmpty { sendTrackpad([], at: ProcessInfo.processInfo.systemUptime) }
+            trackpadIDs.removeAll()
+            trackpadGate = TrackpadContactGate()
+        }
+    }
+
+    public override func touchesBegan(with event: NSEvent) { forwardTrackpad(event) }
+    public override func touchesMoved(with event: NSEvent) { forwardTrackpad(event) }
+    public override func touchesEnded(with event: NSEvent) { forwardTrackpad(event) }
+    public override func touchesCancelled(with event: NSEvent) { forwardTrackpad(event) }
+
+    /// Every finger on a trackpad now → the host touchpad's contacts. A resting thumb is not one,
+    /// nor a touch from a device not shaped like a trackpad; an event with neither, after none,
+    /// sends nothing. Past two fingers core hands the gesture back, and macOS's gestures and the
+    /// motion and scroll paths carry it until every finger lifts. Clicks stay mouse buttons.
+    private func forwardTrackpad(_ event: NSEvent) {
+        guard touchTypesBeforeContacts != nil else { return }
+        let hadFingers = !trackpadIDs.isEmpty
+        var ids: [NSObject: UInt64] = [:]
+        var contacts: [PunktfunkSurfaceTouch] = []
+        for touch in event.touches(matching: .touching, in: self)
+        where TouchpadContacts.isTrackpad(touch.deviceSize) {
+            guard let key = touch.identity as? NSObject else { continue }
+            let id: UInt64
+            if let known = trackpadIDs[key] {
+                id = known
+            } else {
+                lastTrackpadID &+= 1
+                id = lastTrackpadID
+            }
+            ids[key] = id
+            contacts.append(TouchpadContacts.touch(id: id, normalized: touch.normalizedPosition))
+            let ppi = TouchpadContacts.trackpadPointsPerInch
+            trackpadDmm = (
+                TouchpadContacts.dmm(touch.deviceSize.width, pointsPerInch: ppi),
+                TouchpadContacts.dmm(touch.deviceSize.height, pointsPerInch: ppi))
+        }
+        trackpadIDs = ids
+        guard hadFingers || !contacts.isEmpty else { return }
+        sendTrackpad(contacts, at: event.timestamp)
+    }
+
+    /// The Mac clicks on its own taps, so core takes every tap back from the host.
+    private func sendTrackpad(_ contacts: [PunktfunkSurfaceTouch], at time: TimeInterval) {
+        let forwarded = connection?.touchpadSurface(
+            contacts, maxContacts: 2, keep: false, retractTaps: true,
+            widthDmm: trackpadDmm.width, heightDmm: trackpadDmm.height,
+            timeUs: TouchpadContacts.micros(time)) ?? false
+        trackpadGate.noteSurface(forwarded: forwarded, fingers: contacts.count)
     }
 
     /// One host-pixel point on the negotiated output, with the surface dimensions the host
