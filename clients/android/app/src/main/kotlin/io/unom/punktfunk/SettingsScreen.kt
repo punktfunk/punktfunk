@@ -1406,14 +1406,17 @@ private fun AudioSettings(s: Settings, update: (String, Settings) -> Unit, onMic
         ),
         fields = setOf("audio_format", "keep_host_audio", "echo_cancel"),
     ) {
-        // Offered at every channel count: surround negotiates a shorter frame, and only the top of
-        // this list fits nothing. The HUD's `audio lossless …` line reports what a session got.
+        // Offered at every channel count: surround negotiates a shorter frame, or one sent in
+        // parts. 7.1 above 96 kHz fits neither and the host answers Opus, so the caption says so.
+        val hint = stringResource(R.string.player_audio_format_hint)
+        val limit = stringResource(R.string.player_audio_format_surround8_limit_hint)
+        val overLimit = s.audioChannels == 8 && s.audioFormatWire().first > 96_000
         SettingDropdown(
             label = stringResource(R.string.player_audio_format),
             options = AUDIO_FORMAT_OPTIONS.worded(),
             selected = s.audioFormat,
             field = "audio_format",
-            caption = stringResource(R.string.player_audio_format_hint),
+            caption = if (overLimit) "$hint $limit" else hint,
         ) { f -> update("audio_format", s.copy(audioFormat = f)) }
         ToggleRow(
             title = stringResource(R.string.player_keep_host_audio),

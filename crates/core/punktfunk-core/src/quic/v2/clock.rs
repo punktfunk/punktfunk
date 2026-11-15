@@ -7,8 +7,8 @@
 //! Unix-scaled time, the same as before, and the media header's `pts_us` is `elapsed` itself.
 
 use crate::quic::{
-    wall_clock_ns, AUDIO_BITSTREAM_MAGIC, AUDIO_MAGIC, AUDIO_PCM_MAGIC, AUDIO_RED_MAGIC,
-    HOST_TIMING_MAGIC, PAD_AUDIO_MAGIC,
+    wall_clock_ns, AUDIO_BITSTREAM_MAGIC, AUDIO_MAGIC, AUDIO_PCM_MAGIC, AUDIO_PCM_PARTS_MAGIC,
+    AUDIO_RED_MAGIC, HOST_TIMING_MAGIC, PAD_AUDIO_MAGIC,
 };
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -86,9 +86,13 @@ impl SessionClock {
     /// desktop and pad audio, and `HostTiming`, which names its frame by the video pts.
     pub fn retime_datagram(&self, d: &mut [u8]) {
         let (at, video) = match d.first() {
-            Some(&(AUDIO_MAGIC | AUDIO_RED_MAGIC | AUDIO_PCM_MAGIC | AUDIO_BITSTREAM_MAGIC)) => {
-                (5, false)
-            }
+            Some(
+                &(AUDIO_MAGIC
+                | AUDIO_RED_MAGIC
+                | AUDIO_PCM_MAGIC
+                | AUDIO_BITSTREAM_MAGIC
+                | AUDIO_PCM_PARTS_MAGIC),
+            ) => (5, false),
             Some(&PAD_AUDIO_MAGIC) => (7, false),
             Some(&HOST_TIMING_MAGIC) => (1, true),
             _ => return,

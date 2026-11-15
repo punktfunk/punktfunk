@@ -128,7 +128,6 @@
 	"apple_player_mic_channel_n": "Option of Microphone channel. n is the interface's channel number.",
 	"apple_player_audio_format_opus_hint": "Caption while Audio quality is Standard.",
 	"apple_player_audio_format_lossless_hint": "Caption while Audio quality is a lossless rate. rate is the stereo cost in Mbit/s, a number formatted for the reader's language (2.3, 4.6).",
-	"apple_player_audio_format_surround_limit_hint": "Follows the lossless caption under 5.1 or 7.1 above 48 kHz.",
 	"apple_player_audio_format_surround6_hint": "Follows the lossless caption under 5.1.",
 	"apple_player_audio_format_surround8_hint": "Follows the lossless caption under 7.1.",
 	"apple_player_echo_cancel_mac_hint": "Mac, second line of the Echo cancellation explainer.",

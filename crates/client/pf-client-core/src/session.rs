@@ -516,9 +516,9 @@ pub use crate::audio_format::{
 /// `None` for Opus. The environment wins: `PUNKTFUNK_AUDIO_HIRES` overrides `setting`.
 ///
 /// Grammar: `1`/`true`/`on`/`yes` → 96 kHz/24-bit; `96000` → that rate at 24-bit;
-/// `<48000|96000>/<16|24>` → an explicit pair (`48000/16` is the cheapest lossless
-/// rung — see [`AUDIO_FORMAT_UNSPECIFIED`]). `0`/`off`/`false`/`no` force Opus even
-/// when the setting asks for lossless.
+/// `<rate>/<16|24>` → an explicit pair at any rate the plane carries (`48000/16` is the
+/// cheapest lossless rung — see [`AUDIO_FORMAT_UNSPECIFIED`]). `0`/`off`/`false`/`no`
+/// force Opus even when the setting asks for lossless.
 ///
 /// Unset vs unparseable are not "off". Unset: the setting decides. A typo is warned
 /// and ignored, so the setting still decides — treating garbage as off would silently
@@ -546,7 +546,7 @@ fn resolve_audio_format(env: Option<&str>, setting: &str) -> Option<(u32, u8)> {
                 value = %raw,
                 setting,
                 "PUNKTFUNK_AUDIO_HIRES is not a format this client can ask for — use 1, \
-                 96000, 0, or <48000|96000>/<16|24>; ignoring it and using the audio-format \
+                 96000, 0, or <rate>/<16|24>; ignoring it and using the audio-format \
                  setting instead"
             );
             audio_format_wire(setting)
@@ -572,7 +572,7 @@ enum AudioRequest {
 /// Parse half of [`requested_audio_format`], testable without touching the process
 /// environment.
 fn parse_audio_format(raw: &str) -> AudioRequest {
-    use punktfunk_core::audio::pcm::{BITS_16, BITS_24};
+    use punktfunk_core::audio::pcm::{self, BITS_24};
     let v = raw.trim().to_ascii_lowercase();
     match v.as_str() {
         "" | "0" | "off" | "false" | "no" => return AudioRequest::Legacy,
@@ -581,17 +581,16 @@ fn parse_audio_format(raw: &str) -> AudioRequest {
         "1" | "on" | "true" | "yes" => return AudioRequest::Hires(96_000, BITS_24),
         _ => {}
     }
-    // Both halves are checked against the plane. 44.1 kHz and its multiples are
-    // absent on purpose: they truncate `JitterPolicy`'s integer samples-per-ms.
-    // 48 000/16 is accepted — cheapest lossless rung — which is why the caller
-    // sends unspecified `0`/`0` when nobody asked, not an explicit 48 000/16.
+    // Both halves are checked against the plane's own tables. 48 000/16 is accepted —
+    // cheapest lossless rung — which is why the caller sends unspecified `0`/`0` when
+    // nobody asked, not an explicit 48 000/16.
     let (rate_s, bits_s) = v.split_once('/').unwrap_or((v.as_str(), "24"));
     match rate_s
         .trim()
         .parse::<u32>()
         .ok()
         .zip(bits_s.trim().parse::<u8>().ok())
-        .filter(|&(r, b)| matches!(r, 48_000 | 96_000) && matches!(b, BITS_16 | BITS_24))
+        .filter(|&(r, b)| pcm::rate_is_supported(r) && pcm::depth_is_supported(b))
     {
         Some((r, b)) => AudioRequest::Hires(r, b),
         None => AudioRequest::Unsupported,
@@ -687,25 +686,12 @@ fn dial(
     plan: &ConnectPlan,
     ev_tx: &async_channel::Sender<SessionEvent>,
 ) -> Result<Arc<NativeClient>, SessionEvent> {
-    // Lossless opt-in, filtered by what this box can play. `CLIENT_CAP_AUDIO_HIRES`
-    // means capable *and* the user turned it on — advertising without being able to
-    // render spends 1.5–4.6 Mbps ABR cannot reclaim. `Some` past this block is
-    // "ask", and asking is what sets the bit (`AUDIO_FORMAT_UNSPECIFIED`).
-    let hires = requested_audio_format(&params.audio_format).filter(|&(rate, _)| {
-        if params.audio_channels != 2 {
-            // A hi-res surround frame does not fit one datagram at the default MTU
-            // and this plane is never fragmented. The two settings are independent
-            // overlay keys, and the env override answers to no UI, so this is the
-            // one place both are known.
-            tracing::warn!(
-                channels = params.audio_channels,
-                "lossless audio is stereo-only — a surround frame does not fit one QUIC \
-                 datagram; asking for the default Opus plane instead"
-            );
-            return false;
-        }
-        audio::can_render_at(rate)
-    });
+    // Lossless opt-in, filtered by what this box can play: PCM it can't render spends
+    // megabits ABR can't reclaim. `Some` past here is "ask", which sets the capability
+    // bit (`AUDIO_FORMAT_UNSPECIFIED`). Asked at every channel count: the host picks the
+    // frame that fits its datagram, or answers Opus.
+    let hires = requested_audio_format(&params.audio_format)
+        .filter(|&(rate, _)| audio::can_render_at(rate));
     if let Some((rate, bits)) = hires {
         tracing::info!(rate, bits, "asking the host for the lossless audio plane");
     }
@@ -2327,19 +2313,25 @@ mod tests {
             AudioRequest::Hires(48_000, BITS_16)
         );
         assert_ne!(parse_audio_format("48000/16"), AudioRequest::Legacy);
+        // The 44.1 kHz family is on the plane too.
+        assert_eq!(
+            parse_audio_format("44100"),
+            AudioRequest::Hires(44_100, BITS_24)
+        );
+        assert_eq!(
+            parse_audio_format("176400/16"),
+            AudioRequest::Hires(176_400, BITS_16)
+        );
         // "Not asking" must never reach the wire as a format, or every ordinary
         // session would advertise hi-res.
         assert_eq!(AUDIO_FORMAT_UNSPECIFIED, (0, 0));
     }
 
     /// Refuse rungs the plane cannot carry here, where the user can be told.
-    /// 44.1 kHz looks reasonable; it truncates `JitterPolicy`'s integer samples-per-ms.
     #[test]
     fn the_hires_opt_in_refuses_what_the_plane_cannot_carry() {
         for bad in [
-            "44100",
-            "44100/24",
-            "88200/24",
+            "22050",
             "192000/24",
             "48000/32",
             "96000/8",
@@ -2363,29 +2355,30 @@ mod tests {
     #[test]
     fn the_audio_format_setting_speaks_the_cross_client_spellings() {
         use punktfunk_core::audio::pcm::BITS_24;
-        assert_eq!(AUDIO_FORMAT_OPUS, "opus");
-        assert_eq!(AUDIO_FORMAT_LOSSLESS_48, "lossless48");
-        assert_eq!(AUDIO_FORMAT_LOSSLESS_96, "lossless96");
         assert_eq!(
             AUDIO_FORMATS.iter().map(|(v, _)| *v).collect::<Vec<_>>(),
             [
-                AUDIO_FORMAT_OPUS,
-                AUDIO_FORMAT_LOSSLESS_48,
-                AUDIO_FORMAT_LOSSLESS_96
+                "opus",
+                "lossless441",
+                "lossless48",
+                "lossless882",
+                "lossless96",
+                "lossless1764"
             ]
         );
 
         assert_eq!(audio_format_wire(AUDIO_FORMAT_OPUS), None);
-        // Both lossless rows are 24-bit: 16-bit PCM would spend 1.5 Mbps to sound
+        // Every lossless row is 24-bit: 16-bit PCM would spend 1.5 Mbps to sound
         // like the 256 kbps Opus it replaces, which is why no row offers it.
-        assert_eq!(
-            audio_format_wire(AUDIO_FORMAT_LOSSLESS_48),
-            Some((48_000, BITS_24))
-        );
-        assert_eq!(
-            audio_format_wire(AUDIO_FORMAT_LOSSLESS_96),
-            Some((96_000, BITS_24))
-        );
+        for (setting, rate_hz) in [
+            ("lossless441", 44_100),
+            ("lossless48", 48_000),
+            ("lossless882", 88_200),
+            ("lossless96", 96_000),
+            ("lossless1764", 176_400),
+        ] {
+            assert_eq!(audio_format_wire(setting), Some((rate_hz, BITS_24)));
+        }
         // A newer client's row, and a corrupted store: Opus, never a refused connect.
         assert_eq!(audio_format_wire("lossless192"), None);
         assert_eq!(audio_format_wire(""), None);
@@ -2426,7 +2419,10 @@ mod tests {
             resolve_audio_format(Some("96 kHz"), AUDIO_FORMAT_LOSSLESS_48),
             Some((48_000, BITS_24))
         );
-        assert_eq!(resolve_audio_format(Some("44100"), AUDIO_FORMAT_OPUS), None);
+        assert_eq!(
+            resolve_audio_format(Some("192000"), AUDIO_FORMAT_OPUS),
+            None
+        );
     }
 
     #[test]

@@ -267,6 +267,10 @@ pub const FEATURE_PROFILE_UNLOCK: u32 = 42;
 /// Client, on one dial: a `ProfileUnlock` follows this `ClientHello` on the control stream
 /// ([`super::hello::ClientHello::unlock_follows`]). A host never sets it.
 pub const FEATURE_UNLOCK_FOLLOWS: u32 = 43;
+/// Both ends: a lossless PCM frame too big for one datagram travels as `0xD5` parts
+/// ([`AUDIO_PCM_PARTS_MAGIC`](crate::quic::AUDIO_PCM_PARTS_MAGIC)), which the client joins
+/// before its decoder. A host sends parts only to a client that sets it.
+pub const FEATURE_PCM_PARTS: u32 = 44;
 
 #[cfg(test)]
 mod tests {
@@ -310,6 +314,7 @@ mod tests {
         ("FEATURE_STUDIO_RANGE_HDR", FEATURE_STUDIO_RANGE_HDR),
         ("FEATURE_PROFILE_UNLOCK", FEATURE_PROFILE_UNLOCK),
         ("FEATURE_UNLOCK_FOLLOWS", FEATURE_UNLOCK_FOLLOWS),
+        ("FEATURE_PCM_PARTS", FEATURE_PCM_PARTS),
     ];
 
     /// Every close and stop code either wire uses: v1's live on, and v2 adds its own.

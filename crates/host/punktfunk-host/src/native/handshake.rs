@@ -243,9 +243,11 @@ pub(super) fn resolve_bitstream_plane(
 /// choice this pass does not make.
 ///
 /// Capture is asked whether it can actually deliver the rate: both backends accept a rate they
-/// resample without error. Channel count is decided only by [`pcm::frame_us_for`] — there is
-/// no stereo-only rule. `max_datagram` is `None` when the peer has no datagrams, in which case
-/// there is no audio plane.
+/// resample without error. Channel count is decided only by the frame ladder: a frame that
+/// fits one datagram ([`pcm::frame_us_for`]), else, for a client that joins parts
+/// (`client_parts`), one that fits the send buffer in parts ([`pcm::parted_frame_us_for`]).
+/// `max_datagram` is `None` when the peer has no datagrams, in which case there is no audio
+/// plane.
 ///
 /// Pure: operator policy and the capture probe are arguments, not process state.
 #[allow(clippy::too_many_arguments)] // one parameter per gate; a struct would only rename them
@@ -258,6 +260,7 @@ pub(super) fn resolve_audio_plane(
     capture_rate: crate::audio::CaptureRate,
     video_kbps: u32,
     max_datagram: Option<usize>,
+    client_parts: bool,
 ) -> AudioPlane {
     use punktfunk_core::audio::pcm;
     // Not logged: every ordinary client skips this feature; the line would be noise.
@@ -323,21 +326,23 @@ pub(super) fn resolve_audio_plane(
         );
         return AudioPlane::opus();
     };
-    // Channel count is only a multiplier for `frame_us_for`; `None` is the decline.
-    // 44.1 kHz fits the same rung or a longer one than 48 kHz (fewer samples per ms).
-    // Packet rate is not policed here — the affordability gate above is in bits.
-    let Some(frame_us) =
-        pcm::frame_us_for(requested_rate_hz, requested_bits, channels, max_datagram)
-    else {
+    // Channel count is only a multiplier for the ladder; `None` is the decline. One datagram
+    // first: a part lost costs its whole frame. Packet rate is not policed here — the
+    // affordability gate above is in bits.
+    let (rate, bits) = (requested_rate_hz, requested_bits);
+    let single = pcm::frame_us_for(rate, bits, channels, max_datagram);
+    let parted = || pcm::parted_frame_us_for(rate, bits, channels, max_datagram);
+    let Some(frame_us) = single.or_else(|| parted().filter(|_| client_parts)) else {
         tracing::info!(
             requested_rate_hz,
             requested_bits,
             channels,
             max_datagram,
-            "no hi-res frame duration fits this connection's datagram size — the session uses \
-             Opus 48 kHz. This plane is never fragmented, so a frame that would not fit one \
-             datagram is not sent at all; surround and the rates above 96 kHz are what reach \
-             this, and a jumbo path (PUNKTFUNK_WIRE_MTU) is what would carry them"
+            client_parts,
+            "no hi-res frame fits this connection — the session uses Opus 48 kHz. One datagram \
+             cannot hold the shortest frame of this format, and either the client does not join \
+             parts (an older one) or the parts together exceed the datagram send buffer \
+             (176.4 kHz 7.1)"
         );
         return AudioPlane::opus();
     };
@@ -345,12 +350,18 @@ pub(super) fn resolve_audio_plane(
         rate_hz = requested_rate_hz,
         bits = requested_bits,
         frame_us,
+        // 1 is the `0xD3` datagram; more is a frame sent as `0xD5` parts.
+        parts = match single {
+            Some(_) => 1,
+            None => pcm::frame_parts(rate, bits, channels, frame_us, max_datagram)
+                .map_or(0, |(parts, _)| parts),
+        },
         cost_kbps,
         video_kbps,
         max_datagram,
         // `Declared` vs `Engine(96000)` are different grounds for the same yes.
         ?capture_rate,
-        "hi-res audio resolved — the session runs the lossless 0xD3 PCM plane"
+        "hi-res audio resolved — the session runs the lossless PCM plane"
     );
     AudioPlane {
         codec: punktfunk_core::quic::AUDIO_CODEC_PCM,
@@ -1092,6 +1103,10 @@ fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello
         && !t.mirrored
     {
         offered = offered.with(punktfunk_core::quic::v2::registry::FEATURE_SCREENS);
+    }
+    // The bit the audio plane resolved on ([`pcm_parts`]): the sender reads it back.
+    if !n.conn.is_web() {
+        offered = offered.with(punktfunk_core::quic::v2::registry::FEATURE_PCM_PARTS);
     }
     // The picture the Welcome's rate was priced at.
     let picture = crate::session_plan::picture(t.hello.mode, t.view.or(joined_view(&t.joined)));
@@ -1954,20 +1969,63 @@ fn audio_format_asked(rate_hz: u32, bits: u8) -> bool {
     (rate_hz != 0 && rate_hz != SAMPLE_RATE_HZ) || (bits != 0 && bits != pcm::BITS_16)
 }
 
+/// Cap on waiting for MTU discovery to reach the datagram a PCM frame needs. A connection
+/// starts at 1 200 bytes and climbs one acked probe per round trip.
+const PCM_MTU_WAIT: std::time::Duration = std::time::Duration::from_millis(300);
+const PCM_MTU_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// True when a PCM frame fits no rung in `now` bytes but one after the datagram has grown
+/// by `headroom`.
+fn pcm_awaits_mtu(rate_hz: u32, bits: u8, channels: u8, now: usize, headroom: usize) -> bool {
+    use punktfunk_core::audio::pcm;
+    pcm::frame_us_for(rate_hz, bits, channels, now).is_none()
+        && pcm::frame_us_for(rate_hz, bits, channels, now + headroom).is_some()
+}
+
+/// The datagram size the PCM frame is sized from. The frame length is a Welcome promise, so
+/// a format whose shortest frame fits only a climbed MTU waits for the climb, at most
+/// [`PCM_MTU_WAIT`]: 48 kHz/24-bit 7.1 needs 1 165 bytes and a new connection carries 1 161.
+/// A format that fits now, or never will, does not wait. quinn raises the MTU only on an
+/// acked probe, so the size returned is one the path carried.
+async fn pcm_datagram(
+    conn: &super::link::SessionLink,
+    rate_hz: u32,
+    bits: u8,
+    channels: u8,
+) -> Option<usize> {
+    use punktfunk_core::audio::pcm;
+    let mut now = conn.max_datagram_size()?;
+    // The datagram grows byte for byte with the MTU, up to the discovery ceiling.
+    let headroom = punktfunk_core::config::video_datagram_udp_ceiling()
+        .saturating_sub(usize::from(conn.current_mtu()));
+    if !pcm_awaits_mtu(rate_hz, bits, channels, now, headroom) {
+        return Some(now);
+    }
+    let t0 = std::time::Instant::now();
+    while t0.elapsed() < PCM_MTU_WAIT && pcm::frame_us_for(rate_hz, bits, channels, now).is_none() {
+        tokio::time::sleep(PCM_MTU_POLL).await;
+        now = conn.max_datagram_size()?;
+    }
+    tracing::debug!(
+        waited_ms = t0.elapsed().as_millis() as u64,
+        max_datagram = now,
+        "audio: waited for MTU discovery to carry the lossless frame"
+    );
+    Some(now)
+}
+
 /// Audio plane for Welcome and the channel count it codes: AC-3 / E-AC-3 passthrough when the
 /// client's sink asked and [`resolve_bitstream_plane`] holds; else Opus, or lossless PCM when
 /// client, operator, and the capture-rate probe all allow it. Each in the coupling the client
-/// asked for when this host knows it. Async for that blocking probe.
+/// asked for when this host knows it. Async for that blocking probe and [`pcm_datagram`].
 async fn negotiate_audio_plane(
     n: &Negotiation<'_>,
     hello: &Hello,
     audio_channels: u8,
     bitrate_kbps: u32,
 ) -> Result<(AudioPlane, u8)> {
-    // `conn.max_datagram_size()` is quinn's current value; MTU discovery has not settled at
-    // Welcome. Frame duration is a Welcome promise with no mid-session restatement, so the
-    // conservative initial MTU is the safe direction: a frame that fits now keeps fitting as
-    // MTU grows; a frame sized for a discovered MTU that then fails would not be sent.
+    // quinn's current value: MTU discovery has not settled at Welcome. Passthrough only needs
+    // datagrams to exist; the PCM plane sizes its frame from [`pcm_datagram`] below.
     let max_datagram = n.conn.max_datagram_size();
     let hires_asked = hello.client_caps & punktfunk_core::quic::CLIENT_CAP_AUDIO_HIRES != 0;
     // A format without `CLIENT_CAP_AUDIO_HIRES` is contradictory (toggle vs resolved rate).
@@ -2016,6 +2074,17 @@ async fn negotiate_audio_plane(
     } else {
         crate::audio::CaptureRate::Unknown
     };
+    let max_datagram = if hires_asked && hires_allowed {
+        pcm_datagram(
+            n.conn,
+            hello.audio_rate_hz,
+            hello.audio_bits,
+            audio_channels,
+        )
+        .await
+    } else {
+        max_datagram
+    };
     let plane = resolve_audio_plane(
         hires_asked,
         hires_allowed,
@@ -2025,8 +2094,18 @@ async fn negotiate_audio_plane(
         capture_rate,
         bitrate_kbps,
         max_datagram,
+        pcm_parts(n),
     );
     Ok((AudioPlane { layout, ..plane }, audio_channels))
+}
+
+/// Whether this session may send a PCM frame as `0xD5` parts: the client joins them, and
+/// the carrier reports its datagram buffer space, which the browser plane does not.
+fn pcm_parts(n: &Negotiation<'_>) -> bool {
+    !n.conn.is_web()
+        && n.first
+            .features
+            .has(punktfunk_core::quic::v2::registry::FEATURE_PCM_PARTS)
 }
 
 #[cfg(test)]
@@ -2431,6 +2510,7 @@ mod tests {
                 HONEST_CAPTURE,
                 FAT_LINK_KBPS,
                 Some(DGRAM),
+                false,
             );
             assert!(p.is_pcm(), "{rate}/{bits} should have resolved to PCM");
             assert_eq!(p.rate_hz, rate);
@@ -2457,6 +2537,7 @@ mod tests {
             HONEST_CAPTURE,
             FAT_LINK_KBPS,
             Some(DGRAM),
+            false,
         );
         assert_eq!(p, AudioPlane::opus());
     }
@@ -2473,6 +2554,7 @@ mod tests {
             HONEST_CAPTURE,
             FAT_LINK_KBPS,
             Some(DGRAM),
+            false,
         );
         assert_eq!(p, AudioPlane::opus());
     }
@@ -2523,6 +2605,7 @@ mod tests {
                 HONEST_CAPTURE,
                 HUGE_LINK_KBPS,
                 Some(DGRAM),
+                false,
             );
             match want_us {
                 Some(us) => {
@@ -2549,6 +2632,121 @@ mod tests {
         }
     }
 
+    /// A client that joins parts gets the 24-bit surround one datagram cannot hold. One that
+    /// does not keeps Opus, and a format that fits one datagram keeps its one-datagram rung.
+    #[test]
+    fn a_client_that_joins_parts_gets_surround_above_48_khz() {
+        let resolve = |rate, ch, parts| {
+            resolve_audio_plane(
+                true,
+                true,
+                rate,
+                pcm::BITS_24,
+                ch,
+                HONEST_CAPTURE,
+                HUGE_LINK_KBPS,
+                Some(DGRAM),
+                parts,
+            )
+        };
+        for (rate, ch, want_us) in [
+            (88_200, 6, Some(2000)),
+            (88_200, 8, Some(1500)),
+            (96_000, 6, Some(2000)),
+            (96_000, 8, Some(1500)),
+            (176_400, 6, Some(1000)),
+            // Over the datagram send buffer at the shortest rung.
+            (176_400, 8, None),
+        ] {
+            assert_eq!(
+                resolve(rate, ch, false),
+                AudioPlane::opus(),
+                "{rate} {ch}ch"
+            );
+            let p = resolve(rate, ch, true);
+            match want_us {
+                Some(us) => {
+                    assert_eq!((p.is_pcm(), p.rate_hz, p.frame_us), (true, rate, us));
+                    assert!(
+                        pcm::frame_payload_bytes(rate, pcm::BITS_24, ch, us as u32) > DGRAM,
+                        "{rate} {ch}ch is a frame in parts"
+                    );
+                }
+                None => assert_eq!(p, AudioPlane::opus(), "{rate} {ch}ch"),
+            }
+        }
+        // One datagram first: 48 kHz 7.1 and 96 kHz stereo are the same plane either way.
+        for (rate, ch) in [(48_000, 8), (96_000, 2), (48_000, 6)] {
+            assert_eq!(resolve(rate, ch, true), resolve(rate, ch, false));
+            assert!(resolve(rate, ch, true).is_pcm());
+        }
+    }
+
+    /// Only a format in the gap between a new connection's datagram and the discovered one
+    /// waits. 1 161 bytes at connect, 272 more by the 1 472-byte ceiling.
+    #[test]
+    fn only_a_frame_mtu_discovery_can_reach_waits_for_it() {
+        const NEW: usize = 1161;
+        const CLIMB: usize = 272;
+        assert!(pcm_awaits_mtu(48_000, pcm::BITS_24, 8, NEW, CLIMB));
+        // Fits now: 5.1 takes the 1 ms rung, stereo a longer one.
+        assert!(!pcm_awaits_mtu(48_000, pcm::BITS_24, 6, NEW, CLIMB));
+        assert!(!pcm_awaits_mtu(96_000, pcm::BITS_24, 2, NEW, CLIMB));
+        // Never fits: nothing to wait for.
+        assert!(!pcm_awaits_mtu(96_000, pcm::BITS_24, 6, NEW, CLIMB));
+        // Already climbed.
+        assert!(!pcm_awaits_mtu(48_000, pcm::BITS_24, 8, NEW + CLIMB, 0));
+        // The climbed size resolves the plane the wait was for.
+        let plane = resolve_audio_plane(
+            true,
+            true,
+            48_000,
+            pcm::BITS_24,
+            8,
+            HONEST_CAPTURE,
+            HUGE_LINK_KBPS,
+            Some(NEW + CLIMB),
+            false,
+        );
+        assert_eq!((plane.is_pcm(), plane.frame_us), (true, 1000));
+        let declined = resolve_audio_plane(
+            true,
+            true,
+            48_000,
+            pcm::BITS_24,
+            8,
+            HONEST_CAPTURE,
+            HUGE_LINK_KBPS,
+            Some(NEW),
+            false,
+        );
+        assert_eq!(declined, AudioPlane::opus());
+    }
+
+    /// A connection asked the moment it opens, 4 bytes short of 48 kHz/24-bit 7.1, waits into
+    /// a datagram that carries it. Discovery needs no traffic of ours.
+    #[tokio::test]
+    async fn a_connection_waits_into_the_frame_it_needs() {
+        use punktfunk_core::quic::endpoint;
+        let server = endpoint::server("127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = server.local_addr().unwrap();
+        let accept = tokio::spawn(async move {
+            let conn = server.accept().await.unwrap().await.unwrap();
+            (server, conn)
+        });
+        let client = endpoint::client_insecure().unwrap();
+        let _client_conn = client.connect(addr, "punktfunk").unwrap().await.unwrap();
+        let (_server, conn) = accept.await.unwrap();
+        let socket = Arc::new(std::net::UdpSocket::bind("127.0.0.1:0").unwrap());
+        let link = super::super::link::SessionLink::QuicV2(
+            conn.clone(),
+            Arc::new(super::super::link::V2Link::new(conn, socket)),
+        );
+        let got = pcm_datagram(&link, 48_000, pcm::BITS_24, 8).await;
+        let fits = got.and_then(|d| pcm::frame_us_for(48_000, pcm::BITS_24, 8, d));
+        assert_eq!(fits, Some(1000), "datagram {got:?}");
+    }
+
     /// On an ordinary link surround declines on bandwidth before the ladder. 48/24 5.1 is
     /// 6 912 kbps and wants ≥ 27.6 Mbps of video.
     #[test]
@@ -2562,7 +2760,8 @@ mod tests {
                 6,
                 HONEST_CAPTURE,
                 20_000,
-                Some(DGRAM)
+                Some(DGRAM),
+                false
             ),
             AudioPlane::opus(),
             "5.1 at 48/24 costs 6 912 kbps — more than a 20 Mbps session's 25 % allowance"
@@ -2575,7 +2774,8 @@ mod tests {
             6,
             HONEST_CAPTURE,
             28_000,
-            Some(DGRAM)
+            Some(DGRAM),
+            false
         )
         .is_pcm());
     }
@@ -2600,6 +2800,7 @@ mod tests {
                 HONEST_CAPTURE,
                 FAT_LINK_KBPS,
                 Some(DGRAM),
+                false,
             );
             assert!(p.is_pcm(), "{rate}/{bits} should have resolved to PCM");
             assert_eq!(p.rate_hz, rate, "the Welcome must state what was ASKED for");
@@ -2622,6 +2823,7 @@ mod tests {
             HONEST_CAPTURE,
             FAT_LINK_KBPS,
             Some(DGRAM),
+            false,
         );
         assert_eq!(p.rate_hz, 44_100);
     }
@@ -2639,6 +2841,7 @@ mod tests {
                 HONEST_CAPTURE,
                 FAT_LINK_KBPS,
                 Some(DGRAM),
+                false,
             );
             assert_eq!(p, AudioPlane::opus(), "{rate} Hz");
         }
@@ -2659,6 +2862,7 @@ mod tests {
                 HONEST_CAPTURE,
                 FAT_LINK_KBPS,
                 Some(DGRAM),
+                false,
             );
             assert_eq!(p, AudioPlane::opus(), "{bits}-bit");
         }
@@ -2680,7 +2884,8 @@ mod tests {
                 2,
                 engine_48,
                 FAT_LINK_KBPS,
-                Some(DGRAM)
+                Some(DGRAM),
+                false
             ),
             AudioPlane::opus(),
             "96 kHz on a 48 kHz engine must decline rather than pad"
@@ -2694,7 +2899,8 @@ mod tests {
                 2,
                 engine_48,
                 FAT_LINK_KBPS,
-                Some(DGRAM)
+                Some(DGRAM),
+                false
             )
             .is_pcm(),
             "48 kHz on a 48 kHz engine is bit-exact and must be honoured"
@@ -2708,7 +2914,8 @@ mod tests {
             2,
             CaptureRate::Engine(96_000),
             FAT_LINK_KBPS,
-            Some(DGRAM)
+            Some(DGRAM),
+            false
         )
         .is_pcm());
         // Narrow endpoint cannot even do the base rate.
@@ -2721,7 +2928,8 @@ mod tests {
                 2,
                 CaptureRate::Engine(24_000),
                 FAT_LINK_KBPS,
-                Some(DGRAM)
+                Some(DGRAM),
+                false
             ),
             AudioPlane::opus()
         );
@@ -2741,7 +2949,8 @@ mod tests {
                     2,
                     CaptureRate::Unknown,
                     FAT_LINK_KBPS,
-                    Some(DGRAM)
+                    Some(DGRAM),
+                    false
                 ),
                 AudioPlane::opus(),
                 "{rate}/{bits} with an unknowable capture rate"
@@ -2785,6 +2994,7 @@ mod tests {
                 HONEST_CAPTURE,
                 5_000,
                 Some(DGRAM),
+                false,
             );
             assert_eq!(p, AudioPlane::opus(), "{rate}/{bits} on a 5 Mbps session");
         }
@@ -2797,7 +3007,8 @@ mod tests {
             2,
             HONEST_CAPTURE,
             10_000,
-            Some(DGRAM)
+            Some(DGRAM),
+            false
         )
         .is_pcm());
         assert_eq!(
@@ -2809,7 +3020,8 @@ mod tests {
                 2,
                 HONEST_CAPTURE,
                 10_000,
-                Some(DGRAM)
+                Some(DGRAM),
+                false
             ),
             AudioPlane::opus()
         );
@@ -2823,7 +3035,8 @@ mod tests {
                 2,
                 HONEST_CAPTURE,
                 0,
-                Some(DGRAM)
+                Some(DGRAM),
+                false
             ),
             AudioPlane::opus()
         );
@@ -2842,7 +3055,8 @@ mod tests {
                 2,
                 HONEST_CAPTURE,
                 FAT_LINK_KBPS,
-                None
+                None,
+                false
             ),
             AudioPlane::opus()
         );
@@ -2856,7 +3070,8 @@ mod tests {
                 2,
                 HONEST_CAPTURE,
                 FAT_LINK_KBPS,
-                Some(200)
+                Some(200),
+                false
             ),
             AudioPlane::opus()
         );

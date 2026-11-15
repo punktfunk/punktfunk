@@ -3,7 +3,7 @@
 //! Video rides UDP. Everything else here is a QUIC datagram: 0xC9 audio, 0xCA rumble,
 //! 0xCB mic, 0xCC rich input, 0xCD HID output, 0xCE HDR metadata, 0xCF host timing,
 //! 0xD0 cursor, 0xD1 pad audio, 0xD2 redundant audio, 0xD3 PCM, 0xD4 AC-3 / E-AC-3
-//! passthrough. Input 0xC8 lives in [`crate::input`].
+//! passthrough, 0xD5 PCM in parts. Input 0xC8 lives in [`crate::input`].
 //!
 //! Unknown tags and short buffers decode to `None`. Length-tolerant tails (rumble,
 //! host timing, cursor) take the prefix the peer knows. Evidence:
@@ -134,17 +134,10 @@ pub const AUDIO_BITSTREAM_MAGIC: u8 = 0xD4;
 /// The [`AUDIO_MAGIC`] header plus the part byte.
 pub const AUDIO_BITSTREAM_HEADER: usize = 1 + 4 + 8 + 1;
 
-/// Part `index` of `count` of the access unit at `seq`; every part carries the unit's `seq`
-/// and `pts_ns`.
-pub fn encode_audio_bitstream_datagram(
-    seq: u32,
-    pts_ns: u64,
-    index: u8,
-    count: u8,
-    bytes: &[u8],
-) -> Vec<u8> {
+/// `[tag][u32 seq LE][u64 pts_ns LE][u8 part][bytes]`: one part of a unit on a parted plane.
+fn encode_part(tag: u8, seq: u32, pts_ns: u64, index: u8, count: u8, bytes: &[u8]) -> Vec<u8> {
     debug_assert!(index < count && count <= 15, "part {index} of {count}");
-    Wr::tag(AUDIO_BITSTREAM_MAGIC, AUDIO_BITSTREAM_HEADER + bytes.len())
+    Wr::tag(tag, AUDIO_BITSTREAM_HEADER + bytes.len())
         .u32(seq)
         .u64(pts_ns)
         .bytes(&[(index << 4) | (count & 0x0F)])
@@ -154,11 +147,53 @@ pub fn encode_audio_bitstream_datagram(
 
 /// `(seq, pts_ns, index, count, bytes)`. `None` for a short datagram, `count == 0` or
 /// `index >= count`.
-pub fn decode_audio_bitstream_datagram(b: &[u8]) -> Option<(u32, u64, u8, u8, &[u8])> {
-    let (seq, pts_ns, rest) = decode_seq_pts(b, AUDIO_BITSTREAM_MAGIC)?;
+fn decode_part(b: &[u8], tag: u8) -> Option<(u32, u64, u8, u8, &[u8])> {
+    let (seq, pts_ns, rest) = decode_seq_pts(b, tag)?;
     let (&part, bytes) = rest.split_first()?;
     let (index, count) = (part >> 4, part & 0x0F);
     (index < count).then_some((seq, pts_ns, index, count, bytes))
+}
+
+/// Part `index` of `count` of the access unit at `seq`; every part carries the unit's `seq`
+/// and `pts_ns`.
+pub fn encode_audio_bitstream_datagram(
+    seq: u32,
+    pts_ns: u64,
+    index: u8,
+    count: u8,
+    bytes: &[u8],
+) -> Vec<u8> {
+    encode_part(AUDIO_BITSTREAM_MAGIC, seq, pts_ns, index, count, bytes)
+}
+
+/// `(seq, pts_ns, index, count, bytes)`. `None` for a short datagram, `count == 0` or
+/// `index >= count`.
+pub fn decode_audio_bitstream_datagram(b: &[u8]) -> Option<(u32, u64, u8, u8, &[u8])> {
+    decode_part(b, AUDIO_BITSTREAM_MAGIC)
+}
+
+/// A lossless PCM frame no [`crate::audio::pcm::frame_us_for`] rung fits, as parts: the
+/// [`AUDIO_BITSTREAM_MAGIC`] layout under its own tag, the bytes those of one `0xD3` payload.
+/// The parts share the frame's `seq` and `pts`, so the client joins them into the packet a
+/// `0xD3` datagram would have been; a missing part costs its frame. Sent only under
+/// [`FEATURE_PCM_PARTS`](super::v2::registry::FEATURE_PCM_PARTS).
+/// cbindgen:ignore
+pub const AUDIO_PCM_PARTS_MAGIC: u8 = 0xD5;
+
+/// Part `index` of `count` of the PCM frame at `seq`.
+pub fn encode_audio_pcm_part_datagram(
+    seq: u32,
+    pts_ns: u64,
+    index: u8,
+    count: u8,
+    bytes: &[u8],
+) -> Vec<u8> {
+    encode_part(AUDIO_PCM_PARTS_MAGIC, seq, pts_ns, index, count, bytes)
+}
+
+/// `(seq, pts_ns, index, count, bytes)`, as [`decode_audio_bitstream_datagram`].
+pub fn decode_audio_pcm_part_datagram(b: &[u8]) -> Option<(u32, u64, u8, u8, &[u8])> {
+    decode_part(b, AUDIO_PCM_PARTS_MAGIC)
 }
 
 /// Legacy rumble v1. Level-triggered — persists until superseded; the host re-sends as loss heal.
@@ -1161,6 +1196,27 @@ mod tests {
         wrong[0] = AUDIO_PCM_MAGIC;
         assert!(decode_audio_bitstream_datagram(&wrong).is_none());
         assert!(decode_audio_pcm_datagram(&d).is_none());
+    }
+
+    /// A PCM part is the `0xD4` layout under `0xD5`, and neither tag reads as the other.
+    #[test]
+    fn audio_pcm_part_datagram_roundtrip() {
+        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        let d = encode_audio_pcm_part_datagram(0x0102_0304, 0x1122_3344_5566_7788, 2, 3, &[0xaa]);
+        assert_eq!(hex(&d), "d504030201887766554433221123aa");
+        assert_eq!(
+            d.len(),
+            crate::audio::pcm::PCM_PART_HEADER_LEN + 1,
+            "the header pcm sizes parts from"
+        );
+        assert_eq!(
+            decode_audio_pcm_part_datagram(&d),
+            Some((0x0102_0304, 0x1122_3344_5566_7788, 2, 3, &[0xaa][..]))
+        );
+        assert!(decode_audio_bitstream_datagram(&d).is_none());
+        assert!(decode_audio_pcm_datagram(&d).is_none());
+        let bitstream = encode_audio_bitstream_datagram(1, 2, 0, 1, &[0xaa]);
+        assert!(decode_audio_pcm_part_datagram(&bitstream).is_none());
     }
 
     /// Ladder pick must fit the budget it was sized for — keeps this plane off any fragmentation path.

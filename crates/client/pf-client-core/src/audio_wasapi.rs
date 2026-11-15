@@ -142,8 +142,7 @@ fn pick_device(
 pub struct PlaybackFormat {
     /// Interleaved channel count (2/6/8), wire order FL FR FC LFE RL RR SL SR.
     pub channels: u32,
-    /// Negotiated rate: 48 000 on Opus, 48 000 or 96 000 on lossless (`design/hi-res-audio.md`).
-    /// 44.1 kHz is deferred — `JitterPolicy` uses integer samples-per-millisecond.
+    /// Negotiated rate: 48 000 on Opus, any `pcm::rate_is_supported` rate on lossless.
     pub rate_hz: u32,
     /// One protocol frame in microseconds. Feeds the policy's shed/floor, which is in frames.
     pub frame_us: u32,

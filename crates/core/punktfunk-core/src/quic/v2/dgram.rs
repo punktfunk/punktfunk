@@ -32,6 +32,7 @@ fn inner_tags(kind: u64) -> &'static [u8] {
             q::AUDIO_RED_MAGIC,
             q::AUDIO_PCM_MAGIC,
             q::AUDIO_BITSTREAM_MAGIC,
+            q::AUDIO_PCM_PARTS_MAGIC,
             q::PAD_AUDIO_MAGIC,
             q::MIC_MAGIC,
         ],

@@ -188,7 +188,6 @@
 	"apple_player_mic_channel_n": "Canal {n}",
 	"apple_player_audio_format_opus_hint": "Opus compressé à 256 kbit/s — pratiquement transparent.",
 	"apple_player_audio_format_lossless_hint": "PCM exact au bit près, environ {rate} Mbit/s en plus de la vidéo, ou Standard si l’un des deux côtés le refuse.",
-	"apple_player_audio_format_surround_limit_hint": "Le surround exige 48 kHz ou moins.",
 	"apple_player_audio_format_surround6_hint": "Trois fois plus en 5.1.",
 	"apple_player_audio_format_surround8_hint": "Quatre fois plus en 7.1.",
 	"apple_player_echo_cancel_mac_hint": "Uniquement avec les appareils par défaut du système.",

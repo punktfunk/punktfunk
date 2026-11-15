@@ -6,8 +6,9 @@
 //!
 //! [`from_f32`] quantises f32 once, with no dither. After that, [`from_f32`] →
 //! [`to_f32`] → [`from_f32`] is the identity (see the round-trip test). A datagram
-//! larger than the path MTU is not sent, and this plane is never fragmented, so
-//! [`frame_us_for`] sizes from the raw frame.
+//! larger than the path MTU is not sent, so [`frame_us_for`] sizes from the raw frame.
+//! A format no rung fits travels in parts ([`parted_frame_us_for`]) to a client that
+//! joins them.
 //!
 //! Why not FLAC: a VERBATIM subframe is raw samples plus a header, so the worst
 //! case — the only case this plane can provision, sitting outside ABR — does not
@@ -139,6 +140,52 @@ pub fn frame_us_for(rate_hz: u32, bits: u8, channels: u8, max_datagram: usize) -
         .iter()
         .copied()
         .find(|&us| frame_payload_bytes(rate_hz, bits, channels, us) <= budget)
+}
+
+/// The [`PCM_HEADER_LEN`] header plus the part byte of a `0xD5` datagram.
+/// cbindgen:ignore
+pub const PCM_PART_HEADER_LEN: usize = PCM_HEADER_LEN + 1;
+
+/// Bytes the parts of one frame may take of the QUIC datagram send buffer
+/// ([`crate::config::DATAGRAM_SEND_BUFFER`]), which evicts its oldest datagram once full, so
+/// a larger frame would evict its own first part. 176.4 kHz 7.1 is 4 224 B a millisecond and
+/// fits no rung under it; a larger buffer or a shorter rung is what would carry it.
+/// cbindgen:ignore
+pub const PARTED_FRAME_MAX_BYTES: usize = crate::config::DATAGRAM_SEND_BUFFER;
+
+/// Parts a `frame_us` frame takes at `max_datagram` bytes a datagram, and the send-buffer
+/// bytes they add up to: each part pays its header, the datagram kind byte and
+/// [`crate::config::DATAGRAM_QUEUE_OVERHEAD`].
+pub fn frame_parts(
+    rate_hz: u32,
+    bits: u8,
+    channels: u8,
+    frame_us: u32,
+    max_datagram: usize,
+) -> Option<(usize, usize)> {
+    let room = max_datagram.checked_sub(PCM_PART_HEADER_LEN)?;
+    let payload = frame_payload_bytes(rate_hz, bits, channels, frame_us);
+    if room == 0 || payload == 0 {
+        return None;
+    }
+    let parts = payload.div_ceil(room);
+    let per_part = PCM_PART_HEADER_LEN + 1 + crate::config::DATAGRAM_QUEUE_OVERHEAD;
+    Some((parts, payload + parts * per_part))
+}
+
+/// Longest [`FRAME_US_LADDER`] rung whose frame, split into `0xD5` parts of at most
+/// `max_datagram` bytes, stays within [`PARTED_FRAME_MAX_BYTES`]. For a format
+/// [`frame_us_for`] declines, sent to a client that joins parts. `None` when none does.
+pub fn parted_frame_us_for(
+    rate_hz: u32,
+    bits: u8,
+    channels: u8,
+    max_datagram: usize,
+) -> Option<u32> {
+    FRAME_US_LADDER.iter().copied().find(|&us| {
+        frame_parts(rate_hz, bits, channels, us, max_datagram)
+            .is_some_and(|(parts, bytes)| parts <= 15 && bytes <= PARTED_FRAME_MAX_BYTES)
+    })
 }
 
 /// Quantise one interleaved f32 frame onto the wire, appending to `out`.
@@ -454,6 +501,49 @@ mod tests {
         assert_eq!(frame_us_for(96_000, BITS_24, 2, d), Some(2000));
         // 96/24 at 2.5 ms is 240 × 2 × 3 = 1440 B of payload against ~1387 B.
         assert!(frame_payload_bytes(96_000, BITS_24, 2, 2500) + PCM_HEADER_LEN > d);
+    }
+
+    /// The parted ladder for the 24-bit surround one datagram cannot hold, at a new
+    /// connection's datagram and at the discovery ceiling's. A silent change here is a silent
+    /// change in packet rate, or a frame the send buffer evicts.
+    #[test]
+    fn surround_above_48_khz_takes_a_parted_rung() {
+        // (rate, channels, rung µs). The rung holds at both sizes; the part count does not.
+        let table = [
+            (88_200, 6, Some(2000)),
+            (88_200, 8, Some(1500)),
+            (96_000, 6, Some(2000)),
+            (96_000, 8, Some(1500)),
+            (176_400, 6, Some(1000)),
+            // 4 224 B a millisecond: over the send buffer at the shortest rung.
+            (176_400, 8, None),
+        ];
+        for max_datagram in [1161usize, 1433] {
+            for (rate, channels, want) in table {
+                assert_eq!(
+                    frame_us_for(rate, BITS_24, channels, max_datagram),
+                    None,
+                    "{rate} Hz {channels} ch is what parts exist for"
+                );
+                let got = parted_frame_us_for(rate, BITS_24, channels, max_datagram);
+                assert_eq!(got, want, "{rate} Hz {channels} ch at {max_datagram} B");
+                let Some(us) = got else { continue };
+                let (parts, bytes) =
+                    frame_parts(rate, BITS_24, channels, us, max_datagram).unwrap();
+                assert!(
+                    bytes <= PARTED_FRAME_MAX_BYTES && parts <= 4,
+                    "{parts} parts"
+                );
+                // Every part fits its datagram.
+                let payload = frame_payload_bytes(rate, BITS_24, channels, us);
+                assert!(payload.div_ceil(parts) + PCM_PART_HEADER_LEN <= max_datagram);
+            }
+        }
+        assert_eq!(frame_parts(96_000, BITS_24, 6, 2000, 1433), Some((3, 3597)));
+        assert_eq!(
+            parted_frame_us_for(96_000, BITS_24, 6, PCM_PART_HEADER_LEN),
+            None
+        );
     }
 
     /// Every rung is a whole number of samples at 48/96 kHz, so those sessions can treat the rung as a duration.

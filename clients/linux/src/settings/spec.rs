@@ -258,13 +258,10 @@ mod tests {
     ];
 
     /// Pickers that list fewer options than the catalog, the ones they list in its order.
-    const SUBSET: &[(&str, &[&str])] = &[
-        (
-            "decoder",
-            &["auto", "native-vulkan", "native-vaapi", "software"],
-        ),
-        ("audio_format", &["opus", "lossless48", "lossless96"]),
-    ];
+    const SUBSET: &[(&str, &[&str])] = &[(
+        "decoder",
+        &["auto", "native-vulkan", "native-vaapi", "software"],
+    )];
 
     /// Pickers that list the catalog's options in another order: open rows in
     /// docs/settings.md.
