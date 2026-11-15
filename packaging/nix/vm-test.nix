@@ -101,5 +101,33 @@ testers.runNixOSTest {
     machine.fail("systemctl is-active punktfunk-door.service")
     epoch = machine.succeed("cat /home/alice/.config/punktfunk/web-session-epoch").strip()
     assert epoch == "7", epoch
+
+    # A record whose account is gone names no one: another member's on takes the door over.
+    machine.succeed(switch("alice", "on"))
+    machine.wait_for_unit("punktfunk-door.service")
+    machine.succeed("loginctl disable-linger alice; loginctl terminate-user alice || true")
+    machine.succeed("userdel -f alice")
+    machine.wait_until_fails("getent passwd alice")
+    machine.succeed(switch("bob", "on"))
+    assert machine.succeed(f"cat {record}").strip() == "bob"
+    machine.succeed(f"{seats} list | grep owner=true | grep -q ' bob '")
+    machine.wait_for_unit("punktfunk-door.service")
+    machine.succeed(switch("bob", "off"))
+    machine.succeed(f"test ! -e {record}")
+
+    # A first on that fails puts the box back: no record, no mark, the supervisor as it was.
+    # NixOS's units sit in /etc, above a --runtime mask: the control directory is above both.
+    control = "/run/systemd/system.control"
+    supervisor = machine.execute("systemctl is-active punktfunk-seats.service")[1].strip()
+    machine.succeed(f"mkdir -p {control} && ln -s /dev/null {control}/punktfunk-door.service")
+    machine.succeed("systemctl daemon-reload")
+    machine.fail(switch("bob", "on"))
+    machine.wait_until_succeeds(
+        "journalctl -u punktfunk-door-on@bob.service | grep -q 'putting the box back'"
+    )
+    machine.succeed(f"test ! -e {record} && test ! -e /var/lib/punktfunk-seats/door-on")
+    after = machine.execute("systemctl is-active punktfunk-seats.service")[1].strip()
+    assert after == supervisor, f"supervisor {supervisor} before, {after} after"
+    machine.succeed(f"rm {control}/punktfunk-door.service && systemctl daemon-reload")
   '';
 }
