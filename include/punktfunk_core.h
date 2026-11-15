@@ -2162,6 +2162,18 @@ typedef struct {
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
+// One touch on a touch surface ([`punktfunk_connection_touchpad_surface`]).
+typedef struct {
+    // The platform's identity for the touch, stable while it is down.
+    uint64_t id;
+    // `0.0..=1.0` across the surface, origin top-left. Must be finite; outside values clamp.
+    float x;
+    // `0.0..=1.0` down the surface.
+    float y;
+} PunktfunkSurfaceTouch;
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
 // One advertised clipboard format passed to [`punktfunk_connection_clipboard_offer`].
 typedef struct {
     // NUL-terminated UTF-8 wire MIME (e.g. `text/plain;charset=utf-8`). ≤ 128 bytes on the wire.
@@ -3699,6 +3711,34 @@ PunktfunkStatus punktfunk_connection_send_touchpad_pinch(PunktfunkConnection *c,
                                                          uint8_t phase,
                                                          float scale,
                                                          float rotation);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// Every touch on a touch surface now, on the host's touchpad. Core forwards up to
+// `max_contacts` (`1..=5`); more touches (a `count` above five is fine), or `keep` when the
+// client's OS or app claims the gesture, take a forwarded gesture back from the host.
+// `retract_taps`: this source makes its own clicks from taps, so the host must not. The
+// surface is `width_dmm` × `height_dmm` tenths of a millimetre. Call on every change, and
+// once with `count = 0` when the source appears.
+//
+// `*forwarded` true: core owns this update; do not also turn these touches into pointer or
+// scroll. False: the gesture is the caller's until an update with no touches, and on any
+// error. `Unsupported` without [`punktfunk_connection_host_touchpad`]; `InvalidArg` on a
+// coordinate that is not finite or one `id` twice.
+//
+// # Safety
+// `c` is a valid connection handle; `touches` points to `count` readable
+// [`PunktfunkSurfaceTouch`]es, or is null when `count` is 0; `forwarded` is null or writable.
+PunktfunkStatus punktfunk_connection_touchpad_surface(PunktfunkConnection *c,
+                                                      const PunktfunkSurfaceTouch *touches,
+                                                      uint8_t count,
+                                                      uint8_t max_contacts,
+                                                      bool button,
+                                                      bool keep,
+                                                      bool retract_taps,
+                                                      uint16_t width_dmm,
+                                                      uint16_t height_dmm,
+                                                      bool *forwarded);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

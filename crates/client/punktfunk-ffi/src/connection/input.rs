@@ -472,6 +472,72 @@ pub unsafe extern "C" fn punktfunk_connection_send_touchpad_pinch(
     })
 }
 
+/// Every touch on a touch surface now, on the host's touchpad. Core forwards up to
+/// `max_contacts` (`1..=5`); more touches (a `count` above five is fine), or `keep` when the
+/// client's OS or app claims the gesture, take a forwarded gesture back from the host.
+/// `retract_taps`: this source makes its own clicks from taps, so the host must not. The
+/// surface is `width_dmm` × `height_dmm` tenths of a millimetre. Call on every change, and
+/// once with `count = 0` when the source appears.
+///
+/// `*forwarded` true: core owns this update; do not also turn these touches into pointer or
+/// scroll. False: the gesture is the caller's until an update with no touches, and on any
+/// error. `Unsupported` without [`punktfunk_connection_host_touchpad`]; `InvalidArg` on a
+/// coordinate that is not finite or one `id` twice.
+///
+/// # Safety
+/// `c` is a valid connection handle; `touches` points to `count` readable
+/// [`PunktfunkSurfaceTouch`]es, or is null when `count` is 0; `forwarded` is null or writable.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn punktfunk_connection_touchpad_surface(
+    c: *mut PunktfunkConnection,
+    touches: *const PunktfunkSurfaceTouch,
+    count: u8,
+    max_contacts: u8,
+    button: bool,
+    keep: bool,
+    retract_taps: bool,
+    width_dmm: u16,
+    height_dmm: u16,
+    forwarded: *mut bool,
+) -> PunktfunkStatus {
+    // SAFETY: the caller passes `forwarded` null or writable for one value.
+    unsafe { put(forwarded, false) };
+    with_conn!(c => {
+        if touches.is_null() && count != 0 {
+            return PunktfunkStatus::NullPointer;
+        }
+        let raw = if count == 0 {
+            &[][..]
+        } else {
+            // SAFETY: non-null here; the caller makes it readable for `count` touches, borrowed
+            // for this call only.
+            unsafe { std::slice::from_raw_parts(touches, usize::from(count)) }
+        };
+        let touches: Vec<_> = raw
+            .iter()
+            .map(|t| punktfunk_core::client::SurfaceTouch { id: t.id, x: t.x, y: t.y })
+            .collect();
+        match c.inner.touchpad_surface(
+            &touches,
+            max_contacts,
+            button,
+            keep,
+            retract_taps,
+            width_dmm,
+            height_dmm,
+        ) {
+            Ok(owned) => {
+                // SAFETY: as above.
+                unsafe { put(forwarded, owned) };
+                PunktfunkStatus::Ok
+            }
+            Err(e) => e.status(),
+        }
+    })
+}
+
 /// Currently active session mode — Welcome's, until an accepted
 /// [`punktfunk_connection_request_mode`] switches it. Safe any time after connect.
 ///
@@ -577,5 +643,6 @@ mod tests {
         frame.count = 6;
         assert!(frame.to_contacts().is_none(), "count above five");
         assert_eq!(std::mem::size_of::<PunktfunkTouchpadFrame>(), 36);
+        assert_eq!(std::mem::size_of::<PunktfunkSurfaceTouch>(), 16);
     }
 }

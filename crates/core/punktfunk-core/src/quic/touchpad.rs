@@ -45,6 +45,8 @@ const FLAG_BUTTON: u8 = 0x01;
 const STATE_TIP: u8 = 0x01;
 const STATE_CONFIDENT: u8 = 0x02;
 
+/// A contact with `tip` clear is not touching. With `confident` clear too it is a tombstone:
+/// it lifted, and the host treats that lift as accidental, so it never taps or clicks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TouchpadContact {
     /// Stable for the life of one contact, `0..=`[`TOUCHPAD_MAX_ID`].
@@ -58,9 +60,16 @@ pub struct TouchpadContact {
     pub y: u16,
 }
 
+impl TouchpadContact {
+    pub fn is_tombstone(&self) -> bool {
+        !self.tip && !self.confident
+    }
+}
+
 /// `[0xCC][0x06][u16 seq LE][u8 flags][u16 width_dmm LE][u16 height_dmm LE][u8 count]` +
 /// `count` × `[u8 id][u8 state][u16 x LE][u16 y LE]`. Flags bit 0 is the button; state bit 0
-/// tip, bit 1 confident; other bits are ignored. A contact absent from a frame has lifted.
+/// tip, bit 1 confident; other bits are ignored. A contact absent from a frame has lifted; one
+/// listed as a tombstone lifted by accident, which one frame says whole.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TouchpadFrame {
     /// Wrapping; the host applies only a newer one.
@@ -106,18 +115,21 @@ impl TouchpadFrame {
         &self.contacts[..usize::from(self.count)]
     }
 
-    /// A contact or the button is down: the client repeats it, the host times it out.
+    /// A contact touches or the button is down: the client repeats it, the host times it out.
+    /// Tombstones alone are not active.
     pub fn is_active(&self) -> bool {
-        self.button || self.count > 0
+        self.button || self.contacts().iter().any(|c| c.tip)
     }
 
-    /// Every contact lifted and the button up, on the same surface.
+    pub fn has_tombstone(&self) -> bool {
+        self.contacts().iter().any(TouchpadContact::is_tombstone)
+    }
+
+    /// Every contact lifted and the button up, on the same surface. Unused slots stay at their
+    /// default, as `new` leaves them, so two equal pads compare equal.
     pub fn lifted(&self) -> TouchpadFrame {
-        TouchpadFrame {
-            button: false,
-            count: 0,
-            ..*self
-        }
+        TouchpadFrame::new(self.seq, false, self.width_dmm, self.height_dmm, &[])
+            .expect("no contacts is a valid frame")
     }
 
     pub fn encode(&self) -> Vec<u8> {
@@ -169,9 +181,9 @@ impl TouchpadFrame {
         )
     }
 
-    /// This frame on the virtual pad, in pad units. The surface keeps its millimetres, centred
-    /// on the pad; one larger than the pad shrinks uniformly to fit. Zero is
-    /// [`TOUCHPAD_ASSUMED_DMM`].
+    /// This frame's touching contacts on the virtual pad, in pad units. The surface keeps its
+    /// millimetres, centred on the pad; one larger than the pad shrinks uniformly to fit. Zero
+    /// is [`TOUCHPAD_ASSUMED_DMM`].
     pub fn to_pad(&self) -> PadState {
         let (w, h) = if self.width_dmm == 0 || self.height_dmm == 0 {
             TOUCHPAD_ASSUMED_DMM
@@ -186,18 +198,20 @@ impl TouchpadFrame {
         let (ox, oy) = ((max_x - w) / 2.0, (max_y - h) / 2.0);
         let at = |o: f64, span: f64, v: u16| (o + span * f64::from(v) / 65535.0).round() as u16;
         let mut contacts = [PadContact::default(); TOUCHPAD_MAX_CONTACTS];
-        for (slot, c) in contacts.iter_mut().zip(self.contacts()) {
-            *slot = PadContact {
+        let mut count = 0;
+        for c in self.contacts().iter().filter(|c| c.tip) {
+            contacts[count] = PadContact {
                 id: c.id,
-                tip: c.tip,
+                tip: true,
                 confident: c.confident,
                 x: at(ox, w, c.x),
                 y: at(oy, h, c.y),
             };
+            count += 1;
         }
         PadState {
             button: self.button,
-            count: self.count,
+            count: count as u8,
             contacts,
         }
     }
@@ -214,7 +228,8 @@ pub struct PadContact {
     pub y: u16,
 }
 
-/// The virtual pad's whole state, what a backend presents. A contact absent has lifted.
+/// The virtual pad's whole state, what a backend presents. Every contact touches; one absent
+/// has lifted.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PadState {
     pub button: bool,
@@ -237,14 +252,44 @@ pub struct TouchpadTracker {
 }
 
 impl TouchpadTracker {
-    /// `false`, and nothing changes, for a frame no newer than the last one applied.
-    pub fn apply(&mut self, frame: &TouchpadFrame) -> bool {
+    /// The states to present for `frame`, in order; none for a frame no newer than the last
+    /// one applied. A tombstone for a contact that was touching comes first as that contact,
+    /// still down where it was but not confident, beside the frame's touching contacts. A
+    /// backend then always sees the doubt before the lift, whichever frame carried it.
+    pub fn apply(&mut self, frame: &TouchpadFrame) -> Vec<TouchpadFrame> {
         if !pen_seq_newer(frame.seq, self.last_seq) {
-            return false;
+            return Vec::new();
         }
         self.last_seq = Some(frame.seq);
-        self.last = Some(*frame);
-        true
+        let before = self.last.replace(*frame);
+        let was = |id: u8| {
+            before?
+                .contacts()
+                .iter()
+                .find(|p| p.id == id && p.tip)
+                .copied()
+        };
+        let doubted: Vec<_> = frame
+            .contacts()
+            .iter()
+            .filter(|c| c.is_tombstone())
+            .filter_map(|c| was(c.id))
+            .map(|p| TouchpadContact {
+                confident: false,
+                ..p
+            })
+            .collect();
+        if doubted.is_empty() {
+            return vec![*frame];
+        }
+        let mut contacts: Vec<_> = frame.contacts().iter().filter(|c| c.tip).copied().collect();
+        contacts.extend(doubted);
+        contacts.sort_by_key(|c| c.id);
+        let (button, w, h) = (frame.button, frame.width_dmm, frame.height_dmm);
+        TouchpadFrame::new(frame.seq, button, w, h, &contacts)
+            .into_iter()
+            .chain([*frame])
+            .collect()
     }
 
     /// The last frame applied, or lifted by [`Self::force_release`].
@@ -393,10 +438,13 @@ mod tests {
     fn tracker_gates_stale_frames_and_lifts_on_release() {
         let mut t = TouchpadTracker::default();
         let down = frame(10, &[finger(0, 5, 5)]);
-        assert!(t.apply(&down));
+        assert_eq!(t.apply(&down), [down]);
         assert!(t.is_active());
-        assert!(!t.apply(&frame(10, &[])), "a repeat keeps its seq");
-        assert!(!t.apply(&frame(9, &[])), "stale");
+        assert!(
+            t.apply(&frame(10, &[])).is_empty(),
+            "a repeat keeps its seq"
+        );
+        assert!(t.apply(&frame(9, &[])).is_empty(), "stale");
         assert_eq!(t.last(), Some(&down));
 
         let lifted = t.force_release().unwrap();
@@ -404,13 +452,79 @@ mod tests {
         assert_eq!((lifted.width_dmm, lifted.height_dmm), (700, 1500));
         assert!(!t.is_active());
         assert_eq!(t.force_release(), None, "nothing left to lift");
-        assert!(!t.apply(&down), "a late datagram cannot press again");
-        assert!(t.apply(&frame(11, &[finger(0, 6, 6)])));
+        assert!(
+            t.apply(&down).is_empty(),
+            "a late datagram cannot press again"
+        );
+        assert_eq!(t.apply(&frame(11, &[finger(0, 6, 6)])).len(), 1);
 
         let mut held = TouchpadTracker::default();
         held.apply(&TouchpadFrame::new(0, true, 0, 0, &[]).unwrap());
         assert!(held.is_active(), "a held button with no finger");
         assert!(!held.force_release().unwrap().button);
+    }
+
+    fn tombstone(id: u8) -> TouchpadContact {
+        TouchpadContact {
+            id,
+            tip: false,
+            confident: false,
+            x: 1,
+            y: 1,
+        }
+    }
+
+    #[test]
+    fn a_tombstone_frame_is_inactive_and_never_reaches_a_backend() {
+        let f = frame(0, &[tombstone(3)]);
+        assert!(f.has_tombstone() && !f.is_active());
+        assert!(f.to_pad().contacts().is_empty());
+        let mixed = frame(0, &[finger(0, 1, 1), tombstone(3)]);
+        assert!(mixed.is_active());
+        assert_eq!(mixed.to_pad().contacts().len(), 1);
+    }
+
+    /// The doubt comes first for a contact that was touching, at its last position; a
+    /// tombstone for anything else changes nothing.
+    #[test]
+    fn a_tombstone_presents_doubt_then_lift() {
+        let mut t = TouchpadTracker::default();
+        t.apply(&frame(0, &[finger(0, 100, 200), finger(1, 300, 400)]));
+        let out = t.apply(&frame(
+            1,
+            &[tombstone(0), finger(1, 310, 400), finger(2, 9, 9)],
+        ));
+        assert_eq!(out.len(), 2);
+        let doubt = out[0].contacts();
+        assert_eq!(doubt.len(), 3);
+        assert_eq!(
+            (doubt[0].id, doubt[0].tip, doubt[0].confident),
+            (0, true, false)
+        );
+        assert_eq!((doubt[0].x, doubt[0].y), (100, 200), "where it was");
+        assert!(doubt[1].confident && doubt[1].x == 310 && doubt[2].id == 2);
+        let gone = out[1].to_pad();
+        assert_eq!(
+            gone.contacts().iter().map(|c| c.id).collect::<Vec<_>>(),
+            [1, 2]
+        );
+
+        let carried = frame(2, &[tombstone(0), finger(1, 320, 400)]);
+        assert_eq!(t.apply(&carried), [carried], "already lifted");
+        let unknown = frame(3, &[tombstone(7)]);
+        assert_eq!(t.apply(&unknown), [unknown]);
+    }
+
+    #[test]
+    fn a_carried_tombstone_heals_a_lost_one() {
+        let mut t = TouchpadTracker::default();
+        t.apply(&frame(0, &[finger(0, 100, 200)]));
+        // Frame 1, the first tombstone, never arrived.
+        let out = t.apply(&frame(2, &[tombstone(0), finger(1, 5, 5)]));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].contacts()[0].id, 0);
+        assert!(!out[0].contacts()[0].confident && out[0].contacts()[0].tip);
+        assert_eq!(out[1].to_pad().contacts()[0].id, 1);
     }
 
     #[test]

@@ -47,10 +47,13 @@ pub mod sc1_ble;
 pub mod sc2;
 mod screens;
 use crate::rumble;
+/// cbindgen:ignore
+mod touch_surface;
 mod worker;
 
 pub use self::planes::AudioPacket;
 pub use self::probe::ProbeOutcome;
+pub use self::touch_surface::SurfaceTouch;
 pub use crate::reanchor::{FLUSH_COOLDOWN, NO_VIDEO_RETRY};
 
 #[cfg(feature = "l10n")]
@@ -266,6 +269,9 @@ pub struct NativeClient {
     rich_input_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     /// Touchpad frames, unstamped; the touchpad task owns `seq` and the repeat.
     touchpad_tx: tokio::sync::mpsc::UnboundedSender<crate::quic::TouchpadFrame>,
+    /// The surface and the pinch helper, which share the host pad. Held while queueing, so
+    /// frames reach the touchpad task in the order the state machine made them.
+    touch_sources: Mutex<touch_surface::TouchpadSources>,
     /// Touchpad contacts of controller-mouse pads, for the input task's pointer.
     pad_touch_tx: tokio::sync::mpsc::UnboundedSender<pad_touch::Contact>,
     /// Per wire pad: what of a Steam Controller 2's raw reports reaches the host.
@@ -857,6 +863,7 @@ impl NativeClient {
             mic_tx,
             rich_input_tx,
             touchpad_tx,
+            touch_sources: Mutex::default(),
             pad_touch_tx,
             sc2: Mutex::default(),
             ctrl_tx,
@@ -2201,7 +2208,8 @@ impl NativeClient {
     /// tenths of a millimetre (`0` unknown). Send one with no contacts when the source appears.
     /// Core stamps `seq` and repeats the last frame every
     /// [`TOUCHPAD_REPEAT_MS`](crate::quic::TOUCHPAD_REPEAT_MS) while a contact or the button is
-    /// down. Nothing leaves without the pointer grant.
+    /// down. Nothing leaves without the pointer grant. A touch surface uses
+    /// [`Self::touchpad_surface`] instead.
     ///
     /// `Unsupported` without [`Self::host_presents_touchpad`]; `InvalidArg` on more than
     /// [`TOUCHPAD_MAX_CONTACTS`](crate::quic::TOUCHPAD_MAX_CONTACTS) contacts, an id above
@@ -2217,13 +2225,57 @@ impl NativeClient {
             .ok_or(PunktfunkError::InvalidArg(
                 "touchpad frame needs at most five contacts with distinct ids 0..=31",
             ))?;
-        self.send_touchpad_frame(frame)
+        self.touchpad_granted()?;
+        self.queue_touchpad(frame)
+    }
+
+    /// Every touch on a touch surface now, `x`/`y` in `0.0..=1.0` of a surface `width_dmm` ×
+    /// `height_dmm` tenths of a millimetre. Core forwards up to `max_contacts` (`1..=5`) as
+    /// touchpad contacts; more touches, or `keep` (the client's OS or app claimed the
+    /// gesture), take a forwarded gesture back from the host. `retract_taps`: this source makes
+    /// its own clicks from taps, so a tap-like lift is doubted and the host does not click too.
+    /// Call it on every change, and once with no touches when the source appears.
+    ///
+    /// `true`: core owns this update; do not also turn these touches into pointer or scroll.
+    /// `false`: the gesture is the embedder's until an update with no touches, which is
+    /// `false` too. `Unsupported` like [`Self::send_touchpad`]; `InvalidArg` on a coordinate
+    /// that is not finite or one platform id twice.
+    #[allow(clippy::too_many_arguments)]
+    pub fn touchpad_surface(
+        &self,
+        touches: &[SurfaceTouch],
+        max_contacts: u8,
+        button: bool,
+        keep: bool,
+        retract_taps: bool,
+        width_dmm: u16,
+        height_dmm: u16,
+    ) -> Result<bool> {
+        self.touchpad_granted()?;
+        let now_ms = self.born.elapsed().as_millis() as u64;
+        let mut sources = self.touch_sources.lock().unwrap();
+        let (frames, forwarded) = sources.surface(
+            touches,
+            max_contacts,
+            button,
+            keep,
+            retract_taps,
+            width_dmm,
+            height_dmm,
+            now_ms,
+        )?;
+        for frame in frames {
+            self.queue_touchpad(frame)?;
+        }
+        Ok(forwarded)
     }
 
     /// An OS pinch and rotation as two fingers on the host's touchpad
     /// ([`crate::quic::pinch_frame`]): `scale` and `rotation` (radians, clockwise) are
-    /// cumulative since `Begin`; `End` lifts both. Refused like [`Self::send_touchpad`], and
-    /// `InvalidArg` on a value that is not finite.
+    /// cumulative since `Begin`; `End` lifts both. A `Begin` while a surface touch is down or
+    /// its gesture is kept is ignored, with all that follows it until the next `Begin`; a
+    /// surface touch ends a live pinch. Refused like [`Self::send_touchpad`], and `InvalidArg`
+    /// on a value that is not finite.
     pub fn send_touchpad_pinch(
         &self,
         phase: crate::quic::PinchPhase,
@@ -2235,15 +2287,25 @@ impl NativeClient {
                 "pinch scale and rotation must be finite",
             ));
         }
-        self.send_touchpad_frame(crate::quic::pinch_frame(phase, scale, rotation))
+        self.touchpad_granted()?;
+        let mut sources = self.touch_sources.lock().unwrap();
+        match sources.pinch(phase, scale, rotation) {
+            Some(frame) => self.queue_touchpad(frame),
+            None => Ok(()),
+        }
     }
 
-    fn send_touchpad_frame(&self, frame: crate::quic::TouchpadFrame) -> Result<()> {
-        if !self.host_presents_touchpad() {
-            return Err(PunktfunkError::Unsupported(
+    fn touchpad_granted(&self) -> Result<()> {
+        if self.host_presents_touchpad() {
+            Ok(())
+        } else {
+            Err(PunktfunkError::Unsupported(
                 "host did not grant FEATURE_TOUCHPAD",
-            ));
+            ))
         }
+    }
+
+    fn queue_touchpad(&self, frame: crate::quic::TouchpadFrame) -> Result<()> {
         if frame.is_active() {
             self.stamp_input();
         }

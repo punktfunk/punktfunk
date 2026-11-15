@@ -508,6 +508,19 @@ impl PunktfunkTouchpadFrame {
     }
 }
 
+/// One touch on a touch surface ([`punktfunk_connection_touchpad_surface`]).
+#[cfg(feature = "quic")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PunktfunkSurfaceTouch {
+    /// The platform's identity for the touch, stable while it is down.
+    pub id: u64,
+    /// `0.0..=1.0` across the surface, origin top-left. Must be finite; outside values clamp.
+    pub x: f32,
+    /// `0.0..=1.0` down the surface.
+    pub y: f32,
+}
+
 /// Compositor preference for [`punktfunk_connect_ex`]. `AUTO` lets the host pick.
 /// A concrete value is honored only if that backend is available now; else auto-detect.
 /// Resolved choice is on `Welcome`.

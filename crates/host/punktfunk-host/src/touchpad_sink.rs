@@ -1,6 +1,7 @@
-//! One session's touchpad: [`TouchpadTracker`] gates frames by `seq`, and each applied frame
-//! lands on a [`VirtualTouchpad`] in pad units ([`TouchpadFrame::to_pad`]). The device appears
-//! on the first frame, an empty one included, and dies with the session.
+//! One session's touchpad: [`TouchpadTracker`] gates frames by `seq` and turns each into the
+//! states to present, a tombstone's doubt before its lift. Each lands on a [`VirtualTouchpad`]
+//! in pad units ([`TouchpadFrame::to_pad`]), touching contacts only. The device appears on the
+//! first frame, an empty one included, and dies with the session.
 //!
 //! Clients repeat their frame while anything is down, so [`TOUCHPAD_TIMEOUT_MS`] without one
 //! lifts everything. A repeat keeps its `seq`: the gate drops it, the clock still counts it.
@@ -61,8 +62,8 @@ impl<D: PadDevice> TouchpadSink<D> {
                 }
             }
         }
-        if self.tracker.apply(frame) {
-            self.present(frame);
+        for state in self.tracker.apply(frame) {
+            self.present(&state);
         }
     }
 
@@ -194,5 +195,35 @@ mod tests {
         let n = applied(&s).len();
         s.force_release();
         assert_eq!(applied(&s).len(), n, "nothing left to lift");
+    }
+
+    /// The backend sees the doubted finger, then the lift, and never a contact that is not
+    /// touching; a tombstone frame alone holds nothing down, so no timeout follows it.
+    #[test]
+    fn a_tombstone_reaches_the_backend_as_doubt_then_lift() {
+        let mut s = sink(false);
+        s.apply(&frame(0, &[finger(300)]));
+        let tomb = TouchpadContact {
+            tip: false,
+            confident: false,
+            ..finger(900)
+        };
+        s.apply(&frame(1, &[tomb]));
+        let states = &applied(&s)[1..];
+        assert_eq!(states.len(), 2);
+        let doubt = states[0].contacts()[0];
+        assert_eq!((doubt.tip, doubt.confident), (true, false));
+        assert_eq!(
+            doubt.x,
+            frame(0, &[finger(300)]).to_pad().contacts()[0].x,
+            "where it was"
+        );
+        assert!(states[1].contacts().is_empty());
+        assert!(!s.active());
+        s.apply(&frame(2, &[tomb]));
+        assert!(
+            applied(&s)[3].contacts().is_empty(),
+            "a carried copy changes nothing"
+        );
     }
 }
