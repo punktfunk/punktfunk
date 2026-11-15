@@ -2087,6 +2087,42 @@ mod tests {
         assert!(failing.is_empty());
     }
 
+    /// A person's row refreshed by the keep-level thread reaches its device list through the level
+    /// the refresh holds, and its trust copy is written.
+    #[test]
+    fn a_person_s_copies_are_refreshed_under_the_held_level() {
+        let (box_dir, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let backend = backend(box_dir.path(), state.path());
+        let uid = rustix::process::getuid().as_raw();
+        let seat = Seat {
+            id: SeatId::parse("0123456789abcdef0123456789abcd0b").unwrap(),
+            name: "Desk".into(),
+            account: "pfperson".into(),
+            display_slot: 12,
+            native_port: 9779,
+            mgmt_port: 48_125,
+            autostart: false,
+            runtime: RuntimeStatus::stopped(),
+            kind: RowKind::linux_person(uid),
+            fingerprint: None,
+            lent: Vec::new(),
+        };
+        let passwd = accounts::Passwd {
+            name: "pfperson".into(),
+            uid,
+            gid: rustix::process::getgid().as_raw(),
+            gecos: String::new(),
+            home: "/nonexistent".into(),
+        };
+        let tracked = Tracked::of(&seat, &passwd);
+        backend.track(&seat.id, tracked.clone());
+        let mut failing = HashSet::new();
+        assert!(level_seat(&backend.inner, &seat.id, &tracked, &mut failing));
+        assert!(failing.is_empty());
+        assert!(shared::trust_dir(state.path(), &seat.id).is_dir());
+        assert!(backend.inner.locks.level().devices().contains_key(&seat.id));
+    }
+
     /// A trust copy that keeps failing is logged when it starts to, not at every tick, and again
     /// when it fails after a refresh that worked.
     #[test]
