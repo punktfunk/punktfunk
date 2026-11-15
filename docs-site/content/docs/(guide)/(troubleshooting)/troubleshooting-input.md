@@ -87,6 +87,26 @@ is older than the host gives it an Xbox 360 pad until the driver is reinstalled.
 needs Valve's Bluetooth firmware, which Steam installs over its cable; pair it in your device's
 Bluetooth settings by holding Y while you press the Steam button.
 
+### My controller stopped working at the PC (Linux)
+
+It is given to a profile, and the PC's desktop doesn't see a controller a profile has. On
+**Profiles**, set **Used by** on its row of **Controllers on this PC** to **This PC**; it
+reconnects once. To play it on that profile's seat instead, start the seat.
+[Give a controller plugged into the PC to a profile](/docs/profiles#give-a-controller-plugged-into-the-pc-to-a-profile)
+has the rest.
+
+### A controller I gave to a profile doesn't work in its games (Linux)
+
+Check these in order:
+
+- The profile's seat must be running. While it is stopped, nobody can use the controller. Start
+  the seat from the profile's card on **Profiles**.
+- A controller without a serial number is recognised by its USB port. Plug it back into the port
+  it was in when you gave it.
+- Only USB controllers can be given. Bluetooth controllers paired to the PC aren't covered.
+- On an older install, reinstall the `punktfunk-seats` package so its udev rule is current.
+  `sudo punktfunk-seats doctor` says when it isn't.
+
 ### A controller plugged into the PC shows up on a seat (Windows)
 
 The PC's host marks every controller plugged into it for the console session, so seats don't
