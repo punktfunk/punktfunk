@@ -780,6 +780,44 @@ object NativeBridge {
     external fun nativeHostSupportsTouch(handle: Long): Boolean
 
     /**
+     * Whether the host presents a touchpad of its own (`FEATURE_TOUCHPAD`): a touch surface then
+     * sends its contacts through [nativeTouchpadSurface] instead of mouse motion and scroll
+     * (design/touchpad-passthrough.md §4). Fixed for the session. False on `0`.
+     */
+    external fun nativeHostPresentsTouchpad(handle: Long): Boolean
+
+    /**
+     * Whether the host OS clicks on a tap on that touchpad (`FEATURE_TOUCHPAD_TAPS`). When it
+     * does, a touchscreen sends no clicks of its own; when not, it keeps clicking and core takes
+     * its taps back from the host. False on `0`.
+     */
+    external fun nativeHostTapsClick(handle: Long): Boolean
+
+    /**
+     * Every touch down on a touch surface now: the first [count] of [ids] (platform ids, stable
+     * while down) with [xs]/[ys] in 0..1 of the surface, origin top-left. Core forwards up to
+     * [maxContacts]; more, or [keep] (a local gesture owns them), takes a forwarded gesture back.
+     * [retractTaps]: this source clicks on taps itself. [widthDmm]×[heightDmm] is the surface in
+     * tenths of a millimetre (`0` unknown); [timeUs] the touches' capture time on the uptime
+     * clock. Call on every change and once with no touches when the source appears or goes.
+     * `true` when core forwarded the update; `false` leaves the gesture to the caller.
+     */
+    external fun nativeTouchpadSurface(
+        handle: Long,
+        ids: LongArray,
+        xs: FloatArray,
+        ys: FloatArray,
+        count: Int,
+        maxContacts: Int,
+        button: Boolean,
+        keep: Boolean,
+        retractTaps: Boolean,
+        widthDmm: Int,
+        heightDmm: Int,
+        timeUs: Long,
+    ): Boolean
+
+    /**
      * One stylus batch of STATE-FULL samples (the pen plane; design/pen-tablet-input.md §7):
      * [count] × 10 floats, oldest first — `[state, tool, x, y, pressure, distance, tilt_deg,
      * azimuth_deg, roll_deg, dt_us]`. `state` = the wire in-range/touching/barrel bits; `tool`

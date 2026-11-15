@@ -345,6 +345,22 @@ fun StreamScreen(
         }
     }
 
+    // Frame mode (design/touchpad-passthrough.md §4): toward a host with a touchpad of its own,
+    // Trackpad mode sends every finger to it. Empty updates announce the surface when frame mode
+    // starts and lift every contact when it ends.
+    val hostPad = remember(handle) {
+        if (NativeBridge.nativeHostPresentsTouchpad(handle)) {
+            NativeTouchpadFrames(handle, NativeBridge.nativeHostTapsClick(handle), context.resources, peripherals::handBack)
+        } else {
+            null
+        }
+    }
+    val frames = hostPad.takeIf { hasTouch && pointerOk && touchMode == TouchMode.TRACKPAD }
+    DisposableEffect(frames) {
+        frames?.idle(containerSize.width, containerSize.height)
+        onDispose { frames?.idle(containerSize.width, containerSize.height) }
+    }
+
     // The twist and the three-finger tap live in the pointer touch models only — passthrough gives
     // every finger to the host verbatim — and need a screen plus the POINTER grant.
     val gestures = hasTouch && touchMode != TouchMode.TOUCH && pointerOk
@@ -818,6 +834,7 @@ fun StreamScreen(
                                 stylus,
                                 frame,
                                 trackpad = touchMode != TouchMode.POINTER,
+                                frames = frames,
                                 onCycleStats = { ui.statsVerbosity = ui.statsVerbosity.next() },
                                 onKeyboard = showKeyboard,
                                 // The two-finger twist turns the quick-action ring, frame by frame.

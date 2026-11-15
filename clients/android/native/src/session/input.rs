@@ -7,9 +7,10 @@
 //! +=up/right; keys are Windows VK (mapped from KEYCODE_* on the Kotlin side).
 
 use jni::errors::LogErrorAndDefault;
-use jni::objects::{JByteArray, JByteBuffer, JFloatArray, JObject, JString};
+use jni::objects::{JByteArray, JByteBuffer, JFloatArray, JLongArray, JObject, JString};
 use jni::sys::{jboolean, jint, jlong};
 use jni::EnvUnowned;
+use punktfunk_core::client::SurfaceTouch;
 use punktfunk_core::input::scroll::ScrollEvent;
 use punktfunk_core::input::{InputEvent, InputKind};
 use punktfunk_core::quic::{
@@ -284,6 +285,113 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeHostSupport
             .get(handle)
             .is_some_and(|h| h.client.host_caps2() & HOST_CAP2_TOUCH != 0)
     })
+}
+
+/// `NativeBridge.nativeHostPresentsTouchpad(handle)` — the host presents touchpad frames as a
+/// touchpad of its own (`FEATURE_TOUCHPAD`), so a touch surface sends contacts, not mouse
+/// counts (design/touchpad-passthrough.md §4). `0` handle → false.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeHostPresentsTouchpad(
+    _env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+) -> jboolean {
+    jni_guard(false, || {
+        SESSIONS
+            .get(handle)
+            .is_some_and(|h| h.client.host_presents_touchpad())
+    })
+}
+
+/// `NativeBridge.nativeHostTapsClick(handle)` — the host OS clicks on a tap on that touchpad
+/// (`FEATURE_TOUCHPAD_TAPS`), so a touchscreen makes no clicks of its own. `0` handle → false.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeHostTapsClick(
+    _env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+) -> jboolean {
+    jni_guard(false, || {
+        SESSIONS
+            .get(handle)
+            .is_some_and(|h| h.client.host_taps_click())
+    })
+}
+
+/// Touches read per `nativeTouchpadSurface` call. More than any source's contact limit, so a
+/// longer run is still a gesture core keeps.
+const SURFACE_JNI_MAX_TOUCHES: usize = 16;
+
+/// How many touches to read for Kotlin's `count`: none unless positive, at most
+/// [`SURFACE_JNI_MAX_TOUCHES`].
+fn surface_count(count: jint) -> usize {
+    usize::try_from(count)
+        .unwrap_or(0)
+        .min(SURFACE_JNI_MAX_TOUCHES)
+}
+
+/// A surface side in tenths of a millimetre: floored at zero (unknown), capped at 16 bits.
+fn surface_dmm(dmm: jint) -> u16 {
+    dmm.clamp(0, jint::from(u16::MAX)) as u16
+}
+
+/// `NativeBridge.nativeTouchpadSurface(handle, ids, xs, ys, count, maxContacts, button, keep,
+/// retractTaps, widthDmm, heightDmm, timeUs)` — every touch down on a touch surface now, as
+/// [`NativeClient::touchpad_surface`](punktfunk_core::client::NativeClient::touchpad_surface)
+/// takes it: the first `count` platform ids with x/y in 0..1 of the surface. `true` when core
+/// forwarded the update; `false` (also on a refused call or a short array, which change nothing)
+/// leaves the gesture to Kotlin.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeTouchpadSurface(
+    mut env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    ids: JLongArray,
+    xs: JFloatArray,
+    ys: JFloatArray,
+    count: jint,
+    max_contacts: jint,
+    button: jboolean,
+    keep: jboolean,
+    retract_taps: jboolean,
+    width_dmm: jint,
+    height_dmm: jint,
+    time_us: jlong,
+) -> jboolean {
+    env.with_env(|env| -> jni::errors::Result<jboolean> {
+        let n = surface_count(count);
+        let mut id = [0i64; SURFACE_JNI_MAX_TOUCHES];
+        let mut x = [0f32; SURFACE_JNI_MAX_TOUCHES];
+        let mut y = [0f32; SURFACE_JNI_MAX_TOUCHES];
+        if ids.get_region(env, 0, &mut id[..n]).is_err()
+            || xs.get_region(env, 0, &mut x[..n]).is_err()
+            || ys.get_region(env, 0, &mut y[..n]).is_err()
+        {
+            return Ok(false);
+        }
+        let Some(h) = SESSIONS.get(handle) else {
+            return Ok(false);
+        };
+        let touches: [SurfaceTouch; SURFACE_JNI_MAX_TOUCHES] =
+            std::array::from_fn(|i| SurfaceTouch {
+                id: id[i] as u64,
+                x: x[i],
+                y: y[i],
+            });
+        let forwarded = h.client.touchpad_surface(
+            &touches[..n],
+            max_contacts.clamp(0, jint::from(u8::MAX)) as u8,
+            button,
+            keep,
+            retract_taps,
+            surface_dmm(width_dmm),
+            surface_dmm(height_dmm),
+            u64::try_from(time_us).unwrap_or(0),
+        );
+        Ok(forwarded.unwrap_or(false))
+    })
+    .resolve::<LogErrorAndDefault>()
 }
 
 /// Floats per sample in the `nativeSendPen` flat array.
@@ -1010,6 +1118,37 @@ mod tests {
         ];
         for &(name, count, want) in CASES {
             assert_eq!(pen_count(count), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn surface_touches_read_nothing_unless_positive_and_stop_at_16() {
+        const CASES: &[(&str, jint, usize)] = &[
+            ("i32::MIN", jint::MIN, 0),
+            ("negative", -1, 0),
+            ("none down", 0, 0),
+            ("two fingers", 2, 2),
+            ("the ceiling", 16, 16),
+            ("one past the ceiling", 17, 16),
+            ("i32::MAX", jint::MAX, 16),
+        ];
+        for &(name, count, want) in CASES {
+            assert_eq!(surface_count(count), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_surface_side_floors_at_unknown_and_caps_at_sixteen_bits() {
+        const CASES: &[(&str, jint, u16)] = &[
+            ("unknown", 0, 0),
+            ("negative is unknown", -5, 0),
+            ("a phone's width", 1480, 1480),
+            ("the 16-bit maximum", 65535, 65535),
+            ("past 16 bits caps", 65536, 65535),
+            ("i32::MAX caps", jint::MAX, 65535),
+        ];
+        for &(name, dmm, want) in CASES {
+            assert_eq!(surface_dmm(dmm), want, "{name}");
         }
     }
 

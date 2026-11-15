@@ -143,6 +143,7 @@ internal class StreamPeripherals(
                     intArrayOf(map.x(cx), map.y(cy), map.width, map.height, if (onPicture) 1 else 0)
                 }
             },
+            hostPad = NativeBridge.nativeHostPresentsTouchpad(handle),
         )
         mouse.onRequestCapture = {
             // The grab needs the (focusable) capture view: focus it, then ask. Posted so a
@@ -150,7 +151,7 @@ internal class StreamPeripherals(
             keyCapture()?.let { v ->
                 v.post {
                     v.requestFocus()
-                    v.requestPointerCapture()
+                    mouse.grab(v)
                 }
             }
         }
