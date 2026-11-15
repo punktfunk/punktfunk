@@ -7,11 +7,11 @@
 //! Every value is validated again after deserialization. Runtime state is an
 //! observation, not a substitute for the backend's own process identity.
 //!
-//! On Linux one row may be the box owner's: an account that already exists,
-//! adopted rather than created. It takes a slot and ports like any seat. Any other
-//! Linux row may adopt a person's own account too, recorded by its uid.
-//! On Windows a row may adopt a person's own account, named by its SID; its
-//! account follows the SAM naming rule instead of the one for made accounts.
+//! Whose account a row runs on is its [`RowKind`]: one the supervisor made, the box owner's
+//! (Linux), or a person's own, recorded by uid on Linux and by SID on Windows, where its name
+//! follows the SAM rule. The ledger and every IPC frame spell the kind as six flat fields;
+//! `SeatRecord` is the one place they are read and written, and every rule about a kind is a
+//! method of [`RowKind`]. An adopted account takes a slot and ports like any seat.
 
 use crate::backend::Adopted;
 use rand::Rng;

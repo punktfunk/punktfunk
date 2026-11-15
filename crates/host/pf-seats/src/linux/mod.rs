@@ -1,26 +1,24 @@
 //! The Linux seat backend: a user, a logind session and a systemd unit per seat.
 //!
-//! The root daemon `punktfunk-seats` runs [`LinuxBackend`] behind [`socket`]. A seat is a
-//! system-range user with its home under the box directory. Starting it writes the seat contract
-//! and a fresh management token, then starts `punktfunk-seat@<user>.service`: that unit logs the
-//! user in through PAM and runs `seat-session`, which brings up a headless compositor and a stock
-//! `punktfunk-host serve`. Everything a seat runs descends from the unit, so the private
-//! `compatdata` bind mounts reach it. A restart reads each unit's state back from systemd.
+//! The root daemon `punktfunk-seats` runs [`LinuxBackend`] behind [`socket`]. Starting a seat
+//! writes its contract and a fresh management token, then starts
+//! `punktfunk-seat@<user>.service`, which logs the user in through PAM and runs `seat-session`:
+//! a headless compositor and a stock `punktfunk-host serve`. Everything a seat runs descends
+//! from the unit, so its private `compatdata` binds reach it. A restart reads each unit's
+//! state back from systemd.
 //!
-//! The owner's row is the box owner's own account, adopted. Its unit runs the owner's host in a
-//! headless `background` session, and never while the owner sits at the machine: a login of theirs
-//! on a seat ends the unit, and the owner's own user host serves the row from then on. That
-//! host writes the box's library: the daemon copies it for the door and every other seat.
+//! Whose account a row runs on is its [`RowKind`]; [`Own`] is this backend's view of it. A made
+//! seat's account is the daemon's, a system-range user with its home under the box directory.
+//! The owner's row and a person's adopt an account that is theirs, a person's once [`pam`]
+//! accepts their password in a child: the daemon changes nothing on it and ends nothing but
+//! the unit, which never runs while they sit at the machine. The owner's own host serves
+//! their row then, and writes the box's library the daemon copies for the door and the seats.
 //!
-//! Another person's row adopts their account the same way, once [`pam`] accepts their password
-//! in a child process: a headless `user` session, never while they sit at the machine, whose
-//! host admits only the devices the row's list does ([`devices`]). The daemon changes nothing on
-//! the account and ends nothing but its unit.
-//!
-//! A seat's pads are the daemon's too: its host asks the pad broker in the `punktfunk-seats`
-//! binary for them ([`LinuxBackend::running_account`] is its gate), and [`fence`] gives udev the
-//! user each one belongs to. The binary's uinput proxy, the seat's `/dev/uinput`, comes and goes
-//! with the unit ([`LinuxBackend::on_unit`]).
+//! What runs beside a unit rises and falls in [`Inner::cross`] alone, by [`beside`]'s table:
+//! copies, lent pads, the binary's uinput proxy ([`LinuxBackend::on_unit`]), the pad broker's
+//! admission ([`LinuxBackend::running_account`]) and a person's presence ([`devices`]). The
+//! copy writers' lock is a [`level::Level`], the only way to a device list. [`fence`] gives
+//! udev the user each pad belongs to.
 
 mod accounts;
 mod beside;
