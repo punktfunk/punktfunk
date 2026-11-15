@@ -1044,19 +1044,6 @@ mod tests {
         );
     }
 
-    /// Clients reject a mismatched ID, so a vendor bump must move the advertised one.
-    #[test]
-    fn pyrowave_bitstream_id_tracks_vendored_commit() {
-        let vendor =
-            include_str!("../../../../codec/pyrowave-sys/vendor/pyrowave/PUNKTFUNK-VENDOR.txt");
-        let commit = vendor
-            .lines()
-            .find_map(|l| l.strip_prefix("pyrowave:"))
-            .map(str::trim)
-            .expect("PUNKTFUNK-VENDOR.txt names the pyrowave commit");
-        assert!(commit.starts_with(super::super::PYROWAVE_BITSTREAM_ID));
-    }
-
     #[test]
     fn announce_pyrowave_refusals() {
         use super::super::{SCM_H264, SCM_PYROWAVE, SCM_PYROWAVE_444};

@@ -4,15 +4,15 @@
 # never from CI or build.rs (the flatpak/CI builders are offline — that is the
 # whole reason the tree is committed).
 #
-# ⚠️ Bumping PYROWAVE_COMMIT is a protocol-affecting change: the PyroWave
-# bitstream has no version field, so the CODEC_PYROWAVE wire bit means
-# "PyroWave bitstream as of this pin" (design/pyrowave-codec-plan.md §4.2).
-# A bump that changes the bitstream must bump the punktfunk protocol version,
-# and the Apple Metal hand-port (§4.7) must re-diff the two decode shaders +
-# bitstream header structs.
+# Upstream froze the bitstream as v1 on 2026-10-03 (bitstream/bitstream.md), and
+# the CODEC_PYROWAVE wire bit means v1 (design/pyrowave-codec-plan.md §4.2).
+# Before a bump, diff bitstream.md, pyrowave_common.hpp and the shaders against
+# the old pin. A bump that changes the bitstream must bump the punktfunk protocol
+# version and the GameStream PYROWAVE_BITSTREAM_ID. The Apple Metal hand-port
+# (§4.7) re-diffs wavelet_dequant.comp and idwt.comp.
 set -euo pipefail
 
-PYROWAVE_COMMIT=c0b997f84ced7bd827ca737aa5145f4ec811de8d
+PYROWAVE_COMMIT=a32b05e03d70826b19d4d11ff74fe166ed74371b
 # The Granite pin + submodule set come from upstream's checkout_granite.sh at
 # that commit; recorded here for the vendor manifest only.
 
@@ -99,23 +99,14 @@ number is never reused.
     the resolve pass over-credits applied ops and the bitstream can overshoot
     the hard rate target (the same overrun class as 0001). Clamped to the
     packed width (conservative direction). Includes the regenerated
-    shaders/slangmosh.hpp: built with the slangmosh of the Granite pin that
-    preceded 1b2d1801 (44362775 and its glslang/spirv-tools), -O --strip per
-    upstream's slangmosh.sh. That toolchain reproduces upstream's committed
-    bank byte-for-byte, so analyze_rate_control is the only changed program.
+    shaders/slangmosh.hpp: built with the slangmosh of Granite 44362775 and
+    its glslang/spirv-tools, -O --strip per upstream's slangmosh.sh. That
+    toolchain reproduces upstream's committed bank byte-for-byte (the pinned
+    Granite's own does not), so analyze_rate_control is the only changed
+    program.
     NOTE the related UNPATCHED limit: the packed 16-bit block_index wraps when
     block_count_32x32 > 65535 (~8K 4:4:4) — guarded host-side instead
     (pf-encode rejects such modes for PyroWave).
-  0003-devel-encode-16bit-read.patch — devel tool encode.cpp read y4m planes
-    with texel-count math (bytes for 8-bit): 16-bit inputs got half-plane
-    reads and a desynced stream after frame 1. Tool-only (our build never
-    compiles the devel tools; kept so the vendored source is honest).
-  0004-encoder-buffer-pool.patch — the encode body allocated four Vulkan
-    buffers (meta + bitstream, Device + CachedHost) on EVERY encode. At 240 fps
-    with MB-scale bitstreams that churn stalled the encode itself: on an
-    RTX 4090 the 5120x1440 submit+fence-wait was ~15 ms (~64 fps ceiling) and
-    dropped to ~1 ms (~1025 fps) once the buffers are pooled on the encoder and
-    reused. Safe under the synchronous encode model. Perf fix, not correctness.
   0005-global-priority-queue.patch — Context::create_device requests a global-
     priority Vulkan compute queue (VK_KHR_global_priority,
     PYROWAVE_QUEUE_PRIORITY=off|high|realtime, default realtime) so the
@@ -125,10 +116,11 @@ number is never reused.
     only on the Windows path (pyrowave_create_device_by_compat, where Granite
     builds its own device); Linux passes its own create-infos and the same
     request lives in crates/host/pf-encode/src/enc/linux/pyrowave.rs
-    (queue_priority_candidates). Change one, change both. Upstream's compat2
-    request (c0b997f8) is opt-in, needs Vulkan 1.4 and moves the encode to the
-    async compute queue, so it does not replace this; the patch stands down
-    when the caller uses upstream's flags.
+    (queue_priority_candidates). Change one, change both. Upstream's own
+    request (the priority argument of create_device_by_compat) needs Vulkan
+    1.4 and moves the encode to the async compute queue, so it does not
+    replace this; the patch stands down when the caller asks upstream for
+    HIGH or REALTIME.
   0007-encoder-sequence-override.patch — pyrowave_encoder_set_next_sequence()
     stamps the 3-bit wire sequence from the caller, so two alternating encoder
     handles emit 1,2,3... instead of 1,1,2,2... (the decoder swallows a
@@ -151,6 +143,10 @@ number is never reused.
     framebuffers come from Granite's cache instead of being made every frame.
 
 Retired (upstream carries the fix):
+  0003 devel-encode-16bit-read — pyrowave a62f374 (2026-10-03) sizes the devel
+    tool's plane read in bytes.
+  0004 encoder-buffer-pool — pyrowave 1a9bd79 (2026-10-05) pools the four
+    encode buffers per frame context and grows one only for a larger size.
   0006 external-memory consume-on-success-only — Granite b6cffd5c (2026-09-23)
     closes an imported by-reference handle after Device::create_image
     succeeds and not inside the allocator; semaphore import follows the same

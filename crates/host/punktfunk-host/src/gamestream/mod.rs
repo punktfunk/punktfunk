@@ -172,8 +172,8 @@ pub const SCM_PYROWAVE_444: u32 = 0x0100_0000;
 pub const SCM_PYROWAVE_HDR10: u32 = 0x0200_0000;
 #[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub const SCM_PYROWAVE_HDR10_444: u32 = 0x0400_0000;
-/// First 8 hex digits of the vendored pyrowave commit (`pyrowave-sys/vendor/pyrowave/
-/// PUNKTFUNK-VENDOR.txt`). The bitstream has no version field; clients compare this.
+/// Names the PyroWave v1 bitstream by a pyrowave commit that speaks it. Clients refuse an
+/// ID they don't know, and v1 is frozen, so a vendor bump keeps this value.
 #[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub const PYROWAVE_BITSTREAM_ID: &str = "c0b997f8";
 /// SDR baseline: H.264 + HEVC Main + AV1 Main 8-bit. HEVC Main10 is layered at runtime by

@@ -12,13 +12,14 @@ not hold replaces the oldest. Holding the Granite handles on the decoder keeps
 next_frame_context() from recycling a view a later decode still binds.
 
 diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
-index cf94e199c..7ccdf2320 100644
+index 28d6abd..b378680 100644
 --- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
 +++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
-@@ -1617,6 +1617,17 @@ struct pyrowave_decoder_opaque
- 	ChromaSubsampling chroma = {};
- 	int width = 0;
- 	int height = 0;
+@@ -1769,6 +1769,18 @@ struct pyrowave_decoder_opaque
+ 		Semaphore semaphore;
+ 		Fence fence;
+ 	} contexts[PYROWAVE_MAX_FRAME_CONTEXTS];
++
 +	// PUNKTFUNK: plane views per output set the caller rotates through, wrapped once and
 +	// kept. Stable views keep Granite's framebuffer cache hitting; fresh ones made and
 +	// destroyed a framebuffer every frame. A set past the last slot replaces the oldest.
@@ -33,7 +34,7 @@ index cf94e199c..7ccdf2320 100644
  };
  
  bool pyrowave_decoder_device_prefers_fragment_path(pyrowave_device device)
-@@ -1711,6 +1722,38 @@ bool pyrowave_decoder_decode_is_ready_with_sideband(pyrowave_decoder decoder, bo
+@@ -1863,6 +1875,38 @@ bool pyrowave_decoder_decode_is_ready_with_sideband(pyrowave_decoder decoder, bo
  	                                        active_block_mask, word_count);
  }
  
@@ -72,7 +73,7 @@ index cf94e199c..7ccdf2320 100644
  pyrowave_result
  pyrowave_decoder_decode_gpu_buffer(pyrowave_decoder decoder,
                                     const pyrowave_gpu_sync_operation *acquire,
-@@ -1724,8 +1767,8 @@ pyrowave_decoder_decode_gpu_buffer(pyrowave_decoder decoder,
+@@ -1881,8 +1925,8 @@ pyrowave_decoder_decode_gpu_buffer(pyrowave_decoder decoder,
  	auto *device = decoder->device;
  	device->next_frame_context();
  
@@ -81,5 +82,5 @@ index cf94e199c..7ccdf2320 100644
 +	ViewBuffers views = {};
 +	if (!cached_decoder_views(decoder, buffers, views))
  		return PYROWAVE_ERROR_OUT_OF_HOST_MEMORY;
+ 	views.range_scale = decoder->ycbcr_scaling_factor;
  
- 	// Just use normal graphics queue here since the result will likely be consumed there.

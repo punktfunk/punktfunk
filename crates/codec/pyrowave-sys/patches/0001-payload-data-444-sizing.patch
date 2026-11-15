@@ -1,5 +1,5 @@
 diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp
-index 1f84184..8b5d7a9 100644
+index 571ec72..98fc556 100644
 --- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp
 +++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp
 @@ -191,8 +191,13 @@ void Encoder::Impl::init_block_meta()

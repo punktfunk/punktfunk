@@ -40,10 +40,10 @@ encoder is so fast anyway" — pyrowave.h). That reasoning holds at 1080p60 and 
 or under a GPU-bound game, which is what PW5 measured.
 
 diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave.h b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave.h
-index 4bd2975..a30676a 100644
+index 9be06ca..f5042f7 100644
 --- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave.h
 +++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave.h
-@@ -576,6 +576,19 @@ PYROWAVE_PUBLIC_API pyrowave_result
+@@ -596,6 +596,19 @@ PYROWAVE_PUBLIC_API pyrowave_result
  pyrowave_encoder_compute_block_active_words(pyrowave_encoder encoder,
  		int bands, uint32_t *words, size_t word_count);
  
@@ -64,11 +64,11 @@ index 4bd2975..a30676a 100644
  PYROWAVE_PUBLIC_API void
  pyrowave_encoder_destroy(pyrowave_encoder encoder);
 diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
-index ded4fa8..8dc897d 100644
+index 1654a18..5be4d91 100644
 --- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
 +++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
-@@ -1547,6 +1547,17 @@ pyrowave_encoder_packetize(pyrowave_encoder encoder, pyrowave_packet *packets, s
- 			encoder, packets, packet_boundary, 0, out_packets, bitstream, size);
+@@ -1691,6 +1691,17 @@ void pyrowave_encoder_set_ycbcr_scaling_factor(pyrowave_encoder encoder, float f
+ 	encoder->ycbcr_scaling_factor = factor;
  }
  
 +// PUNKTFUNK LOCAL EXTENSION (patches/0007-encoder-sequence-override.patch), not upstream.
@@ -86,10 +86,10 @@ index ded4fa8..8dc897d 100644
  {
  	auto *device = encoder->device;
 diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp
-index 8b5d7a9..e8bebe2 100644
+index 98fc556..766ffd3 100644
 --- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp
 +++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp
-@@ -1269,6 +1269,14 @@ bool Encoder::encode(CommandBuffer &cmd, const ViewBuffers &views, const Bitstre
+@@ -1273,6 +1273,14 @@ bool Encoder::encode(CommandBuffer &cmd, const ViewBuffers &views, const Bitstre
  	return impl->encode(cmd, views, buffers);
  }
  
@@ -105,7 +105,7 @@ index 8b5d7a9..e8bebe2 100644
  {
  	return *impl->component_layer_views[component][level];
 diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.hpp b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.hpp
-index 355f82c..1f3b32d 100644
+index 355f82c..fd70340 100644
 --- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.hpp
 +++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.hpp
 @@ -37,6 +37,12 @@ public:
