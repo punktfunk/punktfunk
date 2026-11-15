@@ -7,7 +7,7 @@
 //! planes — full-res R8 Y + half-res R8G8 CbCr, BT.709 full range — imported as NT
 //! handles. Separate single/two-component textures import at any size; a planar
 //! NV12 does not. A shared D3D11 fence imported as a Vulkan timeline orders the
-//! wavelet read after convert. `encode_gpu_synchronous` acquire/encode/release
+//! wavelet read after convert. `encode_gpu` runs acquire/encode/release
 //! in one pyrowave submission (`VK_QUEUE_FAMILY_EXTERNAL`). Every AU is a
 //! keyframe; framing is [`crate::pyrowave_wire`].
 //!
@@ -179,6 +179,9 @@ impl PyroWaveEncoder {
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    // MEDIUM asks nothing: patch 0005 raises the queue. HIGH or REALTIME
+                    // here would move the encode to the async compute queue.
+                    pw::VkQueueGlobalPriority_VK_QUEUE_GLOBAL_PRIORITY_MEDIUM,
                     &mut pw_dev,
                 ),
                 "create_device_by_compat",
@@ -525,14 +528,8 @@ impl PyroWaveEncoder {
             maximum_bitstream_size: self.budget.rate_control(self.stream.wire_chunk.is_some()),
         };
         pw_check(
-            pw::pyrowave_encoder_encode_gpu_synchronous(
-                self.pw_enc,
-                &acquire,
-                &release,
-                &buffers,
-                &rc,
-            ),
-            "encode_gpu_synchronous",
+            pw::pyrowave_encoder_encode_gpu(self.pw_enc, &acquire, &release, &buffers, &rc),
+            "encode_gpu",
         )?;
 
         let wire_chunk = self.stream.wire_chunk;

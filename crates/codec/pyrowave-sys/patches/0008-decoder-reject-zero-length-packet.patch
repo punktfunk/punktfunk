@@ -26,7 +26,7 @@ already guards this in MetalWaveletDecoder.swift. security-review 2026-08-15
 finding 9.
 
 diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp
-index f300dc2..45cc9bc 100644
+index 429ba8b..4fad6cf 100644
 --- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp
 +++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp
 @@ -214,6 +214,17 @@ bool Decoder::Impl::push_packet(const void *data_, size_t size)

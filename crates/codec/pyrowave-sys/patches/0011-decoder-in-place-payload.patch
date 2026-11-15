@@ -1,7 +1,6 @@
 Decode packets where the caller wrote them — PUNKTFUNK LOCAL PATCH.
 
-Not upstream (pyrowave.h carries "TODO: Add support for importing external
-memory as GPU buffers"). push_packet copied every packet into payload_data_cpu,
+Not upstream. push_packet copied every packet into payload_data_cpu,
 upload_payload copied that again into a staging buffer, and a transfer copied it
 into the device-local payload buffer: two CPU copies and one GPU copy of every
 AU byte, on top of the client's own reassembly.
@@ -17,10 +16,10 @@ mix both. upload_payload now reports failure (a copy overflowing the head), and
 decode() returns it.
 
 diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave-shared.def b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave-shared.def
-index 03de530e0..1427d1b4d 100644
+index 19db0bf..4c7dffa 100644
 --- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave-shared.def
 +++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave-shared.def
-@@ -40,6 +40,8 @@ EXPORTS
+@@ -41,6 +41,8 @@ EXPORTS
  	pyrowave_decoder_create
  	pyrowave_decoder_clear
  	pyrowave_decoder_push_packet
@@ -30,10 +29,10 @@ index 03de530e0..1427d1b4d 100644
  	pyrowave_decoder_decode_is_ready_with_sideband
  	pyrowave_decoder_decode_gpu_buffer
 diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave.h b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave.h
-index a30676aa6..d2fa2957f 100644
+index f5042f7..c27c379 100644
 --- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave.h
 +++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave.h
-@@ -624,6 +624,31 @@ PYROWAVE_PUBLIC_API void pyrowave_decoder_clear(pyrowave_decoder decoder);
+@@ -644,6 +644,31 @@ PYROWAVE_PUBLIC_API void pyrowave_decoder_clear(pyrowave_decoder decoder);
  PYROWAVE_PUBLIC_API pyrowave_result
  pyrowave_decoder_push_packet(pyrowave_decoder decoder, const void *data, size_t size);
  
@@ -66,10 +65,10 @@ index a30676aa6..d2fa2957f 100644
  PYROWAVE_PUBLIC_API bool
  pyrowave_decoder_decode_is_ready(pyrowave_decoder decoder, bool allow_partial_frame);
 diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
-index 04bfb08a7..cf94e199c 100644
+index 98a0de6..28d6abd 100644
 --- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
 +++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
-@@ -1671,6 +1671,30 @@ pyrowave_decoder_push_packet(pyrowave_decoder decoder, const void *data, size_t
+@@ -1823,6 +1823,30 @@ pyrowave_decoder_push_packet(pyrowave_decoder decoder, const void *data, size_t
  	return ret ? PYROWAVE_SUCCESS : PYROWAVE_ERROR_INVALID_ARGUMENT;
  }
  
@@ -101,7 +100,7 @@ index 04bfb08a7..cf94e199c 100644
  bool pyrowave_decoder_decode_is_ready(pyrowave_decoder decoder, bool allow_partial_frame)
  {
 diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp
-index 45cc9bc9c..32ef92574 100644
+index 4fad6cf..4b15cfe 100644
 --- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp
 +++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp
 @@ -33,6 +33,13 @@ struct Decoder::Impl final : public WaveletBuffers
@@ -205,7 +204,7 @@ index 45cc9bc9c..32ef92574 100644
  				{
  					cmd.set_texture(0, 2, payload_r32_image->get_view());
  					cmd.set_texture(0, 3, payload_r16_image->get_view());
-@@ -879,7 +913,11 @@ bool Decoder::Impl::decode(CommandBuffer &cmd, const ViewBuffers &views)
+@@ -882,7 +916,11 @@ bool Decoder::Impl::decode(CommandBuffer &cmd, const ViewBuffers &views)
  {
  	cmd.begin_region("Decode uploads");
  	{
@@ -218,7 +217,7 @@ index 45cc9bc9c..32ef92574 100644
  
  		memcpy(cmd.update_buffer(*dequant_offset_buffer, 0,
  		                         dequant_offset_buffer_cpu.size() * sizeof(dequant_offset_buffer_cpu.front())),
-@@ -1002,6 +1040,100 @@ void Decoder::Impl::check_linear_texture_support()
+@@ -1005,6 +1043,100 @@ void Decoder::Impl::check_linear_texture_support()
  		LOGI("Using linear textures instead of texel buffers.\n");
  }
  
@@ -319,7 +318,7 @@ index 45cc9bc9c..32ef92574 100644
  bool Decoder::init(Vulkan::Device *device, int width, int height, ChromaSubsampling chroma_, bool fragment_path_)
  {
  	auto ops = device->get_device_features().vk11_props.subgroupSupportedOperations;
-@@ -1056,6 +1188,28 @@ bool Decoder::push_packet(const void *data, size_t size)
+@@ -1059,6 +1191,28 @@ bool Decoder::push_packet(const void *data, size_t size)
  	return impl->push_packet(data, size);
  }
  
@@ -349,7 +348,7 @@ index 45cc9bc9c..32ef92574 100644
  {
  	return impl->decode(cmd, views);
 diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.hpp b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.hpp
-index 7232bd5b2..0c34e8411 100644
+index 7232bd5..0c34e84 100644
 --- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.hpp
 +++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.hpp
 @@ -33,6 +33,16 @@ public:

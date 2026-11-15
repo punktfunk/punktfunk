@@ -544,7 +544,7 @@ pub struct PyroWaveEncoder {
     /// set and `Impl::encode` opens by discarding it (`UNDEFINED` old layout + buffer
     /// fills). Two encodes on one handle have no Vulkan execution dependency, so N+1
     /// would overwrite bands N is still packing. Overlap is two handles; within a
-    /// handle, encodes stay serialized so patch 0004's scratch-pool stays intact.
+    /// handle, encodes stay serialized so its pooled scratch buffers stay intact.
     pw_encs: Vec<pw::pyrowave_encoder>,
     /// Wire sequence, kept here not in the encoder objects. Each handle has its own
     /// `sequence_count`, so alternating them emits 1,1,2,2… The decoder restarts a
@@ -1739,7 +1739,7 @@ impl PyroWaveEncoder {
                 ),
                 "set_next_sequence",
             )?;
-            let enc_res = pw::pyrowave_encoder_encode_gpu_synchronous(
+            let enc_res = pw::pyrowave_encoder_encode_gpu(
                 self.pw_encs[slot],
                 std::ptr::null(),
                 std::ptr::null(),
@@ -1747,7 +1747,7 @@ impl PyroWaveEncoder {
                 &rc,
             );
             pw::pyrowave_device_set_command_buffer(self.pw_dev, std::ptr::null_mut());
-            pw_check(enc_res, "encode_gpu_synchronous")?;
+            pw_check(enc_res, "encode_gpu")?;
 
             if let Some(pool) = ts_pool {
                 dev.cmd_write_timestamp2(cmd, vk::PipelineStageFlags2::ALL_COMMANDS, pool, q0 + 2);
