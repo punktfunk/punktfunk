@@ -139,6 +139,10 @@ pub(super) fn hdr_static(client: &NativeClient) -> Option<punktfunk_core::quic::
 /// returns each output when the input is consumed, with a fence that signals when the pixels are
 /// written. Opt-in until the glass gain is measured; the `pf.present` line's `fenceTailMs` is
 /// the codec time the HUD `decode` then no longer sees.
+/// `rtk-lowdelay` (standard plus `video-lowdelay-mode`, which Realtek's ACodec turns into the
+/// decoder's low-delay mode: a picture leaves on its own AU, not the next one's). Opt-in: a
+/// build whose decoder lacks the mode can refuse to configure. `codecMs` on the `pf.present`
+/// line falls by a refresh where it takes.
 /// `adb shell setprop debug.punktfunk.low_latency_key mtk-boost`.
 pub(super) const LOW_LATENCY_KEY_PROP: &std::ffi::CStr = c"debug.punktfunk.low_latency_key";
 

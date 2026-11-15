@@ -48,15 +48,16 @@ pub(crate) fn qti_fence_eligible(codec_name: &str, sdk: u32) -> bool {
 }
 
 /// The low-latency profile to apply: `forced` when it names one (`standard`, `off`, `mtk-tv`,
-/// `mtk-boost`, `qti-fence`), else `mtk-tv` for a `c2.mtk` decoder when `half_rate_tv` says the
-/// platform is one, else `standard`. `half_rate_tv` runs only for a `c2.mtk` decoder.
+/// `mtk-boost`, `qti-fence`, `rtk-lowdelay`), else `mtk-tv` for a `c2.mtk` decoder when
+/// `half_rate_tv` says the platform is one, else `standard`. `half_rate_tv` runs only for a
+/// `c2.mtk` decoder.
 pub(crate) fn low_latency_profile<'a>(
     forced: Option<&'a str>,
     codec_name: &str,
     half_rate_tv: impl FnOnce() -> bool,
 ) -> &'a str {
     match forced {
-        Some(p @ ("standard" | "off" | "mtk-tv" | "mtk-boost" | "qti-fence")) => p,
+        Some(p @ ("standard" | "off" | "mtk-tv" | "mtk-boost" | "qti-fence" | "rtk-lowdelay")) => p,
         _ if codec_name.to_ascii_lowercase().starts_with("c2.mtk") && half_rate_tv() => "mtk-tv",
         _ => "standard",
     }
@@ -71,8 +72,8 @@ pub(crate) fn low_latency_profile<'a>(
 /// key), `priority = 0` and `operating-rate = MAX` together. That is the per-device escape hatch.
 /// On (the default), the set is Moonlight-Android's: MediaTek's `vdec-lowlatency`, the vendor keys
 /// of the decoder's name prefix (a key one vendor honours means nothing to another) and one clock
-/// hint. NVIDIA Tegra, Rockchip and Realtek have no such key; the standard key, the clock hint
-/// and a first rank in `VideoDecoders` cover them.
+/// hint. NVIDIA Tegra and Rockchip have no such key, and Realtek's rides the `rtk-lowdelay`
+/// profile; the standard key, the clock hint and a first rank in `VideoDecoders` cover them.
 pub(crate) fn low_latency_keys(
     profile: &str,
     codec_name: &str,
@@ -82,7 +83,10 @@ pub(crate) fn low_latency_keys(
 ) -> Vec<(&'static str, i32)> {
     let mut keys = Vec::new();
     // The standard key asks the platform decoder for its no-reorder path.
-    if matches!(profile, "standard" | "mtk-boost" | "qti-fence") {
+    if matches!(
+        profile,
+        "standard" | "mtk-boost" | "qti-fence" | "rtk-lowdelay"
+    ) {
         keys.push(("low-latency", 1));
     }
     keys.extend(vendor_keys(codec_name, aggressive));
@@ -98,6 +102,8 @@ pub(crate) fn low_latency_keys(
             }
         }
         "mtk-boost" => keys.push(("vendor.mtk.vdec.cpu.boost.mode.value", 1)),
+        // Realtek's ACodec reads this key and no `vendor.` one; another ACodec ignores it.
+        "rtk-lowdelay" => keys.push(("video-lowdelay-mode", 1)),
         "qti-fence" if qti_fence_eligible(codec_name, sdk) => keys.extend([
             // Decode-order output is the fence's prerequisite. The sw-fence key is the 8 Gen 2
             // spelling, the output-fence pair the 8 Gen 3 / 8 Elite one (type 1: the driver
@@ -158,6 +164,22 @@ fn vendor_keys(codec_name: &str, aggressive: bool) -> Vec<(&'static str, i32)> {
         keys.push(("priority", 0)); // 0 = realtime
     }
     keys
+}
+
+/// The bytes `debug.punktfunk.au_tail` appends to each whole AU fed. `fill` is a filler-data
+/// NAL: part of the AU, it ends the last slice for a parser that waits on the next start code.
+/// `aud` is the next AU's delimiter, for a decoder that finishes a picture when the next one
+/// starts; a decoder that stamps an AU from the buffer it starts in then returns each picture
+/// under the pts before its own. Empty for any other value, and for AV1.
+pub(crate) fn au_tail(codec: u8, mode: Option<&str>) -> &'static [u8] {
+    use punktfunk_core::quic::{CODEC_H264, CODEC_HEVC};
+    match (codec, mode) {
+        (CODEC_HEVC, Some("fill")) => &[0, 0, 0, 1, 0x4C, 0x01, 0xFF, 0x80],
+        (CODEC_HEVC, Some("aud")) => &[0, 0, 0, 1, 0x46, 0x01, 0x50],
+        (CODEC_H264, Some("fill")) => &[0, 0, 0, 1, 0x0C, 0xFF, 0x80],
+        (CODEC_H264, Some("aud")) => &[0, 0, 0, 1, 0x09, 0xF0],
+        _ => &[],
+    }
 }
 
 /// Whether the fed stream is recoded with a 16-bit POC: HEVC on an Amlogic decoder, whose
@@ -243,6 +265,32 @@ pub(crate) fn p50_p95_max_ms(mut v: Vec<u64>) -> (f64, f64, f64) {
 
 #[cfg(test)]
 mod tests {
+    /// Each tail is one NAL of the type its name says, behind a four-byte start code: HEVC
+    /// filler is type 38 and its delimiter 35, H.264's are 12 and 9.
+    #[test]
+    fn an_au_tail_is_one_filler_or_delimiter_nal() {
+        use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC};
+        let hevc = |mode| {
+            let t = super::au_tail(CODEC_HEVC, Some(mode));
+            assert_eq!((&t[..4], t[5] & 7), (&[0, 0, 0, 1][..], 1), "{mode}");
+            (t[4] >> 1) & 0x3F
+        };
+        assert_eq!((hevc("fill"), hevc("aud")), (38, 35));
+        let h264 = |mode| {
+            let t = super::au_tail(CODEC_H264, Some(mode));
+            assert_eq!(&t[..4], &[0, 0, 0, 1], "{mode}");
+            t[4] & 0x1F
+        };
+        assert_eq!((h264("fill"), h264("aud")), (12, 9));
+        for (codec, mode) in [
+            (CODEC_HEVC, None),
+            (CODEC_HEVC, Some("on")),
+            (CODEC_AV1, Some("aud")),
+        ] {
+            assert!(super::au_tail(codec, mode).is_empty(), "{codec} {mode:?}");
+        }
+    }
+
     #[test]
     fn only_amlogic_hevc_takes_the_wide_poc() {
         use punktfunk_core::quic::{CODEC_AV1, CODEC_HEVC};
@@ -652,6 +700,14 @@ mod tests {
                 false,
             ),
             (
+                "forced rtk-lowdelay",
+                Some("rtk-lowdelay"),
+                "OMX.realtek.video.dec.hevc",
+                false,
+                "rtk-lowdelay",
+                false,
+            ),
+            (
                 "an unknown name falls to detection",
                 Some("turbo"),
                 "c2.mtk.hevc.decoder",
@@ -721,7 +777,7 @@ mod tests {
     #[test]
     fn the_keys_follow_the_profile_and_the_decoders_vendor() {
         // (name, profile, decoder, aggressive, keys in set order)
-        let rows: [(&str, &str, &str, bool, Keys); 14] = [
+        let rows: [(&str, &str, &str, bool, Keys); 15] = [
             (
                 "Qualcomm gets its vendor pair and the max clock",
                 "standard",
@@ -838,6 +894,13 @@ mod tests {
                     REALTIME,
                     ("vendor.mtk.vdec.cpu.boost.mode.value", 1),
                 ],
+            ),
+            (
+                "rtk-lowdelay adds Realtek's key to the standard set",
+                "rtk-lowdelay",
+                "OMX.realtek.video.dec.hevc",
+                true,
+                &[STANDARD, MEDIATEK, REALTIME, ("video-lowdelay-mode", 1)],
             ),
             (
                 "qti-fence on Qualcomm on 13 sets the picture order key twice",

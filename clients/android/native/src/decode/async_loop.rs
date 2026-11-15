@@ -29,7 +29,7 @@ use super::vsync::{VsyncClock, VsyncShared};
 use super::{Backstops, DecodeOptions, IN_FLIGHT_CAP};
 use crate::au_intake::{Delivery, Intake};
 use crate::bring_up::{bring_up_rungs, ladder_label, Rung};
-use crate::codec_format::{codec_mime, take_by_pts, take_flags};
+use crate::codec_format::{au_tail, codec_mime, take_by_pts, take_flags};
 use crate::feed_rules::{colour_after, render_after, Cause, Piece, Spoiled};
 use crate::feed_step::{Feed, Handoff, Step, OVERSIZE_RUN};
 use crate::input_stall::{
@@ -473,6 +473,14 @@ fn run_codec(
         &ctx.codec.name().unwrap_or_default(),
         class == Some(DecoderClass::Strict),
     );
+    let tail = sysprop(c"debug.punktfunk.au_tail");
+    state.tail = au_tail(client.video_format().codec, tail.as_deref());
+    if !state.tail.is_empty() {
+        log::info!(
+            "decode: each AU is fed with a {} tail",
+            tail.unwrap_or_default()
+        );
+    }
     if await_keyframe {
         client.recovery_lost();
     }
@@ -1008,6 +1016,9 @@ struct State {
     /// Points a fed AU's lost reference at a held picture ([`concealer`]). `None` on other
     /// decoders.
     conceal: Option<Concealer>,
+    /// Appended to each whole AU fed ([`au_tail`]). Empty unless `debug.punktfunk.au_tail`
+    /// names one.
+    tail: &'static [u8],
     /// The codec's input side: the slots it offered, the parked deliveries, the open AU.
     inputs: Feed,
     ready: Vec<OutputReady>,
@@ -1227,6 +1238,7 @@ impl State {
             sink,
             widen: None,
             conceal: None,
+            tail: &[],
             inputs: Feed::default(),
             ready: Vec::new(),
             fed: 0,
@@ -1481,12 +1493,21 @@ impl State {
                 self.spoil(ctx, pass, idx, &piece, Cause::Oversize);
                 continue;
             }
-            let n = au.len();
+            let mut n = au.len();
             // SAFETY: `au` (wire AU) and `dst` (codec input buffer) are distinct allocations, both
             // valid for `n` bytes; `MaybeUninit<u8>` is layout-identical to `u8`, so this
             // initializes dst[..n].
             unsafe {
                 std::ptr::copy_nonoverlapping(au.as_ptr(), dst.as_mut_ptr().cast::<u8>(), n);
+            }
+            // The tail follows a whole AU only, where the buffer has room for it.
+            if frame.part.is_none() {
+                if let Some(room) = dst.get_mut(n..n + self.tail.len()) {
+                    for (d, &b) in room.iter_mut().zip(self.tail) {
+                        d.write(b);
+                    }
+                    n += self.tail.len();
+                }
             }
             let flags = if piece.last {
                 0
