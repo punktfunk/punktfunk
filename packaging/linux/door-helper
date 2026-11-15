@@ -168,8 +168,10 @@ take_ports() {
     # Their files out of reach, as a home that isn't mounted yet: the last copy stays.
     as_user test -d "$OWN" || return 0
     # Either file may be absent: one missing must not end the group before the other is read.
+    # The newline keeps a host.env that lacks its last one off web.env's first line.
     {
         as_user cat -- "$OWN/host.env" 2>/dev/null || true
+        echo
         as_user cat -- "$OWN/web.env" 2>/dev/null || true
     } | "$SEATS" door-ports
 }
