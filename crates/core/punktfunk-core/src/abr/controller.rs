@@ -3825,6 +3825,64 @@ mod tests {
         assert_eq!(c.decode.cap.kbps(), None);
     }
 
+    /// A 120 Hz controller past its decoder's warm-up at `decode_us`, the
+    /// ceiling at the start: nothing climbs, so every ask is the decoder's.
+    fn warmed_120(decode_us: i64) -> (BitrateController, Instant, u32) {
+        let mut c = BitrateController::new(100_000, None);
+        c.set_frame_budget(120);
+        let start = Instant::now();
+        for t in 0..decode::DECODE_WARMUP_WINDOWS {
+            assert_eq!(loaded(&mut c, ticks(start, t), decode_us), None);
+        }
+        (c, start, decode::DECODE_WARMUP_WINDOWS)
+    }
+
+    /// Twice the period with nothing queued is a pipeline. The notch it is
+    /// asked reads a floor the rate does not move: the rate comes back, the
+    /// driver stays armed and the same level asks nothing again.
+    #[test]
+    fn a_pipelines_flat_floor_costs_one_notch_and_no_stand_down() {
+        let (mut c, start, mut t) = warmed_120(16_000);
+        let notch = until_request(&mut c, start, &mut t, 16_000, 2).expect("a notch");
+        assert_eq!(notch, 87_500);
+        assert_eq!(
+            until_request(&mut c, start, &mut t, 16_000, 6),
+            Some(100_000)
+        );
+        assert!(!c.decode.headroom.disarmed());
+        assert_eq!(c.decode.cap.kbps(), None);
+        assert_eq!(until_request(&mut c, start, &mut t, 16_000, 20), None);
+    }
+
+    /// 12 ms of floor and 8 ms the rate adds at 100 Mbit/s: the notch's
+    /// answer draws the line, 96 % of the period is the rate's, and the notch
+    /// stands. One down it is 84 %: parked.
+    #[test]
+    fn a_pipeline_is_held_on_what_the_rate_adds() {
+        let (mut c, start, mut t) = warmed_120(20_000);
+        let notch = until_request(&mut c, start, &mut t, 20_000, 2).expect("a notch");
+        assert_eq!(notch, 87_500);
+        assert_eq!(until_request(&mut c, start, &mut t, 19_000, 12), None);
+        assert_eq!(c.current_kbps, 87_500);
+        assert_eq!(c.decode.cap.kbps(), Some(87_500));
+        assert!(!c.decode.headroom.disarmed());
+    }
+
+    /// 14 ms of floor and 4 ms the rate adds: the notch is answered, and its
+    /// reading is 48 % of the period. Nothing was due, so the rate comes back.
+    #[test]
+    fn a_pipelines_notch_the_reading_did_not_ask_goes_back() {
+        let (mut c, start, mut t) = warmed_120(18_000);
+        let notch = until_request(&mut c, start, &mut t, 18_000, 2).expect("a notch");
+        assert_eq!(notch, 87_500);
+        assert_eq!(
+            until_request(&mut c, start, &mut t, 17_500, 6),
+            Some(100_000)
+        );
+        assert_eq!(c.decode.cap.kbps(), None);
+        assert_eq!(until_request(&mut c, start, &mut t, 18_000, 20), None);
+    }
+
     /// Twenty pictures a window are 37.5 ms apart. A decode mean over that
     /// gap with nothing queued is a decoder waiting on its next picture: no
     /// verdict. Under the gap it is the decoder's own time, and a shed queue
