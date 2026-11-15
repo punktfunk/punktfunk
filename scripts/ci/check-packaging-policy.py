@@ -15,6 +15,9 @@ packaging/linux/payload.txt's seats rows are the seat supervisor's files. The Ni
 recipes build nothing CI can read, so each must name every one of those files. The deb, rpm,
 pacman and sysext removal steps must run door-remove.
 
+The plugin runner is on by default: the game library's scanners are plugins, so a host whose runner
+is off has an empty library. Each Linux channel's recipe must turn it on at install.
+
 A SteamOS update rebuilds /etc and keeps only what its keep lists name, so every /etc path the
 Steam Deck scripts install must be on scripts/punktfunk-atomic-keep.conf or under a tree SteamOS
 keeps itself.
@@ -60,6 +63,30 @@ SEATS_REMOVAL = [
     ("packaging/arch/punktfunk-seats.install", "pre_remove()"),
     ("packaging/bazzite/punktfunk-sysext.sh", "cmd_remove()"),
 ]
+# A command at the start of a line or after `;`, `&&`, `then`: not inside prose or a string.
+AT_COMMAND = r"(?:^|[;&|({]|\bthen|\bdo|\belse)\s*"
+GLOBAL_ENABLE = (
+    re.compile(AT_COMMAND + r"systemctl\s+--global\s+enable\s+punktfunk-scripting\.service", re.M),
+    "systemctl --global enable punktfunk-scripting.service")
+# Each channel's way of turning the runner on at install: the pattern its command must match
+# outside a comment, and what the error names. `(?![\w@-])` ends a match at the unit's name, so
+# punktfunk-scripting-seat@.service is not the runner.
+RUNNER_ON = {
+    "packaging/debian/build-scripting-deb.sh": GLOBAL_ENABLE,
+    "packaging/rpm/punktfunk.spec": GLOBAL_ENABLE,
+    "packaging/arch/punktfunk-scripting.install": GLOBAL_ENABLE,
+    "packaging/bazzite/build-sysext.sh": (
+        re.compile(AT_COMMAND + r"ln\s+-\w+\s+\S+\s+\S*default\.target\.wants/"
+                                r"punktfunk-scripting\.service(?![\w@-])", re.M),
+        "a link at default.target.wants/punktfunk-scripting.service"),
+    "scripts/steamdeck/install.sh": (
+        re.compile(AT_COMMAND + r"systemctl\s+--user\s+enable\s+--now\s+punktfunk-scripting"
+                                r"(?![\w@-])", re.M),
+        "systemctl --user enable --now punktfunk-scripting"),
+    NIX_MODULE: (
+        re.compile(r"\bautoStart\s*=\s*mkOption\s*\{[^}]*?\bdefault\s*=\s*cfg\.scripting\.enable\s*;"),
+        "a scripting autoStart that defaults to cfg.scripting.enable"),
+}
 UNITS = "packaging/linux/*.service"
 # Directories only root writes (punktfunk-seats.tmpfiles; pf-seats' env files are root's with a
 # read ACL). Their subdirectories hold seat accounts' files, so a unit's file sits directly in one.
@@ -310,6 +337,15 @@ def keep_errors(keep, texts):
     return errors
 
 
+def runner_errors(texts):
+    """[(path, error)] for each RUNNER_ON recipe in `texts` ({path: text}) that never turns the
+    plugin runner on. A comment or a string that names the command does not."""
+    return [(path, f"never runs {shown}, so the plugin runner stays off here and the game library "
+                   "comes up empty")
+            for path, (pattern, shown) in RUNNER_ON.items()
+            if not pattern.search(strip_comments(texts[path].replace("\\\n", " ")))]
+
+
 def tree_errors():
     matrix = read_matrix(read(MATRIX))
     const = dict(GATE_CONST.findall(read(GATE)))
@@ -343,7 +379,8 @@ def tree_errors():
         errors.append((UNITS, "no unit to check"))
     return (errors + tree_group_errors() + seats_errors(read(PAYLOAD), seats)
             + removal_errors({path: read(path) for path, _ in SEATS_REMOVAL})
-            + keep_errors(read(KEEP_LIST), deck) + env_file_errors(units))
+            + keep_errors(read(KEEP_LIST), deck) + env_file_errors(units)
+            + runner_errors({path: read(path) for path in RUNNER_ON}))
 
 
 def check():
@@ -495,6 +532,45 @@ sudo setcap cap_sys_nice=ep ${WORKER}
             ("a way out of root's", "EnvironmentFile=/var/lib/punktfunk-seats/../punktfunk/host.env\n"),
             ("spaced", "  EnvironmentFile = /var/lib/punktfunk/host.env \n")):
         expect(f"env file: {name}", len(env_file_errors({"u": text})), 1)
+
+    on = {
+        "packaging/debian/build-scripting-deb.sh":
+            'if [ -z "$2" ]; then\n    systemctl --global enable punktfunk-scripting.service || true\nfi\n',
+        "packaging/rpm/punktfunk.spec":
+            "if [ \"$1\" -eq 1 ]; then\n    systemctl --global enable punktfunk-scripting.service || :\nfi\n",
+        "packaging/arch/punktfunk-scripting.install":
+            "post_install() {\n  command -v systemctl && systemctl --global enable punktfunk-scripting.service\n}\n",
+        "packaging/bazzite/build-sysext.sh":
+            "ln -sf ../punktfunk-scripting.service \\\n"
+            '  "$STAGE/usr/lib/systemd/user/default.target.wants/punktfunk-scripting.service"\n',
+        "scripts/steamdeck/install.sh":
+            "if [ \"$FRESH\" = 1 ]; then\n    systemctl --user enable --now punktfunk-scripting.service 2>/dev/null\nfi\n",
+        NIX_MODULE:
+            "scripting = {\n  autoStart = mkOption {\n    type = types.bool;\n"
+            "    default = cfg.scripting.enable;\n    description = ''x'';\n  };\n};\n",
+    }
+    expect("runner on everywhere", runner_errors(on), [])
+    expect("runner has a row per channel", sorted(on), sorted(RUNNER_ON))
+    gl, ln, now = ("packaging/rpm/punktfunk.spec", "packaging/bazzite/build-sysext.sh",
+                   "scripts/steamdeck/install.sh")
+    for name, path, text in (
+            ("global enable only in a comment", gl, "# systemctl --global enable punktfunk-scripting.service\n"),
+            ("global enable only in a string", gl, 'echo "run systemctl --global enable punktfunk-scripting.service"\n'),
+            ("global enable of another unit", gl, "systemctl --global enable punktfunk-web.service\n"),
+            ("global enable of the seat unit", gl, "systemctl --global enable punktfunk-scripting-seat@.service\n"),
+            ("global disable", gl, "systemctl --global disable punktfunk-scripting.service\n"),
+            ("no global enable", gl, "echo installed\n"),
+            ("wants link only in a comment", ln, "# ln -sf x default.target.wants/punktfunk-scripting.service\n"),
+            ("wants link removed", ln, "rm -f $STAGE/default.target.wants/punktfunk-scripting.service\n"),
+            ("wants link of another unit", ln, "ln -sf ../punktfunk-web.service $S/default.target.wants/punktfunk-web.service\n"),
+            ("deck enable only in a message", now,
+             'warn "couldn\'t start it — systemctl --user enable --now punktfunk-scripting"\n'),
+            ("deck enable without --now", now, "systemctl --user enable punktfunk-scripting.service\n"),
+            ("deck enable of the seat unit", now, "systemctl --user enable --now punktfunk-scripting-seat@1.service\n"),
+            ("nix autoStart off", NIX_MODULE, "autoStart = mkOption {\n  default = false;\n};\n"),
+            ("nix autoStart follows the host", NIX_MODULE, "autoStart = mkOption {\n  default = cfg.host.autoStart;\n};\n"),
+            ("nix autoStart only in a comment", NIX_MODULE, "# autoStart = mkOption { default = cfg.scripting.enable; };\n")):
+        expect(f"runner: {name}", len(runner_errors({**on, path: text})), 1)
     if fails:
         return 1
     print("check-packaging-policy self-test ok")
