@@ -79,7 +79,8 @@ default `pf2`), `PUNKTFUNK_MGMT_PORT` (writes `PUNKTFUNK_MGMT_BIND` to `host.env
   an older unit's `--gamestream` into it) and the session environment in
   `punktfunk-host.service.d/steamdeck.conf`,
   `punktfunk-web.service`, `punktfunk-rebuild-check.service` (post-OS-update self-heal, enabled), and
-  `punktfunk-scripting.service` (plugin runner, **opt-in** — enable it once you use plugins/scripts).
+  `punktfunk-scripting.service` (plugin runner, started by the first install; a re-run keeps it as
+  you left it).
   Linger is enabled so they run without a login session.
 - **Plugin runner:** the deb's payload laid out user-scoped (read-only `/usr` can't take the
   package): wrapper `~/.local/bin/punktfunk-scripting`, pinned `bun` in

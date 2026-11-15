@@ -1,4 +1,4 @@
-//! `punktfunk-host plugins …` — install plugins and opt in the runner.
+//! `punktfunk-host plugins …` — install plugins and turn the runner on or off.
 //!
 //! Package ops (`add`/`remove`/`list`) go to the bun runner (`sdk/src/plugins.ts`):
 //! this binary locates it; it owns the vendored bun, `@punktfunk` scope, and plugins dir.
@@ -396,7 +396,7 @@ USAGE:
     punktfunk-host plugins add <name…>       install a plugin (playnite, rom-manager, …)
     punktfunk-host plugins remove <name…>    uninstall a plugin
     punktfunk-host plugins list              list installed plugins
-    punktfunk-host plugins enable            enable + start the plugin runner (opt-in)
+    punktfunk-host plugins enable            enable + start the plugin runner
     punktfunk-host plugins disable           stop + disable the plugin runner
     punktfunk-host plugins status            is the runner enabled/running?
     punktfunk-host plugins grant <plugin> <dir> [--write]
@@ -415,9 +415,9 @@ NAMES:
     pass --allow-public-registry.
 
 NOTES:
-    Plugins run under the runner, which is OPT-IN — `plugins add` installs, `plugins enable`
-    turns the runner on. Plugins are operator-installed code that runs with operator
-    privileges; install only plugins you trust.
+    Plugins run under the runner. The install turns it on; `plugins disable` turns it off
+    and `plugins enable` turns it back on. Plugins are operator-installed code that runs
+    with operator privileges; install only plugins you trust.
 "
     );
     plat::usage_note();

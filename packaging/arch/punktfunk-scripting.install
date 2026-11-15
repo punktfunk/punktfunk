@@ -8,7 +8,20 @@ _load_apparmor() {
 }
 
 post_install() {
+  # `--global`: a scriptlet has no user session, and this is the only way to turn a `--user` unit
+  # on for everyone. pacman runs post_install on a fresh install only, so an upgrade never undoes
+  # `systemctl --user mask punktfunk-scripting`.
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --global enable punktfunk-scripting.service >/dev/null 2>&1 || true
+  fi
   _load_apparmor
+  echo "punktfunk-scripting installed and enabled for all users."
+  echo "It runs your automation — game-library sources, scripts in"
+  echo "    ~/.config/punktfunk/scripts/  (loose .ts/.js files)"
+  echo "and plugins under ~/.config/punktfunk/plugins/."
+  echo "It starts with your next login; start it now with:"
+  echo "    systemctl --user start punktfunk-scripting"
+  echo "Don't want it? systemctl --user mask punktfunk-scripting"
 }
 
 post_upgrade() {

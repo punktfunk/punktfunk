@@ -14,11 +14,12 @@
 # picks per GPU. The CLIENT decodes via VAAPI (AMD/Intel, incl. the Deck) with a software
 # fallback, so it works everywhere. See README.md.
 pkgbase=punktfunk
-# punktfunk-web (the browser console) and punktfunk-scripting (the plugin/script runner) are OPT-IN:
-# both need `bun` (AUR-only as bun-bin on stock Arch/SteamOS), so a default makepkg builds only
-# host+client with no JS tooling — mirroring the RPM spec's `%bcond_with web` / `%bcond_with
+# punktfunk-web (the browser console) and punktfunk-scripting (the plugin/script runner) are OPT-IN
+# BUILDS: both need `bun` (AUR-only as bun-bin on stock Arch/SteamOS), so a default makepkg builds
+# only host+client with no JS tooling — mirroring the RPM spec's `%bcond_with web` / `%bcond_with
 # scripting` (off by default). Set PF_WITH_WEB=1 / PF_WITH_SCRIPTING=1 to also build them (each
-# appends its pkgname + bun to makedepends below).
+# appends its pkgname + bun to makedepends below). Once installed, punktfunk-scripting's unit is
+# enabled for every user (punktfunk-scripting.install); the console's is not.
 # aarch64 (Arch Linux ARM) is CLIENT-ONLY — see the `arch` note below. Dropping the host from
 # `pkgname` (rather than giving package_punktfunk-host a per-package arch) is what keeps makepkg
 # from entering the host's build/package path at all, and mirrors how PF_WITH_WEB extends this
@@ -518,8 +519,8 @@ package_punktfunk-scripting() {
   printf '%s\n' '#!/bin/sh' 'exec /usr/lib/punktfunk-bun/bun /usr/share/punktfunk-scripting/runner-cli.js "$@"' \
     > "$pkgdir/usr/bin/punktfunk-scripting"
   chmod 0755 "$pkgdir/usr/bin/punktfunk-scripting"
-  # systemd USER unit — installed but NOT auto-enabled (opt-in). Enable once you have automation:
-  #   systemctl --user enable --now punktfunk-scripting
+  # systemd USER unit. The .install scriptlet enables it for every user on a first install;
+  # opt out with `systemctl --user mask punktfunk-scripting`.
   install -Dm0644 "$R/scripts/punktfunk-scripting.service" "$pkgdir/usr/lib/systemd/user/punktfunk-scripting.service"
   install -Dm0644 "$R/scripts/punktfunk-scripting-seat@.service" \
     "$pkgdir/usr/lib/systemd/user/punktfunk-scripting-seat@.service"

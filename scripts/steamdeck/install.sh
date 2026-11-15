@@ -381,12 +381,13 @@ EOF
     ok "punktfunk-web.service (port $WEB_PORT)"
 fi
 
-# The runner's user unit (OPT-IN, matching the .deb: installed but NOT enabled — the runner is
-# inert until you add scripts/plugins). ExecStart is rewritten from the packaged /usr wrapper to
-# the user-scoped one section 2b installed.
+# The runner's user unit. Like the packages it is turned on at the first install only (below), so
+# a player who turned it off keeps it off. ExecStart is rewritten from the packaged /usr wrapper
+# to the user-scoped one section 2b installed.
+[ -e "$UNITS/punktfunk-scripting.service" ] && RUNNER_FRESH=0 || RUNNER_FRESH=1
 sed 's|^ExecStart=.*|ExecStart=%h/.local/bin/punktfunk-scripting|' \
     "$SRC/scripts/punktfunk-scripting.service" > "$UNITS/punktfunk-scripting.service"
-ok "punktfunk-scripting.service (opt-in: systemctl --user enable --now punktfunk-scripting)"
+ok "punktfunk-scripting.service (started on a first install; a re-run leaves it as it is)"
 
 # Post-OS-update self-heal: SteamOS A/B updates can bump library sonames the host binary links
 # (PipeWire, libva, …) — this oneshot probes the binary with ldd before punktfunk-host starts
@@ -424,8 +425,15 @@ if [ "$WITH_WEB" = 1 ]; then
     systemctl --user restart punktfunk-web.service
     ok "punktfunk-web started"
 fi
-# A re-run rebuilds the runner (§2b); try-restart leaves an opted-out runner off.
-systemctl --user try-restart punktfunk-scripting.service 2>/dev/null || true
+# After the daemon-reload, so the unit written above is the one enabled. A re-run rebuilds the
+# runner (§2b); try-restart leaves a runner the player turned off, off.
+if [ "$RUNNER_FRESH" = 1 ]; then
+    systemctl --user enable --now punktfunk-scripting.service 2>/dev/null \
+        && ok "punktfunk-scripting started" \
+        || warn "couldn't start the plugin runner — systemctl --user enable --now punktfunk-scripting"
+else
+    systemctl --user try-restart punktfunk-scripting.service 2>/dev/null || true
+fi
 
 # --- 6. summary ------------------------------------------------------------
 IP="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1 || true)"
