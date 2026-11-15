@@ -1,8 +1,9 @@
 //! What each row kind's transitions ask of the machine, against [`fake`]: every program in
-//! order, and the files a cold start leaves under `/run`. A made seat's provision and a cold or
-//! warm start of a made seat or the owner's row hand folders to other users and write under
-//! `/run`, so those tests need root; a person's warm start, every stop and a yield run anywhere,
-//! and a made seat's delete wherever `/proc` is.
+//! order, and the files a cold start leaves under `/run`. A made seat's provision, the owner's
+//! prepare and desk start, and a cold or warm start of a made seat or the owner's row hand
+//! folders to other users and write under `/run`, so those tests need root; a person's warm
+//! start, every stop, every yield and the owner's release run anywhere, and a made seat's delete
+//! wherever `/proc` is.
 
 use super::*;
 use std::cell::{Cell, RefCell};
@@ -890,4 +891,270 @@ fn a_made_seat_s_delete_takes_its_files_under_run_and_reloads() {
     let reload = [&DELETE[..], &["systemctl daemon-reload"]].concat();
     assert_eq!(deleted.calls, expect(&reload, "pf-seat-7", MADE_UID));
     assert!(left.is_empty(), "{left:?}");
+}
+
+/// The owner's (or another ordinary user's) account, at `home`.
+fn owner_passwd(account: &str, home: &Path) -> String {
+    format!(
+        "{account}:x:{OWNER_UID}:{OWNER_UID}:Owner:{}:/bin/bash\n",
+        home.display()
+    )
+}
+
+const STOP: &str = "systemctl stop punktfunk-seat@ACCOUNT.service";
+const RESET: &str = "systemctl reset-failed punktfunk-seat@ACCOUNT.service";
+/// `loginctl`'s two questions, with one session listed.
+const SESSIONS: &str = "loginctl list-sessions --no-legend";
+const SHOW_SESSION: &str =
+    "loginctl show-session -p Id -p Name -p Seat -p Class -p Remote -p State 7";
+/// The owner's own host, reached through their user manager: `setpriv` becomes them without a PAM
+/// session.
+const RESTART_HOST: &str = "setpriv --reuid UID --regid UID --init-groups env \
+     XDG_RUNTIME_DIR=/run/user/UID systemctl --user try-restart punktfunk-host.service";
+const KDE_ENABLED: &str = "setpriv --reuid UID --regid UID --init-groups env \
+     XDG_RUNTIME_DIR=/run/user/UID systemctl --user is-enabled --quiet \
+     punktfunk-kde-session.service";
+const START_HOST: &str = "setpriv --reuid UID --regid UID --init-groups env \
+     XDG_RUNTIME_DIR=/run/user/UID systemctl --user start punktfunk-host.service \
+     punktfunk-kde-session.service";
+
+/// Seats outlive the supervisor, so its start finds the owner's row with its unit maybe up: the
+/// row is written again and tracked for as long as it exists, a stop leaving it tracked, and the
+/// owner's own host restarts onto files that changed. A made seat's row and a person's, in the
+/// same ledger, get nothing.
+#[test]
+#[ignore = "needs root: hands the trust copy to the owner and writes under /run"]
+fn the_owner_row_is_tracked_after_a_supervisor_restart() {
+    let _alone = RUN.lock().unwrap_or_else(|e| e.into_inner());
+    clear_run("pfowner", OWNER_UID);
+    let rig = rig();
+    std::fs::write(rig.state.join("owner"), "pfowner\n").unwrap();
+    let seat = row("pfowner", OWNER_ID, true, None);
+    let mut ledger = Ledger::new();
+    ledger.seats = vec![
+        row("pf-seat-7", MADE_ID, false, None),
+        seat.clone(),
+        row("pfperson", PERSON_ID, false, Some(PERSON_UID)),
+    ];
+    let passwd = owner_passwd("pfowner", &rig.home);
+    let _fake = fake::install(machine(passwd, &[ACTIVE], Arc::default()));
+    assert_eq!(rig.backend.running_account(OWNER_UID), None);
+
+    rig.backend.prepare_owners(&ledger);
+    let cold = calls_from(0);
+    rig.backend.prepare_owners(&ledger);
+    let warm = calls_from(cold.len());
+    let tracked = rig
+        .backend
+        .inner
+        .running
+        .lock()
+        .unwrap()
+        .get(&seat.id)
+        .cloned();
+    let others = [MADE_UID, PERSON_UID].map(|uid| rig.backend.running_account(uid));
+    rig.backend.stop(&seat).unwrap();
+    let after_stop = rig.backend.running_account(OWNER_UID);
+    clear_run("pfowner", OWNER_UID);
+
+    let prepare = ["getent passwd ACCOUNT", "getent group punktfunk-door"];
+    let first_files = ["getent passwd punktfunk", "systemctl daemon-reload"];
+    let restart = ["getent passwd ACCOUNT", RESTART_HOST];
+    let expected_cold = [&prepare[..], &first_files, &restart].concat();
+    assert_eq!(cold, expect(&expected_cold, "pfowner", OWNER_UID));
+    assert_eq!(warm, expect(&prepare, "pfowner", OWNER_UID));
+    let tracked = tracked.expect("the owner's row is tracked");
+    assert_eq!((tracked.kind, tracked.uid), (Own::Owner, OWNER_UID));
+    assert!(
+        tracked.guest.is_some(),
+        "the keep-level thread can yield it"
+    );
+    assert_eq!(others, [None, None]);
+    assert_eq!(after_stop.as_deref(), Some("pfowner"));
+}
+
+/// An owner row for an account `door-helper` no longer records is skipped at a supervisor start:
+/// it is looked up, writes nothing and is not tracked, and the backend has no owner.
+#[test]
+fn an_owner_row_the_door_no_longer_records_is_not_tracked_after_a_restart() {
+    let rig = rig();
+    std::fs::write(rig.state.join("owner"), "someone-else\n").unwrap();
+    let mut ledger = Ledger::new();
+    ledger.seats = vec![row("pfowner", OWNER_ID, true, None)];
+    let passwd = owner_passwd("pfowner", &rig.home);
+    let _fake = fake::install(machine(passwd, &[INACTIVE], Arc::default()));
+
+    rig.backend.prepare_owners(&ledger);
+    let lookup = ["getent passwd ACCOUNT"];
+    assert_eq!(calls_from(0), expect(&lookup, "pfowner", OWNER_UID));
+    assert_eq!(rig.backend.running_account(OWNER_UID), None);
+    assert!(rig.backend.owner().is_none());
+}
+
+/// The owner's start with them at the machine: their files are written, the row is tracked and its
+/// pad goes live, and their own host starts through their user manager. The headless unit never
+/// starts. The wait for the host's port then ends at once, as a stop that landed during it would
+/// end it.
+#[test]
+#[ignore = "needs root: hands the trust copy to the owner and writes under /run"]
+fn the_owner_s_start_at_the_desk_starts_its_own_host() {
+    let _alone = RUN.lock().unwrap_or_else(|e| e.into_inner());
+    clear_run("pfowner", OWNER_UID);
+    let rig = rig();
+    std::fs::write(rig.state.join("owner"), "pfowner\n").unwrap();
+    let seat = Seat {
+        lent: vec![lent_pad()],
+        ..row("pfowner", OWNER_ID, true, None)
+    };
+    let passwd = owner_passwd("pfowner", &rig.home);
+    let machine = machine(passwd, &[INACTIVE], Arc::default());
+    let _fake = fake::install(with_a_login_at_the_desk(machine, "pfowner"));
+
+    let asked = rig.backend.inner.stops.fetch_add(1, Ordering::SeqCst);
+    let ended = rig.backend.start_owner(&seat, asked).unwrap_err();
+    let calls = calls_from(0);
+    let written = session::env_path("pfowner").exists();
+    clear_run("pfowner", OWNER_UID);
+
+    assert_eq!(ended.code, "seat_stopped");
+    let expected = [
+        "getent passwd ACCOUNT",
+        "getent group punktfunk-door",
+        "getent passwd punktfunk",
+        "systemctl daemon-reload",
+        SESSIONS,
+        SHOW_SESSION,
+        "getent passwd ACCOUNT",
+        KDE_ENABLED,
+        START_HOST,
+        "getent passwd ACCOUNT",
+    ];
+    assert_eq!(calls, expect(&expected, "pfowner", OWNER_UID));
+    assert!(written, "the owner's files are written at the desk too");
+    let account = rig.backend.running_account(OWNER_UID);
+    assert_eq!(account.as_deref(), Some("pfowner"));
+    let holder = lend_holder(&rig.state, &lent_pad());
+    assert_eq!(holder.as_deref(), Some("pfowner"));
+}
+
+/// The owner sat down at the machine: the headless unit ends and their own host starts through
+/// their user manager. With nobody there the unit is only looked at. The row stays tracked.
+#[test]
+fn the_owner_yields_to_its_own_host_at_the_desk() {
+    let rig = rig();
+    let seat = row("pfyield", OWNER_ID, true, None);
+    let passwd = owner_passwd("pfyield", &rig.home);
+    let found = accounts::parse_passwd(&passwd).unwrap();
+    rig.backend.track(&seat.id, Tracked::of(&seat, &found));
+    {
+        let _fake = fake::install(machine(passwd.clone(), &[ACTIVE], Arc::default()));
+        yield_to_the_desk(&rig.backend.inner, &seat);
+        let alone = [SHOW, SESSIONS];
+        assert_eq!(calls_from(0), expect(&alone, "pfyield", OWNER_UID));
+    }
+
+    let machine = machine(passwd, &[ACTIVE], Arc::default());
+    let _fake = fake::install(with_a_login_at_the_desk(machine, "pfyield"));
+    yield_to_the_desk(&rig.backend.inner, &seat);
+    let yielded = [
+        SHOW,
+        SESSIONS,
+        SHOW_SESSION,
+        SHOW,
+        STOP,
+        RESET,
+        "getent passwd ACCOUNT",
+        KDE_ENABLED,
+        START_HOST,
+    ];
+    assert_eq!(calls_from(0), expect(&yielded, "pfyield", OWNER_UID));
+    let account = rig.backend.running_account(OWNER_UID);
+    assert_eq!(account.as_deref(), Some("pfyield"));
+}
+
+/// The owner row `pfold` released while the backend's owner is `current`.
+struct Released {
+    rig: Rig,
+    seat: Seat,
+    calls: Vec<String>,
+}
+
+fn release_owner_row(current: Option<&str>) -> Released {
+    let rig = rig();
+    let seat = Seat {
+        lent: vec![lent_pad()],
+        ..row("pfold", OWNER_ID, true, None)
+    };
+    let passwd = owner_passwd("pfold", &rig.home);
+    let found = accounts::parse_passwd(&passwd).unwrap();
+    let library = shared::box_library_dir(&rig.state);
+    std::fs::create_dir_all(library.join("profiles")).unwrap();
+    std::fs::write(library.join("profiles/kept"), "x").unwrap();
+    std::fs::write(rig.home.join("notes.txt"), "mine").unwrap();
+    for dir in [
+        shared::seat_dir(&rig.state, &seat.id),
+        shared::trust_dir(&rig.state, &seat.id),
+        shared::host_dir(&rig.state, &seat.id),
+    ] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    rig.backend.track(&seat.id, Tracked::of(&seat, &found));
+    rig.backend.inner.lent.level(&seat, true, true);
+    let owner = current.map(|name| accounts::Passwd {
+        name: name.into(),
+        ..found.clone()
+    });
+    *rig.backend.inner.owner.lock().unwrap() = owner;
+
+    let _fake = fake::install(machine(passwd, &[ACTIVE], Arc::default()));
+    rig.backend.remove(&seat).unwrap();
+    let calls = calls_from(0);
+    Released { rig, seat, calls }
+}
+
+impl Released {
+    /// What every owner row's release does: ends its unit and nothing else of the account,
+    /// forgets the row and hands its pad back.
+    fn assert_the_row_is_gone(&self) {
+        assert_eq!(self.calls, expect(&[SHOW, STOP, RESET], "pfold", OWNER_UID));
+        assert_eq!(self.rig.backend.running_account(OWNER_UID), None);
+        assert!(self.rig.home.join("notes.txt").exists());
+        assert_eq!(lend_holder(&self.rig.state, &lent_pad()), None);
+        for gone in [
+            shared::seat_dir(&self.rig.state, &self.seat.id),
+            shared::trust_dir(&self.rig.state, &self.seat.id),
+            shared::host_dir(&self.rig.state, &self.seat.id),
+        ] {
+            assert!(!gone.exists(), "{}", gone.display());
+        }
+    }
+
+    fn library(&self) -> bool {
+        shared::box_library_dir(&self.rig.state)
+            .join("profiles/kept")
+            .exists()
+    }
+}
+
+/// The owner's row takes the box's library with it: the door it was for goes too. That holds when
+/// the backend's owner is this row's account, and when it has none.
+#[test]
+fn the_owner_s_release_takes_the_box_library() {
+    for current in [Some("pfold"), None] {
+        let released = release_owner_row(current);
+        released.assert_the_row_is_gone();
+        assert!(!released.library(), "{current:?}");
+        assert!(released.rig.backend.owner().is_none());
+    }
+}
+
+/// A row the owner's new row has replaced leaves the library, which is the new one's, and leaves
+/// the backend's owner as it is.
+#[test]
+fn a_replaced_owner_s_release_keeps_the_box_library() {
+    let released = release_owner_row(Some("pfnew"));
+    released.assert_the_row_is_gone();
+    assert!(released.library());
+    let owner = released.rig.backend.owner().map(|owner| owner.name);
+    assert_eq!(owner.as_deref(), Some("pfnew"));
 }
