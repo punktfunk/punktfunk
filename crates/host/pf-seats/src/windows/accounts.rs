@@ -129,7 +129,7 @@ impl AccountManager {
         require_local_system()?;
         require_identity(seat)?;
         let credential = self.credentials.load(&seat.id)?;
-        let adopted = seat.kind.sid().is_some();
+        let adopted = !seat.kind.supervisor_owns_account();
         verify_password(&seat.account, &credential, |error| {
             if adopted {
                 changed_fault(&seat.account)

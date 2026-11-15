@@ -329,6 +329,15 @@ impl RowKind {
         }
     }
 
+    /// The supervisor made the account, so it may close and delete it and end its every
+    /// process. Any other row's account is someone's, whichever platform adopted it.
+    pub fn supervisor_owns_account(&self) -> bool {
+        match self.0 {
+            Kind::Made => true,
+            Kind::Owner { .. } | Kind::LinuxPerson { .. } | Kind::WindowsPerson { .. } => false,
+        }
+    }
+
     /// Starts only on its person's proof: no autostart, keep-warm, door or dial starts it, and a
     /// plain Start answers `unlock_required`.
     pub fn starts_on_proof(&self) -> bool {
@@ -350,8 +359,8 @@ impl RowKind {
     /// The row's unit ends when its user sits down at the machine.
     pub fn yields_to_the_desk(&self) -> bool {
         match self.0 {
-            Kind::Owner { .. } | Kind::LinuxPerson { .. } => true,
-            Kind::Made | Kind::WindowsPerson { .. } => false,
+            Kind::Owner { .. } | Kind::LinuxPerson { .. } | Kind::WindowsPerson { .. } => true,
+            Kind::Made => false,
         }
     }
 

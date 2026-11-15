@@ -368,7 +368,7 @@ fn resources_row(seat: &Seat) -> Option<Diagnostic> {
 /// nobody signs in to it at the PC meanwhile.
 fn account_row(seat: &Seat, inspection: &AccountInspection, group: &str) -> Diagnostic {
     let account = &seat.account;
-    let adopted = seat.kind.sid().is_some();
+    let adopted = !seat.kind.supervisor_owns_account();
     let problem = if !inspection.identity_matches {
         Some(if adopted {
             ("seatcheck_account_gone", format!(

@@ -221,11 +221,12 @@ enum Own {
 }
 
 impl Own {
-    /// Linux's view of `kind`: a row adopted by a uid is a person's.
+    /// Linux's view of `kind`. A Windows person's row is a person's too, which
+    /// [`accounts::require_person`] refuses by name.
     fn of(kind: &RowKind) -> Self {
         if kind.is_owner() {
             Self::Owner
-        } else if kind.uid().is_some() {
+        } else if kind.is_person() {
             Self::Person
         } else {
             Self::Seat
