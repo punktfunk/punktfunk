@@ -72,8 +72,9 @@ pub(crate) fn low_latency_profile<'a>(
 /// key), `priority = 0` and `operating-rate = MAX` together. That is the per-device escape hatch.
 /// On (the default), the set is Moonlight-Android's: MediaTek's `vdec-lowlatency`, the vendor keys
 /// of the decoder's name prefix (a key one vendor honours means nothing to another) and one clock
-/// hint. NVIDIA Tegra and Rockchip have no such key, and Realtek's rides the `rtk-lowdelay`
-/// profile; the standard key, the clock hint and a first rank in `VideoDecoders` cover them.
+/// hint. NVIDIA Tegra and Rockchip have no such key, and Realtek's is set in `decode/` once
+/// the framework is read for it; the standard key, the clock hint and a first rank in
+/// `VideoDecoders` cover them.
 pub(crate) fn low_latency_keys(
     profile: &str,
     codec_name: &str,
@@ -166,20 +167,15 @@ fn vendor_keys(codec_name: &str, aggressive: bool) -> Vec<(&'static str, i32)> {
     keys
 }
 
-/// The bytes `debug.punktfunk.au_tail` appends to each whole AU fed. `fill` is a filler-data
-/// NAL: part of the AU, it ends the last slice for a parser that waits on the next start code.
-/// `aud` is the next AU's delimiter, for a decoder that finishes a picture when the next one
-/// starts; a decoder that stamps an AU from the buffer it starts in then returns each picture
-/// under the pts before its own. Empty for any other value, and for AV1.
-pub(crate) fn au_tail(codec: u8, mode: Option<&str>) -> &'static [u8] {
-    use punktfunk_core::quic::{CODEC_H264, CODEC_HEVC};
-    match (codec, mode) {
-        (CODEC_HEVC, Some("fill")) => &[0, 0, 0, 1, 0x4C, 0x01, 0xFF, 0x80],
-        (CODEC_HEVC, Some("aud")) => &[0, 0, 0, 1, 0x46, 0x01, 0x50],
-        (CODEC_H264, Some("fill")) => &[0, 0, 0, 1, 0x0C, 0xFF, 0x80],
-        (CODEC_H264, Some("aud")) => &[0, 0, 0, 1, 0x09, 0xF0],
-        _ => &[],
-    }
+/// A Realtek decoder, by its OMX or Codec2 name.
+pub(crate) fn is_realtek(codec_name: &str) -> bool {
+    let name = codec_name.to_ascii_lowercase();
+    name.starts_with("omx.realtek") || name.starts_with("c2.realtek")
+}
+
+/// Whether `hay` holds `needle`. An empty needle is in nothing.
+pub(crate) fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && hay.windows(needle.len()).any(|w| w == needle)
 }
 
 /// Whether the fed stream is recoded with a 16-bit POC: HEVC on an Amlogic decoder, whose
@@ -196,9 +192,8 @@ pub(crate) fn widens_poc(codec: u8, codec_name: &str, forced: Option<bool>) -> b
 /// an error-resilient one conformant, so the wave heals it. `forced` is the debug override.
 pub(crate) fn conceals(codec: u8, codec_name: &str, strict: bool, forced: Option<bool>) -> bool {
     use punktfunk_core::quic::{CODEC_AV1, CODEC_HEVC};
-    let name = codec_name.to_ascii_lowercase();
     let pick = match codec {
-        CODEC_HEVC => name.starts_with("omx.realtek") || name.starts_with("c2.realtek"),
+        CODEC_HEVC => is_realtek(codec_name),
         CODEC_AV1 => strict,
         _ => return false,
     };
@@ -265,30 +260,21 @@ pub(crate) fn p50_p95_max_ms(mut v: Vec<u64>) -> (f64, f64, f64) {
 
 #[cfg(test)]
 mod tests {
-    /// Each tail is one NAL of the type its name says, behind a four-byte start code: HEVC
-    /// filler is type 38 and its delimiter 35, H.264's are 12 and 9.
     #[test]
-    fn an_au_tail_is_one_filler_or_delimiter_nal() {
-        use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC};
-        let hevc = |mode| {
-            let t = super::au_tail(CODEC_HEVC, Some(mode));
-            assert_eq!((&t[..4], t[5] & 7), (&[0, 0, 0, 1][..], 1), "{mode}");
-            (t[4] >> 1) & 0x3F
-        };
-        assert_eq!((hevc("fill"), hevc("aud")), (38, 35));
-        let h264 = |mode| {
-            let t = super::au_tail(CODEC_H264, Some(mode));
-            assert_eq!(&t[..4], &[0, 0, 0, 1], "{mode}");
-            t[4] & 0x1F
-        };
-        assert_eq!((h264("fill"), h264("aud")), (12, 9));
-        for (codec, mode) in [
-            (CODEC_HEVC, None),
-            (CODEC_HEVC, Some("on")),
-            (CODEC_AV1, Some("aud")),
+    fn a_realtek_decoder_is_named_by_either_prefix() {
+        for name in [
+            "OMX.realtek.video.dec.hevc",
+            "c2.realtek.video.hevc.decoder",
         ] {
-            assert!(super::au_tail(codec, mode).is_empty(), "{codec} {mode:?}");
+            assert!(super::is_realtek(name), "{name}");
         }
+        assert!(!super::is_realtek("c2.qti.hevc.decoder"));
+        assert!(super::contains(
+            b"\0video-lowdelay-mode\0",
+            b"video-lowdelay-mode"
+        ));
+        assert!(!super::contains(b"video-lowdelay", b"video-lowdelay-mode"));
+        assert!(!super::contains(b"abc", b""));
     }
 
     #[test]

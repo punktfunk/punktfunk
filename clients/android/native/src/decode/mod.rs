@@ -17,6 +17,7 @@
 mod async_loop;
 mod display;
 mod latency;
+mod realtek;
 mod setup;
 mod sink;
 pub(crate) mod surface_control;

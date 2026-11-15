@@ -139,10 +139,8 @@ pub(super) fn hdr_static(client: &NativeClient) -> Option<punktfunk_core::quic::
 /// returns each output when the input is consumed, with a fence that signals when the pixels are
 /// written. Opt-in until the glass gain is measured; the `pf.present` line's `fenceTailMs` is
 /// the codec time the HUD `decode` then no longer sees.
-/// `rtk-lowdelay` (standard plus `video-lowdelay-mode`, which Realtek's ACodec turns into the
-/// decoder's low-delay mode: a picture leaves on its own AU, not the next one's). Opt-in: a
-/// build whose decoder lacks the mode can refuse to configure. `codecMs` on the `pf.present`
-/// line falls by a refresh where it takes.
+/// `rtk-lowdelay` (standard plus `video-lowdelay-mode` whatever [`super::realtek`] read): the
+/// key a Realtek decoder gets on its own once the framework is found to read it.
 /// `adb shell setprop debug.punktfunk.low_latency_key mtk-boost`.
 pub(super) const LOW_LATENCY_KEY_PROP: &std::ffi::CStr = c"debug.punktfunk.low_latency_key";
 
@@ -170,7 +168,8 @@ fn half_rate_tv() -> bool {
 /// never truncated, the HDR static info, and the low-latency keys for `codec_name`.
 /// `keys` is `Some(aggressive)` for [`low_latency_keys`]' profile, `None` for no low-latency key
 /// at all. A `c2.mtk` decoder on a [`HALF_RATE_TVS`] platform swaps the `Some` profile for
-/// `mtk-tv`; [`LOW_LATENCY_KEY_PROP`] overrides either way.
+/// `mtk-tv`; [`LOW_LATENCY_KEY_PROP`] overrides either way. `low_delay` adds Realtek's key
+/// ([`super::realtek::low_delay`]) to the standard profile.
 /// ACodec ignores a refused `max-input-size`, so that key stays.
 pub(super) fn low_latency_format(
     mime: &str,
@@ -178,6 +177,7 @@ pub(super) fn low_latency_format(
     codec_name: &str,
     keys: Option<bool>,
     hdr_static: Option<&punktfunk_core::quic::HdrMeta>,
+    low_delay: bool,
 ) -> MediaFormat {
     let mut format = MediaFormat::new();
     format.set_str("mime", mime);
@@ -203,6 +203,9 @@ pub(super) fn low_latency_format(
         }
         if profile == "qti-fence" && !qti_fence_eligible(codec_name, sdk) {
             log::warn!("decode: qti-fence needs a c2.qti decoder on Android 13+");
+        }
+        if low_delay && profile == "standard" {
+            format.set_i32(super::realtek::KEY, 1);
         }
     }
     if let Some(meta) = hdr_static {
