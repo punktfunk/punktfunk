@@ -50,6 +50,9 @@ pub struct CreateOptions {
     /// Whether this device decodes PyroWave. A host that probes it in Rust overwrites it.
     #[serde(default)]
     pub pyrowave_ok: bool,
+    /// The display lists HDR10 and has no headroom for it ([`ConsoleOptions::hdr_no_headroom`]).
+    #[serde(default)]
+    pub hdr_no_headroom: bool,
     /// The host answers `FetchProfiles`. Absent means it doesn't, and a connect sends the
     /// card's remembered pick unchecked.
     #[serde(default)]
@@ -113,6 +116,7 @@ impl CreateOptions {
             fallback_ui: self.fallback_ui,
             pyrowave_ok: self.pyrowave_ok,
             av1_ok: self.av1_ok,
+            hdr_no_headroom: self.hdr_no_headroom,
             store: Some(store.clone()),
             platform,
             gpu_cache_bytes: self.gpu_cache_bytes.max(16 << 20),

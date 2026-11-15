@@ -9,7 +9,7 @@
 //! Quick actions) opens that page in the preset's [`Scope`].
 
 use super::settings::rows::{
-    adjust, advanced, overrides_row, preset_field, preset_rows, row_spec, Section,
+    adjust, advanced, hdr_asks_first, overrides_row, preset_field, preset_rows, row_spec, Section,
 };
 use crate::glyphs::{Hint, HintKey};
 use crate::model::ConsoleCmd;
@@ -669,6 +669,13 @@ impl PresetEdit {
         fx: &mut Outbox,
     ) -> Option<MenuPulse> {
         let field = preset_field(id)?;
+        if id == super::settings::rows::RowId::Hdr && delta > 0 && hdr_asks_first(ctx) {
+            let scope = Scope::Preset(self.draft.clone());
+            fx.push(Screen::Prompt(
+                super::prompt::PromptScreen::hdr_without_headroom(scope),
+            ));
+            return Some(MenuPulse::Confirm);
+        }
         let held = |s: &Settings| {
             let mut o = SettingsOverlay::default();
             o.pin(field, s);

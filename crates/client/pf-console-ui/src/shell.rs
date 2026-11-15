@@ -228,6 +228,9 @@ pub struct ConsoleOptions {
     /// `CODEC_AV1` advertisement (`pf_client_core::video::av1_advertised`). A host
     /// that learns it only once its GPU exists starts `true` and corrects it.
     pub av1_ok: bool,
+    /// The display lists HDR10, and the OS lights nothing above SDR white: an HDR stream
+    /// comes out darker than SDR. The HDR row then asks once before it turns on.
+    pub hdr_no_headroom: bool,
     /// Settings and preset catalog. `None` uses the desktop file store
     /// (`pf_client_core::trust`); every other host must supply one.
     pub store: Option<Arc<dyn SettingsStore>>,
@@ -278,6 +281,7 @@ impl ConsoleOptions {
             // AV1 is not that safe an assumption, so the overlay corrects this from the
             // presenter's device (`SkiaOverlay::init`) before the first frame.
             av1_ok: true,
+            hdr_no_headroom: false,
             store: None,
             platform: Platform::Desktop,
             gpu_cache_bytes: DEFAULT_GPU_CACHE_BYTES,
@@ -482,6 +486,7 @@ impl Shell {
                 hides: opts.hides,
                 pyrowave_ok: opts.pyrowave_ok,
                 av1_ok: opts.av1_ok,
+                hdr_no_headroom: opts.hdr_no_headroom,
                 name: opts.device_name,
                 code: opts.device_code,
                 version: opts.version.unwrap_or_else(|| crate::VERSION.into()),

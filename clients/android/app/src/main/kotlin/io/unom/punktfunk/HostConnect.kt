@@ -185,9 +185,8 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
         nativeDisplayMode(context, secondScreen = settings.secondScreen)
     }
     val (w, h, hz) = mode
-    // Advertise HDR only when it is on AND this device's display can present it (else the host
-    // sends a proper SDR stream rather than PQ the panel would mis-tone-map).
-    val hdrEnabled = settings.hdrEnabled && displaySupportsHdr(context)
+    // HDR only where the display shows it: else the host sends SDR, not PQ the panel mis-tone-maps.
+    val hdrEnabled = settings.hdrOn(displayHdr(context))
     // 10-bit on its own asks nothing of the PANEL: Main10 at BT.709 decodes and presents on an
     // ordinary display, and the compositor dithers what it cannot show. So this is the user's
     // setting alone, with no display probe — unlike HDR directly above it.

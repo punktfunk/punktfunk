@@ -318,6 +318,7 @@ mod scene {
             spatial: false,
             av1_ok: true,
             pyrowave_ok: true,
+            hdr_no_headroom: false,
             profiles: false,
             prompts_unlock: false,
             hides: false,

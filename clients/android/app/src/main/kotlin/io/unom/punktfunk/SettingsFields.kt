@@ -42,6 +42,9 @@ internal object SettingsFields {
             overlay({ it.secondScreen }, { o, v -> o.copy(secondScreen = v) }), prefsKey = "second_screen"),
         field("hdrEnabled", "hdr_enabled", BoolKind, { it.hdrEnabled }, { s, v -> s.copy(hdrEnabled = v) },
             overlay({ it.hdrEnabled }, { o, v -> o.copy(hdrEnabled = v) })),
+        // This device's yes, never a preset's: the display it answers for is this one.
+        field("hdrWithoutHeadroom", "android.hdr_without_headroom", BoolKind, { it.hdrWithoutHeadroom },
+            { s, v -> s.copy(hdrWithoutHeadroom = v) }, prefsKey = "hdr_without_headroom"),
         field("tenBitSdr", "ten_bit_sdr", BoolKind, { it.tenBitSdr }, { s, v -> s.copy(tenBitSdr = v) },
             overlay({ it.tenBitSdr }, { o, v -> o.copy(tenBitSdr = v) })),
         field("compositor", "compositor", IntKind, { it.compositor }, { s, v -> s.copy(compositor = v) },

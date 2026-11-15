@@ -220,6 +220,11 @@ object SkiaConsole {
             // The same MediaCodec answer the Hello advertises by: without a real AV1
             // decoder the codec row marks AV1 unsupported instead of offering a dead pick.
             .put("av1_ok", VideoDecoders.decodableCodecBits() and 4 != 0)
+            // The HDR row asks once before it turns on where HDR comes out darker than SDR.
+            .put(
+                "hdr_no_headroom",
+                io.unom.punktfunk.displayHdr(context) == io.unom.punktfunk.DisplayHdr.NoHeadroom,
+            )
             // A player whose language the tray cannot type gets the system IME for every field
             // but a password: composition, candidates and dictation live there.
             .put(

@@ -4,11 +4,13 @@
 //!
 //! The answer leaves as [`ConsoleCmd::PromptAnswer`] carrying the prompt's `id`, so the app
 //! can drop a reply to a question it no longer holds. The shell's own questions answer nobody:
-//! [`PromptScreen::exit`]'s yes quits, [`PromptScreen::reset_settings`]'s resets.
+//! [`PromptScreen::exit`]'s yes quits, [`PromptScreen::reset_settings`]'s resets,
+//! [`PromptScreen::hdr_without_headroom`]'s turns HDR on.
 
 use crate::glyphs::{Hint, HintKey};
 use crate::model::ConsoleCmd;
 use crate::pointer::Pointer;
+use crate::screens::preset::Scope;
 use crate::screens::{Ctx, Outbox, ScreenView};
 use crate::theme::Fonts;
 use crate::widgets::{blurb, ListMsg, MenuList, RowSpec};
@@ -31,12 +33,16 @@ enum Own {
     Exit,
     /// Row 1 resets every setting; row 0, Cancel, sits under the cursor.
     ResetSettings,
+    /// Row 0 turns HDR on in the prompt's scope.
+    HdrWithoutHeadroom,
 }
 
 pub(crate) struct PromptScreen {
     prompt: Prompt,
     list: MenuList,
     own: Option<Own>,
+    /// Where [`Own::HdrWithoutHeadroom`]'s yes lands: the device's settings or a preset's.
+    scope: Scope,
 }
 
 impl PromptScreen {
@@ -45,6 +51,7 @@ impl PromptScreen {
             prompt,
             list: MenuList::new(),
             own: None,
+            scope: Scope::Global,
         }
     }
 
@@ -80,6 +87,23 @@ impl PromptScreen {
         )
     }
 
+    /// Why HDR may look darker on this display, asked once before the row turns on.
+    pub(crate) fn hdr_without_headroom(scope: Scope) -> PromptScreen {
+        use pf_l10n::{client, common};
+        PromptScreen {
+            scope,
+            ..Self::own(
+                Own::HdrWithoutHeadroom,
+                client::player_hdr_enabled_no_headroom_title(),
+                client::player_hdr_enabled_no_headroom_body(),
+                [
+                    client::player_hdr_enabled_no_headroom_confirm(),
+                    common::common_cancel(),
+                ],
+            )
+        }
+    }
+
     fn run(
         &mut self,
         msg: ListMsg,
@@ -107,6 +131,10 @@ impl PromptScreen {
                 });
             }
             Some(Own::ResetSettings) => {}
+            Some(Own::HdrWithoutHeadroom) if choice == Some(0) => {
+                super::settings::rows::allow_hdr_without_headroom(&self.scope, ctx, fx);
+            }
+            Some(Own::HdrWithoutHeadroom) => {}
             None => fx.cmds.push(ConsoleCmd::PromptAnswer {
                 id: self.prompt.id.clone(),
                 choice,

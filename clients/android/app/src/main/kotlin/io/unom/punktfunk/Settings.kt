@@ -41,19 +41,23 @@ data class Settings(
      */
     val videoFit: String = "fit",
     /**
-     * Advertise HDR (10-bit BT.2020 PQ) to the host. Default on, but only *effective* on a panel that
-     * can actually present HDR10 (see [displaySupportsHdr]) — on an SDR display HDR is never
-     * advertised regardless, so the host sends a proper 8-bit BT.709 stream rather than PQ the panel
-     * would mis-tone-map. Turning this off forces SDR even on a capable panel.
+     * Ask the host for HDR (10-bit BT.2020 PQ). Default on; what a session asks is [hdrOn], which
+     * also reads the display ([DisplayHdr]). Off forces SDR on any panel.
      */
     val hdrEnabled: Boolean = true,
+    /**
+     * The player's yes to the darker-picture warning on a display with no headroom
+     * ([DisplayHdr.NoHeadroom]), asked once. Off until then, so [hdrEnabled]'s default lights
+     * no HDR there. The console writes the same key.
+     */
+    val hdrWithoutHeadroom: Boolean = false,
     /**
      * Ask for 10-bit WITHOUT HDR — Main10 at BT.709. Off by default, and subsumed by
      * [hdrEnabled], which already implies 10 bits.
      *
      * Unlike HDR this asks nothing of the panel: an 8-bit display shows a dithered Main10 stream
      * perfectly well, and the gain is banding-free gradients — skies, fades, dark scenes — for a
-     * little bandwidth. So it is never gated on [displaySupportsHdr]. Mirrors the cross-client
+     * little bandwidth. So it is never gated on [displayHdr]. Mirrors the cross-client
      * `ten_bit_sdr` key the desktop clients write.
      */
     val tenBitSdr: Boolean = false,
@@ -583,25 +587,53 @@ fun safeDisplayMode(
     return Triple(SafeArea.insetWidth(w, displayCutoutInset(context)), h, hz)
 }
 
-/**
- * Whether to ask the host for HDR10: the panel lists HDR10 or HDR10+, and the OS can light HDR
- * above SDR white. [headroom] is `Display.isHdrSdrRatioAvailable`, or `null` where Android gives no
- * such signal: below API 34, on a TV, or on a screen other than the built-in one (a TV or an HDMI
- * sink shows HDR itself). A built-in panel without headroom tone-maps PQ under its SDR white, a
- * darker picture than the SDR stream. The Apple client's potential-EDR-headroom gate is the twin.
- */
-internal fun advertiseHdr(hdr10: Boolean, headroom: Boolean?): Boolean = hdr10 && headroom != false
+/** What the picture's display does with an HDR10 stream. */
+enum class DisplayHdr {
+    /** No HDR10 or HDR10+ listing: the host sends 8-bit BT.709. */
+    None,
+
+    /**
+     * Listed, but the OS lights nothing above SDR white. It tone-maps PQ under that white, a
+     * darker picture than the SDR stream, so HDR waits for the player's yes.
+     */
+    NoHeadroom,
+
+    /** Listed, and nothing says the OS can't light it. */
+    Full,
+}
 
 /**
- * True when the picture's display can present HDR10 ([advertiseHdr]), so the session asks the host
- * for it. Otherwise the host sends 8-bit BT.709, and the HDR toggle says the display can't.
+ * The verdict from the panel's HDR10 or HDR10+ listing and the OS headroom signal. [headroom] is
+ * `Display.isHdrSdrRatioAvailable`, or `null` where Android gives no such signal: below API 34, on
+ * a TV, or on a screen other than the built-in one (a TV or an HDMI sink shows HDR itself).
  */
-fun displaySupportsHdr(context: Context): Boolean {
+internal fun displayHdr(hdr10: Boolean, headroom: Boolean?): DisplayHdr = when {
+    !hdr10 -> DisplayHdr.None
+    headroom == false -> DisplayHdr.NoHeadroom
+    else -> DisplayHdr.Full
+}
+
+/** Whether a session on [display] asks the host for HDR10. The toggle shows the same answer. */
+fun Settings.hdrOn(display: DisplayHdr): Boolean = hdrEnabled && when (display) {
+    DisplayHdr.None -> false
+    DisplayHdr.NoHeadroom -> hdrWithoutHeadroom
+    DisplayHdr.Full -> true
+}
+
+/**
+ * The defaults after the player's yes to HDR without headroom, asked once. Until then every
+ * scope shows HDR off, so a yes given [inPreset] leaves the defaults off; the preset pins on.
+ */
+internal fun Settings.allowingHdrWithoutHeadroom(inPreset: Boolean): Settings =
+    copy(hdrWithoutHeadroom = true, hdrEnabled = !inPreset)
+
+/** [displayHdr] for the display the picture is on; an unreachable display reads as [DisplayHdr.None]. */
+fun displayHdr(context: Context): DisplayHdr {
     val display = probeDisplay(context)
     if (display == null) {
-        // Distinguishable from a real SDR verdict — a silent `false` here cost an HDR session.
+        // Its own line, so the log tells this apart from a display that lists no HDR.
         Log.w("punktfunk", "display HDR probe: no display reachable — advertising SDR")
-        return false
+        return DisplayHdr.None
     }
     val types = buildSet {
         // API 34+: the sanctioned per-mode query (Display.Mode.getSupportedHdrTypes). The
@@ -627,9 +659,9 @@ fun displaySupportsHdr(context: Context): Boolean {
     } else {
         null
     }
-    val supported = advertiseHdr(hdr10, headroom)
-    Log.i("punktfunk", "display HDR types=$types headroom=${headroom ?: "n/a"} → advertise HDR10=$supported")
-    return supported
+    val verdict = displayHdr(hdr10, headroom)
+    Log.i("punktfunk", "display HDR types=$types headroom=${headroom ?: "n/a"} → $verdict")
+    return verdict
 }
 
 /**

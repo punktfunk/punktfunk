@@ -208,6 +208,8 @@ pub(super) mod device_keys {
     pub const SC2: &str = "android.sc2_capture";
     pub const DS_CAPTURE: &str = "android.ds_capture";
     pub const REDUCE_UI_RES: &str = "android.reduce_ui_resolution";
+    /// The player's yes to HDR on a display with no headroom for it.
+    pub const HDR_WITHOUT_HEADROOM: &str = "android.hdr_without_headroom";
     /// With `width`/`height` 0: Native narrowed to clear the cutout. Kotlin's `-2`
     /// sentinel, which an unsigned size cannot carry.
     pub const SAFE_AREA_MODE: &str = "android.safe_area_mode";
@@ -306,6 +308,32 @@ pub(super) fn extra_bool(s: &pf_client_core::trust::Settings, key: &str, default
 pub(super) fn set_extra_bool(s: &mut pf_client_core::trust::Settings, key: &str, value: bool) {
     s.extra
         .insert(key.to_string(), serde_json::Value::Bool(value));
+}
+
+/// The HDR row asks before it turns on: this display has no headroom, where HDR comes out
+/// darker than SDR, and the player has not said yes. Until then the row reads Off in every
+/// scope, whatever `hdr_enabled` holds, and no session asks for HDR.
+pub(crate) fn hdr_asks_first(ctx: &Ctx) -> bool {
+    ctx.device.hdr_no_headroom
+        && !extra_bool(ctx.settings, device_keys::HDR_WITHOUT_HEADROOM, false)
+}
+
+/// The player's yes to [`hdr_asks_first`]: the device keeps it, so the question comes once,
+/// and HDR turns on in `scope`. A preset's yes leaves the device's own HDR as it read: off.
+pub(crate) fn allow_hdr_without_headroom(
+    scope: &crate::screens::preset::Scope,
+    ctx: &mut Ctx,
+    fx: &mut crate::screens::Outbox,
+) {
+    let preset = matches!(scope, crate::screens::preset::Scope::Preset(_));
+    ctx.write(|c| {
+        set_extra_bool(c.settings, device_keys::HDR_WITHOUT_HEADROOM, true);
+        if preset {
+            c.settings.hdr_enabled = false;
+        }
+        true
+    });
+    scope.write("hdr_enabled", ctx, fx, |s| s.hdr_enabled = true);
 }
 
 pub(super) fn extra_str<'a>(
@@ -1534,6 +1562,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
             )
             .into(),
         ),
+        RowId::Hdr if hdr_asks_first(ctx) => (None, m::player_hdr_enabled(), on_off(false).into()),
         RowId::Hdr => (None, m::player_hdr_enabled(), extra()),
         RowId::Chroma444 => (None, m::player_enable_444(), extra()),
         RowId::TenBitSdr => (None, m::player_ten_bit_sdr(), extra()),
@@ -1772,6 +1801,7 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
         }
         RowId::Codec => m::player_codec_hint().into(),
         RowId::Decoder => m::player_decoder_hint().into(),
+        RowId::Hdr if ctx.device.hdr_no_headroom => m::player_hdr_enabled_no_headroom_hint().into(),
         RowId::Hdr => m::player_hdr_enabled_hint().into(),
         RowId::Chroma444 => m::player_enable_444_hint().into(),
         RowId::TenBitSdr => m::player_ten_bit_sdr_hint().into(),
@@ -1959,9 +1989,12 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
     let fams = families(ctx.device.screen);
     let window = has_window(ctx.device);
     let pyrowave = pyrowave_rate(ctx);
+    let hdr_asks = hdr_asks_first(ctx);
     let hosts = ctx.hosts;
     let s = &mut *ctx.settings;
     match id {
+        // The yes comes through the question, never a step: `allow_hdr_without_headroom`.
+        RowId::Hdr if hdr_asks => None,
         RowId::Resolution => {
             // Native, Native (safe area) on Android, Match window where there is a window, the
             // current family's sizes, then a typed size while one is stored. The policies before
