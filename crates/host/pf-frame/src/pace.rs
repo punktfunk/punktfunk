@@ -3,13 +3,15 @@
 //! clock's ticks: QPC in the Windows driver, nanoseconds in the Linux host.
 
 /// A credit bucket at the stream rate. Each encoded frame spends one period; credit refills with
-/// time up to two periods. A frame that lands one panel tick early still passes, and the long-run
-/// rate never exceeds the stream's.
+/// time up to two periods, or one after a stall. A frame that lands one panel tick early still
+/// passes, and the long-run rate never exceeds the stream's.
 #[derive(Clone, Debug)]
 pub struct FrameCredit {
     period: u64,
     credit: u64,
     last: Option<u64>,
+    /// When the last frame was spent; `None` before the first.
+    spent: Option<u64>,
 }
 
 impl FrameCredit {
@@ -23,24 +25,32 @@ impl FrameCredit {
             period,
             credit: period * Self::DEPTH,
             last: None,
+            spent: None,
         }
     }
 
-    /// Whole frames the credit covers at `now`.
+    /// Whole frames the credit covers at `now`. Two and a half periods past the last spend the
+    /// bucket holds one frame: a desktop waking up sends its first frames a period apart, not a
+    /// panel tick, which a client on the stream's grid would queue for the rest of the motion.
     pub fn frames(&mut self, now: u64) -> usize {
         if let Some(last) = self.last {
+            let stalled = self
+                .spent
+                .is_some_and(|t| now.saturating_sub(t) > self.period * 5 / 2);
+            let depth = if stalled { 1 } else { Self::DEPTH };
             self.credit = self
                 .credit
                 .saturating_add(now.saturating_sub(last))
-                .min(self.period * Self::DEPTH);
+                .min(self.period * depth);
         }
         self.last = Some(now);
         (self.credit / self.period) as usize
     }
 
-    /// One frame encoded.
+    /// One frame encoded, at the time of the last [`Self::frames`].
     pub fn spend(&mut self) {
         self.credit = self.credit.saturating_sub(self.period);
+        self.spent = self.last;
     }
 
     /// Ticks until a whole frame is covered, as of the last [`Self::frames`].
@@ -233,6 +243,31 @@ mod tests {
             assert!(c.frames(1_000_000 + t) >= 1, "arrival {i}");
             c.spend();
         }
+    }
+
+    #[test]
+    fn credit_wakes_from_a_stall_without_a_head_start() {
+        let mut c = FrameCredit::new(PERIOD);
+        let mut t = 1_000_000;
+        for _ in 0..10 {
+            t += PERIOD;
+            assert!(c.frames(t) >= 1);
+            c.spend();
+        }
+        // Half a second of nothing, then the panel composes every half period.
+        t += 500_000;
+        let tick = PERIOD.div_ceil(2);
+        let taken: Vec<u64> = (0..6)
+            .map(|k| t + k * tick)
+            .filter(|&now| {
+                let covered = c.frames(now) >= 1;
+                if covered {
+                    c.spend();
+                }
+                covered
+            })
+            .collect();
+        assert_eq!(taken, [t, t + 2 * tick, t + 4 * tick]);
     }
 
     #[test]

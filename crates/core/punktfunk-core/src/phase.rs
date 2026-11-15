@@ -112,6 +112,9 @@ pub struct CadenceTuning {
     pub cushion_floor_ns: i64,
     /// Source-timestamp gap beyond which the loop re-anchors instead of tracking.
     pub reanchor_gap_ns: i64,
+    /// After such a gap, a frame later than the estimate becomes the anchor. Off, it goes out
+    /// late and folds nothing, and only an earlier frame re-anchors.
+    pub gap_adopts_later: bool,
 }
 
 impl CadenceTuning {
@@ -127,6 +130,7 @@ impl CadenceTuning {
             cushion_den: 1,
             cushion_floor_ns: 500_000,
             reanchor_gap_ns: 500_000_000,
+            gap_adopts_later: true,
         }
     }
 
@@ -140,11 +144,14 @@ impl CadenceTuning {
         }
     }
 
-    /// The latency intent on a measured VRR panel: the panel shows every millisecond of
-    /// arrival jitter, so a small cushion buys evenness. One MAD, floor 0.5 ms.
+    /// The latency intent on a measured panel: the panel shows every millisecond of arrival
+    /// jitter, so a small cushion buys evenness. One MAD, floor 0.5 ms. The first frame after a
+    /// still desktop is the slowest (idle clocks, a dozing radio), and anchored on it every
+    /// frame behind it would wait out the difference.
     pub const fn vrr_latency() -> CadenceTuning {
         CadenceTuning {
             cushion_num: 1,
+            gap_adopts_later: false,
             ..CadenceTuning::snapping()
         }
     }
@@ -237,7 +244,9 @@ impl CadenceClock {
 
     /// Due time in the present-clock domain. May be earlier than `ready_ns`
     /// (late): present at the next opportunity; do not clamp to now — that
-    /// would turn every late frame into a fresh anchor.
+    /// would turn every late frame into a fresh anchor. Past a gap the frame
+    /// re-anchors, unless it is later than the estimate and the tuning keeps
+    /// such a frame out ([`CadenceTuning::gap_adopts_later`]).
     ///
     /// `frame_interval_ns` is the nominal source interval and the cushion ceiling.
     pub fn due_ns(&mut self, src_pts_ns: u64, ready_ns: i64, frame_interval_ns: i64) -> i64 {
@@ -246,18 +255,26 @@ impl CadenceClock {
         let pts = src_pts_ns as i64;
         let raw = ready_ns - pts;
 
-        let anchored = match self.last_pts_ns {
-            // PTS went backwards, or the gap is too long to have tracked:
-            // re-anchor rather than slew for seconds.
-            Some(last)
-                if src_pts_ns < last || src_pts_ns - last > self.tuning.reanchor_gap_ns as u64 =>
-            {
-                false
+        enum Step {
+            Track,
+            Anchor,
+            /// Late after a gap: presented at once, folded nowhere.
+            Skip,
+        }
+        let step = match self.last_pts_ns {
+            Some(last) if src_pts_ns < last => Step::Anchor,
+            // Too long to have tracked: re-anchor rather than slew for seconds.
+            Some(last) if src_pts_ns - last > self.tuning.reanchor_gap_ns as u64 => {
+                if self.tuning.gap_adopts_later || raw <= self.offset_ns {
+                    Step::Anchor
+                } else {
+                    Step::Skip
+                }
             }
-            Some(_) => true,
-            None => false,
+            Some(_) => Step::Track,
+            None => Step::Anchor,
         };
-        if anchored {
+        if let Step::Track = step {
             self.offset_ns = self.offset_ns.saturating_add(self.skew_ns);
             let err = (raw - self.offset_ns)
                 .clamp(-self.tuning.error_clamp_ns, self.tuning.error_clamp_ns);
@@ -275,7 +292,7 @@ impl CadenceClock {
             } else {
                 self.tail_ns -= self.tail_ns >> 7;
             }
-        } else {
+        } else if let Step::Anchor = step {
             self.offset_ns = raw;
             self.skew_ns = 0;
             self.health.reanchors += 1;
@@ -651,6 +668,51 @@ mod tests {
             ready - far as i64,
             "a re-anchor adopts the new sample outright rather than slewing to it"
         );
+    }
+
+    /// A still desktop, then a first frame 30 ms slow and an on-time one behind it. The latency
+    /// tuning shows the slow one late and holds the next only by its cushion; snapping anchors
+    /// on the slow one and holds the next for most of the 30 ms.
+    #[test]
+    fn a_slow_wake_after_a_gap_holds_the_latency_intent_for_nothing() {
+        for (tuning, slow_anchors) in [
+            (CadenceTuning::vrr_latency(), false),
+            (CadenceTuning::snapping(), true),
+        ] {
+            let mut c = CadenceClock::new(tuning);
+            for k in 0..400 {
+                c.due_ns(pts_at(k), pts_at(k) as i64 + DOMAIN + DELAY, P);
+            }
+            let anchors = c.health().reanchors;
+            let k = 400 + 240; // two seconds still
+            let slow = pts_at(k) as i64 + DOMAIN + DELAY + 30_000_000;
+            let late = c.due_ns(pts_at(k), slow, P) < slow;
+            assert_eq!(late, !slow_anchors, "only an anchor is on time");
+            let ready = pts_at(k + 1) as i64 + DOMAIN + DELAY;
+            let hold = c.due_ns(pts_at(k + 1), ready, P) - ready;
+            assert_eq!(c.health().reanchors - anchors, u64::from(slow_anchors));
+            if slow_anchors {
+                assert!(hold > 20_000_000, "snapping held {hold} ns");
+            } else {
+                assert!(hold <= 1_000_000, "the latency tuning held {hold} ns");
+            }
+        }
+    }
+
+    /// An early wake re-anchors under the latency tuning too: holding frames for a slower
+    /// past is the same mistake the other way.
+    #[test]
+    fn an_early_wake_after_a_gap_reanchors_the_latency_intent() {
+        let mut c = CadenceClock::new(CadenceTuning::vrr_latency());
+        for k in 0..400 {
+            c.due_ns(pts_at(k), pts_at(k) as i64 + DOMAIN + DELAY, P);
+        }
+        let anchors = c.health().reanchors;
+        let far = pts_at(400) + 2_000_000_000;
+        let ready = far as i64 + DOMAIN + DELAY - 4_000_000;
+        c.due_ns(far, ready, P);
+        assert_eq!(c.health().reanchors, anchors + 1);
+        assert_eq!(c.health().offset_ns, ready - far as i64);
     }
 
     #[test]
