@@ -172,8 +172,8 @@ pub struct VulkanDecodeDevice {
     /// Vulkan Video decode is usable (queue + extensions + features). The bundle
     /// exists without it; gate the Vulkan rung on this, not on `Some`.
     pub video_decode: bool,
-    /// PyroWave decode is usable (`shaderInt16`, 8-bit storage, subgroup size control,
-    /// timeline semaphores). Gates the `CODEC_PYROWAVE` advertisement.
+    /// PyroWave decode is usable: the owner checked the device against what its lane needs.
+    /// Gates the `CODEC_PYROWAVE` advertisement.
     pub pyrowave_decode: bool,
     /// Feature facts the pyrowave pinned create-info reconstruction mirrors
     /// so it can share this `VkDevice`.

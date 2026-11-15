@@ -32,7 +32,7 @@ use ash::vk::Handle as _;
 use punktfunk_core::au::{AuBuf, AuMemory};
 use pyrowave_sys as pw;
 use std::ffi::{c_char, c_void, CString};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// Slots, each a plane set and a command buffer. Decode writes slot N while N-1 may still be
@@ -253,53 +253,209 @@ pub struct PyroWavePlanarFrame {
     pub turn: u64,
 }
 
-/// One timeline semaphore per decoder; each decode submit signals its frame's `turn`. Shared
-/// so another thread can wait for a frame. The last holder destroys the semaphore, and must
-/// drop before the device does.
+/// When each decode is done: every decode submit signals its frame's `turn`, in order.
+/// Shared so another thread can wait for a frame. The last holder destroys the handles, and
+/// must drop before the device does.
 pub struct DecodeTimeline {
     device: ash::Device,
-    /// The extension's entry points, on a device below 1.2 where the core ones are absent.
-    khr: Option<ash::khr::timeline_semaphore::Device>,
-    sem: vk::Semaphore,
+    sync: TurnSync,
+}
+
+enum TurnSync {
+    /// One timeline semaphore counting finished turns. `khr` holds the extension's entry
+    /// points on a device below 1.2, where the core ones are absent.
+    Timeline {
+        sem: vk::Semaphore,
+        khr: Option<ash::khr::timeline_semaphore::Device>,
+    },
+    /// A device without timeline semaphores: a fence per ring slot, and two binary
+    /// semaphores taken in turn so each submit runs after the one before.
+    Fences {
+        chain: [vk::Semaphore; 2],
+        slots: Mutex<[FenceSlot; RING]>,
+        /// Notified when a waiter leaves a fence.
+        left: Condvar,
+    },
+}
+
+#[derive(Clone, Copy, Default)]
+struct FenceSlot {
+    fence: vk::Fence,
+    /// The turn its submit signals; 0 while it has none.
+    turn: u64,
+    /// Threads waiting on `fence`, which is reset only at zero.
+    waiters: u32,
+}
+
+/// What one decode submit waits on, signals and is fenced by.
+struct TurnSubmit {
+    wait: Option<vk::Semaphore>,
+    signal: vk::Semaphore,
+    fence: vk::Fence,
+    /// The values to wait for and to signal, on a timeline semaphore.
+    values: Option<[u64; 2]>,
 }
 
 impl DecodeTimeline {
+    /// # Safety
+    ///
+    /// `device` is the live device of `instance` and outlives the timeline.
+    unsafe fn new(
+        instance: &ash::Instance,
+        device: &ash::Device,
+        vkd: &VulkanDecodeDevice,
+    ) -> Result<DecodeTimeline> {
+        // Built first, so an early error drops what exists: destroying null is a no-op.
+        let mut timeline = DecodeTimeline {
+            device: device.clone(),
+            sync: TurnSync::Fences {
+                chain: [vk::Semaphore::null(); 2],
+                slots: Mutex::default(),
+                left: Condvar::new(),
+            },
+        };
+        // SAFETY: fn contract; every create-info is a local.
+        unsafe {
+            if vkd.f_timeline_semaphore {
+                let mut kind = vk::SemaphoreTypeCreateInfo::default()
+                    .semaphore_type(vk::SemaphoreType::TIMELINE)
+                    .initial_value(0);
+                timeline.sync = TurnSync::Timeline {
+                    sem: device.create_semaphore(
+                        &vk::SemaphoreCreateInfo::default().push_next(&mut kind),
+                        None,
+                    )?,
+                    khr: (device_api(vkd) < vk::API_VERSION_1_2)
+                        .then(|| ash::khr::timeline_semaphore::Device::new(instance, device)),
+                };
+            } else if let TurnSync::Fences { chain, slots, .. } = &mut timeline.sync {
+                for sem in chain {
+                    *sem = device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?;
+                }
+                for slot in slots.get_mut().unwrap_or_else(|e| e.into_inner()) {
+                    slot.fence = device.create_fence(&vk::FenceCreateInfo::default(), None)?;
+                }
+            }
+        }
+        Ok(timeline)
+    }
+
     /// Block until frame `turn` has decoded, or `timeout` passes.
     pub fn wait(&self, turn: u64, timeout: Duration) -> Result<()> {
-        let sems = [self.sem];
-        let values = [turn];
-        let info = vk::SemaphoreWaitInfo::default()
-            .semaphores(&sems)
-            .values(&values);
         let timeout = timeout.as_nanos() as u64;
-        // SAFETY: `sem` is this timeline's live semaphore; the wait info borrows locals.
-        unsafe {
-            match &self.khr {
-                Some(khr) => khr.wait_semaphores(&info, timeout),
-                None => self.device.wait_semaphores(&info, timeout),
+        match &self.sync {
+            TurnSync::Timeline { sem, khr } => {
+                let sems = [*sem];
+                let values = [turn];
+                let info = vk::SemaphoreWaitInfo::default()
+                    .semaphores(&sems)
+                    .values(&values);
+                // SAFETY: `sem` is this timeline's live semaphore; the wait info borrows locals.
+                unsafe {
+                    match khr {
+                        Some(khr) => khr.wait_semaphores(&info, timeout),
+                        None => self.device.wait_semaphores(&info, timeout),
+                    }
+                }
+            }
+            TurnSync::Fences { slots, left, .. } => {
+                let lock = || slots.lock().unwrap_or_else(|e| e.into_inner());
+                let mut held = lock();
+                // A turn no slot holds was waited for before its slot moved on.
+                let Some(i) = held.iter().position(|s| s.turn == turn && turn != 0) else {
+                    return Ok(());
+                };
+                let fence = held[i].fence;
+                held[i].waiters += 1;
+                drop(held);
+                // SAFETY: `fence` is live, and not reset while `waiters` counts this thread.
+                let waited = unsafe { self.device.wait_for_fences(&[fence], true, timeout) };
+                lock()[i].waiters -= 1;
+                left.notify_all();
+                waited
             }
         }
         .context("pyrowave decode timeline")
     }
 
-    /// The last turn whose decode is done.
+    /// A turn whose decode is done, and with it every turn before: the latest one known.
     fn done(&self) -> u64 {
-        // SAFETY: `sem` is this timeline's live semaphore.
-        unsafe {
-            match &self.khr {
-                Some(khr) => khr.get_semaphore_counter_value(self.sem),
-                None => self.device.get_semaphore_counter_value(self.sem),
+        match &self.sync {
+            // SAFETY: `sem` is this timeline's live semaphore.
+            TurnSync::Timeline { sem, khr } => unsafe {
+                match khr {
+                    Some(khr) => khr.get_semaphore_counter_value(*sem),
+                    None => self.device.get_semaphore_counter_value(*sem),
+                }
+            }
+            .unwrap_or(0),
+            TurnSync::Fences { slots, .. } => slots
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                // SAFETY: `fence` is this timeline's live fence; the status call only reads.
+                .filter(|s| unsafe { self.device.get_fence_status(s.fence) }.unwrap_or(false))
+                .map(|s| s.turn)
+                .max()
+                .unwrap_or(0),
+        }
+    }
+
+    /// What `turn`'s submit takes, from ring slot `slot`. The slot's last decode is done:
+    /// its fence is reset here, once no thread still waits on it.
+    fn arm(&self, slot: usize, turn: u64) -> Result<TurnSubmit> {
+        match &self.sync {
+            TurnSync::Timeline { sem, .. } => Ok(TurnSubmit {
+                wait: Some(*sem),
+                signal: *sem,
+                fence: vk::Fence::null(),
+                values: Some([turn - 1, turn]),
+            }),
+            TurnSync::Fences { chain, slots, left } => {
+                let mut held = slots.lock().unwrap_or_else(|e| e.into_inner());
+                while held[slot].waiters != 0 {
+                    held = left.wait(held).unwrap_or_else(|e| e.into_inner());
+                }
+                held[slot].turn = 0;
+                let fence = held[slot].fence;
+                // SAFETY: `fence` is live, signalled or never submitted, and unwatched.
+                unsafe { self.device.reset_fences(&[fence]) }?;
+                Ok(TurnSubmit {
+                    // Turn 1 follows nothing; each later one takes what the last signalled.
+                    wait: (turn > 1).then(|| chain[(turn - 1) as usize % 2]),
+                    signal: chain[turn as usize % 2],
+                    fence,
+                    values: None,
+                })
             }
         }
-        .unwrap_or(0)
+    }
+
+    /// `slot`'s submit for `turn` is on the queue: waiters may find it.
+    fn armed(&self, slot: usize, turn: u64) {
+        if let TurnSync::Fences { slots, .. } = &self.sync {
+            slots.lock().unwrap_or_else(|e| e.into_inner())[slot].turn = turn;
+        }
     }
 }
 
 impl Drop for DecodeTimeline {
     fn drop(&mut self) {
         // SAFETY: the decoder idles the queue before it lets go, so no submit still signals
-        // `sem`, and every other holder is done waiting on it.
-        unsafe { self.device.destroy_semaphore(self.sem, None) };
+        // these, and every other holder is done waiting on them. Null is a no-op.
+        unsafe {
+            match &mut self.sync {
+                TurnSync::Timeline { sem, .. } => self.device.destroy_semaphore(*sem, None),
+                TurnSync::Fences { chain, slots, .. } => {
+                    for sem in chain {
+                        self.device.destroy_semaphore(*sem, None);
+                    }
+                    for slot in slots.get_mut().unwrap_or_else(|e| e.into_inner()) {
+                        self.device.destroy_fence(slot.fence, None);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -577,7 +733,7 @@ impl PyroWaveDecoder {
         color: ColorDesc,
         hdr16: bool,
     ) -> Result<PyroWaveDecoder> {
-        if !vkd.pyrowave_decode || !vkd.f_timeline_semaphore {
+        if !vkd.pyrowave_decode {
             bail!("presenter device lacks the PyroWave compute feature set");
         }
         if !chroma444 && (width % 2 != 0 || height % 2 != 0) {
@@ -726,7 +882,7 @@ impl PyroWaveDecoder {
         };
 
         // SAFETY: fn contract; every create-info is a local that outlives its call.
-        let (cmd_pool, cmds, sem) = unsafe {
+        let (cmd_pool, cmds, timeline) = unsafe {
             let cmd_pool = device.create_command_pool(
                 &vk::CommandPoolCreateInfo::default()
                     .queue_family_index(vkd.graphics_qf)
@@ -742,14 +898,8 @@ impl PyroWaveDecoder {
                 )?
                 .try_into()
                 .expect("RING buffers requested");
-            let mut kind = vk::SemaphoreTypeCreateInfo::default()
-                .semaphore_type(vk::SemaphoreType::TIMELINE)
-                .initial_value(0);
-            let sem = device.create_semaphore(
-                &vk::SemaphoreCreateInfo::default().push_next(&mut kind),
-                None,
-            )?;
-            (cmd_pool, cmds, sem)
+            let timeline = Arc::new(DecodeTimeline::new(&instance, &device, vkd)?);
+            (cmd_pool, cmds, timeline)
         };
 
         tracing::info!(
@@ -758,12 +908,6 @@ impl PyroWaveDecoder {
             idwt = if fragment { "fragment" } else { "compute" },
             "PyroWave decoder open on the presenter's device"
         );
-        let timeline = Arc::new(DecodeTimeline {
-            device: device.clone(),
-            khr: (device_api(vkd) < vk::API_VERSION_1_2)
-                .then(|| ash::khr::timeline_semaphore::Device::new(&instance, &device)),
-            sem,
-        });
         Ok(PyroWaveDecoder {
             device,
             queue,
@@ -1424,27 +1568,31 @@ impl PyroWaveDecoder {
         self.queue_lock.yield_to_present();
         // pyrowave keeps one payload buffer and one coefficient set per decoder and opens with
         // copies into them: wait for the decode before, and only that, not the present after it.
-        let sems = [self.timeline.sem];
-        let after = [turn - 1];
-        let values = [turn];
+        let sync = self.timeline.arm(slot, turn)?;
+        let wait: Vec<vk::Semaphore> = sync.wait.into_iter().collect();
+        let signal = [sync.signal];
+        let (after, values) = sync.values.map_or(([0], [0]), |[a, v]| ([a], [v]));
         let stages = [vk::PipelineStageFlags::ALL_COMMANDS];
         let mut timeline = vk::TimelineSemaphoreSubmitInfo::default()
             .wait_semaphore_values(&after)
             .signal_semaphore_values(&values);
         let cmds = [cmd];
-        let submit = vk::SubmitInfo::default()
-            .wait_semaphores(&sems)
-            .wait_dst_stage_mask(&stages)
+        let mut submit = vk::SubmitInfo::default()
+            .wait_semaphores(&wait)
+            .wait_dst_stage_mask(&stages[..wait.len()])
             .command_buffers(&cmds)
-            .signal_semaphores(&sems)
-            .push_next(&mut timeline);
+            .signal_semaphores(&signal);
+        if sync.values.is_some() {
+            submit = submit.push_next(&mut timeline);
+        }
         {
             let _guard = self.queue_lock.guard();
             // SAFETY: `queue` external sync is `queue_lock`, held above; `cmd` is executable;
-            // `turn` is above every value signalled so far and `turn - 1` was signalled or is
-            // submitted ahead of us; the submit borrows locals.
-            unsafe { dev.queue_submit(self.queue, &[submit], vk::Fence::null()) }?;
+            // turn - 1's submit signals what this one waits on, and leaves what it signals
+            // unsignalled or below `turn`; the fence is reset; the submit borrows locals.
+            unsafe { dev.queue_submit(self.queue, &[submit], sync.fence) }?;
         }
+        self.timeline.armed(slot, turn);
         self.last_submit = Instant::now();
         Ok(())
     }
