@@ -636,7 +636,7 @@ export const displayEffective: EffectivePolicy = policyFields();
 /** The stored policy: a plain built-in pick, which is what most hosts sit on. */
 export const displayPolicy: DisplayPolicy = {
 	preset: "default",
-	game_session: "auto",
+	game_session: "dedicated",
 	version: 1,
 };
 

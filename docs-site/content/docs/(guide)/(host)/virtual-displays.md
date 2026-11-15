@@ -153,11 +153,11 @@ To show every device one of your real monitors instead of a virtual screen, see
 
 **Linux hosts with gamescope installed.** The last question in **Customise**:
 
-- **Auto** (default): a library launch runs in the session the box is in: Steam Game Mode, a bare
+- **Dedicated** (default): each library launch gets its own headless gamescope at the device's
+  resolution and refresh, with only the game inside. On KDE and GNOME, this is how a game streams
+  in HDR. With keep-alive, the game keeps running when you disconnect.
+- **Auto**: a library launch runs in the session the box is in: Steam Game Mode, a bare
   gamescope, or your desktop.
-- **Dedicated**: each library launch gets its own headless gamescope at the device's resolution
-  and refresh, with only the game inside. With keep-alive, the game keeps running when you
-  disconnect.
 
 On a box in Steam Game Mode, a dedicated Steam launch borrows Game Mode's Steam and hands it back
 when the session ends. Moonlight launches follow the same choice.
