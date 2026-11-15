@@ -180,8 +180,8 @@ pub(super) fn run_service() -> Result<()> {
     // Own thread: `Get-NetConnectionProfile` is slow and must not delay the host.
     std::thread::spawn(warn_if_public_network);
     let result = supervise(stop, session);
-    // The job took the console host with it, so its desk fence comes off here: a pad that stays
-    // up through a service stop must not keep hiding from the next console session.
+    // The fence comes off here: a pad that stays up through a service stop must not keep
+    // hiding from the next console session, and a lent one is the desk's while nothing fences.
     pf_inject::desk_fence::clear();
 
     // Report the truth: `running` carries Win32(0), so a failed `supervise` used to stop as
@@ -250,6 +250,8 @@ pub(super) fn supervise(stop: HANDLE, session_ev: HANDLE) -> Result<()> {
             continue;
         }
 
+        // The desk's controllers belong to this console session, and a later one moves them.
+        pf_inject::desk_fence::start(session);
         // The box's own host only: seat hosts start under `SeatsSlot`, never through here.
         sync_plane_rules(Some(&exe));
         let job_h = HANDLE(job.as_raw_handle());

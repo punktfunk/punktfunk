@@ -1,44 +1,54 @@
-//! The desk fence: the box's host tags the desk's physical game controllers with the console
-//! session, the way every host tags its own virtual pads, so a seat's HID, XUSB and XInput
-//! listings and GameInput deliveries leave them alone.
+//! The desk fence: the service tags each physical game controller with the session that may
+//! list it. A desk controller gets the console session, so a seat's HID, XUSB and XInput
+//! listings and GameInput deliveries leave it alone. A controller lent to a seat ([`hand`])
+//! gets that seat's session, or [`PARKED`] while the seat doesn't run, on every HID and XUSB
+//! devnode under its USB device.
 //!
-//! A tag written after a device appears is what a process can do; nothing a shipped component
-//! writes is earlier, because the session id belongs to the bus that creates the device
-//! (`design/desk-pads-and-seats-spike/results.md`, S7). So the fence lands within tens of
-//! milliseconds of a plug, is wiped by the device's next start and re-applied on its arrival,
-//! does not reach WGI's Xbox listing in a seat, and leaves `xinput1_4`'s box-wide index alone.
-//! Devices a Remote Desktop session redirected in carry that session's id already and are
-//! never touched; the host's own `SWD` devices carry theirs from creation.
+//! The service is the one writer: a process in a session can't locate a devnode tagged for
+//! another, and session 0 locates them all. A tag written after a device appears is what a
+//! process can do: the session id belongs to the bus that creates the device, and a device's
+//! start wipes it, whenever it was written. So the fence lands within tens of milliseconds of
+//! a plug and is re-applied on every arrival. It hides a device from another session's
+//! listings. It doesn't stop an open of a known path, the console's Raw Input or WGI's Xbox
+//! listing, and it leaves `xinput1_4`'s box-wide index alone. A change of holder restarts the
+//! USB device, which ends every open handle. Devices a Remote Desktop session redirected in
+//! and the host's own `SWD` devices carry their session from creation and are never touched.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::c_void;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Sender};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use anyhow::{anyhow, bail, Context, Result};
 use windows::core::{GUID, HSTRING, PCWSTR};
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
-    CM_Get_Device_IDW, CM_Get_Device_Interface_ListW, CM_Get_Device_Interface_List_SizeW,
-    CM_Get_Device_Interface_PropertyW, CM_Get_Parent, CM_Locate_DevNodeW, CM_Register_Notification,
-    CM_Set_DevNode_PropertyW, CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_LOCATE_DEVNODE_NORMAL,
-    CM_NOTIFY_ACTION, CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL, CM_NOTIFY_EVENT_DATA,
-    CM_NOTIFY_FILTER, CM_NOTIFY_FILTER_0, CM_NOTIFY_FILTER_0_0,
-    CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE, CR_SUCCESS, HCMNOTIFICATION,
+    CM_Get_DevNode_PropertyW, CM_Get_Device_IDW, CM_Get_Device_ID_ListW,
+    CM_Get_Device_ID_List_SizeW, CM_Get_Device_Interface_ListW, CM_Get_Device_Interface_List_SizeW,
+    CM_Get_Device_Interface_PropertyW, CM_Get_Parent, CM_Locate_DevNodeW,
+    CM_Query_And_Remove_SubTreeW, CM_Register_Notification, CM_Set_DevNode_PropertyW,
+    CM_Setup_DevNode, CM_GETIDLIST_FILTER_ENUMERATOR, CM_GETIDLIST_FILTER_PRESENT,
+    CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_LOCATE_DEVNODE_NORMAL, CM_NOTIFY_ACTION,
+    CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL, CM_NOTIFY_EVENT_DATA, CM_NOTIFY_FILTER,
+    CM_NOTIFY_FILTER_0, CM_NOTIFY_FILTER_0_0, CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE,
+    CM_REMOVE_NO_RESTART, CM_SETUP_DEVNODE_READY, CR_SUCCESS, HCMNOTIFICATION, PNP_VETO_TYPE,
 };
 use windows::Win32::Devices::HumanInterfaceDevice::{
     HidD_FreePreparsedData, HidD_GetAttributes, HidD_GetPreparsedData, HidP_GetCaps,
     GUID_DEVINTERFACE_HID, HIDD_ATTRIBUTES, HIDP_CAPS, PHIDP_PREPARSED_DATA,
 };
 use windows::Win32::Devices::Properties::{
-    DEVPKEY_Device_InstanceId, DEVPKEY_Device_SessionId, DEVPROPTYPE, DEVPROP_TYPE_EMPTY,
-    DEVPROP_TYPE_STRING, DEVPROP_TYPE_UINT32,
+    DEVPKEY_Device_BusReportedDeviceDesc, DEVPKEY_Device_CompatibleIds, DEVPKEY_Device_DeviceDesc,
+    DEVPKEY_Device_FriendlyName, DEVPKEY_Device_InstanceId, DEVPKEY_Device_SessionId, DEVPROPTYPE,
+    DEVPROP_TYPE_EMPTY, DEVPROP_TYPE_STRING, DEVPROP_TYPE_UINT32,
 };
-use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Foundation::{DEVPROPKEY, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 
-use crate::channel_proof::get_devnode_session;
+use crate::channel_proof::{child_device_ids, get_devnode_session};
 
 /// `GUID_DEVINTERFACE_XUSB`: the class `xinput1_4`, WGI and GameInput walk for Xbox pads.
 const GUID_DEVINTERFACE_XUSB: GUID = GUID::from_u128(0xec87f1e3_c13b_4100_b5f7_8b84d54260cb);
@@ -56,28 +66,44 @@ const STEAM_PADS: [u16; 8] = [
     0x1102, 0x1106, 0x1142, 0x1205, 0x1302, 0x1303, 0x1304, 0x1305,
 ];
 
-static ARRIVALS: OnceLock<Mutex<Sender<String>>> = OnceLock::new();
-static NOTIFICATION: OnceLock<usize> = OnceLock::new();
+/// The session of a lent controller whose seat doesn't run: one no session ever has.
+pub const PARKED: u32 = 0xFFFF_FFFE;
+/// [`CONSOLE`] before the service names a console session.
+const NO_SESSION: u32 = u32::MAX;
 
-/// Fence every physical controller present to `session` and keep fencing the ones that
-/// arrive, for the life of the process. Called once by the box's console host.
-pub fn start(session: u32) {
-    let (tx, rx) = channel::<String>();
-    if ARRIVALS.set(Mutex::new(tx)).is_err() {
-        return;
+static WORK: OnceLock<Mutex<Sender<Work>>> = OnceLock::new();
+static NOTIFICATION: OnceLock<usize> = OnceLock::new();
+/// The console session, which desk controllers are fenced to.
+static CONSOLE: AtomicU32 = AtomicU32::new(NO_SESSION);
+/// Lent USB devices by upper-case instance id: the session each is fenced to.
+static LENDS: Mutex<BTreeMap<String, u32>> = Mutex::new(BTreeMap::new());
+
+/// What the fence thread is asked to do.
+enum Work {
+    /// An interface path that just arrived.
+    Arrived(String),
+    Sweep,
+}
+
+/// Fence every physical controller present, desk controllers to `console`, and keep fencing
+/// the ones that arrive, for the life of the process. The service calls it with each console
+/// session it starts a host in: a later call moves the desk's controllers to the new session.
+pub fn start(console: u32) {
+    CONSOLE.store(console, Ordering::SeqCst);
+    run();
+    if let Some(work) = WORK.get()
+        && let Ok(work) = work.lock()
+    {
+        let _ = work.send(Work::Sweep);
     }
-    let spawned = std::thread::Builder::new()
-        .name("pf-desk-fence".into())
-        .spawn(move || {
-            sweep(session);
-            for path in rx {
-                if let Err(error) = fence_interface(&path, session) {
-                    tracing::warn!(%error, path = %path, "desk controller not fenced");
-                }
-            }
-        });
-    if let Err(error) = spawned {
-        tracing::warn!(%error, "desk fence did not start");
+}
+
+/// Starts the fence thread and its arrival watchers, once: with the first console session or
+/// the first lend, whichever comes first. The watchers come before any sweep or restart, so
+/// no arrival falls between the two.
+fn run() {
+    let (tx, rx) = channel::<Work>();
+    if WORK.set(Mutex::new(tx)).is_err() {
         return;
     }
     for class in [GUID_DEVINTERFACE_HID, GUID_DEVINTERFACE_XUSB] {
@@ -85,6 +111,55 @@ pub fn start(session: u32) {
             tracing::warn!(%error, "desk fence is not watching arrivals");
         }
     }
+    let spawned = std::thread::Builder::new()
+        .name("pf-desk-fence".into())
+        .spawn(move || {
+            for work in rx {
+                match work {
+                    Work::Sweep => sweep(),
+                    Work::Arrived(path) => {
+                        if let Err(error) = fence_interface(&path) {
+                            tracing::warn!(%error, path = %path, "controller not fenced");
+                        }
+                    }
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "desk fence did not start");
+    }
+}
+
+/// Give the USB device `instance` to `session`, a seat's or [`PARKED`]; `None` returns it to
+/// the desk. With `restart` the device restarts, so every handle its last holder had open
+/// dies and its devnodes arrive again under the new tag. Without, the tags change in place:
+/// right only when nobody could have opened it. A device that isn't plugged in is the
+/// holder's the moment it arrives. A refused restart changes nothing: the device runs on
+/// under the tags it had.
+pub fn hand(instance: &str, session: Option<u32>, restart: bool) -> Result<()> {
+    run();
+    let key = instance.to_ascii_uppercase();
+    let set = |session: Option<u32>| {
+        let mut lends = lends();
+        match session {
+            Some(session) => lends.insert(key.clone(), session),
+            None => lends.remove(&key),
+        }
+    };
+    let was = set(session);
+    if !restart {
+        sweep();
+        return Ok(());
+    }
+    let restarted = restart_device(instance);
+    if restarted.is_err() {
+        set(was);
+    }
+    restarted
+}
+
+fn lends() -> MutexGuard<'static, BTreeMap<String, u32>> {
+    LENDS.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
 /// Take the fence off every physical controller that carries one. For the service's stop and
@@ -92,8 +167,17 @@ pub fn start(session: u32) {
 /// through a punktfunk removal would otherwise keep hiding from a later console session. The
 /// fence's own skips hold here too: a redirected pad's tag and our devices' are not the fence's.
 pub fn clear() {
-    for (id, _) in candidates() {
-        if is_ours(&id) || is_redirected(&id).unwrap_or(true) {
+    for (path, hid) in every_interface() {
+        let Ok(id) = instance_id_of(&path) else {
+            continue;
+        };
+        let Ok(line) = lineage(&id) else {
+            continue;
+        };
+        if is_ours(&id) || line.iter().any(|id| is_ts_hub(id)) {
+            continue;
+        }
+        if lent_session(&line).is_none() && hid && !is_controller_collection(&path) {
             continue;
         }
         if let Ok(Some(_)) = get_devnode_session(&id)
@@ -104,96 +188,287 @@ pub fn clear() {
     }
 }
 
-/// Every present controller now: tag what is not ours and not redirected.
-fn sweep(session: u32) {
+/// Every present HID and XUSB interface now: tag what the fence takes.
+fn sweep() {
     let mut fenced = 0usize;
-    for (id, path) in candidates() {
-        match fence_devnode(&id, &path, session) {
+    for (path, hid) in every_interface() {
+        match fence_path(&path, hid) {
             Ok(true) => fenced += 1,
             Ok(false) => {}
-            Err(error) => tracing::warn!(%error, devnode = %id, "desk controller not fenced"),
+            Err(error) => tracing::warn!(%error, path = %path, "controller not fenced"),
         }
     }
-    tracing::info!(
-        session,
-        fenced,
-        "desk controllers fenced to the console session"
-    );
+    let console = CONSOLE.load(Ordering::SeqCst);
+    tracing::info!(console, fenced, "controllers fenced to their sessions");
 }
 
-/// `(instance id, interface path)` of every present HID controller collection
-/// ([`is_controller`]) and every present XUSB interface.
-fn candidates() -> Vec<(String, String)> {
+/// `(interface path, is HID)` of every present HID and XUSB interface.
+fn every_interface() -> Vec<(String, bool)> {
     let mut out = Vec::new();
     for (class, hid) in [
         (GUID_DEVINTERFACE_HID, true),
         (GUID_DEVINTERFACE_XUSB, false),
     ] {
         for path in interfaces(&class).unwrap_or_default() {
-            if hid && !is_controller_collection(&path) {
-                continue;
-            }
-            match instance_id_of(&path) {
-                Ok(id) => out.push((id, path)),
-                Err(error) => tracing::debug!(%error, path = %path, "interface without a devnode"),
-            }
+            out.push((path, hid));
         }
     }
     out
 }
 
-/// One arrived interface: fence its devnode when it is a controller.
-fn fence_interface(path: &str, session: u32) -> Result<()> {
+/// One arrived interface: fence its devnode when the fence takes it.
+fn fence_interface(path: &str) -> Result<()> {
     let is_hid = path
         .to_ascii_lowercase()
         .contains("4d1e55b2-f16f-11cf-88cb-001111000030");
-    if is_hid && !is_controller_collection(path) {
-        return Ok(());
-    }
-    let id = instance_id_of(path)?;
-    fence_devnode(&id, path, session).map(|_| ())
+    fence_path(path, is_hid).map(|_| ())
 }
 
-/// Tag one devnode unless it is ours, redirected, or already tagged. `Ok(true)` when a tag was
-/// written and read back.
-fn fence_devnode(id: &str, path: &str, session: u32) -> Result<bool> {
-    if is_ours(id) || is_redirected(id)? {
+/// Tag the devnode behind `path` with its holder's session: a lent device's every HID and XUSB
+/// devnode with its lend's, a desk controller with the console's. Ours, redirected ones and
+/// other HID devices are left alone. `Ok(true)` when a tag was written and read back.
+fn fence_path(path: &str, hid: bool) -> Result<bool> {
+    let id = instance_id_of(path)?;
+    if is_ours(&id) {
         return Ok(false);
     }
-    if get_devnode_session(id)? == Some(session) {
+    let line = lineage(&id)?;
+    if line.iter().any(|id| is_ts_hub(id)) {
         return Ok(false);
     }
-    set_session(id, Some(session))?;
-    match get_devnode_session(id)? {
+    let session = match lent_session(&line) {
+        Some(session) => session,
+        None if hid && !is_controller_collection(path) => return Ok(false),
+        None => match CONSOLE.load(Ordering::SeqCst) {
+            NO_SESSION => return Ok(false),
+            console => console,
+        },
+    };
+    if get_devnode_session(&id)? == Some(session) {
+        return Ok(false);
+    }
+    set_session(&id, Some(session))?;
+    match get_devnode_session(&id)? {
         Some(read) if read == session => {
-            tracing::info!(devnode = %id, path = %path, session, "desk controller fenced to the console session");
+            tracing::info!(devnode = %id, path = %path, session, "controller fenced");
             Ok(true)
         }
         read => bail!("{id} reads {read:?} after the write"),
     }
 }
 
-/// The host's own virtual devices: `SWD\PUNKTFUNK\…` and `SWD\VID_…\PF_…`, tagged at creation.
-fn is_ours(instance_id: &str) -> bool {
-    instance_id.to_ascii_uppercase().starts_with("SWD\\")
+/// The session the lend of a device in `line` names, a devnode's own id then its ancestors'.
+fn lent_session(line: &[String]) -> Option<u32> {
+    let lends = lends();
+    line.iter().find_map(|id| lends.get(id).copied())
 }
 
-/// Whether an ancestor is the Remote Desktop USB hub: such a device carries its seat's session
-/// and must keep it.
-fn is_redirected(instance_id: &str) -> Result<bool> {
+/// The upper-case instance ids of `instance_id` and its ancestors, nearest first.
+fn lineage(instance_id: &str) -> Result<Vec<String>> {
     let mut devinst = locate(instance_id)?;
+    let mut line = vec![instance_id.to_ascii_uppercase()];
     for _ in 0..16 {
         let mut parent = 0u32;
         // SAFETY: `devinst` is a live devnode handle; `parent` is a valid out-param.
         if unsafe { CM_Get_Parent(&mut parent, devinst, 0) } != CR_SUCCESS {
-            return Ok(false);
+            break;
         }
-        if is_ts_hub(&device_id(parent)) {
-            return Ok(true);
-        }
+        line.push(device_id(parent).to_ascii_uppercase());
         devinst = parent;
     }
-    Ok(false)
+    Ok(line)
+}
+
+/// A USB device plugged into the box, as the lending gate reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UsbDevice {
+    /// `USB\VID_…&PID_…\<serial or port id>`.
+    pub instance: String,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    /// What the device calls itself on the bus.
+    pub name: String,
+    /// Class, subclass and protocol of each interface.
+    pub interfaces: Vec<[u8; 3]>,
+    /// A HID controller collection or an XUSB interface lies under it.
+    pub controller: bool,
+}
+
+/// Every USB device plugged into a real port, redirected ones aside.
+pub fn usb_devices() -> Vec<UsbDevice> {
+    let mut controllers = BTreeSet::new();
+    for (path, hid) in every_interface() {
+        if hid && !is_controller_collection(&path) {
+            continue;
+        }
+        if let Ok(line) = instance_id_of(&path).and_then(|id| lineage(&id)) {
+            controllers.extend(line);
+        }
+    }
+    let read = |instance: String| {
+        let (vendor_id, product_id) = usb_ids(&instance)?;
+        let line = lineage(&instance).ok()?;
+        if line.iter().any(|id| is_ts_hub(id)) {
+            return None;
+        }
+        let devinst = locate(&instance).ok()?;
+        let compatible = strings(devinst, &DEVPKEY_Device_CompatibleIds);
+        let interfaces = if compatible.iter().any(|id| is_composite(id)) {
+            let children = child_device_ids(&instance).unwrap_or_default();
+            let class = |child: &String| {
+                let compatible = strings(locate(child).ok()?, &DEVPKEY_Device_CompatibleIds);
+                compatible.iter().find_map(|id| interface_class(id))
+            };
+            children.iter().filter_map(class).collect()
+        } else {
+            Vec::from_iter(compatible.iter().find_map(|id| interface_class(id)))
+        };
+        let name = [
+            &DEVPKEY_Device_BusReportedDeviceDesc,
+            &DEVPKEY_Device_FriendlyName,
+            &DEVPKEY_Device_DeviceDesc,
+        ]
+        .into_iter()
+        .find_map(|key| strings(devinst, key).into_iter().next())
+        .unwrap_or_default();
+        Some(UsbDevice {
+            controller: controllers.contains(&instance.to_ascii_uppercase()),
+            instance,
+            vendor_id,
+            product_id,
+            name,
+            interfaces,
+        })
+    };
+    present_devices("USB")
+        .into_iter()
+        .filter_map(read)
+        .collect()
+}
+
+/// The vendor and product of a USB device's own instance id, `USB\VID_vvvv&PID_pppp\…`. An
+/// interface's (`…&MI_00\…`) and a hub's own (`USB\ROOT_HUB30\…`) are no device's.
+fn usb_ids(instance_id: &str) -> Option<(u16, u16)> {
+    let upper = instance_id.to_ascii_uppercase();
+    let mut parts = upper.split('\\');
+    let (bus, ids, tail) = (parts.next()?, parts.next()?, parts.next()?);
+    let (vendor, product) = ids.strip_prefix("VID_")?.split_once("&PID_")?;
+    let hex = |text: &str| {
+        u16::from_str_radix(text, 16)
+            .ok()
+            .filter(|_| text.len() == 4)
+    };
+    let device = bus == "USB" && !tail.is_empty() && parts.next().is_none();
+    device.then_some((hex(vendor)?, hex(product)?))
+}
+
+/// The class, subclass and protocol a compatible id of the form
+/// `USB\Class_cc&SubClass_ss&Prot_pp` names.
+fn interface_class(compatible_id: &str) -> Option<[u8; 3]> {
+    let upper = compatible_id.to_ascii_uppercase();
+    let rest = upper.strip_prefix("USB\\CLASS_")?;
+    let (class, rest) = rest.split_once("&SUBCLASS_")?;
+    let (subclass, protocol) = rest.split_once("&PROT_")?;
+    let hex = |text: &str| u8::from_str_radix(text, 16).ok();
+    Some([hex(class)?, hex(subclass)?, hex(protocol)?])
+}
+
+/// The compatible id of a device whose interfaces are devnodes of their own.
+fn is_composite(compatible_id: &str) -> bool {
+    compatible_id.eq_ignore_ascii_case("USB\\COMPOSITE")
+}
+
+/// The instance id of every present device `enumerator` made.
+fn present_devices(enumerator: &str) -> Vec<String> {
+    let filter = HSTRING::from(enumerator);
+    let flags = CM_GETIDLIST_FILTER_ENUMERATOR | CM_GETIDLIST_FILTER_PRESENT;
+    let mut len = 0u32;
+    // SAFETY: `len` is a valid out-param; `filter` is a NUL-terminated name valid for the call.
+    let cr = unsafe { CM_Get_Device_ID_List_SizeW(&mut len, PCWSTR(filter.as_ptr()), flags) };
+    if cr != CR_SUCCESS || len == 0 {
+        return Vec::new();
+    }
+    let mut buf = vec![0u16; len as usize];
+    // SAFETY: `buf` is `len` UTF-16 units as the size call just reported.
+    let cr = unsafe { CM_Get_Device_ID_ListW(PCWSTR(filter.as_ptr()), &mut buf, flags) };
+    if cr != CR_SUCCESS {
+        return Vec::new();
+    }
+    buf.split(|&c| c == 0)
+        .filter(|s| !s.is_empty())
+        .map(String::from_utf16_lossy)
+        .collect()
+}
+
+/// A devnode's string property, one string or a list; empty when it has none.
+fn strings(devinst: u32, key: &DEVPROPKEY) -> Vec<String> {
+    let mut ty = DEVPROPTYPE(0);
+    let mut buf = [0u16; 1024];
+    let mut size = (buf.len() * 2) as u32;
+    // SAFETY: `devinst` is a located devnode; the key is a static; `buf` holds `size` bytes and
+    // `ty` / `size` are valid out-params.
+    let cr = unsafe {
+        CM_Get_DevNode_PropertyW(
+            devinst,
+            key,
+            &mut ty,
+            Some(buf.as_mut_ptr().cast::<u8>()),
+            &mut size,
+            0,
+        )
+    };
+    if cr != CR_SUCCESS {
+        return Vec::new();
+    }
+    let units = (size as usize / 2).min(buf.len());
+    buf[..units]
+        .split(|&c| c == 0)
+        .filter(|s| !s.is_empty())
+        .map(String::from_utf16_lossy)
+        .collect()
+}
+
+/// Remove the device's subtree and set it up again: its drivers unload, every open handle on
+/// it dies, and its devnodes arrive anew. A device that isn't plugged in has nothing to end.
+fn restart_device(instance_id: &str) -> Result<()> {
+    let Ok(devinst) = locate(instance_id) else {
+        return Ok(());
+    };
+    let mut veto = PNP_VETO_TYPE(0);
+    let mut by = [0u16; 260];
+    // SAFETY: `devinst` was just located; `veto` and `by` are valid out-params for the call.
+    let removed = unsafe {
+        CM_Query_And_Remove_SubTreeW(
+            devinst,
+            Some(&mut veto),
+            Some(&mut by),
+            CM_REMOVE_NO_RESTART,
+        )
+    };
+    // A refused removal left it running; one that went through needs this to come back.
+    // SAFETY: `devinst` stays a valid devnode handle across its removal.
+    let ready = unsafe { CM_Setup_DevNode(devinst, CM_SETUP_DEVNODE_READY) };
+    if removed != CR_SUCCESS {
+        let end = by.iter().position(|&c| c == 0).unwrap_or(by.len());
+        let by = String::from_utf16_lossy(&by[..end]);
+        bail!(
+            "restart {instance_id}: removal refused (CONFIGRET {}, veto {} by {by:?})",
+            removed.0,
+            veto.0
+        );
+    }
+    if ready != CR_SUCCESS {
+        bail!(
+            "restart {instance_id}: CONFIGRET {} setting it up again",
+            ready.0
+        );
+    }
+    Ok(())
+}
+
+/// The host's own virtual devices: `SWD\PUNKTFUNK\…` and `SWD\VID_…\PF_…`, tagged at creation.
+fn is_ours(instance_id: &str) -> bool {
+    instance_id.to_ascii_uppercase().starts_with("SWD\\")
 }
 
 /// The Remote Desktop USB redirection bus and hub, by the ids Windows gives them.
@@ -421,10 +696,10 @@ unsafe extern "system" fn on_notify(
         let end = units.iter().position(|&c| c == 0).unwrap_or(units.len());
         String::from_utf16_lossy(&units[..end])
     };
-    if let Some(tx) = ARRIVALS.get()
-        && let Ok(tx) = tx.lock()
+    if let Some(work) = WORK.get()
+        && let Ok(work) = work.lock()
     {
-        let _ = tx.send(link);
+        let _ = work.send(Work::Arrived(link));
     }
     0
 }
@@ -473,5 +748,32 @@ mod tests {
         assert!(is_ts_hub("ROOT\\RDPBUS\\0000"));
         assert!(is_ts_hub("USB\\TS_USB_HUB_ENUMERATOR\\0000"));
         assert!(!is_ts_hub("USB\\ROOT_HUB30\\9&2EC1B4C8&0&0"));
+    }
+
+    #[test]
+    fn a_usb_device_is_read_from_its_ids() {
+        assert_eq!(
+            usb_ids("USB\\VID_28DE&PID_1304\\FXB995480095E"),
+            Some((0x28DE, 0x1304))
+        );
+        assert_eq!(
+            usb_ids("usb\\vid_054c&pid_0ce6\\7&3f94d01&0&2"),
+            Some((0x054C, 0x0CE6))
+        );
+        let interface = "USB\\VID_054C&PID_0CE6&MI_03\\8&185D5297&4&0003";
+        assert_eq!(usb_ids(interface), None, "an interface");
+        assert_eq!(usb_ids("USB\\ROOT_HUB30\\9&2EC1B4C8&0&0"), None, "a hub");
+        let child = "HID\\VID_054C&PID_0CE6\\9&25E0AEA4&0&0000";
+        assert_eq!(usb_ids(child), None, "a HID child");
+        assert_eq!(usb_ids("USB\\VID_054C&PID_0CE6"), None, "no instance");
+
+        let hid = interface_class("USB\\Class_03&SubClass_00&Prot_00");
+        assert_eq!(hid, Some([3, 0, 0]));
+        let xbox = interface_class("usb\\class_ff&subclass_47&prot_d0");
+        assert_eq!(xbox, Some([0xFF, 0x47, 0xD0]));
+        assert_eq!(interface_class("USB\\Class_03&SubClass_00"), None);
+        assert_eq!(interface_class("USB\\COMPOSITE"), None);
+        assert!(is_composite("USB\\COMPOSITE"));
+        assert!(!is_composite("USB\\Class_03"));
     }
 }
