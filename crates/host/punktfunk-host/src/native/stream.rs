@@ -575,28 +575,13 @@ impl StreamCommon {
 /// needs. The whole context moves onto the stream thread.
 pub(super) struct SessionContext {
     pub(super) common: StreamCommon,
-    pub(super) compositor: crate::vdisplay::Compositor,
-    /// Per-instance, not via `PUNKTFUNK_GAMESCOPE_NODE` — two sessions must not overwrite each other.
-    pub(super) gamescope_route: Option<crate::vdisplay::GamescopeRoute>,
+    /// What the handshake settled.
+    pub(super) terms: Arc<super::handshake::SessionTerms>,
     /// What the handshake's format rule read, re-run when the codec or the source moves.
     pub(super) format_facts: super::handshake::FormatFacts,
-    /// The display is lit in HDR ([`Verdict::display_hdr`](super::handshake::Verdict)).
-    pub(super) display_hdr: bool,
-    /// The handshake's encode resolution, which the session keeps for every open.
-    pub(super) encoder: Arc<crate::encode::Resolved>,
     pub(super) host_knobs: &'static super::HostKnobs,
     pub(super) knobs: super::SessionKnobs,
-    /// `Hello::bitrate_kbps == 0`. A mode switch re-resolves PyroWave's pin either way, and an
-    /// Automatic rate is held inside the new bounds. Another codec's explicit rate stays.
-    pub(super) bitrate_auto: bool,
-    /// PyroWave's bits per pixel for every pin this session resolves (`session_pyrowave_bpp`).
-    pub(super) pyrowave_bpp: f64,
     pub(super) conn: super::link::SessionLink,
-    pub(super) cursor_forward: bool,
-    pub(super) streamed_au: bool,
-    /// H.264/HEVC slices per frame; 1 = single-slice. TV-SoC decoders (Amlogic) wedge on
-    /// multi-slice.
-    pub(super) slices: u32,
     pub(super) launch: Option<String>,
     pub(super) launch_target: Option<crate::library::LaunchTarget>,
     /// This session's launch record, claimed before prep and the launch hold.
@@ -607,19 +592,8 @@ pub(super) struct SessionContext {
     /// Where this session's launch outcome goes; the control task writes it to
     /// the client ([`punktfunk_core::quic::LaunchOutcome`]).
     pub(super) launch_outcome: crate::gamelease::OutcomeTx,
-    /// Threaded into the EDID CTA HDR block before `create` so host apps tone-map to the client's panel.
-    pub(super) client_hdr: Option<pf_frame::HdrMeta>,
     /// Admitted by `mode_conflict: join`: share the live display instead of creating one.
     pub(super) join_live: bool,
-    /// The handshake's screen is a host monitor ([`SessionPlan::mirrored`](crate::session_plan::SessionPlan::mirrored)).
-    pub(super) mirrored: bool,
-    /// The screen the handshake settled this session wants ([`crate::vdisplay::SessionParams::screen`]).
-    pub(super) screen: Option<crate::vdisplay::policy::DisplayTarget>,
-    /// The topology the handshake settled ([`crate::vdisplay::SessionParams::topology`]).
-    pub(super) topology: Option<crate::vdisplay::policy::Topology>,
-    /// The view and fit the encoder frames for: a joiner's, or this client's own view
-    /// ([`SessionPlan::reframe_to`](crate::session_plan::SessionPlan::reframe_to)).
-    pub(super) reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     /// The encoder's framing, published for the input thread.
     pub(super) frame_map: super::input::FrameMap,
     /// The session gamescope's X displays, published for the clipboard.

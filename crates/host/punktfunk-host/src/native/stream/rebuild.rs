@@ -479,22 +479,14 @@ impl StreamState {
             .facts
             .format_facts
             .resolve(codec, &self.facts.encoder, mode);
-        self.plan = super::pipeline::resolve_plan(
-            &self.facts.encoder,
-            v.bit_depth,
-            v.hdr,
-            v.chroma,
+        self.plan = super::pipeline::plan_for(
+            &self.facts.terms,
             codec,
-            self.plan.studio_asked,
-            self.plan.cursor_forward,
-            self.plan.slices,
-            compositor,
-            route,
-            self.plan.pyrowave_bpp,
-            usize::from(self.facts.shard_payload),
+            &v,
             self.plan.reframe_to,
             self.display.vd_params.join_live,
-            self.plan.mirrored,
+            compositor,
+            route,
         );
         self.bit_depth = v.bit_depth;
         v
@@ -2390,7 +2382,7 @@ mod tests {
     /// `tenure`'s answers on this host: content, follows and `join_live`, then the OS's. The
     /// control task's gates compose as `native.rs` sets them and `inbound.rs` reads them.
     fn tenure_answers(tenure: Tenure) -> ((bool, bool, bool), OsAnswers) {
-        use crate::encode::{ChromaFormat, Codec};
+        use crate::encode::Codec;
         use crate::native::handshake::{cursor_forward, follows_source, runs_exact_rate};
         use punktfunk_core::quic::v2::{features::FeatureSet, registry::FEATURE_FORMAT_EPOCH};
         let mut f = super::super::swap::tests::fake();
@@ -2431,22 +2423,19 @@ mod tests {
         } else {
             !worker || cursor(worker)
         };
-        let capture = super::super::pipeline::resolve_plan(
-            &f.st.facts.encoder,
-            8,
-            false,
-            ChromaFormat::Yuv420,
+        let mut terms = crate::native::handshake::tests::terms_for(
+            crate::native::handshake::tests::hello_at(ASKED),
+            f.st.facts.encoder.clone(),
+        );
+        terms.mirrored = mirrored;
+        let capture = super::super::pipeline::plan_for(
+            &terms,
             Codec::H265,
-            Default::default(),
-            false,
-            1,
-            Compositor::Mutter,
-            None,
-            0.0,
-            1200,
+            &terms.verdict,
             None,
             joined,
-            mirrored,
+            Compositor::Mutter,
+            None,
         )
         .capture;
         let os = OsAnswers {

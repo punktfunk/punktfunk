@@ -411,11 +411,10 @@ impl StreamState {
         send: Arc<std::sync::mpsc::SyncSender<SendMsg>>,
     ) -> super::screens::ScreenSet {
         let base = super::screens::ScreenBase {
+            terms: self.facts.terms.clone(),
             compositor: self.display.compositor,
             params: self.display.vd_params.clone(),
             plan: self.plan,
-            pyrowave_max_kbps: self.facts.knobs.pyrowave_max_kbps,
-            encoder: self.facts.encoder.clone(),
             bit_depth: self.bit_depth,
             enc_of: EncDerive {
                 share_permille: crate::native::bitrate::SHARE_ALL,
@@ -467,6 +466,7 @@ impl StreamState {
         bitrate_kbps: u32,
     ) -> BuildRequest {
         BuildRequest {
+            terms: self.facts.terms.clone(),
             mode,
             bitrate_kbps,
             bitrate_auto: self.facts.bitrate_auto,
@@ -476,9 +476,6 @@ impl StreamState {
                 ..self.enc_now()
             },
             plan: self.plan,
-            pyrowave_max_kbps: self.facts.knobs.pyrowave_max_kbps,
-            encoder: self.facts.encoder.clone(),
-            client_hdr: self.facts.client_hdr,
             wire_seq_base: self.clock.next_au(),
             screen: 0,
         }
@@ -575,8 +572,12 @@ impl StreamState {
     /// fails drops what the phases before it started: the lease, the pipeline, the display, the
     /// ramp.
     pub(super) fn new(ctx: SessionContext, prepared: Option<PreparedDisplay>) -> Result<Self> {
-        let mut plan = session_plan(&ctx);
-        let (cursor, vd_params) = display_request(&ctx, &plan);
+        let compositor = ctx
+            .terms
+            .compositor
+            .expect("the Virtual source resolves a compositor during the handshake");
+        let mut plan = session_plan(&ctx, compositor);
+        let (cursor, vd_params) = display_request(&ctx, &plan, compositor);
         let (streamed_wire, slice_wire) = wire_request(&ctx);
         let (mode, bitrate_kbps, adopted) = settle_mode(&ctx, &mut plan, prepared.is_some());
         let mut facts = session_facts(&ctx, &plan, mode, streamed_wire);
@@ -595,7 +596,7 @@ impl StreamState {
             // window lingers past pipeline-ready for it to cross.
             !facts.bitrate_auto && c.codec == crate::encode::Codec::PyroWave,
         );
-        let (mut display, pipe) = open_display(prepared, ctx.compositor, vd_params, cursor)?;
+        let (mut display, pipe) = open_display(prepared, compositor, vd_params, cursor)?;
         let pipe = match pipe {
             Some(pipe) => pipe,
             None => build_first(&mut display, &facts, plan, c.bit_depth, bitrate_kbps, &fec)?,
@@ -888,25 +889,11 @@ pub(super) fn adopt_built_bitrate(
 }
 
 /// Bring-up's first phase: what the session encodes, as the handshake settled it.
-fn session_plan(ctx: &SessionContext) -> crate::session_plan::SessionPlan {
-    let c = &ctx.common;
-    let plan = resolve_plan(
-        &ctx.encoder,
-        c.bit_depth,
-        c.hdr,
-        c.chroma,
-        c.codec,
-        ctx.format_facts.studio_asked,
-        ctx.cursor_forward,
-        ctx.slices,
-        ctx.compositor,
-        ctx.gamescope_route.as_ref(),
-        ctx.pyrowave_bpp,
-        c.session.shard_payload(),
-        ctx.reframe_to,
-        ctx.join_live,
-        ctx.mirrored,
-    );
+fn session_plan(
+    ctx: &SessionContext,
+    compositor: crate::vdisplay::Compositor,
+) -> crate::session_plan::SessionPlan {
+    let plan = resolve_plan(&ctx.terms, compositor, ctx.terms.gamescope_route.as_ref());
     tracing::info!(?plan, "resolved session plan");
     plan
 }
@@ -926,17 +913,19 @@ type CursorPlan = (
 fn display_request(
     ctx: &SessionContext,
     plan: &crate::session_plan::SessionPlan,
+    compositor: crate::vdisplay::Compositor,
 ) -> (CursorPlan, crate::vdisplay::SessionParams) {
-    let cursor_fwd = ctx
+    let terms = &ctx.terms;
+    let cursor_fwd = terms
         .cursor_forward
         .then(super::super::cursor_fwd::CursorForwarder::new);
-    if ctx.cursor_forward {
+    if terms.cursor_forward {
         tracing::info!("cursor channel negotiated — forwarding shape/state, encoder blend off");
     }
     let (gamescope_composite, metadata_composite) = composite_plan(
         plan,
         cursor_fwd.is_some(),
-        ctx.compositor == pf_vdisplay::Compositor::Gamescope,
+        compositor == pf_vdisplay::Compositor::Gamescope,
     );
     if gamescope_composite {
         tracing::info!("gamescope cursor: compositing the XFixes-sourced pointer into the video");
@@ -948,16 +937,16 @@ fn display_request(
         );
     }
     let params = crate::vdisplay::SessionParams {
-        screen: ctx.screen.clone(),
-        topology: ctx.topology,
+        screen: terms.wanted.clone(),
+        topology: terms.topology,
         client_fp: ctx.conn.peer_fingerprint(),
-        client_hdr: ctx.client_hdr,
-        hdr: ctx.display_hdr,
-        hw_cursor: ctx.cursor_forward || metadata_composite,
+        client_hdr: terms.client_hdr(),
+        hdr: terms.verdict.display_hdr,
+        hw_cursor: terms.cursor_forward || metadata_composite,
         join_live: ctx.join_live,
         quit: ctx.common.life.quit_flag().clone(),
         launch: ctx.launch.clone(),
-        route: ctx.gamescope_route.clone(),
+        route: terms.gamescope_route.clone(),
         #[cfg(target_os = "linux")]
         isolation: ctx.isolation.clone(),
         #[cfg(not(target_os = "linux"))]
@@ -973,7 +962,9 @@ fn display_request(
 /// knobs leave them on (`PUNKTFUNK_STREAMED_AU=0` reverts to whole-AU sends). Encoder chunking
 /// is per AU.
 fn wire_request(ctx: &SessionContext) -> (bool, bool) {
-    let streamed = ctx.streamed_au && ctx.knobs.streamed_au;
+    // Sentinel-headed streamed blocks: ship early FEC while the AU tail still encodes.
+    let accepted = ctx.terms.hello.video_caps & punktfunk_core::quic::VIDEO_CAP_STREAMED_AU != 0;
+    let streamed = accepted && ctx.knobs.streamed_au;
     if streamed {
         tracing::info!(
             "client accepts streamed AUs (VIDEO_CAP_STREAMED_AU) — used if this session's \
@@ -982,7 +973,7 @@ fn wire_request(ctx: &SessionContext) -> (bool, bool) {
     }
     (
         streamed,
-        streamed && ctx.slices > 1 && ctx.knobs.slice_stream,
+        streamed && ctx.terms.slices > 1 && ctx.knobs.slice_stream,
     )
 }
 
@@ -1016,13 +1007,13 @@ fn settle_mode(
         mode = m;
         plan.reframe_to = v.map(|v| (punktfunk_core::video_fit::VideoFit::Fit, v));
         if plan.codec == crate::encode::Codec::PyroWave {
-            let running = ctx.bitrate_auto.then_some(bitrate_kbps);
+            let running = ctx.terms.bitrate_auto().then_some(bitrate_kbps);
             let picture = plan.picture(mode);
             bitrate_kbps = pyrowave_mode_kbps(running, &picture, plan, ctx.knobs.pyrowave_max_kbps);
         }
     }
     tracing::info!(
-        compositor = ctx.compositor.id(),
+        compositor = ctx.terms.compositor.map_or("none", |c| c.id()),
         ?mode,
         bitrate_kbps,
         bit_depth = c.bit_depth,
@@ -1042,19 +1033,20 @@ fn session_facts(
     let c = &ctx.common;
     SessionFacts {
         deadline: std::time::Instant::now(),
-        encoder: ctx.encoder.clone(),
+        terms: ctx.terms.clone(),
+        encoder: ctx.terms.encoder.clone(),
         knobs: ctx.knobs,
         life: c.life.clone(),
         counters: c.counters.clone(),
         conn: ctx.conn.clone(),
         negotiated: mode,
-        bitrate_auto: ctx.bitrate_auto,
+        bitrate_auto: ctx.terms.bitrate_auto(),
         audio_reserved_kbps: c.audio_reserved_kbps,
         shard_payload: c.shard_payload,
         pyrowave: plan.codec == crate::encode::Codec::PyroWave,
         streamed_wire,
         perf: pf_host_config::config().perf,
-        client_hdr: ctx.client_hdr,
+        client_hdr: ctx.terms.client_hdr(),
         bringup: c.bringup.clone(),
         stats: c.stats.clone(),
         format_facts: ctx.format_facts.clone(),
@@ -1163,6 +1155,7 @@ fn build_first(
         facts.life.stop_flag(),
     )?;
     let req = BuildRequest {
+        terms: facts.terms.clone(),
         mode,
         bitrate_kbps,
         bitrate_auto: facts.bitrate_auto,
@@ -1175,9 +1168,6 @@ fn build_first(
             share_permille: crate::native::bitrate::SHARE_ALL,
         },
         plan,
-        pyrowave_max_kbps: facts.knobs.pyrowave_max_kbps,
-        encoder: facts.encoder.clone(),
-        client_hdr: facts.client_hdr,
         wire_seq_base: 0,
         screen: 0,
     };
@@ -1889,21 +1879,22 @@ mod tests {
             chroma: crate::encode::ChromaFormat::Yuv420,
             color: punktfunk_core::quic::ColorInfo::SDR_BT709,
         };
+        let mut terms = crate::native::handshake::tests::terms_for(
+            punktfunk_core::quic::Hello {
+                bitrate_kbps: if w.auto { 0 } else { w.kbps },
+                ..crate::native::handshake::tests::hello_at(w.mode)
+            },
+            f.st.facts.encoder.clone(),
+        );
+        (terms.codec, terms.bitrate_kbps, terms.view) = (w.codec, w.kbps, w.view);
+        terms.pyrowave_max_kbps = f.st.facts.knobs.pyrowave_max_kbps;
         SessionContext {
             common,
-            compositor: crate::vdisplay::Compositor::Mutter,
-            gamescope_route: None,
+            terms: Arc::new(terms),
             format_facts: f.st.facts.format_facts.clone(),
-            display_hdr: false,
-            encoder: f.st.facts.encoder.clone(),
             host_knobs: crate::native::HostKnobs::get(),
             knobs: f.st.facts.knobs,
-            bitrate_auto: w.auto,
-            pyrowave_bpp: 1.6,
             conn: f.st.facts.conn.clone(),
-            cursor_forward: false,
-            streamed_au: false,
-            slices: 1,
             launch: None,
             launch_target: None,
             launch_claim: None,
@@ -1918,14 +1909,7 @@ mod tests {
                 pad_slots: None,
             },
             launch_outcome: unbounded_channel().0,
-            client_hdr: None,
             join_live: false,
-            mirrored: false,
-            screen: None,
-            topology: None,
-            reframe_to: w
-                .view
-                .map(|v| (punktfunk_core::video_fit::VideoFit::Fit, v)),
             frame_map: Default::default(),
             #[cfg(target_os = "linux")]
             gamescope_xwayland: Default::default(),
@@ -1958,7 +1942,7 @@ mod tests {
     fn settled(w: Welcomed, queued: &[crate::native::wiring::ModeAsk], prepared: bool) -> Settled {
         let f = super::super::swap::tests::fake();
         let ctx = context(&f, w, queued);
-        let mut plan = session_plan(&ctx);
+        let mut plan = session_plan(&ctx, crate::vdisplay::Compositor::Mutter);
         let (mode, kbps, adopted) = settle_mode(&ctx, &mut plan, prepared);
         let facts = session_facts(&ctx, &plan, mode, false);
         assert_eq!(
@@ -2046,7 +2030,7 @@ mod tests {
             view: None,
         };
         let ctx = context(&f, w, &[(asked, Some((32, 16)))]);
-        let mut plan = session_plan(&ctx);
+        let mut plan = session_plan(&ctx, crate::vdisplay::Compositor::Mutter);
         let (mode, kbps, adopted) = settle_mode(&ctx, &mut plan, false);
         assert!(adopted);
         assert_eq!(session_facts(&ctx, &plan, mode, false).negotiated, asked);

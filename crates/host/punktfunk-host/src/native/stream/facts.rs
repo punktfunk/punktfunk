@@ -9,6 +9,8 @@ use crate::native::bitrate::EncoderCeiling;
 pub(super) struct SessionFacts {
     /// The session's `seconds` cap: the loop ends here.
     pub(super) deadline: std::time::Instant,
+    /// What the handshake settled, which every build and encoder-rate derivation reads.
+    pub(super) terms: Arc<crate::native::handshake::SessionTerms>,
     /// The handshake's encode resolution. Every rebuild opens on it, so an Encoder-row change
     /// applies at the next session.
     pub(super) encoder: Arc<crate::encode::Resolved>,

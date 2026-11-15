@@ -447,11 +447,17 @@ pub(super) mod tests {
         let (codec_tx, codecs) = tokio::sync::mpsc::unbounded_channel();
         let (rate_tx, rates) = tokio::sync::mpsc::unbounded_channel();
         let display = Arc::new(Mutex::new(DisplayAsks::default()));
+        let encoder = crate::encode::resolve();
+        let knobs = crate::native::SessionKnobs::read();
+        let hello = crate::native::handshake::tests::hello_at(mode);
+        let mut terms = crate::native::handshake::tests::terms_for(hello, encoder.clone());
+        terms.pyrowave_max_kbps = knobs.pyrowave_max_kbps;
         let st = StreamState {
             facts: SessionFacts {
                 deadline: now + Duration::from_secs(60),
-                encoder: crate::encode::resolve(),
-                knobs: crate::native::SessionKnobs::read(),
+                terms: Arc::new(terms),
+                encoder,
+                knobs,
                 life: life.clone(),
                 counters: Default::default(),
                 conn,
@@ -744,7 +750,7 @@ pub(super) mod tests {
             f.st.build_request(f.st.live.cur_mode, f.st.live.bitrate_kbps);
         let mut on_session = false;
         super::super::pipeline::open_session_encoder_with(
-            &req.encoder,
+            &req.terms.encoder,
             &req.plan,
             &*f.st.live.capturer,
             &f.st.live.frame,

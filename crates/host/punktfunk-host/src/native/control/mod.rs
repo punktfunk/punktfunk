@@ -212,6 +212,8 @@ impl ProbeSpacing {
 pub(super) struct Task {
     pub(super) ctrl_send: super::link::CtlSend,
     pub(super) ctrl_recv: super::link::CtlReader,
+    /// What the handshake settled.
+    pub(super) terms: Arc<super::handshake::SessionTerms>,
     /// The session's media clock: clock echoes leave in its time.
     pub(super) clock: std::sync::Arc<punktfunk_core::quic::v2::clock::SessionClock>,
     /// The input thread's queue, shared with the datagram loop: a key edge off the
@@ -239,24 +241,13 @@ pub(super) struct Task {
     /// The client rebuilds its decoder on a format epoch, and this session owns its capture.
     pub(super) format_change_ok: bool,
     pub(super) adaptive_fec: bool,
-    pub(super) session_bitrate_kbps: u32,
-    /// Automatic bitrate, so the shared-path governor may move this session. A
-    /// client-set rate is never touched.
-    pub(super) bitrate_automatic: bool,
     /// PyroWave session whose client asked Automatic (`Hello.bitrate_kbps ==
     /// 0`): it adapts between its floor and the pin. An explicit one runs at
     /// the pin, which its bring-up ramp may lower once while `ramp_open` holds.
     pub(super) pyrowave_automatic: bool,
-    /// PyroWave's bits per pixel for this session; a delivered mode re-pins at it.
-    pub(super) pyrowave_bpp: f64,
-    /// The session's `PUNKTFUNK_PYROWAVE_MAX_MBPS` cap, kbps, over every re-pin.
-    pub(super) pyrowave_max_kbps: Option<u32>,
     /// One wire packet, bytes. Turns the client's delivery count into the rate
     /// the governor divides, and the shard the parity rule sizes against.
     pub(super) wire_bytes: u64,
-    /// Audio reservation out of the wire budget. With [`Self::wire_bytes`] and
-    /// the live mode it is the frame adaptive FEC has to protect.
-    pub(super) audio_kbps: u32,
     /// Client set `EXT_ABR_ACK_REASON` in its `ClientHello`: its `BitrateChanged`
     /// may carry the reason byte. Clear for every shipped client, which rejects
     /// a longer ack, and for every client behind a host without `HOST_CAP2_EXT`.
@@ -468,8 +459,8 @@ impl Task {
             mode,
             chroma,
             self.stream_config.bit_depth,
-            self.pyrowave_bpp,
-            self.pyrowave_max_kbps,
+            self.terms.pyrowave_bpp,
+            self.terms.pyrowave_max_kbps,
         )
     }
 
@@ -536,12 +527,14 @@ pub(super) async fn run(task: Task) {
 impl ControlTask {
     fn new(task: Task) -> Self {
         let now = std::time::Instant::now();
+        // The Welcome's rate: PyroWave retarget-refusals ack this pin.
+        let session_kbps = task.terms.bitrate_kbps;
         let pyrowave_pin = rate::PyroWavePin {
-            kbps: task.session_bitrate_kbps,
+            kbps: session_kbps,
             floor: if task.codec == crate::encode::Codec::PyroWave {
                 task.pyrowave_bounds(&task.initial_picture)
                     .0
-                    .min(task.session_bitrate_kbps)
+                    .min(session_kbps)
             } else {
                 0
             },
@@ -710,7 +703,9 @@ impl ControlTask {
             &self.task.counters,
             &mut self.window,
             &mut self.share_clocks,
-            self.task.bitrate_automatic,
+            // Automatic, so negotiable: the shared-path governor may move it. A client-set
+            // rate is never touched.
+            self.task.terms.bitrate_auto(),
             self.task.wire_bytes,
         );
         match share {
@@ -732,7 +727,8 @@ impl ControlTask {
             unrecovered_run,
             punktfunk_core::abr::budget::FrameBudget {
                 budget_kbps: shared.live_bitrate.load(Ordering::Relaxed),
-                audio_kbps: self.task.audio_kbps,
+                // With `wire_bytes` and the live mode: the frame adaptive FEC has to protect.
+                audio_kbps: self.task.terms.audio_kbps,
                 shard_payload: self
                     .task
                     .wire_bytes

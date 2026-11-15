@@ -276,15 +276,15 @@ pub(super) fn spawn_planes(
     ends: PlaneEnds,
 ) -> Result<()> {
     let (conn, n) = (scope.conn().clone(), &agreed.n);
-    let (hello, welcome) = (&n.hello, &n.welcome);
-    let joined = n.joined.as_ref().map(|(d, _)| d);
+    let (hello, welcome) = (&n.terms.hello, &n.welcome);
+    let joined = n.terms.joined.as_ref().map(|(d, _)| d);
     // Claiming the default mic is a PipeWire round trip under a 5 s timeout, and this runtime
     // has two workers: off them, as the launch prep.
     scope.set_planes(tokio::task::block_in_place(|| {
         SessionPlanes::mint(
             joined,
-            n.compositor,
-            n.gamescope_route.as_ref(),
+            n.terms.compositor,
+            n.terms.gamescope_route.as_ref(),
             &n.resolved,
             &host.inj_tx,
             host.mic_tx.clone(),
@@ -349,7 +349,7 @@ pub(super) fn spawn_planes(
     );
     // Also for a stream that starts SDR on a display lit in HDR: a decoder rebuilt when its
     // content turns HDR is configured before the capture's own metadata arrives.
-    if n.display_hdr {
+    if n.terms.verdict.display_hdr {
         send_hdr_baseline(&conn, hello.display_hdr);
     }
     if source == Punktfunk1Source::Synthetic && who.knobs.test_feedback {
@@ -361,7 +361,7 @@ pub(super) fn spawn_planes(
             width: hello.mode.width,
             height: hello.mode.height,
             refresh_hz: hello.mode.refresh_hz,
-            hdr: n.display_hdr,
+            hdr: n.terms.verdict.display_hdr,
             client: wired.client_name.clone().unwrap_or_default(),
             fingerprint: who.fp_hex.clone(),
             launch: hello.launch.clone(),
@@ -399,12 +399,12 @@ fn register_live(
         (mode.width, mode.height, mode.refresh_hz),
         label,
         crate::vdisplay::admission::LiveDisplay {
-            compositor: n.compositor,
-            route: n.gamescope_route.clone(),
+            compositor: n.terms.compositor,
+            route: n.terms.gamescope_route.clone(),
             isolation: scope.planes().isolation.clone(),
             audio_sink: audio_sink.clone(),
             hdr: n.welcome.color.is_hdr(),
-            format: crate::vdisplay::admission::shares_capture(n.compositor).then_some(
+            format: crate::vdisplay::admission::shares_capture(n.terms.compositor).then_some(
                 crate::vdisplay::admission::SampleFormat {
                     bit_depth: n.welcome.bit_depth,
                     chroma_444: n.welcome.chroma_format == punktfunk_core::quic::CHROMA_IDC_444,

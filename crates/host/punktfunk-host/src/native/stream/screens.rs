@@ -95,14 +95,13 @@ fn place(
 /// What every screen loop of a session starts from.
 #[derive(Clone)]
 pub(super) struct ScreenBase {
+    /// What the handshake settled: the encode resolution every screen opens on, and the
+    /// `PUNKTFUNK_PYROWAVE_MAX_MBPS` cap.
+    pub(super) terms: Arc<super::super::handshake::SessionTerms>,
     pub(super) compositor: crate::vdisplay::Compositor,
     /// The first screen's display request; each screen swaps in its own identity.
     pub(super) params: crate::vdisplay::SessionParams,
     pub(super) plan: crate::session_plan::SessionPlan,
-    /// The session's `PUNKTFUNK_PYROWAVE_MAX_MBPS` cap, kbps.
-    pub(super) pyrowave_max_kbps: Option<u32>,
-    /// The session's encode resolution, which every screen opens on.
-    pub(super) encoder: Arc<crate::encode::Resolved>,
     pub(super) bit_depth: u8,
     pub(super) enc_of: EncDerive,
     pub(super) fec_target: Arc<AtomicU8>,
@@ -598,15 +597,13 @@ fn run_screen(base: ScreenBase, mut run: ScreenRun) {
                 }
             };
             let req = BuildRequest {
+                terms: base.terms.clone(),
                 mode: run.mode,
                 bitrate_kbps: base.live_bitrate.load(Ordering::Relaxed),
                 bitrate_auto: false,
                 bit_depth: base.bit_depth,
                 enc_of: enc_of(&base, &run),
                 plan,
-                pyrowave_max_kbps: base.pyrowave_max_kbps,
-                encoder: base.encoder.clone(),
-                client_hdr: base.params.client_hdr,
                 wire_seq_base: au_seq,
                 screen: run.index,
             };
@@ -960,6 +957,10 @@ mod tests {
         let (tell, told) = tokio::sync::mpsc::unbounded_channel();
         let wire = Arc::new(ScreenWire::new());
         let base = ScreenBase {
+            terms: Arc::new(crate::native::handshake::tests::terms_for(
+                crate::native::handshake::tests::hello_at(mode(1920, 1080, 60)),
+                crate::encode::resolve(),
+            )),
             compositor: crate::vdisplay::Compositor::Kwin,
             params: crate::vdisplay::SessionParams {
                 screen: None,
@@ -994,8 +995,6 @@ mod tests {
                 rgb_full_range: crate::encode::RgbFullRange::BOTH,
                 studio_asked: crate::session_plan::StudioAsk::default(),
             },
-            pyrowave_max_kbps: None,
-            encoder: crate::encode::resolve(),
             bit_depth: 8,
             enc_of: EncDerive {
                 audio_kbps: 512,

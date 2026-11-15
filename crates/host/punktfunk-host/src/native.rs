@@ -1477,21 +1477,21 @@ async fn negotiate_session(
     // mirror (physical head ignores the requested mode). The mirror is the handshake's pick: a
     // console change mid-session must not change this session's answer. A `join` session is
     // asked at each switch (`wiring::joined_held`).
-    let mirrored = n.mirrored;
+    let mirrored = n.terms.mirrored;
     let live_reconfig_ok = {
         let per_client_mode_identity = crate::vdisplay::policy::prefs()
             .configured_effective()
             .is_some_and(|e| e.identity == crate::vdisplay::policy::Identity::PerClientMode);
-        reconfig_allowed(n.compositor, per_client_mode_identity, mirrored)
+        reconfig_allowed(n.terms.compositor, per_client_mode_identity, mirrored)
     };
-    let exact_rate_ok = handshake::runs_exact_rate(n.compositor, mirrored);
+    let exact_rate_ok = handshake::runs_exact_rate(n.terms.compositor, mirrored);
     // A mirror shares another session's capture: its format stays.
     let format_change_ok = !mirrored;
     let codec = crate::encode::codec_from_wire(n.welcome.codec);
     tracing::info!(
         peer = %scope.conn().remote_address(),
-        mode = ?n.hello.mode,
-        compositor = n.compositor.map(|c| c.id()).unwrap_or("none"),
+        mode = ?n.terms.hello.mode,
+        compositor = n.terms.compositor.map(|c| c.id()).unwrap_or("none"),
         gamepad = n.welcome.gamepad.as_str(),
         // Build + the shell that dialled, so two sessions from one device are told apart here.
         // "-" is a client too old to send one.
@@ -1557,13 +1557,13 @@ async fn wire_session(
         ),
     );
     // A joiner may not switch before its stream knows the display it joined.
-    let joined = wiring::joined_display(n.joined.is_some(), None);
+    let joined = wiring::joined_display(n.terms.joined.is_some(), None);
     shared.joined_display.store(joined, Ordering::Relaxed);
     // Shard renegotiation only if `Hello::max_shard_payload` and not PyroWave (PyroWave pins
     // the Welcome value for the session; a mid-stream re-key would desync). Not for a browser
     // either: the driver's targets are UDP-over-IP maths, and a WebTransport datagram also
     // carries QUIC and HTTP/3 framing, so a grow it computed would not fit.
-    let shard_reneg = (n.hello.max_shard_payload > 0
+    let shard_reneg = (n.terms.hello.max_shard_payload > 0
         && agreed.codec != crate::encode::Codec::PyroWave
         && shared_plane)
         .then_some(wire_mtu::ShardReneg {
@@ -1576,7 +1576,7 @@ async fn wire_session(
     wire_mtu::spawn_watch(
         conn.clone(),
         n.welcome.shard_payload as usize,
-        n.hello.max_shard_payload,
+        n.terms.hello.max_shard_payload,
         shard_reneg,
     );
     let gamescope_xwayland = pf_clipboard::GamescopeXwayland::default();
@@ -1586,7 +1586,7 @@ async fn wire_session(
         conn,
         who.grants,
         clip_enabled.clone(),
-        clip_target(n.compositor, &gamescope_xwayland),
+        clip_target(n.terms.compositor, &gamescope_xwayland),
     )
     .await;
     let clip_available = clip.available;
@@ -1618,7 +1618,7 @@ async fn wire_session(
         launch_outcome_rx,
     };
     spawn_control(scope, host, who, agreed, to_control);
-    let client_name = client_name(&host.np, who.fp_hex.as_deref(), &n.hello);
+    let client_name = client_name(&host.np, who.fp_hex.as_deref(), &n.terms.hello);
     watch_access(
         scope,
         who,
@@ -1776,7 +1776,8 @@ fn spawn_control(
 ) {
     let conn = scope.conn();
     let (n, codec, source, knobs) = (&agreed.n, agreed.codec, host.opts.source, who.knobs);
-    let (hello, welcome, host_link, features) = (&n.hello, &n.welcome, &n.host_link, &n.features);
+    let (terms, welcome, host_link, features) = (&n.terms, &n.welcome, &n.host_link, &n.features);
+    let hello = &terms.hello;
     let ToControl {
         ctrl_send,
         ctrl_recv,
@@ -1799,15 +1800,14 @@ fn spawn_control(
     // a proposal only after its encoder accepts the matching rate. Fixed synthetic and
     // the standalone software source have no coordinated retarget path.
     let adaptive_fec = adaptive_fec_for(source, knobs.fec_pct.is_some());
-    // Negotiated rate; PyroWave retarget-refusals ack this pin.
-    let session_bitrate_kbps = welcome.bitrate_kbps;
     scope.task(control::run(control::Task {
         ctrl_send,
         ctrl_recv,
+        terms: terms.clone(),
         clock: conn.v2_session().clock.clone(),
         input_tx,
         initial_mode: hello.mode,
-        initial_picture: n.picture(),
+        initial_picture: terms.picture(),
         stream_config: v2msg::StreamConfig {
             stream: 0,
             epoch: 0,
@@ -1826,7 +1826,7 @@ fn spawn_control(
             host_sndbuf_kb: host_link.sndbuf_kb,
             host_forced_shape: host_link.forced_shape,
             picture: crate::session_plan::picture_field(welcome.mode, {
-                let p = n.picture();
+                let p = terms.picture();
                 (p.width, p.height)
             }),
         },
@@ -1847,20 +1847,14 @@ fn spawn_control(
                 | punktfunk_core::quic::CODEC_HEVC
                 | punktfunk_core::quic::CODEC_AV1
         } else {
-            n.encoder.wire_caps()
+            terms.encoder.wire_caps()
         },
         format_change_ok: agreed.format_change_ok
             && features.has(punktfunk_core::quic::v2::registry::FEATURE_FORMAT_EPOCH),
         adaptive_fec,
-        session_bitrate_kbps,
-        // Automatic, so negotiable: the governor may move it. PyroWave's floor still binds.
-        bitrate_automatic: hello.bitrate_kbps == 0,
-        pyrowave_automatic: hello.bitrate_kbps == 0 && codec == crate::encode::Codec::PyroWave,
-        pyrowave_bpp: n.pyrowave_bpp,
-        pyrowave_max_kbps: knobs.pyrowave_max_kbps,
+        pyrowave_automatic: terms.bitrate_auto() && codec == crate::encode::Codec::PyroWave,
         wire_bytes: u64::from(welcome.shard_payload)
             + punktfunk_core::abr::budget::SHARD_WIRE_OVERHEAD,
-        audio_kbps: audio_reserved_kbps(welcome),
         ack_reason: n.abr_features & punktfunk_core::quic::EXT_ABR_ACK_REASON != 0,
         feedback_rx,
         feedback_tx,
@@ -1941,7 +1935,7 @@ async fn stream_session(
         #[cfg(target_os = "linux")]
         input_tx,
     } = wired;
-    let (hello, welcome) = (&n.hello, &n.welcome);
+    let (hello, welcome) = (&n.terms.hello, &n.welcome);
     let clear = n
         .features
         .has(punktfunk_core::quic::v2::registry::FEATURE_CLEAR_PLACEMENT);
@@ -2073,57 +2067,34 @@ fn display_half(
     let inj_tx = host.inj_tx.clone();
     let host_knobs = host.knobs;
     let handshake::Negotiated {
-        hello,
+        terms,
         welcome,
-        compositor,
-        gamescope_route,
-        encoder,
-        pyrowave_bpp,
-        slices,
-        joined,
-        view,
         features,
-        mirrored,
-        screen,
-        topology,
-        display_hdr,
         ..
     } = n;
-    // Read back from what the ServerHello agreed, like `cursor_forward` below.
+    // Read back from what the ServerHello agreed.
     let mut format_facts = handshake::FormatFacts::of(
-        &hello,
+        &terms.hello,
         crate::session_plan::StudioAsk::of(&features),
-        compositor,
-        gamescope_route.as_ref(),
+        terms.compositor,
+        terms.gamescope_route.as_ref(),
         &knobs,
-        joined.as_ref().map(|(d, _)| d),
-        handshake::follows_source(&features, mirrored),
+        terms.joined.as_ref().map(|(d, _)| d),
+        handshake::follows_source(&features, terms.mirrored),
     );
     // The content the Welcome was resolved for, not a second look at it.
     format_facts.content_hdr = format_facts
         .follows_content()
         .then_some(welcome.color.is_hdr());
-    let reframe_to = handshake::reframe_to(hello.video_fit, handshake::joined_view(&joined), view);
-    // Read back from Welcome, not recomputed (would re-probe and could drift).
-    let cursor_forward = welcome.host_caps & punktfunk_core::quic::HOST_CAP_CURSOR != 0;
+    let join_live = terms.joined.is_some();
     // Mid-stream resize counterpart; latest accepted Reconfigure wins.
     let resize_ms: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     move |common| SessionContext {
         common,
-        compositor: compositor
-            .expect("the Virtual source resolves a compositor during the handshake"),
-        gamescope_route,
+        terms,
         format_facts,
-        display_hdr,
-        encoder,
         host_knobs,
         knobs,
-        bitrate_auto: hello.bitrate_kbps == 0,
-        pyrowave_bpp,
-        cursor_forward,
-        // Sentinel-headed streamed blocks: ship early FEC while the AU tail still encodes.
-        streamed_au: hello.video_caps & punktfunk_core::quic::VIDEO_CAP_STREAMED_AU != 0,
-        slices,
         conn,
         launch: launch.command,
         launch_target: launch.target,
@@ -2131,13 +2102,7 @@ fn display_half(
         launch_stamp: launch.stamp,
         launch_owner: launch.owner,
         launch_outcome: lanes.launch_outcome,
-        // `None` = older client or no HDR: the EDID and 0xCE take built-in defaults.
-        client_hdr: hello.display_hdr.map(crate::encode::hdr_meta_from_wire),
-        join_live: joined.is_some(),
-        mirrored,
-        screen,
-        topology,
-        reframe_to,
+        join_live,
         frame_map: lanes.frame_map,
         #[cfg(target_os = "linux")]
         gamescope_xwayland: lanes.gamescope_xwayland,

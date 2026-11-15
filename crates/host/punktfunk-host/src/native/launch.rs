@@ -212,8 +212,8 @@ pub(super) async fn launch_session(
             ..
         },
     ) = prepare_launch(
-        &n.hello,
-        n.display_hdr,
+        &n.terms.hello,
+        n.terms.verdict.display_hdr,
         &n.resolved,
         &owner,
         outcome,
@@ -227,7 +227,7 @@ pub(super) async fn launch_session(
     scope.hold(
         target
             .as_ref()
-            .and(n.hello.launch.as_deref())
+            .and(n.terms.hello.launch.as_deref())
             .and_then(crate::library::audio_sessions_for)
             .map(|policy| crate::session_status::apply_audio_policy(policy, &client_label)),
     );
