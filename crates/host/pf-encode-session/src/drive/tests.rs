@@ -279,10 +279,7 @@ fn drive(
         }),
     };
     let live = AtomicBool::new(live);
-    let rates = Rates {
-        fps: 1000,
-        panel_hz: 1000,
-    };
+    let rates = Rates::off_panel(1000, 1_000_000);
     let stop = raw(pool.stop);
     Drive::new(Box::new(enc), &pool, session, stop, &live, rates, 0, None).run();
     close(pool.wake);
@@ -424,6 +421,28 @@ fn a_terminal_submit_error_ends_the_thread_at_once() {
         assert_eq!(
             mem.word(offset_of!(AuHeader, encoder_state)),
             au::ENCODER_WEDGED
+        );
+    }
+}
+
+/// A panel at a multiple of the stream's rate hands the stream its fraction. A whole panel, or
+/// one the stream does not divide, leaves the whole rate.
+#[test]
+fn a_stream_takes_its_fraction_from_the_panel() {
+    for (fps, panel_mhz, fps_mhz) in [
+        (60, 59_940, 59_940),
+        (60, 119_880, 59_940),
+        (120, 119_880, 119_880),
+        (60, 60_000, 60_000),
+        (60, 120_000, 60_000),
+        (60, 143_856, 60_000),
+        (120, 59_940, 120_000),
+    ] {
+        let rates = Rates::off_panel(fps, panel_mhz);
+        assert_eq!(
+            (rates.fps_mhz, rates.panel_mhz),
+            (fps_mhz, panel_mhz),
+            "{fps} {panel_mhz}"
         );
     }
 }

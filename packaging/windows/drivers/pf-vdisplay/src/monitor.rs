@@ -78,6 +78,9 @@ pub struct Monitor {
     state: AtomicU8,
     /// Advertised modes (requested mode first, then the host's extras and history).
     modes: Mutex<Vec<Mode>>,
+    /// The rate the requested mode runs when that is not whole hertz, in millihertz; zero
+    /// otherwise. Every listed mode at the same whole rate runs it ([`vdisplay::rate_mhz`]).
+    exact_mhz: AtomicU32,
     /// The live swap-chain drain worker; dropping it joins the thread.
     swap: Mutex<Option<SwapChainProcessor>>,
     /// The source sequence: advanced only by frames the drain worker hands the pool, and
@@ -128,6 +131,7 @@ impl Monitor {
         id: u32,
         session_id: u64,
         hw_cursor: bool,
+        exact_mhz: u32,
         modes: Vec<Mode>,
     ) -> Self {
         Self {
@@ -140,6 +144,7 @@ impl Monitor {
             arrival: OnceLock::new(),
             state: AtomicU8::new(CREATING),
             modes: Mutex::new(modes),
+            exact_mhz: AtomicU32::new(exact_mhz),
             swap: Mutex::new(None),
             source_seq: Arc::new(AtomicU64::new(0)),
             cursor: Mutex::new(CursorState::new()),
@@ -338,6 +343,11 @@ impl Monitor {
         lock(&self.modes).clone()
     }
 
+    /// [`Self::exact_mhz`], for the same fill.
+    pub fn exact_mhz(&self) -> u32 {
+        self.exact_mhz.load(Ordering::Acquire)
+    }
+
     /// Install the drain worker for a fresh swap-chain assignment. Returns the processor it
     /// displaced — or `proc` itself once the monitor is torn down — for the caller to drop with
     /// no lock held: dropping one joins its thread.
@@ -470,7 +480,8 @@ pub fn create_monitor(
         &[],
     );
     let (hw_cursor, preferred_id) = (req.hw_cursor != 0, req.preferred_monitor_id);
-    let monitor = registry::insert(owner, session_id, hw_cursor, preferred_id, modes);
+    let exact = exact_of(refresh, req.refresh_mhz);
+    let monitor = registry::insert(owner, session_id, hw_cursor, preferred_id, exact, modes);
     let id = monitor.id;
     let Some(object) = create_object(adapter, id, req) else {
         remove_entry(&monitor);
@@ -618,6 +629,7 @@ pub fn update_monitor_modes(
     width: u32,
     height: u32,
     refresh: u32,
+    refresh_mhz: u32,
 ) -> NTSTATUS {
     let Some(m) = registry::find(|m| m.owner == owner && m.session_id == session_id) else {
         return crate::STATUS_NOT_FOUND;
@@ -646,9 +658,14 @@ pub fn update_monitor_modes(
         )
     };
 
+    let exact = exact_of(refresh, refresh_mhz);
+    let old_exact = m.exact_mhz.swap(exact, Ordering::AcqRel);
     // The OS's target-mode list for this monitor (the `*2`/HDR shape, like `monitor_query_modes2`).
     let mut targets: Vec<iddcx::IDDCX_TARGET_MODE2> = flatten(&new_modes)
-        .map(|item| target_mode2(item.width, item.height, item.refresh_rate))
+        .map(|item| {
+            let mhz = vdisplay::rate_mhz(exact, item.refresh_rate);
+            target_mode2(item.width, item.height, mhz)
+        })
         .collect();
     let in_args = iddcx::IDARG_IN_UPDATEMODES2 {
         Reason: iddcx::IDDCX_UPDATE_REASON::IDDCX_UPDATE_REASON_OTHER,
@@ -665,9 +682,19 @@ pub fn update_monitor_modes(
     if !wdk_iddcx::nt_success(st) {
         // Keep the stored list coherent with what the OS actually holds (the old one).
         *lock(&m.modes) = old_modes;
+        m.exact_mhz.store(old_exact, Ordering::Release);
         return st;
     }
     crate::STATUS_SUCCESS
+}
+
+/// The exact rate a request names beside its whole `hz`: `mhz` where it has a fraction and
+/// rounds to `hz`, else zero.
+fn exact_of(hz: u32, mhz: u32) -> u32 {
+    match vdisplay::rate_mhz(mhz, hz) {
+        rate if rate % 1000 != 0 => rate,
+        _ => 0,
+    }
 }
 
 /// `IOCTL_REMOVE`: unlink, tear down and depart `owner`'s monitor for `session_id`, recording
@@ -726,11 +753,26 @@ mod tests {
     /// A remover that never claims: device cleanup, or no removal at all.
     const NEVER: u8 = 3;
 
+    /// A request's exact rate counts only where it has a fraction and names the whole rate
+    /// beside it; every mode at that whole rate then runs it.
+    #[test]
+    fn a_monitor_runs_the_fraction_its_request_names() {
+        assert_eq!(exact_of(60, 59_940), 59_940);
+        assert_eq!(exact_of(120, 119_880), 119_880);
+        // No fraction, none sent, or one that rounds to another rate.
+        for (hz, mhz) in [(60, 60_000), (60, 0), (120, 59_940), (60, 61_000)] {
+            assert_eq!(exact_of(hz, mhz), 0, "{hz} {mhz}");
+        }
+        let m = Monitor::pending(1, 1, 1, false, 59_940, Vec::new());
+        assert_eq!(vdisplay::rate_mhz(m.exact_mhz(), 60), 59_940);
+        assert_eq!(vdisplay::rate_mhz(m.exact_mhz(), 120), 120_000);
+    }
+
     /// One create racing one remover on a real entry. The remover's claim lands at step
     /// `remover_at`: 0 before the creator's swap, 1 before the creator's claim, 2 after it.
     /// Returns the creator's decision and how many departures ran in all.
     fn race(remover_at: u8, linked: bool) -> (AfterArrival, u32) {
-        let m = Monitor::pending(1, 1, 1, false, Vec::new());
+        let m = Monitor::pending(1, 1, 1, false, 0, Vec::new());
         let remover = |step: u8| step == remover_at && m.claim_departure();
         let mut departures = u32::from(remover(0));
         let arrived = m

@@ -110,6 +110,11 @@ pub struct AddRequest {
     /// More sizes to offer, `[width, height]`, each at `refresh_hz`. A zero entry is unused, so
     /// an old host's missing tail offers none.
     pub extra_modes: [[u32; 2]; MAX_EXTRA_MODES],
+    /// `refresh_hz` to the millihertz: 59 940 beside 60. Zero is the whole rate, which is also
+    /// all a driver older than [`EXACT_RATE_SINCE`](crate::EXACT_RATE_SINCE) runs.
+    pub refresh_mhz: u32,
+    /// Pads the `u64`-aligned struct to a multiple of 8.
+    pub _reserved: u32,
 }
 
 /// How many [`AddRequest::extra_modes`] one ADD carries.
@@ -165,8 +170,9 @@ pub struct UpdateModesRequest {
     pub width: u32,
     pub height: u32,
     pub refresh_hz: u32,
-    /// Pads the `u64`-aligned struct to a multiple of 8 (Pod forbids implicit tail padding).
-    pub _reserved: u32,
+    /// `refresh_hz` to the millihertz, as [`AddRequest::refresh_mhz`]. The struct's old
+    /// tail padding: a driver older than the field ignores it.
+    pub refresh_mhz: u32,
 }
 
 #[repr(C)]
@@ -269,7 +275,8 @@ const _: () = {
     // Former tail `_reserved` — same offset, same total size (rename-only).
     assert!(offset_of!(AddRequest, hw_cursor) == 36);
     assert!(offset_of!(AddRequest, extra_modes) == 40);
-    assert!(size_of::<AddRequest>() == 40 + 8 * MAX_EXTRA_MODES);
+    assert!(offset_of!(AddRequest, refresh_mhz) == 40 + 8 * MAX_EXTRA_MODES);
+    assert!(size_of::<AddRequest>() == 48 + 8 * MAX_EXTRA_MODES);
 
     assert!(size_of::<AddReply>() == 24);
     assert!(offset_of!(AddReply, adapter_luid_low) == 0);
@@ -339,6 +346,8 @@ mod tests {
                 m[0] = [2560, 1440];
                 m
             },
+            refresh_mhz: 119_880,
+            _reserved: 0,
         };
         let bytes = bytemuck::bytes_of(&req);
         assert_eq!(bytes.len(), size_of::<AddRequest>());
@@ -391,14 +400,15 @@ mod tests {
             width: 2560,
             height: 1409, // arbitrary — the in-place path serves window-drag modes
             refresh_hz: 120,
-            _reserved: 0,
+            refresh_mhz: 0,
         };
         let bytes = bytemuck::bytes_of(&req);
         assert_eq!(bytes.len(), 24);
         assert_eq!(*bytemuck::from_bytes::<UpdateModesRequest>(bytes), req);
         assert_eq!(bytes[8..12], 2560u32.to_le_bytes());
-        // v10's framing is additive, so a v9 driver still opens; v9's slot layout is the floor.
-        assert_eq!(PROTOCOL_VERSION, 10);
+        // v10's framing and v11's exact rate are additive, so a v9 driver still opens; v9's
+        // slot layout is the floor.
+        assert_eq!(PROTOCOL_VERSION, 11);
         assert_eq!(MIN_DRIVER_PROTOCOL_VERSION, 9);
     }
 
