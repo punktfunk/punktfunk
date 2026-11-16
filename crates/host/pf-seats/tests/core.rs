@@ -873,7 +873,11 @@ fn a_failed_save_is_not_loaded_later() {
 /// `-box` files are copies from a Bazzite box and a Windows seats VM, ids and pins replaced.
 #[test]
 fn a_ledger_loads_and_saves_byte_for_byte() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ledgers");
+    // The running checkout: CI reuses a test binary, and its baked `env!` names the checkout
+    // that built it.
+    let root =
+        std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").into());
+    let dir = std::path::Path::new(&root).join("tests/fixtures/ledgers");
     let mut seen = 0;
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();

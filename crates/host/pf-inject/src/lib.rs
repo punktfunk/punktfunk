@@ -1283,3 +1283,13 @@ mod backend_select_tests {
         assert_eq!(backend_from_id("not-a-backend"), None);
     }
 }
+
+/// A file by its path from the repository root, in the checkout the test runs in. CI reuses a
+/// test binary across checkouts, so a baked `env!("CARGO_MANIFEST_DIR")` can name one that is
+/// gone; cargo sets the variable again for every test run.
+#[cfg(all(test, windows))]
+pub(crate) fn repo_file(rel: &str) -> std::path::PathBuf {
+    let dir =
+        std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").into());
+    std::path::Path::new(&dir).join("../../..").join(rel)
+}

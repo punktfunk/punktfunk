@@ -244,11 +244,8 @@ mod tests {
     /// cannot start on a software-enumerated devnode. Hardware ids outlive package renames.
     #[test]
     fn hwid_matches_inf() {
-        let inx = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../packaging/windows/drivers/pf-gamepad/pf_gamepad.inx"
-        );
-        let inf = std::fs::read_to_string(inx).expect("read pf_gamepad.inx");
+        let inx = crate::repo_file("packaging/windows/drivers/pf-gamepad/pf_gamepad.inx");
+        let inf = std::fs::read_to_string(&inx).expect("read pf_gamepad.inx");
         // Match the install section by prefix, not `pfGamepad,` — Xbox installs `pfGamepadXbox`
         // (xinputhid filter) and PlayStation/Deck must not. An exact match went vacuous at that
         // split.
@@ -269,9 +266,10 @@ mod tests {
             .collect();
         assert!(
             declared.len() >= 4,
-            "parsed {} hardware ids out of {inx} — the [Models] shape changed and this test went \
+            "parsed {} hardware ids out of {} — the [Models] shape changed and this test went \
              vacuous; fix the parse rather than deleting the assert",
-            declared.len()
+            declared.len(),
+            inx.display()
         );
         for hwid in [
             WinDsIdentity::dualsense().hwid,
@@ -318,11 +316,8 @@ mod tests {
     /// onto `pfGamepad` enumerates and is never promoted.
     #[test]
     fn only_the_xbox_identity_installs_the_xinputhid_section() {
-        let inx = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../packaging/windows/drivers/pf-gamepad/pf_gamepad.inx"
-        );
-        let inf = std::fs::read_to_string(inx).expect("read pf_gamepad.inx");
+        let inx = crate::repo_file("packaging/windows/drivers/pf-gamepad/pf_gamepad.inx");
+        let inf = std::fs::read_to_string(&inx).expect("read pf_gamepad.inx");
         let xbox: Vec<String> = super::super::xbox_windows::XBOX_IDENTITIES
             .iter()
             .map(|i| i.hwid.to_ascii_lowercase())
