@@ -186,10 +186,16 @@ impl NativeVaapiEncoder {
     }
 }
 
-/// Probe picture size: large enough to exercise the real import + VPP path.
-const PROBE_DIM: u32 = 64;
+/// Probe picture size. iHD binds an import compressed only above 64×64, so a smaller probe
+/// never reads a compressed candidate the way a capture frame is read.
+const PROBE_DIM: u32 = 128;
+/// Edge of one probe cell, and the gray level each cell is painted at.
+const PROBE_CELL: u32 = 32;
+const PROBE_LEVELS: [u8; 4] = [32, 96, 160, 224];
+/// Luma a cell may stray from its level and still read as written.
+const PROBE_SLACK: u8 = 16;
 
-/// Allocate a 64x64 BO tiled exactly as `modifier` on `node`'s GBM device, one plane.
+/// Allocate a `PROBE_DIM`² BO tiled exactly as `modifier` on `node`'s GBM device, one plane.
 /// `None` is a refused candidate, never a host failure.
 fn alloc_probe_bo(node: &std::path::Path, fourcc: u32, modifier: u64) -> Option<GbmBo> {
     let file = std::fs::OpenOptions::new()
@@ -210,14 +216,27 @@ fn alloc_probe_bo(node: &std::path::Path, fourcc: u32, modifier: u64) -> Option<
     (bo.planes == 1 && bo.modifier == modifier && bo.stride != 0).then_some(bo)
 }
 
-/// Prove one candidate: allocate the modifier on the session's own render node
-/// and run a real 64x64 H.264/8-bit dmabuf submit through the native session —
-/// `Display::import_dmabuf` plus the source VPP into the NV12 target is the
-/// import contract being proved (the source VPP also serves a 10-bit source).
+/// Prove one candidate on the session's own render node: the GPU paints gray cells
+/// into a BO of that modifier, a real H.264/8-bit dmabuf submit goes through the
+/// native session, then the same import is converted to NV12 and every cell must
+/// read back at its level. An import libva accepts but reads wrong, such as a
+/// compressed layout read raw, fails here. A probe the driver cannot paint or read
+/// back keeps the submit's verdict.
 fn probe_capture_modifier(node: &std::path::Path, fourcc: u32, modifier: u64) -> bool {
     use pf_frame::DmabufFrame;
     let Some(bo) = alloc_probe_bo(node, fourcc, modifier) else {
         return false;
+    };
+    let painted = match paint_probe(&bo, fourcc) {
+        Ok(painted) => painted,
+        Err(e) => {
+            tracing::info!(
+                modifier = format_args!("{modifier:#x}"),
+                error = %format!("{e:#}"),
+                "VAAPI capture modifier kept unchecked: the probe was not painted"
+            );
+            false
+        }
     };
     let Ok(mut enc) = NativeVaapiEncoder::open(
         Codec::H264,
@@ -257,7 +276,154 @@ fn probe_capture_modifier(node: &std::path::Path, fourcc: u32, modifier: u64) ->
         }),
         cursor: None,
     };
-    enc.submit(&frame).is_ok()
+    if enc.submit(&frame).is_err() {
+        return false;
+    }
+    if !painted {
+        return true;
+    }
+    match probe_read_back(node, &bo, fourcc, modifier) {
+        Ok(None) => true,
+        Ok(Some(OffLevel { x, y, got, want })) => {
+            tracing::info!(
+                fourcc = format_args!("{fourcc:#010x}"),
+                modifier = format_args!("{modifier:#x}"),
+                x,
+                y,
+                got,
+                want,
+                "VAAPI capture modifier refused: the picture reads back wrong"
+            );
+            false
+        }
+        Err(e) => {
+            tracing::info!(
+                modifier = format_args!("{modifier:#x}"),
+                error = %format!("{e:#}"),
+                "VAAPI capture modifier kept unchecked: the read-back did not run"
+            );
+            true
+        }
+    }
+}
+
+/// Paint the probe's gray cells through the GPU. `false` for a fourcc it has no gray for.
+fn paint_probe(bo: &GbmBo, fourcc: u32) -> Result<bool> {
+    let Some(format) = PixelFormat::from_drm_fourcc(fourcc) else {
+        return Ok(false);
+    };
+    if probe_gray(format, 0).is_none() {
+        return Ok(false);
+    }
+    bo.write(PROBE_DIM, PROBE_DIM, |rows, pitch| {
+        for y in 0..PROBE_DIM {
+            for x in 0..PROBE_DIM {
+                let at = y as usize * pitch + x as usize * 4;
+                if let Some(px) = probe_gray(format, probe_level(x, y)) {
+                    rows[at..at + 4].copy_from_slice(&px);
+                }
+            }
+        }
+    })?;
+    Ok(true)
+}
+
+/// The level of the cell holding (`x`, `y`): every level on every row of cells.
+fn probe_level(x: u32, y: u32) -> u8 {
+    PROBE_LEVELS[((x / PROBE_CELL + 2 * (y / PROBE_CELL)) % 4) as usize]
+}
+
+/// One gray pixel of luma `v` in `format`'s little-endian bytes.
+fn probe_gray(format: PixelFormat, v: u8) -> Option<[u8; 4]> {
+    match format {
+        PixelFormat::Bgrx | PixelFormat::Bgra | PixelFormat::Rgbx | PixelFormat::Rgba => {
+            Some([v, v, v, 0xff])
+        }
+        PixelFormat::X2Rgb10 | PixelFormat::X2Bgr10 => {
+            let c = u32::from(v) << 2 | u32::from(v) >> 6;
+            Some((3 << 30 | c << 20 | c << 10 | c).to_le_bytes())
+        }
+        _ => None,
+    }
+}
+
+/// A probe cell read back off its level: the luma at its centre (`x`, `y`) and the level.
+#[derive(Debug, PartialEq, Eq)]
+struct OffLevel {
+    x: u32,
+    y: u32,
+    got: u8,
+    want: u8,
+}
+
+/// Import the painted probe again, convert it to full-range NV12 and return the first cell
+/// off its level; `None` when every cell reads as painted.
+fn probe_read_back(
+    node: &std::path::Path,
+    bo: &GbmBo,
+    fourcc: u32,
+    modifier: u64,
+) -> Result<Option<OffLevel>> {
+    use pf_vaapi::drm::VA_FOURCC_NV12;
+    use pf_vaapi::vpp::VA_RT_FORMAT_YUV420;
+    let display = Display::open_path(Libva::load()?, &node.to_string_lossy())?;
+    let converter = pf_libva::vpp::Vpp::new(&display, PROBE_DIM, PROBE_DIM, true)?;
+    let mut surfaces = Vec::new();
+    let found = (|| {
+        let source = display.import_dmabuf(&DmabufSource {
+            width: PROBE_DIM,
+            height: PROBE_DIM,
+            drm_fourcc: fourcc,
+            modifier,
+            planes: &[ExportedPlane {
+                fd: bo.fd.as_raw_fd(),
+                offset: bo.offset,
+                stride: bo.stride,
+            }],
+        })?;
+        surfaces.push(source);
+        let target = display.create_surface(
+            VA_RT_FORMAT_YUV420,
+            Some(VA_FOURCC_NV12),
+            PROBE_DIM,
+            PROBE_DIM,
+        )?;
+        surfaces.push(target);
+        converter.convert(
+            &display,
+            source,
+            (PROBE_DIM, PROBE_DIM),
+            true,
+            COLOUR_BT709,
+            target,
+        )?;
+        display.map_image(target, |image, ptr| {
+            let pitch = image.pitches[0] as usize;
+            let len = pitch * (PROBE_DIM as usize - 1) + PROBE_DIM as usize;
+            // SAFETY: the mapped image holds its luma plane at `offsets[0]`, `PROBE_DIM` rows
+            // `pitch` apart, until `map_image` unmaps it after this closure.
+            let luma =
+                unsafe { std::slice::from_raw_parts(ptr.add(image.offsets[0] as usize), len) };
+            Ok(first_off_level(luma, pitch))
+        })
+    })();
+    for surface in surfaces {
+        display.destroy_surface(surface);
+    }
+    converter.destroy(&display);
+    found
+}
+
+/// The first cell whose centre luma strays more than [`PROBE_SLACK`] from its level.
+fn first_off_level(luma: &[u8], pitch: usize) -> Option<OffLevel> {
+    let half = PROBE_CELL / 2;
+    (0..PROBE_DIM / PROBE_CELL)
+        .flat_map(|cy| (0..PROBE_DIM / PROBE_CELL).map(move |cx| (cx, cy)))
+        .map(|(cx, cy)| (cx * PROBE_CELL + half, cy * PROBE_CELL + half))
+        .find_map(|(x, y)| {
+            let (got, want) = (luma[y as usize * pitch + x as usize], probe_level(x, y));
+            (got.abs_diff(want) > PROBE_SLACK).then_some(OffLevel { x, y, got, want })
+        })
 }
 
 /// Intel's single-plane layouts, newest first: 4-tiled, Y-tiled, X-tiled.
@@ -286,9 +452,9 @@ pub(crate) fn capture_candidates(fourcc: u32) -> Vec<u64> {
     }
 }
 
-/// The `candidates` subset libva actually imports for `fourcc` on this render
-/// node, proved by a real GBM alloc + encoder submit per candidate. Verdicts are
-/// cached per (node rdev, fourcc, modifier) so each is proved once per device.
+/// The `candidates` subset libva imports and reads right for `fourcc` on this render
+/// node, each proved by [`probe_capture_modifier`]. Verdicts are cached per
+/// (node rdev, fourcc, modifier) so each is proved once per device.
 pub(crate) fn vaapi_capture_modifiers(fourcc: u32, candidates: &[u64]) -> Vec<u64> {
     use std::collections::HashMap;
     use std::os::unix::fs::MetadataExt;
@@ -787,6 +953,92 @@ fn packed_rgb(staged: PixelFormat) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A probe read back as painted passes; one cell off its level by more than the slack
+    /// names that cell.
+    #[test]
+    fn the_probe_check_finds_a_cell_off_its_level() {
+        let pitch = PROBE_DIM as usize + 64;
+        let mut luma = vec![0u8; pitch * PROBE_DIM as usize];
+        for y in 0..PROBE_DIM {
+            for x in 0..PROBE_DIM {
+                luma[y as usize * pitch + x as usize] = probe_level(x, y);
+            }
+        }
+        assert_eq!(first_off_level(&luma, pitch), None);
+        luma[48 * pitch + 80] = probe_level(80, 48) + PROBE_SLACK;
+        assert_eq!(first_off_level(&luma, pitch), None, "within the slack");
+        luma[48 * pitch + 80] = probe_level(80, 48) + PROBE_SLACK + 1;
+        let want = probe_level(80, 48);
+        assert_eq!(
+            first_off_level(&luma, pitch),
+            Some(OffLevel {
+                x: 80,
+                y: 48,
+                got: want + PROBE_SLACK + 1,
+                want
+            })
+        );
+    }
+
+    /// Every row of cells holds every level, and gray packs the same in each 10-bit order.
+    #[test]
+    fn the_probe_paints_every_level_in_each_fourcc() {
+        let mut seen: Vec<u8> = (0..PROBE_DIM / PROBE_CELL)
+            .map(|cx| probe_level(cx * PROBE_CELL, 0))
+            .collect();
+        seen.sort_unstable();
+        assert_eq!(seen, PROBE_LEVELS);
+        assert_eq!(probe_gray(PixelFormat::Bgrx, 96), Some([96, 96, 96, 0xff]));
+        let ten = u32::from_le_bytes(probe_gray(PixelFormat::X2Rgb10, 255).unwrap());
+        assert_eq!(ten, 0xffff_ffff);
+        assert_eq!(
+            probe_gray(PixelFormat::X2Bgr10, 160),
+            probe_gray(PixelFormat::X2Rgb10, 160)
+        );
+        assert_eq!(probe_gray(PixelFormat::Nv12, 96), None);
+    }
+
+    /// Each packed-RGB capture candidate of this box's render node through the full proof,
+    /// with refusals logged. Ignored: needs a VAAPI device; run with `--nocapture`.
+    #[test]
+    #[ignore = "needs a VAAPI device"]
+    fn capture_candidates_prove_on_this_device() {
+        let _ = tracing_subscriber::fmt()
+            .with_test_writer()
+            .with_env_filter("pf_encode=info")
+            .try_init();
+        for fourcc in [vpp::DRM_FORMAT_XRGB8888, vpp::DRM_FORMAT_ARGB8888] {
+            let candidates = capture_candidates(fourcc);
+            let accepted = vaapi_capture_modifiers(fourcc, &candidates);
+            println!("{fourcc:#010x}: candidates {candidates:#x?} accepted {accepted:#x?}");
+            assert!(accepted.iter().all(|m| candidates.contains(m)));
+        }
+    }
+
+    /// The read-back catches a wrong read on real hardware: a probe painted in the first tiled
+    /// candidate, imported as the last, must leave a cell off its level. Ignored: needs a VAAPI
+    /// device with two tiled candidates.
+    #[test]
+    #[ignore = "needs a VAAPI device"]
+    fn the_read_back_catches_a_layout_read_as_another() {
+        let fourcc = vpp::DRM_FORMAT_XRGB8888;
+        let tiled: Vec<u64> = capture_candidates(fourcc)
+            .into_iter()
+            .filter(|&m| m != 0)
+            .collect();
+        let (Some(&painted), Some(&declared)) = (tiled.first(), tiled.last()) else {
+            panic!("no tiled candidate on this device");
+        };
+        assert_ne!(painted, declared, "needs two tiled candidates");
+        let node = pf_gpu::linux_render_node();
+        let bo = alloc_probe_bo(&node, fourcc, painted).expect("allocate the probe");
+        assert!(paint_probe(&bo, fourcc).expect("paint the probe"));
+        assert_eq!(probe_read_back(&node, &bo, fourcc, painted).unwrap(), None);
+        let wrong = probe_read_back(&node, &bo, fourcc, declared).unwrap();
+        println!("{painted:#x} read as {declared:#x}: {wrong:?}");
+        assert!(wrong.is_some(), "a layout read as another passed");
+    }
 
     /// 24-bit CPU frames become 32-bit with an opaque alpha; 32-bit ones upload
     /// as they are.
