@@ -9,9 +9,9 @@ use crate::native::bitrate::EncoderCeiling;
 pub(super) struct SessionFacts {
     /// The session's `seconds` cap: the loop ends here.
     pub(super) deadline: std::time::Instant,
-    /// The handshake's encode resolution. Every rebuild opens on it, so an Encoder-row change
-    /// applies at the next session.
-    pub(super) encoder: Arc<crate::encode::Resolved>,
+    /// What the handshake settled, which every build and encoder-rate derivation reads. Its
+    /// encode resolution is every rebuild's, so an Encoder-row change applies at the next session.
+    pub(super) terms: Arc<crate::native::handshake::SessionTerms>,
     /// The knobs read at admission; a console change applies at the next session.
     pub(super) knobs: crate::native::knobs::SessionKnobs,
     /// The flags every thread reads, and `end`, which the path that knows why calls first:
@@ -20,20 +20,8 @@ pub(super) struct SessionFacts {
     /// Session totals; this loop notes every encoder rate it adopts.
     pub(super) counters: Arc<crate::session_status::SessionCounters>,
     pub(super) conn: super::super::link::SessionLink,
-    /// The client's ask at bring-up. A mirror's encoder fits to it; the display may deliver
-    /// another size.
-    pub(super) negotiated: punktfunk_core::Mode,
-    pub(super) bitrate_auto: bool,
-    pub(super) audio_reserved_kbps: u32,
-    pub(super) shard_payload: u16,
-    /// PyroWave: parity rides each frame's head ([`EncDerive::pyrowave_hz`]), and an
-    /// explicit-rate stream paces at the link.
-    ///
-    /// [`EncDerive::pyrowave_hz`]: crate::native::bitrate::EncDerive::pyrowave_hz
-    pub(super) pyrowave: bool,
     pub(super) streamed_wire: bool,
     pub(super) perf: bool,
-    pub(super) client_hdr: Option<pf_frame::HdrMeta>,
     pub(super) bringup: Arc<crate::bringup::Trace>,
     pub(super) stats: Arc<StatsRecorder>,
     /// What the handshake's depth, HDR and chroma rule read, for a codec change to re-run it.
@@ -73,8 +61,8 @@ pub(super) struct Shared {
     pub(super) cadence_behind_score: Arc<AtomicU32>,
     pub(super) client_packets_received: Arc<AtomicU32>,
     pub(super) cursor_client_draws: Arc<AtomicBool>,
-    /// [`crate::native::wiring::SessionShared::joined_display`].
-    pub(super) joined_display: Arc<AtomicU64>,
+    /// [`crate::native::wiring::SessionShared::tenure`].
+    pub(super) tenure: Arc<crate::native::geometry::TenureCell>,
 }
 
 /// The loop's ends of the control task's and the input thread's channels.
@@ -89,7 +77,7 @@ pub(super) struct LoopEnds {
     pub(super) inj_shared_tx: std::sync::mpsc::Sender<punktfunk_core::input::InputEvent>,
     #[cfg(target_os = "linux")]
     pub(super) inj_session_tx: Option<std::sync::mpsc::Sender<punktfunk_core::input::InputEvent>>,
-    pub(super) reconfig: std::sync::mpsc::Receiver<crate::native::wiring::ModeAsk>,
+    pub(super) reconfig: std::sync::mpsc::Receiver<crate::native::geometry::Intent>,
     pub(super) keyframe: std::sync::mpsc::Receiver<()>,
     pub(super) rfi: std::sync::mpsc::Receiver<(u32, u32)>,
     pub(super) bitrate_rx: std::sync::mpsc::Receiver<u32>,

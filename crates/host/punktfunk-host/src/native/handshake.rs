@@ -12,6 +12,7 @@ use super::*;
 use crate::native::bitrate::{
     audio_reserved_kbps, resolve_bitrate_kbps_for, session_pyrowave_bpp, EncDerive,
 };
+use crate::native::geometry::{Intent, Tenure};
 use crate::vdisplay::policy::{DisplayTarget, Topology};
 use punktfunk_core::abr::budget::FEC_ADAPTIVE_START;
 use punktfunk_core::quic::v2::hello::{Role, RoleEcho, RoleReason, ScreenEcho, ScreenWish};
@@ -466,7 +467,8 @@ fn codec_miss_note(miss: punktfunk_core::quic::CodecMiss, preferred: &str, picke
 
 /// What [`negotiate`] settled, for the session runner.
 pub(super) struct Negotiated {
-    pub(super) hello: Hello,
+    /// What the handshake settled, handed on whole to every part of the session.
+    pub(super) terms: Arc<SessionTerms>,
     pub(super) welcome: Welcome,
     /// What the client calls itself; `None` from one that sent no label. Log only: two dialers
     /// from one device are told apart by that line.
@@ -479,22 +481,9 @@ pub(super) struct Negotiated {
     pub(super) client_link: punktfunk_core::quic::LinkFacts,
     /// A diagnostic session.
     pub(super) probe_only: bool,
-    /// PyroWave's bits per pixel for this session: the client's quality, else the host's.
-    pub(super) pyrowave_bpp: f64,
-    /// H.264/HEVC slices per frame ([`crate::session_plan::client_slices`]).
-    pub(super) slices: u32,
     /// This host's end of the path, for every `StreamConfig`.
     pub(super) host_link: punktfunk_core::quic::HostLink,
-    pub(super) compositor: Option<crate::vdisplay::Compositor>,
-    /// Gamescope sub-mode as a value, not process env — a concurrent connect would overwrite env.
-    pub(super) gamescope_route: Option<crate::vdisplay::GamescopeRoute>,
     pub(super) prep: Option<super::stream::PrepHandle>,
-    /// Admitted by `mode_conflict: join`: the owner's display, which this session shares, and
-    /// the size this client shows it at.
-    pub(super) joined: Option<(crate::vdisplay::admission::LiveDisplay, (u32, u32))>,
-    /// The size this client shows its own display at, smaller than `hello.mode` ([`kept_view`]).
-    /// `None` for a joiner and a mirror.
-    pub(super) view: Option<(u32, u32)>,
     /// This connect's row in the admission table, until the planes register it. Dropped with
     /// the handshake when the session never gets that far.
     pub(super) reservation: std::sync::Mutex<Option<crate::vdisplay::admission::Reservation>>,
@@ -502,66 +491,8 @@ pub(super) struct Negotiated {
     pub(super) features: punktfunk_core::quic::v2::features::FeatureSet,
     /// The profile this session plays as; `ServerHello` echoed its id.
     pub(super) resolved: crate::profiles::Resolved,
-    /// The encode resolution the Welcome was negotiated against, kept for the session.
-    pub(super) encoder: Arc<crate::encode::Resolved>,
-    /// The session streams a host monitor: the device's screen as `ServerHello` stated it.
-    pub(super) mirrored: bool,
-    /// The screen this session wants ([`session_screen`]); every open of it re-checks it is free.
-    pub(super) screen: Option<crate::vdisplay::policy::DisplayTarget>,
-    /// The topology its own screen opens under ([`session_screen`]); rebuilds reuse it.
-    pub(super) topology: Option<crate::vdisplay::policy::Topology>,
-    /// The session's display is lit in HDR. The Welcome's colour is the stream's, which is SDR
-    /// while the content on that display is.
-    pub(super) display_hdr: bool,
     /// The client asked for a game, and joining a shared screen dropped it.
     pub(super) launch_dropped: bool,
-}
-
-impl Negotiated {
-    /// The Welcome's mode at the size the encoder means to take it to, as the Welcome priced it.
-    pub(super) fn picture(&self) -> punktfunk_core::Mode {
-        let view = self.view.or(joined_view(&self.joined));
-        crate::session_plan::picture(self.hello.mode, view)
-    }
-}
-
-/// The client's `view` while it is a size `mode` can be scaled to: one a mode could be, no
-/// larger than `mode` on either axis and smaller on one. Anything else encodes the mode.
-pub(super) fn kept_view(
-    view: Option<(u32, u32)>,
-    mode: &punktfunk_core::Mode,
-    codec: crate::encode::Codec,
-) -> Option<(u32, u32)> {
-    let (w, h) = view?;
-    let kept = crate::encode::validate_dimensions(codec, w, h).is_ok()
-        && w <= mode.width
-        && h <= mode.height
-        && (w < mode.width || h < mode.height);
-    if !kept {
-        tracing::debug!(view = ?(w, h), ?mode, "client view not kept — encoding the mode");
-    }
-    kept.then_some((w, h))
-}
-
-/// The size a joiner shows the owner's display at.
-pub(super) fn joined_view(
-    joined: &Option<(crate::vdisplay::admission::LiveDisplay, (u32, u32))>,
-) -> Option<(u32, u32)> {
-    joined.as_ref().map(|(_, view)| *view)
-}
-
-/// What the session's encoder frames for: a joiner's view at its own fit, else the client's
-/// `view` at Fit. `None` encodes the picture as captured.
-pub(super) fn reframe_to(
-    video_fit: u8,
-    joined_view: Option<(u32, u32)>,
-    view: Option<(u32, u32)>,
-) -> Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))> {
-    use punktfunk_core::video_fit::VideoFit;
-    match joined_view {
-        Some(v) => Some((VideoFit::from_wire(video_fit), v)),
-        None => view.map(|v| (VideoFit::Fit, v)),
-    }
 }
 
 /// How long the host holds the connection after a `Redirect` for the client to read it and
@@ -607,44 +538,74 @@ pub(super) struct Negotiation<'a> {
     pub(super) knobs: SessionKnobs,
 }
 
-/// What the handshake settled before the Welcome states it.
-struct Terms {
+/// Everything the handshake settled, built once by [`negotiate`] and handed on as an `Arc`: the
+/// Welcome states it, and the Welcome-time prep, the control task and the stream read it here.
+pub(in crate::native) struct SessionTerms {
     /// The client's Hello at the mode it gets: capped, then admitted.
-    hello: Hello,
+    pub(in crate::native) hello: Hello,
     codec_bit: u8,
-    codec: crate::encode::Codec,
-    joined: Option<(crate::vdisplay::admission::LiveDisplay, (u32, u32))>,
-    /// [`Negotiated::view`].
-    view: Option<(u32, u32)>,
-    compositor: Option<crate::vdisplay::Compositor>,
-    gamescope_route: Option<crate::vdisplay::GamescopeRoute>,
-    encoder: Arc<crate::encode::Resolved>,
+    pub(in crate::native) codec: crate::encode::Codec,
+    /// How this session holds its display.
+    pub(in crate::native) tenure: Tenure,
+    /// Admitted by `mode_conflict: join`: the owner's display, which this session shares.
+    pub(in crate::native) joined: Option<crate::vdisplay::admission::LiveDisplay>,
+    /// The mode the session gets, `hello.mode`, with the view it keeps and its framing.
+    pub(in crate::native) intent: Intent,
+    pub(in crate::native) compositor: Option<crate::vdisplay::Compositor>,
+    /// Gamescope sub-mode as a value, not process env — a concurrent connect would overwrite env.
+    pub(in crate::native) gamescope_route: Option<crate::vdisplay::GamescopeRoute>,
+    /// The encode resolution the Welcome was negotiated against, kept for the session.
+    pub(in crate::native) encoder: Arc<crate::encode::Resolved>,
     gamepad: GamepadPref,
     audio_channels: u8,
-    bit_depth: u8,
-    hdr: bool,
-    /// [`Verdict::display_hdr`].
-    display_hdr: bool,
-    chroma: crate::encode::ChromaFormat,
+    /// The stream's depth, HDR verdict and chroma. Its `display_hdr` is the session's display
+    /// lit in HDR; the Welcome's colour is the stream's, which is SDR while the content on that
+    /// display is.
+    pub(in crate::native) verdict: Verdict,
     /// The colours the client asked to get at studio range.
-    studio_asked: crate::session_plan::StudioAsk,
-    pyrowave_bpp: f64,
-    slices: u32,
-    bitrate_kbps: u32,
-    shard_payload: usize,
+    pub(in crate::native) studio_asked: crate::session_plan::StudioAsk,
+    /// PyroWave's bits per pixel for this session: the client's quality, else the host's.
+    pub(in crate::native) pyrowave_bpp: f64,
+    /// `PUNKTFUNK_PYROWAVE_MAX_MBPS`, kbps, over every PyroWave pin of the session.
+    pub(in crate::native) pyrowave_max_kbps: Option<u32>,
+    /// H.264/HEVC slices per frame ([`crate::session_plan::client_slices`]); 1 = single-slice.
+    /// TV-SoC decoders (Amlogic) wedge on multi-slice.
+    pub(in crate::native) slices: u32,
+    pub(in crate::native) bitrate_kbps: u32,
+    pub(in crate::native) shard_payload: usize,
     chacha: bool,
     audio_plane: AudioPlane,
+    /// The Welcome grants the cursor channel. Read back off it, so the prepared display and the
+    /// session wiring cannot disagree.
+    pub(in crate::native) cursor_forward: bool,
+    /// The audio reservation out of the wire budget, read off the Welcome.
+    pub(in crate::native) audio_kbps: u32,
     /// What this session streams; `None` for a joiner, whose hello says `Shared`, or a synthetic
     /// source.
     screen: Option<ScreenEcho>,
-    /// `screen` is a monitor this session mirrors.
-    mirrored: bool,
     /// The screen this session wants ([`session_screen`]), which every open re-checks.
-    wanted: Option<crate::vdisplay::policy::DisplayTarget>,
-    /// [`Negotiated::topology`].
-    topology: Option<crate::vdisplay::policy::Topology>,
+    pub(in crate::native) wanted: Option<crate::vdisplay::policy::DisplayTarget>,
+    /// The topology its own screen opens under ([`session_screen`]); rebuilds reuse it.
+    pub(in crate::native) topology: Option<crate::vdisplay::policy::Topology>,
     /// The role the Welcome states ([`role_echo`]).
     role: Option<RoleEcho>,
+}
+
+impl SessionTerms {
+    /// `Hello::bitrate_kbps == 0`. A mode switch re-resolves PyroWave's pin either way, and an
+    /// Automatic rate is held inside the new bounds. Another codec's explicit rate stays.
+    pub(in crate::native) fn bitrate_auto(&self) -> bool {
+        self.hello.bitrate_kbps == 0
+    }
+
+    /// The client's panel, threaded into the EDID CTA HDR block before `create` so host apps
+    /// tone-map to it. `None` from an older client or an SDR panel: the EDID and 0xCE take
+    /// built-in defaults.
+    pub(in crate::native) fn client_hdr(&self) -> Option<pf_frame::HdrMeta> {
+        self.hello
+            .display_hdr
+            .map(crate::encode::hdr_meta_from_wire)
+    }
 }
 
 /// `ClientHello` → `ServerHello` → `Ready`. Borrows the control streams; the caller keeps them
@@ -662,10 +623,10 @@ pub(super) async fn negotiate(
     let (codec_bit, codec) = pick_codec(&hello, &encoder)?;
     settle_bitrate(&mut hello, codec_bit);
     cap_mode(&n, &mut hello, codec);
-    // Against the mode this client gets, before a join hands it the owner's.
-    let view = kept_view(n.first.view, &hello.mode, codec);
+    // The client's own intent, at the mode it gets before a join hands it the owner's.
+    let asked = Intent::at_hello(hello.mode, n.first.view, &Tenure::of(None, false), codec);
     let asked_launch = hello.launch.is_some();
-    let (joined, reservation) = admit_mode(&n, &mut hello, codec, view).await?;
+    let (joined, reservation) = admit_mode(&n, &mut hello, codec, asked.view()).await?;
     let launch_dropped = asked_launch && hello.launch.is_none();
 
     crate::encode::validate_dimensions(codec, hello.mode.width, hello.mode.height)
@@ -684,13 +645,17 @@ pub(super) async fn negotiate(
         topology,
         role,
     } = session_screen(&n, joined.is_some(), compositor).await?;
-    let mirrored = matches!(screen, Some(ScreenEcho::Monitor(_)));
+    let fit = punktfunk_core::video_fit::VideoFit::from_wire(hello.video_fit);
+    let tenure = Tenure::of(
+        joined.as_ref().map(|(_, view)| (fit, *view)),
+        matches!(screen, Some(ScreenEcho::Monitor(_))),
+    );
+    let joined = joined.map(|(display, _)| display);
     hello.mode = deliverable_rate(
         hello.mode,
-        runs_exact_rate(compositor, joined.is_some() || mirrored),
+        runs_exact_rate(compositor, tenure.shares_capture()),
     );
-    // A joiner's view rides `joined`; a mirrored head keeps its own fit.
-    let view = view.filter(|_| joined.is_none() && !mirrored);
+    let intent = Intent::at_hello(hello.mode, asked.view(), &tenure, codec);
 
     // Library launch is resolved after Welcome into `SessionContext.launch`. Do not write
     // `PUNKTFUNK_GAMESCOPE_APP`: process env races concurrent sessions and only gamescope's bare spawn reads it.
@@ -713,16 +678,17 @@ pub(super) async fn negotiate(
         compositor,
         gamescope_route.as_ref(),
         &n.knobs,
-        joined.as_ref().map(|(d, _)| d),
-        follows_source(&n.first.features, mirrored),
+        joined.as_ref(),
+        follows_source(&n.first.features, &tenure),
     );
     let (studio_asked, owner_hdr) = (facts.studio_asked, facts.owner_hdr);
+    let verdict = negotiate_video_format(facts.clone(), codec, encoder.clone(), hello.mode).await?;
     let Verdict {
         bit_depth,
         hdr: session_hdr,
         chroma,
-        display_hdr,
-    } = negotiate_video_format(facts.clone(), codec, encoder.clone(), hello.mode).await?;
+        ..
+    } = verdict;
     if owner_hdr.is_some_and(|o| crate::vdisplay::admission::joined_hdr(o, session_hdr).is_none()) {
         // Out of the table first, as `admit_mode`'s refusal.
         drop(reservation);
@@ -748,11 +714,10 @@ pub(super) async fn negotiate(
     let pyrowave_bpp = session_pyrowave_bpp(n.first.pyrowave_bpp_x100);
     let slices = crate::session_plan::client_slices(hello.video_caps, n.first.slices);
     // Priced at the picture the encoder means to take, as every build of the session prices it.
-    let picture = crate::session_plan::picture(hello.mode, view.or(joined_view(&joined)));
     let bitrate_kbps = resolve_bitrate_kbps_for(
         codec,
         hello.bitrate_kbps,
-        &picture,
+        &intent.picture(),
         chroma,
         bit_depth,
         pyrowave_bpp,
@@ -770,42 +735,47 @@ pub(super) async fn negotiate(
     // AC-3 codes 7.1 as 5.1: Welcome, capture and encoder all take the plane's count.
     let (audio_plane, audio_channels) =
         negotiate_audio_plane(&n, &hello, audio_channels, bitrate_kbps).await?;
-    let t = Terms {
+    let mut terms = SessionTerms {
         hello,
         codec_bit,
         codec,
+        tenure,
         joined,
-        view,
+        intent,
         compositor,
         gamescope_route,
         encoder,
         gamepad,
         audio_channels,
-        bit_depth,
-        hdr: session_hdr,
-        display_hdr,
-        chroma,
+        verdict,
         studio_asked,
         pyrowave_bpp,
+        pyrowave_max_kbps: n.knobs.pyrowave_max_kbps,
         slices,
         bitrate_kbps,
         shard_payload,
         chacha,
         audio_plane,
+        // Both are read off the Welcome below.
+        cursor_forward: false,
+        audio_kbps: 0,
         screen,
-        mirrored,
         wanted,
         topology,
         role,
     };
-    let server_hello = server_hello(&n, &t, welcome(&n, &t));
+    let welcome = welcome(&n, &terms);
+    terms.cursor_forward = welcome.host_caps & punktfunk_core::quic::HOST_CAP_CURSOR != 0;
+    terms.audio_kbps = audio_reserved_kbps(&welcome);
+    let terms = Arc::new(terms);
+    let server_hello = server_hello(&n, &terms, welcome);
     let host_link = crate::telemetry::net_health::host_link(
         n.conn.local_ip(),
         n.conn.v2().map(|v2| &*v2.media_socket),
     );
     punktfunk_core::quic::v2::io::send(send, &server_hello).await?;
     n.bringup.mark("welcome");
-    let prep = prepare_at_welcome(&n, &t, &server_hello.welcome);
+    let prep = prepare_at_welcome(&n, &terms, &server_hello.welcome);
 
     let (ty, body) = recv.read_frame().await?;
     punktfunk_core::quic::v2::msg::decode::<Ready>(ty, &body)
@@ -814,29 +784,18 @@ pub(super) async fn negotiate(
     // `wire_mtu::spawn_watch` is started by `serve_session` once the control-task channels
     // exist; it also drives mid-session shard renegotiation (needs the control writer).
     Ok(Negotiated {
-        hello: t.hello,
+        terms,
         welcome: server_hello.welcome,
         client_label: n.first.client_label.clone(),
         preset: n.first.preset.clone().map(Into::into),
         abr_features: n.first.abr_features,
         client_link: n.first.link,
         probe_only: n.first.probe_only,
-        pyrowave_bpp: t.pyrowave_bpp,
-        slices: t.slices,
         host_link,
-        compositor: t.compositor,
-        gamescope_route: t.gamescope_route,
         prep,
-        joined: t.joined,
-        view: t.view,
         reservation: std::sync::Mutex::new(Some(reservation)),
         features: server_hello.features,
         resolved: n.resolved,
-        encoder: t.encoder,
-        mirrored: t.mirrored,
-        screen: t.wanted,
-        topology: t.topology,
-        display_hdr: t.display_hdr,
         launch_dropped,
     })
 }
@@ -1026,7 +985,7 @@ fn wants_chacha(hello: &Hello) -> bool {
 
 /// The Welcome for the settled terms: what the client opens its decoder, audio device and
 /// input from.
-fn welcome(n: &Negotiation<'_>, t: &Terms) -> Welcome {
+fn welcome(n: &Negotiation<'_>, t: &SessionTerms) -> Welcome {
     Welcome {
         mode: t.hello.mode,
         fec: FecConfig {
@@ -1054,20 +1013,20 @@ fn welcome(n: &Negotiation<'_>, t: &Terms) -> Welcome {
             .unwrap_or(CompositorPref::Auto),
         gamepad: t.gamepad,
         bitrate_kbps: t.bitrate_kbps,
-        bit_depth: t.bit_depth,
+        bit_depth: t.verdict.bit_depth,
         // Mastering metadata (ST.2086 + CLL) rides the 0xCE datagram. The range is the one the
         // session plan encodes at.
         color: punktfunk_core::quic::ColorInfo::for_session(
-            t.hdr,
+            t.verdict.hdr,
             crate::session_plan::full_range_for(
                 &t.encoder,
                 t.studio_asked,
                 t.codec,
-                t.hdr,
-                t.bit_depth,
+                t.verdict.hdr,
+                t.verdict.bit_depth,
             ),
         ),
-        chroma_format: crate::encode::chroma_idc(t.chroma),
+        chroma_format: crate::encode::chroma_idc(t.verdict.chroma),
         audio_channels: t.audio_channels,
         // Negotiated codec; the client must not assume HEVC.
         codec: t.codec_bit,
@@ -1097,7 +1056,7 @@ fn welcome(n: &Negotiation<'_>, t: &Terms) -> Welcome {
 /// The `ServerHello` around `welcome`. Settles the session's media suite, which keys the media,
 /// offers the native features this session can run, states its screen and role, and tells a
 /// joiner its screen is shared.
-fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello {
+fn server_hello(n: &Negotiation<'_>, t: &SessionTerms, welcome: Welcome) -> ServerHello {
     // A browser's media goes unsealed, inside WebTransport's own encryption.
     let suite = (!n.conn.is_web()).then_some(if t.chacha {
         punktfunk_core::crypto::MediaSuite::ChaCha20Poly1305
@@ -1122,12 +1081,11 @@ fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello
             crate::inject::touchpad_taps(),
         ));
     // Further screens only where this session builds displays of its own on a compositor with
-    // more than one output: not gamescope, not a joiner or a mirror.
+    // more than one output: not gamescope.
     if matches!(n.source, Punktfunk1Source::Virtual)
         && t.compositor
             .is_some_and(|c| c != crate::vdisplay::Compositor::Gamescope)
-        && t.joined.is_none()
-        && !t.mirrored
+        && t.tenure.offers_screens()
     {
         offered = offered.with(punktfunk_core::quic::v2::registry::FEATURE_SCREENS);
     }
@@ -1135,19 +1093,19 @@ fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello
     if !n.conn.is_web() {
         offered = offered.with(punktfunk_core::quic::v2::registry::FEATURE_PCM_PARTS);
     }
-    // The picture the Welcome's rate was priced at.
-    let picture = crate::session_plan::picture(t.hello.mode, t.view.or(joined_view(&t.joined)));
     ServerHello {
-        picture: crate::session_plan::picture_field(welcome.mode, (picture.width, picture.height)),
+        // The picture the Welcome's rate was priced at.
+        picture: t.intent.picture().wire(welcome.mode),
         welcome,
         session_id: session.session_id,
         clock_origin_ns: session.clock.origin_ns(),
         suite,
         features: n.first.features.intersect(offered),
         profile: Some(n.resolved.id.clone()),
-        screen: match t.joined {
-            Some(_) => Some(ScreenEcho::Shared),
-            None => t.screen.clone(),
+        screen: if t.tenure.join_live() {
+            Some(ScreenEcho::Shared)
+        } else {
+            t.screen.clone()
         },
         role: t.role,
     }
@@ -1158,51 +1116,27 @@ fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello
 /// (gamescope nests the command), which must not run if Start never arrives.
 fn prepare_at_welcome(
     n: &Negotiation<'_>,
-    t: &Terms,
+    t: &Arc<SessionTerms>,
     welcome: &Welcome,
 ) -> Option<super::stream::PrepHandle> {
-    let compositor = match (n.source, t.compositor) {
-        (Punktfunk1Source::Virtual, Some(comp)) if cfg!(target_os = "windows") => comp,
-        _ => return None,
-    };
+    if !(matches!(n.source, Punktfunk1Source::Virtual)
+        && t.compositor.is_some()
+        && cfg!(target_os = "windows"))
+    {
+        return None;
+    }
     let prep = super::stream::DisplayPrep {
-        compositor,
-        mode: t.hello.mode,
+        terms: t.clone(),
         client_identity: n.conn.peer_fingerprint(),
-        client_hdr: t.hello.display_hdr.map(crate::encode::hdr_meta_from_wire),
-        // Read back off Welcome so the prepared display and session wiring cannot disagree.
-        cursor_forward: welcome.host_caps & punktfunk_core::quic::HOST_CAP_CURSOR != 0,
-        // The count SessionContext reads; a different one would change the wire mid-flow.
-        slices: t.slices,
-        bitrate_kbps: t.bitrate_kbps,
-        // The build may re-resolve if the source delivers a different size.
-        bitrate_auto: t.hello.bitrate_kbps == 0,
-        bit_depth: t.bit_depth,
-        hdr: t.hdr,
-        studio_asked: t.studio_asked,
         // `bitrate_kbps` is the wire budget; the prep encoder opens at the derived video
         // rate, snapshotted at Welcome's initial FEC percent. The FEC watcher re-derives.
-        enc_of: EncDerive {
-            audio_kbps: audio_reserved_kbps(welcome),
-            shard_payload: welcome.shard_payload,
-            fec_target: welcome.fec.fec_percent,
-            pyrowave_hz: (t.codec == crate::encode::Codec::PyroWave)
-                .then_some(welcome.mode.refresh_hz),
-            // Further screens build after Welcome and take their shares then.
-            share_permille: super::bitrate::SHARE_ALL,
-        },
-        chroma: t.chroma,
-        codec: t.codec,
-        pyrowave_bpp: t.pyrowave_bpp,
-        pyrowave_max_kbps: n.knobs.pyrowave_max_kbps,
-        shard_payload: welcome.shard_payload,
-        encoder: t.encoder.clone(),
-        mirrored: t.mirrored,
-        screen: t.wanted.clone(),
-        topology: t.topology,
-        // As `SessionContext::reframe_to` and `join_live` carry them.
-        reframe_to: reframe_to(t.hello.video_fit, joined_view(&t.joined), t.view),
-        join_live: t.joined.is_some(),
+        // Further screens build after Welcome and take their shares then.
+        enc_of: EncDerive::new(
+            t,
+            t.hello.mode.refresh_hz,
+            welcome.fec.fec_percent,
+            super::bitrate::SHARE_ALL,
+        ),
     };
     super::stream::spawn_display_prep(
         prep,
@@ -1495,7 +1429,7 @@ async fn admit_mode(
 
 /// `Welcome::host_caps`: what this host does for this session. `0x80` is the last bit; the next
 /// capability needs a second byte and an ABI bump.
-fn welcome_host_caps(n: &Negotiation<'_>, t: &Terms) -> u8 {
+fn welcome_host_caps(n: &Negotiation<'_>, t: &SessionTerms) -> u8 {
     // Sequence-gated gamepad snapshots; capable clients send those, not per-transition events.
     punktfunk_core::quic::HOST_CAP_GAMEPAD_STATE
         // Clipboard only when operator policy and a platform backend both exist, and never to a
@@ -1518,9 +1452,9 @@ fn welcome_host_caps(n: &Negotiation<'_>, t: &Terms) -> u8 {
             t.hello.client_caps,
             t.compositor,
             t.codec,
-            t.bit_depth,
-            t.hdr,
-            t.joined.is_some() || t.mirrored,
+            t.verdict.bit_depth,
+            t.verdict.hdr,
+            t.tenure.shares_capture(),
             &t.encoder,
         ) {
             punktfunk_core::quic::HOST_CAP_CURSOR
@@ -1703,8 +1637,7 @@ pub(super) struct Verdict {
 }
 
 impl FormatFacts {
-    /// `owner` is the display a joiner was admitted onto. `follows` is the client's promise
-    /// to rebuild its decoder, for a session that mirrors no monitor.
+    /// `owner` is the display a joiner was admitted onto. `follows` is [`follows_source`].
     pub(super) fn of(
         hello: &Hello,
         studio_asked: crate::session_plan::StudioAsk,
@@ -1723,7 +1656,7 @@ impl FormatFacts {
             studio_asked: asked_under(owner_format, studio_asked),
             owner_hdr: owner.map(|d| d.hdr),
             owner_format,
-            follows: follows && owner.is_none(),
+            follows,
             content_hdr: None,
         }
     }
@@ -1950,12 +1883,13 @@ fn asked_under(
 }
 
 /// Whether a session's format may move with its source ([`FormatFacts::follows`]): the client
-/// rebuilds its decoder at an epoch, and the session mirrors no monitor, whose capture it shares.
+/// rebuilds its decoder at an epoch, and the capture is the session's own.
 pub(super) fn follows_source(
     features: &punktfunk_core::quic::v2::features::FeatureSet,
-    mirrored: bool,
+    tenure: &Tenure,
 ) -> bool {
-    features.has(punktfunk_core::quic::v2::registry::FEATURE_FORMAT_EPOCH) && !mirrored
+    features.has(punktfunk_core::quic::v2::registry::FEATURE_FORMAT_EPOCH)
+        && !tenure.shares_capture()
 }
 
 /// HDR the client asks for: `VIDEO_CAP_HDR`, except a joiner of an SDR display (`owner_hdr`).
@@ -2169,7 +2103,7 @@ fn pcm_parts(n: &Negotiation<'_>) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use punktfunk_core::audio::pcm;
 
@@ -2247,41 +2181,22 @@ mod tests {
     fn a_pyrowave_rate_on_an_hevc_session_is_automatic() {
         use punktfunk_core::quic::{CODEC_HEVC, CODEC_PYROWAVE};
         let mut hello = Hello {
-            mode: punktfunk_core::Mode {
-                width: 1920,
-                height: 1080,
-                refresh_hz: 60,
-                refresh_mhz: 0,
-            },
-            compositor: punktfunk_core::config::CompositorPref::Auto,
-            gamepad: punktfunk_core::config::GamepadPref::Auto,
             bitrate_kbps: 80_000,
-            name: None,
-            launch: None,
-            video_caps: 0,
-            audio_channels: 2,
             video_codecs: CODEC_HEVC | CODEC_PYROWAVE,
             preferred_codec: CODEC_PYROWAVE,
-            display_hdr: None,
-            client_caps: 0,
-            max_shard_payload: 0,
-            audio_rate_hz: punktfunk_core::audio::SAMPLE_RATE_HZ,
-            audio_bits: pcm::BITS_16,
-            audio_layout: 0,
-            video_fit: 0,
-            audio_bitstreams: 0,
+            ..hello_at(mode(1920, 1080, 60))
         };
         let mut on_pyrowave = hello.clone();
         settle_bitrate(&mut on_pyrowave, CODEC_PYROWAVE);
         assert_eq!(on_pyrowave.bitrate_kbps, 80_000, "Fixed stays Fixed");
         settle_bitrate(&mut hello, CODEC_HEVC);
         assert_eq!(hello.bitrate_kbps, 0);
-        let mode = hello.mode;
+        let picture = Intent::of(hello.mode, None).picture();
         assert_eq!(
             resolve_bitrate_kbps_for(
                 crate::encode::Codec::H265,
                 hello.bitrate_kbps,
-                &mode,
+                &picture,
                 crate::encode::ChromaFormat::Yuv420,
                 8,
                 session_pyrowave_bpp(0),
@@ -2291,7 +2206,11 @@ mod tests {
         );
     }
 
-    fn mode(width: u32, height: u32, refresh_hz: u32) -> punktfunk_core::Mode {
+    pub(in crate::native) fn mode(
+        width: u32,
+        height: u32,
+        refresh_hz: u32,
+    ) -> punktfunk_core::Mode {
         punktfunk_core::Mode {
             width,
             height,
@@ -2300,12 +2219,92 @@ mod tests {
         }
     }
 
+    /// A client's `Hello` for `mode`, at Automatic, offering HEVC alone.
+    pub(in crate::native) fn hello_at(mode: punktfunk_core::Mode) -> Hello {
+        use punktfunk_core::config::{CompositorPref, GamepadPref};
+        Hello {
+            mode,
+            compositor: CompositorPref::Auto,
+            gamepad: GamepadPref::Auto,
+            bitrate_kbps: 0,
+            name: None,
+            launch: None,
+            video_caps: 0,
+            audio_channels: 2,
+            video_codecs: punktfunk_core::quic::CODEC_HEVC,
+            preferred_codec: punktfunk_core::quic::CODEC_HEVC,
+            display_hdr: None,
+            client_caps: 0,
+            max_shard_payload: 0,
+            audio_rate_hz: punktfunk_core::audio::SAMPLE_RATE_HZ,
+            audio_bits: pcm::BITS_16,
+            audio_layout: 0,
+            video_fit: 0,
+            audio_bitstreams: 0,
+        }
+    }
+
+    /// The terms of an HEVC session on Mutter for `hello`: 8-bit SDR 4:2:0, a display of its
+    /// own, no view and no mirror. A test sets the fields it exercises.
+    pub(in crate::native) fn terms_for(
+        hello: Hello,
+        encoder: Arc<crate::encode::Resolved>,
+    ) -> SessionTerms {
+        SessionTerms {
+            intent: Intent::of(hello.mode, None),
+            hello,
+            codec_bit: punktfunk_core::quic::CODEC_HEVC,
+            codec: crate::encode::Codec::H265,
+            tenure: Tenure::of(None, false),
+            joined: None,
+            compositor: Some(crate::vdisplay::Compositor::Mutter),
+            gamescope_route: None,
+            encoder,
+            gamepad: GamepadPref::Auto,
+            audio_channels: 2,
+            verdict: Verdict {
+                bit_depth: 8,
+                hdr: false,
+                chroma: crate::encode::ChromaFormat::Yuv420,
+                display_hdr: false,
+            },
+            studio_asked: Default::default(),
+            pyrowave_bpp: 1.6,
+            pyrowave_max_kbps: None,
+            slices: 1,
+            bitrate_kbps: 20_000,
+            shard_payload: 1200,
+            chacha: false,
+            audio_plane: AudioPlane::opus(),
+            cursor_forward: false,
+            audio_kbps: 0,
+            screen: None,
+            wanted: None,
+            topology: None,
+            role: None,
+        }
+    }
+
+    /// The display a joiner was admitted onto: Mutter's, lit in SDR, its format not known.
+    pub(in crate::native) fn live_display() -> crate::vdisplay::admission::LiveDisplay {
+        crate::vdisplay::admission::LiveDisplay {
+            compositor: Some(crate::vdisplay::Compositor::Mutter),
+            route: None,
+            isolation: None,
+            audio_sink: Arc::default(),
+            hdr: false,
+            format: None,
+        }
+    }
+
     /// A view is kept only as a size a mode could be, inside the mode and smaller on one axis.
     #[test]
     fn a_view_is_kept_only_inside_its_mode() {
         use crate::encode::Codec::{PyroWave, H265};
         let at_1_5x = mode(2048, 1152, 120);
-        let kept = |view, codec| kept_view(Some(view), &at_1_5x, codec);
+        let own = Tenure::of(None, false);
+        let view_at = |view, mode, codec| Intent::at_hello(mode, view, &own, codec).view();
+        let kept = |view, codec| view_at(Some(view), at_1_5x, codec);
         assert_eq!(kept((1366, 768), H265), Some((1366, 768)), "fine");
         assert_eq!(
             kept((2048, 768), H265),
@@ -2318,24 +2317,172 @@ mod tests {
         assert_eq!(kept((1367, 768), H265), None, "odd");
         assert_eq!(kept((0, 768), H265), None, "zero");
         assert_eq!(kept((120, 100), PyroWave), None, "under the codec's floor");
-        assert_eq!(kept_view(None, &at_1_5x, H265), None);
+        assert_eq!(view_at(None, at_1_5x, H265), None);
     }
 
     /// A joiner frames for its own view at its fit, whatever view the client also named; any
     /// other session for its view at Fit, or not at all.
     #[test]
     fn a_joiner_frames_for_its_view_and_a_viewer_at_fit() {
+        use crate::encode::Codec::H265;
         use punktfunk_core::video_fit::VideoFit;
-        let crop = VideoFit::Crop.wire();
+        let crop = VideoFit::from_wire(VideoFit::Crop.wire());
+        let hd = mode(1920, 1080, 60);
+        let framing = |view, tenure| Intent::at_hello(hd, view, &tenure, H265).framing();
+        let joiner = Tenure::of(Some((crop, (1280, 720))), false);
         assert_eq!(
-            reframe_to(crop, Some((1280, 720)), Some((1024, 576))),
+            framing(Some((1024, 576)), joiner),
             Some((VideoFit::Crop, (1280, 720)))
         );
+        let own = Tenure::of(None, false);
         assert_eq!(
-            reframe_to(crop, None, Some((1366, 768))),
+            framing(Some((1366, 768)), own),
             Some((VideoFit::Fit, (1366, 768)))
         );
-        assert_eq!(reframe_to(crop, None, None), None);
+        assert_eq!(framing(None, own), None);
+    }
+
+    /// Where a Welcome's session streams: a display of its own, one capped by the operator to a
+    /// mode, a display another session runs at its mode, or a host monitor.
+    #[derive(Clone, Copy, Debug)]
+    pub(in crate::native) enum Welcomed {
+        Own,
+        Capped(punktfunk_core::Mode),
+        Joiner(punktfunk_core::Mode),
+        Mirror,
+    }
+
+    /// The Welcome's mode, rate and `ServerHello` picture for a client that asked `asked` at
+    /// `view` and `kbps`, through `negotiate`'s steps in its order on a mutter host. The cap
+    /// and the join enter as the mode they leave; PyroWave runs at 1.6 bits per pixel.
+    pub(in crate::native) fn welcomed(
+        asked: punktfunk_core::Mode,
+        view: Option<(u32, u32)>,
+        codec: crate::encode::Codec,
+        kbps: u32,
+        at: Welcomed,
+    ) -> (punktfunk_core::Mode, u32, Option<(u32, u32)>) {
+        let mut mode = asked;
+        if let Welcomed::Capped(cap) = at {
+            (mode.width, mode.height, mode.refresh_hz) = (cap.width, cap.height, cap.refresh_hz);
+        }
+        let asked = Intent::at_hello(mode, view, &Tenure::of(None, false), codec);
+        let joined = match at {
+            Welcomed::Joiner(owner) => {
+                let shown = asked.view().unwrap_or((mode.width, mode.height));
+                (mode.width, mode.height, mode.refresh_hz) =
+                    (owner.width, owner.height, owner.refresh_hz);
+                Some((punktfunk_core::video_fit::VideoFit::Fit, shown))
+            }
+            _ => None,
+        };
+        let tenure = Tenure::of(joined, matches!(at, Welcomed::Mirror));
+        let exact = runs_exact_rate(
+            Some(crate::vdisplay::Compositor::Mutter),
+            tenure.shares_capture(),
+        );
+        let mode = deliverable_rate(mode, exact);
+        let intent = Intent::at_hello(mode, asked.view(), &tenure, codec);
+        let kbps = resolve_bitrate_kbps_for(
+            codec,
+            kbps,
+            &intent.picture(),
+            crate::encode::ChromaFormat::Yuv420,
+            8,
+            session_pyrowave_bpp(160),
+            None,
+        );
+        (mode, kbps, intent.picture().wire(mode))
+    }
+
+    /// One Hello and the Welcome it gets.
+    struct WelcomeRow {
+        name: &'static str,
+        asked: punktfunk_core::Mode,
+        view: Option<(u32, u32)>,
+        codec: crate::encode::Codec,
+        kbps: u32,
+        at: Welcomed,
+        welcome: (punktfunk_core::Mode, u32, Option<(u32, u32)>),
+        verdict: crate::native::tests::Verdict,
+    }
+
+    #[rustfmt::skip]
+    fn welcome_rows() -> Vec<WelcomeRow> {
+        use crate::encode::Codec::{PyroWave, H265};
+        use crate::native::tests::Verdict::Wanted;
+        let (hd, qhd, uhd) = (mode(1920, 1080, 60), mode(2560, 1440, 60), mode(3840, 2160, 60));
+        let row = |name, asked, view, codec, kbps, at, welcome, verdict| WelcomeRow {
+            name,
+            asked,
+            view,
+            codec,
+            kbps,
+            at,
+            welcome,
+            verdict,
+        };
+        let exact = punktfunk_core::Mode::exact(1920, 1080, 59_940);
+        vec![
+            row("HEVC Automatic: the host's default", hd, None, H265, 0, Welcomed::Own,
+                (hd, 20_000, None), Wanted),
+            row("HEVC Automatic with a view: not priced by size, told the view", uhd,
+                Some((1920, 1080)), H265, 0, Welcomed::Own, (uhd, 20_000, Some((1920, 1080))),
+                Wanted),
+            row("HEVC at a fixed rate: the rate stands", uhd, Some((1920, 1080)), H265, 50_000,
+                Welcomed::Own, (uhd, 50_000, Some((1920, 1080))), Wanted),
+            row("PyroWave at the mode", hd, None, PyroWave, 0, Welcomed::Own,
+                (hd, 199_065, None), Wanted),
+            row("PyroWave priced and told at its view", uhd, Some((1920, 1080)), PyroWave, 0,
+                Welcomed::Own, (uhd, 199_065, Some((1920, 1080))), Wanted),
+            row("PyroWave Fixed: the pin at the view, the client's number ignored", uhd,
+                Some((1920, 1080)), PyroWave, 80_000, Welcomed::Own,
+                (uhd, 199_065, Some((1920, 1080))), Wanted),
+            row("a view the mode's size: the mode", hd, Some((1920, 1080)), PyroWave, 0,
+                Welcomed::Own, (hd, 199_065, None), Wanted),
+            row("a view larger than the mode: the mode", hd, Some((2560, 1440)), PyroWave, 0,
+                Welcomed::Own, (hd, 199_065, None), Wanted),
+            row("a fraction on a display of its own stays", exact, None, H265, 0, Welcomed::Own,
+                (exact, 20_000, None), Wanted),
+            row("a joiner asking less: the owner's mode, priced and told at its ask",
+                mode(1280, 720, 120), None, PyroWave, 0, Welcomed::Joiner(hd),
+                (hd, 88_473, Some((1280, 720))), Wanted),
+            row("a joiner with a view: the owner's mode at that view", uhd, Some((1920, 1080)),
+                PyroWave, 0, Welcomed::Joiner(qhd), (qhd, 199_065, Some((1920, 1080))), Wanted),
+            row("a joiner at the owner's size: the mode, whole hertz", exact, None, PyroWave, 0,
+                Welcomed::Joiner(hd), (hd, 199_065, None), Wanted),
+            row("a joiner asking more than the owner runs: priced and told at the mode its fit \
+                 encodes", uhd, None, PyroWave, 0, Welcomed::Joiner(hd), (hd, 199_065, None),
+                Wanted),
+            row("an HEVC joiner asking more: the default, told the mode", uhd, None, H265, 0,
+                Welcomed::Joiner(hd), (hd, 20_000, None), Wanted),
+            row("a mirror: its view dropped, priced and told at the mode", hd,
+                Some((1280, 720)), PyroWave, 0, Welcomed::Mirror, (hd, 199_065, None), Wanted),
+            row("a cap keeps a view inside the capped mode", mode(3840, 2160, 120),
+                Some((1920, 1080)), PyroWave, 0, Welcomed::Capped(qhd),
+                (qhd, 199_065, Some((1920, 1080))), Wanted),
+            row("a cap to the view's size: the mode", uhd, Some((1920, 1080)), PyroWave, 0,
+                Welcomed::Capped(hd), (hd, 199_065, None), Wanted),
+            row("a cap under the view: the capped mode", uhd, Some((1920, 1080)), PyroWave, 0,
+                Welcomed::Capped(mode(1280, 720, 60)), (mode(1280, 720, 60), 88_473, None),
+                Wanted),
+        ]
+    }
+
+    /// The Welcome's mode, rate and picture for each Hello shape: HEVC and PyroWave, with and
+    /// without a view, as a joiner, as a mirror and under a cap.
+    #[test]
+    fn geometry_rows() {
+        use crate::encode::Codec::PyroWave;
+        // A host built without the PyroWave encoder takes no PyroWave size, nor its view.
+        let pyrowave = crate::encode::validate_dimensions(PyroWave, 1920, 1080).is_ok();
+        for r in welcome_rows() {
+            if r.codec == PyroWave && !pyrowave {
+                continue;
+            }
+            let got = welcomed(r.asked, r.view, r.codec, r.kbps, r.at);
+            assert_eq!(got, r.welcome, "{} ({:?}, {:?})", r.name, r.at, r.verdict);
+        }
     }
 
     /// A joiner's colour is the owner display's: an SDR display asks no HDR of an HDR client,

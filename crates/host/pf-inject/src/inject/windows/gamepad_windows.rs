@@ -207,11 +207,8 @@ mod tests {
     /// UpperFilters string: on a machine without that service it fails the devnode.
     #[test]
     fn xusb_hwids_match_inf() {
-        let inx = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../packaging/windows/drivers/pf-xusb/pf_xusb.inx"
-        );
-        let inf = std::fs::read_to_string(inx).expect("read pf_xusb.inx");
+        let inx = crate::repo_file("packaging/windows/drivers/pf-xusb/pf_xusb.inx");
+        let inf = std::fs::read_to_string(&inx).expect("read pf_xusb.inx");
         let lines: Vec<&str> = inf
             .lines()
             .map(str::trim)

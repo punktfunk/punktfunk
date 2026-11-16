@@ -67,7 +67,7 @@ impl SwapReason {
 
     /// `enc_src` follows the frame where the site publishes the delivered mode itself, or
     /// rebuilds at the mode it had. A session switch and a capture loss can land on a backend
-    /// that delivers another size: left stale, `follow_source_mode` sees it, sets `cur_mode`,
+    /// that delivers another size: left stale, `follow_source_mode` sees it, sets the intent,
     /// re-resolves the rate and tells the client. A rate rebuild leaves a source change it did
     /// not make to it too.
     fn rereads_enc_src(self) -> bool {
@@ -85,12 +85,12 @@ impl SwapReason {
 pub(super) enum Next {
     /// Capture and encoder both, from a build or a re-attach.
     Pipeline(Pipeline),
-    /// The encoder alone, under a capturer that keeps its attachment. `resized` is the first
-    /// frame at a new size and its pacing interval, after the Windows in-place mode set.
+    /// The encoder alone, under a capturer that keeps its attachment, and what it delivers.
+    /// `resized` is the first frame at a new size, after the Windows in-place mode set.
     Encoder {
         enc: Box<dyn crate::encode::Encoder>,
-        reframe: punktfunk_core::video_fit::Reframe,
-        resized: Option<(crate::capture::CapturedFrame, std::time::Duration)>,
+        geometry: crate::native::geometry::Geometry,
+        resized: Option<crate::capture::CapturedFrame>,
     },
 }
 
@@ -100,8 +100,9 @@ fn enc_src_of(frame: &crate::capture::CapturedFrame) -> (pf_frame::PixelFormat, 
 }
 
 impl StreamState {
-    /// Install `next` and restart what restarts with an encoder. The caller closed any open
-    /// wire frame first ([`Self::close_open_frame`]); `next`'s encoder numbers its AUs after it.
+    /// Install `next` and its geometry, write the input plane's frame map from it, and restart
+    /// what restarts with an encoder. The caller closed any open wire frame first
+    /// ([`Self::close_open_frame`]); `next`'s encoder numbers its AUs after it.
     pub(super) fn swap_pipeline(&mut self, next: Next, why: SwapReason) {
         let old_gen = self.live.cur_display_gen;
         if why.moves_epoch() {
@@ -111,7 +112,7 @@ impl StreamState {
         // opens on the same source.
         let opens_on = match &next {
             Next::Pipeline(p) => Some(&p.frame),
-            Next::Encoder { resized, .. } => resized.as_ref().map(|(frame, _)| frame),
+            Next::Encoder { resized, .. } => resized.as_ref(),
         };
         let source_moved = opens_on.is_some_and(|f| enc_src_of(f) != enc_src_of(&self.live.frame));
         if source_moved || why.limits_unknown() {
@@ -129,18 +130,22 @@ impl StreamState {
             Next::Pipeline(p) => self.adopt_pipeline(p),
             Next::Encoder {
                 enc,
-                reframe,
+                geometry,
                 resized,
             } => {
-                self.adopt_reframe(reframe);
+                self.live.geometry = geometry;
                 self.live.enc = enc;
                 self.carry_pipelining();
-                if let Some((frame, interval)) = resized {
+                if let Some(frame) = resized {
                     self.live.frame = frame;
-                    self.live.interval = interval;
                 }
             }
         }
+        *self
+            .shared
+            .frame_map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = self.live.geometry.reframe();
         self.clock.inflight.clear();
         self.clock.watchdog.on_au();
         if let Some(g) = why.retires(old_gen, self.live.cur_display_gen) {
@@ -149,7 +154,7 @@ impl StreamState {
         if why.rereads_enc_src() {
             self.live.enc_src = enc_src_of(&self.live.frame);
         }
-        self.live.applied_share = self.enc_now().share_permille;
+        self.live.applied_share = self.enc_now().share_permille();
         // The new encoder opened on an IDR: the keyframe cooldown counts from it, and a host
         // repair it covers is owed no longer.
         self.clock.last_forced_idr = Some(std::time::Instant::now());
@@ -157,30 +162,26 @@ impl StreamState {
         // Every epoch is told, before its first frame encodes; a site that corrects the mode
         // tells again.
         if why.moves_epoch() {
-            self.tell_delivered(self.delivered_mode(), false);
+            self.tell(false);
         }
     }
 
     /// The capture side of a built pipeline, then its encoder. The plan settles on the new
-    /// capture: a joiner's rebuild can join or miss anew, and the control task learns the
-    /// display it joined. A new capturer numbers its cursor shapes from 1 again, so the last
+    /// capture: a joiner's rebuild can join or miss anew, and the control task's tenure cell
+    /// takes the new display. A new capturer numbers its cursor shapes from 1 again, so the last
     /// forwarded one is forgotten, and the clipboard follows the new capture's gamescope.
     fn adopt_pipeline(&mut self, p: Pipeline) {
         let Pipeline {
             capturer,
             enc,
             frame,
-            interval,
+            geometry,
             node_id,
             display_gen,
             bitrate_kbps: _,
-            reframe,
             #[cfg(target_os = "linux")]
             lease,
-            #[cfg(target_os = "linux")]
-            panel_tick_ns,
         } = p;
-        self.adopt_reframe(reframe);
         // The old capturer goes before the old encoder, as on teardown.
         self.live.capturer = capturer;
         self.plan = self.plan.captured_by(&*self.live.capturer);
@@ -191,12 +192,10 @@ impl StreamState {
         self.live.enc = enc;
         self.carry_pipelining();
         self.live.frame = frame;
-        self.live.interval = interval;
+        self.live.geometry = geometry;
         self.live.cur_node_id = node_id;
         self.live.cur_display_gen = display_gen;
-        let joined =
-            crate::native::wiring::joined_display(self.display.vd_params.join_live, display_gen);
-        (self.shared.joined_display).store(joined, std::sync::atomic::Ordering::Relaxed);
+        self.shared.tenure.adopt(&self.display.tenure, display_gen);
         #[cfg(target_os = "linux")]
         {
             super::state::publish_gamescope_xwayland(
@@ -204,7 +203,9 @@ impl StreamState {
                 lease.as_ref(),
             );
             self.live.lease = lease;
-            self.live.restamp = panel_tick_ns.map(super::encode::SourceStamps::new);
+            self.live.restamp = geometry
+                .panel_tick_ns()
+                .map(super::encode::SourceStamps::new);
         }
         self.publish_arrival_poke();
     }
@@ -258,6 +259,7 @@ pub(super) mod tests {
     use super::*;
     use crate::capture::{CapturedFrame, Capturer, SyntheticCapturer};
     use crate::native::bitrate::EncoderCeiling;
+    use crate::native::geometry::{Geometry, Intent};
     use punktfunk_core::quic::AckReason;
     use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8};
     use std::sync::{Arc, Mutex};
@@ -347,21 +349,29 @@ pub(super) mod tests {
             .expect("a synthetic frame")
     }
 
+    /// The fake's intent at `size`, captured at it, every [`INTERVAL`], unframed.
+    pub(in crate::native::stream) fn geometry(size: (u32, u32)) -> Geometry {
+        let mode = punktfunk_core::Mode {
+            width: SMALL.0,
+            height: SMALL.1,
+            refresh_hz: 60,
+            refresh_mhz: 0,
+        };
+        Geometry::of(Intent::of(mode, None), size, INTERVAL, Default::default())
+    }
+
     /// A built pipeline of `size` on display generation 2.
     fn pipeline(size: (u32, u32)) -> Next {
         Next::Pipeline(Pipeline {
             capturer: Box::new(SyntheticCapturer::new(size.0, size.1, 60)),
             enc: Box::new(NullEnc),
             frame: frame(size),
-            interval: INTERVAL,
+            geometry: geometry(size),
             node_id: 2,
             display_gen: Some(2),
             bitrate_kbps: 20_000,
-            reframe: Default::default(),
             #[cfg(target_os = "linux")]
             lease: None,
-            #[cfg(target_os = "linux")]
-            panel_tick_ns: None,
         })
     }
 
@@ -369,8 +379,8 @@ pub(super) mod tests {
     fn encoder(resized: Option<(u32, u32)>) -> Next {
         Next::Encoder {
             enc: Box::new(NullEnc),
-            reframe: Default::default(),
-            resized: resized.map(|size| (frame(size), INTERVAL)),
+            geometry: geometry(resized.unwrap_or(SMALL)),
+            resized: resized.map(frame),
         }
     }
 
@@ -447,22 +457,26 @@ pub(super) mod tests {
         let (codec_tx, codecs) = tokio::sync::mpsc::unbounded_channel();
         let (rate_tx, rates) = tokio::sync::mpsc::unbounded_channel();
         let display = Arc::new(Mutex::new(DisplayAsks::default()));
+        let encoder = crate::encode::resolve();
+        let knobs = crate::native::SessionKnobs::read();
+        // An explicit rate: the fake runs no Automatic session.
+        let hello = punktfunk_core::quic::Hello {
+            bitrate_kbps: 20_000,
+            ..crate::native::handshake::tests::hello_at(mode)
+        };
+        let mut terms = crate::native::handshake::tests::terms_for(hello, encoder);
+        terms.pyrowave_max_kbps = knobs.pyrowave_max_kbps;
+        let own = terms.tenure;
         let st = StreamState {
             facts: SessionFacts {
                 deadline: now + Duration::from_secs(60),
-                encoder: crate::encode::resolve(),
-                knobs: crate::native::SessionKnobs::read(),
+                terms: Arc::new(terms),
+                knobs,
                 life: life.clone(),
                 counters: Default::default(),
                 conn,
-                negotiated: mode,
-                bitrate_auto: false,
-                audio_reserved_kbps: 0,
-                shard_payload: 1200,
-                pyrowave: false,
                 streamed_wire: false,
                 perf: false,
-                client_hdr: None,
                 bringup: crate::bringup::Trace::start("swap-test", Arc::new(AtomicU32::new(0))),
                 stats: crate::stats_recorder::StatsRecorder::new(
                     std::env::temp_dir().join(format!("pf-swap-test-{}", std::process::id())),
@@ -497,6 +511,7 @@ pub(super) mod tests {
             display: DisplayRequest {
                 vd: Box::new(NullDisplay(display.clone())),
                 compositor: crate::vdisplay::Compositor::Kwin,
+                tenure: own,
                 cursor_fwd: None,
                 cursor_client_drew: true,
                 gamescope_composite: false,
@@ -576,7 +591,7 @@ pub(super) mod tests {
                 enc: Box::new(NullEnc),
                 enc_src: enc_src_of(&live),
                 frame: live,
-                interval: INTERVAL,
+                geometry: geometry(SMALL),
                 cur_node_id: 1,
                 cur_display_gen: Some(1),
                 epoch: 7,
@@ -584,7 +599,6 @@ pub(super) mod tests {
                 lease: None,
                 #[cfg(target_os = "linux")]
                 restamp: None,
-                cur_mode: mode,
                 bitrate_kbps: 20_000,
                 retargeted: true,
                 asks: Default::default(),
@@ -605,7 +619,6 @@ pub(super) mod tests {
                 gamescope_cursor: false,
                 sdr10_native: false,
                 slices: 1,
-                reframe_to: None,
                 mirrored: false,
                 rgb_full_range: crate::encode::RgbFullRange::BOTH,
                 studio_asked: crate::session_plan::StudioAsk::default(),
@@ -633,7 +646,7 @@ pub(super) mod tests {
                 cadence_behind_score: Default::default(),
                 client_packets_received: Default::default(),
                 cursor_client_draws: Default::default(),
-                joined_display: Default::default(),
+                tenure: Arc::new(crate::native::geometry::TenureCell::new(&own)),
             },
             ends: LoopEnds {
                 cursor_shape_tx: tokio::sync::watch::channel(None).0,
@@ -733,7 +746,7 @@ pub(super) mod tests {
             return;
         }
         let f = fake();
-        let session = f.st.facts.encoder.clone();
+        let session = f.st.facts.terms.encoder.clone();
         let patch = serde_json::json!({ "encoder": "nvenc" });
         pf_host_config::save(patch.as_object().expect("a patch")).expect("the console's write");
         assert!(
@@ -741,16 +754,16 @@ pub(super) mod tests {
             "the write moves what the next session resolves"
         );
         let req =
-            f.st.build_request(f.st.live.cur_mode, f.st.live.bitrate_kbps);
+            f.st.build_request(f.st.live.geometry.intent(), f.st.live.bitrate_kbps);
         let mut on_session = false;
         super::super::pipeline::open_session_encoder_with(
-            &req.encoder,
+            &req.terms.encoder,
             &req.plan,
             &*f.st.live.capturer,
             &f.st.live.frame,
-            (f.st.facts.negotiated.width, f.st.facts.negotiated.height),
+            f.st.live.geometry.intent().framing(),
             60,
-            |_, _| 20_000_000,
+            |_| 20_000_000,
             req.bit_depth,
             None,
             req.wire_seq_base,

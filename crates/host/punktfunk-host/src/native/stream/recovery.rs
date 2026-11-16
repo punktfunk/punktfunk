@@ -64,7 +64,7 @@ impl StreamState {
             requested,
         ) {
             FecMove::Published => {
-                self.live.applied_share = to.share_permille;
+                self.live.applied_share = to.share_permille();
                 self.note_fec_move(requested, want, true);
             }
             FecMove::Pending => self.fec.pending = Some((requested, want)),
@@ -172,7 +172,7 @@ impl StreamState {
         {
             return false;
         }
-        self.live.applied_share = ed.share_permille;
+        self.live.applied_share = ed.share_permille();
         let applied_kbps = self.applied_kbps(new_kbps);
         tracing::info!(
             from_kbps = self.live.bitrate_kbps,
@@ -448,8 +448,11 @@ impl StreamState {
             .keyframe_left
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        self.kf_gate
-            .measure(self.facts.conn.rtt(), self.live.interval, keyframe_left);
+        self.kf_gate.measure(
+            self.facts.conn.rtt(),
+            self.live.geometry.interval(),
+            keyframe_left,
+        );
         match self.kf_gate.decide(
             now,
             base,

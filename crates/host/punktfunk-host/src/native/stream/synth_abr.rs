@@ -243,7 +243,7 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
         common:
             StreamCommon {
                 session,
-                mode,
+                intent,
                 seconds,
                 life,
                 counters,
@@ -295,6 +295,7 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
         plane,
         peer,
     } = ctx;
+    let mode = intent.mode();
     let fps = mode.refresh_hz.max(1);
     let mut budget_kbps = bitrate_kbps;
     live_bitrate.store(budget_kbps, Ordering::Relaxed);

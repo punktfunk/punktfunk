@@ -23,6 +23,7 @@ mod rate;
 
 use super::*;
 use crate::native::bitrate::{fec_pct, pyrowave_bounds_kbps, UnrecoveredRun, FEC_WHOLE_FRAME};
+use crate::native::geometry::Picture;
 use pf_clipboard::ClipCoordCmd;
 use punktfunk_core::abr::governor::{ShareWindow, NO_SHARE_KBPS};
 use punktfunk_core::quic::v2::{dgram::Feedback, io as v2io, msg as v2msg};
@@ -212,14 +213,13 @@ impl ProbeSpacing {
 pub(super) struct Task {
     pub(super) ctrl_send: super::link::CtlSend,
     pub(super) ctrl_recv: super::link::CtlReader,
+    /// What the handshake settled.
+    pub(super) terms: Arc<super::handshake::SessionTerms>,
     /// The session's media clock: clock echoes leave in its time.
     pub(super) clock: std::sync::Arc<punktfunk_core::quic::v2::clock::SessionClock>,
     /// The input thread's queue, shared with the datagram loop: a key edge off the
     /// control stream lands in the same order-preserving line as the pointer.
     pub(super) input_tx: std::sync::mpsc::SyncSender<super::input::ClientInput>,
-    pub(super) initial_mode: punktfunk_core::Mode,
-    /// `initial_mode` at the size its first epoch is encoded at: PyroWave's first bounds.
-    pub(super) initial_picture: punktfunk_core::Mode,
     /// Epoch 0's `StreamConfig` with this host's link facts, sent as the task starts.
     pub(super) stream_config: v2msg::StreamConfig,
     /// The client moves its mode on configs (`FEATURE_STREAM_CONFIG`). Otherwise a switch is
@@ -239,24 +239,13 @@ pub(super) struct Task {
     /// The client rebuilds its decoder on a format epoch, and this session owns its capture.
     pub(super) format_change_ok: bool,
     pub(super) adaptive_fec: bool,
-    pub(super) session_bitrate_kbps: u32,
-    /// Automatic bitrate, so the shared-path governor may move this session. A
-    /// client-set rate is never touched.
-    pub(super) bitrate_automatic: bool,
     /// PyroWave session whose client asked Automatic (`Hello.bitrate_kbps ==
     /// 0`): it adapts between its floor and the pin. An explicit one runs at
     /// the pin, which its bring-up ramp may lower once while `ramp_open` holds.
     pub(super) pyrowave_automatic: bool,
-    /// PyroWave's bits per pixel for this session; a delivered mode re-pins at it.
-    pub(super) pyrowave_bpp: f64,
-    /// The session's `PUNKTFUNK_PYROWAVE_MAX_MBPS` cap, kbps, over every re-pin.
-    pub(super) pyrowave_max_kbps: Option<u32>,
     /// One wire packet, bytes. Turns the client's delivery count into the rate
     /// the governor divides, and the shard the parity rule sizes against.
     pub(super) wire_bytes: u64,
-    /// Audio reservation out of the wire budget. With [`Self::wire_bytes`] and
-    /// the live mode it is the frame adaptive FEC has to protect.
-    pub(super) audio_kbps: u32,
     /// Client set `EXT_ABR_ACK_REASON` in its `ClientHello`: its `BitrateChanged`
     /// may carry the reason byte. Clear for every shipped client, which rejects
     /// a longer ack, and for every client behind a host without `HOST_CAP2_EXT`.
@@ -328,20 +317,20 @@ fn tell(
     stream_config: &mut Option<v2msg::StreamConfig>,
     d: &super::wiring::Delivered,
 ) -> Option<Tell> {
-    let picture = crate::session_plan::picture_field(d.mode, d.encoded);
+    let picture = d.picture.wire(d.delivered);
     match stream_config {
         Some(cfg)
             if (cfg.epoch, cfg.mode, cfg.picture, cfg.format())
-                != (d.epoch, d.mode, picture, d.format) =>
+                != (d.epoch, d.delivered, picture, d.format) =>
         {
-            (cfg.epoch, cfg.mode, cfg.picture) = (d.epoch, d.mode, picture);
+            (cfg.epoch, cfg.mode, cfg.picture) = (d.epoch, d.delivered, picture);
             cfg.set_format(d.format);
             Some(Tell::Config(*cfg))
         }
         Some(_) => None,
         None => d.corrects.then_some(Tell::Correct(Reconfigured {
             accepted: true,
-            mode: d.mode,
+            mode: d.delivered,
             exclude_codecs: 0,
         })),
     }
@@ -420,11 +409,13 @@ struct ControlTask {
     /// First-of-class `warn!` for grant drops: a revoked client spamming the gated messages
     /// must not flood the log.
     denied: crate::session_status::GrantDrops,
-    /// The mode the client holds: every `Reconfigured` this task sends carries it, and
-    /// adaptive FEC sizes a frame at its refresh.
-    active: punktfunk_core::Mode,
-    /// The view the last accepted switch, else the handshake, scales `active` to.
-    active_view: Option<(u32, u32)>,
+    /// The intent the client holds: the stream's last told one, or an accepted ask in flight.
+    /// Every `Reconfigured` this task sends carries its mode, adaptive FEC sizes a frame at its
+    /// refresh, and the next ask keeps its view while the size stays.
+    held: crate::native::geometry::Intent,
+    /// The epoch of the last `Delivered`, and the one an ask in flight was accepted at.
+    told_epoch: u8,
+    asked_at: Option<u8>,
     /// What the client holds; `None` for a client that takes no configs.
     held_config: Option<v2msg::StreamConfig>,
     pyrowave_pin: rate::PyroWavePin,
@@ -456,27 +447,27 @@ struct ControlTask {
 }
 
 impl Task {
-    /// PyroWave's floor and pin at `mode`, at the session's bits per pixel and cap. The
-    /// Welcome resolved the pin for the first mode; the floor comes from the same rule.
-    fn pyrowave_bounds(&self, mode: &punktfunk_core::Mode) -> (u32, u32) {
+    /// PyroWave's floor and pin at `picture`, at the session's bits per pixel and cap. The
+    /// Welcome resolved the pin for the first picture; the floor comes from the same rule.
+    fn pyrowave_bounds(&self, picture: &Picture) -> (u32, u32) {
         let chroma = if self.stream_config.chroma_format == punktfunk_core::quic::CHROMA_IDC_444 {
             crate::encode::ChromaFormat::Yuv444
         } else {
             crate::encode::ChromaFormat::Yuv420
         };
         pyrowave_bounds_kbps(
-            mode,
+            picture,
             chroma,
             self.stream_config.bit_depth,
-            self.pyrowave_bpp,
-            self.pyrowave_max_kbps,
+            self.terms.pyrowave_bpp,
+            self.terms.pyrowave_max_kbps,
         )
     }
 
-    /// This session streams a display it joined and may not change now, read at each ask
-    /// ([`joined_held`](super::wiring::joined_held)).
-    fn joined_held(&self) -> bool {
-        super::wiring::joined_held(self.shared.joined_display.load(Ordering::Relaxed))
+    /// The display the stream last adopted is not this session's to change now, read off the
+    /// display registry at each ask.
+    fn held(&self) -> bool {
+        self.shared.tenure.held(crate::vdisplay::registry::shared)
     }
 }
 
@@ -536,12 +527,14 @@ pub(super) async fn run(task: Task) {
 impl ControlTask {
     fn new(task: Task) -> Self {
         let now = std::time::Instant::now();
+        // The Welcome's rate: PyroWave retarget-refusals ack this pin.
+        let session_kbps = task.terms.bitrate_kbps;
         let pyrowave_pin = rate::PyroWavePin {
-            kbps: task.session_bitrate_kbps,
+            kbps: session_kbps,
             floor: if task.codec == crate::encode::Codec::PyroWave {
-                task.pyrowave_bounds(&task.initial_picture)
+                task.pyrowave_bounds(&task.terms.intent.picture())
                     .0
-                    .min(task.session_bitrate_kbps)
+                    .min(session_kbps)
             } else {
                 0
             },
@@ -558,11 +551,9 @@ impl ControlTask {
         ControlTask {
             closed: Closed::default(),
             denied: crate::session_status::GrantDrops::new(task.plane),
-            active: task.initial_mode,
-            active_view: crate::session_plan::picture_field(
-                task.initial_mode,
-                (task.initial_picture.width, task.initial_picture.height),
-            ),
+            held: task.terms.intent,
+            told_epoch: 0,
+            asked_at: None,
             held_config: task.anchored.then_some(task.stream_config),
             pyrowave_pin,
             last_accepted_switch: None,
@@ -710,7 +701,9 @@ impl ControlTask {
             &self.task.counters,
             &mut self.window,
             &mut self.share_clocks,
-            self.task.bitrate_automatic,
+            // Automatic, so negotiable: the shared-path governor may move it. A client-set
+            // rate is never touched.
+            self.task.terms.bitrate_auto(),
             self.task.wire_bytes,
         );
         match share {
@@ -732,14 +725,15 @@ impl ControlTask {
             unrecovered_run,
             punktfunk_core::abr::budget::FrameBudget {
                 budget_kbps: shared.live_bitrate.load(Ordering::Relaxed),
-                audio_kbps: self.task.audio_kbps,
+                // With `wire_bytes` and the live mode: the frame adaptive FEC has to protect.
+                audio_kbps: self.task.terms.audio_kbps,
                 shard_payload: self
                     .task
                     .wire_bytes
                     .saturating_sub(punktfunk_core::abr::budget::SHARD_WIRE_OVERHEAD)
                     .try_into()
                     .unwrap_or(u16::MAX),
-                fps: self.active.refresh_hz,
+                fps: self.held.mode().refresh_hz,
             },
             &mut self.fec_horizon,
         );
@@ -954,27 +948,23 @@ impl ControlTask {
         let outcome = outcome.ok_or(Ended)?;
         let ack = Reconfigured {
             accepted: outcome.is_some(),
-            mode: self.active,
+            mode: self.held.mode(),
             exclude_codecs: std::mem::take(&mut self.asked),
         };
         self.send(&ack).await
     }
 
-    /// What an epoch delivers. Keeps `active` truthful for later refusal echoes, an
-    /// Automatic PyroWave session's bounds on the size it encodes, and the codec a mode is
-    /// checked for; then tells the client what it does not hold.
+    /// What an epoch delivers. Keeps the held intent truthful for later asks and refusal echoes
+    /// ([`held_after`]), an Automatic PyroWave session's bounds on the size it encodes, and the
+    /// codec a mode is checked for; then tells the client what it does not hold.
     async fn on_delivered(&mut self, delivered: Option<super::wiring::Delivered>) -> Step {
         let d = delivered.ok_or(Ended)?;
-        self.active = d.mode;
+        (self.held, self.asked_at) = held_after(self.held, self.asked_at, &d);
+        self.told_epoch = d.epoch;
         self.task.codec = crate::encode::codec_from_wire(d.format.codec);
         if self.pyrowave_pin.automatic {
-            let (width, height) = d.encoded;
-            let encoded = punktfunk_core::Mode {
-                width,
-                height,
-                ..d.mode
-            };
-            (self.pyrowave_pin.floor, self.pyrowave_pin.kbps) = self.task.pyrowave_bounds(&encoded);
+            (self.pyrowave_pin.floor, self.pyrowave_pin.kbps) =
+                self.task.pyrowave_bounds(&d.picture);
         }
         match tell(&mut self.held_config, &d) {
             Some(Tell::Config(cfg)) => self.send(&cfg).await,
@@ -982,6 +972,20 @@ impl ControlTask {
             None => Ok(()),
         }
     }
+}
+
+/// What the control task holds after `d`, and the epoch an ask still in flight was accepted
+/// at. A `Delivered` of that epoch predates the ask: it moves the held mode and the ask stands.
+/// Any other tells what the stream runs, its view and framing with it.
+pub(super) fn held_after(
+    held: crate::native::geometry::Intent,
+    asked_at: Option<u8>,
+    d: &super::wiring::Delivered,
+) -> (crate::native::geometry::Intent, Option<u8>) {
+    if asked_at == Some(d.epoch) {
+        return (held.delivered_at(d.delivered), asked_at);
+    }
+    (d.intent.delivered_at(d.delivered), None)
 }
 
 /// Operator policy (`None` = off), then CLIPBOARD grant (AND, never override),
@@ -1125,7 +1129,8 @@ impl OffloadGuard {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    pub(in crate::native) use super::inbound::tests::control_ask;
     use super::*;
     use punktfunk_core::quic::ProbeRequest;
 
@@ -1133,16 +1138,17 @@ mod tests {
     /// display, nor off Linux; on Linux, while no other session holds that display, it may.
     #[test]
     fn a_joiner_switches_only_alone_on_linux() {
-        use super::super::wiring::{joined_display, joined_held, JOINED_UNSEEN};
-        assert_eq!(joined_display(false, Some(7)), 0);
-        assert_eq!(joined_display(true, None), JOINED_UNSEEN);
-        assert!(!joined_held(0), "its own display");
-        assert!(joined_held(JOINED_UNSEEN), "not known yet");
+        use super::super::geometry::{Tenure, TenureCell};
+        use crate::vdisplay::registry::shared;
+        let own = Tenure::of(None, false);
+        let joiner = Tenure::of(Some((Default::default(), (1280, 720))), false);
+        let cell = TenureCell::new(&joiner);
+        assert!(cell.held(shared), "not known yet");
+        cell.adopt(&own, Some(7));
+        assert!(!cell.held(|_| true), "its own display");
         // No pool entry holds generation 7, so nobody shares it.
-        assert_eq!(
-            joined_held(joined_display(true, Some(7))),
-            !cfg!(target_os = "linux")
-        );
+        cell.adopt(&joiner, Some(7));
+        assert_eq!(cell.held(shared), !cfg!(target_os = "linux"));
     }
 
     #[test]
@@ -1283,9 +1289,17 @@ mod tests {
             refresh_hz: 60,
             refresh_mhz: 0,
         };
+        let at = |width, size| {
+            Picture::of(punktfunk_core::Mode {
+                width,
+                height: 360,
+                ..mode(size)
+            })
+        };
         let d = |epoch, width: u32, corrects| Delivered {
-            mode: mode(width),
-            encoded: (width / 2, 360),
+            intent: asked(mode(width), None),
+            delivered: mode(width),
+            picture: at(width / 2, width),
             format: Default::default(),
             epoch,
             corrects,
@@ -1305,7 +1319,7 @@ mod tests {
         assert_eq!(cfg.picture, Some((960, 360)));
         assert_eq!(tell(&mut held, &d(1, 1920, true)), None, "already held");
         let unscaled = Delivered {
-            encoded: (1920, 720),
+            picture: Picture::of(mode(1920)),
             ..d(1, 1920, false)
         };
         let Some(Tell::Config(cfg)) = tell(&mut held, &unscaled) else {
@@ -1325,14 +1339,129 @@ mod tests {
         );
     }
 
+    use crate::native::geometry::tests::asked;
+    use crate::native::handshake::tests::mode;
+
+    /// A client that takes no configs hears `d`.
+    pub(crate) fn older_client_hears(d: &super::super::wiring::Delivered) -> bool {
+        tell(&mut None, d).is_some()
+    }
+
+    /// An Automatic PyroWave session's task after its connect: the floor and pin it holds and
+    /// the picture its config names. It starts at the Welcome's `picture` of `mode`; only an
+    /// epoch-0 `Delivered` moves either.
+    pub(crate) fn after_connect(
+        mode: punktfunk_core::Mode,
+        picture: punktfunk_core::Mode,
+        delivered: Option<super::super::wiring::Delivered>,
+    ) -> ((u32, u32), Option<(u32, u32)>) {
+        let bounds = |p: &Picture| {
+            pyrowave_bounds_kbps(p, crate::encode::ChromaFormat::Yuv420, 8, 1.6, None)
+        };
+        let size = (picture.width, picture.height);
+        let welcome = asked(mode, (size != (mode.width, mode.height)).then_some(size)).picture();
+        let welcome_kbps = bounds(&welcome).1;
+        let mut held = (bounds(&welcome).0.min(welcome_kbps), welcome_kbps);
+        let mut config = Some(v2msg::StreamConfig {
+            mode,
+            picture: welcome.wire(mode),
+            ..Default::default()
+        });
+        if let Some(d) = delivered {
+            held = bounds(&d.picture);
+            let _ = tell(&mut config, &d);
+        }
+        (held, config.and_then(|c| c.picture))
+    }
+
+    /// One connect: the Welcome's mode and picture, what the first build encodes, and whether
+    /// the client is told; the bounds and picture the task holds after.
+    struct ConnectRow {
+        name: &'static str,
+        mode: punktfunk_core::Mode,
+        picture: punktfunk_core::Mode,
+        encoded: (u32, u32),
+        told: bool,
+        held: ((u32, u32), Option<(u32, u32)>),
+        verdict: crate::native::tests::Verdict,
+    }
+
+    #[rustfmt::skip]
+    fn connect_rows() -> Vec<ConnectRow> {
+        use crate::native::tests::Verdict::Wanted;
+        let (hd, uhd) = (mode(1920, 1080, 60), mode(3840, 2160, 60));
+        let row = |name, mode, picture, encoded, told, held, verdict| ConnectRow {
+            name, mode, picture, encoded, told, held, verdict,
+        };
+        vec![
+            row("framed at the Welcome's view: bounds and picture at the view", uhd, hd,
+                (1920, 1080), false, ((62_208, 199_065), Some((1920, 1080))), Wanted),
+            row("a framing that fell back at connect is told: bounds at the mode it encodes",
+                uhd, hd, (3840, 2160), true, ((248_832, 796_262), None), Wanted),
+            row("a mirror fitted at connect is told: bounds and picture at the fit",
+                mode(1920, 1200, 60), mode(1920, 1200, 60), (1920, 1080), true,
+                ((62_208, 199_065), Some((1920, 1080))), Wanted),
+            row("an ask adopted at connect is told: bounds and picture follow what it encodes",
+                uhd, hd, (1280, 720), true, ((27_648, 88_473), Some((1280, 720))), Wanted),
+        ]
+    }
+
+    /// The control task's PyroWave bounds and held picture after a connect, re-pinned or not.
+    #[test]
+    fn geometry_rows() {
+        use super::super::wiring::Delivered;
+        for r in connect_rows() {
+            let (width, height) = r.encoded;
+            let d = r.told.then_some(Delivered {
+                intent: asked(r.mode, None),
+                delivered: r.mode,
+                picture: Picture::of(punktfunk_core::Mode {
+                    width,
+                    height,
+                    ..r.mode
+                }),
+                format: Default::default(),
+                epoch: 0,
+                corrects: false,
+            });
+            let got = after_connect(r.mode, r.picture, d);
+            assert_eq!(got, r.held, "{} ({:?})", r.name, r.verdict);
+        }
+    }
+
+    /// An ask accepted between two `Delivered`s stands across the first, which predates it; a
+    /// later epoch tells what the stream runs, its view included.
+    #[test]
+    fn an_ask_stands_until_a_later_epoch_tells() {
+        use punktfunk_core::video_fit::VideoFit;
+        let (hd, hd120) = (mode(1920, 1080, 60), mode(1920, 1080, 120));
+        let framed = crate::native::geometry::Intent::of(hd, Some((VideoFit::Fit, (1280, 720))));
+        let d = |epoch| super::super::wiring::Delivered {
+            intent: framed,
+            delivered: hd,
+            picture: Picture::of(mode(1280, 720, 60)),
+            format: Default::default(),
+            epoch,
+            corrects: true,
+        };
+        let ask = asked(hd120, None);
+        assert_eq!(
+            held_after(ask, Some(3), &d(3)),
+            (ask.delivered_at(hd), Some(3))
+        );
+        assert_eq!(held_after(ask, Some(3), &d(4)), (framed, None));
+        assert_eq!(held_after(asked(hd, None), None, &d(3)), (framed, None));
+    }
+
     /// A format change is told even at the same epoch and mode; the same format twice is not.
     #[test]
     fn a_new_format_is_a_config() {
         use super::super::wiring::Delivered;
         use punktfunk_core::quic::{VideoFormat, CODEC_H264, CODEC_HEVC};
         let d = |codec| Delivered {
-            mode: Default::default(),
-            encoded: (0, 0),
+            intent: asked(Default::default(), None),
+            delivered: Default::default(),
+            picture: Picture::of(Default::default()),
             format: VideoFormat {
                 codec,
                 ..VideoFormat::default()

@@ -57,7 +57,7 @@ impl ControlTask {
     /// the ask is refused at once.
     async fn on_codec_ask(&mut self, exclude: u8) -> Step {
         let mut to = None;
-        if self.task.format_change_ok && !self.task.joined_held() && self.asked == 0 {
+        if self.task.format_change_ok && !self.task.held() && self.asked == 0 {
             self.excluded |= exclude;
             let left = self.task.client_codecs & !self.excluded;
             let t = &self.task;
@@ -75,7 +75,7 @@ impl ControlTask {
                      capture, or one already pending)");
                 let ack = Reconfigured {
                     accepted: false,
-                    mode: self.active,
+                    mode: self.held.mode(),
                     exclude_codecs: exclude,
                 };
                 self.send(&ack).await
@@ -83,10 +83,10 @@ impl ControlTask {
         }
     }
 
-    /// A `Reconfigure`, its view filled by [`asked_view`], as [`reconfigure_ask`] reads it: a
-    /// codec ask goes on as one; a mode switch is acked at once with the mode the client now
-    /// holds, then handed to the stream thread with its view. A refused switch hands nothing on;
-    /// a joiner's is refused while its display is held.
+    /// A `Reconfigure`, as [`reconfigure_ask`] reads it: a codec ask goes on as one; a mode
+    /// switch is acked at once with the mode the client now holds, then handed to the stream
+    /// thread with its view. A refused switch hands nothing on; a joiner's is refused while its
+    /// display is held.
     async fn on_reconfigure(&mut self, req: Reconfigure) -> Step {
         let now = std::time::Instant::now();
         let too_soon = self
@@ -94,25 +94,23 @@ impl ControlTask {
             .is_some_and(|t| now.duration_since(t) < MIN_SWITCH_INTERVAL);
         let exact = self.task.exact_rate_ok;
         let req = Reconfigure {
-            view: asked_view(&req, self.active, self.active_view),
             mode: crate::native::handshake::deliverable_rate(req.mode, exact),
             ..req
         };
         let t = &self.task;
-        let live = t.live_reconfig_ok && !t.joined_held();
-        let accepted = match reconfigure_ask(&req, t.codec, live, too_soon) {
+        let live = t.live_reconfig_ok && !t.held();
+        let accepted = match reconfigure_ask(&req, &self.held, t.codec, live, too_soon) {
             Ask::Codec(exclude) => return self.on_codec_ask(exclude).await,
             Ask::Mode(asked) => Some(asked),
             Ask::Refused => None,
         };
-        if let Some((_, view)) = accepted {
-            self.active = req.mode;
-            self.active_view = view;
+        if let Some(asked) = accepted {
+            (self.held, self.asked_at) = (asked, Some(self.told_epoch));
             self.last_accepted_switch = Some(now);
         }
         let ack = Reconfigured {
             accepted: accepted.is_some(),
-            mode: self.active,
+            mode: self.held.mode(),
             exclude_codecs: 0,
         };
         self.send(&ack).await?;
@@ -312,32 +310,23 @@ impl ControlTask {
 /// What a `Reconfigure` asks of the stream thread.
 #[derive(Debug, PartialEq)]
 enum Ask {
-    /// A mode switch, with the view kept for it by the handshake's rule
-    /// ([`kept_view`](crate::native::handshake::kept_view)). The same mode with another view is a
-    /// switch too.
-    Mode(crate::native::wiring::ModeAsk),
+    /// A mode switch, with the view [`Intent::ask`] keeps for it. The same mode with another
+    /// view is a switch too.
+    ///
+    /// [`Intent::ask`]: crate::native::geometry::Intent::ask
+    Mode(crate::native::geometry::Intent),
     /// These `CODEC_*` bits off. The mode and view stay as they run.
     Codec(u8),
     /// A mode switch refused.
     Refused,
 }
 
-/// The view `req` asks for: its own, else `view` while it keeps the `active` size. A rate
-/// pick does not know the view; a view the size of the mode clears it in [`reconfigure_ask`].
-fn asked_view(
-    req: &Reconfigure,
-    active: punktfunk_core::Mode,
-    view: Option<(u32, u32)>,
-) -> Option<(u32, u32)> {
-    let same_size = (req.mode.width, req.mode.height) == (active.width, active.height);
-    req.view.or(view.filter(|_| same_size))
-}
-
-/// What `req` asks for a session encoding `codec`. A mode switch is refused when the backend
-/// cannot `live_reconfig`, the mode cannot land, or the last switch was `too_soon`
-/// ([`MIN_SWITCH_INTERVAL`]).
+/// What `req` asks of a session that holds `held` and encodes `codec`. A mode switch is
+/// refused when the backend cannot `live_reconfig`, the mode cannot land, or the last switch
+/// was `too_soon` ([`MIN_SWITCH_INTERVAL`]).
 fn reconfigure_ask(
     req: &Reconfigure,
+    held: &crate::native::geometry::Intent,
     codec: crate::encode::Codec,
     live_reconfig: bool,
     too_soon: bool,
@@ -363,15 +352,116 @@ fn reconfigure_ask(
         tracing::warn!(?mode, "mode switch rejected (rate-limited)");
         Ask::Refused
     } else {
-        let view = crate::native::handshake::kept_view(req.view, &mode, codec);
-        tracing::info!(?mode, ?view, "mode switch accepted");
-        Ask::Mode((mode, view))
+        let asked = held.ask(mode, req.view, codec);
+        tracing::info!(?mode, view = ?asked.view(), "mode switch accepted");
+        Ask::Mode(asked)
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use crate::native::geometry::Intent;
+
+    use crate::native::geometry::tests::asked;
+
+    /// A mode and the view it is shown at, as the rows spell an intent.
+    type ModeAsk = (punktfunk_core::Mode, Option<(u32, u32)>);
+
+    /// [`ControlTask::on_reconfigure`]'s answer to `req` from a task that holds `held`: the ask
+    /// it hands the stream thread (`None`: refused, or a codec ask), and what it holds after.
+    /// `exact` is the session's exact-rate display, `live` its live reconfigure with no held join.
+    pub(in crate::native) fn control_ask(
+        req: Reconfigure,
+        held: Intent,
+        codec: crate::encode::Codec,
+        exact: bool,
+        live: bool,
+    ) -> (Option<Intent>, Intent) {
+        let req = Reconfigure {
+            mode: crate::native::handshake::deliverable_rate(req.mode, exact),
+            ..req
+        };
+        match reconfigure_ask(&req, &held, codec, live, false) {
+            Ask::Mode(asked) => (Some(asked), asked),
+            Ask::Codec(_) | Ask::Refused => (None, held),
+        }
+    }
+
+    use crate::native::handshake::tests::mode;
+
+    /// One `Reconfigure` against what the control task holds, and the ask it hands on.
+    struct AskRow {
+        name: &'static str,
+        held: ModeAsk,
+        req: Reconfigure,
+        exact: bool,
+        live: bool,
+        handed: Option<ModeAsk>,
+        held_after: ModeAsk,
+        verdict: crate::native::tests::Verdict,
+    }
+
+    #[rustfmt::skip]
+    fn ask_rows() -> Vec<AskRow> {
+        use crate::native::tests::Verdict::Wanted;
+        let (hd, uhd) = (mode(1920, 1080, 60), mode(3840, 2160, 60));
+        let viewed = (uhd, Some((1920, 1080)));
+        let req = |mode, view| Reconfigure { mode, exclude_codecs: 0, view };
+        let row = |name, held, req, (exact, live), handed, held_after, verdict| AskRow {
+            name, held, req, exact, live, handed, held_after, verdict,
+        };
+        let on = (false, true);
+        let uhd120 = mode(3840, 2160, 120);
+        let exact = punktfunk_core::Mode::exact(3840, 2160, 59_940);
+        vec![
+            row("a rate pick at the live size keeps the view in force", viewed,
+                req(uhd120, None), on, Some((uhd120, Some((1920, 1080)))),
+                (uhd120, Some((1920, 1080))), Wanted),
+            row("another size with no view clears it", viewed, req(mode(2560, 1440, 60), None),
+                on, Some((mode(2560, 1440, 60), None)), (mode(2560, 1440, 60), None), Wanted),
+            row("a view of its own replaces it", viewed, req(uhd, Some((1280, 720))), on,
+                Some((uhd, Some((1280, 720)))), (uhd, Some((1280, 720))), Wanted),
+            row("a view the mode's size clears it", viewed, req(uhd, Some((3840, 2160))), on,
+                Some((uhd, None)), (uhd, None), Wanted),
+            row("a view larger than the mode clears it", viewed, req(hd, Some((2560, 1440))), on,
+                Some((hd, None)), (hd, None), Wanted),
+            row("a fraction on a whole-hertz display asks the whole rate", viewed, req(exact, None),
+                on, Some((uhd, Some((1920, 1080)))), (uhd, Some((1920, 1080))), Wanted),
+            row("a fraction where the display runs one stays", viewed, req(exact, None),
+                (true, true), Some((exact, Some((1920, 1080)))), (exact, Some((1920, 1080))),
+                Wanted),
+            row("no live reconfigure (gamescope, a mirror, a held join): refused, nothing held \
+                 moves", viewed, req(uhd120, None), (false, false), None, viewed, Wanted),
+            row("a size no encoder takes: refused", viewed, req(mode(3841, 2160, 60), None), on,
+                None, viewed, Wanted),
+            row("a codec ask hands no mode on", viewed, Reconfigure {
+                    exclude_codecs: punktfunk_core::quic::CODEC_HEVC, ..req(uhd, None) },
+                on, None, viewed, Wanted),
+            row("after a framed resize on a shared display was corrected, a rate pick at the \
+                 told size keeps the told view", (hd, Some((1280, 720))),
+                req(mode(1920, 1080, 120), None), on,
+                Some((mode(1920, 1080, 120), Some((1280, 720)))),
+                (mode(1920, 1080, 120), Some((1280, 720))), Wanted),
+        ]
+    }
+
+    /// What a control ask hands the stream thread, and the mode and view the task holds after.
+    #[test]
+    fn geometry_rows() {
+        let pair = |i: Intent| (i.mode(), i.view());
+        for r in ask_rows() {
+            let held = asked(r.held.0, r.held.1);
+            let got = control_ask(r.req, held, crate::encode::Codec::H265, r.exact, r.live);
+            assert_eq!(
+                (got.0.map(pair), pair(got.1)),
+                (r.handed, r.held_after),
+                "{} ({:?})",
+                r.name,
+                r.verdict
+            );
+        }
+    }
 
     /// A rate pick keeps the view in force; a new size, or a view of its own, does not.
     #[test]
@@ -382,32 +472,21 @@ mod tests {
             refresh_hz,
             refresh_mhz: 0,
         };
-        let ask = |m, view| Reconfigure {
-            mode: m,
-            exclude_codecs: 0,
-            view,
-        };
         let (live, kept) = (mode(3840, 2160, 60), Some((1920, 1080)));
-        let rate = ask(mode(3840, 2160, 120), None);
-        assert_eq!(asked_view(&rate, live, kept), kept);
-        assert_eq!(
-            asked_view(&ask(mode(2560, 1440, 60), None), live, kept),
-            None
-        );
+        let held = asked(live, kept);
+        let view_of = |m, view| held.ask(m, view, crate::encode::Codec::H265).view();
+        assert_eq!(view_of(mode(3840, 2160, 120), None), kept);
+        assert_eq!(view_of(mode(2560, 1440, 60), None), None);
         let own = Some((1280, 720));
-        assert_eq!(asked_view(&ask(live, own), live, kept), own);
-        let cleared = asked_view(&ask(live, Some((3840, 2160))), live, kept);
-        assert_eq!(
-            cleared,
-            Some((3840, 2160)),
-            "reconfigure_ask keeps none of it"
-        );
+        assert_eq!(view_of(live, own), own);
+        let cleared = view_of(live, Some((3840, 2160)));
+        assert_eq!(cleared, None, "a view the mode's size keeps none of it");
     }
 
     /// A mode ask hands on its view only while its mode can be scaled to it; a codec ask
     /// leaves the mode and view alone; a refused switch hands nothing on.
     #[test]
-    fn a_reconfigure_hands_on_its_kept_view() {
+    fn a_reconfigure_hands_on_the_view_it_keeps() {
         use crate::encode::Codec::H265;
         let mode = punktfunk_core::Mode {
             width: 2048,
@@ -420,20 +499,21 @@ mod tests {
             exclude_codecs,
             view,
         };
-        let ask = |req: Reconfigure| reconfigure_ask(&req, H265, true, false);
+        let held = asked(mode, None);
+        let ask = |req: Reconfigure| reconfigure_ask(&req, &held, H265, true, false);
         assert_eq!(
             ask(req(Some((1366, 768)), 0)),
-            Ask::Mode((mode, Some((1366, 768))))
+            Ask::Mode(asked(mode, Some((1366, 768))))
         );
         for dropped in [(2048, 1152), (2560, 1440), (1366, 1440)] {
             let got = ask(req(Some(dropped), 0));
-            assert_eq!(got, Ask::Mode((mode, None)), "{dropped:?}");
+            assert_eq!(got, Ask::Mode(asked(mode, None)), "{dropped:?}");
         }
         let hevc = punktfunk_core::quic::CODEC_HEVC;
         assert_eq!(ask(req(Some((1366, 768)), hevc)), Ask::Codec(hevc));
         let viewed = req(Some((1366, 768)), 0);
         let refused = |live, too_soon, r: &Reconfigure| {
-            reconfigure_ask(r, H265, live, too_soon) == Ask::Refused
+            reconfigure_ask(r, &held, H265, live, too_soon) == Ask::Refused
         };
         assert!(refused(false, false, &viewed), "no live reconfigure");
         assert!(refused(true, true, &viewed), "too soon");

@@ -22,7 +22,8 @@ mod ramp;
 mod rebuild;
 mod rebuild_plan;
 mod recovery;
-#[cfg(target_os = "windows")]
+// Windows resizes in place; a test drives what follows the mode set on any host.
+#[cfg(any(target_os = "windows", test))]
 mod resize;
 mod screens;
 mod send;
@@ -31,6 +32,8 @@ mod state;
 mod swap;
 mod synth_abr;
 pub(super) use self::pipeline::{spawn_display_prep, DisplayPrep, PrepHandle, PreparedDisplay};
+// `geometry.rs` derives the rate a build runs at.
+pub(super) use self::pipeline::{frame_interval, stream_mhz, whole_hz};
 /// The pipeline steps both stream loops take, for GameStream as `crate::native::pipeline`.
 #[cfg(feature = "gamestream")]
 pub(crate) mod shared {
@@ -50,12 +53,15 @@ pub(crate) use self::send::reconfig_allowed;
 use self::session_watch::{session_watch_enabled, session_watcher_loop, SessionSwitch};
 pub(super) use self::state::session_client_label;
 use self::state::StreamState;
+// `geometry.rs`'s `tenure_rows` reads the rebuild plan off the stream's fake.
+#[cfg(test)]
+pub(in crate::native) use self::{rebuild::tests::tenure_plans, rebuild_plan::Build};
 // `main.rs` parses the content script; `native.rs` builds the context and dispatches.
 pub(super) use self::synth_abr::{synthetic_abr_stream, SynthAbrContext};
 pub use self::synth_abr::{Content, KeyframeAnswer, SynthAbrShape, DEFAULT_IDR_PCT};
 
 /// Test frames at 60 Hz. The frames have no size, so an accepted mode switch or codec ask is
-/// delivered as the next epoch, the way a rebuilt pipeline delivers one.
+/// delivered as the next epoch at the intent asked, the way a rebuilt pipeline delivers one.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn synthetic_stream(
     session: &mut Session,
@@ -65,7 +71,7 @@ pub(super) fn synthetic_stream(
     fec_target: &AtomicU8,
     timing_conn: Option<&super::link::SessionLink>,
     probe_seq: bool,
-    (mut mode, mut format): (punktfunk_core::Mode, punktfunk_core::quic::VideoFormat),
+    (mut intent, mut format): (super::geometry::Intent, punktfunk_core::quic::VideoFormat),
 ) -> Result<()> {
     let (probe_rx, probe_result_tx) = (&ends.probe_rx, &ends.probe_result_tx);
     let interval = std::time::Duration::from_millis(1000 / 60);
@@ -74,18 +80,23 @@ pub(super) fn synthetic_stream(
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        let asked_mode = ends.reconfig.try_iter().last().map(|(mode, _)| mode);
+        let asked = ends.reconfig.try_iter().last();
         let asked_codec = ends.format_rx.try_iter().last();
-        if asked_mode.is_some() || asked_codec.is_some() {
+        if asked.is_some() || asked_codec.is_some() {
             epoch = epoch.wrapping_add(1);
             session.set_epoch(epoch);
-            mode = asked_mode.unwrap_or(mode);
+            intent = asked.unwrap_or(intent);
+            let mode = intent.mode();
             if let Some(codec) = asked_codec {
                 format.codec = crate::encode::codec_to_wire(codec);
             }
+            let whole = punktfunk_core::video_fit::Reframe::full((mode.width, mode.height));
+            let built = super::geometry::Geometry::built(intent, (mode.refresh_hz, mode.millihz()))
+                .reframed(intent, whole);
             let _ = ends.reconfig_result_tx.send(super::wiring::Delivered {
-                mode,
-                encoded: (mode.width, mode.height),
+                intent,
+                delivered: mode,
+                picture: built.picture(),
                 format,
                 epoch,
                 corrects: false,
@@ -531,7 +542,8 @@ fn pace_sealed(
 /// [`SessionShared`]: super::wiring::SessionShared
 pub(crate) struct StreamCommon {
     pub(crate) session: Session,
-    pub(crate) mode: punktfunk_core::Mode,
+    /// The mode and view the Welcome settled.
+    pub(crate) intent: super::geometry::Intent,
     pub(crate) seconds: u32,
     /// The flags every thread of the session reads, and the one `end` that writes them.
     pub(crate) life: crate::lifecycle::Lifecycle,
@@ -564,10 +576,10 @@ pub(crate) struct StreamCommon {
 }
 
 impl StreamCommon {
-    /// The mode and video format the Welcome promised.
-    pub(crate) fn opened_as(&self) -> (punktfunk_core::Mode, punktfunk_core::quic::VideoFormat) {
+    /// The intent and video format the Welcome promised.
+    pub(crate) fn opened_as(&self) -> (super::geometry::Intent, punktfunk_core::quic::VideoFormat) {
         let format = state::video_format(self.codec, self.bit_depth, self.color, self.chroma);
-        (self.mode, format)
+        (self.intent, format)
     }
 }
 
@@ -575,28 +587,13 @@ impl StreamCommon {
 /// needs. The whole context moves onto the stream thread.
 pub(super) struct SessionContext {
     pub(super) common: StreamCommon,
-    pub(super) compositor: crate::vdisplay::Compositor,
-    /// Per-instance, not via `PUNKTFUNK_GAMESCOPE_NODE` — two sessions must not overwrite each other.
-    pub(super) gamescope_route: Option<crate::vdisplay::GamescopeRoute>,
+    /// What the handshake settled.
+    pub(super) terms: Arc<super::handshake::SessionTerms>,
     /// What the handshake's format rule read, re-run when the codec or the source moves.
     pub(super) format_facts: super::handshake::FormatFacts,
-    /// The display is lit in HDR ([`Verdict::display_hdr`](super::handshake::Verdict)).
-    pub(super) display_hdr: bool,
-    /// The handshake's encode resolution, which the session keeps for every open.
-    pub(super) encoder: Arc<crate::encode::Resolved>,
     pub(super) host_knobs: &'static super::HostKnobs,
     pub(super) knobs: super::SessionKnobs,
-    /// `Hello::bitrate_kbps == 0`. A mode switch re-resolves PyroWave's pin either way, and an
-    /// Automatic rate is held inside the new bounds. Another codec's explicit rate stays.
-    pub(super) bitrate_auto: bool,
-    /// PyroWave's bits per pixel for every pin this session resolves (`session_pyrowave_bpp`).
-    pub(super) pyrowave_bpp: f64,
     pub(super) conn: super::link::SessionLink,
-    pub(super) cursor_forward: bool,
-    pub(super) streamed_au: bool,
-    /// H.264/HEVC slices per frame; 1 = single-slice. TV-SoC decoders (Amlogic) wedge on
-    /// multi-slice.
-    pub(super) slices: u32,
     pub(super) launch: Option<String>,
     pub(super) launch_target: Option<crate::library::LaunchTarget>,
     /// This session's launch record, claimed before prep and the launch hold.
@@ -607,19 +604,6 @@ pub(super) struct SessionContext {
     /// Where this session's launch outcome goes; the control task writes it to
     /// the client ([`punktfunk_core::quic::LaunchOutcome`]).
     pub(super) launch_outcome: crate::gamelease::OutcomeTx,
-    /// Threaded into the EDID CTA HDR block before `create` so host apps tone-map to the client's panel.
-    pub(super) client_hdr: Option<pf_frame::HdrMeta>,
-    /// Admitted by `mode_conflict: join`: share the live display instead of creating one.
-    pub(super) join_live: bool,
-    /// The handshake's screen is a host monitor ([`SessionPlan::mirrored`](crate::session_plan::SessionPlan::mirrored)).
-    pub(super) mirrored: bool,
-    /// The screen the handshake settled this session wants ([`crate::vdisplay::SessionParams::screen`]).
-    pub(super) screen: Option<crate::vdisplay::policy::DisplayTarget>,
-    /// The topology the handshake settled ([`crate::vdisplay::SessionParams::topology`]).
-    pub(super) topology: Option<crate::vdisplay::policy::Topology>,
-    /// The view and fit the encoder frames for: a joiner's, or this client's own view
-    /// ([`SessionPlan::reframe_to`](crate::session_plan::SessionPlan::reframe_to)).
-    pub(super) reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     /// The encoder's framing, published for the input thread.
     pub(super) frame_map: super::input::FrameMap,
     /// The session gamescope's X displays, published for the clipboard.
