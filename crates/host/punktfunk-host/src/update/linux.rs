@@ -157,9 +157,9 @@ fn system_copy_behind() -> Option<u64> {
     copy_behind(&built, &tip)
 }
 
-/// Deck source rebuild via `systemd-run` so the script's host restart cannot
-/// kill a child in our cgroup. Fail: we survive, the unit fails. Success: we
-/// die mid-poll; the `source_build` intent at next boot is the signal.
+/// Deck source rebuild in a transient user unit, so the script's host restart cannot kill it.
+/// The wrapper writes the script's exit status beside the log. Status 0 means the script queued
+/// our restart: the intent stays and boot reconcile records the outcome. Anything else fails.
 pub(super) fn run_apply_steamos(
     target_version: &str,
     serial: u64,
@@ -182,6 +182,8 @@ pub(super) fn run_apply_steamos(
     if let Some(dir) = log.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
+    let status = log.with_extension("status");
+    let _ = std::fs::remove_file(&status);
 
     jobs::write_json_atomic(
         &jobs::intent_path(),
@@ -203,9 +205,10 @@ pub(super) fn run_apply_steamos(
         Command::new("systemd-run")
             .args(["--user", "--collect", "--unit", UNIT, "bash", "-c"])
             .arg(format!(
-                "exec >> '{}' 2>&1; exec bash '{}' --pull",
+                "exec >> '{}' 2>&1; bash '{}' --pull; s=$?; echo $s > '{}'; exit $s",
                 log.display(),
-                script.display()
+                script.display(),
+                status.display()
             )),
     )
     .status();
@@ -222,7 +225,7 @@ pub(super) fn run_apply_steamos(
     }
     stage("applying");
 
-    // Success restarts us before the unit goes inactive. Surviving this loop is fail or still-building.
+    // The script's last step queues our restart, so the unit ends before this process does.
     let deadline = Instant::now() + Duration::from_secs(90 * 60);
     loop {
         std::thread::sleep(Duration::from_secs(5));
@@ -245,8 +248,11 @@ pub(super) fn run_apply_steamos(
                     ));
                 }
             }
-            // Unit ended and we are still alive: the script never restarted us. An
-            // up-to-date tree still rebuilds and restarts, so this is a failed build.
+            _ if std::fs::read_to_string(&status).is_ok_and(|s| s.trim() == "0") => {
+                stage("restarting");
+                return Ok(());
+            }
+            // Non-zero, unreadable or missing status: the build failed or the unit was killed.
             _ => {
                 let _ = std::fs::remove_file(jobs::intent_path());
                 return Err((
