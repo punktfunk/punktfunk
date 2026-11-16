@@ -167,21 +167,22 @@ fn reclaim_leftovers_once() {
     });
 }
 
-/// Poll until `name` reports a mode, then return it as `(width, height, millihertz)`.
-fn wait_for_mode(name: &str) -> Result<(u32, u32, u32)> {
+/// Poll until `name` reports a mode at `mhz`, then return it as `(width, height,
+/// millihertz)`. At the deadline a listed output is streamed at the mode it has.
+fn wait_for_mode(name: &str, mhz: u32) -> Result<(u32, u32, u32)> {
     let deadline = Instant::now() + MODE_WAIT;
     loop {
         let found = ipc::outputs()?
             .into_iter()
             .find(|o| o.name == name)
             .and_then(|o| o.mode().map(|m| (m.width, m.height, m.refresh_rate)));
-        if let Some(mode) = found {
-            return Ok(mode);
+        match found {
+            Some(mode) if mode.2 == mhz || Instant::now() >= deadline => return Ok(mode),
+            None if Instant::now() >= deadline => {
+                bail!("niri created {name} but it reported no mode within {MODE_WAIT:?}")
+            }
+            _ => thread::sleep(Duration::from_millis(25)),
         }
-        if Instant::now() >= deadline {
-            bail!("niri created {name} but it reported no mode within {MODE_WAIT:?}");
-        }
-        thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -409,7 +410,20 @@ impl VirtualDisplay for NiriDisplay {
             output.name = made.clone();
         }
         let name = made;
-        let (width, height, mhz) = wait_for_mode(&name)?;
+        // The create takes whole hertz and niri keeps an output's last custom mode by name,
+        // so every create states its mode again, to the millihertz.
+        let exact = desktop::custom_mode_action(mode.width, mode.height, mode.millihz());
+        let asked = match ipc::output_action(&name, exact) {
+            Ok(()) => mode.millihz(),
+            Err(e) => {
+                tracing::warn!(
+                    output = %name, error = %format!("{e:#}"),
+                    "niri: exact mode not applied — the output keeps whole hertz"
+                );
+                mode.refresh_hz.saturating_mul(1000)
+            }
+        };
+        let (width, height, mhz) = wait_for_mode(&name, asked)?;
         if (width, height) != (mode.width, mode.height) {
             tracing::warn!(
                 output = %name, want = %format!("{}x{}", mode.width, mode.height),
@@ -452,6 +466,7 @@ impl VirtualDisplay for NiriDisplay {
         };
         let mut out =
             VirtualOutput::owned(node_id, Some((width, height, mode.refresh_hz)), keepalive);
+        out.refresh_mhz = Some(mhz);
         // Extend topology: input and direct capture find the output by its `wl_output` name.
         out.output_name = Some(name);
         Ok(out)

@@ -88,6 +88,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativePyrowaveQua
         width: px(width),
         height: px(height),
         refresh_hz: px(refresh_hz),
+        refresh_mhz: 0,
     };
     let link = LinkFacts {
         kind: u8::try_from(link_kind).unwrap_or(0),
@@ -111,6 +112,7 @@ mod tests {
             width: 3840,
             height: 2160,
             refresh_hz: 120,
+            refresh_mhz: 0,
         };
         let wire = LinkFacts {
             kind: IFACE_KIND_ETHERNET,
@@ -134,6 +136,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let wifi = LinkFacts {
             kind: IFACE_KIND_WIFI,

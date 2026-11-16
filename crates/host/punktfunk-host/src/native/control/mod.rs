@@ -227,6 +227,10 @@ pub(super) struct Task {
     pub(super) anchored: bool,
     pub(super) codec: crate::encode::Codec,
     pub(super) live_reconfig_ok: bool,
+    /// The session's display runs a rate that is not whole hertz
+    /// ([`runs_exact_rate`](crate::native::handshake::runs_exact_rate)): a mode switch keeps its
+    /// fraction.
+    pub(super) exact_rate_ok: bool,
     /// The client's decodable codecs, its preference and what this source encodes: what a
     /// codec ask picks among.
     pub(super) client_codecs: u8,
@@ -1277,6 +1281,7 @@ mod tests {
             width,
             height: 720,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let d = |epoch, width: u32, corrects| Delivered {
             mode: mode(width),

@@ -44,6 +44,12 @@ fn scale_action(scale: f64) -> Value {
     json!({ "Scale": { "scale": { "Specific": scale } } })
 }
 
+/// `width`×`height` at `mhz` as a custom mode. niri reads the refresh as decimal hertz.
+pub(crate) fn custom_mode_action(width: u32, height: u32, mhz: u32) -> Value {
+    let refresh = f64::from(mhz) / 1000.0;
+    json!({ "CustomMode": { "mode": { "width": width, "height": height, "refresh": refresh } } })
+}
+
 /// `skip_isolated` is biri's, and biri requires it. Stock niri ignores the field.
 fn power_off_action() -> Value {
     json!({ "PowerOffMonitors": { "skip_isolated": false } })
@@ -707,6 +713,11 @@ mod tests {
         assert_eq!(
             ipc::output_request("PF-1-1", scale_action(1.5)),
             json!({"Output":{"output":"PF-1-1","action":{"Scale":{"scale":{"Specific":1.5}}}}})
+        );
+        assert_eq!(
+            ipc::output_request("PF-1-1", custom_mode_action(1920, 1080, 59_940)),
+            json!({"Output":{"output":"PF-1-1","action":{"CustomMode":{"mode":
+                {"width":1920,"height":1080,"refresh":59.94}}}}})
         );
     }
 

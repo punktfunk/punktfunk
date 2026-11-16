@@ -158,7 +158,7 @@ mod tests {
     }
 
     fn store(priority: PresentPriority, tail: bool) -> Store<i64> {
-        Store::new(priority, frame_interval_ns(SOURCE_HZ), tail)
+        Store::new(priority, frame_interval_ns(SOURCE_HZ * 1000), tail)
     }
 
     /// Push `k` through `s` and take it back: the due time it was given.

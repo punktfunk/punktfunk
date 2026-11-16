@@ -788,6 +788,17 @@ impl std::fmt::Display for DriverOutdated {
 impl std::error::Error for DriverOutdated {}
 
 /// pf-vdisplay IOCTL surface behind [`VirtualDisplayManager`](super::manager::VirtualDisplayManager).
+/// `mode`'s rate for a driver request, in millihertz: its fraction where the driver runs
+/// one, else zero, the whole rate.
+fn exact_mhz(mode: Mode) -> u32 {
+    let mhz = mode.millihz();
+    if mhz % 1000 != 0 && crate::manager::runs_exact_rates() {
+        mhz
+    } else {
+        0
+    }
+}
+
 /// Wire contract: `pf_driver_proto::control` (versioned, hard-checked).
 pub(crate) struct PfVdisplayDriver;
 
@@ -871,6 +882,8 @@ impl VdisplayDriver for PfVdisplayDriver {
             // the pointer.
             hw_cursor: hw_cursor as u32,
             extra_modes,
+            refresh_mhz: exact_mhz(mode),
+            _reserved: 0,
         };
         // Opt-in; non-fatal: the driver reports the real render LUID in the shared header.
         if let Some(luid) = render_luid {
@@ -972,7 +985,7 @@ impl VdisplayDriver for PfVdisplayDriver {
             width: mode.width,
             height: mode.height,
             refresh_hz: mode.refresh_hz,
-            _reserved: 0,
+            refresh_mhz: exact_mhz(mode),
         };
         ioctl_send(dev, control::IOCTL_UPDATE_MODES, bytemuck::bytes_of(&req)).with_context(|| {
             format!(
@@ -1585,6 +1598,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("create virtual display");
         assert_eq!(vout.preferred_mode, Some((1920, 1080, 60)));
@@ -1646,6 +1660,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("create virtual display");
         let wc = vout.win_capture.as_ref().expect("no capture target");
@@ -1849,6 +1864,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("create member 1");
         thread::sleep(Duration::from_secs(2));
@@ -1869,6 +1885,7 @@ mod tests {
                 width: 1280,
                 height: 720,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("create member 2");
         thread::sleep(Duration::from_secs(2));
@@ -2023,6 +2040,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("create virtual display");
         thread::sleep(Duration::from_secs(2));
@@ -2068,6 +2086,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("create virtual display");
         let t1 = first
@@ -2083,6 +2102,7 @@ mod tests {
                 width: 2356,
                 height: 1332,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("in-place resize acquire");
         let resize_ms = t0.elapsed().as_millis();

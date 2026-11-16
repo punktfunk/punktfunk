@@ -435,6 +435,7 @@ mod tests {
             width,
             height: 720,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let short = Some(crate::quic::AckReason::EncoderLimit);
         let (tx, rx) = std::sync::mpsc::channel();

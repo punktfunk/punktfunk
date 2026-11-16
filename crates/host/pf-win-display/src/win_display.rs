@@ -334,6 +334,24 @@ pub fn active_mode(key: CcdTargetKey) -> Option<(u32, u32, u32)> {
     Some((dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency))
 }
 
+/// The refresh `key`'s active path runs, in millihertz, off the path's own rational: GDI
+/// truncates, so [`active_mode`] reads 59 for 59.94 Hz. `None` without an active path.
+pub fn active_refresh_mhz(key: CcdTargetKey) -> Option<u32> {
+    let (paths, _) = query_display_config(QDC_ONLY_ACTIVE_PATHS).ok()?;
+    let rate = paths
+        .iter()
+        .find(|p| path_target_key(p) == key)?
+        .targetInfo
+        .refreshRate;
+    let den = u64::from(rate.Denominator);
+    (den > 0).then(|| ((u64::from(rate.Numerator) * 1000 + den / 2) / den) as u32)
+}
+
+/// The whole rate GDI lists `mode` under. It truncates: 59.94 Hz is 59.
+fn gdi_hz(mode: Mode) -> u32 {
+    mode.millihz() / 1000
+}
+
 /// Verified-state topology-settle wait (latency plan P0.2): poll the CCD state until the target is
 /// actually COMMITTED — an active path exists (the GDI name resolves) and the active resolution
 /// equals the requested one — instead of sleeping a fixed interval. The conditions are exactly what
@@ -444,7 +462,7 @@ pub fn wait_mode_advertised(gdi_name: &str, mode: Mode, ceiling: std::time::Dura
             }
             if dm.dmPelsWidth == mode.width
                 && dm.dmPelsHeight == mode.height
-                && dm.dmDisplayFrequency == mode.refresh_hz
+                && dm.dmDisplayFrequency == gdi_hz(mode)
             {
                 return true;
             }
@@ -638,19 +656,28 @@ pub fn set_active_mode_ccd(key: CcdTargetKey, mode: Mode) -> bool {
             cx: mode.width,
             cy: mode.height,
         };
-        let hz = u64::from(mode.refresh_hz);
+        // The driver's numbers for this mode: a whole rate over 1, a fraction over 1000.
+        let mhz = mode.millihz();
+        let lines = u64::from(mhz) * u64::from(mode.height);
+        let v_sync = match mhz % 1000 {
+            0 => DISPLAYCONFIG_RATIONAL {
+                Numerator: mhz / 1000,
+                Denominator: 1,
+            },
+            _ => DISPLAYCONFIG_RATIONAL {
+                Numerator: mhz,
+                Denominator: 1000,
+            },
+        };
         // SAFETY: guarded by `infoType == DISPLAYCONFIG_MODE_INFO_TYPE_TARGET` immediately above.
         unsafe {
             let si = &mut modes[tgt_idx].Anonymous.targetMode.targetVideoSignalInfo;
-            si.pixelRate = hz * u64::from(mode.width) * u64::from(mode.height);
+            si.pixelRate = (lines * u64::from(mode.width) + 500) / 1000;
             si.hSyncFreq = DISPLAYCONFIG_RATIONAL {
-                Numerator: u32::try_from(hz * u64::from(mode.height)).unwrap_or(u32::MAX),
+                Numerator: u32::try_from((lines + 500) / 1000).unwrap_or(u32::MAX),
                 Denominator: 1,
             };
-            si.vSyncFreq = DISPLAYCONFIG_RATIONAL {
-                Numerator: mode.refresh_hz,
-                Denominator: 1,
-            };
+            si.vSyncFreq = v_sync;
             si.totalSize = region;
             si.activeSize = region;
             si.scanLineOrdering = DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE;
@@ -689,6 +716,7 @@ pub fn set_active_mode_ccd(key: CcdTargetKey, mode: Mode) -> bool {
 /// this as [`set_active_mode_ccd`]'s fallback owe that a log, or a display
 /// left on the wrong mode looks like it was never asked.
 pub fn set_active_mode(gdi_name: &str, mode: Mode) -> bool {
+    let want_hz = gdi_hz(mode);
     let wname = HSTRING::from(gdi_name);
 
     // Prefer same WxH: exact Hz, else highest advertised ≤ requested, else
@@ -721,19 +749,14 @@ pub fn set_active_mode(gdi_name: &str, mode: Mode) -> bool {
             at_res.push(dm.dmDisplayFrequency);
         }
     }
-    let chosen_hz = if at_res.contains(&mode.refresh_hz) {
-        mode.refresh_hz
-    } else if let Some(hz) = at_res
-        .iter()
-        .copied()
-        .filter(|&hz| hz <= mode.refresh_hz)
-        .max()
-    {
+    let chosen_hz = if at_res.contains(&want_hz) {
+        want_hz
+    } else if let Some(hz) = at_res.iter().copied().filter(|&hz| hz <= want_hz).max() {
         hz
     } else if let Some(hz) = at_res.iter().copied().max() {
         hz
     } else {
-        mode.refresh_hz // not advertised; attempt anyway (likely OS default)
+        want_hz // not advertised; attempt anyway (likely OS default)
     };
     if at_res.is_empty() {
         tracing::warn!(
@@ -741,14 +764,14 @@ pub fn set_active_mode(gdi_name: &str, mode: Mode) -> bool {
             mode.width,
             mode.height,
             res_set.iter().rev().take(8).collect::<Vec<_>>(),
-            mode.refresh_hz
+            want_hz
         );
-    } else if chosen_hz != mode.refresh_hz {
+    } else if chosen_hz != want_hz {
         tracing::warn!(
             "{gdi_name}: {}x{}@{} not advertised; using {}x{}@{} (advertised refreshes here: {:?})",
             mode.width,
             mode.height,
-            mode.refresh_hz,
+            want_hz,
             mode.width,
             mode.height,
             chosen_hz,

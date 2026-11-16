@@ -286,6 +286,7 @@ mod live_tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("create a virtual display");
         let want = OutputFormat {
@@ -408,6 +409,7 @@ mod live_tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             })
             .expect("create a virtual display");
         let pid = vout

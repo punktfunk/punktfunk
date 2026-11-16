@@ -107,8 +107,8 @@ pub fn accumulate_modes(into: &mut Vec<Mode>, seat: bool, history: &[Mode]) {
     }
 }
 
-/// The numbers of a `DISPLAYCONFIG_VIDEO_SIGNAL_INFO`, without the OS struct. Both sync
-/// rationals have denominator 1, and total size equals active size (no fabricated blanking),
+/// The numbers of a `DISPLAYCONFIG_VIDEO_SIGNAL_INFO`, without the OS struct. The hSync
+/// rational has denominator 1, and total size equals active size (no fabricated blanking),
 /// so the driver stamps one `(width, height)` region into both size fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SignalInfo {
@@ -116,8 +116,10 @@ pub struct SignalInfo {
     pub pixel_rate: u64,
     /// `hSyncFreq` numerator, `refresh · height`, saturated into u32.
     pub h_sync_num: u32,
-    /// `vSyncFreq` numerator — the refresh rate itself.
+    /// `vSyncFreq` numerator: whole hertz over [`Self::v_sync_den`] 1, or millihertz over 1000.
     pub v_sync_num: u32,
+    /// `vSyncFreq` denominator.
+    pub v_sync_den: u32,
     /// The `AdditionalSignalInfo` union read as `videoStandard`: 255 (other), with the
     /// vSync frequency divider in bits 16..21.
     pub video_standard: u32,
@@ -134,18 +136,34 @@ pub struct SignalInfo {
 ///
 /// The hSync numerator is computed in u64 and saturated: an unchecked `refresh · height`
 /// past u32 would panic → abort the extern-"C" mode DDI in a debug build.
+///
+/// `mhz` is the refresh in millihertz. A whole rate keeps the integer vSync rational; one
+/// with a fraction states it over 1000.
 #[must_use]
-pub fn signal_info(
-    width: u32,
-    height: u32,
-    refresh_rate: u32,
-    v_sync_freq_divider: u32,
-) -> SignalInfo {
+pub fn signal_info(width: u32, height: u32, mhz: u32, v_sync_freq_divider: u32) -> SignalInfo {
+    let lines = u64::from(mhz) * u64::from(height);
+    let (v_sync_num, v_sync_den) = match mhz % 1000 {
+        0 => (mhz / 1000, 1),
+        _ => (mhz, 1000),
+    };
     SignalInfo {
-        pixel_rate: u64::from(refresh_rate) * u64::from(width) * u64::from(height),
-        h_sync_num: u32::try_from(u64::from(refresh_rate) * u64::from(height)).unwrap_or(u32::MAX),
-        v_sync_num: refresh_rate,
+        pixel_rate: (lines * u64::from(width) + 500) / 1000,
+        h_sync_num: u32::try_from((lines + 500) / 1000).unwrap_or(u32::MAX),
+        v_sync_num,
+        v_sync_den,
         video_standard: 255 | (v_sync_freq_divider << 16),
+    }
+}
+
+/// The rate a mode at whole `hz` runs on a monitor whose exact rate is `exact_mhz`, in
+/// millihertz. Zero is a monitor with none; a rate that rounds to another `hz` is not this
+/// mode's.
+#[must_use]
+pub fn rate_mhz(exact_mhz: u32, hz: u32) -> u32 {
+    if exact_mhz != 0 && exact_mhz.saturating_add(500) / 1000 == hz {
+        exact_mhz
+    } else {
+        hz.saturating_mul(1000)
     }
 }
 
@@ -376,26 +394,35 @@ mod tests {
     #[test]
     fn signal_info_numerics_match_the_ddi_formula() {
         // Monitor modes pass divider 0, target modes 1 — the ONLY difference between the two.
-        let m = signal_info(1920, 1080, 60, 0);
+        let m = signal_info(1920, 1080, 60_000, 0);
         assert_eq!(m.pixel_rate, 60 * 1920 * 1080);
         assert_eq!(m.h_sync_num, 60 * 1080);
-        assert_eq!(m.v_sync_num, 60);
+        assert_eq!((m.v_sync_num, m.v_sync_den), (60, 1));
         assert_eq!(m.video_standard, 255);
         assert_eq!(
-            signal_info(1920, 1080, 60, 1).video_standard,
+            signal_info(1920, 1080, 60_000, 1).video_standard,
             255 | (1 << 16)
         );
 
+        // A rate with a fraction states it over 1000; the other numbers follow it.
+        let ntsc = signal_info(1920, 1080, 59_940, 1);
+        assert_eq!((ntsc.v_sync_num, ntsc.v_sync_den), (59_940, 1000));
+        assert_eq!(ntsc.pixel_rate, 124_291_584);
+        assert_eq!(ntsc.h_sync_num, 64_735);
+        assert_eq!(rate_mhz(59_940, 60), 59_940);
+        assert_eq!(rate_mhz(59_940, 120), 120_000);
+        assert_eq!(rate_mhz(0, 60), 60_000);
+
         // 8K240's pixel rate (7.96e9) is why that field is u64; the hSync numerator still fits
         // a u32 with orders of magnitude to spare.
-        let big = signal_info(7680, 4320, 240, 1);
+        let big = signal_info(7680, 4320, 240_000, 1);
         assert_eq!(big.pixel_rate, 7_962_624_000);
         assert!(big.pixel_rate > u64::from(u32::MAX));
         assert_eq!(big.h_sync_num, 240 * 4320);
 
         // The hSync saturation is unreachable through `valid_mode` (16384 · 1000 fits); it only
         // keeps an unvalidated tuple from panicking inside the extern-"C" mode DDI.
-        assert!(signal_info(16384, 16384, 1000, 0).h_sync_num < u32::MAX);
+        assert!(signal_info(16384, 16384, 1_000_000, 0).h_sync_num < u32::MAX);
         assert_eq!(signal_info(1, u32::MAX, u32::MAX, 0).h_sync_num, u32::MAX);
     }
 

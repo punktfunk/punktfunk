@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: unom <packages@unom.io>
+Date: Sun, 15 Nov 2026 21:50:38 +0000
+Subject: [PATCH 42/42] punktfunk: stamp pfhdr37
+
+A host passes -r with a fraction only to a gamescope that reads one: an
+older one refuses the argument and does not start. The level tells the
+two apart. New capability: an exact refresh rate.
+---
+ src/meson.build | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index 655138b4..3c80c4ca 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -229,7 +229,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr34 — …and a private reliable capture node beside the public one Steam reads
+ #   +pfhdr35 — …on upstream 3.17.0 (31 is upstream there)
+ #   +pfhdr36 — …and the WSI layer reports an X11 window's size as its extent range
+-version_tag = vcs_tag + '+pfhdr36' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr37 — …and a refresh with a fraction (-r 59.94) runs to the millihertz
++version_tag = vcs_tag + '+pfhdr37' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)

@@ -530,6 +530,7 @@ mod tests {
             width,
             height,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let first = Rect::new(0, 0, 2560, 1440);
         let (hidpi, fhd) = (mode(5120, 2880), mode(1920, 1080));
@@ -565,6 +566,7 @@ mod tests {
             width: 2560,
             height: 1440,
             refresh_hz: 144,
+            refresh_mhz: 0,
         };
         let at = |w, h| Mode {
             width: w,

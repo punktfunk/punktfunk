@@ -126,6 +126,8 @@ fn present_seat_display(stop: HANDLE) {
             min_luminance_millinits: 0,
             hw_cursor: 0,
             extra_modes: Default::default(),
+            refresh_mhz: 0,
+            _reserved: 0,
         },
     );
     dbglog!(
@@ -194,21 +196,21 @@ pub unsafe extern "C" fn device_cleanup(_object: WDFOBJECT) {
 }
 
 /// One `IDDCX_MONITOR_MODE` (SDR) for the description mode list.
-fn monitor_mode(width: u32, height: u32, refresh_rate: u32) -> iddcx::IDDCX_MONITOR_MODE {
+fn monitor_mode(width: u32, height: u32, mhz: u32) -> iddcx::IDDCX_MONITOR_MODE {
     iddcx::IDDCX_MONITOR_MODE {
         Size: core::mem::size_of::<iddcx::IDDCX_MONITOR_MODE>() as u32,
         Origin: iddcx::IDDCX_MONITOR_MODE_ORIGIN::IDDCX_MONITOR_MODE_ORIGIN_MONITORDESCRIPTOR,
-        MonitorVideoSignalInfo: crate::modes::display_info(width, height, refresh_rate),
+        MonitorVideoSignalInfo: crate::modes::display_info(width, height, mhz),
     }
 }
 
 /// One `IDDCX_MONITOR_MODE2`: the SDR mode plus the per-mode wire bit-depth, which is what makes the
 /// OS offer HDR10 modes on this monitor.
-fn monitor_mode2(width: u32, height: u32, refresh_rate: u32) -> iddcx::IDDCX_MONITOR_MODE2 {
+fn monitor_mode2(width: u32, height: u32, mhz: u32) -> iddcx::IDDCX_MONITOR_MODE2 {
     iddcx::IDDCX_MONITOR_MODE2 {
         Size: core::mem::size_of::<iddcx::IDDCX_MONITOR_MODE2>() as u32,
         Origin: iddcx::IDDCX_MONITOR_MODE_ORIGIN::IDDCX_MONITOR_MODE_ORIGIN_MONITORDESCRIPTOR,
-        MonitorVideoSignalInfo: crate::modes::display_info(width, height, refresh_rate),
+        MonitorVideoSignalInfo: crate::modes::display_info(width, height, mhz),
         BitsPerComponent: crate::modes::wire_bits(),
     }
 }
@@ -235,7 +237,8 @@ unsafe fn fill_monitor_modes<M>(
     let Ok(id) = pf_driver_proto::edid::get_serial(edid) else {
         return STATUS_INVALID_PARAMETER;
     };
-    let Some(modes) = crate::registry::find(|m| m.id == id).map(|m| m.modes()) else {
+    let found = crate::registry::find(|m| m.id == id).map(|m| (m.modes(), m.exact_mhz()));
+    let Some((modes, exact)) = found else {
         return STATUS_NOT_FOUND;
     };
     let count = crate::monitor::flatten(&modes).count() as u32;
@@ -261,7 +264,8 @@ unsafe fn fill_monitor_modes<M>(
     // `count` above, so >= `count` `M` entries are writable.
     let out = unsafe { core::slice::from_raw_parts_mut(p_modes, count as usize) };
     for (item, slot) in crate::monitor::flatten(&modes).zip(out.iter_mut()) {
-        *slot = make(item.width, item.height, item.refresh_rate);
+        let mhz = pf_driver_proto::vdisplay::rate_mhz(exact, item.refresh_rate);
+        *slot = make(item.width, item.height, mhz);
     }
     out_args.PreferredMonitorModeIdx = 0;
     STATUS_SUCCESS
@@ -342,8 +346,9 @@ unsafe fn fill_target_modes<M>(
     tag: Option<&str>,
     make: impl Fn(u32, u32, u32) -> M,
 ) -> NTSTATUS {
-    let Some(modes) = crate::registry::find(|m| m.object() == Some(monitor)).map(|m| m.modes())
-    else {
+    let found =
+        crate::registry::find(|m| m.object() == Some(monitor)).map(|m| (m.modes(), m.exact_mhz()));
+    let Some((modes, exact)) = found else {
         return STATUS_NOT_FOUND;
     };
     let count = crate::monitor::flatten(&modes).count() as u32;
@@ -364,7 +369,8 @@ unsafe fn fill_target_modes<M>(
         // against `count` above, so >= `count` `M` entries are writable.
         let out = unsafe { core::slice::from_raw_parts_mut(p_modes, count as usize) };
         for (item, slot) in crate::monitor::flatten(&modes).zip(out.iter_mut()) {
-            *slot = make(item.width, item.height, item.refresh_rate);
+            let mhz = pf_driver_proto::vdisplay::rate_mhz(exact, item.refresh_rate);
+            *slot = make(item.width, item.height, mhz);
         }
     }
     STATUS_SUCCESS

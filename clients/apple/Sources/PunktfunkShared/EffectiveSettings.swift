@@ -370,6 +370,26 @@ public enum PresetSelection: Hashable, Sendable {
     }
 }
 
+/// A refresh rate to the millihertz, as the core's `Mode` carries it: 59 940 for 59.94 Hz.
+public enum RefreshRate {
+    /// Whole hertz of `milliHz`, rounded: 60 for 59 940.
+    public static func whole(milliHz: Int) -> Int { (milliHz + 500) / 1000 }
+
+    /// A rate for a player: `60` for whole hertz, else two decimals in the reader's locale.
+    public static func label(milliHz: Int) -> String {
+        guard milliHz % 1000 != 0 else { return String(milliHz / 1000) }
+        return (Double(milliHz) / 1000).formatted(.number.precision(.fractionLength(2)))
+    }
+
+    /// The rate as the core's stats lines write it: `60`, else `59.94` with a point.
+    public static func statsLabel(milliHz: UInt32) -> String {
+        guard milliHz % 1000 != 0 else { return String(milliHz / 1000) }
+        let hundredths = (milliHz + 5) / 10
+        let fraction = hundredths % 100
+        return "\(hundredths / 100).\(fraction < 10 ? "0" : "")\(fraction)"
+    }
+}
+
 extension EffectiveSettings {
     /// The mode a session asks the host for: the configured size at the render scale, capped at
     /// the codec's per-axis limit, at the configured refresh. A zero width, height or refresh is
@@ -383,6 +403,12 @@ extension EffectiveSettings {
             maxDimension: RenderScale.maxDimension(codec: codec))
         let hz = refreshHz == 0 ? max(native.hz, 30) : refreshHz
         return (mode.width, mode.height, UInt32(clamping: hz))
+    }
+
+    /// The exact rate behind `streamMode(native:)`'s whole hertz, in millihertz: the display's
+    /// under Native (59 940 at 59.94 Hz, at least 30 000), a picked rate as picked.
+    public func streamRefreshMilliHz(nativeMilliHz: Int) -> UInt32 {
+        UInt32(clamping: refreshHz == 0 ? max(nativeMilliHz, 30_000) : refreshHz * 1000)
     }
 
     /// The size `streamMode(native:)` shows the picture at when render scale makes the mode larger

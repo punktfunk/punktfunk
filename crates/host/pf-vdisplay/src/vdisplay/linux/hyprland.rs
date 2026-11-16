@@ -481,6 +481,7 @@ impl VirtualDisplay for HyprlandDisplay {
             node_id,
             remote_fd,
             preferred_mode: Some((mode.width, mode.height, mode.refresh_hz)),
+            refresh_mhz: None,
             keepalive,
             ownership: DisplayOwnership::Owned,
             reused_gen: None,
@@ -1547,7 +1548,8 @@ fn set_monitor_rule(
     colour: Option<HdrRule>,
     at: Option<(i32, i32)>,
 ) -> Result<()> {
-    let hz = mode.refresh_hz.max(1);
+    // Hyprland reads the rate as a decimal: `@59.940` runs the head at 59.94 Hz.
+    let hz = punktfunk_core::config::hz_decimal(mode.millihz().max(1000));
     let pos = at.map_or_else(|| "auto".to_string(), |(x, y)| format!("{x}x{y}"));
     let spec = format!(
         "{name},{}x{}@{hz},{pos},1{}",
@@ -2458,6 +2460,7 @@ mod tests {
         width: 1920,
         height: 1080,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
 
     /// A fake `hyprctl`: logs each call to `$HOME/hyprctl.log`, refuses `output create`, lists

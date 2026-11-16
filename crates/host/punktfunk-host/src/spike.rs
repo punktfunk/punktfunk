@@ -230,6 +230,7 @@ pub fn run(opts: Options) -> Result<()> {
                     width: opts.width,
                     height: opts.height,
                     refresh_hz: opts.fps,
+                    refresh_mhz: 0,
                 })
                 .context("create virtual output")?;
             // `OutputFormat::resolve` hard-codes `pyrowave: false` (GameStream never

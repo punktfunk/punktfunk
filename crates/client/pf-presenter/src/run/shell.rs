@@ -183,6 +183,7 @@ impl Shell {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         });
 
         let event_pump = sdl
@@ -452,6 +453,23 @@ pub(super) fn native_mode_of(window: &sdl3::video::Window) -> Option<Mode> {
         .ok()
         .map(|m| native_mode(m.w, m.h, m.pixel_density, m.refresh_rate))
         .filter(|m| m.width > 0 && m.height > 0)
+        .map(|m| at_stated_rate(window, m))
+}
+
+/// `mode` at the rate Windows states for the window's monitor, where that is within a hertz
+/// of SDL's: SDL reads whole hertz there and guesses the fraction.
+#[cfg(windows)]
+fn at_stated_rate(window: &sdl3::video::Window, mode: Mode) -> Mode {
+    match crate::win32::window_refresh_mhz(window) {
+        Some(mhz) if mhz.abs_diff(mode.millihz()) < 1000 => mode.at_millihz(mhz),
+        _ => mode,
+    }
+}
+
+/// Elsewhere SDL states the rate itself.
+#[cfg(not(windows))]
+fn at_stated_rate(_window: &sdl3::video::Window, mode: Mode) -> Mode {
+    mode
 }
 
 /// Apply capture to the window: pointer lock (relative mouse + hidden cursor) and a

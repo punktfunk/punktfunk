@@ -240,6 +240,8 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
         }
         val request = ConnectRequest(
             host = spec.host, port = spec.port, width = w, height = h, refreshHz = hz,
+            // Native's exact rate. Core drops it where an override moved the whole rate.
+            refreshMilliHz = settings.effectiveRefreshMilliHz(context),
             viewWidth = view?.first ?: 0, viewHeight = view?.second ?: 0,
             certPem = spec.identity.certPem, keyPem = spec.identity.privateKeyPem, pinHex = spec.pinHex,
             // Zero is Automatic. Under PyroWave any other value is Fixed: the host ignores the

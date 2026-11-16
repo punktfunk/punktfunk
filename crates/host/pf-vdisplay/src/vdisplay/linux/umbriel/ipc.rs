@@ -216,14 +216,16 @@ pub(crate) fn windows() -> Result<Vec<Window>> {
     serde_json::from_value(request("windows", &[])?).context("decode umbriel windows")
 }
 
-/// `<W>x<H>@<Hz>`: the refresh is always given, or Umbriel paces at its default.
-pub(crate) fn create_mode(width: u32, height: u32, hz: u32) -> String {
+/// `<W>x<H>@<Hz>`: the refresh is always given, or Umbriel paces at its default. Umbriel
+/// reads it as a decimal, so 59.94 Hz goes out as `59.940`.
+pub(crate) fn create_mode(width: u32, height: u32, mhz: u32) -> String {
+    let hz = punktfunk_core::config::hz_decimal(mhz);
     format!("{width}x{height}@{hz}")
 }
 
 /// Create virtual output `name`. It exists and is enabled when this returns.
-pub(crate) fn create_output(name: &str, width: u32, height: u32, hz: u32) -> Result<()> {
-    request("output-create", &[name, &create_mode(width, height, hz)]).map(drop)
+pub(crate) fn create_output(name: &str, width: u32, height: u32, mhz: u32) -> Result<()> {
+    request("output-create", &[name, &create_mode(width, height, mhz)]).map(drop)
 }
 
 /// Destroy virtual output `name`. Umbriel moves its windows to another output itself.
@@ -260,10 +262,14 @@ mod tests {
     #[test]
     fn requests_are_pinned_to_the_wire_line() {
         assert_eq!(
-            request_line("output-create", &["PF-1-0", &create_mode(2560, 1600, 120)]),
+            request_line(
+                "output-create",
+                &["PF-1-0", &create_mode(2560, 1600, 120_000)]
+            ),
             "{\"cmd\":\"output-create\",\"arg\":\"PF-1-0 2560x1600@120\",\
              \"args\":[\"PF-1-0\",\"2560x1600@120\"]}\n"
         );
+        assert_eq!(create_mode(1920, 1080, 59_940), "1920x1080@59.940");
         assert_eq!(request_line("outputs", &[]), "{\"cmd\":\"outputs\"}\n");
         assert_eq!(
             request_line("msg", &["window-focus:a\"b"]),

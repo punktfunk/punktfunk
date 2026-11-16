@@ -95,6 +95,10 @@ pub struct VirtualOutput {
     /// `(width, height, refresh_hz)` for PipeWire format negotiation. KWin/gamescope already
     /// created at this size; Mutter sizes the virtual monitor FROM the negotiation.
     pub preferred_mode: Option<(u32, u32, u32)>,
+    /// The rate the display runs, in millihertz, where the backend knows it: read back off the
+    /// compositor, or a mirrored head's own. `None` leaves `preferred_mode`'s whole hertz and
+    /// the mode the display was asked for.
+    pub refresh_mhz: Option<u32>,
     /// DXGI adapter LUID + GDI output name; host `capture::capture_virtual_output` duplicates this.
     #[cfg(target_os = "windows")]
     pub win_capture: Option<pf_frame::dxgi::WinCaptureTarget>,
@@ -162,6 +166,7 @@ impl VirtualOutput {
             #[cfg(target_os = "linux")]
             remote_fd: None,
             preferred_mode,
+            refresh_mhz: None,
             #[cfg(target_os = "windows")]
             win_capture: None,
             keepalive,

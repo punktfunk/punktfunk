@@ -105,7 +105,20 @@ impl FieldValue for [u8; 32] {
     }
 }
 
-/// `width u32 ‖ height u32 ‖ refresh_hz u32` as one 12-byte value.
+/// A mode's exact rate, `u32` millihertz in a tag of its own beside the 12-byte value. Left
+/// out for a whole rate, so a peer that skips the tag streams at `refresh_hz`.
+pub(crate) fn put_exact_rate(f: Fields, tag: u64, mode: &Mode) -> Fields {
+    let mhz = mode.millihz();
+    f.when(mhz % 1000 != 0, |f| f.u32(tag, mhz))
+}
+
+/// The millihertz of [`put_exact_rate`]; a value of another shape states nothing.
+pub(crate) fn exact_rate_of(v: &[u8]) -> u32 {
+    u32_of(v).unwrap_or(0)
+}
+
+/// `width u32 ‖ height u32 ‖ refresh_hz u32` as one 12-byte value. The exact rate rides
+/// beside it ([`put_exact_rate`]).
 impl FieldValue for Mode {
     fn put(&self, f: Fields, tag: u64) -> Fields {
         let mut b = [0u8; 12];
@@ -123,6 +136,7 @@ impl FieldValue for Mode {
             width: at(0),
             height: at(4),
             refresh_hz: at(8),
+            refresh_mhz: 0,
         })
     }
 }
@@ -187,29 +201,36 @@ impl FieldValue for Vec<(String, String)> {
     }
 }
 
-/// A [`V2Message`] for a plain struct: `tag => field` per member, then an optional check of
-/// the decoded value. Every member's type is a [`FieldValue`].
+/// A [`V2Message`] for a plain struct: `tag => field` per member, then an optional `exact`
+/// tag for the rate of a [`Mode`] member ([`put_exact_rate`]), then an optional check of the
+/// decoded value. Every member's type is a [`FieldValue`].
 macro_rules! v2_message {
-    ($ty:ident = $id:expr, { $($tag:literal => $field:ident),* $(,)? } $(, check $check:expr)?) => {
+    ($ty:ident = $id:expr, { $($tag:literal => $field:ident),* $(,)? }
+        $(, exact $etag:literal => $emode:ident)? $(, check $check:expr)?) => {
         impl V2Message for $ty {
             const TYPE: u64 = $id;
 
             fn fields(&self) -> Fields {
                 let f = Fields::new();
                 $( let f = FieldValue::put(&self.$field, f, $tag); )*
+                $( let f = put_exact_rate(f, $etag, &self.$emode); )?
                 f
             }
 
             fn from_body(body: &[u8]) -> Result<Self> {
                 $( let mut $field = None; )*
+                $( let mut exact_mhz: u32 = { let _ = $etag; 0 }; )?
                 let mut r = FieldReader::new(body);
                 while let Some((tag, v)) = r.next_field()? {
                     match tag {
                         $( $tag => set_once(&mut $field, FieldValue::get(v)?)?, )*
+                        $( $etag => exact_mhz = exact_rate_of(v), )?
                         _ => {}
                     }
                 }
-                let m = $ty { $( $field: $field.unwrap_or_default(), )* };
+                #[allow(unused_mut)]
+                let mut m = $ty { $( $field: $field.unwrap_or_default(), )* };
+                $( m.$emode = m.$emode.stating(exact_mhz); )?
                 $(
                     let check: fn(&$ty) -> bool = $check;
                     if !check(&m) {
@@ -233,9 +254,10 @@ v2_message!(Refused = reg::MSG_REFUSED,
     { 1 => code, 2 => reason, 3 => reason_id, 4 => reason_params },
     check |m| m.bounded());
 
-v2_message!(Reconfigure = reg::MSG_RECONFIGURE, { 1 => mode, 2 => exclude_codecs, 3 => view });
+v2_message!(Reconfigure = reg::MSG_RECONFIGURE, { 1 => mode, 2 => exclude_codecs, 3 => view },
+    exact 4 => mode);
 v2_message!(Reconfigured = reg::MSG_RECONFIGURED,
-    { 1 => accepted, 2 => mode, 3 => exclude_codecs });
+    { 1 => accepted, 2 => mode, 3 => exclude_codecs }, exact 4 => mode);
 v2_message!(SetBitrate = reg::MSG_SET_BITRATE, { 1 => bitrate_kbps });
 v2_message!(PipelineGap = reg::MSG_PIPELINE_GAP, { 1 => gap_ms });
 v2_message!(ProbeShaped = reg::MSG_PROBE_REQUEST,
@@ -637,7 +659,7 @@ pub struct StreamConfig {
 v2_message!(StreamConfig = reg::MSG_STREAM_CONFIG,
     { 1 => epoch, 2 => mode, 3 => codec, 4 => bit_depth, 5 => color, 6 => chroma_format,
       7 => host_iface_kind, 8 => host_link_mbps, 9 => host_sndbuf_kb, 10 => host_forced_shape,
-      11 => stream, 12 => picture });
+      11 => stream, 12 => picture }, exact 13 => mode);
 
 /// Screens one session carries at most, the first included.
 pub const SCREENS_MAX: usize = 4;
@@ -667,18 +689,23 @@ pub struct Screen {
     pub view: Option<(u32, u32)>,
 }
 
-/// `index u8 ‖ stream u8 ‖ flags u8 ‖ 0 ‖ width u16 ‖ height u16 ‖ refresh u16 ‖ 0 u16 ‖ x i32 ‖
-/// y i32` per screen, at most [`SCREENS_MAX`], as one value.
+/// `index u8 ‖ stream u8 ‖ flags u8 ‖ 0 ‖ width u16 ‖ height u16 ‖ refresh u16 ‖ milli i16 ‖
+/// x i32 ‖ y i32` per screen, at most [`SCREENS_MAX`], as one value. `milli` is the exact rate
+/// in millihertz less `refresh` whole hertz: `-60` for 59.94 Hz, `0` for a whole rate.
 impl FieldValue for Vec<Screen> {
     fn put(&self, f: Fields, tag: u64) -> Fields {
         let mut b = Vec::with_capacity(self.len() * SCREEN_LEN);
         for s in self.iter().take(SCREENS_MAX) {
             let dim = |v: u32| (v.min(u32::from(u16::MAX)) as u16).to_le_bytes();
+            let hz = s.mode.refresh_hz.min(u32::from(u16::MAX));
+            // Within half a hertz of `hz`, or 0 once `hz` was clamped.
+            let milli = i64::from(s.mode.millihz()) - i64::from(hz) * 1000;
+            let milli = i16::try_from(milli).unwrap_or(0);
             b.extend_from_slice(&[s.index, s.stream, u8::from(s.primary), 0]);
             b.extend_from_slice(&dim(s.mode.width));
             b.extend_from_slice(&dim(s.mode.height));
-            b.extend_from_slice(&dim(s.mode.refresh_hz));
-            b.extend_from_slice(&[0, 0]);
+            b.extend_from_slice(&dim(hz));
+            b.extend_from_slice(&milli.to_le_bytes());
             b.extend_from_slice(&s.x.to_le_bytes());
             b.extend_from_slice(&s.y.to_le_bytes());
         }
@@ -692,15 +719,19 @@ impl FieldValue for Vec<Screen> {
             .map(|r| {
                 let u16_at = |o: usize| u32::from(u16::from_le_bytes([r[o], r[o + 1]]));
                 let i32_at = |o: usize| i32::from_le_bytes([r[o], r[o + 1], r[o + 2], r[o + 3]]);
+                let milli = i64::from(i16::from_le_bytes([r[10], r[11]]));
+                let mhz = i64::from(u16_at(8)) * 1000 + milli;
+                let whole = Mode {
+                    width: u16_at(4),
+                    height: u16_at(6),
+                    refresh_hz: u16_at(8),
+                    refresh_mhz: 0,
+                };
                 Screen {
                     index: r[0],
                     stream: r[1],
                     primary: r[2] & 1 != 0,
-                    mode: Mode {
-                        width: u16_at(4),
-                        height: u16_at(6),
-                        refresh_hz: u16_at(8),
-                    },
+                    mode: whole.stating(u32::try_from(mhz).unwrap_or(0)),
                     x: i32_at(12),
                     y: i32_at(16),
                     view: None,
@@ -893,6 +924,7 @@ mod tests {
             width: 3840,
             height: 2160,
             refresh_hz: 120,
+            refresh_mhz: 0,
         };
         round_trip(PairRequest {
             name: "Living room TV".into(),
@@ -1087,6 +1119,7 @@ mod tests {
                     width: 2560,
                     height: 1440,
                     refresh_hz: 60,
+                    refresh_mhz: 0,
                 },
                 x: -2560,
                 y: -300,
@@ -1165,6 +1198,7 @@ mod tests {
                         width: 1920,
                         height: 1080,
                         refresh_hz: 60,
+                        refresh_mhz: 0,
                     },
                     x: 1920,
                     y: 0,
@@ -1185,6 +1219,7 @@ mod tests {
                 width: 2560,
                 height: 1440,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             },
             ..Default::default()
         };
@@ -1221,6 +1256,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             },
             ..Default::default()
         };
@@ -1237,6 +1273,83 @@ mod tests {
     }
 
     /// A view of another length or with a zero axis reads as no view, never a failed message.
+    /// A 59.94 Hz mode crosses every message that names one, and a whole rate adds no bytes.
+    #[test]
+    fn an_exact_rate_rides_beside_the_mode() {
+        let exact = Mode::exact(3840, 2160, 59_940);
+        let whole = Mode::exact(3840, 2160, 60_000);
+        for mode in [exact, whole] {
+            round_trip(Reconfigure {
+                mode,
+                exclude_codecs: 0,
+                view: None,
+            });
+            round_trip(Reconfigured {
+                accepted: true,
+                mode,
+                exclude_codecs: 0,
+            });
+            round_trip(StreamConfig {
+                mode,
+                ..StreamConfig::default()
+            });
+            round_trip(Screens {
+                screens: vec![Screen {
+                    mode,
+                    ..Screen::default()
+                }],
+            });
+        }
+        let ask = |mode| {
+            Reconfigure {
+                mode,
+                exclude_codecs: 0,
+                view: None,
+            }
+            .fields()
+            .into_body()
+        };
+        // Tag 4, four bytes of millihertz.
+        assert_eq!(ask(exact).len(), ask(whole).len() + 6);
+    }
+
+    /// A peer that predates the tag reads the whole rate; a rate that is not the mode's
+    /// fraction states nothing.
+    #[test]
+    fn an_exact_rate_is_only_a_fraction_of_the_mode() {
+        let whole = Mode::exact(1920, 1080, 60_000);
+        let body = |mhz: Option<u32>| {
+            let f = whole.put(Fields::new(), 1);
+            mhz.map_or(f.clone(), |v| f.u32(4, v)).into_body()
+        };
+        let read = |mhz| Reconfigure::from_body(&body(mhz)).unwrap().mode;
+        assert_eq!(read(None), whole);
+        assert_eq!(read(Some(59_940)), Mode::exact(1920, 1080, 59_940));
+        assert_eq!(read(Some(119_880)), whole);
+        assert_eq!(read(Some(0)), whole);
+        let short = whole.put(Fields::new(), 1).bytes(4, &[1, 2, 3, 4, 5]);
+        assert_eq!(
+            Reconfigure::from_body(&short.into_body()).unwrap().mode,
+            whole
+        );
+    }
+
+    /// A screen's fraction sits in the two bytes after its whole rate; out of range is whole.
+    #[test]
+    fn a_screen_record_keeps_its_fraction() {
+        let screen = Screen {
+            mode: Mode::exact(2560, 1440, 143_856),
+            ..Screen::default()
+        };
+        let wire = vec![screen].put(Fields::new(), 1).into_body();
+        let record = &wire[wire.len() - SCREEN_LEN..];
+        assert_eq!(&record[8..12], &[144, 0, 0x70, 0xFF], "144 Hz less 144 mHz");
+        let mut far = record.to_vec();
+        far[10..12].copy_from_slice(&900i16.to_le_bytes());
+        let read = <Vec<Screen> as FieldValue>::get(&far).unwrap();
+        assert_eq!(read[0].mode, Mode::exact(2560, 1440, 144_000));
+    }
+
     #[test]
     fn a_bad_view_reads_as_none() {
         let read = |v: &[u8]| Reconfigure::from_body(&Fields::new().bytes(3, v).into_body());

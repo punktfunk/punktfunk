@@ -469,6 +469,14 @@ final class SessionModel: ObservableObject {
         let native = NativeDisplay.mode
         #endif
         let own = effective.streamMode(native: native)
+        // Native's exact rate rides beside the mode's whole hertz: 59.94 Hz on a Mac display
+        // that runs it. The other platforms state whole hertz.
+        #if os(macOS)
+        let nativeMilliHz = NativeDisplay.refreshMilliHz
+        #else
+        let nativeMilliHz = native.hz * 1000
+        #endif
+        let refreshMilliHz = effective.streamRefreshMilliHz(nativeMilliHz: nativeMilliHz)
         let mode = overrides?.fit(
             own, native: native, codecMax: RenderScale.maxDimension(codec: effective.codec)) ?? own
         let view = effective.streamView(native: native, mode: mode)
@@ -510,7 +518,8 @@ final class SessionModel: ObservableObject {
             sessionLog.info("\(connectLine, privacy: .public)")
             let result = Result { try PunktfunkConnection(
                 host: host.address, port: host.port,
-                width: offer.width, height: offer.height, refreshHz: offer.hz, view: view,
+                width: offer.width, height: offer.height, refreshHz: offer.hz,
+                refreshMilliHz: refreshMilliHz, view: view,
                 pinSHA256: pin, identity: identity, compositor: offer.compositor,
                 gamepad: gamepad, bitrateKbps: offer.bitrateKbps, videoCaps: offer.videoCaps,
                 audioChannels: offer.audioChannels,
@@ -1371,7 +1380,7 @@ final class SessionModel: ObservableObject {
         _ conn: PunktfunkConnection, tier: StatsVerbosity, advanced: Bool
     ) -> [PunktfunkConnection.HudLine] {
         PunktfunkConnection.HudLine.naming(
-            picture: picture, mode: conn.currentMode(),
+            picture: picture, mode: conn.currentMode(), milliHz: conn.currentRefreshMilliHz(),
             in: conn.hudLines(tier: tier, advanced: advanced, facts: hudFacts()))
     }
 

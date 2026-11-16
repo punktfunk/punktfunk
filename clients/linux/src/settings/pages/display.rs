@@ -21,7 +21,7 @@ pub fn display(b: &mut Build) {
     let names: Vec<String> = REFRESH
         .iter()
         .map(|&r| match r {
-            0 => client::player_refresh_hz_native().to_string(),
+            0 => pf_client_core::settings::native_refresh_label(b.native),
             r => common::common_hz(r),
         })
         .collect();

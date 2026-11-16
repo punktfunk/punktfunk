@@ -770,6 +770,7 @@ mod tests {
             width: 2048,
             height: 1152,
             refresh_hz: 120,
+            refresh_mhz: 0,
         };
         let mut plan = SessionPlan::resolve(
             &crate::encode::resolve(),

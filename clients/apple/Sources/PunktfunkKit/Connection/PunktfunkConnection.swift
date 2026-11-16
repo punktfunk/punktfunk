@@ -463,6 +463,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public private(set) var width: UInt32 = 0
     public private(set) var height: UInt32 = 0
     public private(set) var refreshHz: UInt32 = 0
+    /// `refreshHz` to the millihertz, as the host delivers it: 59 940 where it took the
+    /// display's 59.94 Hz, the whole rate from a host that takes no fraction.
+    public private(set) var refreshMilliHz: UInt32 = 0
 
     /// SHA-256 fingerprint of the certificate the host presented (32 bytes). After a
     /// trust-on-first-use connect, persist this and pass it as `pinSHA256` next time.
@@ -1238,6 +1241,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public init(
         host: String, port: UInt16 = 9777,
         width: UInt32, height: UInt32, refreshHz: UInt32,
+        refreshMilliHz: UInt32 = 0,
         view: (width: UInt32, height: UInt32)? = nil,
         pinSHA256: Data? = nil,
         identity: ClientIdentity? = nil,
@@ -1301,6 +1305,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
         opts.width = width
         opts.height = height
         opts.refresh_hz = refreshHz
+        // The display's exact rate. The core drops one that is not `refreshHz`'s fraction.
+        opts.refresh_mhz = refreshMilliHz
         opts.view_width = view?.width ?? 0
         opts.view_height = view?.height ?? 0
         opts.compositor = compositor.rawValue
@@ -1412,6 +1418,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
         self.width = w
         self.height = h
         self.refreshHz = hz
+        var mhz: UInt32 = 0
+        _ = punktfunk_connection_refresh_mhz(opened, &mhz)
+        self.refreshMilliHz = mhz
         var gp: UInt32 = 0
         _ = punktfunk_connection_gamepad(opened, &gp)
         resolvedGamepad = GamepadType(rawValue: gp) ?? .auto
@@ -1609,8 +1618,21 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// At the live size the host keeps the view it scales to, so a rate pick leaves its scale.
     public func requestMode(width: UInt32, height: UInt32, refreshHz: UInt32) {
         withLiveHandle(or: ()) { h in
-            _ = punktfunk_connection_request_mode(h, width, height, refreshHz)
+            _ = punktfunk_connection_request_mode_exact(
+                h, width, height, exactRate(refreshHz, live: h), true, 0, 0)
         }
+    }
+
+    /// The exact rate a switch to `refreshHz` asks for, in millihertz. The live rate and the
+    /// one this session connected at keep their fraction (a resize, the ring's Native); any
+    /// other rate is whole hertz.
+    private func exactRate(_ refreshHz: UInt32, live h: OpaquePointer) -> UInt32 {
+        var live: UInt32 = 0
+        _ = punktfunk_connection_refresh_mhz(h, &live)
+        for known in [live, refreshMilliHz] where (known + 500) / 1000 == refreshHz {
+            return known
+        }
+        return refreshHz &* 1000
     }
 
     /// `requestMode` shown at `view`, the size the picture is shown at when smaller
@@ -1620,8 +1642,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
         view: (width: UInt32, height: UInt32)?
     ) {
         withLiveHandle(or: ()) { h in
-            _ = punktfunk_connection_request_mode_view(
-                h, width, height, refreshHz, view?.width ?? 0, view?.height ?? 0)
+            _ = punktfunk_connection_request_mode_exact(
+                h, width, height, exactRate(refreshHz, live: h), false,
+                view?.width ?? 0, view?.height ?? 0)
         }
     }
 
@@ -1740,21 +1763,26 @@ public final class PunktfunkConnection: @unchecked Sendable {
         /// `lines` led by the size the picture decodes at when the host scaled `mode` down to it:
         /// `1920×1080@60 · host renders 3840×2160`. A decoder's padded output is no such picture.
         /// Only a line opening with the mode changes, so Compact, which names no size, stays as it is.
+        /// `milliHz` is the mode's exact rate, which the core's line names: `@59.94`. Zero is
+        /// the whole rate.
         public static func naming(
             picture: (width: UInt32, height: UInt32)?,
-            mode: (width: UInt32, height: UInt32, refreshHz: UInt32), in lines: [HudLine]
+            mode: (width: UInt32, height: UInt32, refreshHz: UInt32), milliHz: UInt32 = 0,
+            in lines: [HudLine]
         ) -> [HudLine] {
             guard let p = picture, p.width <= mode.width, p.height <= mode.height,
                 (p.width, p.height) != (mode.width, mode.height)
             else { return lines }
-            let lead = "\(mode.width)×\(mode.height)@\(mode.refreshHz)"
+            let rate = RefreshRate.statsLabel(
+                milliHz: milliHz == 0 ? mode.refreshHz &* 1000 : milliHz)
+            let lead = "\(mode.width)×\(mode.height)@\(rate)"
             return lines.map { line in
                 guard line.text == lead || line.text.hasPrefix(lead + " · ") else { return line }
                 let host = L10n.overlayHostRenders(
                     width: String(mode.width), height: String(mode.height))
                 return HudLine(
                     role: line.role,
-                    text: "\(p.width)×\(p.height)@\(mode.refreshHz) · \(host)"
+                    text: "\(p.width)×\(p.height)@\(rate) · \(host)"
                         + line.text.dropFirst(lead.count))
             }
         }
@@ -1859,6 +1887,15 @@ public final class PunktfunkConnection: @unchecked Sendable {
             var w: UInt32 = 0, h: UInt32 = 0, hz: UInt32 = 0
             _ = punktfunk_connection_mode(hd, &w, &h, &hz)
             return (w, h, hz)
+        }
+    }
+
+    /// `currentMode()`'s rate to the millihertz: 59 940 while the host delivers 59.94 Hz.
+    public func currentRefreshMilliHz() -> UInt32 {
+        withLiveHandle(or: 0) { hd in
+            var mhz: UInt32 = 0
+            _ = punktfunk_connection_refresh_mhz(hd, &mhz)
+            return mhz
         }
     }
 

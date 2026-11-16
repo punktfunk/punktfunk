@@ -31,7 +31,8 @@ internal class StreamPlanes(
     private val ui: StreamUi,
     private val isTv: Boolean,
     private val isChromeOs: Boolean,
-    private val streamHz: Int,
+    /** The stream's exact rate in hertz, 59.94 where the host delivers that; 0 = unknown. */
+    private val streamHz: Float,
     private val streamSize: Pair<Int, Int>?,
 ) {
     private val handle = session.handle
@@ -131,9 +132,9 @@ internal class StreamPlanes(
         // Some OEM builds reset the frame-rate vote on a geometry change, dropping the 120 Hz pin.
         // ALWAYS lets a phone leave the 60 Hz Android 15+ holds a game at; a TV forces its HDMI
         // switch only in low-latency mode. Same rule as the native `force_rate_switch`.
-        if (streamHz > 0) runCatching {
+        if (streamHz > 0f) runCatching {
             holder.surface.setFrameRate(
-                streamHz.toFloat(),
+                streamHz,
                 Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
                 if (!isTv || lowLatencyMode) {
                     Surface.CHANGE_FRAME_RATE_ALWAYS

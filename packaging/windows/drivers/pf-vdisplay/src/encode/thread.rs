@@ -178,6 +178,7 @@ fn run(stop: HANDLE, ctx: ThreadCtx, live: Arc<AtomicBool>) {
         .first()
         .and_then(|m| m.refresh_rates.first().copied())
         .unwrap_or(spec.fps);
+    let panel_mhz = pf_driver_proto::vdisplay::rate_mhz(monitor.exact_mhz(), panel_hz);
     drop(monitor);
     let scaled = framing.scales().then(|| {
         let (w, h) = framing.source;
@@ -217,10 +218,7 @@ fn run(stop: HANDLE, ctx: ThreadCtx, live: Arc<AtomicBool>) {
         // The caller gave up waiting: nothing will install this session.
         return;
     }
-    let rates = Rates {
-        fps: spec.fps,
-        panel_hz,
-    };
+    let rates = Rates::off_panel(spec.fps, panel_mhz);
     Drive::new(
         enc,
         &*pool,

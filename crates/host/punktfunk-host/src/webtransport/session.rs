@@ -410,6 +410,7 @@ mod tests {
                 width: 1280,
                 height: 720,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             },
             compositor: CompositorPref::Auto,
             gamepad: GamepadPref::Auto,

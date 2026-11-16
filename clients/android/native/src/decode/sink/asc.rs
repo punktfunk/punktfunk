@@ -214,8 +214,9 @@ impl AscSink {
     /// negotiated decode size; `surface_size` the LIVE view size the layer composites into;
     /// `src_crop` the part of the buffer it shows; `layers` the second window and the shown mask;
     /// `panel_hz` the mode-table panel rate (seeds the clock); `dataspace` the `ADataSpace` from the
-    /// negotiated colour; `source_hz` the negotiated stream rate, which the layer votes, switching
-    /// the panel non-seamlessly when `force_switch` ([`super::super::DecodeOptions::force_rate_switch`]).
+    /// negotiated colour; `source_mhz` the negotiated stream rate in millihertz, which the layer
+    /// votes as it is (59.94, not 60), switching the panel non-seamlessly when `force_switch`
+    /// ([`super::super::DecodeOptions::force_rate_switch`]).
     ///
     /// `overlay` sets the reader's gralloc ask. `true` adds `COMPOSER_OVERLAY` so HWC scans the
     /// buffer out directly: the default. It is also the one reader parameter that can make
@@ -235,7 +236,7 @@ impl AscSink {
         layers: std::sync::Arc<PictureLayers>,
         panel_hz: i32,
         dataspace: i32,
-        source_hz: u32,
+        source_mhz: u32,
         priority: PresentPriority,
         overlay: bool,
         force_switch: bool,
@@ -277,7 +278,7 @@ impl AscSink {
             .unwrap_or(0)
             .min(50_000);
         log::info!(
-            "asc: backend up — {}, reader usage {} ({}x{} @ {} Hz src, panel seed {} Hz, dataspace {:#x}, pacing {}, hold chain {}, hold band {}, sf lead {})",
+            "asc: backend up — {}, reader usage {} ({}x{} @ {:.3} Hz src, panel seed {} Hz, dataspace {:#x}, pacing {}, hold chain {}, hold band {}, sf lead {})",
             match priority {
                 PresentPriority::Latency => "latency (one-MAD cushion)".to_string(),
                 PresentPriority::Smooth { buffer } => format!("smooth (buffer {buffer})"),
@@ -285,7 +286,7 @@ impl AscSink {
             if overlay { "overlay" } else { "gpu-only" },
             src_w,
             src_h,
-            source_hz,
+            f64::from(source_mhz) / 1e3,
             panel_hz,
             dataspace,
             if pacing { "on" } else { "OFF (sysprop)" },
@@ -305,13 +306,13 @@ impl AscSink {
             shown: PictureLayers::PRIMARY,
             store: Store::new(
                 priority,
-                frame_interval_ns(source_hz),
+                frame_interval_ns(source_mhz),
                 super::cushion_tail(),
             ),
             budget: AscBudget::default(),
             slots: Slots::new(
                 panel_hz,
-                frame_interval_ns(source_hz),
+                frame_interval_ns(source_mhz),
                 priority,
                 pacing,
                 hold,
@@ -330,7 +331,7 @@ impl AscSink {
             dataspace,
             refine: crate::sys::sdk_int() >= 31,
             hdr_meta: None,
-            frame_rate: if source_hz > 0 { source_hz as f32 } else { 0.0 },
+            frame_rate: source_mhz as f32 / 1000.0,
             src_w: src_w.max(1),
             src_h: src_h.max(1),
             next_seq: 0,

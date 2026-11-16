@@ -96,10 +96,26 @@ fn stop_signalled(stop: HANDLE) -> bool {
     unsafe { WaitForSingleObject(stop, 0) == WAIT_OBJECT_0 }
 }
 
-/// The stream's frame rate and the refresh the source composes at, both in Hz.
+/// The stream's frame rate and the refresh the source composes at, both in millihertz.
 pub struct Rates {
-    pub fps: u32,
-    pub panel_hz: u32,
+    pub fps_mhz: u32,
+    pub panel_mhz: u32,
+}
+
+impl Rates {
+    /// A stream at whole `fps` off a panel that runs `panel_mhz`. A panel at a multiple of
+    /// `fps` hands the stream its fraction: 59.94 frames a second off 119.88 Hz.
+    #[must_use]
+    pub fn off_panel(fps: u32, panel_mhz: u32) -> Self {
+        let fps = fps.max(1);
+        let panel_hz = panel_mhz.saturating_add(500) / 1000;
+        let fps_mhz = if panel_hz >= fps && panel_hz % fps == 0 {
+            panel_mhz / (panel_hz / fps)
+        } else {
+            fps.saturating_mul(1000)
+        };
+        Self { fps_mhz, panel_mhz }
+    }
 }
 
 impl<'a> Drive<'a> {
@@ -118,8 +134,11 @@ impl<'a> Drive<'a> {
         block_after: Option<u64>,
     ) -> Self {
         let (heap_offset, heap_bytes) = session.section.heap();
-        let fps = rates.fps.max(1);
+        // Periods off millihertz: a whole rate gives the numbers whole hertz gave.
+        let fps_mhz = u64::from(rates.fps_mhz.max(1000));
         let qpc_hz = qpc_frequency();
+        let ticks = |mhz: u64| qpc_hz * 1000 / mhz;
+        let frame_us = 1_000_000_000 / fps_mhz;
         Self {
             enc,
             pool,
@@ -139,16 +158,16 @@ impl<'a> Drive<'a> {
             want_republish: false,
             cursor_only: false,
             qpc_hz,
-            frame_interval: Duration::from_micros(1_000_000 / u64::from(fps)),
-            credit: FrameCredit::new(qpc_hz / u64::from(fps)),
+            frame_interval: Duration::from_micros(frame_us),
+            credit: FrameCredit::new(ticks(fps_mhz)),
             // Only a panel faster than the stream stamps on a grid finer than the frames.
-            restamp: (rates.panel_hz > fps)
-                .then(|| Restamp::new(qpc_hz / u64::from(rates.panel_hz))),
+            restamp: (u64::from(rates.panel_mhz) > fps_mhz)
+                .then(|| Restamp::new(ticks(rates.panel_mhz.into()))),
             last_frame: None,
             owed_since: None,
             ready_latch: false,
             timer: None,
-            report: Report::new(qpc_hz, 1_000_000 / u64::from(fps)),
+            report: Report::new(qpc_hz, frame_us),
             applied_kbps: opened_kbps,
             state: au::ENCODER_OPEN,
             stop: HANDLE(stop),

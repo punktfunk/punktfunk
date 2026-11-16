@@ -38,6 +38,10 @@ pub const fn interface_guid_fields() -> (u32, u16, u16, [u8; 8]) {
 /// The protocol this host and its driver speak, exchanged via [`control::IOCTL_GET_INFO`]. The
 /// host drives any driver from [`MIN_DRIVER_PROTOCOL_VERSION`] up to this one.
 ///
+/// v11 adds a mode's exact rate: [`control::AddRequest::refresh_mhz`]
+/// and [`control::UpdateModesRequest::refresh_mhz`]. The driver paces a stream off the rate its
+/// monitor runs. An older driver reads neither and runs whole hertz ([`EXACT_RATE_SINCE`]).
+///
 /// v10 adds [`encode::SetEncodeRequest::framing`] and [`encode::au::AuHeader::frames_input`]. A
 /// v9 driver reads the request's prefix, opens the surface at its own size and leaves the stamp
 /// zero, so the host encodes unscaled. Since v9 the AU slot is 48 bytes; since v8 a monitor, its
@@ -46,7 +50,10 @@ pub const fn interface_guid_fields() -> (u32, u16, u16, [u8; 8]) {
 /// [`control::AddRequest`]'s luminance tail and [`control::AddReply::cursor_excluded`] are
 /// prefix-compatible: a short read sees zeros, which mean unknown. A hardware-cursor declare is
 /// irrevocable on the adapter, so the driver blends the pointer when the client draws none.
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
+
+/// The first driver that runs a monitor at a rate that is not whole hertz.
+pub const EXACT_RATE_SINCE: u32 = 11;
 
 /// Oldest driver this host still drives. A v8 driver writes 32-byte slots into a table this host
 /// lays out at 48.
