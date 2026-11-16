@@ -14,6 +14,12 @@ on:
       - 'scripts/**'
       - 'flake.nix'
       - '.gitea/workflows/**'
+      # What check-packaging-policy.py reads outside the paths above (its --inputs).
+      - 'crates/host/punktfunk-host/src/update/linux.rs'
+      - 'crates/host/pf-host-config/src/listen.rs'
+      - 'crates/host/pf-seats/src/model.rs'
+      - 'crates/host/punktfunk-host/src/gamestream/mod.rs'
+      - 'data/platforms.json'
   workflow_dispatch:
 
 jobs:

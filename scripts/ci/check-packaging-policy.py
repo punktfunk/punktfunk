@@ -26,10 +26,25 @@ packaging/linux's units are system units. PID 1 reads each EnvironmentFile= as r
 link, whatever User= says, and a `+` or `!` line hands what it read to root. So each such file sits
 directly in a directory only root writes.
 
-Usage: python3 scripts/ci/check-packaging-policy.py [--self-test]
+packaging/linux/restart-user-units.sh's two lists are the units an update restarts. The Bazzite and
+Steam Deck updaters and the host's own restart them without it, so each names the same units. A
+deb, rpm or pacman scriptlet restarts none: the helper does, once the host is unpacked.
+
+The ports a firewall opener opens are the ports the host binds: the constants in pf-host-config's
+listen.rs, pf-seats' model.rs and the host's gamestream/mod.rs, and the console unit's PORT with
+the plugin origin one above it. Each firewalld service, ufw profile and NixOS list opens exactly
+those, and data/platforms.json, the docs' table, states no other.
+
+Windows PowerShell 5.1 reads a script in the box's ANSI codepage, so the scripts an installer runs
+are ASCII. windows-host.yml's gate names them and runs on a push; this holds the same list on a
+pull request.
+
+Usage: python3 scripts/ci/check-packaging-policy.py [--self-test | --inputs]
+--inputs lists the files read outside packaging/ and scripts/, for check-workflow-paths.py.
 """
 import glob
 import itertools
+import json
 import os
 import posixpath
 import re
@@ -87,6 +102,44 @@ RUNNER_ON = {
         re.compile(r"\bautoStart\s*=\s*mkOption\s*\{[^}]*?\bdefault\s*=\s*cfg\.scripting\.enable\s*;"),
         "a scripting autoStart that defaults to cfg.scripting.enable"),
 }
+RESTART_TABLE = "packaging/linux/restart-user-units.sh"
+HOST_UPDATER = "crates/host/punktfunk-host/src/update/linux.rs"
+# Each updater that restarts the services itself, and the helper's lists it covers. The Steam
+# Deck's system units are door.sh's.
+RESTART_SITES = {
+    "packaging/bazzite/punktfunk-sysext.sh": ("SYSTEM_UNITS", "USER_UNITS"),
+    "scripts/steamdeck/install.sh": ("USER_UNITS",),
+    "scripts/steamdeck/update.sh": ("USER_UNITS",),
+    HOST_UPDATER: ("USER_UNITS",),
+}
+# The scriptlets of the channels whose packages run the helper.
+RESTART_CALLERS = ["packaging/debian/*.sh", "packaging/rpm/*.spec", "packaging/arch/PKGBUILD",
+                   "packaging/arch/*.install"]
+# Where each port is bound, and the constants read from it.
+LISTEN = "crates/host/pf-host-config/src/listen.rs"
+SEAT_MODEL = "crates/host/pf-seats/src/model.rs"
+GAMESTREAM = "crates/host/punktfunk-host/src/gamestream/mod.rs"
+PORT_CONSTS = {
+    LISTEN: ("NATIVE_PORT", "MGMT_PORT", "BROWSER_PORT"),
+    SEAT_MODEL: ("DEFAULT_NATIVE_PORTS", "DEFAULT_BROWSER_PORTS"),
+    GAMESTREAM: ("HTTPS_PORT", "HTTP_PORT", "RTSP_PORT", "VIDEO_PORT", "CONTROL_PORT", "AUDIO_PORT"),
+}
+# The packaged console's unit: PORT is the console's, PORT + 1 the plugin origin's.
+WEB_UNIT = "scripts/punktfunk-web.service"
+MDNS = 5353
+FIREWALLD = {"native": "packaging/linux/punktfunk-native.xml",
+             "gamestream": "packaging/linux/punktfunk-gamestream.xml",
+             "web": "packaging/linux/punktfunk-web.xml"}
+UFW = "packaging/linux/punktfunk.ufw"
+# Tells an open firewall which port its stored rule lacks, by number.
+PORT_HINTS = ["packaging/linux/post-install.sh"]
+# The port table the docs and the website render.
+PLATFORMS = "data/platforms.json"
+# Scripts that tell a moved management port from the default, by the default's number.
+MGMT_DEFAULT = ["packaging/linux/omarchy/punktfunk-omarchy", "scripts/steamdeck/lib.sh"]
+LOCALE_GATE = ".gitea/workflows/windows-host.yml"
+# What the checks read outside packaging/ and scripts/: packaging-lint.yml runs on each.
+INPUTS = [HOST_UPDATER, LISTEN, SEAT_MODEL, GAMESTREAM, PLATFORMS]
 UNITS = "packaging/linux/*.service"
 # Directories only root writes (punktfunk-seats.tmpfiles; pf-seats' env files are root's with a
 # read ACL). Their subdirectories hold seat accounts' files, so a unit's file sits directly in one.
@@ -346,6 +399,220 @@ def runner_errors(texts):
             if not pattern.search(strip_comments(texts[path].replace("\\\n", " ")))]
 
 
+UNIT_TABLE = re.compile(r'^(SYSTEM_UNITS|USER_UNITS)="([^"]*)"', re.M)
+UNIT = re.compile(r"\bpunktfunk-[\w@-]+\.service\b")
+# What follows `systemctl … try-restart|restart|enable --now`, and the list a `for` walks.
+RESTARTS = re.compile(AT_COMMAND + r"(?:sudo\s+)?systemctl\b[^\n;&|]*?"
+                                   r"\s(?:try-restart|restart|enable\s+--now)\s([^\n;&|]*)", re.M)
+LOOPS = re.compile(AT_COMMAND + r"for\s+\w+\s+in\s([^\n;&|]*)", re.M)
+# A row of the host updater's argument table: `["try-restart", "punktfunk-web.service"],`.
+RUST_RESTART = re.compile(r'^\s*\["(?:try-)?restart",\s*"([^"]+)"\],?\s*$', re.M)
+
+
+def restarted(text, loops=False):
+    """The punktfunk units `text` restarts by a systemctl command or a row of Rust arguments.
+    `loops` counts the list a `for` walks too, which is how an updater restarts several."""
+    shell = strip_comments(text.replace("\\\n", " "))
+    found = [m.group(1) for m in RESTARTS.finditer(shell)]
+    if loops:
+        found += [m.group(1) for m in LOOPS.finditer(shell)]
+    return {u for rest in found for u in UNIT.findall(rest)} | set(RUST_RESTART.findall(text))
+
+
+def restart_errors(table, sites, callers):
+    """[(path, error)] for the helper's unit lists (`table`, its text) against each updater in
+    `sites` and each scriptlet in `callers` (both {path: text})."""
+    lists = {name: units.split() for name, units in UNIT_TABLE.findall(table)}
+    errors = [(RESTART_TABLE, f"has no {name} list for the other updaters to match")
+              for name in ("SYSTEM_UNITS", "USER_UNITS") if not lists.get(name)]
+    if errors:
+        return errors
+    errors = [(RESTART_TABLE, f"restarts {u} by name; a unit belongs in SYSTEM_UNITS or USER_UNITS")
+              for u in sorted(restarted(table, loops=True))]
+    for path, names in RESTART_SITES.items():
+        want = {u for name in names for u in lists[name]}
+        got = restarted(sites[path], loops=True)
+        errors += [(path, f"never restarts {u}, which {RESTART_TABLE} lists, so an update here "
+                          "leaves the old build of it running")
+                   for u in sorted(want - got)]
+        errors += [(path, f"restarts {u}, which {RESTART_TABLE} does not list")
+                   for u in sorted(got - want)]
+    every = {u for units in lists.values() for u in units}
+    return errors + [(path, f"restarts {u} itself; {RESTART_TABLE} restarts it once, after the "
+                            "host it runs is unpacked")
+                     for path, text in callers.items() for u in sorted(restarted(text) & every)]
+
+
+RUST_PORTS = re.compile(r"^pub const (\w+): (?:u16|\[u16; \w+\]) = \[?([\d,\s]+)\]?;", re.M)
+
+
+def rust_ports(text):
+    """{constant: [ports]} for each `pub const NAME: u16 = n;` or `[u16; N] = [a, b];`."""
+    return {name: [int(p) for p in re.findall(r"\d+", ports)]
+            for name, ports in RUST_PORTS.findall(text)}
+
+
+def profiles(consts, console):
+    """{profile: {(proto, port)}}: what a firewall opener of each profile opens. `consts` is
+    {constant: [ports]}, `console` the console unit's PORT."""
+    def of(proto, *names):
+        return {(proto, p) for name in names for p in consts[name]}
+
+    mdns = {("udp", MDNS)}
+    return {
+        "native": of("udp", "NATIVE_PORT", "BROWSER_PORT", "DEFAULT_NATIVE_PORTS",
+                     "DEFAULT_BROWSER_PORTS") | of("tcp", "MGMT_PORT") | mdns,
+        "gamestream": of("tcp", "HTTPS_PORT", "HTTP_PORT", "RTSP_PORT")
+        | of("udp", "VIDEO_PORT", "CONTROL_PORT", "AUDIO_PORT") | mdns,
+        "web": {("tcp", console), ("tcp", console + 1)},
+    }
+
+
+def spans(proto, pairs):
+    """{(proto, port)} for each (low, high or '') pair of port numbers."""
+    return {(proto, p) for lo, hi in pairs for p in range(int(lo), int(hi or lo) + 1)}
+
+
+def read_firewalld(text):
+    """{(proto, port)} of a firewalld service: each `<port protocol= port=/>` outside a comment."""
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    return {rule for proto, lo, hi in
+            re.findall(r'<port\s+protocol="(\w+)"\s+port="(\d+)(?:-(\d+))?"\s*/>', text)
+            for rule in spans(proto, [(lo, hi)])}
+
+
+def read_ufw(text):
+    """{profile: {(proto, port)}} of a ufw application file: `ports=a,b/tcp|c:d/udp` per section."""
+    out = {}
+    for section in re.split(r"^(?=\[)", strip_comments(text), flags=re.M):
+        name = re.match(r"\[punktfunk-([\w-]+)\]", section)
+        ports = re.search(r"^ports=(.*)$", section, re.M)
+        if name:
+            out[name.group(1)] = {rule for spec, proto in
+                                  re.findall(r"([\d,:]+)/(\w+)", ports.group(1) if ports else "")
+                                  for rule in spans(proto, re.findall(r"(\d+)(?::(\d+))?", spec))}
+    return out
+
+
+def read_nix_ports(text):
+    """{profile: {(proto, port)}} of the NixOS module's port lists. GameStream's lists add to the
+    native ones, which carry mDNS, and the seats' range is the native profile's."""
+    text = strip_comments(text)
+    lists = {name: ports.split()
+             for name, ports in re.findall(r"\b(\w+)\s*=\s*\[([\d\s]+)\]", text)}
+
+    def of(proto, name):
+        return spans(proto, [(p, "") for p in lists.get(name, ())])
+
+    native = (of("tcp", "nativeTCP") | of("udp", "nativeUDP")
+              | spans("udp", re.findall(r"\bfrom\s*=\s*(\d+);\s*to\s*=\s*(\d+);", text)))
+    return {"native": native,
+            "gamestream": of("tcp", "gamestreamTCP") | of("udp", "gamestreamUDP")
+            | (native & {("udp", MDNS)}),
+            "web": of("tcp", "allowedTCPPorts")}
+
+
+def port_errors(want, openers):
+    """[(path, error)] for each of `openers` ([(path, profile, {(proto, port)})]) that opens
+    another set of ports than `want` ({profile: {(proto, port)}}) holds for its profile."""
+    errors = []
+    for path, profile, got in openers:
+        errors += [(path, f"the {profile} profile leaves {proto} {port} closed, where the host or "
+                          "its console listens")
+                   for proto, port in sorted(want[profile] - got)]
+        errors += [(path, f"the {profile} profile opens {proto} {port}, where nothing of ours "
+                          "listens")
+                   for proto, port in sorted(got - want[profile])]
+    return errors
+
+
+PORT_NUMBER = r"(?<![\w.-])%s(?![\w.-])"
+
+
+def hint_errors(want, texts):
+    """[(path, error)] for each four- or five-digit number outside a comment in `texts`
+    ({path: text}) that is no port of `want`: a hint names the port a stored rule lacks."""
+    ports = {str(port) for rules in want.values() for _, port in rules}
+    return [(path, f"names port {n}, which no firewall profile opens")
+            for path, text in texts.items()
+            for n in sorted(set(re.findall(PORT_NUMBER % r"\d{4,5}", strip_comments(text))) - ports)]
+
+
+def default_errors(port, texts):
+    """[(path, error)] for each script in `texts` ({path: text}) that never names `port`, the
+    default management port, outside a comment."""
+    return [(path, f"never names {port}, the management port {LISTEN} defaults to")
+            for path, text in texts.items()
+            if not re.search(PORT_NUMBER % port, strip_comments(text))]
+
+
+def platform_ports(text):
+    """{(proto, port)} of the docs' port table: a row holds one `port` with its `also`, or a list
+    per protocol."""
+    out = set()
+    for row in json.loads(text)["ports"].values():
+        if "port" in row:
+            row = {row["proto"]: [row["port"], *row.get("also", [])]}
+        out |= {(proto, p) for proto in ("tcp", "udp") for p in row.get(proto, [])}
+    return out
+
+
+def tree_port_errors():
+    consts, errors = {}, []
+    for path, names in PORT_CONSTS.items():
+        found = rust_ports(read(path))
+        errors += [(path, f"has no `pub const {name}` port for the firewall openers to match")
+                   for name in names if name not in found]
+        consts.update(found)
+    console = re.search(r"^Environment=PORT=(\d+)$", read(WEB_UNIT), re.M)
+    if not console:
+        errors.append((WEB_UNIT, "sets no PORT for the web firewall openers to match"))
+    if errors:
+        return errors
+    want = profiles(consts, int(console.group(1)))
+    ufw, nix = read_ufw(read(UFW)), read_nix_ports(read(NIX_MODULE))
+    openers = [(path, profile, read_firewalld(read(path))) for profile, path in FIREWALLD.items()]
+    openers += [(UFW, profile, ufw.get(profile, set())) for profile in want]
+    openers += [(NIX_MODULE, profile, nix[profile]) for profile in want]
+    return (port_errors(want, openers) + hint_errors(want, {p: read(p) for p in PORT_HINTS})
+            + [(PLATFORMS, f"states {proto} {port}, which no firewall profile opens")
+               for proto, port in sorted(platform_ports(read(PLATFORMS)) - set().union(*want.values()))]
+            + default_errors(consts["MGMT_PORT"][0], {p: read(p) for p in MGMT_DEFAULT}))
+
+
+# The gate's own file list, `Get-ChildItem a, b, c -ErrorAction`, before the next step opens.
+GATE_GLOBS = re.compile(r"Locale-safety gate(?:(?!\n\s*- name:).)*?Get-ChildItem\s+"
+                        r"([\w./*-]+(?:,\s*[\w./*-]+)*)\s+-ErrorAction", re.S)
+
+
+def ascii_errors(files):
+    """[(path, error)] for each of `files` ({path: bytes}) with a byte outside ASCII."""
+    errors = []
+    for path, data in files.items():
+        lines = [str(n) for n, line in enumerate(data.split(b"\n"), 1) if not line.isascii()]
+        if lines:
+            more = f" and {len(lines) - 5} more" if len(lines) > 5 else ""
+            errors.append((path, f"line {', '.join(lines[:5])}{more}: not ASCII. The installer runs "
+                                 "this where Windows PowerShell 5.1 and cmd.exe read it in the "
+                                 "box's codepage"))
+    return errors
+
+
+def tree_ascii_errors():
+    gate = GATE_GLOBS.search(read(LOCALE_GATE))
+    if not gate:
+        return [(LOCALE_GATE, "has no locale-safety gate naming the installer-run scripts")]
+    files, errors = {}, []
+    for pattern in re.split(r",\s*", gate.group(1)):
+        paths = sorted(glob.glob(os.path.join(ROOT, pattern)))
+        if not paths:
+            errors.append((LOCALE_GATE, f"the locale-safety gate's {pattern} matches no file"))
+        for path in paths:
+            with open(path, "rb") as f:
+                files[os.path.relpath(path, ROOT)] = f.read()
+    return errors + ascii_errors(files)
+
+
 def tree_errors():
     matrix = read_matrix(read(MATRIX))
     const = dict(GATE_CONST.findall(read(GATE)))
@@ -380,7 +647,12 @@ def tree_errors():
     return (errors + tree_group_errors() + seats_errors(read(PAYLOAD), seats)
             + removal_errors({path: read(path) for path, _ in SEATS_REMOVAL})
             + keep_errors(read(KEEP_LIST), deck) + env_file_errors(units)
-            + runner_errors({path: read(path) for path in RUNNER_ON}))
+            + runner_errors({path: read(path) for path in RUNNER_ON})
+            + restart_errors(read(RESTART_TABLE), {path: read(path) for path in RESTART_SITES},
+                             {os.path.relpath(f, ROOT): read(os.path.relpath(f, ROOT))
+                              for p in RESTART_CALLERS
+                              for f in sorted(glob.glob(os.path.join(ROOT, p)))})
+            + tree_port_errors() + tree_ascii_errors())
 
 
 def check():
@@ -571,6 +843,148 @@ sudo setcap cap_sys_nice=ep ${WORKER}
             ("nix autoStart follows the host", NIX_MODULE, "autoStart = mkOption {\n  default = cfg.host.autoStart;\n};\n"),
             ("nix autoStart only in a comment", NIX_MODULE, "# autoStart = mkOption { default = cfg.scripting.enable; };\n")):
         expect(f"runner: {name}", len(runner_errors({**on, path: text})), 1)
+
+    table = ('SYSTEM_UNITS="punktfunk-seats.service punktfunk-door.service"\n'
+             'USER_UNITS="punktfunk-web.service punktfunk-host.service"\n'
+             "systemctl --no-block try-restart $SYSTEM_UNITS 2>/dev/null\n"
+             "systemctl show -P ActiveState punktfunk-update.service\n"
+             'for unit in $USER_UNITS; do\n    systemctl --user try-restart "$unit"\ndone\n')
+    bazzite, install, update = list(RESTART_SITES)[:3]
+    # The boot branch starts what the first never names: a loop's list counts.
+    sysext = ("restart_user_units() {\n  systemctl --no-block try-restart punktfunk-seats.service \\\n"
+              "    punktfunk-door.service 2>/dev/null || :\n"
+              '  if [ -n "$SUDO_USER" ] \\\n'
+              '     && systemctl --user -M "$SUDO_USER@" try-restart punktfunk-web.service; then\n'
+              "    echo restarted\n  else\n"
+              "    for s in punktfunk-web.service punktfunk-host.service; do\n"
+              '      systemctl --user --no-block start "$s"\n    done\n'
+              '    echo "    systemctl --user restart punktfunk-web punktfunk-host"\n  fi\n}\n')
+    deck = ("systemctl --user enable punktfunk-rebuild-check.service 2>/dev/null || true\n"
+            "systemctl --user enable punktfunk-host.service 2>/dev/null\n"
+            "systemctl --user restart punktfunk-host.service\n"
+            'if [ "$WEB" = 1 ]; then systemctl --user restart --no-block punktfunk-web.service; fi\n'
+            "systemctl --user restart xdg-permission-store 2>/dev/null || true\n")
+    rust = ('        .args(["start", "--no-ask-password", "punktfunk-update.service"])\n'
+            '    for args in [\n        ["restart", "punktfunk-web.service"],\n'
+            '        ["try-restart", "punktfunk-host.service"],\n    ] {\n')
+    sites = {bazzite: sysext, install: deck, update: deck, HOST_UPDATER: rust}
+    unpack = {"p.sh": "for f in punktfunk-seats.service punktfunk-door.service; do\n"
+                      '  install -Dm0644 "packaging/linux/$f" "$STAGE/$f"\ndone\n'
+                      "systemctl daemon-reload || true\n"}
+    expect("restarts agree", restart_errors(table, sites, unpack), [])
+    expect("restart has a row per updater", sorted(sites), sorted(RESTART_SITES))
+    host_row = '        ["try-restart", "punktfunk-host.service"],\n'
+    for name, changed in (
+            ("no user list", {"table": table.replace("USER_UNITS=", "OTHER=")}),
+            ("helper restarts a unit by name",
+             {"table": table + "systemctl try-restart punktfunk-web.service\n"}),
+            ("sysext drops the door", {bazzite: sysext.replace("    punktfunk-door.service", "   ")}),
+            ("sysext drops the loop's unit", {bazzite: sysext.replace(" punktfunk-host.service;", ";")}),
+            ("deck restart only in a comment",
+             {update: deck.replace("systemctl --user restart punktfunk-host", "# systemctl restart x")}),
+            ("deck restart only in a message",
+             {update: deck.replace("systemctl --user restart punktfunk-host",
+                                   'warn "run systemctl --user restart punktfunk-host')}),
+            ("deck enables without restarting",
+             {install: deck.replace("systemctl --user restart punktfunk-host.service\n", "")}),
+            ("deck restarts an unlisted unit",
+             {install: deck + "systemctl --user try-restart punktfunk-tray.service\n"}),
+            ("deck restarts a seat's runner",
+             {install: deck + "systemctl --user try-restart punktfunk-scripting-seat@1.service\n"}),
+            ("host updater drops a row", {HOST_UPDATER: rust.replace(host_row, "")}),
+            ("host updater row only in a comment",
+             {HOST_UPDATER: rust.replace(host_row, "        // " + host_row.strip() + "\n")}),
+            ("a scriptlet restarts the supervisor itself",
+             {"callers": {"p.install": "post_upgrade() {\n  systemctl try-restart punktfunk-seats.service\n}\n"}})):
+        got = restart_errors(changed.get("table", table), {**sites, **changed},
+                             changed.get("callers", unpack))
+        expect(f"restart: {name}", len(got), 1)
+
+    consts = rust_ports(
+        "/// The native QUIC port.\npub const NATIVE_PORT: u16 = 9777;\n"
+        "pub const MGMT_PORT: u16 = 47990;\npub const BROWSER_PORT: u16 = 9778;\n"
+        "const PRIVATE_PORT: u16 = 1;\npub const MAX_SEATS: usize = 4;\n"
+        "pub const RESERVED_PORTS: [u16; 2] = [CONSOLE_NATIVE_PORT, CONSOLE_MGMT_PORT];\n"
+        "pub const DEFAULT_NATIVE_PORTS: [u16; MAX_SEATS] = [9779, 9780];\n"
+        "pub const DEFAULT_BROWSER_PORTS: [u16; MAX_SEATS] = [\n    9781,\n    9782,\n];\n"
+        "pub const HTTP_PORT: u16 = 47989;\npub const HTTPS_PORT: u16 = 47984;\n"
+        "pub const RTSP_PORT: u16 = 48010;\npub const VIDEO_PORT: u16 = 47998;\n"
+        "pub const CONTROL_PORT: u16 = 47999;\npub const AUDIO_PORT: u16 = 48000;\n")
+    expect("rust ports", (consts["NATIVE_PORT"], consts["DEFAULT_NATIVE_PORTS"],
+                          sorted(set(consts) & {"PRIVATE_PORT", "MAX_SEATS", "RESERVED_PORTS"})),
+           ([9777], [9779, 9780], []))
+    expect("rust ports has every constant", sorted(n for names in PORT_CONSTS.values() for n in names),
+           sorted(consts))
+    want = profiles(consts, 47992)
+    xml = ('<!-- <port protocol="udp" port="1"/> -->\n<service>\n'
+           '  <port protocol="udp" port="9777"/>  <!-- QUIC (default 9777) -->\n'
+           '  <port protocol="udp" port="9778-9782"/>\n  <port protocol="udp" port="5353"/>\n'
+           '  <port protocol="tcp" port="47990"/>\n</service>\n')
+    ufw = ("# [punktfunk-old]\n# ports=1/tcp\n[punktfunk-native]\ntitle=host (9999)\n"
+           "ports=9777/udp|9778:9782/udp|5353/udp|47990/tcp\n\n[punktfunk-gamestream]\n"
+           "ports=47984,47989,48010/tcp|47998:48000/udp|5353/udp\n\n"
+           "[punktfunk-web]\nports=47992,47993/tcp\n")
+    nix = ("  nativeTCP = [ 47990 ]; # mgmt\n  nativeUDP = [\n    9777\n    9778\n    5353\n  ]; # x\n"
+           "  gamestreamTCP = [\n    47984\n    47989\n    48010\n  ];\n"
+           "  gamestreamUDP = [ 47998 47999 48000 ];\n  allowedUDPPorts = [ 5353 ];\n"
+           "  # allowedTCPPorts = [ 1 ];\n  allowedTCPPorts = [\n    47992\n    47993\n  ];\n"
+           "  { from = 9779; to = 9782; }\n")
+    expect("firewalld", read_firewalld(xml), want["native"])
+    expect("ufw", read_ufw(ufw), want)
+    expect("nix ports", read_nix_ports(nix), want)
+    expect("ports agree", port_errors(want, [("x", "native", read_firewalld(xml))]), [])
+    for name, profile, got, count in (
+            ("browser port closed", "native", read_firewalld(xml.replace("9778-", "9779-")), 1),
+            ("seat range one short", "native", read_firewalld(xml.replace("-9782", "-9781")), 1),
+            ("tcp port opened as udp", "native", read_firewalld(xml.replace('"tcp"', '"udp"')), 2),
+            ("mDNS closed", "native", read_ufw(ufw.replace("|5353/udp|47990", "|47990"))["native"], 1),
+            ("idle range opened", "gamestream",
+             read_ufw(ufw.replace("47998:48000", "47998:48002"))["gamestream"], 2),
+            ("profile removed", "web", read_ufw(ufw.replace("[punktfunk-web]", "")).get("web", set()), 2),
+            ("nix lacks the plugin origin", "web", read_nix_ports(nix.replace("    47993\n", ""))["web"], 1),
+            ("nix lacks the seats", "native", read_nix_ports(nix.replace("from = 9779", "x = 1"))["native"], 4),
+            ("nix opens GameStream always", "native",
+             read_nix_ports(nix.replace("    5353\n", "    5353\n    47998\n"))["native"], 1)):
+        expect(f"ports: {name}", len(port_errors(want, [("x", profile, got)])), count)
+    moved = profiles({**consts, "BROWSER_PORT": [9790]}, 47992)
+    expect("ports: constant moved", len(port_errors(moved, [("x", "native", read_firewalld(xml))])), 2)
+    expect("ports: console moved",
+           len(port_errors(profiles(consts, 48100), [("x", "web", read_ufw(ufw)["web"])])), 4)
+    hint = ("ufw status verbose | grep -q '47993'\necho \"predates UDP 9778 (browser streaming)\"\n"
+            "# 1234\ninstall -Dm0755 a /etc/punktfunk/b\nTimeoutStartSec=20min\n")
+    docs = ('{"ports": {"web": {"port": 47992, "proto": "tcp", "also": [47993]},\n'
+            ' "mdns": {"port": 5353, "proto": "udp", "what": "mDNS"},\n'
+            ' "gamestream": {"tcp": [47984, 48010], "udp": [47998], "what": "x"}}, "firewall": {}}')
+    expect("docs port table", platform_ports(docs),
+           {("tcp", 47992), ("tcp", 47993), ("udp", 5353), ("tcp", 47984), ("tcp", 48010),
+            ("udp", 47998)})
+    expect("docs port table agrees", platform_ports(docs) - set().union(*want.values()), set())
+    expect("docs port table: stale port",
+           platform_ports(docs) - set().union(*profiles(consts, 48100).values()),
+           {("tcp", 47992), ("tcp", 47993)})
+    expect("hints name ports", hint_errors(want, {"p.sh": hint}), [])
+    expect("hints: stale port", len(hint_errors(moved, {"p.sh": hint})), 1)
+    expect("default named", default_errors(47990, {"a.sh": 'if [ "$bind" != 0.0.0.0:47990 ]; then\n',
+                                                   "b": '[[ "$port" != 47990 ]] && echo "$port"\n'}), [])
+    for name, text in (("only in a comment", "# off 47990 (Sunshine's web UI)\n"),
+                       ("another port", '[[ "$port" != 47991 ]]\n'),
+                       ("inside a longer number", "sleep 147990\n")):
+        expect(f"default: {name}", len(default_errors(47990, {"a.sh": text})), 1)
+
+    step = ("      - name: Locale-safety gate (installer-run scripts must be ASCII)\n        run: |\n"
+            "          $bad = Get-ChildItem packaging/windows/*.ps1, scripts/windows/*.cmd"
+            " -ErrorAction SilentlyContinue |\n")
+    expect("gate list", GATE_GLOBS.search(step).group(1),
+           "packaging/windows/*.ps1, scripts/windows/*.cmd")
+    expect("gate renamed", GATE_GLOBS.search(step.replace("Locale-safety", "Encoding")), None)
+    later = "      - name: Stage bun\n        run: Get-ChildItem dist/*.exe -ErrorAction Stop\n"
+    expect("gate without a list reads no later step's",
+           GATE_GLOBS.search(step.replace("Get-ChildItem", "Get-Item") + later), None)
+    expect("ascii clean", ascii_errors({"a.ps1": b"Write-Output 'ok'\r\n", "b.cmd": b""}), [])
+    for name, data in (("em dash", "Write-Output 'a — b'\n".encode()),
+                       ("umlaut in Windows-1252", b"REM \xfc\r\n"),
+                       ("byte order mark", b"\xef\xbb\xbfWrite-Output 'ok'\n")):
+        expect(f"ascii: {name}", len(ascii_errors({"a.ps1": data, "b.ps1": b"ok\n"})), 1)
     if fails:
         return 1
     print("check-packaging-policy self-test ok")
@@ -580,8 +994,11 @@ sudo setcap cap_sys_nice=ep ${WORKER}
 def main(argv):
     if argv[1:] == ["--self-test"]:
         return self_test()
+    if argv[1:] == ["--inputs"]:
+        print("\n".join(INPUTS))
+        return 0
     if argv[1:]:
-        print("usage: check-packaging-policy.py [--self-test]", file=sys.stderr)
+        print("usage: check-packaging-policy.py [--self-test | --inputs]", file=sys.stderr)
         return 2
     return check()
 

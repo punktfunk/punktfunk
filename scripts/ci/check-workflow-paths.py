@@ -142,8 +142,10 @@ def lane_files():
     """Everything packaging-lint.yml lints, reads or re-runs on."""
     shell = subprocess.check_output(["sh", "scripts/ci/lint-shell.sh", "--list"], cwd=ROOT,
                                     text=True).split()
+    policy = subprocess.check_output([sys.executable, "scripts/ci/check-packaging-policy.py",
+                                      "--inputs"], cwd=ROOT, text=True).split()
     tracked = tracked_files()
-    return {LINT_LANE, *shell,
+    return {LINT_LANE, *shell, *policy,
             *(f for f in tracked if f.endswith((".spec", "PKGBUILD"))
               or (f.startswith(".gitea/workflows/") and f.endswith(".yml"))),
             *(f for w in RECIPES for f in recipe_files(w))}
