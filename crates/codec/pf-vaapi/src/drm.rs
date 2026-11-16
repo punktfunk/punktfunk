@@ -92,6 +92,43 @@ impl VaDrmPrimeSurfaceDescriptor {
     }
 }
 
+/// Import flag (`VA_SURFACE_EXTBUF_DESC_WC`): the buffer is write-combined on the CPU.
+pub const VA_SURFACE_EXTBUF_DESC_WC: u32 = 0x0000_0008;
+
+/// `DRM_PRIME_3`'s descriptor: the `DRM_PRIME_2` fields, then import `flags`. Flat, so
+/// `flags` follows the layers as in C rather than [`VaDrmPrimeSurfaceDescriptor`]'s padding.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VaDrmPrime3SurfaceDescriptor {
+    pub fourcc: u32,
+    pub width: u32,
+    pub height: u32,
+    pub num_objects: u32,
+    pub objects: [VaDrmPrimeObject; MAX_OBJECTS],
+    pub num_layers: u32,
+    pub layers: [VaDrmPrimeLayer; MAX_LAYERS],
+    /// `VA_SURFACE_EXTBUF_DESC_*`.
+    pub flags: u32,
+    reserved: [u32; 7],
+}
+
+impl VaDrmPrime3SurfaceDescriptor {
+    /// `desc` imported with `flags`.
+    pub fn new(desc: &VaDrmPrimeSurfaceDescriptor, flags: u32) -> Self {
+        Self {
+            fourcc: desc.fourcc,
+            width: desc.width,
+            height: desc.height,
+            num_objects: desc.num_objects,
+            objects: desc.objects,
+            num_layers: desc.num_layers,
+            layers: desc.layers,
+            flags,
+            reserved: [0; 7],
+        }
+    }
+}
+
 /// One flattened plane. `fd` is BORROWED: several planes may share an object,
 /// so the caller owns the objects and the planes only reference them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,6 +300,11 @@ const _: () = {
     assert!(offset_of!(VaDrmPrimeSurfaceDescriptor, objects) == 16);
     assert!(offset_of!(VaDrmPrimeSurfaceDescriptor, num_layers) == 80);
     assert!(offset_of!(VaDrmPrimeSurfaceDescriptor, layers) == 84);
+    // libva va_drmcommon.h: `flags` at 308, then `reserved[VA_PADDING_MEDIUM - 1]`.
+    assert!(size_of::<VaDrmPrime3SurfaceDescriptor>() == 344);
+    assert!(align_of::<VaDrmPrime3SurfaceDescriptor>() == 8);
+    assert!(offset_of!(VaDrmPrime3SurfaceDescriptor, layers) == 84);
+    assert!(offset_of!(VaDrmPrime3SurfaceDescriptor, flags) == 308);
 };
 
 #[cfg(test)]

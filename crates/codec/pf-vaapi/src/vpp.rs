@@ -15,6 +15,7 @@ use std::mem::size_of;
 pub use crate::config::VA_RT_FORMAT_YUV420;
 pub use crate::config::VA_RT_FORMAT_YUV420_10;
 pub use crate::config::VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2;
+pub use crate::config::VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_3;
 
 pub const VA_PROFILE_NONE: i32 = -1;
 pub const VA_ENTRYPOINT_VIDEO_PROC: i32 = 10;
