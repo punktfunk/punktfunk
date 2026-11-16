@@ -430,10 +430,10 @@ fn c_abi_connection_roundtrip() {
             port: 19777,
             source: Punktfunk1Source::Synthetic,
             seconds: 0,
-            // More than the 25 each session pulls. The budget is one loop per session and a
-            // mid-stream mode change discards what is already queued at the old mode, so a
-            // client that pulls the whole budget only succeeds when its switch beats frame 0.
-            frames: 40,
+            // Until each client closes. A mode change discards what is queued at the old mode
+            // and a puller that falls behind jumps to live, so no count is sure to cover the
+            // 25 frames a session pulls.
+            frames: u32::MAX,
             max_sessions: 3,
             max_concurrent: 1,
             require_pairing: false,
