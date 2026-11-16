@@ -219,8 +219,7 @@ pub(super) struct Task {
     /// The input thread's queue, shared with the datagram loop: a key edge off the
     /// control stream lands in the same order-preserving line as the pointer.
     pub(super) input_tx: std::sync::mpsc::SyncSender<super::input::ClientInput>,
-    pub(super) initial_mode: punktfunk_core::Mode,
-    /// `initial_mode` at the size its first epoch is encoded at: PyroWave's first bounds.
+    /// The Welcome's mode at the size its first epoch is encoded at: PyroWave's first bounds.
     pub(super) initial_picture: punktfunk_core::Mode,
     /// Epoch 0's `StreamConfig` with this host's link facts, sent as the task starts.
     pub(super) stream_config: v2msg::StreamConfig,
@@ -411,11 +410,10 @@ struct ControlTask {
     /// First-of-class `warn!` for grant drops: a revoked client spamming the gated messages
     /// must not flood the log.
     denied: crate::session_status::GrantDrops,
-    /// The mode the client holds: every `Reconfigured` this task sends carries it, and
-    /// adaptive FEC sizes a frame at its refresh.
-    active: punktfunk_core::Mode,
-    /// The view the last accepted switch, else the handshake, scales `active` to.
-    active_view: Option<(u32, u32)>,
+    /// The mode the client holds, with the view of the last accepted switch, else the
+    /// handshake's: every `Reconfigured` this task sends carries the mode, adaptive FEC sizes a
+    /// frame at its refresh, and the next ask keeps the view while the size stays.
+    held: crate::native::geometry::Intent,
     /// What the client holds; `None` for a client that takes no configs.
     held_config: Option<v2msg::StreamConfig>,
     pyrowave_pin: rate::PyroWavePin,
@@ -551,11 +549,7 @@ impl ControlTask {
         ControlTask {
             closed: Closed::default(),
             denied: crate::session_status::GrantDrops::new(task.plane),
-            active: task.initial_mode,
-            active_view: crate::session_plan::picture_field(
-                task.initial_mode,
-                (task.initial_picture.width, task.initial_picture.height),
-            ),
+            held: task.terms.intent,
             held_config: task.anchored.then_some(task.stream_config),
             pyrowave_pin,
             last_accepted_switch: None,
@@ -735,7 +729,7 @@ impl ControlTask {
                     .saturating_sub(punktfunk_core::abr::budget::SHARD_WIRE_OVERHEAD)
                     .try_into()
                     .unwrap_or(u16::MAX),
-                fps: self.active.refresh_hz,
+                fps: self.held.mode().refresh_hz,
             },
             &mut self.fec_horizon,
         );
@@ -950,18 +944,18 @@ impl ControlTask {
         let outcome = outcome.ok_or(Ended)?;
         let ack = Reconfigured {
             accepted: outcome.is_some(),
-            mode: self.active,
+            mode: self.held.mode(),
             exclude_codecs: std::mem::take(&mut self.asked),
         };
         self.send(&ack).await
     }
 
-    /// What an epoch delivers. Keeps `active` truthful for later refusal echoes, an
+    /// What an epoch delivers. Keeps the held mode truthful for later refusal echoes, an
     /// Automatic PyroWave session's bounds on the size it encodes, and the codec a mode is
     /// checked for; then tells the client what it does not hold.
     async fn on_delivered(&mut self, delivered: Option<super::wiring::Delivered>) -> Step {
         let d = delivered.ok_or(Ended)?;
-        self.active = d.mode;
+        self.held = self.held.delivered_at(d.mode);
         self.task.codec = crate::encode::codec_from_wire(d.format.codec);
         if self.pyrowave_pin.automatic {
             let (width, height) = d.encoded;

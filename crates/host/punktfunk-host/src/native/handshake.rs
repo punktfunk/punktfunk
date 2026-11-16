@@ -12,7 +12,7 @@ use super::*;
 use crate::native::bitrate::{
     audio_reserved_kbps, resolve_bitrate_kbps_for, session_pyrowave_bpp, EncDerive,
 };
-use crate::native::geometry::Tenure;
+use crate::native::geometry::{Intent, Tenure};
 use crate::vdisplay::policy::{DisplayTarget, Topology};
 use punktfunk_core::abr::budget::FEC_ADAPTIVE_START;
 use punktfunk_core::quic::v2::hello::{Role, RoleEcho, RoleReason, ScreenEcho, ScreenWish};
@@ -495,38 +495,6 @@ pub(super) struct Negotiated {
     pub(super) launch_dropped: bool,
 }
 
-/// The client's `view` while it is a size `mode` can be scaled to: one a mode could be, no
-/// larger than `mode` on either axis and smaller on one. Anything else encodes the mode.
-pub(super) fn kept_view(
-    view: Option<(u32, u32)>,
-    mode: &punktfunk_core::Mode,
-    codec: crate::encode::Codec,
-) -> Option<(u32, u32)> {
-    let (w, h) = view?;
-    let kept = crate::encode::validate_dimensions(codec, w, h).is_ok()
-        && w <= mode.width
-        && h <= mode.height
-        && (w < mode.width || h < mode.height);
-    if !kept {
-        tracing::debug!(view = ?(w, h), ?mode, "client view not kept — encoding the mode");
-    }
-    kept.then_some((w, h))
-}
-
-/// The size a joiner shows the owner's display at.
-pub(super) fn joined_view(tenure: &Tenure) -> Option<(u32, u32)> {
-    tenure.framing().map(|(_, view)| view)
-}
-
-/// What the session's encoder frames for: a joiner's `framing`, else the client's `view` at
-/// Fit. `None` encodes the picture as captured.
-pub(super) fn reframe_to(
-    framing: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
-    view: Option<(u32, u32)>,
-) -> Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))> {
-    framing.or(view.map(|v| (punktfunk_core::video_fit::VideoFit::Fit, v)))
-}
-
 /// How long the host holds the connection after a `Redirect` for the client to read it and
 /// leave. A close first could outrun the frame.
 const REDIRECT_LINGER: std::time::Duration = std::time::Duration::from_secs(2);
@@ -581,9 +549,8 @@ pub(in crate::native) struct SessionTerms {
     pub(in crate::native) tenure: Tenure,
     /// Admitted by `mode_conflict: join`: the owner's display, which this session shares.
     pub(in crate::native) joined: Option<crate::vdisplay::admission::LiveDisplay>,
-    /// The size this client shows its own display at, smaller than `hello.mode` ([`kept_view`]).
-    /// `None` for a joiner and a mirror.
-    pub(in crate::native) view: Option<(u32, u32)>,
+    /// The mode the session gets, `hello.mode`, with the view it keeps and its framing.
+    pub(in crate::native) intent: Intent,
     pub(in crate::native) compositor: Option<crate::vdisplay::Compositor>,
     /// Gamescope sub-mode as a value, not process env — a concurrent connect would overwrite env.
     pub(in crate::native) gamescope_route: Option<crate::vdisplay::GamescopeRoute>,
@@ -627,8 +594,7 @@ pub(in crate::native) struct SessionTerms {
 impl SessionTerms {
     /// The Welcome's mode at the size the encoder means to take it to, as the Welcome priced it.
     pub(in crate::native) fn picture(&self) -> punktfunk_core::Mode {
-        let view = self.view.or(joined_view(&self.tenure));
-        crate::session_plan::picture(self.hello.mode, view)
+        crate::session_plan::picture(self.intent.mode(), self.intent.view())
     }
 
     /// `Hello::bitrate_kbps == 0`. A mode switch re-resolves PyroWave's pin either way, and an
@@ -662,10 +628,10 @@ pub(super) async fn negotiate(
     let (codec_bit, codec) = pick_codec(&hello, &encoder)?;
     settle_bitrate(&mut hello, codec_bit);
     cap_mode(&n, &mut hello, codec);
-    // Against the mode this client gets, before a join hands it the owner's.
-    let view = kept_view(n.first.view, &hello.mode, codec);
+    // The client's own intent, at the mode it gets before a join hands it the owner's.
+    let asked = Intent::at_hello(hello.mode, n.first.view, &Tenure::of(None, false), codec);
     let asked_launch = hello.launch.is_some();
-    let (joined, reservation) = admit_mode(&n, &mut hello, codec, view).await?;
+    let (joined, reservation) = admit_mode(&n, &mut hello, codec, asked.view()).await?;
     let launch_dropped = asked_launch && hello.launch.is_none();
 
     crate::encode::validate_dimensions(codec, hello.mode.width, hello.mode.height)
@@ -694,8 +660,7 @@ pub(super) async fn negotiate(
         hello.mode,
         runs_exact_rate(compositor, tenure.shares_capture()),
     );
-    // A joiner's view rides its tenure; a mirrored head keeps its own fit.
-    let view = view.filter(|_| !tenure.shares_capture());
+    let intent = Intent::at_hello(hello.mode, asked.view(), &tenure, codec);
 
     // Library launch is resolved after Welcome into `SessionContext.launch`. Do not write
     // `PUNKTFUNK_GAMESCOPE_APP`: process env races concurrent sessions and only gamescope's bare spawn reads it.
@@ -754,7 +719,7 @@ pub(super) async fn negotiate(
     let pyrowave_bpp = session_pyrowave_bpp(n.first.pyrowave_bpp_x100);
     let slices = crate::session_plan::client_slices(hello.video_caps, n.first.slices);
     // Priced at the picture the encoder means to take, as every build of the session prices it.
-    let picture = crate::session_plan::picture(hello.mode, view.or(joined_view(&tenure)));
+    let picture = crate::session_plan::picture(intent.mode(), intent.view());
     let bitrate_kbps = resolve_bitrate_kbps_for(
         codec,
         hello.bitrate_kbps,
@@ -782,7 +747,7 @@ pub(super) async fn negotiate(
         codec,
         tenure,
         joined,
-        view,
+        intent,
         compositor,
         gamescope_route,
         encoder,
@@ -2293,12 +2258,12 @@ pub(crate) mod tests {
         encoder: Arc<crate::encode::Resolved>,
     ) -> SessionTerms {
         SessionTerms {
+            intent: Intent::of(hello.mode, None),
             hello,
             codec_bit: punktfunk_core::quic::CODEC_HEVC,
             codec: crate::encode::Codec::H265,
             tenure: Tenure::of(None, false),
             joined: None,
-            view: None,
             compositor: Some(crate::vdisplay::Compositor::Mutter),
             gamescope_route: None,
             encoder,
@@ -2344,7 +2309,9 @@ pub(crate) mod tests {
     fn a_view_is_kept_only_inside_its_mode() {
         use crate::encode::Codec::{PyroWave, H265};
         let at_1_5x = mode(2048, 1152, 120);
-        let kept = |view, codec| kept_view(Some(view), &at_1_5x, codec);
+        let own = Tenure::of(None, false);
+        let kept_view = |view, mode, codec| Intent::at_hello(mode, view, &own, codec).view();
+        let kept = |view, codec| kept_view(Some(view), at_1_5x, codec);
         assert_eq!(kept((1366, 768), H265), Some((1366, 768)), "fine");
         assert_eq!(
             kept((2048, 768), H265),
@@ -2357,26 +2324,29 @@ pub(crate) mod tests {
         assert_eq!(kept((1367, 768), H265), None, "odd");
         assert_eq!(kept((0, 768), H265), None, "zero");
         assert_eq!(kept((120, 100), PyroWave), None, "under the codec's floor");
-        assert_eq!(kept_view(None, &at_1_5x, H265), None);
+        assert_eq!(kept_view(None, at_1_5x, H265), None);
     }
 
     /// A joiner frames for its own view at its fit, whatever view the client also named; any
     /// other session for its view at Fit, or not at all.
     #[test]
     fn a_joiner_frames_for_its_view_and_a_viewer_at_fit() {
+        use crate::encode::Codec::H265;
         use punktfunk_core::video_fit::VideoFit;
         let crop = VideoFit::from_wire(VideoFit::Crop.wire());
-        let joiner = Tenure::of(Some((crop, (1280, 720))), false).framing();
+        let hd = mode(1920, 1080, 60);
+        let framing = |view, tenure| Intent::at_hello(hd, view, &tenure, H265).framing();
+        let joiner = Tenure::of(Some((crop, (1280, 720))), false);
         assert_eq!(
-            reframe_to(joiner, Some((1024, 576))),
+            framing(Some((1024, 576)), joiner),
             Some((VideoFit::Crop, (1280, 720)))
         );
-        let own = Tenure::of(None, false).framing();
+        let own = Tenure::of(None, false);
         assert_eq!(
-            reframe_to(own, Some((1366, 768))),
+            framing(Some((1366, 768)), own),
             Some((VideoFit::Fit, (1366, 768)))
         );
-        assert_eq!(reframe_to(own, None), None);
+        assert_eq!(framing(None, own), None);
     }
 
     /// Where a Welcome's session streams: a display of its own, one capped by the operator to a
@@ -2403,10 +2373,10 @@ pub(crate) mod tests {
         if let Welcomed::Capped(cap) = at {
             (mode.width, mode.height, mode.refresh_hz) = (cap.width, cap.height, cap.refresh_hz);
         }
-        let view = kept_view(view, &mode, codec);
+        let asked = Intent::at_hello(mode, view, &Tenure::of(None, false), codec);
         let joined = match at {
             Welcomed::Joiner(owner) => {
-                let shown = view.unwrap_or((mode.width, mode.height));
+                let shown = asked.view().unwrap_or((mode.width, mode.height));
                 (mode.width, mode.height, mode.refresh_hz) =
                     (owner.width, owner.height, owner.refresh_hz);
                 Some((punktfunk_core::video_fit::VideoFit::Fit, shown))
@@ -2419,8 +2389,8 @@ pub(crate) mod tests {
             tenure.shares_capture(),
         );
         let mode = deliverable_rate(mode, exact);
-        let view = view.filter(|_| !tenure.shares_capture());
-        let picture = crate::session_plan::picture(mode, view.or(joined_view(&tenure)));
+        let intent = Intent::at_hello(mode, asked.view(), &tenure, codec);
+        let picture = crate::session_plan::picture(intent.mode(), intent.view());
         let kbps = resolve_bitrate_kbps_for(
             codec,
             kbps,

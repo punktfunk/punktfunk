@@ -1809,7 +1809,6 @@ fn spawn_control(
         terms: terms.clone(),
         clock: conn.v2_session().clock.clone(),
         input_tx,
-        initial_mode: hello.mode,
         initial_picture: terms.picture(),
         stream_config: v2msg::StreamConfig {
             stream: 0,

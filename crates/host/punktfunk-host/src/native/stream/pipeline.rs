@@ -84,12 +84,12 @@ pub(super) fn resolve_plan(
     compositor: crate::vdisplay::Compositor,
     route: Option<&crate::vdisplay::GamescopeRoute>,
 ) -> crate::session_plan::SessionPlan {
-    use super::super::handshake::reframe_to;
     plan_for(
         terms,
         terms.codec,
         &terms.verdict,
-        reframe_to(terms.tenure.framing(), terms.view),
+        // A mirror's fit is `SessionPlan::mirrored`'s.
+        terms.intent.framing().filter(|_| !terms.tenure.mirrors()),
         &terms.tenure,
         compositor,
         route,

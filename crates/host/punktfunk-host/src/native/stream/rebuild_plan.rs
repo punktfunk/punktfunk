@@ -10,7 +10,7 @@ use super::session_watch::SessionSwitch;
 use super::swap::SwapReason;
 use crate::encode::Codec;
 use crate::native::bitrate::pyrowave_mode_kbps;
-use crate::native::geometry::{Hold, Tenure};
+use crate::native::geometry::{Hold, Intent, Tenure};
 use crate::session_plan::{CaptureBackend, SessionPlan};
 use crate::vdisplay::Compositor;
 use punktfunk_core::Mode;
@@ -19,8 +19,8 @@ use punktfunk_core::Mode;
 pub(super) enum RebuildAsk {
     /// Gaming↔Desktop.
     SessionSwitch(SessionSwitch),
-    /// The client's accepted mode, and the view it is encoded at (`None` = the mode).
-    Mode(Mode, Option<(u32, u32)>),
+    /// The client's accepted mode and view.
+    Mode(Intent),
     /// The client's codec ask, vetted by the control task.
     Format(Codec),
     /// The Windows topology watchdog's generation now.
@@ -39,8 +39,8 @@ pub(super) enum RebuildAsk {
 /// What the loop runs when it plans.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RebuildFacts {
-    /// The mode the session runs: the client's last ask, or what the source delivered.
-    pub(super) mode: Mode,
+    /// What the session runs: the client's last ask, or the mode the source delivered.
+    pub(super) intent: Intent,
     pub(super) rate_kbps: u32,
     pub(super) plan: SessionPlan,
     pub(super) compositor: Compositor,
@@ -178,8 +178,8 @@ pub(super) struct RebuildPlan {
     pub(super) build: Build,
     /// Try the Windows in-place mode set first; [`Self::build`] is its fallback.
     pub(super) in_place: bool,
-    /// The mode built, and the session's mode after: the derivation runs at its refresh (S5-8).
-    pub(super) mode: Mode,
+    /// What is built, and the session's intent after: the derivation runs at its refresh (S5-8).
+    pub(super) intent: Intent,
     /// The wire budget built at, kbps.
     pub(super) rate_kbps: u32,
     pub(super) display: Option<DisplayChange>,
@@ -191,33 +191,22 @@ pub(super) struct RebuildPlan {
     pub(super) rollback: Rollback,
 }
 
-/// The rate `mode` encoded at `view` runs at: PyroWave pins it per picture at the session's bits
-/// per pixel, and an Automatic session keeps its rate inside the new bounds.
-fn rate_at(mode: Mode, view: Option<(u32, u32)>, f: &RebuildFacts) -> u32 {
+/// The rate `intent` runs at: PyroWave pins it per picture at the session's bits per pixel, and
+/// an Automatic session keeps its rate inside the new bounds.
+fn rate_at(intent: &Intent, f: &RebuildFacts) -> u32 {
     if f.plan.codec != Codec::PyroWave {
         return f.rate_kbps;
     }
     let running = f.bitrate_auto.then_some(f.rate_kbps);
-    let picture = crate::session_plan::picture(mode, view);
+    let picture = crate::session_plan::picture(intent.mode(), intent.view());
     pyrowave_mode_kbps(running, &picture, &f.plan, f.pyrowave_max_kbps)
-}
-
-/// The view a mode ask encodes once the plan built `built`: its own view where that is the
-/// asked mode, else the asked size framed on the display that stays. A size at least the
-/// display's on both axes frames nothing.
-pub(super) fn view_for(asked: Mode, view: Option<(u32, u32)>, built: Mode) -> Option<(u32, u32)> {
-    if asked == built {
-        return view;
-    }
-    let (w, h) = view.unwrap_or((asked.width, asked.height));
-    (w < built.width || h < built.height).then_some((w, h))
 }
 
 /// The rebuild `ask` needs, or `None`: a switch to the compositor that runs, the live mode and
 /// view asked again (S5-6), on a shared display a size it already frames, a topology generation
 /// already followed or no IDD-push to follow. A joiner alone on its display builds its own.
 pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
-    let view = f.plan.reframe_to.map(|(_, v)| v);
+    let live = f.intent;
     let idd_push = f.plan.capture == CaptureBackend::IddPush;
     let rebuilt = Epilogue {
         reassert_sync: idd_push,
@@ -227,7 +216,7 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
         reason: SwapReason::ModeSwitch,
         build: Build::Once,
         in_place: false,
-        mode: f.mode,
+        intent: live,
         rate_kbps: f.rate_kbps,
         display: None,
         trace: None,
@@ -252,14 +241,15 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
         },
         // Another session is on the display, so its mode stays: the encoder alone frames the
         // asked size, and the client, which holds the mode it asked for, hears the one that runs.
-        RebuildAsk::Mode(mode, asked) if f.hold != Hold::Alone && mode != f.mode => {
-            let framed = view_for(mode, asked, f.mode);
-            if framed == view {
+        RebuildAsk::Mode(ask) if f.hold != Hold::Alone && ask.mode() != live.mode() => {
+            let framed = ask.on_display(live.mode());
+            if framed.view() == live.view() {
                 return None;
             }
             RebuildPlan {
                 build: Build::Encoder,
-                rate_kbps: rate_at(f.mode, framed, f),
+                intent: framed,
+                rate_kbps: rate_at(&framed, f),
                 trace: Some("resize"),
                 epilogue: Epilogue {
                     tell: Some(Tell::Correction),
@@ -272,11 +262,14 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
                 ..at_live
             }
         }
-        RebuildAsk::Mode(mode, asked) if (mode, asked) == (f.mode, view) => return None,
+        RebuildAsk::Mode(ask) if (ask.mode(), ask.view()) == (live.mode(), live.view()) => {
+            return None
+        }
         // The display stays: the encoder alone reopens on the live capture, framed anew.
-        RebuildAsk::Mode(mode, asked) if mode == f.mode => RebuildPlan {
+        RebuildAsk::Mode(ask) if ask.mode() == live.mode() => RebuildPlan {
             build: Build::Encoder,
-            rate_kbps: rate_at(mode, asked, f),
+            intent: ask,
+            rate_kbps: rate_at(&ask, f),
             trace: Some("resize"),
             epilogue: Epilogue {
                 tell: Some(Tell::Mode),
@@ -288,10 +281,10 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
             },
             ..at_live
         },
-        RebuildAsk::Mode(mode, asked) => RebuildPlan {
+        RebuildAsk::Mode(ask) => RebuildPlan {
             in_place: f.windows && idd_push,
-            mode,
-            rate_kbps: rate_at(mode, asked, f),
+            intent: ask,
+            rate_kbps: rate_at(&ask, f),
             trace: Some("resize"),
             stops_joining,
             epilogue: Epilogue {
@@ -371,8 +364,8 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
         RebuildAsk::SourceMode(mode) => RebuildPlan {
             reason: SwapReason::SourceMode,
             build: Build::Encoder,
-            mode,
-            rate_kbps: rate_at(mode, view, f),
+            intent: live.delivered_at(mode),
+            rate_kbps: rate_at(&live.delivered_at(mode), f),
             epilogue: Epilogue {
                 tell: Some(Tell::Correction),
                 ..PIPELINE
@@ -416,7 +409,7 @@ mod tests {
 
     fn facts() -> RebuildFacts {
         RebuildFacts {
-            mode: LIVE,
+            intent: Intent::of(LIVE, None),
             rate_kbps: 20_000,
             plan: SessionPlan::resolve(
                 &crate::encode::resolve(),
@@ -488,6 +481,7 @@ mod tests {
             refresh_hz: 120,
             ..LIVE
         };
+        let view_for = |asked, view, built| ask(asked, view).on_display(built).view();
         assert_eq!(view_for(BIG, Some(VIEW), BIG), Some(VIEW), "built as asked");
         assert_eq!(view_for(BIG, None, BIG), None);
         assert_eq!(
@@ -548,7 +542,7 @@ mod tests {
             reason,
             build,
             in_place: false,
-            mode: LIVE,
+            intent: Intent::of(LIVE, None),
             rate_kbps: 20_000,
             display: None,
             trace: None,
@@ -562,7 +556,7 @@ mod tests {
     fn to_big(rate_kbps: u32, in_place: bool) -> Option<RebuildPlan> {
         Some(RebuildPlan {
             in_place,
-            mode: BIG,
+            intent: Intent::of(BIG, None),
             rate_kbps,
             trace: Some("resize"),
             epilogue: Epilogue {
@@ -598,7 +592,7 @@ mod tests {
     /// The encoder reopened at the delivered [`BIG`] for `rate_kbps`.
     fn source_mode(rate_kbps: u32) -> Option<RebuildPlan> {
         Some(RebuildPlan {
-            mode: BIG,
+            intent: Intent::of(BIG, None),
             rate_kbps,
             epilogue: Epilogue {
                 tell: Some(Tell::Correction),
@@ -618,8 +612,10 @@ mod tests {
     const VIEW: (u32, u32) = (1920, 1080);
 
     fn viewed(f: &mut RebuildFacts) {
-        f.plan.reframe_to = Some((punktfunk_core::video_fit::VideoFit::Fit, VIEW));
+        f.intent = ask(LIVE, Some(VIEW));
     }
+
+    use crate::native::geometry::tests::asked as ask;
 
     /// The encoder alone reopened on the live display for a new view, at `rate_kbps`.
     fn new_view(rate_kbps: u32) -> Option<RebuildPlan> {
@@ -673,50 +669,50 @@ mod tests {
         Row {
             name: "mode switch: one build at the new mode, the client hears it; a failed one \
                    tells the mode kept (44692a0dc)",
-            ask: || RebuildAsk::Mode(BIG, None),
+            ask: || RebuildAsk::Mode(ask(BIG, None)),
             facts: |_| {},
             want: || to_big(20_000, false),
         },
         Row {
             name: "mode switch to the live mode: nothing (S5-6)",
-            ask: || RebuildAsk::Mode(LIVE, None),
+            ask: || RebuildAsk::Mode(ask(LIVE, None)),
             facts: |_| {},
             want: || None,
         },
         Row {
             name: "the live mode and view asked again: nothing",
-            ask: || RebuildAsk::Mode(LIVE, Some(VIEW)),
+            ask: || RebuildAsk::Mode(ask(LIVE, Some(VIEW))),
             facts: viewed,
             want: || None,
         },
         Row {
             name: "a view at the live mode: the encoder alone, framed for it; the client hears \
                    the mode",
-            ask: || RebuildAsk::Mode(LIVE, Some(VIEW)),
+            ask: || RebuildAsk::Mode(ask(LIVE, Some(VIEW))),
             facts: |_| {},
             want: || new_view(20_000),
         },
         Row {
             name: "a view cleared at the live mode: the encoder alone, at the mode",
-            ask: || RebuildAsk::Mode(LIVE, None),
+            ask: || RebuildAsk::Mode(ask(LIVE, None)),
             facts: viewed,
             want: || new_view(20_000),
         },
         Row {
             name: "mode switch on Windows IDD-push: in place first, the generation read again",
-            ask: || RebuildAsk::Mode(BIG, None),
+            ask: || RebuildAsk::Mode(ask(BIG, None)),
             facts: idd_push,
             want: || to_big(20_000, true),
         },
         Row {
             name: "PyroWave mode switch: the pin re-resolved at the mode built (S5-8)",
-            ask: || RebuildAsk::Mode(BIG, None),
+            ask: || RebuildAsk::Mode(ask(BIG, None)),
             facts: pyrowave,
             want: || to_big(pyrowave_pin(), false),
         },
         Row {
             name: "PyroWave mode switch with a view: the pin priced at the view",
-            ask: || RebuildAsk::Mode(BIG, Some(VIEW)),
+            ask: || RebuildAsk::Mode(ask(BIG, Some(VIEW))),
             facts: pyrowave,
             want: || {
                 let mut f = facts();
@@ -901,13 +897,13 @@ mod tests {
         Row {
             name: "shared display, a smaller mode asked: the encoder alone frames it at the live \
                    mode; the client hears that mode",
-            ask: || RebuildAsk::Mode(SMALL, None),
+            ask: || RebuildAsk::Mode(ask(SMALL, None)),
             facts: shared,
             want: framed,
         },
         Row {
             name: "shared display, a larger mode asked: nothing to frame",
-            ask: || RebuildAsk::Mode(BIG, None),
+            ask: || RebuildAsk::Mode(ask(BIG, None)),
             facts: shared,
             want: || None,
         },
@@ -918,25 +914,24 @@ mod tests {
                     refresh_hz: 120,
                     ..LIVE
                 };
-                RebuildAsk::Mode(faster, None)
+                RebuildAsk::Mode(ask(faster, None))
             },
             facts: shared,
             want: || None,
         },
         Row {
             name: "shared display, the size it already frames: nothing",
-            ask: || RebuildAsk::Mode(SMALL, None),
+            ask: || RebuildAsk::Mode(ask(SMALL, None)),
             facts: |f| {
                 shared(f);
-                let fit = punktfunk_core::video_fit::VideoFit::Fit;
-                f.plan.reframe_to = Some((fit, (1280, 720)));
+                f.intent = ask(LIVE, Some((1280, 720)));
             },
             want: || None,
         },
         Row {
             name:
                 "a joiner on a shared display: framed as its owner is, never a display of its own",
-            ask: || RebuildAsk::Mode(SMALL, None),
+            ask: || RebuildAsk::Mode(ask(SMALL, None)),
             facts: |f| {
                 joined(f);
                 f.hold = Hold::Held;
@@ -945,7 +940,7 @@ mod tests {
         },
         Row {
             name: "a joiner alone on its display: a mode switch builds its own",
-            ask: || RebuildAsk::Mode(BIG, None),
+            ask: || RebuildAsk::Mode(ask(BIG, None)),
             facts: joined,
             want: || {
                 Some(RebuildPlan {
@@ -1003,7 +998,12 @@ mod tests {
         for row in ROWS {
             let mut f = facts();
             (row.facts)(&mut f);
-            assert_eq!(plan(&(row.ask)(), &f), (row.want)(), "{}", row.name);
+            // The rows name the mode built; `geometry_rows` checks the view.
+            let planned = plan(&(row.ask)(), &f).map(|p| RebuildPlan {
+                intent: Intent::of(p.intent.mode(), None),
+                ..p
+            });
+            assert_eq!(planned, (row.want)(), "{}", row.name);
         }
     }
 
@@ -1016,11 +1016,7 @@ mod tests {
     /// [`Geometry`] of the plan for `ask`.
     fn geometry(ask: &RebuildAsk, f: &RebuildFacts) -> Geometry {
         let p = plan(ask, f)?;
-        let view = match *ask {
-            RebuildAsk::Mode(asked, view) => view_for(asked, view, p.mode),
-            _ => f.plan.reframe_to.map(|(_, v)| v),
-        };
-        Some((p.build, p.mode, view, p.rate_kbps))
+        Some((p.build, p.intent.mode(), p.intent.view(), p.rate_kbps))
     }
 
     /// [`pyrowave`] at 1.6 bits per pixel, the rows' quality everywhere.
@@ -1031,7 +1027,7 @@ mod tests {
 
     /// The session frames [`LIVE`] at 1280×720.
     fn framed_at_720(f: &mut RebuildFacts) {
-        f.plan.reframe_to = Some((punktfunk_core::video_fit::VideoFit::Fit, (1280, 720)));
+        f.intent = ask(LIVE, Some((1280, 720)));
     }
 
     /// One ask against the facts the loop runs: what its plan builds, at which mode, view and
@@ -1062,54 +1058,54 @@ mod tests {
             f.compositor = Compositor::Gamescope;
         }
         vec![
-            row("a new mode: one build at it, no view", RebuildAsk::Mode(BIG, None), &[],
+            row("a new mode: one build at it, no view", RebuildAsk::Mode(ask(BIG, None)), &[],
                 Some((Once, BIG, None, 20_000)), Wanted),
             row("a new mode with a view: one build, framed at the view",
-                RebuildAsk::Mode(uhd, Some((1920, 1080))), &[],
+                RebuildAsk::Mode(ask(uhd, Some((1920, 1080)))), &[],
                 Some((Once, uhd, Some((1920, 1080)), 20_000)), Wanted),
-            row("PyroWave, a new mode: priced at the mode", RebuildAsk::Mode(uhd, None), &[pyro],
+            row("PyroWave, a new mode: priced at the mode", RebuildAsk::Mode(ask(uhd, None)), &[pyro],
                 Some((Once, uhd, None, 796_262)), Wanted),
             row("PyroWave, a new mode with a view: priced at the view",
-                RebuildAsk::Mode(uhd, Some((1920, 1080))), &[pyro],
+                RebuildAsk::Mode(ask(uhd, Some((1920, 1080)))), &[pyro],
                 Some((Once, uhd, Some((1920, 1080)), 199_065)), Wanted),
             row("PyroWave Automatic: the running rate held inside the view's bounds",
-                RebuildAsk::Mode(uhd, Some((1920, 1080))), &[pyro, auto],
+                RebuildAsk::Mode(ask(uhd, Some((1920, 1080)))), &[pyro, auto],
                 Some((Once, uhd, Some((1920, 1080)), 150_000)), Wanted),
             row("PyroWave Automatic above the view's pin: the pin",
-                RebuildAsk::Mode(uhd, Some((1920, 1080))), &[pyro, hot],
+                RebuildAsk::Mode(ask(uhd, Some((1920, 1080)))), &[pyro, hot],
                 Some((Once, uhd, Some((1920, 1080)), 199_065)), Wanted),
             row("a view at the live mode: the encoder alone, framed",
-                RebuildAsk::Mode(LIVE, Some((1280, 720))), &[],
+                RebuildAsk::Mode(ask(LIVE, Some((1280, 720)))), &[],
                 Some((Encoder, LIVE, Some((1280, 720)), 20_000)), Wanted),
             row("PyroWave, a view at the live mode: priced at the view",
-                RebuildAsk::Mode(LIVE, Some((1280, 720))), &[pyro],
+                RebuildAsk::Mode(ask(LIVE, Some((1280, 720)))), &[pyro],
                 Some((Encoder, LIVE, Some((1280, 720)), 88_473)), Wanted),
             row("a rate pick that keeps the view: one build at the rate, framed as before",
-                RebuildAsk::Mode(hd120, Some((1280, 720))), &[pyro, framed_at_720],
+                RebuildAsk::Mode(ask(hd120, Some((1280, 720)))), &[pyro, framed_at_720],
                 Some((Once, hd120, Some((1280, 720)), 176_947)), Wanted),
             row("a rate pick with no view: one build at the rate, the view cleared",
-                RebuildAsk::Mode(hd120, None), &[pyro, framed_at_720],
+                RebuildAsk::Mode(ask(hd120, None)), &[pyro, framed_at_720],
                 Some((Once, hd120, None, 398_131)), Wanted),
             row("shared: a smaller size framed on the live mode, priced at it",
-                RebuildAsk::Mode(SMALL, None), &[pyro, shared],
+                RebuildAsk::Mode(ask(SMALL, None)), &[pyro, shared],
                 Some((Encoder, LIVE, Some((1280, 720)), 88_473)), Wanted),
             row("shared: a smaller size at another rate framed at the live rate",
-                RebuildAsk::Mode(small120, None), &[pyro, shared],
+                RebuildAsk::Mode(ask(small120, None)), &[pyro, shared],
                 Some((Encoder, LIVE, Some((1280, 720)), 88_473)), Wanted),
             row("shared, framed: the framed size at another rate changes nothing",
-                RebuildAsk::Mode(small120, None), &[pyro, shared, framed_at_720], None, Wanted),
+                RebuildAsk::Mode(ask(small120, None)), &[pyro, shared, framed_at_720], None, Wanted),
             row("shared, framed: a refresh at the told size clears the framing",
-                RebuildAsk::Mode(hd120, None), &[pyro, shared, framed_at_720],
+                RebuildAsk::Mode(ask(hd120, None)), &[pyro, shared, framed_at_720],
                 Some((Encoder, LIVE, None, 199_065)), D3),
             row("shared, framed: the told size at another rate with its view changes nothing",
-                RebuildAsk::Mode(hd120, Some((1280, 720))), &[pyro, shared, framed_at_720],
+                RebuildAsk::Mode(ask(hd120, Some((1280, 720)))), &[pyro, shared, framed_at_720],
                 None, Wanted),
-            row("shared: a larger size changes nothing", RebuildAsk::Mode(BIG, None),
+            row("shared: a larger size changes nothing", RebuildAsk::Mode(ask(BIG, None)),
                 &[shared], None, Wanted),
             row("shared, framed: a larger size clears the framing to the whole display",
-                RebuildAsk::Mode(BIG, None), &[pyro, shared, framed_at_720],
+                RebuildAsk::Mode(ask(BIG, None)), &[pyro, shared, framed_at_720],
                 Some((Encoder, LIVE, None, 199_065)), Wanted),
-            row("a joiner alone: a new mode builds its own display", RebuildAsk::Mode(BIG, None),
+            row("a joiner alone: a new mode builds its own display", RebuildAsk::Mode(ask(BIG, None)),
                 &[joined], Some((Once, BIG, None, 20_000)), Wanted),
             row("source mode: the delivered mode, the view kept, priced at it",
                 RebuildAsk::SourceMode(BIG), &[pyro, framed_at_720],
@@ -1122,7 +1118,7 @@ mod tests {
             row("rate: the asked rate, the view kept", RebuildAsk::Bitrate(8_000),
                 &[framed_at_720], Some((Encoder, LIVE, Some((1280, 720)), 8_000)), Wanted),
             row("after a switch into gamescope: a new mode still builds a display",
-                RebuildAsk::Mode(BIG, None), &[gamescope],
+                RebuildAsk::Mode(ask(BIG, None)), &[gamescope],
                 Some((Once, BIG, None, 20_000)), Other),
         ]
     }

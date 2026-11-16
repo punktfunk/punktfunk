@@ -77,7 +77,7 @@ pub(super) fn synthetic_stream(
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        let asked_mode = ends.reconfig.try_iter().last().map(|(mode, _)| mode);
+        let asked_mode = ends.reconfig.try_iter().last().map(|a| a.mode());
         let asked_codec = ends.format_rx.try_iter().last();
         if asked_mode.is_some() || asked_codec.is_some() {
             epoch = epoch.wrapping_add(1);

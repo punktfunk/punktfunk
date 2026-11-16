@@ -67,7 +67,7 @@ impl SwapReason {
 
     /// `enc_src` follows the frame where the site publishes the delivered mode itself, or
     /// rebuilds at the mode it had. A session switch and a capture loss can land on a backend
-    /// that delivers another size: left stale, `follow_source_mode` sees it, sets `cur_mode`,
+    /// that delivers another size: left stale, `follow_source_mode` sees it, sets the intent,
     /// re-resolves the rate and tells the client. A rate rebuild leaves a source change it did
     /// not make to it too.
     fn rereads_enc_src(self) -> bool {
@@ -588,7 +588,7 @@ pub(super) mod tests {
                 lease: None,
                 #[cfg(target_os = "linux")]
                 restamp: None,
-                cur_mode: mode,
+                intent: crate::native::geometry::Intent::of(mode, None),
                 bitrate_kbps: 20_000,
                 retargeted: true,
                 asks: Default::default(),
@@ -745,7 +745,7 @@ pub(super) mod tests {
             "the write moves what the next session resolves"
         );
         let req =
-            f.st.build_request(f.st.live.cur_mode, f.st.live.bitrate_kbps);
+            f.st.build_request(f.st.live.intent.mode(), f.st.live.bitrate_kbps);
         let mut on_session = false;
         super::super::pipeline::open_session_encoder_with(
             &req.terms.encoder,

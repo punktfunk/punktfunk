@@ -86,7 +86,7 @@ pub(super) struct LoopEnds {
     pub(super) inj_shared_tx: std::sync::mpsc::Sender<punktfunk_core::input::InputEvent>,
     #[cfg(target_os = "linux")]
     pub(super) inj_session_tx: Option<std::sync::mpsc::Sender<punktfunk_core::input::InputEvent>>,
-    pub(super) reconfig: std::sync::mpsc::Receiver<crate::native::wiring::ModeAsk>,
+    pub(super) reconfig: std::sync::mpsc::Receiver<crate::native::geometry::Intent>,
     pub(super) keyframe: std::sync::mpsc::Receiver<()>,
     pub(super) rfi: std::sync::mpsc::Receiver<(u32, u32)>,
     pub(super) bitrate_rx: std::sync::mpsc::Receiver<u32>,

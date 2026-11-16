@@ -297,10 +297,10 @@ impl ScreenSet {
         }
     }
 
-    /// Run exactly the screens `list` names past the first, as [`Self::plan`] says, each view
-    /// kept only where its mode can be scaled to it. A stopped loop retires: [`Self::poll`] reaps
-    /// it once its thread ends. A kept loop takes the list's record, and places its display
-    /// again when the client moved it against the first.
+    /// Run exactly the screens `list` names past the first, as [`Self::plan`] says, each at the
+    /// view its own [`screen_intent`] keeps. A stopped loop retires: [`Self::poll`] reaps it once
+    /// its thread ends. A kept loop takes the list's record, and places its display again when
+    /// the client moved it against the first.
     fn apply(&mut self, list: Vec<Screen>) {
         let Some(base) = self.base.clone() else {
             return;
@@ -309,7 +309,7 @@ impl ScreenSet {
         let list: Vec<Screen> = list
             .into_iter()
             .map(|s| Screen {
-                view: crate::native::handshake::kept_view(s.view, &s.mode, codec),
+                view: screen_intent(&s, codec).view(),
                 ..s
             })
             .collect();
@@ -478,6 +478,13 @@ impl Drop for ScreenSet {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+/// A further screen's intent: a display of its own at the record's mode and view. Each list
+/// asks afresh, so a record with no view clears the one its loop runs.
+fn screen_intent(s: &Screen, codec: crate::encode::Codec) -> crate::native::geometry::Intent {
+    let own = crate::native::geometry::Tenure::of(None, false);
+    crate::native::geometry::Intent::at_hello(s.mode, s.view, &own, codec)
 }
 
 /// The shares of the video, per mille, by pixel rate: the first screen's, then each of `rest`'s.

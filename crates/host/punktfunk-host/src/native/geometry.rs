@@ -1,14 +1,118 @@
-//! How a session holds its display. [`Tenure`] is settled once at admission ([`Tenure::of`]):
-//! its own display, one it joined, or a host monitor. [`Hold`] is whether another session is on
-//! that display now, read from the display registry by generation, which comes in as an input:
-//! this module does no I/O. The stream writes each display it adopts into a [`TenureCell`], which
-//! the control task reads at each ask.
+//! What a session streams and how it holds its display. [`Intent`] is the mode a session means
+//! to encode, the view it keeps and what its encoder frames for: settled at the Hello, moved by
+//! the client's asks. [`Tenure`] is settled once at admission ([`Tenure::of`]): its own display,
+//! one it joined, or a host monitor. [`Hold`] is whether another session is on that display now,
+//! read from the display registry by generation, which comes in as an input: this module does no
+//! I/O. The stream writes each display it adopts into a [`TenureCell`], which the control task
+//! reads at each ask.
 //!
-//! Every tenure question is a method here; a caller never re-derives one from the variants.
-//! Pinned by `tenure_rows`, one row per tenure on each host.
+//! Every mode, view and tenure question is a method here; a caller never re-derives one. Pinned
+//! by `mode_view_vectors`, the `geometry_rows` and `tenure_rows`.
 
+use crate::encode::Codec;
 use punktfunk_core::video_fit::VideoFit;
+use punktfunk_core::Mode;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// The mode a session means to encode, the view the client shows it at, and what the encoder
+/// frames the capture for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Intent {
+    mode: Mode,
+    /// Smaller than `mode` on one axis and inside it on both; `None` shows the mode.
+    view: Option<(u32, u32)>,
+    /// The view at Fit, a joiner's own view at its fit, or a mirrored head fitted to the mode
+    /// the client asked for. `None` encodes the capture as it comes.
+    framing: Option<(VideoFit, (u32, u32))>,
+}
+
+impl Intent {
+    /// The Hello's intent at `asked`, the mode the session gets: the client's `view` kept by
+    /// [`kept`]. A joiner's `asked` is the owner's mode, shown at the view and fit of its
+    /// tenure; a mirror fits its head to `asked` and keeps no view.
+    pub(crate) fn at_hello(
+        asked: Mode,
+        view: Option<(u32, u32)>,
+        tenure: &Tenure,
+        codec: Codec,
+    ) -> Self {
+        if let Some((fit, shown)) = tenure.framing() {
+            return Intent {
+                mode: asked,
+                view: Some(shown),
+                framing: Some((fit, shown)),
+            };
+        }
+        if tenure.mirrors() {
+            return Intent {
+                mode: asked,
+                view: None,
+                framing: Some((VideoFit::Fit, (asked.width, asked.height))),
+            };
+        }
+        Intent::fitted(asked, kept(view, &asked, codec))
+    }
+
+    /// A mode ask against this intent: the ask's own view, else this one while the size stays,
+    /// kept by [`kept`] and framed at Fit.
+    pub(crate) fn ask(&self, mode: Mode, view: Option<(u32, u32)>, codec: Codec) -> Self {
+        let same_size = (mode.width, mode.height) == (self.mode.width, self.mode.height);
+        let view = view.or(self.view.filter(|_| same_size));
+        Intent::fitted(mode, kept(view, &mode, codec))
+    }
+
+    /// This ask on a display that runs `display` and stays: the asked size, or its view, framed
+    /// on that mode while it is smaller on an axis. A size at least the display's frames
+    /// nothing.
+    pub(crate) fn on_display(&self, display: Mode) -> Self {
+        if self.mode == display {
+            return *self;
+        }
+        let (w, h) = self.view.unwrap_or((self.mode.width, self.mode.height));
+        let view = (w < display.width || h < display.height).then_some((w, h));
+        Intent::fitted(display, view)
+    }
+
+    /// This intent on a source that delivers `mode` with no ask: the view and framing stay.
+    pub(crate) fn delivered_at(&self, mode: Mode) -> Self {
+        Intent { mode, ..*self }
+    }
+
+    fn fitted(mode: Mode, view: Option<(u32, u32)>) -> Self {
+        Intent {
+            mode,
+            view,
+            framing: view.map(|v| (VideoFit::Fit, v)),
+        }
+    }
+
+    pub(crate) fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    pub(crate) fn view(&self) -> Option<(u32, u32)> {
+        self.view
+    }
+
+    /// What the encoder frames the capture for, into `open_encoder_fitted`.
+    pub(crate) fn framing(&self) -> Option<(VideoFit, (u32, u32))> {
+        self.framing
+    }
+}
+
+/// `view` while it is a size `mode` can be scaled to: one the codec encodes, no larger than
+/// `mode` on either axis and smaller on one. Anything else encodes the mode.
+fn kept(view: Option<(u32, u32)>, mode: &Mode, codec: Codec) -> Option<(u32, u32)> {
+    let (w, h) = view?;
+    let kept = crate::encode::validate_dimensions(codec, w, h).is_ok()
+        && w <= mode.width
+        && h <= mode.height
+        && (w < mode.width || h < mode.height);
+    if !kept {
+        tracing::debug!(view = ?(w, h), ?mode, "client view not kept — encoding the mode");
+    }
+    kept.then_some((w, h))
+}
 
 /// How a session holds the display it streams.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,6 +262,22 @@ pub(crate) mod tests {
     use super::*;
     use crate::native::stream::{tenure_plans, Build};
     use crate::vdisplay::Compositor;
+
+    impl Intent {
+        /// A fixture: `mode` framed as `framing`, its view the framed size.
+        pub(crate) fn of(mode: Mode, framing: Option<(VideoFit, (u32, u32))>) -> Self {
+            Intent {
+                mode,
+                view: framing.map(|(_, v)| v),
+                framing,
+            }
+        }
+    }
+
+    /// The client's ask for `mode` at `view`, as the control task hands it on.
+    pub(crate) fn asked(mode: Mode, view: Option<(u32, u32)>) -> Intent {
+        Intent::fitted(mode, view)
+    }
 
     /// Who holds the display a session streams.
     #[derive(Clone, Copy, Debug)]
