@@ -29,6 +29,8 @@ pub const VA_CONFIG_ATTRIB_RT_FORMAT: u32 = 0;
 /// Yields [`crate::VaDrmPrimeSurfaceDescriptor`], on export and on dmabuf import.
 /// The older `DRM_PRIME` (0x2000_0000) is a different, smaller structure.
 pub const VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2: u32 = 0x4000_0000;
+/// Yields [`crate::drm::VaDrmPrime3SurfaceDescriptor`] on dmabuf import (libva 2.21+).
+pub const VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_3: u32 = 0x0800_0000;
 
 /// Mirrors `pf-dxvadec::Codec` locally; this crate must not depend on the Windows one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

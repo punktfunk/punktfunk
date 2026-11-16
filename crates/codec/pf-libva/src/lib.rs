@@ -30,15 +30,21 @@ use anyhow::bail;
 use anyhow::Context as _;
 use anyhow::Result;
 use pf_vaapi::drm::ExportedPlane;
+use pf_vaapi::drm::VaDrmPrime3SurfaceDescriptor;
 use pf_vaapi::drm::VaDrmPrimeObject;
 use pf_vaapi::drm::VaDrmPrimeSurfaceDescriptor;
 use pf_vaapi::drm::MAX_OBJECTS;
 use pf_vaapi::drm::MAX_PLANES_PER_LAYER;
+use pf_vaapi::drm::VA_SURFACE_EXTBUF_DESC_WC;
 use pf_vaapi::va::VaImage;
 use pf_vaapi::vpp::VA_GENERIC_VALUE_TYPE_POINTER;
 use pf_vaapi::vpp::VA_SURFACE_ATTRIB_EXTERNAL_BUFFER_DESCRIPTOR;
 use pf_vaapi::vpp::VA_SURFACE_ATTRIB_MEMORY_TYPE;
 use pf_vaapi::vpp::VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2;
+use pf_vaapi::vpp::VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_3;
+
+/// Xe2's flat-CCS layouts, `I915_FORMAT_MOD_4_TILED_LNL_CCS` and `_BMG_CCS`.
+const XE2_CCS: [u64; 2] = [0x0100_0000_0000_0010, 0x0100_0000_0000_0011];
 
 pub type VaDisplay = *mut c_void;
 pub type VaStatus = c_int;
@@ -695,19 +701,29 @@ impl Display {
         desc.layers[0] = layer;
         desc.num_layers = 1;
 
+        // Xe2 decompresses only through a non-coherent PAT. iHD binds a plain PRIME_2
+        // import 1-way coherent, so the bytes read raw; a write-combined import is not.
+        let mut desc3 = VaDrmPrime3SurfaceDescriptor::new(&desc, VA_SURFACE_EXTBUF_DESC_WC);
+        let (mem_type, descriptor) = if XE2_CCS.contains(&source.modifier) {
+            let ptr = (&raw mut desc3).cast::<c_void>();
+            (VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_3, ptr)
+        } else {
+            let ptr = (&raw mut desc).cast::<c_void>();
+            (VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2, ptr)
+        };
         let mut attrs = [
             VaSurfaceAttrib {
                 kind: VA_SURFACE_ATTRIB_MEMORY_TYPE,
                 flags: VA_SURFACE_ATTRIB_SETTABLE,
-                value: VaGenericValue::integer(VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2 as i32),
+                value: VaGenericValue::integer(mem_type as i32),
             },
             VaSurfaceAttrib {
                 kind: VA_SURFACE_ATTRIB_EXTERNAL_BUFFER_DESCRIPTOR,
                 flags: VA_SURFACE_ATTRIB_SETTABLE,
-                value: VaGenericValue::pointer((&raw mut desc).cast::<c_void>()),
+                value: VaGenericValue::pointer(descriptor),
             },
         ];
-        // `desc` outlives the call inside `create_surface_with`; libva reads it there.
+        // The descriptor outlives the call inside `create_surface_with`; libva reads it there.
         self.create_surface_with(rt_format, source.width, source.height, &mut attrs)
     }
 

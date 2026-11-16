@@ -32,7 +32,21 @@ unsafe extern "C" {
     fn gbm_bo_get_offset(bo: *mut c_void, plane: i32) -> u32;
     fn gbm_bo_get_modifier(bo: *mut c_void) -> u64;
     fn gbm_bo_get_plane_count(bo: *mut c_void) -> i32;
+    fn gbm_bo_map(
+        bo: *mut c_void,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        flags: u32,
+        stride: *mut u32,
+        map_data: *mut *mut c_void,
+    ) -> *mut c_void;
+    fn gbm_bo_unmap(bo: *mut c_void, map_data: *mut c_void);
 }
+
+/// `gbm_bo_map` flag: the mapping is written.
+const GBM_BO_TRANSFER_WRITE: u32 = 1 << 1;
 
 /// The buffer is rendered into by a GPU.
 /// `GBM_BO_USE_SCANOUT`: Mesa pads a LINEAR buffer's rows only for a buffer a plane can show.
@@ -151,6 +165,48 @@ impl GbmBo {
             planes,
             _device: Rc::clone(device),
         })
+    }
+
+    /// Map the top-left `width`×`height` 4-byte pixels for writing and hand `f` the rows and
+    /// their pitch. The driver writes a tiled or compressed layout back with its own blit on
+    /// unmap, as a GPU producer would have written it.
+    pub fn write<T>(
+        &self,
+        width: u32,
+        height: u32,
+        f: impl FnOnce(&mut [u8], usize) -> T,
+    ) -> Result<T> {
+        if width == 0 || height == 0 {
+            bail!("gbm_bo_map of an empty {width}x{height} region");
+        }
+        let (mut stride, mut map_data) = (0u32, std::ptr::null_mut());
+        // SAFETY: live bo; `stride` and `map_data` are locals the call writes. Null is a refusal.
+        let ptr = unsafe {
+            gbm_bo_map(
+                self.raw,
+                0,
+                0,
+                width,
+                height,
+                GBM_BO_TRANSFER_WRITE,
+                &mut stride,
+                &mut map_data,
+            )
+        };
+        if ptr.is_null() {
+            bail!("gbm_bo_map {width}x{height}");
+        }
+        let pitch = stride as usize;
+        let len = pitch * (height as usize - 1) + width as usize * 4;
+        // SAFETY: the mapping holds `height` rows `pitch` apart, the last one `width` pixels
+        // long, until `gbm_bo_unmap` below; nothing else aliases it meanwhile.
+        let out = f(
+            unsafe { std::slice::from_raw_parts_mut(ptr.cast::<u8>(), len) },
+            pitch,
+        );
+        // SAFETY: ends the mapping made above, once.
+        unsafe { gbm_bo_unmap(self.raw, map_data) };
+        Ok(out)
     }
 }
 
