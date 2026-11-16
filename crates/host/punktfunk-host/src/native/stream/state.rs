@@ -379,7 +379,9 @@ impl StreamState {
                 .unwrap_or_else(|e| e.into_inner())
                 .out;
             let encoded = Some(out).filter(|&(w, h)| w > 0 && h > 0);
-            set.poll(mode, crate::session_plan::picture(mode, encoded), first_gen);
+            let picture = (self.live.intent.delivered_at(mode))
+                .encoded(encoded.unwrap_or((mode.width, mode.height)));
+            set.poll(mode, picture, first_gen);
         }
         let share = self
             .shared
@@ -456,21 +458,22 @@ impl StreamState {
         self.enc_derive(self.fec.target.load(Ordering::Relaxed))
     }
 
-    /// A rebuild's [`BuildRequest`] at `mode` and `bitrate_kbps`: this session's plan, encode
-    /// resolution, depth and HDR metadata, the derivation in force now at `mode`'s refresh (a
-    /// PyroWave frame's head parity is per frame), and the wire index its encoder continues at.
+    /// A rebuild's [`BuildRequest`] at `intent` and `bitrate_kbps`: this session's plan, encode
+    /// resolution, depth and HDR metadata, the derivation in force now at the intent's refresh
+    /// (a PyroWave frame's head parity is per frame), and the wire index its encoder continues at.
     pub(super) fn build_request(
         &self,
-        mode: punktfunk_core::Mode,
+        intent: crate::native::geometry::Intent,
         bitrate_kbps: u32,
     ) -> BuildRequest {
+        let hz = intent.mode().refresh_hz;
         BuildRequest {
             terms: self.facts.terms.clone(),
-            mode,
+            intent,
             bitrate_kbps,
             bitrate_auto: self.facts.bitrate_auto,
             bit_depth: self.bit_depth,
-            enc_of: self.enc_derive_at(mode.refresh_hz, self.fec.target.load(Ordering::Relaxed)),
+            enc_of: self.enc_derive_at(hz, self.fec.target.load(Ordering::Relaxed)),
             plan: self.plan,
             wire_seq_base: self.clock.next_au(),
             screen: 0,
@@ -551,6 +554,7 @@ impl StreamState {
             .ends
             .reconfig_result_tx
             .send(crate::native::wiring::Delivered {
+                intent: self.live.intent,
                 mode,
                 encoded,
                 format,
@@ -596,7 +600,15 @@ impl StreamState {
         let (mut display, pipe) = open_display(prepared, compositor, tenure, vd_params, cursor)?;
         let pipe = match pipe {
             Some(pipe) => pipe,
-            None => build_first(&mut display, &facts, plan, c.bit_depth, bitrate_kbps, &fec)?,
+            None => build_first(
+                &mut display,
+                &facts,
+                intent,
+                plan,
+                c.bit_depth,
+                bitrate_kbps,
+                &fec,
+            )?,
         };
         plan = plan.captured_by(&*pipe.capturer);
         let live = first_live(
@@ -1001,11 +1013,10 @@ fn settle_mode(
              instead of building twice"
         );
         intent = ask;
-        let mode = ask.mode();
         plan.reframe_to = ask.framing();
         if plan.codec == crate::encode::Codec::PyroWave {
             let running = ctx.terms.bitrate_auto().then_some(bitrate_kbps);
-            let picture = plan.picture(mode);
+            let picture = ask.picture();
             bitrate_kbps = pyrowave_mode_kbps(running, &picture, plan, ctx.knobs.pyrowave_max_kbps);
         }
     }
@@ -1132,19 +1143,21 @@ fn open_display(
     Ok((display, pipe))
 }
 
-/// Build the first pipeline on the session's display at `bitrate_kbps`, over bring-up's eight
-/// attempts. PyroWave's parity rides each frame's head at the mode built, and the first screen
-/// takes the whole video until further screens move its share. Windows holds the slot's IDD
-/// setup guard across the build: it preempts only a prior session on this client's slot.
+/// Build the first pipeline on the session's display at `intent` and `bitrate_kbps`, over
+/// bring-up's eight attempts. PyroWave's parity rides each frame's head at the mode built, and
+/// the first screen takes the whole video until further screens move its share. Windows holds
+/// the slot's IDD setup guard across the build: it preempts only a prior session on this
+/// client's slot.
 fn build_first(
     display: &mut DisplayRequest,
     facts: &SessionFacts,
+    intent: crate::native::geometry::Intent,
     plan: crate::session_plan::SessionPlan,
     bit_depth: u8,
     bitrate_kbps: u32,
     fec: &FecState,
 ) -> Result<Pipeline> {
-    let mode = facts.negotiated;
+    let mode = intent.mode();
     let _idd_setup_guard = crate::windows::idd::setup_guard(
         plan.capture,
         display.vd_params.client_fp,
@@ -1153,7 +1166,7 @@ fn build_first(
     )?;
     let req = BuildRequest {
         terms: facts.terms.clone(),
-        mode,
+        intent,
         bitrate_kbps,
         bitrate_auto: facts.bitrate_auto,
         bit_depth,
@@ -1252,6 +1265,7 @@ fn tell_adopted(
 ) {
     let actual = delivered_mode(live.frame.width, live.frame.height, live.interval);
     let _ = tell.send(crate::native::wiring::Delivered {
+        intent: live.intent,
         mode: actual,
         encoded: shared
             .frame_map
@@ -1693,8 +1707,9 @@ mod tests {
             refresh_hz: f.st.live.intent.mode().refresh_hz * 2,
             ..f.st.live.intent.mode()
         };
+        let to = crate::native::geometry::Intent::of(to, None);
         let req = f.st.build_request(to, f.st.live.bitrate_kbps);
-        assert_eq!(req.enc_of.pyrowave_hz(), Some(to.refresh_hz));
+        assert_eq!(req.enc_of.pyrowave_hz(), Some(to.mode().refresh_hz));
     }
 
     /// A swapped-in encoder opened at the first screen's share in force, whatever the swap's
@@ -1847,7 +1862,7 @@ mod tests {
         };
         let common = StreamCommon {
             session,
-            mode: w.mode,
+            intent: asked(w.mode, w.view),
             seconds: 0,
             life: crate::lifecycle::Lifecycle::new(),
             counters: Default::default(),

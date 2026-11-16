@@ -191,22 +191,20 @@ pub(super) struct RebuildPlan {
     pub(super) rollback: Rollback,
 }
 
-/// The rate `intent` runs at: PyroWave pins it per picture at the session's bits per pixel, and
-/// an Automatic session keeps its rate inside the new bounds.
-fn rate_at(intent: &Intent, f: &RebuildFacts) -> u32 {
-    if f.plan.codec != Codec::PyroWave {
-        return f.rate_kbps;
-    }
-    let running = f.bitrate_auto.then_some(f.rate_kbps);
-    let picture = crate::session_plan::picture(intent.mode(), intent.view());
-    pyrowave_mode_kbps(running, &picture, &f.plan, f.pyrowave_max_kbps)
-}
-
 /// The rebuild `ask` needs, or `None`: a switch to the compositor that runs, the live mode and
 /// view asked again (S5-6), on a shared display a size it already frames, a topology generation
 /// already followed or no IDD-push to follow. A joiner alone on its display builds its own.
 pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
     let live = f.intent;
+    // PyroWave pins each intent's picture at the session's bits per pixel, and an Automatic
+    // session keeps its rate inside the new bounds. Another codec's rate stands.
+    let priced = |intent: &Intent| match f.plan.codec {
+        Codec::PyroWave => {
+            let running = f.bitrate_auto.then_some(f.rate_kbps);
+            pyrowave_mode_kbps(running, &intent.picture(), &f.plan, f.pyrowave_max_kbps)
+        }
+        _ => f.rate_kbps,
+    };
     let idd_push = f.plan.capture == CaptureBackend::IddPush;
     let rebuilt = Epilogue {
         reassert_sync: idd_push,
@@ -249,7 +247,7 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
             RebuildPlan {
                 build: Build::Encoder,
                 intent: framed,
-                rate_kbps: rate_at(&framed, f),
+                rate_kbps: priced(&framed),
                 trace: Some("resize"),
                 epilogue: Epilogue {
                     tell: Some(Tell::Correction),
@@ -269,7 +267,7 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
         RebuildAsk::Mode(ask) if ask.mode() == live.mode() => RebuildPlan {
             build: Build::Encoder,
             intent: ask,
-            rate_kbps: rate_at(&ask, f),
+            rate_kbps: priced(&ask),
             trace: Some("resize"),
             epilogue: Epilogue {
                 tell: Some(Tell::Mode),
@@ -284,7 +282,7 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
         RebuildAsk::Mode(ask) => RebuildPlan {
             in_place: f.windows && idd_push,
             intent: ask,
-            rate_kbps: rate_at(&ask, f),
+            rate_kbps: priced(&ask),
             trace: Some("resize"),
             stops_joining,
             epilogue: Epilogue {
@@ -365,7 +363,7 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
             reason: SwapReason::SourceMode,
             build: Build::Encoder,
             intent: live.delivered_at(mode),
-            rate_kbps: rate_at(&live.delivered_at(mode), f),
+            rate_kbps: priced(&live.delivered_at(mode)),
             epilogue: Epilogue {
                 tell: Some(Tell::Correction),
                 ..PIPELINE
@@ -481,19 +479,19 @@ mod tests {
             refresh_hz: 120,
             ..LIVE
         };
-        let view_for = |asked, view, built| ask(asked, view).on_display(built).view();
-        assert_eq!(view_for(BIG, Some(VIEW), BIG), Some(VIEW), "built as asked");
-        assert_eq!(view_for(BIG, None, BIG), None);
+        let framed = |asked, view, built| ask(asked, view).on_display(built).view();
+        assert_eq!(framed(BIG, Some(VIEW), BIG), Some(VIEW), "built as asked");
+        assert_eq!(framed(BIG, None, BIG), None);
         assert_eq!(
-            view_for(SMALL, None, LIVE),
+            framed(SMALL, None, LIVE),
             Some((1280, 720)),
             "the asked size"
         );
-        assert_eq!(view_for(SMALL, Some((640, 360)), LIVE), Some((640, 360)));
-        assert_eq!(view_for(faster, None, LIVE), None, "a refresh alone");
-        assert_eq!(view_for(BIG, None, LIVE), None, "larger on both axes");
+        assert_eq!(framed(SMALL, Some((640, 360)), LIVE), Some((640, 360)));
+        assert_eq!(framed(faster, None, LIVE), None, "a refresh alone");
+        assert_eq!(framed(BIG, None, LIVE), None, "larger on both axes");
         assert_eq!(
-            view_for(wide, None, LIVE),
+            framed(wide, None, LIVE),
             Some((2560, 720)),
             "shorter on one"
         );
@@ -605,7 +603,7 @@ mod tests {
     fn pyrowave_pin() -> u32 {
         let mut f = facts();
         pyrowave(&mut f);
-        pyrowave_mode_kbps(None, &BIG, &f.plan, None)
+        pyrowave_mode_kbps(None, &Picture::of(BIG), &f.plan, None)
     }
 
     /// The view a client shows [`BIG`] at.
@@ -616,6 +614,7 @@ mod tests {
     }
 
     use crate::native::geometry::tests::asked as ask;
+    use crate::native::geometry::Picture;
 
     /// The encoder alone reopened on the live display for a new view, at `rate_kbps`.
     fn new_view(rate_kbps: u32) -> Option<RebuildPlan> {
@@ -722,7 +721,7 @@ mod tests {
                     height: VIEW.1,
                     ..BIG
                 };
-                let pin = pyrowave_mode_kbps(None, &at_view, &f.plan, None);
+                let pin = pyrowave_mode_kbps(None, &Picture::of(at_view), &f.plan, None);
                 assert!(pin < pyrowave_pin(), "a view prices fewer pixels");
                 to_big(pin, false)
             },

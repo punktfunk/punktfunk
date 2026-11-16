@@ -1809,7 +1809,6 @@ fn spawn_control(
         terms: terms.clone(),
         clock: conn.v2_session().clock.clone(),
         input_tx,
-        initial_picture: terms.picture(),
         stream_config: v2msg::StreamConfig {
             stream: 0,
             epoch: 0,
@@ -1827,10 +1826,7 @@ fn spawn_control(
             host_link_mbps: host_link.link_mbps,
             host_sndbuf_kb: host_link.sndbuf_kb,
             host_forced_shape: host_link.forced_shape,
-            picture: crate::session_plan::picture_field(welcome.mode, {
-                let p = terms.picture();
-                (p.width, p.height)
-            }),
+            picture: terms.intent.picture().wire(welcome.mode),
         },
         anchored: features.has(punktfunk_core::quic::v2::registry::FEATURE_STREAM_CONFIG),
         codec,
@@ -1951,7 +1947,7 @@ async fn stream_session(
         .map_err(|e| anyhow!("host session: {e:?}"))?;
     let common = StreamCommon {
         session,
-        mode: hello.mode,
+        intent: n.terms.intent,
         seconds: host.opts.seconds,
         life: scope.life().clone(),
         counters: who.counters,
@@ -2373,7 +2369,7 @@ fn run_source(
         Punktfunk1Source::Software => software_stream(
             &mut common.session,
             common.codec,
-            common.mode,
+            common.intent.mode(),
             common.bitrate_kbps,
             common.life.stop_flag(),
             &common.ends.probe_rx,

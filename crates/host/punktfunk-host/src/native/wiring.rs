@@ -12,6 +12,8 @@ use crate::native::geometry::{Intent, Tenure, TenureCell};
 /// is not what the client was last told, so a client without `StreamConfig` gets a second
 /// `Reconfigured`.
 pub(crate) struct Delivered {
+    /// What the epoch runs: the client's ask, or the mode the source delivered.
+    pub(crate) intent: Intent,
     /// The display's mode, as captured: what the client asked for, not what is encoded.
     pub(crate) mode: punktfunk_core::Mode,
     /// The size the encoder takes the picture to: a view, a mirror's fit, or `mode`'s own.

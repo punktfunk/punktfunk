@@ -58,7 +58,7 @@ pub(super) use self::synth_abr::{synthetic_abr_stream, SynthAbrContext};
 pub use self::synth_abr::{Content, KeyframeAnswer, SynthAbrShape, DEFAULT_IDR_PCT};
 
 /// Test frames at 60 Hz. The frames have no size, so an accepted mode switch or codec ask is
-/// delivered as the next epoch, the way a rebuilt pipeline delivers one.
+/// delivered as the next epoch at the intent asked, the way a rebuilt pipeline delivers one.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn synthetic_stream(
     session: &mut Session,
@@ -68,7 +68,7 @@ pub(super) fn synthetic_stream(
     fec_target: &AtomicU8,
     timing_conn: Option<&super::link::SessionLink>,
     probe_seq: bool,
-    (mut mode, mut format): (punktfunk_core::Mode, punktfunk_core::quic::VideoFormat),
+    (mut intent, mut format): (super::geometry::Intent, punktfunk_core::quic::VideoFormat),
 ) -> Result<()> {
     let (probe_rx, probe_result_tx) = (&ends.probe_rx, &ends.probe_result_tx);
     let interval = std::time::Duration::from_millis(1000 / 60);
@@ -77,16 +77,18 @@ pub(super) fn synthetic_stream(
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        let asked_mode = ends.reconfig.try_iter().last().map(|a| a.mode());
+        let asked = ends.reconfig.try_iter().last();
         let asked_codec = ends.format_rx.try_iter().last();
-        if asked_mode.is_some() || asked_codec.is_some() {
+        if asked.is_some() || asked_codec.is_some() {
             epoch = epoch.wrapping_add(1);
             session.set_epoch(epoch);
-            mode = asked_mode.unwrap_or(mode);
+            intent = asked.unwrap_or(intent);
+            let mode = intent.mode();
             if let Some(codec) = asked_codec {
                 format.codec = crate::encode::codec_to_wire(codec);
             }
             let _ = ends.reconfig_result_tx.send(super::wiring::Delivered {
+                intent,
                 mode,
                 encoded: (mode.width, mode.height),
                 format,
@@ -534,7 +536,8 @@ fn pace_sealed(
 /// [`SessionShared`]: super::wiring::SessionShared
 pub(crate) struct StreamCommon {
     pub(crate) session: Session,
-    pub(crate) mode: punktfunk_core::Mode,
+    /// The mode and view the Welcome settled.
+    pub(crate) intent: super::geometry::Intent,
     pub(crate) seconds: u32,
     /// The flags every thread of the session reads, and the one `end` that writes them.
     pub(crate) life: crate::lifecycle::Lifecycle,
@@ -567,10 +570,10 @@ pub(crate) struct StreamCommon {
 }
 
 impl StreamCommon {
-    /// The mode and video format the Welcome promised.
-    pub(crate) fn opened_as(&self) -> (punktfunk_core::Mode, punktfunk_core::quic::VideoFormat) {
+    /// The intent and video format the Welcome promised.
+    pub(crate) fn opened_as(&self) -> (super::geometry::Intent, punktfunk_core::quic::VideoFormat) {
         let format = state::video_format(self.codec, self.bit_depth, self.color, self.chroma);
-        (self.mode, format)
+        (self.intent, format)
     }
 }
 

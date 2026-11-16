@@ -272,11 +272,6 @@ impl SessionPlan {
         self
     }
 
-    /// `mode` at the size this plan encodes it ([`picture`]).
-    pub fn picture(&self, mode: punktfunk_core::Mode) -> punktfunk_core::Mode {
-        picture(mode, self.reframe_to.map(|(_, view)| view))
-    }
-
     /// The range this plan encodes and advertises at the live `hdr` and `bit_depth` ([`full_range`]).
     pub fn full_range(&self, hdr: bool, bit_depth: u8) -> bool {
         full_range(
@@ -361,25 +356,6 @@ impl SessionPlan {
             full_range: self.full_range(self.hdr, self.bit_depth),
         }
     }
-}
-
-/// `mode` at the size the encoder means to take it to: `view`, else the mode's own. Every
-/// bitrate that depends on pixels is priced here.
-pub(crate) fn picture(
-    mode: punktfunk_core::Mode,
-    view: Option<(u32, u32)>,
-) -> punktfunk_core::Mode {
-    let (width, height) = view.unwrap_or((mode.width, mode.height));
-    punktfunk_core::Mode {
-        width,
-        height,
-        ..mode
-    }
-}
-
-/// The `picture` field a client prices its bitrate on: `None` at `mode`'s own size.
-pub(crate) fn picture_field(mode: punktfunk_core::Mode, picture: (u32, u32)) -> Option<(u32, u32)> {
-    (picture != (mode.width, mode.height)).then_some(picture)
 }
 
 pub(crate) fn resolve_topology(capture: CaptureBackend) -> SessionTopology {
@@ -763,32 +739,6 @@ pub(crate) mod tests {
         })
         .expect("an encoder");
         assert_eq!((opens, framed.out), (vec![(2048, 1152)], (2048, 1152)));
-    }
-
-    /// A plan prices pixels at its view; without one, at the mode.
-    #[test]
-    fn a_plan_prices_the_picture_it_encodes() {
-        use punktfunk_core::video_fit::VideoFit;
-        let mode = punktfunk_core::Mode {
-            width: 2048,
-            height: 1152,
-            refresh_hz: 120,
-            refresh_mhz: 0,
-        };
-        let mut plan = SessionPlan::resolve(
-            &crate::encode::resolve(),
-            8,
-            false,
-            ChromaFormat::Yuv420,
-            Codec::H264,
-            false,
-            false,
-            1,
-        );
-        assert_eq!(plan.picture(mode), mode);
-        plan.reframe_to = Some((VideoFit::Fit, (1366, 768)));
-        let p = plan.picture(mode);
-        assert_eq!((p.width, p.height, p.refresh_hz), (1366, 768, 120));
     }
 
     /// The plan keeps the client's count: a GameStream ask above the native default survives.

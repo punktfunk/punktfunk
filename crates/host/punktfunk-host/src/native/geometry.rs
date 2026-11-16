@@ -98,6 +98,38 @@ impl Intent {
     pub(crate) fn framing(&self) -> Option<(VideoFit, (u32, u32))> {
         self.framing
     }
+
+    /// The mode at the size the client shows it: what a build is priced at before it opens.
+    pub(crate) fn picture(&self) -> Picture {
+        self.encoded(self.view.unwrap_or((self.mode.width, self.mode.height)))
+    }
+
+    /// The mode at the size an encoder opened for this intent took it to.
+    pub(crate) fn encoded(&self, (width, height): (u32, u32)) -> Picture {
+        Picture(Mode {
+            width,
+            height,
+            ..self.mode
+        })
+    }
+}
+
+/// The size and rate a bitrate is priced at. Only an [`Intent`] makes one, so every price
+/// follows from what the session means to encode or what its encoder took.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Picture(Mode);
+
+impl Picture {
+    pub(crate) fn mode(&self) -> Mode {
+        self.0
+    }
+
+    /// The picture as a `StreamConfig` or `ServerHello` names it beside `mode`: `None` at
+    /// `mode`'s own size.
+    pub(crate) fn wire(&self, mode: Mode) -> Option<(u32, u32)> {
+        let size = (self.0.width, self.0.height);
+        (size != (mode.width, mode.height)).then_some(size)
+    }
 }
 
 /// `view` while it is a size `mode` can be scaled to: one the codec encodes, no larger than
@@ -274,9 +306,30 @@ pub(crate) mod tests {
         }
     }
 
+    impl Picture {
+        /// A fixture: a price at `mode` as it stands.
+        pub(crate) fn of(mode: Mode) -> Self {
+            Picture(mode)
+        }
+    }
+
     /// The client's ask for `mode` at `view`, as the control task hands it on.
     pub(crate) fn asked(mode: Mode, view: Option<(u32, u32)>) -> Intent {
         Intent::fitted(mode, view)
+    }
+
+    /// An intent prices pixels at its view; without one, at the mode.
+    #[test]
+    fn an_intent_prices_the_picture_it_encodes() {
+        let mode = Mode {
+            width: 2048,
+            height: 1152,
+            refresh_hz: 120,
+            refresh_mhz: 0,
+        };
+        assert_eq!(asked(mode, None).picture().mode(), mode);
+        let p = asked(mode, Some((1366, 768))).picture().mode();
+        assert_eq!((p.width, p.height, p.refresh_hz), (1366, 768, 120));
     }
 
     /// Who holds the display a session streams.

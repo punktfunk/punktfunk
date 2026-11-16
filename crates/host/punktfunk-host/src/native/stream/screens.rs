@@ -12,6 +12,7 @@ use super::pipeline::{build_pipeline_with_retry, BuildRequest, Pipeline};
 use super::send::{AuMeta, FrameMsg, SendMsg};
 use super::*;
 use crate::native::bitrate::{EncDerive, SHARE_ALL};
+use crate::native::geometry::Picture;
 use crate::native::wiring::{ScreenTell, ScreenWire};
 use punktfunk_core::quic::v2::msg::{Screen, StreamConfig, SCREENS_MAX};
 use std::sync::atomic::AtomicU16;
@@ -189,7 +190,7 @@ pub(super) struct ScreenSet {
     /// The client's screen 0 record, for its position and primary flag.
     first: Screen,
     /// What the first screen's encoder took its picture to at the last poll.
-    first_picture: Option<punktfunk_core::Mode>,
+    first_picture: Option<Picture>,
     /// The layout last told.
     told: Vec<Screen>,
     /// When the next build may start ([`BUILD_SPACING`]).
@@ -233,7 +234,7 @@ impl ScreenSet {
     pub(super) fn poll(
         &mut self,
         first_mode: punktfunk_core::Mode,
-        first_picture: punktfunk_core::Mode,
+        first_picture: Picture,
         first_gen: Option<u64>,
     ) {
         if let Some(base) = self.base.as_ref() {
@@ -406,11 +407,12 @@ impl ScreenSet {
         let Some(base) = self.base.as_ref() else {
             return;
         };
-        let first = self.first_picture.unwrap_or(self.first.mode);
+        let first = self.first_picture.map_or(self.first.mode, |p| p.mode());
+        let codec = base.plan.codec;
         let asks: Vec<punktfunk_core::Mode> = self
             .loops
             .iter()
-            .map(|h| crate::session_plan::picture(h.ask.mode, h.ask.view))
+            .map(|h| screen_intent(&h.ask, codec).picture().mode())
             .collect();
         let (first, rest) = shares(first, &asks);
         base.wire.primary_share.store(first, Ordering::Relaxed);
@@ -546,6 +548,7 @@ enum Ended {
 /// lost capture.
 fn run_screen(base: ScreenBase, mut run: ScreenRun) {
     let _span = tracing::info_span!("screen", index = run.index).entered();
+    let intent = screen_intent(&run.ask, base.plan.codec);
     while std::time::Instant::now() < run.not_before {
         if run.leaving(&base) {
             return;
@@ -606,7 +609,7 @@ fn run_screen(base: ScreenBase, mut run: ScreenRun) {
             };
             let req = BuildRequest {
                 terms: base.terms.clone(),
-                mode: run.mode,
+                intent,
                 bitrate_kbps: base.live_bitrate.load(Ordering::Relaxed),
                 bitrate_auto: false,
                 bit_depth: base.bit_depth,
@@ -630,7 +633,7 @@ fn run_screen(base: ScreenBase, mut run: ScreenRun) {
             stream: run.stream,
             epoch,
             mode: delivered,
-            picture: crate::session_plan::picture_field(delivered, pipe.reframe.out),
+            picture: intent.encoded(pipe.reframe.out).wire(delivered),
             ..Default::default()
         };
         cfg.set_format(super::state::format_of(
@@ -1036,7 +1039,7 @@ mod tests {
         let one = mode(1920, 1080, 60);
         let mut set = ScreenSet::new(base, screens_rx, vec![asked(0, one), asked(1, one)]);
         assert_eq!(wire.primary_share.load(Ordering::Relaxed), 500);
-        set.poll(one, one, None);
+        set.poll(one, Picture::of(one), None);
         let Ok(ScreenTell::Layout(layout)) = told.try_recv() else {
             panic!("a layout is told at once");
         };
@@ -1046,14 +1049,14 @@ mod tests {
             (0, 0, one)
         );
         screens_tx.send(vec![asked(0, one)]).unwrap();
-        set.poll(one, one, None);
+        set.poll(one, Picture::of(one), None);
         assert!(set.loops.is_empty(), "screen 1's loop stopped");
         assert_eq!(wire.primary_share.load(Ordering::Relaxed), SHARE_ALL);
         let Ok(ScreenTell::Layout(again)) = told.try_recv() else {
             panic!("an ask is answered with a layout");
         };
         assert_eq!(again, layout);
-        set.poll(one, one, None);
+        set.poll(one, Picture::of(one), None);
         assert!(
             told.try_recv().is_err(),
             "no ask and no change, nothing told"
@@ -1071,15 +1074,15 @@ mod tests {
         let one = mode(1920, 1080, 60);
         let mut set = ScreenSet::new(base, screens_rx, Vec::new());
         assert_eq!(wire.primary_share.load(Ordering::Relaxed), SHARE_ALL);
-        set.poll(one, one, None);
+        set.poll(one, Picture::of(one), None);
         let Ok(ScreenTell::Layout(layout)) = told.try_recv() else {
             panic!("screen 0 is told at once");
         };
         assert_eq!((layout.len(), layout[0].index, layout[0].mode), (1, 0, one));
-        set.poll(one, one, None);
+        set.poll(one, Picture::of(one), None);
         assert!(told.try_recv().is_err(), "nothing moved, nothing told");
         screens_tx.send(vec![asked(0, one), asked(1, one)]).unwrap();
-        set.poll(one, one, None);
+        set.poll(one, Picture::of(one), None);
         assert_eq!(set.loops.len(), 1, "screen 1's loop started");
         assert_eq!(wire.primary_share.load(Ordering::Relaxed), 500);
         set.shutdown();
@@ -1394,12 +1397,12 @@ mod tests {
         let (handle, gate) = building(asked(1, one));
         set.loops.push(handle);
         screens_tx.send(vec![asked(0, one)]).unwrap();
-        set.poll(one, one, None);
+        set.poll(one, Picture::of(one), None);
         assert!(set.loops.is_empty(), "screen 1 still runs");
         assert_eq!(set.retiring.len(), 1, "screen 1 was joined on the tick");
         let next_build = set.next_build;
         screens_tx.send(vec![asked(0, one), asked(1, one)]).unwrap();
-        set.poll(one, one, None);
+        set.poll(one, Picture::of(one), None);
         assert!(set.loops.is_empty(), "screen 1 started beside its old loop");
         assert_eq!(set.pending, vec![asked(1, one)]);
         assert_eq!(
@@ -1414,7 +1417,7 @@ mod tests {
                 "screen 1 never started"
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
-            set.poll(one, one, None);
+            set.poll(one, Picture::of(one), None);
         }
         assert!(set.retiring.is_empty() && set.pending.is_empty());
         assert_eq!(set.loops[0].ask, asked(1, one));
@@ -1442,7 +1445,7 @@ mod tests {
             ..asked(1, one)
         };
         screens_tx.send(vec![asked(0, one), right]).unwrap();
-        set.poll(one, one, None);
+        set.poll(one, Picture::of(one), None);
         assert!(!stop.load(Ordering::SeqCst), "a move stopped the loop");
         assert_eq!(moved.lock().unwrap().take(), Some(right));
         let primary = Screen {
@@ -1450,7 +1453,7 @@ mod tests {
             ..right
         };
         screens_tx.send(vec![asked(0, one), primary]).unwrap();
-        set.poll(one, one, None);
+        set.poll(one, Picture::of(one), None);
         assert_eq!(*moved.lock().unwrap(), None, "a primary flag placed it");
         let mut layout = None;
         while let Ok(tell) = told.try_recv() {
@@ -1464,7 +1467,7 @@ mod tests {
             ..asked(0, one)
         };
         screens_tx.send(vec![first_left, primary]).unwrap();
-        set.poll(one, one, None);
+        set.poll(one, Picture::of(one), None);
         assert_eq!(*moved.lock().unwrap(), Some(primary), "the first moved");
         let first = set.base.as_ref().unwrap().first.lock().unwrap().asked;
         assert_eq!(first, first_left, "the loop places against the old first");
@@ -1583,7 +1586,7 @@ mod tests {
             let (first_mode, first_picture) = r.first;
             let list = vec![asked(0, first_mode), r.further];
             let mut set = ScreenSet::new(base, screens_rx, list);
-            set.poll(first_mode, first_picture, None);
+            set.poll(first_mode, Picture::of(first_picture), None);
             let share = wire.primary_share.load(Ordering::Relaxed);
             set.shutdown();
             assert_eq!(share, r.first_share, "{} ({:?})", r.name, r.verdict);
@@ -1597,13 +1600,13 @@ mod tests {
         let (_screens_tx, screens_rx) = std::sync::mpsc::channel();
         let one = mode(1920, 1080, 60);
         let mut set = ScreenSet::new(base, screens_rx, vec![asked(0, one), asked(1, one)]);
-        set.poll(one, one, None);
+        set.poll(one, Picture::of(one), None);
         assert_eq!(wire.primary_share.load(Ordering::Relaxed), 500);
         let uhd = mode(3840, 2160, 60);
-        set.poll(uhd, uhd, None);
+        set.poll(uhd, Picture::of(uhd), None);
         assert_eq!(wire.primary_share.load(Ordering::Relaxed), 800);
         // Shown at 1080p, the first screen weighs what it encodes.
-        set.poll(uhd, one, None);
+        set.poll(uhd, Picture::of(one), None);
         assert_eq!(wire.primary_share.load(Ordering::Relaxed), 500);
         set.shutdown();
     }
@@ -1625,7 +1628,7 @@ mod tests {
                 "screen 1 never restarted"
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
-            set.poll(one, one, None);
+            set.poll(one, Picture::of(one), None);
         }
         assert_eq!(
             Arc::strong_count(&old),

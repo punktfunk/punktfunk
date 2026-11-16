@@ -23,6 +23,7 @@ mod rate;
 
 use super::*;
 use crate::native::bitrate::{fec_pct, pyrowave_bounds_kbps, UnrecoveredRun, FEC_WHOLE_FRAME};
+use crate::native::geometry::Picture;
 use pf_clipboard::ClipCoordCmd;
 use punktfunk_core::abr::governor::{ShareWindow, NO_SHARE_KBPS};
 use punktfunk_core::quic::v2::{dgram::Feedback, io as v2io, msg as v2msg};
@@ -219,8 +220,6 @@ pub(super) struct Task {
     /// The input thread's queue, shared with the datagram loop: a key edge off the
     /// control stream lands in the same order-preserving line as the pointer.
     pub(super) input_tx: std::sync::mpsc::SyncSender<super::input::ClientInput>,
-    /// The Welcome's mode at the size its first epoch is encoded at: PyroWave's first bounds.
-    pub(super) initial_picture: punktfunk_core::Mode,
     /// Epoch 0's `StreamConfig` with this host's link facts, sent as the task starts.
     pub(super) stream_config: v2msg::StreamConfig,
     /// The client moves its mode on configs (`FEATURE_STREAM_CONFIG`). Otherwise a switch is
@@ -318,7 +317,7 @@ fn tell(
     stream_config: &mut Option<v2msg::StreamConfig>,
     d: &super::wiring::Delivered,
 ) -> Option<Tell> {
-    let picture = crate::session_plan::picture_field(d.mode, d.encoded);
+    let picture = d.intent.encoded(d.encoded).wire(d.mode);
     match stream_config {
         Some(cfg)
             if (cfg.epoch, cfg.mode, cfg.picture, cfg.format())
@@ -445,16 +444,16 @@ struct ControlTask {
 }
 
 impl Task {
-    /// PyroWave's floor and pin at `mode`, at the session's bits per pixel and cap. The
-    /// Welcome resolved the pin for the first mode; the floor comes from the same rule.
-    fn pyrowave_bounds(&self, mode: &punktfunk_core::Mode) -> (u32, u32) {
+    /// PyroWave's floor and pin at `picture`, at the session's bits per pixel and cap. The
+    /// Welcome resolved the pin for the first picture; the floor comes from the same rule.
+    fn pyrowave_bounds(&self, picture: &Picture) -> (u32, u32) {
         let chroma = if self.stream_config.chroma_format == punktfunk_core::quic::CHROMA_IDC_444 {
             crate::encode::ChromaFormat::Yuv444
         } else {
             crate::encode::ChromaFormat::Yuv420
         };
         pyrowave_bounds_kbps(
-            mode,
+            picture,
             chroma,
             self.stream_config.bit_depth,
             self.terms.pyrowave_bpp,
@@ -530,7 +529,7 @@ impl ControlTask {
         let pyrowave_pin = rate::PyroWavePin {
             kbps: session_kbps,
             floor: if task.codec == crate::encode::Codec::PyroWave {
-                task.pyrowave_bounds(&task.initial_picture)
+                task.pyrowave_bounds(&task.terms.intent.picture())
                     .0
                     .min(session_kbps)
             } else {
@@ -958,12 +957,7 @@ impl ControlTask {
         self.held = self.held.delivered_at(d.mode);
         self.task.codec = crate::encode::codec_from_wire(d.format.codec);
         if self.pyrowave_pin.automatic {
-            let (width, height) = d.encoded;
-            let encoded = punktfunk_core::Mode {
-                width,
-                height,
-                ..d.mode
-            };
+            let encoded = d.intent.delivered_at(d.mode).encoded(d.encoded);
             (self.pyrowave_pin.floor, self.pyrowave_pin.kbps) = self.task.pyrowave_bounds(&encoded);
         }
         match tell(&mut self.held_config, &d) {
@@ -1276,6 +1270,7 @@ pub(crate) mod tests {
             refresh_mhz: 0,
         };
         let d = |epoch, width: u32, corrects| Delivered {
+            intent: asked(mode(width), None),
             mode: mode(width),
             encoded: (width / 2, 360),
             format: Default::default(),
@@ -1317,6 +1312,7 @@ pub(crate) mod tests {
         );
     }
 
+    use crate::native::geometry::tests::asked;
     use crate::native::handshake::tests::mode;
 
     /// An Automatic PyroWave session's task after its connect: the floor and pin it holds and
@@ -1327,24 +1323,20 @@ pub(crate) mod tests {
         picture: punktfunk_core::Mode,
         delivered: Option<super::super::wiring::Delivered>,
     ) -> ((u32, u32), Option<(u32, u32)>) {
-        let bounds = |m: &punktfunk_core::Mode| {
-            pyrowave_bounds_kbps(m, crate::encode::ChromaFormat::Yuv420, 8, 1.6, None)
+        let bounds = |p: &Picture| {
+            pyrowave_bounds_kbps(p, crate::encode::ChromaFormat::Yuv420, 8, 1.6, None)
         };
-        let welcome_kbps = bounds(&picture).1;
-        let mut held = (bounds(&picture).0.min(welcome_kbps), welcome_kbps);
-        let wire = crate::session_plan::picture_field(mode, (picture.width, picture.height));
+        let size = (picture.width, picture.height);
+        let welcome = asked(mode, (size != (mode.width, mode.height)).then_some(size)).picture();
+        let welcome_kbps = bounds(&welcome).1;
+        let mut held = (bounds(&welcome).0.min(welcome_kbps), welcome_kbps);
         let mut config = Some(v2msg::StreamConfig {
             mode,
-            picture: wire,
+            picture: welcome.wire(mode),
             ..Default::default()
         });
         if let Some(d) = delivered {
-            let (width, height) = d.encoded;
-            held = bounds(&punktfunk_core::Mode {
-                width,
-                height,
-                ..d.mode
-            });
+            held = bounds(&d.intent.delivered_at(d.mode).encoded(d.encoded));
             let _ = tell(&mut config, &d);
         }
         (held, config.and_then(|c| c.picture))
@@ -1388,6 +1380,7 @@ pub(crate) mod tests {
         use super::super::wiring::Delivered;
         for r in connect_rows() {
             let d = r.told.then_some(Delivered {
+                intent: asked(r.mode, None),
                 mode: r.mode,
                 encoded: r.encoded,
                 format: Default::default(),
@@ -1405,6 +1398,7 @@ pub(crate) mod tests {
         use super::super::wiring::Delivered;
         use punktfunk_core::quic::{VideoFormat, CODEC_H264, CODEC_HEVC};
         let d = |codec| Delivered {
+            intent: asked(Default::default(), None),
             mode: Default::default(),
             encoded: (0, 0),
             format: VideoFormat {

@@ -485,7 +485,7 @@ pub(crate) mod tests {
     /// A mode ask hands on its view only while its mode can be scaled to it; a codec ask
     /// leaves the mode and view alone; a refused switch hands nothing on.
     #[test]
-    fn a_reconfigure_hands_on_its_kept_view() {
+    fn a_reconfigure_hands_on_the_view_it_keeps() {
         use crate::encode::Codec::H265;
         let mode = punktfunk_core::Mode {
             width: 2048,

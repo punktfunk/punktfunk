@@ -6,6 +6,7 @@ use super::*;
 #[cfg(target_os = "linux")]
 use crate::capture::OutputLease;
 use crate::native::bitrate::{pyrowave_mode_kbps, EncDerive};
+use crate::native::geometry::{Intent, Picture};
 
 /// One built pipeline. `bitrate_kbps` is the rate the encoder actually opened at.
 pub(in crate::native) struct Pipeline {
@@ -47,14 +48,15 @@ pub(in crate::native) type PrepHandle = (
 );
 
 /// What every pipeline build of one session asks for. A rebuild moves a field or two: the
-/// mode, the rate, the wire index its encoder continues at.
+/// intent, the rate, the wire index its encoder continues at.
 #[derive(Clone)]
 pub(super) struct BuildRequest {
     /// What the handshake settled: the encode resolution capture and the encoder open on,
     /// whatever the Encoder row says now, the `PUNKTFUNK_PYROWAVE_MAX_MBPS` cap for a pin
     /// re-resolved at the delivered size, and the client's panel.
     pub(super) terms: Arc<super::super::handshake::SessionTerms>,
-    pub(super) mode: punktfunk_core::Mode,
+    /// The mode the display is asked for, and the picture its rate is priced at.
+    pub(super) intent: Intent,
     /// The wire budget; the encoder opens at what `enc_of` derives from it.
     pub(super) bitrate_kbps: u32,
     /// This build holds a running rate inside a PyroWave pin's bounds. A further screen's is
@@ -185,7 +187,7 @@ pub(in crate::native) fn prepare_display(
         isolation: None,
     }
     .apply(&mut *vd);
-    let mode = terms.hello.mode;
+    let mode = terms.intent.mode();
     let _idd_setup_guard = crate::windows::idd::setup_guard(
         plan.capture,
         client_identity,
@@ -193,7 +195,7 @@ pub(in crate::native) fn prepare_display(
         stop,
     )?;
     let req = BuildRequest {
-        mode,
+        intent: terms.intent,
         bitrate_kbps: terms.bitrate_kbps,
         // The build may re-resolve if the source delivers a different size.
         bitrate_auto: terms.bitrate_auto(),
@@ -285,7 +287,7 @@ pub(super) fn build_pipeline_with_retry(
         crate::session_plan::CaptureBackend::IddPush
     ) {
         Some(
-            vd.create(display_mode_for(req.mode, vd.name()))
+            vd.create(display_mode_for(req.intent.mode(), vd.name()))
                 .context("acquire virtual output for the session (retry-hold lease)")?,
         )
     } else {
@@ -659,23 +661,16 @@ pub(super) fn open_session_encoder_with(
 pub(super) fn rate_at_encoded(
     bitrate_kbps: u32,
     bitrate_auto: bool,
-    priced: punktfunk_core::Mode,
-    (width, height): (u32, u32),
+    priced: &Picture,
+    encoded: &Picture,
     plan: &crate::session_plan::SessionPlan,
     pyrowave_max_kbps: Option<u32>,
 ) -> u32 {
-    if plan.codec != crate::encode::Codec::PyroWave
-        || (width, height) == (priced.width, priced.height)
-    {
+    if plan.codec != crate::encode::Codec::PyroWave || encoded == priced {
         return bitrate_kbps;
     }
-    let encoded = punktfunk_core::Mode {
-        width,
-        height,
-        ..priced
-    };
     let running = bitrate_auto.then_some(bitrate_kbps);
-    pyrowave_mode_kbps(running, &encoded, plan, pyrowave_max_kbps)
+    pyrowave_mode_kbps(running, encoded, plan, pyrowave_max_kbps)
 }
 
 /// Acquire a display at `req`'s mode and attach capture and an encoder to it.
@@ -687,7 +682,7 @@ pub(super) fn build_pipeline(
     first_frame_budget: Option<std::time::Duration>,
     trace: Option<&crate::bringup::Trace>,
 ) -> Result<Pipeline> {
-    let display_mode = display_mode_for(req.mode, vd.name());
+    let display_mode = display_mode_for(req.intent.mode(), vd.name());
     let vout = crate::vdisplay::registry::acquire(vd, display_mode, quit.clone(), supersedes)
         .context("create virtual output")?;
     if let Some(t) = trace {
@@ -706,7 +701,7 @@ pub(super) fn reattach_pipeline(
     keepalive: Box<dyn Send>,
     req: &BuildRequest,
 ) -> Result<Pipeline> {
-    let display_mode = display_mode_for(req.mode, vd.name());
+    let display_mode = display_mode_for(req.intent.mode(), vd.name());
     attach_pipeline(
         vd,
         lease.into_output(keepalive),
@@ -728,7 +723,7 @@ fn attach_pipeline(
 ) -> Result<Pipeline> {
     let BuildRequest {
         ref terms,
-        mode,
+        intent,
         bitrate_kbps,
         bitrate_auto,
         bit_depth,
@@ -739,6 +734,7 @@ fn attach_pipeline(
     } = *req;
     let (encoder, pyrowave_max_kbps, client_hdr) =
         (&terms.encoder, terms.pyrowave_max_kbps, terms.client_hdr());
+    let mode = intent.mode();
     #[cfg(target_os = "linux")]
     let reused_gen = vout.reused_gen;
     #[cfg(target_os = "linux")]
@@ -805,13 +801,14 @@ fn attach_pipeline(
         t.mark("first_frame");
     }
     let negotiated = (mode.width, mode.height);
-    let priced = plan.picture(mode);
+    let priced = intent.picture();
     let kbps_for = |w: u32, h: u32| {
+        let encoded = intent.encoded((w, h));
         rate_at_encoded(
             bitrate_kbps,
             bitrate_auto,
-            priced,
-            (w, h),
+            &priced,
+            &encoded,
             &plan,
             pyrowave_max_kbps,
         )
@@ -833,7 +830,7 @@ fn attach_pipeline(
     let re = kbps_for(encoded.0, encoded.1);
     if re != bitrate_kbps {
         tracing::info!(
-            priced = %format!("{}x{}", priced.width, priced.height),
+            priced = %format!("{}x{}", priced.mode().width, priced.mode().height),
             encoded = %format!("{}x{}", encoded.0, encoded.1),
             from_kbps = bitrate_kbps,
             to_kbps = re,
@@ -1173,22 +1170,23 @@ mod tests {
             refresh_mhz: 0,
         };
         let mut p = plan(crate::encode::ChromaFormat::Yuv420, false, 1);
-        p.reframe_to = Some((punktfunk_core::video_fit::VideoFit::Fit, (1366, 768)));
-        let priced = p.picture(mode);
-        let fell_back = (mode.width, mode.height);
+        let intent = crate::native::geometry::tests::asked(mode, Some((1366, 768)));
+        let priced = intent.picture();
+        let fell_back = intent.encoded((mode.width, mode.height));
         assert_eq!(
-            rate_at_encoded(37_000, true, priced, fell_back, &p, None),
+            rate_at_encoded(37_000, true, &priced, &fell_back, &p, None),
             37_000
         );
         p.codec = crate::encode::Codec::PyroWave;
         p.pyrowave_bpp = 4.0;
         let at_view = pyrowave_mode_kbps(None, &priced, &p, None);
+        let framed = intent.encoded((1366, 768));
         assert_eq!(
-            rate_at_encoded(at_view, false, priced, (1366, 768), &p, None),
+            rate_at_encoded(at_view, false, &priced, &framed, &p, None),
             at_view
         );
-        let at_mode = rate_at_encoded(at_view, false, priced, fell_back, &p, None);
-        assert_eq!(at_mode, pyrowave_mode_kbps(None, &mode, &p, None));
+        let at_mode = rate_at_encoded(at_view, false, &priced, &fell_back, &p, None);
+        assert_eq!(at_mode, pyrowave_mode_kbps(None, &fell_back, &p, None));
         assert!(at_mode > at_view);
     }
 
@@ -1354,14 +1352,19 @@ mod tests {
         framed: Framed,
         fails: bool,
     ) -> ((u32, u32), u32) {
+        use crate::native::geometry::{Intent, Tenure};
         use punktfunk_core::video_fit::VideoFit;
         let mut p = plan(crate::encode::ChromaFormat::Yuv420, false, 1);
         (p.codec, p.pyrowave_bpp) = (crate::encode::Codec::PyroWave, 1.6);
-        match framed {
-            Framed::Own(view) => p.reframe_to = Some((VideoFit::Fit, view)),
-            Framed::Joiner(view) => p.reframe_to = Some((VideoFit::Crop, view)),
-            Framed::Mirror => p.mirrored = true,
-        }
+        let intent = match framed {
+            Framed::Own(view) => Intent::of(mode, Some((VideoFit::Fit, view))),
+            Framed::Joiner(view) => Intent::of(mode, Some((VideoFit::Crop, view))),
+            Framed::Mirror => {
+                p.mirrored = true;
+                Intent::at_hello(mode, None, &Tenure::of(None, true), p.codec)
+            }
+        };
+        p.reframe_to = intent.framing().filter(|_| !p.mirrored);
         let cap = crate::capture::SyntheticCapturer::new(captured.0, captured.1, 60);
         let frame = super::super::swap::tests::frame(captured);
         let (_, reframe) = open_session_encoder_with(
@@ -1386,11 +1389,12 @@ mod tests {
             },
         )
         .expect("an encoder");
-        let priced = p.picture(mode);
+        let priced = intent.picture();
         let pin = pyrowave_mode_kbps(None, &priced, &p, None);
+        let encoded = intent.encoded(reframe.out);
         (
             reframe.out,
-            rate_at_encoded(pin, false, priced, reframe.out, &p, None),
+            rate_at_encoded(pin, false, &priced, &encoded, &p, None),
         )
     }
 

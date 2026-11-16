@@ -150,7 +150,7 @@ impl CaptureLossRebuild for StreamState {
     #[cfg(target_os = "linux")]
     fn reattach(&mut self, keepalive: Box<dyn Send>) -> Option<Pipeline> {
         let lease = self.live.lease.clone()?;
-        let req = self.build_request(self.live.intent.mode(), self.live.bitrate_kbps);
+        let req = self.build_request(self.live.intent, self.live.bitrate_kbps);
         match reattach_pipeline(&mut self.display.vd, lease, keepalive, &req) {
             Ok(p) => {
                 tracing::info!(
@@ -178,7 +178,7 @@ impl CaptureLossRebuild for StreamState {
         if pf_host_config::config().compositor.is_none() {
             self.retarget_to_live_session();
         }
-        let req = self.build_request(self.live.intent.mode(), self.live.bitrate_kbps);
+        let req = self.build_request(self.live.intent, self.live.bitrate_kbps);
         build_pipeline_with_retry(
             &mut self.display.vd,
             &req,
@@ -565,12 +565,12 @@ impl StreamState {
                         .unwrap_or_else(|| self.display.vd_params.clone())
                 };
                 params.apply(&mut *vd);
-                let req = self.build_request(plan.intent.mode(), plan.rate_kbps);
+                let req = self.build_request(plan.intent, plan.rate_kbps);
                 let pipe = build_on(&mut vd, &req, &self.facts.life, None, build, trace)?;
                 Ok(Built::pipeline(pipe, Some(vd)))
             }
             (build, _) => {
-                let req = self.build_request(plan.intent.mode(), plan.rate_kbps);
+                let req = self.build_request(plan.intent, plan.rate_kbps);
                 let live_gen = self.live.cur_display_gen;
                 let vd = &mut self.display.vd;
                 let pipe = build_on(vd, &req, &self.facts.life, live_gen, build, trace)?;
@@ -592,10 +592,13 @@ impl StreamState {
     ) -> Result<Built> {
         let ed = self.enc_now();
         let wire_seq_base = self.clock.next_au();
-        let priced = self.plan.picture(plan.intent.mode());
+        let (intent, priced) = (plan.intent, plan.intent.picture());
         let (auto, cap) = (self.facts.bitrate_auto, self.facts.knobs.pyrowave_max_kbps);
         let kbps_for = |w, h| match plan.epilogue.rate {
-            Rate::Built => rate_at_encoded(plan.rate_kbps, auto, priced, (w, h), &self.plan, cap),
+            Rate::Built => {
+                let encoded = intent.encoded((w, h));
+                rate_at_encoded(plan.rate_kbps, auto, &priced, &encoded, &self.plan, cap)
+            }
             Rate::Applied => plan.rate_kbps,
         };
         let (enc, reframe) = open_session_encoder_with(
@@ -650,10 +653,13 @@ impl StreamState {
     #[cfg(target_os = "windows")]
     fn in_place(&mut self, plan: &RebuildPlan, trace: &Trace) -> Option<(Next, u32)> {
         let recover_ring = plan.reason == super::swap::SwapReason::TopologyReassert;
-        let (session, priced) = (self.plan, self.plan.picture(plan.intent.mode()));
+        let (session, intent) = (self.plan, plan.intent);
         let (auto, cap) = (self.facts.bitrate_auto, self.facts.knobs.pyrowave_max_kbps);
         let kbps_for = move |w, h| match plan.epilogue.rate {
-            Rate::Built => rate_at_encoded(plan.rate_kbps, auto, priced, (w, h), &session, cap),
+            Rate::Built => {
+                let (priced, encoded) = (intent.picture(), intent.encoded((w, h)));
+                rate_at_encoded(plan.rate_kbps, auto, &priced, &encoded, &session, cap)
+            }
             Rate::Applied => plan.rate_kbps,
         };
         let next = self.resize(plan.intent.mode(), kbps_for, trace, recover_ring)?;
@@ -1839,6 +1845,7 @@ pub(crate) mod tests {
     #[test]
     fn an_encoder_that_cannot_frame_the_view_reprices_pyrowave() {
         use crate::native::bitrate::pyrowave_mode_kbps;
+        use crate::native::geometry::Picture;
         let mut f = super::super::swap::tests::fake();
         let full = mode((1920, 1080), 60);
         f.st.live.frame = frame((1920, 1080));
@@ -1847,7 +1854,7 @@ pub(crate) mod tests {
         f.st.plan.pyrowave_bpp = 4.0;
         let ask = RebuildAsk::Mode(ask(full, Some((1280, 720))));
         let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("an encoder rebuild");
-        let at_mode = pyrowave_mode_kbps(None, &full, &f.st.plan, None);
+        let at_mode = pyrowave_mode_kbps(None, &Picture::of(full), &f.st.plan, None);
         assert!(plan.rate_kbps < at_mode, "the plan priced the view");
         let enc_bps = u64::from(f.st.enc_now().enc_kbps(at_mode)) * 1000;
         let mut opened = Vec::new();
@@ -2116,7 +2123,7 @@ pub(crate) mod tests {
             let mut opened_for = None;
             let built = f.st.perform(plan, ask, |st, plan, _, _| {
                 opened_for = Some(
-                    st.build_request(plan.intent.mode(), plan.rate_kbps)
+                    st.build_request(plan.intent, plan.rate_kbps)
                         .plan
                         .reframe_to,
                 );
@@ -2143,7 +2150,7 @@ pub(crate) mod tests {
         let mut opened_for = None;
         let built = f.st.perform(plan, ask, |st, plan, _, _| {
             opened_for = Some(
-                st.build_request(plan.intent.mode(), plan.rate_kbps)
+                st.build_request(plan.intent, plan.rate_kbps)
                     .plan
                     .reframe_to,
             );
@@ -2407,8 +2414,8 @@ pub(crate) mod tests {
         let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
         let mut retried = None;
         let built = f.st.perform(plan, ask, |st, plan, _, _| {
-            let req = st.build_request(plan.intent.mode(), plan.rate_kbps);
-            retried = Some((req.mode, req.plan.reframe_to));
+            let req = st.build_request(plan.intent, plan.rate_kbps);
+            retried = Some((req.intent.mode(), req.plan.reframe_to));
             script(Script::Pipeline(SMALL, 20_000), plan.rate_kbps, &keyframes)
         });
         assert!(matches!(built, Ok(Rebuilt::Built)));
@@ -2529,7 +2536,7 @@ pub(crate) mod tests {
         let size = (plan.intent.mode().width, plan.intent.mode().height);
         let (enc, reframe) = fitted(
             size,
-            st.build_request(plan.intent.mode(), plan.rate_kbps)
+            st.build_request(plan.intent, plan.rate_kbps)
                 .plan
                 .reframe_to,
         )?;

@@ -744,8 +744,7 @@ pub(super) mod tests {
             !Arc::ptr_eq(&session, &crate::encode::resolve()),
             "the write moves what the next session resolves"
         );
-        let req =
-            f.st.build_request(f.st.live.intent.mode(), f.st.live.bitrate_kbps);
+        let req = f.st.build_request(f.st.live.intent, f.st.live.bitrate_kbps);
         let mut on_session = false;
         super::super::pipeline::open_session_encoder_with(
             &req.terms.encoder,

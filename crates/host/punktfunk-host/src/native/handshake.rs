@@ -592,11 +592,6 @@ pub(in crate::native) struct SessionTerms {
 }
 
 impl SessionTerms {
-    /// The Welcome's mode at the size the encoder means to take it to, as the Welcome priced it.
-    pub(in crate::native) fn picture(&self) -> punktfunk_core::Mode {
-        crate::session_plan::picture(self.intent.mode(), self.intent.view())
-    }
-
     /// `Hello::bitrate_kbps == 0`. A mode switch re-resolves PyroWave's pin either way, and an
     /// Automatic rate is held inside the new bounds. Another codec's explicit rate stays.
     pub(in crate::native) fn bitrate_auto(&self) -> bool {
@@ -719,11 +714,10 @@ pub(super) async fn negotiate(
     let pyrowave_bpp = session_pyrowave_bpp(n.first.pyrowave_bpp_x100);
     let slices = crate::session_plan::client_slices(hello.video_caps, n.first.slices);
     // Priced at the picture the encoder means to take, as every build of the session prices it.
-    let picture = crate::session_plan::picture(intent.mode(), intent.view());
     let bitrate_kbps = resolve_bitrate_kbps_for(
         codec,
         hello.bitrate_kbps,
-        &picture,
+        &intent.picture(),
         chroma,
         bit_depth,
         pyrowave_bpp,
@@ -1099,10 +1093,9 @@ fn server_hello(n: &Negotiation<'_>, t: &SessionTerms, welcome: Welcome) -> Serv
     if !n.conn.is_web() {
         offered = offered.with(punktfunk_core::quic::v2::registry::FEATURE_PCM_PARTS);
     }
-    // The picture the Welcome's rate was priced at.
-    let picture = t.picture();
     ServerHello {
-        picture: crate::session_plan::picture_field(welcome.mode, (picture.width, picture.height)),
+        // The picture the Welcome's rate was priced at.
+        picture: t.intent.picture().wire(welcome.mode),
         welcome,
         session_id: session.session_id,
         clock_origin_ns: session.clock.origin_ns(),
@@ -2198,12 +2191,12 @@ pub(crate) mod tests {
         assert_eq!(on_pyrowave.bitrate_kbps, 80_000, "Fixed stays Fixed");
         settle_bitrate(&mut hello, CODEC_HEVC);
         assert_eq!(hello.bitrate_kbps, 0);
-        let mode = hello.mode;
+        let picture = Intent::of(hello.mode, None).picture();
         assert_eq!(
             resolve_bitrate_kbps_for(
                 crate::encode::Codec::H265,
                 hello.bitrate_kbps,
-                &mode,
+                &picture,
                 crate::encode::ChromaFormat::Yuv420,
                 8,
                 session_pyrowave_bpp(0),
@@ -2310,8 +2303,8 @@ pub(crate) mod tests {
         use crate::encode::Codec::{PyroWave, H265};
         let at_1_5x = mode(2048, 1152, 120);
         let own = Tenure::of(None, false);
-        let kept_view = |view, mode, codec| Intent::at_hello(mode, view, &own, codec).view();
-        let kept = |view, codec| kept_view(Some(view), at_1_5x, codec);
+        let view_at = |view, mode, codec| Intent::at_hello(mode, view, &own, codec).view();
+        let kept = |view, codec| view_at(Some(view), at_1_5x, codec);
         assert_eq!(kept((1366, 768), H265), Some((1366, 768)), "fine");
         assert_eq!(
             kept((2048, 768), H265),
@@ -2324,7 +2317,7 @@ pub(crate) mod tests {
         assert_eq!(kept((1367, 768), H265), None, "odd");
         assert_eq!(kept((0, 768), H265), None, "zero");
         assert_eq!(kept((120, 100), PyroWave), None, "under the codec's floor");
-        assert_eq!(kept_view(None, at_1_5x, H265), None);
+        assert_eq!(view_at(None, at_1_5x, H265), None);
     }
 
     /// A joiner frames for its own view at its fit, whatever view the client also named; any
@@ -2390,18 +2383,16 @@ pub(crate) mod tests {
         );
         let mode = deliverable_rate(mode, exact);
         let intent = Intent::at_hello(mode, asked.view(), &tenure, codec);
-        let picture = crate::session_plan::picture(intent.mode(), intent.view());
         let kbps = resolve_bitrate_kbps_for(
             codec,
             kbps,
-            &picture,
+            &intent.picture(),
             crate::encode::ChromaFormat::Yuv420,
             8,
             session_pyrowave_bpp(160),
             None,
         );
-        let wire = crate::session_plan::picture_field(mode, (picture.width, picture.height));
-        (mode, kbps, wire)
+        (mode, kbps, intent.picture().wire(mode))
     }
 
     /// One Hello and the Welcome it gets.
