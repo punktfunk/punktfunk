@@ -36,7 +36,7 @@ int main(void) {
      * older caller's sizeof covered. The size-prefix guard rejects an undersized struct as a
      * status, not a read. The staticlib this links always carries quic. */
 #ifdef PUNKTFUNK_FEATURE_QUIC
-    if (sizeof(PunktfunkConnectOpts) != (sizeof(void *) == 8 ? 216u : 152u)
+    if (sizeof(PunktfunkConnectOpts) != (sizeof(void *) == 8 ? 224u : 160u)
         || offsetof(PunktfunkConnectOpts, video_fit) != (sizeof(void *) == 8 ? 100u : 72u)
         || offsetof(PunktfunkConnectOpts, delivery_flags) != (sizeof(void *) == 8 ? 121u : 85u)
         || offsetof(PunktfunkConnectOpts, profile_id) != (sizeof(void *) == 8 ? 128u : 92u)
@@ -48,9 +48,10 @@ int main(void) {
         || offsetof(PunktfunkConnectOpts, view_width) != (sizeof(void *) == 8 ? 192u : 136u)
         || offsetof(PunktfunkConnectOpts, screen_views) != (sizeof(void *) == 8 ? 200u : 144u)
         || offsetof(PunktfunkConnectOpts, host_screen) != (sizeof(void *) == 8 ? 208u : 148u)
+        || offsetof(PunktfunkConnectOpts, refresh_mhz) != (sizeof(void *) == 8 ? 216u : 152u)
         || sizeof(PunktfunkProfileUnlock) != (sizeof(void *) == 8 ? 40u : 24u)
         || sizeof(PunktfunkScreen) != 24u || sizeof(PunktfunkScreenView) != 8u) {
-        fprintf(stderr, "FAIL: PunktfunkConnectOpts is %zu bytes, video_fit at %zu, delivery_flags at %zu, profile_id at %zu, pyrowave_bpp_x100 at %zu, on_pending at %zu, screens at %zu, unlock at %zu, view_width at %zu, screen_views at %zu, host_screen at %zu; PunktfunkScreen is %zu, PunktfunkProfileUnlock %zu\n",
+        fprintf(stderr, "FAIL: PunktfunkConnectOpts is %zu bytes, video_fit at %zu, delivery_flags at %zu, profile_id at %zu, pyrowave_bpp_x100 at %zu, on_pending at %zu, screens at %zu, unlock at %zu, view_width at %zu, screen_views at %zu, host_screen at %zu, refresh_mhz at %zu; PunktfunkScreen is %zu, PunktfunkProfileUnlock %zu\n",
                 sizeof(PunktfunkConnectOpts), offsetof(PunktfunkConnectOpts, video_fit),
                 offsetof(PunktfunkConnectOpts, delivery_flags),
                 offsetof(PunktfunkConnectOpts, profile_id),
@@ -60,6 +61,7 @@ int main(void) {
                 offsetof(PunktfunkConnectOpts, view_width),
                 offsetof(PunktfunkConnectOpts, screen_views),
                 offsetof(PunktfunkConnectOpts, host_screen),
+                offsetof(PunktfunkConnectOpts, refresh_mhz),
                 sizeof(PunktfunkScreen), sizeof(PunktfunkProfileUnlock));
         return 1;
     }
@@ -67,6 +69,14 @@ int main(void) {
     if (punktfunk_connection_request_mode_view(NULL, 2048, 1152, 60, 1366, 768)
         != PUNKTFUNK_STATUS_NULL_POINTER) {
         fprintf(stderr, "FAIL: punktfunk_connection_request_mode_view on a null connection\n");
+        return 1;
+    }
+    /* And for the exact-rate ask and its read-back. */
+    uint32_t mhz = 0;
+    if (punktfunk_connection_request_mode_exact(NULL, 2048, 1152, 59940, true, 0, 0)
+            != PUNKTFUNK_STATUS_NULL_POINTER
+        || punktfunk_connection_refresh_mhz(NULL, &mhz) != PUNKTFUNK_STATUS_NULL_POINTER) {
+        fprintf(stderr, "FAIL: an exact-rate call on a null connection\n");
         return 1;
     }
     if (punktfunk_connection_request_screens_view(NULL, NULL, NULL, 0)

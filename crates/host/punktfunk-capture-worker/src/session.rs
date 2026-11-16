@@ -149,13 +149,14 @@ fn run(stop: RawHandle, ctx: ThreadCtx) {
         source.detach(&pool);
         return;
     }
+    let panel_hz = if source.refresh_hz == 0 {
+        spec.fps
+    } else {
+        source.refresh_hz
+    };
     let rates = Rates {
-        fps: spec.fps,
-        panel_hz: if source.refresh_hz == 0 {
-            spec.fps
-        } else {
-            source.refresh_hz
-        },
+        fps_mhz: spec.fps.saturating_mul(1000),
+        panel_mhz: panel_hz.saturating_mul(1000),
     };
     // This thread is never detached: a stop that fails ends the process.
     let live = AtomicBool::new(true);

@@ -431,6 +431,7 @@ pub(super) mod tests {
             width: SMALL.0,
             height: SMALL.1,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let now = Instant::now();
         let life = crate::lifecycle::Lifecycle::new();

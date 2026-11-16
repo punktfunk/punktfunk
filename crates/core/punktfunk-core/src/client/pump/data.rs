@@ -680,6 +680,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let anchor = crate::packet::USER_FLAG_RECOVERY_ANCHOR;
         for (codec, flags, expect) in [
@@ -734,6 +735,7 @@ mod tests {
             width: 1280,
             height: 720,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let origin = crate::quic::wall_clock_ns();
         let (host_tp, session) = idle_client_session(origin);
@@ -799,6 +801,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let origin = crate::quic::wall_clock_ns();
         let (host_tp, mut session) = idle_client_session(origin);
@@ -863,6 +866,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         for (codec, lost, expect_rfi) in [
             (CODEC_HEVC, 16usize, false),
@@ -946,6 +950,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let (_host_tp, session) = idle_client_session(crate::quic::wall_clock_ns());
         let shared = Arc::new(ClientShared::new(mode));
@@ -994,6 +999,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let (_host_tp, session) = idle_client_session(crate::quic::wall_clock_ns());
         let shared = Arc::new(ClientShared::new(mode));
@@ -1042,6 +1048,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         // Explicit bitrate (not Automatic): keep the controller and the
         // startup probe out. The probe would discard a window of its own.

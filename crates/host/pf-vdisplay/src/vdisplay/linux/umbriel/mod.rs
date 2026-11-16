@@ -147,10 +147,9 @@ fn reclaim_leftovers_once() {
     });
 }
 
-/// `mode` is `width`×`height` at `hz`, its refresh within 1 Hz.
-fn mode_matches(mode: &ipc::OutputMode, width: u32, height: u32, hz: u32) -> bool {
-    (mode.width, mode.height) == (width, height)
-        && mode.refresh_mhz.abs_diff(hz.saturating_mul(1000)) <= 1000
+/// `mode` is `width`×`height` at `mhz`, its refresh within 1 Hz.
+fn mode_matches(mode: &ipc::OutputMode, width: u32, height: u32, mhz: u32) -> bool {
+    (mode.width, mode.height) == (width, height) && mode.refresh_mhz.abs_diff(mhz) <= 1000
 }
 
 /// Poll until `name` is listed at `mode`, then return what it runs as `(width, height,
@@ -163,7 +162,7 @@ fn wait_for_mode(name: &str, mode: Mode) -> Result<(u32, u32, u32)> {
             .find(|o| o.name == name)
             .and_then(|o| o.mode().cloned());
         match current {
-            Some(m) if mode_matches(&m, mode.width, mode.height, mode.refresh_hz) => {
+            Some(m) if mode_matches(&m, mode.width, mode.height, mode.millihz()) => {
                 return Ok((m.width, m.height, m.refresh_mhz));
             }
             Some(m) if Instant::now() >= deadline => {
@@ -314,7 +313,7 @@ impl VirtualDisplay for UmbrielDisplay {
             name: name.clone(),
             seq,
         };
-        ipc::create_output(&name, mode.width, mode.height, mode.refresh_hz)
+        ipc::create_output(&name, mode.width, mode.height, mode.millihz().max(1000))
             .context("create an umbriel virtual output")?;
         let (width, height, mhz) = wait_for_mode(&name, mode)?;
         focus_output(&name);
@@ -329,6 +328,7 @@ impl VirtualDisplay for UmbrielDisplay {
         }
         let mut out =
             VirtualOutput::owned(0, Some((width, height, mode.refresh_hz)), Box::new(output));
+        out.refresh_mhz = Some(mhz);
         // Direct capture and absolute input find the output by its `wl_output` name.
         out.output_name = Some(name);
         Ok(out)
@@ -366,10 +366,11 @@ mod tests {
             refresh_mhz: mhz,
             current: true,
         };
-        assert!(mode_matches(&m(2560, 1600, 120_000), 2560, 1600, 120));
-        assert!(mode_matches(&m(1920, 1080, 59_940), 1920, 1080, 60));
-        assert!(!mode_matches(&m(1920, 1080, 58_000), 1920, 1080, 60));
-        assert!(!mode_matches(&m(1920, 1200, 60_000), 1920, 1080, 60));
+        assert!(mode_matches(&m(2560, 1600, 120_000), 2560, 1600, 120_000));
+        assert!(mode_matches(&m(1920, 1080, 59_940), 1920, 1080, 60_000));
+        assert!(mode_matches(&m(1920, 1080, 59_940), 1920, 1080, 59_940));
+        assert!(!mode_matches(&m(1920, 1080, 58_000), 1920, 1080, 60_000));
+        assert!(!mode_matches(&m(1920, 1200, 60_000), 1920, 1080, 60_000));
     }
 
     /// The journal reads the heads back after every `EnableHeads` undo; a backend that lists

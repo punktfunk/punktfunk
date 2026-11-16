@@ -11,7 +11,8 @@
 //! pin, so they are left alone.
 //!
 //! [`window_monitor`] names the monitor the window is on, the key the HDR volume
-//! lookup matches DXGI outputs against.
+//! lookup matches DXGI outputs against. [`window_refresh_mhz`] reads that monitor's
+//! exact rate.
 
 use windows_sys::core::w;
 use windows_sys::Win32::Foundation::{APPMODEL_ERROR_NO_PACKAGE, HWND, LPARAM, WPARAM};
@@ -60,6 +61,74 @@ pub(crate) fn window_monitor(window: &sdl3::video::Window) -> Option<isize> {
     // SAFETY: `hwnd` is SDL's live handle; the call only reads it and returns a monitor handle.
     let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
     (!monitor.is_null()).then_some(monitor as isize)
+}
+
+/// The exact rate of the monitor the window is on, in millihertz, off its active display
+/// path. SDL reads whole hertz here and guesses the fraction, so 59.80 Hz reads 59.94.
+/// `None` when Windows names no path for the monitor.
+pub(crate) fn window_refresh_mhz(window: &sdl3::video::Window) -> Option<u32> {
+    use windows_sys::Win32::Devices::Display::{
+        DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig,
+        DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO,
+        DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
+    };
+    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO, MONITORINFOEXW};
+    let hwnd = window_hwnd(window)?;
+    // SAFETY: MONITORINFOEXW is integers and a name array; all-zero is a valid value.
+    let mut info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
+    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    // SAFETY: `hwnd` is SDL's live handle. `info` is a local whose `cbSize` names the EX form,
+    // which starts with the MONITORINFO the call is typed for.
+    let named = unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        GetMonitorInfoW(monitor, (&raw mut info).cast::<MONITORINFO>())
+    };
+    if named == 0 {
+        return None;
+    }
+    let (mut np, mut nm) = (0u32, 0u32);
+    // SAFETY: both counts are live locals the call fills.
+    if unsafe { GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut np, &mut nm) } != 0
+        || np == 0
+    {
+        return None;
+    }
+    // SAFETY: both records are integers and unions of integers; all-zero is a valid value.
+    let (path, mode): (DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_MODE_INFO) =
+        unsafe { (std::mem::zeroed(), std::mem::zeroed()) };
+    let mut paths = vec![path; np as usize];
+    let mut modes = vec![mode; nm as usize];
+    // SAFETY: each array holds the count passed beside it, and the call writes no more. The
+    // topology id is only written under `QDC_DATABASE_CURRENT`, so null is allowed here.
+    let rc = unsafe {
+        QueryDisplayConfig(
+            QDC_ONLY_ACTIVE_PATHS,
+            &mut np,
+            paths.as_mut_ptr(),
+            &mut nm,
+            modes.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    paths.truncate(np as usize);
+    paths.iter().find_map(|p| {
+        // SAFETY: the request packet is integers and a name array; all-zero is a valid value.
+        let mut name: DISPLAYCONFIG_SOURCE_DEVICE_NAME = unsafe { std::mem::zeroed() };
+        name.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        name.header.size = std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
+        name.header.adapterId = p.sourceInfo.adapterId;
+        name.header.id = p.sourceInfo.id;
+        // SAFETY: the header states the packet's own type and size, and `name` outlives the call.
+        let found = unsafe { DisplayConfigGetDeviceInfo(&mut name.header) } == 0;
+        let rate = p.targetInfo.refreshRate;
+        (found && name.viewGdiDeviceName == info.szDevice && rate.Denominator > 0).then(|| {
+            let den = u64::from(rate.Denominator);
+            ((u64::from(rate.Numerator) * 1000 + den / 2) / den) as u32
+        })
+    })
 }
 
 /// Resource ordinal 1 onto this HWND. No-op when the exe embeds no icon.

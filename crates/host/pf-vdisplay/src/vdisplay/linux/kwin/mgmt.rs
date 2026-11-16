@@ -98,6 +98,37 @@ use crate::kwin::{CVT_H_GRANULARITY, MANAGED_PREFIX};
 /// would be a protocol error that kills the connection — every call site gates on this.
 const REPLICATION_SOURCE_SINCE: u32 = 13;
 
+/// `kde_mode_list_v2.add_cvt` arrived in v22: a mode whose timing the client states.
+/// `add_mode` generates CVT timing instead, whose rounded pixel clock moves the rate off
+/// the one asked.
+const STATED_TIMING_SINCE: u32 = 22;
+
+/// `DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_NVSYNC`, the CVT reduced-blanking polarity.
+const STATED_TIMING_FLAGS: u32 = 0x1 | 0x8;
+
+/// The rate KWin derives from a modeline, in millihertz: `CvtModeline::refreshRate`.
+fn modeline_mhz(clock_khz: u64, htotal: u64, vtotal: u64) -> u64 {
+    (clock_khz * 1_000_000 / htotal + vtotal / 2) / vtotal
+}
+
+/// `(pixel clock in kHz, htotal, vtotal)` for `width`×`height` at exactly `mhz`. A clock
+/// is whole kilohertz, so the totals are searched for a pair KWin reads back as `mhz`.
+fn stated_timing(width: u32, height: u32, mhz: u32) -> Option<(u32, u32, u32)> {
+    let (first_h, first_v) = (u64::from(width) + 160, u64::from(height) + 32);
+    (first_v..first_v + 64)
+        .flat_map(|vtotal| (first_h..first_h + 64).map(move |htotal| (htotal, vtotal)))
+        .filter(|&(htotal, vtotal)| htotal <= 0xffff && vtotal <= 0xffff)
+        .find_map(|(htotal, vtotal)| {
+            let clock = (u64::from(mhz) * htotal * vtotal + 500_000) / 1_000_000;
+            let clock = u32::try_from(clock).ok().filter(|&c| c > 0)?;
+            (modeline_mhz(u64::from(clock), htotal, vtotal) == u64::from(mhz)).then_some((
+                clock,
+                htotal as u32,
+                vtotal as u32,
+            ))
+        })
+}
+
 /// The `source` value that means "this output mirrors nothing" — KWin's `applyMirroring` looks the
 /// source UUID up among the enabled outputs and treats an empty string as no replication at all.
 const NO_REPLICATION_SOURCE: &str = "";
@@ -957,17 +988,18 @@ fn position_target<'a>(
     }
 }
 
-/// Install and select a `want_w`×`want_h`@`want_hz` custom mode on the virtual output
+/// Install and select a `want_w`×`want_h` custom mode at `want_mhz` on the virtual output
 /// named `our_prefix`, which sits at `at_w`×`at_h` right now — its sacrificial birth size,
 /// or wherever KWin's stored setup put it. Addressing it by a size it has already left
 /// resolves nothing. In-process replacement for `kscreen-doctor` `addCustomMode`.
 ///
-/// `set_custom_modes` hands KWin a one-entry list; KWin generates CVT timing
-/// (width may align down — [`CVT_H_GRANULARITY`]) and we then select it, which
-/// changes size and renegotiates the screencast (`kwin::create`). Runs on `sess`
-/// from [`watch`]. Returns the active mode read back (Hz rounded). `set_custom_modes`
-/// replaces the custom list; on a bind below v18 it is a protocol error, so [`gate`]
-/// declines first.
+/// `set_custom_modes` hands KWin a one-entry list. From v22 the entry states its timing
+/// ([`stated_timing`]) and runs at exactly `want_mhz`. Below, KWin generates CVT timing:
+/// the width may align down ([`CVT_H_GRANULARITY`]) and the rate lands near the ask.
+/// Selecting the mode changes size and renegotiates the screencast (`kwin::create`).
+/// Runs on `sess` from [`watch`]. Returns the active mode read back, in millihertz.
+/// `set_custom_modes` replaces the custom list; on a bind below v18 it is a protocol
+/// error, so [`gate`] declines first.
 pub(crate) fn set_custom_mode(
     sess: Option<&mut Session>,
     our_prefix: &str,
@@ -975,7 +1007,7 @@ pub(crate) fn set_custom_mode(
     at_h: u32,
     want_w: u32,
     want_h: u32,
-    want_hz: u32,
+    want_mhz: u32,
 ) -> Result<(u32, u32, u32), Declined> {
     let deadline = Instant::now() + OP_BUDGET;
     let sess = ready(sess, Op::CustomMode, deadline)?;
@@ -986,24 +1018,45 @@ pub(crate) fn set_custom_mode(
         .ok_or_else(unresolved)?;
     let our_key = our_proxy.id();
 
-    let want_mhz = want_hz.saturating_mul(1000);
-    // Exact height, width at/just-below the request (CVT alignment), refresh within
-    // 1 Hz — excludes the sacrificial 60 Hz birth mode.
+    let stated =
+        stated_timing(want_w, want_h, want_mhz).filter(|_| sess.version() >= STATED_TIMING_SINCE);
+    // Exact height, width at/just-below the request (CVT alignment). A generated mode is
+    // within 1 Hz, which excludes the sacrificial 60 Hz birth mode. A stated one is exact,
+    // which excludes a birth mode 0.06 Hz away.
+    let slack = if stated.is_some() { 0 } else { 1000 };
     let mode_matches = move |st: &State, mid: &ObjectId| -> bool {
         st.mode_dims.get(mid).is_some_and(|&(w, h, mhz)| {
             h == want_h
                 && w <= want_w
                 && want_w - w < CVT_H_GRANULARITY
-                && (mhz as i64 - want_mhz as i64).abs() <= 1000
+                && mhz.abs_diff(want_mhz) <= slack
         })
     };
 
-    // Full blanking, matching kscreen-doctor's `.full`.
     let mode_list = sess.new_mode_list();
-    mode_list.set_resolution(want_w, want_h);
-    mode_list.set_refresh_rate(want_mhz);
-    mode_list.set_reduced_blanking(0);
-    mode_list.add_mode();
+    match stated {
+        Some((clock, htotal, vtotal)) => mode_list.add_cvt(
+            clock,
+            want_w,
+            want_w + 48,
+            want_w + 80,
+            htotal,
+            0,
+            want_h,
+            want_h + 3,
+            want_h + 8,
+            vtotal,
+            1,
+            STATED_TIMING_FLAGS,
+        ),
+        // Full blanking, matching kscreen-doctor's `.full`.
+        None => {
+            mode_list.set_resolution(want_w, want_h);
+            mode_list.set_refresh_rate(want_mhz);
+            mode_list.set_reduced_blanking(0);
+            mode_list.add_mode();
+        }
+    }
     let config = sess.new_config();
     config.set_custom_modes(&our_proxy, &mode_list);
     let installed = sess.apply(&config, deadline);
@@ -1020,7 +1073,7 @@ pub(crate) fn set_custom_mode(
     };
     if !sess.pump_until(deadline, found) {
         return Err(Declined::Unresolved(format!(
-            "the generated {want_w}x{want_h}@{want_hz} mode"
+            "the {want_w}x{want_h} custom mode at {want_mhz} mHz"
         )));
     }
 
@@ -1069,17 +1122,46 @@ pub(crate) fn set_custom_mode(
         .get(&our_key)
         .and_then(|dev| sess.current_dims(dev))
         .ok_or_else(unresolved)?;
-    let hz = ((cmhz as f64) / 1000.0).round() as u32;
     tracing::info!(
         want_w,
         want_h,
-        want_hz,
+        want_mhz,
         active_w = cw,
         active_h = ch,
-        active_hz = hz,
+        active_mhz = cmhz,
+        stated = stated.is_some(),
         "KWin output management: custom mode installed + selected (in-process)"
     );
-    Ok((cw, ch, hz.max(1)))
+    Ok((cw, ch, cmhz.max(1000)))
+}
+
+/// Put our output, at `dims`, on exactly `want_mhz`, and answer the rate it runs. Only a
+/// KWin that takes stated timing can move it: any other keeps the rate it has. `None`
+/// when the output cannot be read.
+pub(crate) fn settle_rate(
+    mut sess: Option<&mut Session>,
+    our_prefix: &str,
+    dims: (u32, u32),
+    want_mhz: u32,
+) -> Option<u32> {
+    let (_, _, at, _) = actual_dims(sess.as_deref_mut(), our_prefix)?;
+    let states = sess
+        .as_deref()
+        .is_some_and(|s| s.version() >= STATED_TIMING_SINCE);
+    if at == want_mhz || !states {
+        return Some(at);
+    }
+    let (w, h) = dims;
+    match set_custom_mode(sess, our_prefix, w, h, w, h, want_mhz) {
+        Ok((_, _, mhz)) => Some(mhz),
+        Err(why) => {
+            tracing::warn!(
+                our_prefix, want_mhz, at_mhz = at, %why,
+                "KWin kept the output's rate — streaming at the one it runs"
+            );
+            Some(at)
+        }
+    }
 }
 
 /// Re-enable outputs by name at their captured `WxH@Hz` (teardown). `Ok` only if
@@ -1292,6 +1374,53 @@ mod tests {
     fn replication_source_version_gate_matches_the_protocol() {
         assert_eq!(REPLICATION_SOURCE_SINCE, 13);
         const { assert!(MGMT_MAX >= REPLICATION_SOURCE_SINCE) };
+    }
+
+    /// Every rate a client asks lands to the millihertz, inside the modeline's 16-bit totals.
+    #[test]
+    fn stated_timing_reads_back_as_the_rate_asked() {
+        const { assert!(MGMT_MAX >= STATED_TIMING_SINCE) };
+        let sizes = [
+            (640, 360),
+            (1280, 720),
+            (1920, 1080),
+            (2560, 1600),
+            (7680, 4320),
+        ];
+        let rates = [
+            23_976, 29_970, 47_952, 59_940, 59_800, 60_000, 119_880, 120_000, 143_856, 239_760,
+        ];
+        for (w, h) in sizes {
+            for mhz in rates {
+                let (clock, htotal, vtotal) = stated_timing(w, h, mhz).expect("timing");
+                assert!(htotal > w && vtotal > h, "{w}x{h}@{mhz}");
+                assert!(htotal <= 0xffff && vtotal <= 0xffff, "{w}x{h}@{mhz}");
+                let got = modeline_mhz(clock.into(), htotal.into(), vtotal.into());
+                assert_eq!(got, u64::from(mhz), "{w}x{h}");
+            }
+        }
+    }
+
+    /// `PF_KWIN_OUTPUT=<name> PF_KWIN_MHZ=<rate>`: put that output of the live KWin, by
+    /// default the first it lists, on the rate and print what it reads back.
+    #[test]
+    #[ignore = "needs a live KWin; run with --ignored"]
+    fn live_kwin_runs_a_stated_rate() {
+        let first = || Some(list_monitors().ok()?.first()?.connector.clone());
+        let name = std::env::var("PF_KWIN_OUTPUT")
+            .ok()
+            .or_else(first)
+            .expect("an output");
+        let want: u32 = std::env::var("PF_KWIN_MHZ")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(59_940);
+        let mut sess = watch();
+        let bound = sess.as_ref().map(Session::version);
+        let (w, h, at, _) = actual_dims(sess.as_mut(), &name).expect("output listed");
+        let ran = settle_rate(sess.as_mut(), &name, (w, h), want);
+        println!("bound={bound:?} {name} {w}x{h} at={at} want={want} ran={ran:?}");
+        assert_eq!(ran, Some(want));
     }
 
     #[test]

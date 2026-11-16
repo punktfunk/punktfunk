@@ -411,6 +411,10 @@ pub struct StatsSnapshot {
     pub width: u32,
     pub height: u32,
     pub refresh_hz: u32,
+    /// The exact rate in millihertz when it is not whole hertz, else `0` ([`Mode::refresh_mhz`]).
+    ///
+    /// [`Mode::refresh_mhz`]: crate::config::Mode::refresh_mhz
+    pub refresh_mhz: u32,
     /// The decoded picture's size, set by an embedder that knows it. A host that scales sends
     /// less than `width`×`height`, and the mode line then leads with this.
     pub picture: Option<(u32, u32)>,
@@ -1233,12 +1237,19 @@ fn mode(s: &StatsSnapshot) -> Vec<String> {
     // Only a picture the host scaled down: a decoder's padded output is not one.
     let smaller =
         |(w, h): (u32, u32)| w <= s.width && h <= s.height && (w, h) != (s.width, s.height);
+    let rate = crate::config::Mode {
+        width: s.width,
+        height: s.height,
+        refresh_hz: s.refresh_hz,
+        refresh_mhz: s.refresh_mhz,
+    };
+    let hz = crate::config::hz_label(rate.millihz());
     match s.picture.filter(|&p| smaller(p)) {
         Some((w, h)) => vec![
-            format!("{w}×{h}@{}", s.refresh_hz),
+            format!("{w}×{h}@{hz}"),
             m::overlay_host_renders(s.width, s.height),
         ],
-        None => vec![format!("{}×{}@{}", s.width, s.height, s.refresh_hz)],
+        None => vec![format!("{}×{}@{hz}", s.width, s.height)],
     }
 }
 

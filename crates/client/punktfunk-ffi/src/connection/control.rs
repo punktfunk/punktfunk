@@ -82,6 +82,7 @@ pub unsafe extern "C" fn punktfunk_connection_request_mode(
             width,
             height,
             refresh_hz,
+            refresh_mhz: 0,
         }))
     })
 }
@@ -108,7 +109,37 @@ pub unsafe extern "C" fn punktfunk_connection_request_mode_view(
             width,
             height,
             refresh_hz,
+            refresh_mhz: 0,
         };
+        let view = (view_width > 0 && view_height > 0).then_some((view_width, view_height));
+        status_of(c.inner.request_mode_view(mode, view))
+    })
+}
+
+/// A mode switch at an exact rate: `refresh_mhz` is the rate in millihertz, `59940` for
+/// 59.94 Hz, and the whole rate is its rounding. `keep_view` leaves the host's view in place
+/// as [`punktfunk_connection_request_mode`] does, and the view arguments are not read; without
+/// it they are [`punktfunk_connection_request_mode_view`]'s. A host that takes no fraction
+/// switches to the whole rate; [`punktfunk_connection_refresh_mhz`] reads which.
+///
+/// # Safety
+/// `c` is a valid connection handle.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_request_mode_exact(
+    c: *const PunktfunkConnection,
+    width: u32,
+    height: u32,
+    refresh_mhz: u32,
+    keep_view: bool,
+    view_width: u32,
+    view_height: u32,
+) -> PunktfunkStatus {
+    with_conn!(c => {
+        let mode = punktfunk_core::config::Mode::exact(width, height, refresh_mhz);
+        if keep_view {
+            return status_of(c.inner.request_mode(mode));
+        }
         let view = (view_width > 0 && view_height > 0).then_some((view_width, view_height));
         status_of(c.inner.request_mode_view(mode, view))
     })

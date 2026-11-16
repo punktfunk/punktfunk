@@ -26,6 +26,27 @@ pub(super) fn game_hz(session_hz: u32) -> u32 {
     pf_host_config::config().game_fps(session_hz).max(1)
 }
 
+/// The rate a session at `mode` runs on a gamescope this host spawns, in millihertz: the
+/// mode's own where the binary runs a fraction, else whole hertz.
+pub(super) fn session_mhz(mode: Mode) -> u32 {
+    if gamescope_runs_exact_rates() {
+        mode.millihz()
+    } else {
+        mode.refresh_hz.saturating_mul(1000)
+    }
+}
+
+/// [`game_hz`] in millihertz: the session's fraction, unless a cap moved the game off the
+/// session's rate.
+pub(super) fn game_mhz(mode: Mode) -> u32 {
+    let hz = game_hz(mode.refresh_hz.max(1));
+    if hz == mode.refresh_hz {
+        session_mhz(mode)
+    } else {
+        hz.saturating_mul(1000)
+    }
+}
+
 /// Add the compositor-side arguments shared by every bare gamescope spawn. `steam_mode` belongs
 /// before the `--` terminator; [`PUNKTFUNK_GAMESCOPE_APP`](spawn()) configures the nested command
 /// after it and therefore cannot enable gamescope's Steam integration itself.
@@ -35,18 +56,19 @@ pub(super) fn game_hz(session_hz: u32) -> u32 {
 /// frames nobody asked for, while capture and the wire keep running at the client's own rate.
 fn add_bare_gamescope_args(
     command: &mut Command,
-    w: u32,
-    h: u32,
-    hz: u32,
+    mode: Mode,
     steam_mode: bool,
     grab_cursor: bool,
     hdr: bool,
 ) {
+    let hz = mode.refresh_hz.max(1);
+    // `60`, or `59.940` for a gamescope that reads a decimal.
+    let rate = punktfunk_core::config::hz_decimal(game_mhz(mode));
     command
         .args(["--backend", "headless"])
-        .args(["-W", &w.to_string()])
-        .args(["-H", &h.to_string()])
-        .args(["-r", &game_hz(hz).to_string()]);
+        .args(["-W", &mode.width.to_string()])
+        .args(["-H", &mode.height.to_string()])
+        .args(["-r", &rate]);
     if steam_mode {
         command.arg("--steam");
     }
@@ -237,14 +259,13 @@ pub(super) fn resolved_spawn_app(cmd: Option<&str>) -> Option<String> {
 /// runs hidden ([`mangoapp_config`]). Gamescope and the game write to [`spawn_log_path`] of
 /// `inst`, kept under [`LOG_CAP`].
 pub(super) fn spawn(
-    w: u32,
-    h: u32,
-    hz: u32,
+    mode: Mode,
     app: Option<String>,
     inst: u64,
     hdr: bool,
     iso: Option<&crate::SessionIsolation>,
 ) -> Result<Child> {
+    let (w, h, hz) = (mode.width, mode.height, mode.refresh_hz.max(1));
     let log = spawn_log_path(inst);
     // Real app vs `sleep infinity` keep-alive: scopes the game-only cursor-grab flag below.
     let game_launch = app.is_some();
@@ -287,7 +308,7 @@ pub(super) fn spawn(
     if let Some(config) = mangoapp_env {
         cmd.env("MANGOHUD_CONFIG", config);
     }
-    add_bare_gamescope_args(&mut cmd, w, h, hz, steam_mode, grab_cursor, hdr);
+    add_bare_gamescope_args(&mut cmd, mode, steam_mode, grab_cursor, hdr);
     let wsi = WsiPlan::resolve();
     if wsi == WsiPlan::DistroDisabled {
         // `hdr` is a field, not a gate: the layer is missing either way, and so is the fix.

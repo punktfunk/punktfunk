@@ -507,7 +507,8 @@ fn default_pyrowave_bpp() -> f64 {
 
 impl Settings {
     /// The mode a connect asks for: a `0` size or refresh takes `native`'s (a refresh under 30
-    /// reads 30), then render scale.
+    /// reads 30), then render scale. A `0` refresh takes the display's exact rate, 59.94 Hz
+    /// say; a picked one is whole hertz.
     pub fn stream_mode(&self, native: punktfunk_core::Mode) -> punktfunk_core::Mode {
         let (w, h) = self.stream_base(native);
         let (width, height) = punktfunk_core::render_scale::apply(
@@ -516,10 +517,16 @@ impl Settings {
             self.render_scale,
             punktfunk_core::render_scale::max_dimension(&self.codec),
         );
-        punktfunk_core::Mode {
+        let whole = punktfunk_core::Mode {
             width,
             height,
             refresh_hz: pick(self.refresh_hz, native.refresh_hz.max(30)),
+            refresh_mhz: 0,
+        };
+        if self.refresh_hz == 0 {
+            whole.stating(native.refresh_mhz)
+        } else {
+            whole
         }
     }
 
@@ -583,6 +590,17 @@ impl Settings {
         );
         (caption, link_warning(kbps, link))
     }
+}
+
+/// The Native option of Refresh rate, named with the rate it asks for on `native`'s display:
+/// `Native (59.94 Hz)`. The bare name where the display states no rate.
+pub fn native_refresh_label(native: punktfunk_core::Mode) -> String {
+    use pf_l10n::client as m;
+    if native.refresh_hz == 0 {
+        return m::player_refresh_hz_native().into();
+    }
+    let asked = Settings::default().stream_mode(native).millihz();
+    m::player_refresh_hz_native_rate(punktfunk_core::config::hz_label(asked))
 }
 
 /// `set`, or `native` where it is `0`.
@@ -1160,6 +1178,29 @@ mod tests {
         assert!(s.pad_rumble);
     }
 
+    /// Native asks for the display's exact rate; a picked rate is whole hertz as picked.
+    #[test]
+    fn native_refresh_is_the_displays_exact_rate() {
+        let native = punktfunk_core::Mode::exact(1920, 1080, 59_940);
+        let auto = Settings::default();
+        assert_eq!(auto.stream_mode(native).millihz(), 59_940);
+        let picked = Settings {
+            refresh_hz: 60,
+            ..Settings::default()
+        };
+        assert_eq!(picked.stream_mode(native).millihz(), 60_000);
+        // A display under 30 Hz reads 30, and its fraction goes with it.
+        let film = punktfunk_core::Mode::exact(1920, 1080, 23_976);
+        assert_eq!(auto.stream_mode(film).millihz(), 30_000);
+
+        assert_eq!(native_refresh_label(native), "Native (59.94 Hz)");
+        let whole = punktfunk_core::Mode::exact(2560, 1440, 144_000);
+        assert_eq!(native_refresh_label(whole), "Native (144 Hz)");
+        assert_eq!(native_refresh_label(film), "Native (30 Hz)");
+        let unknown = punktfunk_core::Mode::default();
+        assert_eq!(native_refresh_label(unknown), "Native");
+    }
+
     /// The shared device keys read from `extra` with the other clients' defaults, and
     /// write back under the same names.
     #[test]
@@ -1383,6 +1424,7 @@ mod tests {
             width: 3840,
             height: 2160,
             refresh_hz: 120,
+            refresh_mhz: 0,
         };
         let sdr = Settings {
             hdr_enabled: false,

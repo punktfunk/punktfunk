@@ -37,13 +37,87 @@ impl FecScheme {
     }
 }
 
-/// Size the host should produce on the virtual output.
+/// Size and rate the host should produce on the virtual output.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Mode {
     pub width: u32,
     pub height: u32,
+    /// The rate in whole hertz, rounded: 60 for a 59.94 Hz panel.
     pub refresh_hz: u32,
+    /// The exact rate in millihertz when it is not a whole number of hertz, else `0`. Read it
+    /// through [`Mode::millihz`]: code that only knows whole hertz changes `refresh_hz` alone.
+    pub refresh_mhz: u32,
+}
+
+impl Mode {
+    /// A mode at an exact rate in millihertz: 59 940 for a 59.94 Hz panel.
+    pub const fn exact(width: u32, height: u32, mhz: u32) -> Mode {
+        Mode {
+            width,
+            height,
+            refresh_hz: mhz.saturating_add(500) / 1000,
+            refresh_mhz: if mhz % 1000 == 0 { 0 } else { mhz },
+        }
+    }
+
+    /// The rate in millihertz. A `refresh_mhz` that does not round to `refresh_hz` is left
+    /// over from before the whole rate changed, and reads as the whole rate.
+    pub const fn millihz(&self) -> u32 {
+        if self.refresh_mhz != 0 && self.refresh_mhz.saturating_add(500) / 1000 == self.refresh_hz {
+            self.refresh_mhz
+        } else {
+            self.refresh_hz.saturating_mul(1000)
+        }
+    }
+
+    /// This size at `mhz`.
+    pub const fn at_millihz(self, mhz: u32) -> Mode {
+        Mode::exact(self.width, self.height, mhz)
+    }
+
+    /// This mode with the exact rate a peer or caller states beside the whole one. A rate
+    /// that does not round to `refresh_hz`, or a whole one, states nothing.
+    pub const fn stating(self, mhz: u32) -> Mode {
+        let stated = Mode {
+            refresh_mhz: mhz,
+            ..self
+        };
+        Mode {
+            refresh_mhz: if stated.millihz() % 1000 == 0 { 0 } else { mhz },
+            ..self
+        }
+    }
+
+    /// One frame at this rate. A rate of zero reads as one hertz.
+    pub fn frame_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_nanos(millihz_period_ns(self.millihz()))
+    }
+}
+
+/// One period of `mhz` in nanoseconds, rounded. Zero reads as one hertz.
+pub const fn millihz_period_ns(mhz: u32) -> u64 {
+    let mhz = if mhz == 0 { 1000 } else { mhz as u64 };
+    (1_000_000_000_000 + mhz / 2) / mhz
+}
+
+/// A rate in hertz to the millihertz, for a compositor that parses a decimal: `60`, `59.940`.
+pub fn hz_decimal(mhz: u32) -> String {
+    if mhz % 1000 == 0 {
+        (mhz / 1000).to_string()
+    } else {
+        format!("{}.{:03}", mhz / 1000, mhz % 1000)
+    }
+}
+
+/// A rate for a player: `60` for a whole number of hertz, else two decimals, `59.94`.
+pub fn hz_label(mhz: u32) -> String {
+    if mhz % 1000 == 0 {
+        (mhz / 1000).to_string()
+    } else {
+        let c = (mhz + 5) / 10;
+        format!("{}.{:02}", c / 100, c % 100)
+    }
 }
 
 /// Client compositor preference on [`Hello`](crate::quic::Hello); [`Welcome`](crate::quic::Welcome)
@@ -659,6 +733,64 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An exact rate keeps its fraction and rounds its whole hertz; a whole one stores none.
+    #[test]
+    fn a_mode_carries_its_exact_rate() {
+        let m = Mode::exact(1920, 1080, 59_940);
+        assert_eq!(
+            (m.refresh_hz, m.refresh_mhz, m.millihz()),
+            (60, 59_940, 59_940)
+        );
+        assert_eq!(Mode::exact(1920, 1080, 59_800).refresh_hz, 60);
+        assert_eq!(Mode::exact(1920, 1080, 23_976).refresh_hz, 24);
+        let whole = Mode::exact(1920, 1080, 120_000);
+        assert_eq!((whole.refresh_hz, whole.refresh_mhz), (120, 0));
+        assert_eq!(whole.millihz(), 120_000);
+        assert_eq!(m.at_millihz(119_880).millihz(), 119_880);
+    }
+
+    /// Code that sets `refresh_hz` alone leaves a fraction behind: it must not survive.
+    #[test]
+    fn a_fraction_of_another_rate_reads_as_whole() {
+        let mut m = Mode::exact(1920, 1080, 119_880);
+        m.refresh_hz = 60;
+        assert_eq!(m.millihz(), 60_000);
+        m.refresh_hz = 120;
+        assert_eq!(m.millihz(), 119_880);
+    }
+
+    /// What a peer states beside the whole rate counts only when it is that rate's fraction.
+    #[test]
+    fn a_stated_rate_must_round_to_the_whole_one() {
+        let whole = Mode::exact(1920, 1080, 60_000);
+        assert_eq!(whole.stating(59_940), Mode::exact(1920, 1080, 59_940));
+        assert_eq!(whole.stating(60_000), whole);
+        assert_eq!(whole.stating(0), whole);
+        assert_eq!(whole.stating(119_880), whole);
+        assert_eq!(whole.stating(u32::MAX), whole);
+    }
+
+    #[test]
+    fn a_frame_lasts_one_period_of_the_exact_rate() {
+        assert_eq!(millihz_period_ns(60_000), 16_666_667);
+        assert_eq!(millihz_period_ns(59_940), 16_683_350);
+        assert_eq!(millihz_period_ns(0), 1_000_000_000);
+        let m = Mode::exact(1280, 720, 59_940);
+        assert_eq!(m.frame_interval().as_nanos(), 16_683_350);
+    }
+
+    #[test]
+    fn a_rate_label_shows_a_fraction_only_when_there_is_one() {
+        assert_eq!(hz_label(60_000), "60");
+        assert_eq!(hz_label(59_940), "59.94");
+        assert_eq!(hz_label(59_800), "59.80");
+        assert_eq!(hz_label(119_880), "119.88");
+        assert_eq!(hz_label(23_976), "23.98");
+        assert_eq!(hz_decimal(60_000), "60");
+        assert_eq!(hz_decimal(59_940), "59.940");
+        assert_eq!(hz_decimal(23_976), "23.976");
+    }
 
     /// A pin beats the switch, the switch beats the adapter, and only an adapter above 1500
     /// opts in by itself.

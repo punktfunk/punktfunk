@@ -1,7 +1,9 @@
 //! The Windows in-place resize: mode-set the live monitor, restore its presentation, open only
 //! the encoder. Also the topology re-assert recovery, which is the same path with a liveness gate.
 
-use super::pipeline::{display_mode_for, open_session_encoder, pacing_hz};
+use super::pipeline::{
+    display_mode_for, display_rate, frame_interval, open_session_encoder, stream_mhz, whole_hz,
+};
 use super::state::StreamState;
 use super::swap::Next;
 use super::*;
@@ -36,12 +38,9 @@ impl StreamState {
             }
         };
         trace.mark("display_resized");
-        let achieved_hz = vout
-            .preferred_mode
-            .map(|(_, _, hz)| hz)
-            .filter(|&hz| hz > 0)
-            .unwrap_or(new_display_mode.refresh_hz);
-        let effective_hz = pacing_hz(new_mode.refresh_hz, achieved_hz);
+        let (_, display_mhz) = display_rate(&vout, new_display_mode);
+        let rate_mhz = stream_mhz(new_mode, display_mhz);
+        let effective_hz = whole_hz(rate_mhz);
         if vout.win_capture.as_ref().map(|t| t.target_id) != Some(cur_target) {
             tracing::info!(
                 "resize: monitor re-arrived (no in-place support) — running the full pipeline rebuild"
@@ -213,7 +212,7 @@ impl StreamState {
                 }
             },
         };
-        let interval = std::time::Duration::from_secs_f64(1.0 / effective_hz.max(1) as f64);
+        let interval = frame_interval(rate_mhz);
         trace.mark("encoder_open");
         Some(Next::Encoder {
             enc,

@@ -426,7 +426,9 @@ final class SessionPresenter {
         // Deadline pacing: the hint goes to the pipeline's CAMetalDisplayLink instead (staged;
         // applied from the link's own thread — see Stage2Pipeline.setFrameRateHint). A no-op
         // under arrival/glass pacing, where the CADisplayLink below is the one hinted link.
-        stage2?.setFrameRateHint(hz: Float(hz))
+        // The exact stream rate: its interval bounds the cadence cushion, 16.68 ms at 59.94 Hz.
+        let exact = connection?.currentRefreshMilliHz() ?? 0
+        stage2?.setFrameRateHint(hz: exact > 0 ? Float(exact) / 1000 : Float(hz))
         guard let link = stage2Link else { return }
         let range = Self.frameRateRange(
             hz: Float(hz), allowVRR: connection?.settings.allowVRR ?? true)

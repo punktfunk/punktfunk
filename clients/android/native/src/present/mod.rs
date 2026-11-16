@@ -53,12 +53,13 @@ impl PresentPriority {
 
 /// The source's frame interval at the NEGOTIATED stream rate, not the panel's: the cadence
 /// loop's cushion ceiling, since a cushion past one source frame buys smoothness the source
-/// cannot supply. 0 (unnegotiated) takes [`FALLBACK_PERIOD_NS`], the tighter plausible answer:
-/// too low costs smoothness, too high costs latency the user never asked for.
-pub(crate) fn frame_interval_ns(source_hz: u32) -> i64 {
-    match source_hz {
+/// cannot supply. `source_mhz` is that rate in millihertz, so a 59.94 Hz stream's frames are
+/// 16.68 ms apart. 0 (unnegotiated) takes [`FALLBACK_PERIOD_NS`], the tighter plausible
+/// answer: too low costs smoothness, too high costs latency the user never asked for.
+pub(crate) fn frame_interval_ns(source_mhz: u32) -> i64 {
+    match source_mhz {
         0 => FALLBACK_PERIOD_NS,
-        hz => 1_000_000_000 / i64::from(hz),
+        mhz => punktfunk_core::config::millihz_period_ns(mhz) as i64,
     }
 }
 
@@ -137,8 +138,9 @@ mod tests {
     #[test]
     fn an_unnegotiated_rate_takes_one_120_hz_frame() {
         assert_eq!(frame_interval_ns(0), FALLBACK_PERIOD_NS);
-        assert_eq!(frame_interval_ns(60), 16_666_666);
-        assert_eq!(frame_interval_ns(120), 8_333_333);
+        assert_eq!(frame_interval_ns(60_000), 16_666_667);
+        assert_eq!(frame_interval_ns(59_940), 16_683_350);
+        assert_eq!(frame_interval_ns(120_000), 8_333_333);
     }
 
     #[test]

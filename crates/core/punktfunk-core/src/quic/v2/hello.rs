@@ -143,7 +143,8 @@ impl V2Message for ClientHello {
             .filter(|p| p.len() <= PROFILE_ID_MAX);
         let views = super::msg::screen_views(&self.screens);
         // Tag 24 goes before 23; `tests::start_extensions_and_session_fields_ride_along` pins it.
-        f.when(label.is_some(), |f| f.str(19, label.unwrap_or("")))
+        let f = f
+            .when(label.is_some(), |f| f.str(19, label.unwrap_or("")))
             .when(self.abr_features != 0, |f| f.u8(20, self.abr_features))
             .when(preset.is_some(), |f| {
                 f.bytes(21, preset.as_deref().unwrap_or_default())
@@ -165,7 +166,8 @@ impl V2Message for ClientHello {
             .when(self.screen_wish.is_some(), |f| {
                 let wish = self.screen_wish.as_ref().map(ScreenWish::wire);
                 f.bytes(32, &wish.unwrap_or_default())
-            })
+            });
+        super::msg::put_exact_rate(f, 33, &h.mode)
     }
 
     fn from_body(body: &[u8]) -> Result<Self> {
@@ -196,7 +198,7 @@ impl V2Message for ClientHello {
         let mut features = FeatureSet::default();
         let (mut profile, mut access_only) = (None, false);
         let (mut screens, mut view, mut views) = (Vec::new(), None, None);
-        let mut screen_wish = None;
+        let (mut screen_wish, mut exact_mhz) = (None, 0);
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -256,9 +258,11 @@ impl V2Message for ClientHello {
                 30 => view = <Option<(u32, u32)> as FieldValue>::get(v)?,
                 31 => views = Some(v),
                 32 => screen_wish = ScreenWish::of_wire(v),
+                33 => exact_mhz = super::msg::exact_rate_of(v),
                 _ => {}
             }
         }
+        h.mode = h.mode.stating(exact_mhz);
         super::msg::read_screen_views(&mut screens, views.unwrap_or_default());
         // Fold what this build cannot honour onto its default.
         h.audio_channels = crate::audio::normalize_channels(h.audio_channels);
@@ -562,9 +566,10 @@ impl V2Message for ServerHello {
             .when(self.screen.is_some(), |f| {
                 f.bytes(28, self.screen.as_ref().map_or(&[][..], ScreenEcho::wire))
             });
-        self.picture.put(f, 29).when(self.role.is_some(), |f| {
+        let f = self.picture.put(f, 29).when(self.role.is_some(), |f| {
             f.bytes(30, &self.role.map_or([0; 2], RoleEcho::wire))
-        })
+        });
+        super::msg::put_exact_rate(f, 31, &w.mode)
     }
 
     fn from_body(body: &[u8]) -> Result<Self> {
@@ -599,6 +604,7 @@ impl V2Message for ServerHello {
         let (mut session_id, mut clock_origin_ns, mut suite) = (None, 0, None);
         let mut features = FeatureSet::default();
         let (mut profile, mut screen, mut picture, mut role) = (None, None, None, None);
+        let mut exact_mhz = 0;
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -656,9 +662,11 @@ impl V2Message for ServerHello {
                 28 => screen = ScreenEcho::of_wire(v),
                 29 => picture = <Option<(u32, u32)> as FieldValue>::get(v)?,
                 30 => role = RoleEcho::of_wire(v),
+                31 => exact_mhz = super::msg::exact_rate_of(v),
                 _ => {}
             }
         }
+        w.mode = w.mode.stating(exact_mhz);
         // Fold what this build cannot honour onto its default.
         if w.chroma_format != CHROMA_IDC_444 {
             w.chroma_format = CHROMA_IDC_420;
@@ -747,6 +755,7 @@ mod tests {
                     width: a.0,
                     height: a.1,
                     refresh_hz: a.2,
+                    refresh_mhz: 0,
                 },
                 compositor: CompositorPref::from_u8(a.3),
                 gamepad: GamepadPref::from_u8(a.4),
@@ -822,6 +831,7 @@ mod tests {
                         width: a.0,
                         height: a.1,
                         refresh_hz: a.2,
+                        refresh_mhz: 0,
                     },
                     fec: FecConfig {
                         scheme: FecScheme::Gf16,
@@ -881,6 +891,35 @@ mod tests {
             let _ = ClientHello::from_body(&body);
             let _ = ServerHello::from_body(&body);
         }
+    }
+
+    /// The exact rate rides `ClientHello` tag 33 and echoes in `ServerHello` tag 31. A hello
+    /// without the tag, which is every older peer's, reads the whole rate.
+    #[test]
+    fn an_exact_rate_rides_both_hellos() {
+        let exact = Mode::exact(3840, 2160, 59_940);
+        let mut ch = ClientHello::from_body(&Fields::new().into_body()).unwrap();
+        ch.hello.mode = exact;
+        let body = ch.fields().into_body();
+        assert_eq!(ClientHello::from_body(&body).unwrap().hello.mode, exact);
+
+        let whole = exact.at_millihz(60_000);
+        let old = whole.put(Fields::new(), 3).into_body();
+        assert_eq!(ClientHello::from_body(&old).unwrap().hello.mode, whole);
+        // 120 Hz beside 59.94: the fraction is another rate's and states nothing.
+        let stale = Mode::exact(3840, 2160, 120_000).put(Fields::new(), 3);
+        let stale = stale.u32(33, 59_940).into_body();
+        let read = ClientHello::from_body(&stale).unwrap().hello.mode;
+        assert_eq!(read.millihz(), 120_000);
+
+        let sid = Fields::new().bytes(1, &[7; 16]);
+        let mut sh = ServerHello::from_body(&sid.clone().into_body()).unwrap();
+        assert_eq!(sh.welcome.mode.millihz(), 0);
+        sh.welcome.mode = exact;
+        let back = ServerHello::from_body(&sh.fields().into_body()).unwrap();
+        assert_eq!(back.welcome.mode, exact);
+        let old = whole.put(sid, 5).into_body();
+        assert_eq!(ServerHello::from_body(&old).unwrap().welcome.mode, whole);
     }
 
     /// The ask rides `ClientHello` tag 23 with the `PROFILES` bit, the echo `ServerHello` tag 27.
@@ -1136,6 +1175,7 @@ mod tests {
                     width: 1920,
                     height: 1080,
                     refresh_hz: 60,
+                    refresh_mhz: 0,
                 },
                 compositor: CompositorPref::Auto,
                 gamepad: GamepadPref::Auto,

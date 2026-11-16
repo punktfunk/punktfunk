@@ -365,13 +365,13 @@ mod tests {
     const T: i64 = 987_000_000_000;
 
     fn latency() -> Store<u32> {
-        Store::new(PresentPriority::Latency, frame_interval_ns(120), true)
+        Store::new(PresentPriority::Latency, frame_interval_ns(120_000), true)
     }
 
     fn smooth() -> Store<u32> {
         Store::new(
             PresentPriority::Smooth { buffer: 2 },
-            frame_interval_ns(120),
+            frame_interval_ns(120_000),
             true,
         )
     }

@@ -750,7 +750,7 @@ class MainActivity : FragmentActivity() {
      * stream of the panel's own [size] also takes the panel to that size; [setConsoleHighRefreshRate]
      * puts the user's resolution back. [hz] ≤ 0 falls back to releasing the pin.
      */
-    fun setStreamDisplayMode(hz: Int, size: Pair<Int, Int>? = null) {
+    fun setStreamDisplayMode(hz: Float, size: Pair<Int, Int>? = null) {
         if (hz <= 0) {
             setConsoleHighRefreshRate(false)
             return

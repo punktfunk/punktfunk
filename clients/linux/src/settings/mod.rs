@@ -57,15 +57,14 @@ fn native_mode(window: &gtk::Widget) -> punktfunk_core::Mode {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
     };
     let g = m.geometry();
     let px = |logical: i32| (f64::from(logical.max(0)) * m.scale()).round() as u32;
-    punktfunk_core::Mode {
-        width: px(g.width()),
-        height: px(g.height()),
-        refresh_hz: ((m.refresh_rate().max(0) + 500) / 1000) as u32,
-    }
+    // GDK states the rate in millihertz: 59 940 for a 59.94 Hz monitor.
+    let mhz = m.refresh_rate().max(0) as u32;
+    punktfunk_core::Mode::exact(px(g.width()), px(g.height()), mhz)
 }
 
 /// The dialog in a given [`Scope`]. `on_scope` asks the app to open it again in another one:

@@ -405,11 +405,13 @@ mod tests {
         width: 1920,
         height: 1080,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
     const BIG: Mode = Mode {
         width: 3840,
         height: 2160,
         refresh_hz: 120,
+        refresh_mhz: 0,
     };
 
     fn facts() -> RebuildFacts {
@@ -441,6 +443,7 @@ mod tests {
         width: 1280,
         height: 720,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
 
     fn shared(f: &mut RebuildFacts) {
@@ -476,6 +479,7 @@ mod tests {
             width: 2560,
             height: 720,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         let faster = Mode {
             refresh_hz: 120,

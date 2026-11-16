@@ -1579,6 +1579,7 @@ fn pyrowave_floor_kbps() -> u32 {
         width: 3840,
         height: 2160,
         refresh_hz: 165,
+        refresh_mhz: 0,
     };
     crate::pyrowave::kbps_for(&mode, false, 8, crate::pyrowave::BPP_FLOOR)
 }

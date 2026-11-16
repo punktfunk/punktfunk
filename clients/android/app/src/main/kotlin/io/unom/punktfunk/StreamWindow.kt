@@ -36,33 +36,43 @@ internal data class PanelMode(val id: Int, val width: Int, val height: Int, val 
 
 /**
  * The mode a [hz] stream of [size] pins: the panel's own size when the stream is exactly that and
- * [current] renders below it, else [current]'s size. At that size, the exact rate, else the
- * smallest integer multiple (120 for a 60 stream: judder-free 2:1 pulldown), else the highest.
+ * [current] renders below it, else [current]'s size. At that size, the rate within a hertz that
+ * is nearest (59.94 for a 59.94 stream on a table that also lists 60), else the smallest integer
+ * multiple (120 for a 60 stream: judder-free 2:1 pulldown), else the highest.
  */
 internal fun pickStreamMode(
     modes: List<PanelMode>,
     current: PanelMode,
-    hz: Int,
+    hz: Float,
     size: Pair<Int, Int>?,
 ): PanelMode? {
-    if (hz <= 0) return null
+    if (hz <= 0f) return null
     val own = current.width to current.height
     val panel = Resolutions.panelScreens(own, own, modes.map { it.width to it.height }).first
     val at = if (size == panel) panel else own
+    fun off(rate: Float, k: Int) = kotlin.math.abs(rate - hz * k)
+    // Rounded: 119.88 over 59.94 is 2, and a float division may land a hair under it.
     fun multiple(rate: Float): Int {
-        val k = (rate / hz).toInt()
-        return if (k >= 2 && kotlin.math.abs(rate - hz * k) < 1f) k else 0
+        val k = kotlin.math.round(rate / hz).toInt()
+        return if (k >= 2 && off(rate, k) < 1f) k else 0
     }
     return modes.filter { it.width to it.height == at }.minWithOrNull(
         compareBy(
             {
                 when {
-                    kotlin.math.abs(it.hz - hz) < 1f -> 0 // exact
-                    multiple(it.hz) > 0 -> 1 // integer multiple — prefer smallest
+                    off(it.hz, 1) < 1f -> 0 // the stream's rate — prefer nearest
+                    multiple(it.hz) > 0 -> 1 // integer multiple — prefer smallest, then nearest
                     else -> 2 // no relation — prefer highest
                 }
             },
-            { if (multiple(it.hz) > 0) it.hz else -it.hz },
+            {
+                val k = multiple(it.hz)
+                when {
+                    off(it.hz, 1) < 1f -> off(it.hz, 1)
+                    k > 0 -> k * 10f + off(it.hz, k)
+                    else -> -it.hz
+                }
+            },
         ),
     )
 }
@@ -75,7 +85,7 @@ private fun Display.Mode.row() = PanelMode(
 )
 
 /** [pickStreamMode] on this display. [size] is the stream's, or null to stay at the current size. */
-internal fun Display.streamModeFor(hz: Int, size: Pair<Int, Int>? = null): Display.Mode? {
+internal fun Display.streamModeFor(hz: Float, size: Pair<Int, Int>? = null): Display.Mode? {
     val id = pickStreamMode(supportedModes.map { it.row() }, mode.row(), hz, size)?.id ?: return null
     return supportedModes.firstOrNull { it.modeId == id }
 }
@@ -85,7 +95,7 @@ internal fun Display.streamModeFor(hz: Int, size: Pair<Int, Int>? = null): Displ
  * `refreshRate` reports a per-uid frame-rate override (games get 60 on Android 15+), not the
  * panel. `0` when unresolvable.
  */
-internal fun Display.streamPanelFps(hz: Int, size: Pair<Int, Int>? = null): Int =
+internal fun Display.streamPanelFps(hz: Float, size: Pair<Int, Int>? = null): Int =
     streamModeFor(hz, size)?.refreshRate?.let { kotlin.math.round(it).toInt() } ?: 0
 
 /**
@@ -109,7 +119,8 @@ internal class StreamWindow(
     private val lowLatencyMode: Boolean,
     private val isTv: Boolean,
     /** The negotiated stream refresh (0 = unknown / older native lib). */
-    private val streamHz: Int,
+    /** The stream's exact rate in hertz, 59.94 where the host delivers that; 0 = unknown. */
+    private val streamHz: Float,
     /** The negotiated stream size, landscape; null when unknown. */
     private val streamSize: Pair<Int, Int>?,
 ) {
@@ -295,8 +306,8 @@ internal class StreamWindow(
         // as 16.6 ms vsync callbacks on a 120 Hz panel, which would pace the presenter at half
         // rate. The native side also subdivides onto the panel grid, so this vote is the belt to
         // that braces. Reset to no-preference on the way out.
-        if (Build.VERSION.SDK_INT >= 35 && streamHz > 0) {
-            composeView.requestedFrameRate = streamHz.toFloat()
+        if (Build.VERSION.SDK_INT >= 35 && streamHz > 0f) {
+            composeView.requestedFrameRate = streamHz
         }
         displayManager?.registerDisplayListener(displayListener, null)
         logPanel("pinned")

@@ -217,6 +217,7 @@ mod tests {
                 width,
                 height: 720,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             },
             ..StreamConfig::default()
         }
@@ -403,6 +404,7 @@ mod tests {
             width: 640,
             height: 360,
             refresh_hz: 60,
+            refresh_mhz: 0,
         };
         assert_eq!(rx.try_iter().collect::<Vec<_>>(), [PumpEvent::Mode(priced)]);
         a.frame(1);

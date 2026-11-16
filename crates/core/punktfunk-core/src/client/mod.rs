@@ -1365,6 +1365,7 @@ impl NativeClient {
         let mut s = self.hud.drain(&self.hud_counters());
         let m = self.mode();
         (s.width, s.height, s.refresh_hz) = (m.width, m.height, m.refresh_hz);
+        s.refresh_mhz = m.refresh_mhz;
         let f = self.video_format();
         s.codec = crate::hud::codec_label(f.codec).into();
         s.bit_depth = f.bit_depth;
