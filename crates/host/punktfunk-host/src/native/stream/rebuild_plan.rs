@@ -192,8 +192,9 @@ pub(super) struct RebuildPlan {
 }
 
 /// The rebuild `ask` needs, or `None`: a switch to the compositor that runs, the live mode and
-/// view asked again (S5-6), on a shared display a size it already frames, a topology generation
-/// already followed or no IDD-push to follow. A joiner alone on its display builds its own.
+/// view asked again (S5-6), on a shared display a size it already frames, a new mode on
+/// gamescope, a topology generation already followed or no IDD-push to follow. A joiner alone
+/// on its display builds its own.
 pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
     let live = f.intent;
     // PyroWave pins each intent's picture at the session's bits per pixel, and an Automatic
@@ -279,6 +280,9 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
             },
             ..at_live
         },
+        // A new mode respawns gamescope's nested game. A session that followed a switch onto it
+        // keeps its display, and the client hears the mode that runs.
+        RebuildAsk::Mode(_) if f.compositor == Compositor::Gamescope => return None,
         RebuildAsk::Mode(ask) => RebuildPlan {
             in_place: f.windows && idd_push,
             intent: ask,
@@ -1041,7 +1045,7 @@ mod tests {
 
     #[rustfmt::skip]
     fn geometry_rows_table() -> Vec<GeometryRow> {
-        use crate::native::tests::Verdict::{Other, Wanted};
+        use crate::native::tests::Verdict::Wanted;
         use Build::{Encoder, Once};
         let (uhd, hd120, small120) = (mode(3840, 2160, 60), mode(1920, 1080, 120), mode(1280, 720, 120));
         let row = |name, ask, facts: &'static [fn(&mut RebuildFacts)], want: Geometry, verdict| {
@@ -1113,9 +1117,11 @@ mod tests {
                 Wanted),
             row("rate: the asked rate, the view kept", RebuildAsk::Bitrate(8_000),
                 &[framed_at_720], Some((Encoder, LIVE, Some((1280, 720)), 8_000)), Wanted),
-            row("after a switch into gamescope: a new mode still builds a display",
-                RebuildAsk::Mode(ask(BIG, None)), &[gamescope],
-                Some((Once, BIG, None, 20_000)), Other),
+            row("after a switch into gamescope: a new mode builds nothing",
+                RebuildAsk::Mode(ask(BIG, None)), &[gamescope], None, Wanted),
+            row("after a switch into gamescope: a view at the live mode still frames the encoder",
+                RebuildAsk::Mode(ask(LIVE, Some((1280, 720)))), &[gamescope],
+                Some((Encoder, LIVE, Some((1280, 720)), 20_000)), Wanted),
         ]
     }
 
