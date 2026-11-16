@@ -135,12 +135,22 @@ struct ScreenHandle {
     moved: Arc<std::sync::Mutex<Option<Screen>>>,
     /// What the loop built; `None` before it has, and after it gave up.
     built: Arc<std::sync::Mutex<Option<Screen>>>,
+    /// The picture the loop's last build encodes; `None` before its first.
+    encodes: Arc<std::sync::Mutex<Option<Picture>>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl ScreenHandle {
     fn built(&self) -> Option<Screen> {
         *self.built.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The picture the split prices this screen at: what its build encodes, else its ask.
+    fn priced(&self, codec: crate::encode::Codec) -> punktfunk_core::Mode {
+        let encodes = *self.encodes.lock().unwrap_or_else(|e| e.into_inner());
+        encodes
+            .unwrap_or_else(|| screen_intent(&self.ask, codec).picture())
+            .mode()
     }
 
     fn stop_and_join(&mut self) {
@@ -191,6 +201,8 @@ pub(super) struct ScreenSet {
     first: Screen,
     /// What the first screen's encoder took its picture to at the last poll.
     first_picture: Option<Picture>,
+    /// The further screens' pictures the last split priced.
+    priced: Vec<punktfunk_core::Mode>,
     /// The layout last told.
     told: Vec<Screen>,
     /// When the next build may start ([`BUILD_SPACING`]).
@@ -219,6 +231,7 @@ impl ScreenSet {
             pending: Vec::new(),
             first,
             first_picture: None,
+            priced: Vec::new(),
             told: Vec::new(),
             next_build: std::time::Instant::now() + BUILD_SPACING,
             seqs: Default::default(),
@@ -259,7 +272,7 @@ impl ScreenSet {
         if self.retiring.len() != retiring && !self.pending.is_empty() {
             self.apply(self.asks());
         }
-        if self.loops.len() != before || first_moved {
+        if self.loops.len() != before || first_moved || self.pictures() != self.priced {
             self.reshare();
         }
         self.tell_layout(first_mode, asked);
@@ -369,6 +382,7 @@ impl ScreenSet {
             stop: Arc::new(AtomicBool::new(false)),
             moved: Arc::default(),
             built: Arc::default(),
+            encodes: Arc::default(),
             thread: None,
         };
         let run = ScreenRun {
@@ -380,6 +394,7 @@ impl ScreenSet {
             stop: handle.stop.clone(),
             moved: handle.moved.clone(),
             built: handle.built.clone(),
+            encodes: handle.encodes.clone(),
             seq: self.seqs[usize::from(w.index)].clone(),
             not_before,
         };
@@ -401,20 +416,26 @@ impl ScreenSet {
         }
     }
 
+    /// Each further screen's picture as the split prices it ([`ScreenHandle::priced`]).
+    fn pictures(&self) -> Vec<punktfunk_core::Mode> {
+        let Some(base) = self.base.as_ref() else {
+            return Vec::new();
+        };
+        self.loops
+            .iter()
+            .map(|h| h.priced(base.plan.codec))
+            .collect()
+    }
+
     /// Split the video by the pixel rate each screen encodes: the first screen's share to the
-    /// first loop, each further screen's to its own, at its view when it has one.
-    fn reshare(&self) {
+    /// first loop, each further screen's to its own, at its asked view until it has built.
+    fn reshare(&mut self) {
+        self.priced = self.pictures();
         let Some(base) = self.base.as_ref() else {
             return;
         };
         let first = self.first_picture.map_or(self.first.mode, |p| p.mode());
-        let codec = base.plan.codec;
-        let asks: Vec<punktfunk_core::Mode> = self
-            .loops
-            .iter()
-            .map(|h| screen_intent(&h.ask, codec).picture().mode())
-            .collect();
-        let (first, rest) = shares(first, &asks);
+        let (first, rest) = shares(first, &self.priced);
         base.wire.primary_share.store(first, Ordering::Relaxed);
         for (h, s) in self.loops.iter().zip(rest) {
             h.share.store(s, Ordering::Relaxed);
@@ -525,6 +546,7 @@ struct ScreenRun {
     stop: Arc<AtomicBool>,
     moved: Arc<std::sync::Mutex<Option<Screen>>>,
     built: Arc<std::sync::Mutex<Option<Screen>>>,
+    encodes: Arc<std::sync::Mutex<Option<Picture>>>,
     seq: Arc<ScreenSeq>,
     not_before: std::time::Instant,
 }
@@ -653,6 +675,8 @@ fn run_screen(base: ScreenBase, mut run: ScreenRun) {
                 primary: false,
                 view: None,
             });
+            let encodes = Some(pipe.geometry.picture());
+            *run.encodes.lock().unwrap_or_else(|e| e.into_inner()) = encodes;
             let _ = base.tell.send(ScreenTell::Config(cfg));
         }
         tracing::info!(screen = run.index, ?delivered, x, y, "screen built");
@@ -1303,6 +1327,7 @@ mod tests {
             stop,
             moved: Arc::default(),
             built: Arc::default(),
+            encodes: Arc::default(),
             thread: Some(thread),
         };
         (handle, gate)
@@ -1541,47 +1566,50 @@ mod tests {
         }
     }
 
-    /// One split: the first screen's mode and the picture its encoder takes it to, and a
-    /// further screen's ask; the first's share after the set polls.
+    /// One split: the first screen's mode and the picture its encoder takes it to, a further
+    /// screen's ask and the picture its build encodes; the first's share after the set polls.
     struct SplitRow {
         name: &'static str,
         first: (punktfunk_core::Mode, punktfunk_core::Mode),
-        further: Screen,
+        further: (Screen, Option<punktfunk_core::Mode>),
         first_share: u16,
         verdict: crate::native::tests::Verdict,
     }
 
     #[rustfmt::skip]
     fn split_rows() -> Vec<SplitRow> {
-        use crate::native::tests::Verdict::{D5, Wanted};
+        use crate::native::tests::Verdict::Wanted;
         let (one, qhd, uhd) = (mode(1920, 1080, 60), mode(2560, 1440, 60), mode(3840, 2160, 60));
         let viewed = |mode, view| Screen { view: Some(view), ..asked(1, mode) };
         let row = |name, first, further, first_share, verdict| SplitRow {
             name, first, further, first_share, verdict,
         };
         vec![
-            row("two screens at one size: half each", (one, one), asked(1, one), 500, Wanted),
-            row("a first screen framed at its view weighs the view", (uhd, one), asked(1, one),
-                500, Wanted),
+            row("two screens at one size: half each", (one, one), (asked(1, one), None), 500,
+                Wanted),
+            row("a first screen framed at its view weighs the view", (uhd, one),
+                (asked(1, one), None), 500, Wanted),
             row("a first screen whose framing fell back weighs what it encodes", (uhd, uhd),
-                asked(1, one), 800, Wanted),
+                (asked(1, one), None), 800, Wanted),
             row("a further screen framed at its view weighs the view", (one, one),
-                viewed(qhd, (1920, 1080)), 500, Wanted),
-            row("a further screen whose framing fell back still weighs its asked view",
-                (one, one), viewed(qhd, (1920, 1080)), 500, D5),
+                (viewed(qhd, (1920, 1080)), Some(one)), 500, Wanted),
+            row("a further screen whose framing fell back weighs what it encodes",
+                (one, one), (viewed(qhd, (1920, 1080)), Some(qhd)), 360, Wanted),
         ]
     }
 
-    /// The split of the video between the first screen and a further one: the first at the
-    /// picture its encoder takes, a further one at the view it asked, whatever it encodes.
+    /// The split of the video between the first screen and a further one, each at the
+    /// picture its encoder takes; a further one not yet built at the view it asked.
     #[test]
     fn geometry_rows() {
         for r in split_rows() {
             let (base, _frames, _told, wire) = kwin_base();
             let (_screens_tx, screens_rx) = std::sync::mpsc::channel();
             let (first_mode, first_picture) = r.first;
-            let list = vec![asked(0, first_mode), r.further];
+            let (further, encodes) = r.further;
+            let list = vec![asked(0, first_mode), further];
             let mut set = ScreenSet::new(base, screens_rx, list);
+            *set.loops[0].encodes.lock().unwrap() = encodes.map(Picture::of);
             set.poll(first_mode, Picture::of(first_picture), None);
             let share = wire.primary_share.load(Ordering::Relaxed);
             set.shutdown();
@@ -1589,11 +1617,12 @@ mod tests {
         }
     }
 
-    /// U7: a further screen is priced at the view it asked for. The set reads nothing of what
-    /// its build encodes, so one whose framing fell back to 2560×1440 still weighs 1920×1080.
+    /// U7: a further screen is priced at its asked view until it builds, then at what its
+    /// build encodes: one whose framing fell back to 2560×1440 weighs 2560×1440 from the next
+    /// poll.
     #[test]
     fn a_further_screen_is_priced_at_what_it_encodes() {
-        let verdict = crate::native::tests::Verdict::D5;
+        let verdict = crate::native::tests::Verdict::Wanted;
         let (one, qhd) = (mode(1920, 1080, 60), mode(2560, 1440, 60));
         let (base, _frames, _told, wire) = kwin_base();
         let (_screens_tx, screens_rx) = std::sync::mpsc::channel();
@@ -1603,9 +1632,12 @@ mod tests {
         };
         let mut set = ScreenSet::new(base, screens_rx, vec![asked(0, one), further]);
         set.poll(one, Picture::of(one), None);
+        let asked_share = wire.primary_share.load(Ordering::Relaxed);
+        *set.loops[0].encodes.lock().unwrap() = Some(Picture::of(qhd));
+        set.poll(one, Picture::of(one), None);
         let share = wire.primary_share.load(Ordering::Relaxed);
         set.shutdown();
-        assert_eq!(share, 500, "{verdict:?}");
+        assert_eq!((asked_share, share), (500, 360), "{verdict:?}");
     }
 
     /// S8-5: the first screen's new mode re-splits the video with no new list.

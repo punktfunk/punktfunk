@@ -3503,6 +3503,5 @@ fn a_client_that_stops_reading_its_control_stream_is_closed() {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::native) enum Verdict {
     Wanted,
-    D5,
     Other,
 }
