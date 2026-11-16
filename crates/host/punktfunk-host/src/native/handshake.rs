@@ -2423,7 +2423,6 @@ pub(crate) mod tests {
             verdict,
         };
         let exact = punktfunk_core::Mode::exact(1920, 1080, 59_940);
-        let own_exact = if cfg!(windows) { hd } else { exact };
         vec![
             row("HEVC Automatic: the host's default", hd, None, H265, 0, Welcomed::Own,
                 (hd, 20_000, None), Wanted),
@@ -2443,8 +2442,8 @@ pub(crate) mod tests {
                 Welcomed::Own, (hd, 199_065, None), Wanted),
             row("a view larger than the mode: the mode", hd, Some((2560, 1440)), PyroWave, 0,
                 Welcomed::Own, (hd, 199_065, None), Wanted),
-            row("a fraction on a display of its own stays where the host runs one", exact, None,
-                H265, 0, Welcomed::Own, (own_exact, 20_000, None), Wanted),
+            row("a fraction on a display of its own stays", exact, None, H265, 0, Welcomed::Own,
+                (exact, 20_000, None), Wanted),
             row("a joiner asking less: the owner's mode, priced and told at its ask",
                 mode(1280, 720, 120), None, PyroWave, 0, Welcomed::Joiner(hd),
                 (hd, 88_473, Some((1280, 720))), Wanted),
