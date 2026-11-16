@@ -450,29 +450,6 @@ fn capture_quantum_frames(rate_hz: u32) -> u32 {
     ((CAPTURE_QUANTUM_FRAMES as u64 * rate_hz as u64 / SAMPLE_RATE as u64) as u32).max(1)
 }
 
-/// Graph quantum while an app in `host_bridge::POW2_QUANTUM_APPS` plays, in frames at
-/// 48 kHz. pipewire-pulse asks a client for audio once `pulse.min.req` = 256 frames are
-/// missing. [`CAPTURE_QUANTUM_FRAMES`] is 16 short, so it asks every other cycle for two
-/// quanta. 256 is the smallest quantum it serves every cycle, as a hardware sink does.
-const POW2_QUANTUM_FRAMES: u32 = 256;
-
-/// [`POW2_QUANTUM_FRAMES`] at `rate_hz`: `pulse.min.req` is a time, so it doubles at 96 kHz.
-fn pow2_quantum_frames(rate_hz: u32) -> u32 {
-    ((POW2_QUANTUM_FRAMES as u64 * rate_hz as u64 / SAMPLE_RATE as u64) as u32).max(1)
-}
-
-/// Carry `frames` as this stream's `node.force-quantum`; `0` clears it. The newest forced
-/// value in a driver group wins, so this overrides the null sink's own while it is set.
-fn force_stream_quantum(stream: &pipewire::stream::Stream, frames: u32) {
-    let mut props = pipewire::properties::PropertiesBox::new();
-    props.insert("node.force-quantum", frames.to_string());
-    // SAFETY: `stream` and `props` are live across the call, and this runs on the loop
-    // thread that owns the stream. PipeWire copies the dict.
-    unsafe {
-        pipewire::sys::pw_stream_update_properties(stream.as_raw_ptr(), props.dict().as_raw_ptr());
-    }
-}
-
 /// Consecutive callbacks that must agree on a new buffer size before it
 /// replaces the one gaps are scored against. Three rejects a boundary
 /// artefact and still adopts a genuine re-plan within ~15 ms.
@@ -546,9 +523,6 @@ struct CapEvents {
     /// Spans away from `Streaming` that ended since the data thread last looked, and their µs.
     pauses: AtomicU64,
     paused_us: AtomicU64,
-    /// The quantum this stream forces right now, `0` for none: what a first callback is
-    /// judged against instead of the ask.
-    forced_frames: AtomicU32,
 }
 
 /// The main-loop half of the capture stream, owned by `state_changed` and `param_changed`.
@@ -647,10 +621,7 @@ impl CapUd {
         let rate_hz = self.rate_hz();
         let rate = rate_hz.max(1);
         self.quantum = Duration::from_micros(frames as u64 * 1_000_000 / rate as u64);
-        let want = match self.events.forced_frames.load(Ordering::Relaxed) {
-            0 => capture_quantum_frames(rate_hz),
-            forced => forced,
-        } as usize;
+        let want = capture_quantum_frames(rate_hz) as usize;
         let negotiated_ms = format!("{:.1}", frames as f32 * 1000.0 / rate as f32);
         if was != 0 {
             // Moves the gap threshold under a reader comparing windows.
@@ -1040,44 +1011,6 @@ fn pw_thread(
             ours: None,
             driver: None,
         }));
-        let props = capture_props(
-            mode,
-            sink_name.as_deref(),
-            &capture_name,
-            target.as_deref(),
-            &node_latency,
-        )?;
-        // Rc, not Box: the registry callbacks below re-plan this stream's quantum.
-        let stream = pw::stream::StreamRc::new(core.clone(), "punktfunk-audio", props)
-            .context("pw audio Stream")?;
-        let events = Arc::new(CapEvents::default());
-
-        // Null-sink mode forces the group's quantum, so only there can this stream move it.
-        // Runs after every registry change; writes only when the answer changes.
-        let sync_quantum = Rc::new({
-            let bridge = bridge.clone();
-            let stream = stream.clone();
-            let events = events.clone();
-            let held = std::cell::Cell::new(false);
-            move || {
-                let want = mode == CaptureMode::NullSink && bridge.borrow().wants_pow2_quantum();
-                if held.replace(want) == want {
-                    return;
-                }
-                let frames = if want {
-                    pow2_quantum_frames(rate_hz)
-                } else {
-                    0
-                };
-                events.forced_frames.store(frames, Ordering::Relaxed);
-                force_stream_quantum(&stream, frames);
-                tracing::info!(
-                    forced_frames = frames,
-                    "audio capture quantum follows a playing app (0 = the sink's own)"
-                );
-            }
-        });
-
         let registry = core.get_registry_rc().context("pw audio registry")?;
         let _registry_listener = registry
             .add_listener_local()
@@ -1087,14 +1020,12 @@ fn pw_thread(
                 let core = core.clone();
                 let registry = registry.clone();
                 let capture_name = capture_name.clone();
-                let sync_quantum = sync_quantum.clone();
                 move |global| {
                     {
                         let mut b = bridge.borrow_mut();
                         b.on_global(global, &registry);
                         b.sync(&core);
                     }
-                    sync_quantum();
                     if global.type_ != pw::types::ObjectType::Node {
                         return;
                     }
@@ -1140,11 +1071,21 @@ fn pw_thread(
                 let bridge = bridge.clone();
                 move |id| {
                     bridge.borrow_mut().on_remove(id);
-                    sync_quantum();
                 }
             })
             .register();
 
+        let props = capture_props(
+            mode,
+            sink_name.as_deref(),
+            &capture_name,
+            target.as_deref(),
+            &node_latency,
+        )?;
+        let stream = pw::stream::StreamBox::new(&core, "punktfunk-audio", props)
+            .context("pw audio Stream")?;
+
+        let events = Arc::new(CapEvents::default());
         let ud = CapUd::new(
             tx,
             channels,
@@ -1478,58 +1419,5 @@ mod tests {
         assert_eq!(ud.stats.gaps, 1);
         watch.negotiated_rate.store(96_000, Ordering::Relaxed);
         assert_eq!(ud.rate_hz(), 96_000);
-    }
-
-    #[test]
-    fn pow2_quantum_scales_with_the_rate() {
-        assert_eq!(pow2_quantum_frames(48_000), 256);
-        assert_eq!(pow2_quantum_frames(96_000), 512);
-    }
-
-    /// The sink runs at 240 frames, at 256 while a stream named Ryujinx plays, at 240 after.
-    #[test]
-    #[ignore = "needs a PipeWire session with WirePlumber and pw-cat — run with --ignored"]
-    fn quantum_follows_a_ryujinx_stream() {
-        let mut cap = PwAudioCapturer::open(2, SAMPLE_RATE).unwrap();
-        let sink = cap.sink_name().unwrap().to_owned();
-        // Silence into the sink under an app name; the first player keeps the sink running.
-        let play = |app: &str| {
-            let props = format!("{{ application.name = \"{app}\" }}");
-            std::process::Command::new("pw-cat")
-                .args(["--playback", "--raw", "--format", "s16", "--rate", "48000"])
-                .args([
-                    "--channels",
-                    "2",
-                    "--target",
-                    &sink,
-                    "-P",
-                    &props,
-                    "/dev/zero",
-                ])
-                .spawn()
-                .unwrap()
-        };
-        // Frames per callback once the graph has settled: the last chunk of two seconds.
-        let settled = |cap: &mut PwAudioCapturer| {
-            let until = std::time::Instant::now() + Duration::from_secs(2);
-            let mut frames = 0;
-            while std::time::Instant::now() < until {
-                let chunk = cap.next_chunk_within(Duration::from_millis(100)).unwrap();
-                if !chunk.is_empty() {
-                    frames = chunk.len() / 2;
-                }
-            }
-            frames
-        };
-        let mut other = play("some-game");
-        let alone = settled(&mut cap);
-        let mut ryujinx = play("Ryujinx");
-        let with = settled(&mut cap);
-        ryujinx.kill().unwrap();
-        ryujinx.wait().unwrap();
-        let after = settled(&mut cap);
-        other.kill().unwrap();
-        other.wait().unwrap();
-        assert_eq!((alone, with, after), (240, 256, 240));
     }
 }
