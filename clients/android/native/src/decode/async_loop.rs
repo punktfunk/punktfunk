@@ -1185,17 +1185,17 @@ fn admission(codec: u8, decoder: &str) -> Option<DecoderClass> {
 /// Tails a decoder hung or failed under in this process ([`Tail::bit`]).
 static TAILS_BLOCKED: AtomicU8 = AtomicU8::new(0);
 
-/// The tail trial for this run. `debug.punktfunk.au_tail` = `off` / `fill` / `aud` names the
-/// tail; `trial` runs the trial on any decoder. Unset, a Realtek decoder runs it on H.264 and
-/// HEVC: it returns each picture when the next AU is fed, and the trial reads whether a tail
-/// ends that. The `pf.decode` line's `held` counts the outputs that waited either way.
+/// The tail for this run. `debug.punktfunk.au_tail` = `off` / `fill` / `aud` names it; `trial`
+/// reads the delimiter on any decoder. Unset, a Realtek decoder gets the delimiter on H.264 and
+/// HEVC, read once against none: it returns each picture when the next AU is fed. The
+/// `pf.decode` line's `held` counts the outputs that waited either way.
 fn hold_trial(codec: u8, decoder: &str) -> Trial {
     let prop = sysprop(c"debug.punktfunk.au_tail");
     if let Some(tail) = prop.as_deref().and_then(Tail::named) {
         log::info!("decode: each AU is fed with tail {}", tail.label());
         return Trial::fixed(tail);
     }
-    let tails = !Tail::Fill.bytes(codec).is_empty();
+    let tails = !Tail::Aud.bytes(codec).is_empty();
     if tails && (prop.as_deref() == Some("trial") || is_realtek(decoder)) {
         log::info!("decode: hold trial on {decoder}");
         return Trial::new(TAILS_BLOCKED.load(Ordering::Relaxed));
@@ -1703,13 +1703,12 @@ impl State {
             {
                 log::info!(
                     "decode: hold trial — tail {}: codec {:.1} ms with, {:.1} ms without, AUs \
-                     {:.1} ms apart; tail {} {}",
+                     {:.1} ms apart; tail {} from here",
                     r.tail.label(),
                     r.with_us as f64 / 1000.0,
                     r.without_us as f64 / 1000.0,
                     r.gap_us as f64 / 1000.0,
                     r.next.label(),
-                    if r.done { "from here" } else { "next" }
                 );
             }
             let feed_us = match (queued, received_ns) {

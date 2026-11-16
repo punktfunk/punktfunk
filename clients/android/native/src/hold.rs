@@ -1,5 +1,5 @@
-//! A decoder that returns each picture when the next AU is fed, and the tail that may end the
-//! wait: the bytes ([`Tail`]) and the trial that reads whether one works ([`Trial`]). No codec:
+//! A decoder that returns each picture when the next AU is fed, and the tail that ends the
+//! wait: the bytes ([`Tail`]) and the reading that keeps or drops it ([`Trial`]). No codec:
 //! `decode/async_loop.rs` feeds the tail and reports each output.
 
 use punktfunk_core::quic::{CODEC_H264, CODEC_HEVC};
@@ -36,7 +36,7 @@ impl Tail {
         }
     }
 
-    /// The bit that blocks this tail from a later trial. `0` for none.
+    /// The bit that blocks this tail from a later run. `0` for none.
     pub(crate) fn bit(self) -> u8 {
         match self {
             Tail::None => 0,
@@ -57,34 +57,31 @@ impl Tail {
     }
 }
 
-/// Outputs in one block of a reading, all fed the same way.
+/// Outputs in one block of the reading, all fed the same way.
 const BLOCK: u32 = 30;
 /// Outputs skipped at the head of a block: their AUs were fed in the block before.
 const SKIP: u32 = 6;
-/// Blocks in a reading. A tail's reading alternates with and without it, so a rate that moves
+/// Blocks in the reading. It alternates with and without the tail, so a rate that moves
 /// meanwhile moves both halves.
-const BLOCKS: u32 = 16;
+const BLOCKS: u32 = 8;
 
-/// One reading: the median codec time fed `with` the tail and `without`, over `gap_us` between
-/// AUs. The first reading has no tail and its halves are one.
+/// The reading: the median codec time fed `with` the tail and `without`, over `gap_us` between
+/// AUs, and the tail fed from here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Reading {
     pub(crate) tail: Tail,
     pub(crate) with_us: u64,
     pub(crate) without_us: u64,
     pub(crate) gap_us: u64,
-    /// The tail fed from here, and whether the trial is over.
     pub(crate) next: Tail,
-    pub(crate) done: bool,
 }
 
-/// Finds the tail that ends a decoder's hold. A held picture's codec time is at least the gap
-/// to the next AU, so a decoder under the gap is left alone. Over it, each tail is read in
-/// turn, blocks with it against blocks without: one that takes half a gap off stays.
+/// Feeds the delimiter after every AU. One reading at the start runs blocks with it against
+/// blocks without, for the log; the delimiter goes only if it adds a quarter gap. A hold comes
+/// and goes within a run, so a reading that finds none keeps it.
 pub(crate) struct Trial {
     /// The tail under reading, or the one kept.
     tail: Tail,
-    left: Vec<Tail>,
     seen: u32,
     with: Vec<u64>,
     without: Vec<u64>,
@@ -92,38 +89,36 @@ pub(crate) struct Trial {
     done: bool,
 }
 
-fn median(v: &mut [u64]) -> u64 {
+fn median(mut v: Vec<u64>) -> u64 {
     v.sort_unstable();
     v.get(v.len() / 2).copied().unwrap_or(0)
 }
 
 impl Trial {
-    /// A trial over every tail whose [`Tail::bit`] is clear in `blocked`.
+    /// The delimiter, read against no tail. None if `blocked` holds its [`Tail::bit`].
     pub(crate) fn new(blocked: u8) -> Trial {
+        if blocked & Tail::Aud.bit() != 0 {
+            return Trial::fixed(Tail::None);
+        }
         Trial {
-            tail: Tail::None,
-            left: [Tail::Fill, Tail::Aud]
-                .into_iter()
-                .filter(|t| t.bit() & blocked == 0)
-                .collect(),
+            done: false,
+            ..Trial::fixed(Tail::Aud)
+        }
+    }
+
+    /// No reading: `tail` for the whole run.
+    pub(crate) fn fixed(tail: Tail) -> Trial {
+        Trial {
+            tail,
             seen: 0,
             with: Vec::new(),
             without: Vec::new(),
             gaps: Vec::new(),
-            done: false,
-        }
-    }
-
-    /// No trial: `tail` for the whole run.
-    pub(crate) fn fixed(tail: Tail) -> Trial {
-        Trial {
-            tail,
             done: true,
-            ..Trial::new(u8::MAX)
         }
     }
 
-    /// Even blocks of a reading carry its tail.
+    /// Even blocks of the reading carry its tail.
     fn on(&self) -> bool {
         (self.seen / BLOCK) % 2 == 0
     }
@@ -138,7 +133,7 @@ impl Trial {
     }
 
     /// One picture out: its codec time, and the gap between its AU and the one before.
-    /// `Some` closes a reading.
+    /// `Some` closes the reading.
     pub(crate) fn note(&mut self, codec_us: u64, gap_us: u64) -> Option<Reading> {
         if self.done {
             return None;
@@ -156,32 +151,19 @@ impl Trial {
             return None;
         }
         let tail = self.tail;
-        let (with_us, without_us) = (median(&mut self.with), median(&mut self.without));
-        let gap_us = median(&mut self.gaps);
-        let keep = match tail {
-            // No tail on either half: under the gap nothing is held.
-            Tail::None => with_us.max(without_us) < gap_us,
-            _ => with_us + gap_us / 2 <= without_us,
-        };
-        if keep || self.left.is_empty() {
-            self.done = true;
-            if !keep {
-                self.tail = Tail::None;
-            }
-        } else {
-            self.tail = self.left.remove(0);
+        let with_us = median(std::mem::take(&mut self.with));
+        let without_us = median(std::mem::take(&mut self.without));
+        let gap_us = median(std::mem::take(&mut self.gaps));
+        if with_us > without_us + gap_us / 4 {
+            self.tail = Tail::None;
         }
-        self.seen = 0;
-        self.with.clear();
-        self.without.clear();
-        self.gaps.clear();
+        self.done = true;
         Some(Reading {
             tail,
             with_us,
             without_us,
             gap_us,
             next: self.tail,
-            done: self.done,
         })
     }
 }
@@ -222,57 +204,58 @@ mod tests {
         assert_eq!(Tail::named("on"), None);
     }
 
-    /// One whole reading on a decoder that takes `held_us` a picture, and `freed_us` when fed
-    /// the tail in `frees`.
-    fn read(trial: &mut Trial, held_us: u64, freed_us: u64, frees: Tail) -> Reading {
+    /// The whole reading on a decoder that takes `held_us` a picture, and `aud_us` behind the
+    /// delimiter.
+    fn read(trial: &mut Trial, held_us: u64, aud_us: u64) -> Reading {
         (0..BLOCK * BLOCKS)
             .find_map(|_| {
-                let fed = trial.tail();
-                let us = if fed == frees && fed != Tail::None {
-                    freed_us
+                let us = if trial.tail() == Tail::Aud {
+                    aud_us
                 } else {
                     held_us
                 };
                 trial.note(us, GAP)
             })
-            .expect("a reading closes")
+            .expect("the reading closes")
     }
 
-    /// 9 ms a picture against a 16.7 ms gap: nothing is held, and nothing is tried.
+    /// 30 ms a picture, 14 ms behind the delimiter: kept on every AU from there.
     #[test]
-    fn a_decoder_under_the_gap_is_left_alone() {
+    fn a_hold_the_delimiter_frees_keeps_it() {
         let mut trial = Trial::new(0);
-        let r = read(&mut trial, 9_000, 9_000, Tail::None);
-        assert_eq!((r.tail, r.next, r.done), (Tail::None, Tail::None, true));
-        assert_eq!(trial.note(40_000, GAP), None, "over");
+        assert_eq!(trial.tail(), Tail::Aud, "the first block carries it");
+        let r = read(&mut trial, 30_000, 14_000);
+        assert_eq!(
+            (r.tail, r.next, r.with_us, r.without_us),
+            (Tail::Aud, Tail::Aud, 14_000, 30_000)
+        );
+        assert!((0..100).all(|_| trial.note(14_000, GAP).is_none() && trial.tail() == Tail::Aud));
+    }
+
+    /// 13 ms either way under a 16.7 ms gap: no hold now, and the delimiter stays for one that
+    /// comes later.
+    #[test]
+    fn a_reading_without_a_hold_keeps_the_delimiter() {
+        let r = read(&mut Trial::new(0), 13_000, 13_000);
+        assert_eq!(r.next, Tail::Aud);
+    }
+
+    /// A delimiter that costs a picture goes, and a blocked one is never fed.
+    #[test]
+    fn a_delimiter_that_costs_goes() {
+        let mut trial = Trial::new(0);
+        assert_eq!(read(&mut trial, 14_000, 14_000 + GAP).next, Tail::None);
         assert_eq!(trial.tail(), Tail::None);
+
+        let mut trial = Trial::new(Tail::Aud.bit());
+        assert!((0..1000).all(|_| trial.note(30_000, GAP).is_none() && trial.tail() == Tail::None));
     }
 
-    /// 30 ms a picture, 14 ms under the delimiter: the filler is read and dropped, the
-    /// delimiter read and kept, on every AU from there.
-    #[test]
-    fn a_hold_tries_each_tail_and_keeps_the_one_that_frees_it() {
-        let mut trial = Trial::new(0);
-        let r = read(&mut trial, 30_000, 14_000, Tail::Aud);
-        assert_eq!((r.tail, r.next, r.done), (Tail::None, Tail::Fill, false));
-        let r = read(&mut trial, 30_000, 14_000, Tail::Aud);
-        assert_eq!((r.tail, r.next, r.done), (Tail::Fill, Tail::Aud, false));
-        assert_eq!((r.with_us, r.without_us), (30_000, 30_000));
-        let r = read(&mut trial, 30_000, 14_000, Tail::Aud);
-        assert_eq!((r.tail, r.next, r.done), (Tail::Aud, Tail::Aud, true));
-        assert_eq!((r.with_us, r.without_us), (14_000, 30_000));
-        assert!((0..100).all(|_| {
-            trial.note(14_000, GAP);
-            trial.tail() == Tail::Aud
-        }));
-    }
-
-    /// A reading alternates blocks with the tail and without, the first outputs of each
+    /// The reading alternates blocks with the tail and without, the first outputs of each
     /// skipped: a rate that halves the codec time mid-reading moves both halves alike.
     #[test]
-    fn a_rate_that_moves_during_a_reading_frees_nothing() {
+    fn a_rate_that_moves_during_the_reading_costs_nothing() {
         let mut trial = Trial::new(0);
-        read(&mut trial, 30_000, 30_000, Tail::None);
         let mut fed = Vec::new();
         let r = (0..BLOCK * BLOCKS)
             .find_map(|i| {
@@ -284,26 +267,14 @@ mod tests {
                 };
                 trial.note(us, GAP)
             })
-            .expect("a reading");
-        assert_eq!((r.tail, r.next), (Tail::Fill, Tail::Aud), "not kept");
+            .expect("the reading");
+        assert_eq!(
+            (r.with_us, r.without_us, r.next),
+            (40_000, 40_000, Tail::Aud)
+        );
         let block = |n: u32| &fed[(n * BLOCK) as usize..((n + 1) * BLOCK) as usize];
-        assert!(block(0).iter().all(|&t| t == Tail::Fill));
+        assert!(block(0).iter().all(|&t| t == Tail::Aud));
         assert!(block(1).iter().all(|&t| t == Tail::None));
-    }
-
-    /// No tail frees it, or the ones that might are blocked: back to none.
-    #[test]
-    fn a_hold_no_tail_frees_ends_on_none() {
-        let mut trial = Trial::new(0);
-        for _ in 0..2 {
-            assert!(!read(&mut trial, 30_000, 30_000, Tail::None).done);
-        }
-        let r = read(&mut trial, 30_000, 30_000, Tail::None);
-        assert_eq!((r.tail, r.next, r.done), (Tail::Aud, Tail::None, true));
-
-        let mut trial = Trial::new(Tail::Fill.bit() | Tail::Aud.bit());
-        let r = read(&mut trial, 30_000, 30_000, Tail::None);
-        assert_eq!((r.next, r.done), (Tail::None, true));
     }
 
     #[test]
