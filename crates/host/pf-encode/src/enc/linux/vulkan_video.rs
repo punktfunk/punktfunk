@@ -34,7 +34,7 @@ use ash::vk;
 use pf_frame::{CapturedFrame, FramePayload, PixelFormat};
 use pf_zerocopy::vkdev::{VkBufferAlloc, VkImageAlloc};
 use std::collections::VecDeque;
-use std::ffi::c_void;
+use std::ffi::{c_void, CStr};
 use std::os::fd::AsFd;
 
 const NV12: vk::Format = vk::Format::G8_B8R8_2PLANE_420_UNORM;
@@ -491,19 +491,7 @@ unsafe fn create_encode_device(
     use super::vk_av1_encode as av1b;
     use super::vk_intra_refresh as vir;
     use super::vk_valve_rgb as vrgb;
-    // AV1 extension name is raw — ash 0.38 lacks it.
-    let mut dev_exts = vec![
-        ash::khr::video_queue::NAME.as_ptr(),
-        ash::khr::video_encode_queue::NAME.as_ptr(),
-        if av1 {
-            av1b::EXTENSION_NAME.as_ptr()
-        } else {
-            ash::khr::video_encode_h265::NAME.as_ptr()
-        },
-        ash::khr::external_memory_fd::NAME.as_ptr(),
-        ash::ext::external_memory_dma_buf::NAME.as_ptr(),
-        ash::ext::image_drm_format_modifier::NAME.as_ptr(),
-    ];
+    let mut dev_exts = required_device_exts(av1).map(CStr::as_ptr).to_vec();
     if rgb {
         dev_exts.push(vrgb::EXTENSION_NAME.as_ptr());
     }
@@ -686,9 +674,28 @@ unsafe fn build_csc_pipeline(
     Ok((csc_dsl, csc_layout, csc_pipe))
 }
 
-/// First physical device with a `VIDEO_ENCODE` queue family advertising `codec_op` (llvmpipe
-/// advertises none) whose driver [`super::vk_util::encode_trusted`] accepts. Shared by
-/// [`VulkanVideoEncoder::open_inner`] and [`probe_encode_caps`].
+/// Device extensions every encode open enables, whatever the session's options.
+fn required_device_exts(av1: bool) -> [&'static CStr; 6] {
+    [
+        ash::khr::video_queue::NAME,
+        ash::khr::video_encode_queue::NAME,
+        // ash 0.38 lacks the AV1 name.
+        if av1 {
+            super::vk_av1_encode::EXTENSION_NAME
+        } else {
+            ash::khr::video_encode_h265::NAME
+        },
+        ash::khr::external_memory_fd::NAME,
+        ash::ext::external_memory_dma_buf::NAME,
+        ash::ext::image_drm_format_modifier::NAME,
+    ]
+}
+
+/// First physical device whose driver [`super::vk_util::encode_trusted`] accepts, with a
+/// `VIDEO_ENCODE` queue family for `codec_op` (llvmpipe has none) and every
+/// [`required_device_exts`] entry advertised. The open, [`probe_encode_caps`] and
+/// [`vulkan_capture_modifiers`] all pick here, so capture never offers the modifiers of a
+/// device the open then fails to create.
 ///
 /// # Safety
 /// `instance` must be a live `ash::Instance` and `devices` handles enumerated from it.
@@ -708,16 +715,29 @@ unsafe fn find_encode_device(
             qf[i].p_next = &mut video[i] as *mut _ as *mut c_void;
         }
         instance.get_physical_device_queue_family_properties2(pd, &mut qf);
-        for i in 0..qf_len {
-            if qf[i]
+        let Some(family) = (0..qf_len).find(|&i| {
+            qf[i]
                 .queue_family_properties
                 .queue_flags
                 .contains(vk::QueueFlags::VIDEO_ENCODE_KHR)
                 && video[i].video_codec_operations.contains(codec_op)
-            {
-                return Some((pd, i as u32));
-            }
+        }) else {
+            continue;
+        };
+        let exts = instance
+            .enumerate_device_extension_properties(pd)
+            .unwrap_or_default();
+        let missing: Vec<&CStr> = required_device_exts(codec_op == codec_op_for(true))
+            .into_iter()
+            .filter(|name| !super::vk_util::ext_advertised(&exts, name))
+            .collect();
+        if missing.is_empty() {
+            return Some((pd, family as u32));
         }
+        tracing::info!(
+            ?missing,
+            "Vulkan Video encode device skipped: an extension the open enables is not advertised"
+        );
     }
     None
 }
