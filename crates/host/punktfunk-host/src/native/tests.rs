@@ -365,6 +365,56 @@ unsafe fn pull_verified(conn: *mut punktfunk_ffi::PunktfunkConnection, count: u3
 /// [`crate::session_status::tests::REGISTRY`] first — that order, always.
 static SESSION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// The longest a test waits for something that must happen. It ends a hang, since libtest
+/// has no timeout of its own, and never a wait that a host clock could end first.
+const HANG: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The ports whose host has bound its socket, and the wake for a test waiting on one.
+static LISTENING: (std::sync::Mutex<Vec<u16>>, std::sync::Condvar) =
+    (std::sync::Mutex::new(Vec::new()), std::sync::Condvar::new());
+
+/// Held by [`serve`] from the bind to its return.
+pub(super) struct Listening(u16);
+
+impl Listening {
+    pub(super) fn on(port: u16) -> Self {
+        let mut bound = LISTENING.0.lock().unwrap_or_else(|p| p.into_inner());
+        bound.push(port);
+        LISTENING.1.notify_all();
+        Listening(port)
+    }
+}
+
+impl Drop for Listening {
+    fn drop(&mut self) {
+        let mut bound = LISTENING.0.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(i) = bound.iter().position(|p| *p == self.0) {
+            bound.swap_remove(i);
+        }
+    }
+}
+
+/// `host` once it is bound on `port`, so a dial's first packet finds a socket. A host that
+/// ended instead fails the test with its own error.
+fn up(port: u16, host: std::thread::JoinHandle<Result<()>>) -> std::thread::JoinHandle<Result<()>> {
+    let mut bound = LISTENING.0.lock().unwrap_or_else(|p| p.into_inner());
+    while !bound.contains(&port) {
+        if host.is_finished() {
+            drop(bound);
+            host.join().unwrap().unwrap();
+            panic!("the host on {port} returned before it listened");
+        }
+        // A thread's end wakes nobody: look again every 20 ms.
+        let step = std::time::Duration::from_millis(20);
+        bound = LISTENING
+            .1
+            .wait_timeout(bound, step)
+            .unwrap_or_else(|p| p.into_inner())
+            .0;
+    }
+    host
+}
+
 /// C ABI: TOFU connect → pull frames → send input → close. Three sequential sessions
 /// against one host prove the persistent listener; a wrong pin is rejected.
 #[test]
@@ -382,10 +432,10 @@ fn c_abi_connection_roundtrip() {
             port: 19777,
             source: Punktfunk1Source::Synthetic,
             seconds: 0,
-            // More than the 25 each session pulls. The budget is one loop per session and a
-            // mid-stream mode change discards what is already queued at the old mode, so a
-            // client that pulls the whole budget only succeeds when its switch beats frame 0.
-            frames: 40,
+            // Until each client closes. A mode change discards what is queued at the old mode
+            // and a puller that falls behind jumps to live, so no count is sure to cover the
+            // 25 frames a session pulls.
+            frames: u32::MAX,
             max_sessions: 3,
             max_concurrent: 1,
             require_pairing: false,
@@ -539,7 +589,7 @@ fn a_synthetic_abr_session_registers_while_it_streams() {
     let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     use punktfunk_core::client::{ConnectParams, NativeClient};
 
-    let host = std::thread::spawn(|| {
+    let spawned = std::thread::spawn(|| {
         run_ephemeral(Punktfunk1Options {
             port: 19782,
             source: Punktfunk1Source::SyntheticAbr(SynthAbrShape {
@@ -550,7 +600,8 @@ fn a_synthetic_abr_session_registers_while_it_streams() {
                 bringup: std::time::Duration::ZERO,
                 serve_ramp: false,
             }),
-            seconds: 3,
+            // Until the client leaves: the row is there for as long as the test looks.
+            seconds: 0,
             frames: 0, // this source is timed, not counted
             max_sessions: 1,
             max_concurrent: 1,
@@ -562,7 +613,7 @@ fn a_synthetic_abr_session_registers_while_it_streams() {
             mdns: false,
         })
     });
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    let host = up(19782, spawned);
 
     let mode = punktfunk_core::Mode {
         width: 1280,
@@ -572,7 +623,7 @@ fn a_synthetic_abr_session_registers_while_it_streams() {
     };
     let client = NativeClient::connect(ConnectParams {
         preset: punktfunk_core::quic::SessionPreset::new("dock-1", "Docked"),
-        ..ConnectParams::new("127.0.0.1", 19782, mode, std::time::Duration::from_secs(10))
+        ..ConnectParams::new("127.0.0.1", 19782, mode, HANG)
     })
     .expect("client connects to the synthetic-abr host");
 
@@ -583,17 +634,11 @@ fn a_synthetic_abr_session_registers_while_it_streams() {
             .into_iter()
             .find(|s| (s.width, s.height, s.fps) == (1280, 720, 60))
     };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let row = loop {
-        if let Some(r) = ours() {
-            break r;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the synthetic-abr session never reached the registry"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    };
+    assert!(
+        wait_for(|| ours().is_some()),
+        "the synthetic-abr session never reached the registry"
+    );
+    let row = ours().expect("the row stays while the client does");
     assert_ne!(
         row.id, 0,
         "0 is the id the control task skips the governor on"
@@ -745,7 +790,8 @@ fn clipboard_control_and_fetch_decline_over_session() {
 }
 
 /// Spin up a host of `source` on `port` and dial it with `params`; the host joins on
-/// drop of the returned client.
+/// drop of the returned client. The stream has no budget of its own: it runs until the
+/// client leaves, so a test never races it.
 fn synthetic_session(
     port: u16,
     source: Punktfunk1Source,
@@ -755,12 +801,12 @@ fn synthetic_session(
     std::thread::JoinHandle<anyhow::Result<()>>,
 ) {
     use punktfunk_core::client::{ConnectParams, NativeClient};
-    let host = std::thread::spawn(move || {
+    let spawned = std::thread::spawn(move || {
         run_ephemeral(Punktfunk1Options {
             port,
             source,
             seconds: 0,
-            frames: 600,
+            frames: u32::MAX,
             max_sessions: 1,
             max_concurrent: 1,
             require_pairing: false,
@@ -771,25 +817,21 @@ fn synthetic_session(
             mdns: false,
         })
     });
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    let host = up(port, spawned);
     let mode = punktfunk_core::Mode {
         width: 1280,
         height: 720,
         refresh_hz: 60,
         refresh_mhz: 0,
     };
-    let client = NativeClient::connect(params(ConnectParams::new(
-        "127.0.0.1",
-        port,
-        mode,
-        std::time::Duration::from_secs(10),
-    )))
-    .expect("client connects to synthetic host");
+    let client = NativeClient::connect(params(ConnectParams::new("127.0.0.1", port, mode, HANG)))
+        .expect("client connects to synthetic host");
     (client, host)
 }
 
+/// Whether `pred` came true. It is polled: the client keeps these as plain fields.
 fn wait_for(pred: impl Fn() -> bool) -> bool {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + HANG;
     while std::time::Instant::now() < deadline {
         if pred() {
             return true;
@@ -914,19 +956,21 @@ fn a_keyframe_ask_rides_the_feedback_datagram() {
     host.join().unwrap().unwrap();
 }
 
-/// A device that dials again while its first session still streams gets in once that
-/// session has released, not after a fixed grace: the old 1.5 s sleep is gone.
+/// A device that dials again while its first session still streams gets in, and the first
+/// session is retired for it. How long the host waits for that release, and that it waits
+/// no longer, is `handshake`'s `a_release_ends_the_wait_and_the_cap_ends_a_stuck_one`.
 #[test]
 fn a_reconnect_waits_for_the_release_not_a_timer() {
     let _registry = crate::session_status::tests::registry_lock();
     let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     use punktfunk_core::client::{ConnectParams, NativeClient};
-    let host = std::thread::spawn(|| {
+    let spawned = std::thread::spawn(|| {
         run_ephemeral(Punktfunk1Options {
             port: 19793,
             source: Punktfunk1Source::Synthetic,
             seconds: 0,
-            frames: 600,
+            // Until each client leaves: neither stream ends under the test.
+            frames: u32::MAX,
             max_sessions: 2,
             max_concurrent: 2,
             require_pairing: false,
@@ -937,35 +981,25 @@ fn a_reconnect_waits_for_the_release_not_a_timer() {
             mdns: false,
         })
     });
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    let host = up(19793, spawned);
     let (cert, key) = punktfunk_core::quic::endpoint::generate_identity().unwrap();
+    let mode = punktfunk_core::Mode {
+        width: 1280,
+        height: 720,
+        refresh_hz: 60,
+        refresh_mhz: 0,
+    };
     let dial = || {
         NativeClient::connect(ConnectParams {
             identity: Some((cert.clone(), key.clone())),
-            ..ConnectParams::new(
-                "127.0.0.1",
-                19793,
-                punktfunk_core::Mode {
-                    width: 1280,
-                    height: 720,
-                    refresh_hz: 60,
-                    refresh_mhz: 0,
-                },
-                std::time::Duration::from_secs(10),
-            )
+            ..ConnectParams::new("127.0.0.1", 19793, mode, HANG)
         })
         .expect("client connects")
     };
     let first = dial();
-    assert!(first.next_frame(std::time::Duration::from_secs(5)).is_ok());
-    let started = std::time::Instant::now();
+    first.next_frame(HANG).expect("the first session streams");
     let second = dial();
-    let took = started.elapsed();
-    assert!(
-        took < std::time::Duration::from_millis(1400),
-        "the reconnect took {took:?}"
-    );
-    assert!(second.next_frame(std::time::Duration::from_secs(5)).is_ok());
+    second.next_frame(HANG).expect("the second session streams");
     assert!(
         wait_for(|| first.end_reason() != punktfunk_core::client::PunktfunkEndReason::None),
         "the first session was retired, not kept beside the second"
@@ -983,23 +1017,30 @@ fn a_punktfunk_2_session_streams_end_to_end() {
     let _registry = crate::session_status::tests::registry_lock();
     let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let (client, host) = synthetic_session(19791, Punktfunk1Source::Synthetic, |p| p);
-    let mut got = 0;
-    let mut pts = std::collections::HashSet::new();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while got < 60 && std::time::Instant::now() < deadline {
-        if let Ok(f) = client.next_frame(std::time::Duration::from_millis(200)) {
-            let idx = u32::from_le_bytes(f.data[0..4].try_into().unwrap());
-            assert_eq!(f.data, test_frame(idx, f.data.len()), "frame {idx}");
-            pts.insert(f.pts_ns);
-            got += 1;
-        }
-    }
-    assert_eq!(got, 60, "frames cross the v2 media path");
+    // Sixty frames, and fifty of the frames seen named by a `HostTiming`. Both are counted
+    // as they come: a timing is a datagram and may be lost, or land after its frame.
+    let (mut frames, mut timed) = (
+        std::collections::HashSet::new(),
+        std::collections::HashSet::new(),
+    );
     let mut named = 0;
-    while let Ok(t) = client.next_host_timing(std::time::Duration::from_millis(50)) {
-        named += usize::from(pts.contains(&t.pts_ns));
+    while frames.len() < 60 || named < 50 {
+        assert!(
+            frames.len() < 600,
+            "HostTiming names its frames: {named} of {}",
+            frames.len()
+        );
+        let f = client
+            .next_frame(HANG)
+            .expect("frames cross the v2 media path");
+        let idx = u32::from_le_bytes(f.data[0..4].try_into().unwrap());
+        assert_eq!(f.data, test_frame(idx, f.data.len()), "frame {idx}");
+        frames.insert(f.pts_ns);
+        while let Ok(t) = client.next_host_timing(std::time::Duration::ZERO) {
+            timed.insert(t.pts_ns);
+        }
+        named = frames.intersection(&timed).count();
     }
-    assert!(named >= 50, "HostTiming names its frames: {named} of 60");
     client.request_probe(5_000, 200).unwrap();
     assert!(
         wait_for(|| client.probe_result().done),
@@ -1556,7 +1597,7 @@ fn spawn_logged_host(
                 port,
                 source: Punktfunk1Source::Synthetic,
                 seconds: 0,
-                frames: 3000, // ~50 s at 60 fps; the stop flag cuts it long before
+                frames: u32::MAX, // until the typed close or the client's leaving ends it
                 max_sessions,
                 max_concurrent: 1,
                 require_pairing: true,
@@ -1583,8 +1624,16 @@ fn access_store_path(tag: &str) -> std::path::PathBuf {
     crate::test_support::scratch().join(format!("pf-access-{tag}.json"))
 }
 
-/// `ClientHello` → `ServerHello` → `Ready`, returning streams so a test can read
-/// `AccessUpdate`s and the exact close code. The media handle keeps the client's socket open.
+/// A raw client's connection, its control stream open and nothing said on it yet. The media
+/// handle keeps the client's socket open.
+type RawDial = (
+    quinn::Connection,
+    quinn::SendStream,
+    punktfunk_core::quic::v2::io::FrameReader<quinn::RecvStream>,
+    punktfunk_core::transport::shared::ClientMedia,
+);
+
+/// [`raw_dial`] then [`raw_hello`].
 async fn raw_session(
     port: u16,
     identity: (&str, &str),
@@ -1595,8 +1644,12 @@ async fn raw_session(
     Welcome,
     punktfunk_core::transport::shared::ClientMedia,
 ) {
-    use punktfunk_core::quic::v2::hello::{Ready, ServerHello};
-    use punktfunk_core::quic::v2::{io as v2io, msg, registry};
+    raw_hello(raw_dial(port, identity).await).await
+}
+
+/// The QUIC handshake and the control stream, up to the `ClientHello`.
+async fn raw_dial(port: u16, identity: (&str, &str)) -> RawDial {
+    use punktfunk_core::quic::v2::{io as v2io, registry};
     let (ep, _observed) = endpoint::client_shared(None, Some(identity), &[registry::ALPN], None);
     let (ep, media) = ep.expect("client endpoint");
     let conn = ep
@@ -1608,7 +1661,22 @@ async fn raw_session(
     v2io::write_stream_type(&mut send, registry::STREAM_CONTROL)
         .await
         .expect("stream type");
-    let mut recv = v2io::FrameReader::new(recv);
+    (conn, send, v2io::FrameReader::new(recv), media)
+}
+
+/// `ClientHello` → `ServerHello` → `Ready`, returning streams so a test can read
+/// `AccessUpdate`s and the exact close code.
+async fn raw_hello(
+    (conn, mut send, mut recv, media): RawDial,
+) -> (
+    quinn::Connection,
+    quinn::SendStream,
+    punktfunk_core::quic::v2::io::FrameReader<quinn::RecvStream>,
+    Welcome,
+    punktfunk_core::transport::shared::ClientMedia,
+) {
+    use punktfunk_core::quic::v2::hello::{Ready, ServerHello};
+    use punktfunk_core::quic::v2::{io as v2io, msg};
     v2io::send(&mut send, &plain_hello(None, Default::default()))
         .await
         .expect("ClientHello");
@@ -1782,35 +1850,35 @@ fn access_expiry_advertises_and_closes_typed() {
     let np = Arc::new(NativePairing::load_with(Some(store.clone()), None, false).unwrap());
     let (cert, key) = endpoint::generate_identity().unwrap();
     let fp_hex = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
-    let host = spawn_access_host(19782, 1, np.clone());
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    // Granted once the host is up: a handshake that reaches the pairing gate after expiry is
-    // parked as an unpaired knock. 4 s leaves at least 3 s for it on a loaded runner.
-    np.add_with_access(
-        "Evening Guest",
-        &fp_hex,
-        Some(crate::native_pairing::Access {
-            grants: GRANT_ALL,
-            expires_unix: Some(crate::clock::unix_secs() + 4),
-            until_disconnect: false,
-        }),
-    )
-    .unwrap();
+    let host = up(19782, spawn_access_host(19782, 1, np.clone()));
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
     rt.block_on(async {
-        let (conn, _send, _recv, welcome, _media) =
-            raw_session(19782, (cert.as_str(), key.as_str())).await;
+        // Granted once the connection is up, so the 4 s are the session's: only the hello
+        // is left to cross before the pairing gate reads the grant. A hello that reaches the
+        // gate after expiry is parked as an unpaired knock.
+        let dial = raw_dial(19782, (cert.as_str(), key.as_str())).await;
+        np.add_with_access(
+            "Evening Guest",
+            &fp_hex,
+            Some(crate::native_pairing::Access {
+                grants: GRANT_ALL,
+                expires_unix: Some(crate::clock::unix_secs() + 4),
+                until_disconnect: false,
+            }),
+        )
+        .unwrap();
+        let (conn, _send, _recv, welcome, _media) = raw_hello(dial).await;
         assert_eq!(welcome.grants, GRANT_ALL, "the Welcome advertises the mask");
         assert!(
             (1..=4).contains(&welcome.expires_in_secs),
             "a 4 s grant must advertise 1–4 remaining secs, got {}",
             welcome.expires_in_secs
         );
-        let code = tokio::time::timeout(std::time::Duration::from_secs(10), closed_app_code(&conn))
+        let code = tokio::time::timeout(HANG, closed_app_code(&conn))
             .await
             .expect("the deadline task must close the session");
         assert_eq!(
@@ -1839,8 +1907,7 @@ fn access_edit_pushes_updates_and_expire_now_closes() {
     let (cert, key) = endpoint::generate_identity().unwrap();
     let fp_hex = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
     np.add("Edited Device", &fp_hex).unwrap();
-    let host = spawn_access_host(19783, 1, np.clone());
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    let host = up(19783, spawn_access_host(19783, 1, np.clone()));
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1852,7 +1919,7 @@ fn access_edit_pushes_updates_and_expire_now_closes() {
         assert_eq!(welcome.grants, GRANT_ALL);
         assert_eq!(welcome.expires_in_secs, 0, "permanent access advertises 0");
         // The control task opens with the session's first config.
-        let (ty, body) = tokio::time::timeout(std::time::Duration::from_secs(5), recv.read_frame())
+        let (ty, body) = tokio::time::timeout(HANG, recv.read_frame())
             .await
             .expect("the first StreamConfig owed")
             .expect("control stream open");
@@ -1876,25 +1943,26 @@ fn access_edit_pushes_updates_and_expire_now_closes() {
         .expect("the fingerprint is paired");
 
         // Update 1: the edit itself (new mask + remaining).
-        let (ty, body) = tokio::time::timeout(std::time::Duration::from_secs(5), recv.read_frame())
+        let (ty, body) = tokio::time::timeout(HANG, recv.read_frame())
             .await
             .expect("edit AccessUpdate owed")
             .expect("control stream open");
         let u = punktfunk_core::quic::v2::msg::decode::<AccessUpdate>(ty, &body)
             .expect("an AccessUpdate");
         assert_eq!(u.grants, punktfunk_core::quic::GRANT_PRESET_CONTROLLER_ONLY);
+        // The host stamped it between the edit and this read, on the clock both read.
+        let left = now + 62 - crate::clock::unix_secs();
         assert!(
-            (55..=62).contains(&u.remaining_secs),
-            "remaining should track the fresh deadline, got {}",
+            (left..=62).contains(&i64::from(u.remaining_secs)),
+            "remaining should track the fresh deadline, got {} of {left}..=62",
             u.remaining_secs
         );
 
         // Update 2: T−1 m warning, fired as the threshold is crossed live.
-        let (ty, body) =
-            tokio::time::timeout(std::time::Duration::from_secs(10), recv.read_frame())
-                .await
-                .expect("T-1m warning owed")
-                .expect("control stream open");
+        let (ty, body) = tokio::time::timeout(HANG, recv.read_frame())
+            .await
+            .expect("T-1m warning owed")
+            .expect("control stream open");
         let u = punktfunk_core::quic::v2::msg::decode::<AccessUpdate>(ty, &body)
             .expect("an AccessUpdate");
         assert!(
@@ -1913,7 +1981,7 @@ fn access_edit_pushes_updates_and_expire_now_closes() {
             },
         )
         .unwrap();
-        let code = tokio::time::timeout(std::time::Duration::from_secs(10), closed_app_code(&conn))
+        let code = tokio::time::timeout(HANG, closed_app_code(&conn))
             .await
             .expect("expire-now must close the session");
         assert_eq!(code, punktfunk_core::reject::ACCESS_EXPIRED_CLOSE_CODE);
@@ -2390,7 +2458,7 @@ fn a_session_that_fails_after_its_planes_start() {
     let (cert, key) = endpoint::generate_identity().unwrap();
     let fp = endpoint::fingerprint_of_pem(&cert).unwrap();
     *FAIL_AT_LAUNCH.lock().unwrap_or_else(|p| p.into_inner()) = Some((fp, None));
-    let host = std::thread::spawn(|| {
+    let spawned = std::thread::spawn(|| {
         run_ephemeral(Punktfunk1Options {
             port: 19796,
             source: Punktfunk1Source::Synthetic,
@@ -2406,7 +2474,7 @@ fn a_session_that_fails_after_its_planes_start() {
             mdns: false,
         })
     });
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    let host = up(19796, spawned);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -2414,7 +2482,8 @@ fn a_session_that_fails_after_its_planes_start() {
     let code = rt.block_on(async {
         let (conn, _send, _recv, _welcome, _media) =
             raw_session(19796, (cert.as_str(), key.as_str())).await;
-        tokio::time::timeout(std::time::Duration::from_secs(10), closed_app_code(&conn))
+        // The close follows the teardown, which may wait its whole join grace for a thread.
+        tokio::time::timeout(HANG, closed_app_code(&conn))
             .await
             .expect("the host closes the failed session")
     });
@@ -2488,6 +2557,12 @@ async fn dial_until(
     use punktfunk_core::quic::v2::{io as v2io, msg, registry};
     let (ep, observed) = endpoint::client_shared(None, Some(identity), &[registry::ALPN], None);
     let (ep, _media) = ep.expect("client endpoint");
+    // The client's close leaves only while its endpoint is polled, and this runtime stops
+    // with the dial: without the wait the host streams to nobody until its idle timeout.
+    let left = |conn: quinn::Connection, ep: quinn::Endpoint| async move {
+        conn.close(0u32.into(), b"");
+        ep.wait_idle().await;
+    };
     let conn = ep
         .connect(format!("127.0.0.1:{port}").parse().unwrap(), "punktfunk")
         .expect("connect")
@@ -2525,13 +2600,13 @@ async fn dial_until(
         if ty == msg::Pending::TYPE {
             pendings += 1;
             if held_ends {
-                conn.close(0u32.into(), b"");
+                left(conn, ep).await;
                 return (pendings, Heard::Held);
             }
             continue;
         }
         if ty == registry::MSG_SERVER_HELLO {
-            conn.close(0u32.into(), b"");
+            left(conn, ep).await;
             return (pendings, Heard::Played);
         }
         assert_eq!(
@@ -2540,12 +2615,13 @@ async fn dial_until(
             "an admission answers no other frame"
         );
         let to = msg::decode::<msg::Redirect>(ty, &body).unwrap();
-        conn.close(0u32.into(), b"");
+        left(conn, ep).await;
         let (port, pin) = (to.port, to.pin);
         return (pendings, Heard::Redirect { port, pin });
     }
-    let quinn::ConnectionError::ApplicationClosed(ac) = conn.closed().await else {
-        panic!("the host closes the connect itself");
+    let ac = match conn.closed().await {
+        quinn::ConnectionError::ApplicationClosed(ac) => ac,
+        other => panic!("the host closes the connect itself, and this was {other:?}"),
     };
     let code = u32::try_from(u64::from(ac.error_code)).unwrap();
     let reason = punktfunk_core::reject::RejectReason::from_close_code(code)
@@ -3002,8 +3078,8 @@ fn dial_host(
     let sup = Fake::new(vec![seat], |_| Ok(pf_seats::ipc::CommandResult::Left));
     let _armed = fake::arm(&fp, Arc::new(sup));
     let profiles = Arc::new(profiles);
-    let host = spawn_profile_host(port, dials.len() as u32, np, Arc::clone(&profiles));
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    let spawned = spawn_profile_host(port, dials.len() as u32, np, Arc::clone(&profiles));
+    let host = up(port, spawned);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
