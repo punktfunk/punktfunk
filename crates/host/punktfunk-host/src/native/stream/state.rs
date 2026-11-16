@@ -498,20 +498,14 @@ impl StreamState {
         );
     }
 
-    /// Publish the delivered mode to `/status` and to the client, correcting it when it
-    /// differs from `asked`.
-    pub(super) fn publish_delivered_mode(&self, asked: punktfunk_core::Mode) {
-        let actual = self.live.geometry.delivered();
-        self.shared.live_mode.store(
-            pack_mode(actual.width, actual.height, actual.refresh_hz),
-            Ordering::Relaxed,
-        );
-        self.tell_delivered(actual, actual != asked);
-    }
-
-    /// Tell the control task what the current epoch delivers and the size its encoder takes it
-    /// to, and `/status` what it encodes.
-    pub(super) fn tell_delivered(&self, mode: punktfunk_core::Mode, corrects: bool) {
+    /// Tell what the current epoch delivers and encodes, off the live geometry: the control
+    /// task, which sends the client what it does not hold and, when `corrects`, a correction to
+    /// a client that takes no configs; `/status` the mode and format.
+    pub(super) fn tell(&self, corrects: bool) {
+        let g = &self.live.geometry;
+        let delivered = g.delivered();
+        let packed = pack_mode(delivered.width, delivered.height, delivered.refresh_hz);
+        self.shared.live_mode.store(packed, Ordering::Relaxed);
         let format = format_of(&self.plan, &*self.live.capturer, self.bit_depth);
         crate::session_status::set_format(
             self.live_session.id,
@@ -524,13 +518,22 @@ impl StreamState {
             .ends
             .reconfig_result_tx
             .send(crate::native::wiring::Delivered {
-                intent: self.live.geometry.intent(),
-                delivered: mode,
-                picture: self.live.geometry.picture(),
+                intent: g.intent(),
+                delivered,
+                picture: g.picture(),
                 format,
                 epoch: self.live.epoch,
                 corrects,
             });
+    }
+
+    /// Epoch 0 is told when bring-up adopted an ask the control task's first config does not
+    /// name, as a correction when the display delivers another mode.
+    fn tell_connect(&self, adopted: bool) {
+        let g = &self.live.geometry;
+        if adopted {
+            self.tell(g.delivered() != g.intent().mode());
+        }
     }
 
     /// Bring the session up in phases. What the context settles comes first: the plan, the
@@ -588,9 +591,6 @@ impl StreamState {
             bitrate_kbps,
             &c.ends.retarget_tx,
         );
-        if adopted {
-            tell_adopted(&c.ends.reconfig_result_tx, &live, &plan, c.bit_depth);
-        }
         let (game_shared, game_life) = spawn_launch_and_lease(
             &display,
             live.cur_display_gen,
@@ -694,6 +694,7 @@ impl StreamState {
             content: None,
             game_life,
         };
+        st.tell_connect(adopted);
         let (rx, tell) = (c.ends.screens_rx, c.ends.screen_tell_tx);
         st.screens = ctx
             .screens
@@ -1198,26 +1199,6 @@ fn first_live(
         asks: Default::default(),
         applied_share: crate::native::bitrate::SHARE_ALL,
     }
-}
-
-/// An adopted ask is not the one the control task's first config names: tell it what epoch 0
-/// delivers and encodes. It sends only what the client does not hold, and corrects a client
-/// acked with another mode.
-fn tell_adopted(
-    tell: &tokio::sync::mpsc::UnboundedSender<crate::native::wiring::Delivered>,
-    live: &Live,
-    plan: &crate::session_plan::SessionPlan,
-    bit_depth: u8,
-) {
-    let (actual, intent) = (live.geometry.delivered(), live.geometry.intent());
-    let _ = tell.send(crate::native::wiring::Delivered {
-        intent,
-        delivered: actual,
-        picture: live.geometry.picture(),
-        format: format_of(plan, &*live.capturer, bit_depth),
-        epoch: 0,
-        corrects: actual != intent.mode(),
-    });
 }
 
 /// Start the send thread on the data plane the ramp hands back, and the hook that queues the
@@ -2062,18 +2043,16 @@ mod tests {
         adopted: bool,
         plan: &crate::session_plan::SessionPlan,
     ) -> Told {
-        let (tell_tx, mut told) = tokio::sync::mpsc::unbounded_channel();
         let (retarget_tx, mut retarget) = tokio::sync::mpsc::unbounded_channel();
         let built = pipe.geometry.reframed(intent, pipe.geometry.reframe());
         let pipe = Pipeline {
             geometry: built,
             ..pipe
         };
-        let live = first_live(pipe, &mut f.st.display, &f.st.shared, kbps, &retarget_tx);
-        if adopted {
-            tell_adopted(&tell_tx, &live, plan, 8);
-        }
-        let d = told.try_recv().ok().map(|d| {
+        f.st.live = first_live(pipe, &mut f.st.display, &f.st.shared, kbps, &retarget_tx);
+        (f.st.plan, f.st.bit_depth) = (*plan, 8);
+        f.st.tell_connect(adopted);
+        let d = f.told.try_recv().ok().map(|d| {
             let p = d.picture.mode();
             (d.delivered, (p.width, p.height), d.corrects)
         });

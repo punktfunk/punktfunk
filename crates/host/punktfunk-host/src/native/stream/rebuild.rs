@@ -25,7 +25,6 @@ use crate::encode_recovery::{
     EncoderWatchdog, RebuildBudget, MAX_CAPTURE_REBUILDS, MAX_ENCODER_RESETS,
 };
 use crate::native::geometry::{Geometry, Hold, Tenure};
-use crate::session_status::pack_mode;
 
 /// How long a capture-loss rebuild waits after a failed attempt.
 const LOSS_RETRY: std::time::Duration = std::time::Duration::from_millis(500);
@@ -327,7 +326,7 @@ impl StreamState {
     pub(super) fn rebuild(&mut self, ask: RebuildAsk) -> Result<Rebuilt> {
         let Some(plan) = rebuild_plan::plan(&ask, &self.rebuild_facts()) else {
             if let RebuildAsk::Mode(asked) = ask {
-                self.publish_delivered_mode(asked.mode());
+                self.tell(self.live.geometry.delivered() != asked.mode());
             }
             return Ok(Rebuilt::Unchanged);
         };
@@ -747,13 +746,8 @@ impl StreamState {
         // The pacing clock restarts: the stall was the rebuild's, not encode falling behind.
         self.next = std::time::Instant::now();
         match (e.tell, plan.display) {
-            (Some(Tell::Mode), _) => self.publish_delivered_mode(m),
-            (Some(Tell::Correction), _) => {
-                let actual = self.live.geometry.delivered();
-                let packed = pack_mode(actual.width, actual.height, actual.refresh_hz);
-                self.shared.live_mode.store(packed, Ordering::Relaxed);
-                self.tell_delivered(actual, true);
-            }
+            (Some(Tell::Mode), _) => self.tell(self.live.geometry.delivered() != m),
+            (Some(Tell::Correction), _) => self.tell(true),
             (Some(Tell::Codec), Some(DisplayChange::Format(codec))) => {
                 let _ = self.ends.format_result_tx.send(Some(codec));
             }
@@ -817,7 +811,7 @@ impl StreamState {
             announce_gap_since(&self.ends.gap_tx, t0);
         }
         match plan.rollback.tell {
-            Some(Tell::Mode) => self.tell_delivered(self.live.geometry.delivered(), true),
+            Some(Tell::Mode) => self.tell(true),
             Some(Tell::Codec) => {
                 let _ = self.ends.format_result_tx.send(None);
             }
@@ -1960,7 +1954,7 @@ pub(crate) mod tests {
         };
         let Some(plan) = rebuild_plan::plan(&ask, &facts) else {
             if let RebuildAsk::Mode(asked) = ask {
-                f.st.publish_delivered_mode(asked.mode());
+                f.st.tell(f.st.live.geometry.delivered() != asked.mode());
             }
             return false;
         };
@@ -2633,7 +2627,7 @@ pub(crate) mod tests {
             None => "refused",
             Some(asked) => match rebuild_plan::plan(&RebuildAsk::Mode(asked), &facts) {
                 None => {
-                    f.st.publish_delivered_mode(asked.mode());
+                    f.st.tell(f.st.live.geometry.delivered() != asked.mode());
                     "none"
                 }
                 Some(plan) => {

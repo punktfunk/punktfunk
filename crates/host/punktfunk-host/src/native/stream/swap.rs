@@ -162,7 +162,7 @@ impl StreamState {
         // Every epoch is told, before its first frame encodes; a site that corrects the mode
         // tells again.
         if why.moves_epoch() {
-            self.tell_delivered(self.live.geometry.delivered(), false);
+            self.tell(false);
         }
     }
 
