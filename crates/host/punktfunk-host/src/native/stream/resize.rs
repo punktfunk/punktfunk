@@ -1,28 +1,27 @@
 //! The Windows in-place resize: mode-set the live monitor, restore its presentation, open only
 //! the encoder. Also the topology re-assert recovery, which is the same path with a liveness gate.
 
-use super::pipeline::{
-    display_mode_for, display_rate, frame_interval, open_session_encoder, stream_mhz, whole_hz,
-};
+use super::pipeline::{display_mode_for, display_rate, open_session_encoder};
 use super::state::StreamState;
 use super::swap::Next;
 use super::*;
+use crate::native::geometry::{Geometry, Intent};
 
 impl StreamState {
-    /// Mode-set the live monitor, restore its presentation, and open an encoder at the first
-    /// frame of the new size, framed as `framing` says, at `kbps_for` the picture it encodes, for
-    /// the rebuild performer to swap in. `None` → full rebuild.
+    /// Mode-set the live monitor to `intent`, restore its presentation, and open an encoder at
+    /// the first frame of the new size, framed as the intent says, at `price` the geometry it
+    /// builds, for the rebuild performer to swap in. `None` → full rebuild.
     /// With the driver's encoder, only its pool taking a frame proves the new size; a second
     /// without one restarts the presentation once. `recover_ring` re-attaches the ring at the
     /// current mode and demands a second, newer present as proof the OS resumed presenting.
     pub(super) fn resize(
         &mut self,
-        new_mode: punktfunk_core::Mode,
-        framing: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
-        kbps_for: impl Fn(u32, u32) -> u32,
+        intent: Intent,
+        price: impl Fn(&Geometry) -> u32,
         trace: &crate::bringup::Trace,
         recover_ring: bool,
     ) -> Option<Next> {
+        let (new_mode, framing) = (intent.mode(), intent.framing());
         let enc_of = self.enc_now();
         let cur_target = self.live.capturer.display().map(|d| d.target_id())?;
         let new_display_mode = display_mode_for(new_mode, self.display.vd.name());
@@ -39,9 +38,8 @@ impl StreamState {
             }
         };
         trace.mark("display_resized");
-        let (_, display_mhz) = display_rate(&vout, new_display_mode);
-        let rate_mhz = stream_mhz(new_mode, display_mhz);
-        let effective_hz = whole_hz(rate_mhz);
+        let built = Geometry::built(intent, display_rate(&vout, new_display_mode));
+        let effective_hz = built.hz();
         if vout.win_capture.as_ref().map(|t| t.target_id) != Some(cur_target) {
             tracing::info!(
                 "resize: monitor re-arrived (no in-place support) — running the full pipeline rebuild"
@@ -74,9 +72,9 @@ impl StreamState {
                             &*self.live.capturer,
                             framing,
                             effective_hz,
-                            enc_of.enc_kbps(kbps_for(framing.out.0, framing.out.1)) as u64 * 1000,
+                            enc_of.enc_kbps(price(&built.reframed(intent, framing))) as u64 * 1000,
                             self.bit_depth,
-                            self.facts.client_hdr,
+                            self.facts.terms.client_hdr(),
                             wire_seq_base,
                         )
                     });
@@ -189,15 +187,15 @@ impl StreamState {
         let (enc, reframe) = match pre_opened {
             Some(opened) => opened,
             None => match open_session_encoder(
-                &self.facts.encoder,
+                &self.facts.terms.encoder,
                 &self.plan,
                 &*self.live.capturer,
                 &new_frame,
                 framing,
                 effective_hz,
-                |w, h| enc_of.enc_kbps(kbps_for(w, h)) as u64 * 1000,
+                |f| enc_of.enc_kbps(price(&built.reframed(intent, *f))) as u64 * 1000,
                 self.bit_depth,
-                self.facts.client_hdr,
+                self.facts.terms.client_hdr(),
                 wire_seq_base,
             ) {
                 Ok(opened) => opened,
@@ -208,12 +206,11 @@ impl StreamState {
                 }
             },
         };
-        let interval = frame_interval(rate_mhz);
         trace.mark("encoder_open");
         Some(Next::Encoder {
             enc,
-            reframe,
-            resized: Some((new_frame, interval)),
+            geometry: built.reframed(intent, reframe),
+            resized: Some(new_frame),
         })
     }
 }

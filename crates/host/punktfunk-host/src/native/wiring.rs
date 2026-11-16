@@ -6,18 +6,19 @@
 
 use super::*;
 use crate::native::bitrate::EncoderCeiling;
-use crate::native::geometry::{Intent, Tenure, TenureCell};
+use crate::native::geometry::{Intent, Picture, Tenure, TenureCell};
 
-/// The mode and video format epoch `epoch` delivers, from the stream thread. `corrects`: the mode
-/// is not what the client was last told, so a client without `StreamConfig` gets a second
-/// `Reconfigured`.
+/// What epoch `epoch` delivers, from the stream thread's geometry, and its video format.
+/// `corrects`: the mode is not what the client was last told, so a client without
+/// `StreamConfig` gets a second `Reconfigured`.
 pub(crate) struct Delivered {
     /// What the epoch runs: the client's ask, or the mode the source delivered.
     pub(crate) intent: Intent,
     /// The display's mode, as captured: what the client asked for, not what is encoded.
-    pub(crate) mode: punktfunk_core::Mode,
-    /// The size the encoder takes the picture to: a view, a mirror's fit, or `mode`'s own.
-    pub(crate) encoded: (u32, u32),
+    pub(crate) delivered: punktfunk_core::Mode,
+    /// The size the encoder takes the picture to, at the rate delivered: a view, a mirror's fit,
+    /// or the captured size.
+    pub(crate) picture: Picture,
     pub(crate) format: punktfunk_core::quic::VideoFormat,
     pub(crate) epoch: u8,
     pub(crate) corrects: bool,

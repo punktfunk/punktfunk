@@ -31,6 +31,8 @@ mod state;
 mod swap;
 mod synth_abr;
 pub(super) use self::pipeline::{spawn_display_prep, DisplayPrep, PrepHandle, PreparedDisplay};
+// `geometry.rs` derives the rate a build runs at.
+pub(super) use self::pipeline::{frame_interval, stream_mhz, whole_hz};
 /// The pipeline steps both stream loops take, for GameStream as `crate::native::pipeline`.
 #[cfg(feature = "gamestream")]
 pub(crate) mod shared {
@@ -87,10 +89,13 @@ pub(super) fn synthetic_stream(
             if let Some(codec) = asked_codec {
                 format.codec = crate::encode::codec_to_wire(codec);
             }
+            let whole = punktfunk_core::video_fit::Reframe::full((mode.width, mode.height));
+            let built = super::geometry::Geometry::built(intent, (mode.refresh_hz, mode.millihz()))
+                .reframed(intent, whole);
             let _ = ends.reconfig_result_tx.send(super::wiring::Delivered {
                 intent,
-                mode,
-                encoded: (mode.width, mode.height),
+                delivered: mode,
+                picture: built.picture(),
                 format,
                 epoch,
                 corrects: false,

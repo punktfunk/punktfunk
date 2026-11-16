@@ -317,20 +317,20 @@ fn tell(
     stream_config: &mut Option<v2msg::StreamConfig>,
     d: &super::wiring::Delivered,
 ) -> Option<Tell> {
-    let picture = d.intent.encoded(d.encoded).wire(d.mode);
+    let picture = d.picture.wire(d.delivered);
     match stream_config {
         Some(cfg)
             if (cfg.epoch, cfg.mode, cfg.picture, cfg.format())
-                != (d.epoch, d.mode, picture, d.format) =>
+                != (d.epoch, d.delivered, picture, d.format) =>
         {
-            (cfg.epoch, cfg.mode, cfg.picture) = (d.epoch, d.mode, picture);
+            (cfg.epoch, cfg.mode, cfg.picture) = (d.epoch, d.delivered, picture);
             cfg.set_format(d.format);
             Some(Tell::Config(*cfg))
         }
         Some(_) => None,
         None => d.corrects.then_some(Tell::Correct(Reconfigured {
             accepted: true,
-            mode: d.mode,
+            mode: d.delivered,
             exclude_codecs: 0,
         })),
     }
@@ -963,8 +963,8 @@ impl ControlTask {
         self.told_epoch = d.epoch;
         self.task.codec = crate::encode::codec_from_wire(d.format.codec);
         if self.pyrowave_pin.automatic {
-            let encoded = d.intent.delivered_at(d.mode).encoded(d.encoded);
-            (self.pyrowave_pin.floor, self.pyrowave_pin.kbps) = self.task.pyrowave_bounds(&encoded);
+            (self.pyrowave_pin.floor, self.pyrowave_pin.kbps) =
+                self.task.pyrowave_bounds(&d.picture);
         }
         match tell(&mut self.held_config, &d) {
             Some(Tell::Config(cfg)) => self.send(&cfg).await,
@@ -983,9 +983,9 @@ pub(super) fn held_after(
     d: &super::wiring::Delivered,
 ) -> (crate::native::geometry::Intent, Option<u8>) {
     if asked_at == Some(d.epoch) {
-        return (held.delivered_at(d.mode), asked_at);
+        return (held.delivered_at(d.delivered), asked_at);
     }
-    (d.intent.delivered_at(d.mode), None)
+    (d.intent.delivered_at(d.delivered), None)
 }
 
 /// Operator policy (`None` = off), then CLIPBOARD grant (AND, never override),
@@ -1289,10 +1289,17 @@ pub(crate) mod tests {
             refresh_hz: 60,
             refresh_mhz: 0,
         };
+        let at = |width, size| {
+            Picture::of(punktfunk_core::Mode {
+                width,
+                height: 360,
+                ..mode(size)
+            })
+        };
         let d = |epoch, width: u32, corrects| Delivered {
             intent: asked(mode(width), None),
-            mode: mode(width),
-            encoded: (width / 2, 360),
+            delivered: mode(width),
+            picture: at(width / 2, width),
             format: Default::default(),
             epoch,
             corrects,
@@ -1312,7 +1319,7 @@ pub(crate) mod tests {
         assert_eq!(cfg.picture, Some((960, 360)));
         assert_eq!(tell(&mut held, &d(1, 1920, true)), None, "already held");
         let unscaled = Delivered {
-            encoded: (1920, 720),
+            picture: Picture::of(mode(1920)),
             ..d(1, 1920, false)
         };
         let Some(Tell::Config(cfg)) = tell(&mut held, &unscaled) else {
@@ -1356,7 +1363,7 @@ pub(crate) mod tests {
             ..Default::default()
         });
         if let Some(d) = delivered {
-            held = bounds(&d.intent.delivered_at(d.mode).encoded(d.encoded));
+            held = bounds(&d.picture);
             let _ = tell(&mut config, &d);
         }
         (held, config.and_then(|c| c.picture))
@@ -1399,10 +1406,15 @@ pub(crate) mod tests {
     fn geometry_rows() {
         use super::super::wiring::Delivered;
         for r in connect_rows() {
+            let (width, height) = r.encoded;
             let d = r.told.then_some(Delivered {
                 intent: asked(r.mode, None),
-                mode: r.mode,
-                encoded: r.encoded,
+                delivered: r.mode,
+                picture: Picture::of(punktfunk_core::Mode {
+                    width,
+                    height,
+                    ..r.mode
+                }),
                 format: Default::default(),
                 epoch: 0,
                 corrects: false,
@@ -1421,8 +1433,8 @@ pub(crate) mod tests {
         let framed = crate::native::geometry::Intent::of(hd, Some((VideoFit::Fit, (1280, 720))));
         let d = |epoch| super::super::wiring::Delivered {
             intent: framed,
-            mode: hd,
-            encoded: (1280, 720),
+            delivered: hd,
+            picture: Picture::of(mode(1280, 720, 60)),
             format: Default::default(),
             epoch,
             corrects: true,
@@ -1443,8 +1455,8 @@ pub(crate) mod tests {
         use punktfunk_core::quic::{VideoFormat, CODEC_H264, CODEC_HEVC};
         let d = |codec| Delivered {
             intent: asked(Default::default(), None),
-            mode: Default::default(),
-            encoded: (0, 0),
+            delivered: Default::default(),
+            picture: Picture::of(Default::default()),
             format: VideoFormat {
                 codec,
                 ..VideoFormat::default()

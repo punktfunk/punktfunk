@@ -5,34 +5,23 @@
 use super::*;
 #[cfg(target_os = "linux")]
 use crate::capture::OutputLease;
-use crate::native::bitrate::{pyrowave_mode_kbps, EncDerive};
-use crate::native::geometry::{Intent, Picture};
+use crate::native::bitrate::EncDerive;
+use crate::native::geometry::{Geometry, Intent};
 
 /// One built pipeline. `bitrate_kbps` is the rate the encoder actually opened at.
 pub(in crate::native) struct Pipeline {
     pub(super) capturer: Box<dyn crate::capture::Capturer>,
     pub(super) enc: Box<dyn crate::encode::Encoder>,
     pub(super) frame: crate::capture::CapturedFrame,
-    pub(super) interval: std::time::Duration,
+    /// What the build delivers and its encoder takes of each captured picture.
+    pub(super) geometry: Geometry,
     pub(super) node_id: u32,
     pub(super) display_gen: Option<u64>,
     pub(super) bitrate_kbps: u32,
-    /// What the encoder takes of each captured picture.
-    pub(super) reframe: punktfunk_core::video_fit::Reframe,
     /// The output this capture attached to, for a capture-only rebuild. `None` where the
     /// capture cannot re-attach (a portal remote fd is spent on the first connect).
     #[cfg(target_os = "linux")]
     pub(super) lease: Option<OutputLease>,
-    /// The display's refresh period when it runs faster than the stream: its frames' stamps
-    /// sit on that finer tick and are corrected onto the content's cadence ([`panel_tick_ns`]).
-    #[cfg(target_os = "linux")]
-    pub(super) panel_tick_ns: Option<u64>,
-}
-
-/// The display's refresh period in ns when it runs faster than the `stream_hz` it serves.
-#[cfg(target_os = "linux")]
-pub(super) fn panel_tick_ns(display_hz: u32, stream_hz: u32) -> Option<u64> {
-    (display_hz > stream_hz).then(|| 1_000_000_000 / u64::from(display_hz))
 }
 
 /// Display + pipeline built on the prep thread while the Start round trip is in flight.
@@ -466,7 +455,7 @@ pub(super) fn display_rate(
 /// stream runs at the display's own rate over that multiple, 59.94 Hz off a 119.88 Hz
 /// display and 60 off a 120 Hz one whatever fraction the session asked. Any other display
 /// is paced at the lower of the two rates. Overdrive is display-only.
-pub(super) fn stream_mhz(session: punktfunk_core::Mode, display_mhz: u32) -> u32 {
+pub(in crate::native) fn stream_mhz(session: punktfunk_core::Mode, display_mhz: u32) -> u32 {
     let nominal = session.refresh_hz.max(1).saturating_mul(1000);
     let k = (display_mhz.saturating_add(nominal / 2) / nominal).max(1);
     let per = display_mhz.saturating_add(k / 2) / k;
@@ -478,12 +467,12 @@ pub(super) fn stream_mhz(session: punktfunk_core::Mode, display_mhz: u32) -> u32
 }
 
 /// Whole hertz of a rate in millihertz, for the encoder and the capture offer.
-pub(super) fn whole_hz(mhz: u32) -> u32 {
+pub(in crate::native) fn whole_hz(mhz: u32) -> u32 {
     (mhz.saturating_add(500) / 1000).max(1)
 }
 
 /// One frame at `mhz`.
-pub(super) fn frame_interval(mhz: u32) -> std::time::Duration {
+pub(in crate::native) fn frame_interval(mhz: u32) -> std::time::Duration {
     std::time::Duration::from_nanos(punktfunk_core::config::millihz_period_ns(mhz))
 }
 
@@ -529,7 +518,7 @@ fn report_achieved_hz(
 /// Open the session's encoder for `frame` on `encoder`, the session's resolution, framed as the
 /// intent's `framing` says (`session_plan::open_encoder_fitted`), with the plan's chunking, slice
 /// ceiling and the capturer's ring depth applied, and return the framing it encodes.
-/// `bitrate_bps` is asked for that size; depth and HDR are what the source composes now
+/// `bitrate_bps` prices each framing it opens; depth and HDR are what the source composes now
 /// (`session_plan::live_depth`). A remote-encoder source gets the driver's or worker's encoder
 /// instead, framed only for a view on the driver, its wire-index domain continuing at
 /// `wire_seq_base` (the loop's `au_seq`). Both stream loops open here: GameStream's plan carries
@@ -542,7 +531,7 @@ pub(crate) fn open_session_encoder(
     frame: &crate::capture::CapturedFrame,
     framing: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     hz: u32,
-    bitrate_bps: impl Fn(u32, u32) -> u64,
+    bitrate_bps: impl Fn(&punktfunk_core::video_fit::Reframe) -> u64,
     bit_depth: u8,
     client_hdr: Option<pf_frame::HdrMeta>,
     wire_seq_base: u32,
@@ -576,7 +565,7 @@ pub(super) fn open_session_encoder_with(
     frame: &crate::capture::CapturedFrame,
     framing: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     hz: u32,
-    bitrate_bps: impl Fn(u32, u32) -> u64,
+    bitrate_bps: impl Fn(&punktfunk_core::video_fit::Reframe) -> u64,
     bit_depth: u8,
     client_hdr: Option<pf_frame::HdrMeta>,
     wire_seq_base: u32,
@@ -603,7 +592,7 @@ pub(super) fn open_session_encoder_with(
                     capturer,
                     framing,
                     hz,
-                    bitrate_bps(framing.out.0, framing.out.1),
+                    bitrate_bps(&framing),
                     bit_depth,
                     client_hdr,
                     wire_seq_base,
@@ -624,7 +613,7 @@ pub(super) fn open_session_encoder_with(
                     width,
                     height,
                     fps: hz,
-                    bitrate_bps: bitrate_bps(width, height),
+                    bitrate_bps: bitrate_bps(&framing),
                     cuda: frame.is_cuda(),
                     bit_depth,
                     hdr,
@@ -641,24 +630,6 @@ pub(super) fn open_session_encoder_with(
     // The host submits one frame in flight; an NVENC never told so pipelines two.
     enc.set_input_ring_depth(1);
     Ok((enc, framed))
-}
-
-/// The wire budget a build priced at `priced` runs once its encoder takes `encoded`. A PyroWave
-/// pin follows the pixels: a mirrored head's fit, a view the backend could not frame, a size the
-/// display delivered. Every other codec's rate is not priced by size, so it stands.
-pub(super) fn rate_at_encoded(
-    bitrate_kbps: u32,
-    bitrate_auto: bool,
-    priced: &Picture,
-    encoded: &Picture,
-    plan: &crate::session_plan::SessionPlan,
-    pyrowave_max_kbps: Option<u32>,
-) -> u32 {
-    if plan.codec != crate::encode::Codec::PyroWave || encoded == priced {
-        return bitrate_kbps;
-    }
-    let running = bitrate_auto.then_some(bitrate_kbps);
-    pyrowave_mode_kbps(running, encoded, plan, pyrowave_max_kbps)
 }
 
 /// Acquire a display at `req`'s mode and attach capture and an encoder to it.
@@ -729,20 +700,20 @@ fn attach_pipeline(
     let lease = OutputLease::of(&vout);
     let pool_gen = vout.pool_gen;
     let node_id = vout.node_id;
-    let (achieved_hz, display_mhz) = display_rate(&vout, display_mode);
+    let rate = display_rate(&vout, display_mode);
     report_achieved_hz(
         vout.ownership,
         display_mode.refresh_hz,
-        achieved_hz,
+        rate.0,
         mode.refresh_hz,
     );
-    let rate_mhz = stream_mhz(mode, display_mhz);
-    let effective_hz = whole_hz(rate_mhz);
-    if rate_mhz % 1000 != 0 || mode.millihz() % 1000 != 0 {
+    let built = Geometry::built(intent, rate);
+    let stream = built.delivered();
+    if stream.millihz() % 1000 != 0 || mode.millihz() % 1000 != 0 {
         tracing::info!(
             session_mhz = mode.millihz(),
-            display_mhz,
-            stream_mhz = rate_mhz,
+            display_mhz = rate.1,
+            stream_mhz = stream.millihz(),
             "session rate with a fraction"
         );
     }
@@ -758,7 +729,7 @@ fn attach_pipeline(
             capture: plan.capture,
             kwin: cursor_id0_hides,
             gamescope: producer_is_gamescope,
-            stream_hz: effective_hz,
+            stream_hz: built.hz(),
             screen,
             gamescope_cursor: plan.gamescope_cursor,
             mirrored: plan.mirrored,
@@ -788,36 +759,26 @@ fn attach_pipeline(
     if let Some(t) = trace {
         t.mark("first_frame");
     }
-    let priced = intent.picture();
-    let kbps_for = |w: u32, h: u32| {
-        let encoded = intent.encoded((w, h));
-        rate_at_encoded(
-            bitrate_kbps,
-            bitrate_auto,
-            &priced,
-            &encoded,
-            &plan,
-            pyrowave_max_kbps,
-        )
-    };
+    let price = |g: &Geometry| g.rate_kbps(bitrate_kbps, bitrate_auto, &plan, pyrowave_max_kbps);
     let (enc, reframe) = open_session_encoder(
         encoder,
         &plan,
         &*capturer,
         &frame,
         intent.framing(),
-        effective_hz,
-        |w, h| enc_of.enc_kbps(kbps_for(w, h)) as u64 * 1000,
+        built.hz(),
+        |f| enc_of.enc_kbps(price(&built.reframed(intent, *f))) as u64 * 1000,
         bit_depth,
         client_hdr,
         wire_seq_base,
     )
     .context("open video encoder")?;
-    let encoded = reframe.out;
-    let re = kbps_for(encoded.0, encoded.1);
+    let geometry = built.reframed(intent, reframe);
+    let re = price(&geometry);
     if re != bitrate_kbps {
+        let (priced, encoded) = (intent.picture().mode(), geometry.encoded());
         tracing::info!(
-            priced = %format!("{}x{}", priced.mode().width, priced.mode().height),
+            priced = %format!("{}x{}", priced.width, priced.height),
             encoded = %format!("{}x{}", encoded.0, encoded.1),
             from_kbps = bitrate_kbps,
             to_kbps = re,
@@ -836,20 +797,16 @@ fn attach_pipeline(
             "encoder chroma disagrees with the negotiated Welcome — the client was told the other value"
         );
     }
-    let interval = frame_interval(rate_mhz);
     Ok(Pipeline {
         capturer,
         enc,
         frame,
-        interval,
+        geometry,
         node_id,
         display_gen: pool_gen,
         bitrate_kbps,
-        reframe,
         #[cfg(target_os = "linux")]
         lease,
-        #[cfg(target_os = "linux")]
-        panel_tick_ns: panel_tick_ns(achieved_hz, effective_hz),
     })
 }
 
@@ -857,26 +814,7 @@ fn attach_pipeline(
 mod tests {
     use super::*;
     use crate::capture::Capturer;
-
-    /// A session at an exact rate is delivered at it: the mode read back off the interval is the
-    /// mode asked, so no corrective ack goes out. Every millihertz below 1 kHz survives the trip.
-    #[test]
-    fn a_fractional_rate_survives_the_interval() {
-        use crate::native::{delivered_mode, interval_mhz};
-        for mhz in [23_976u32, 59_800, 59_940, 119_880, 143_856, 239_760, 60_000] {
-            let asked = punktfunk_core::Mode::exact(2560, 1440, mhz);
-            let interval = frame_interval(stream_mhz(asked, mhz));
-            assert_eq!(delivered_mode(2560, 1440, interval), asked, "{mhz} mHz");
-        }
-        for mhz in (1_000u32..1_000_000).step_by(997) {
-            let asked = punktfunk_core::Mode::exact(64, 64, mhz);
-            assert_eq!(interval_mhz(asked.frame_interval()), mhz);
-        }
-        // A display that runs below the session paces at its own rate.
-        let asked = punktfunk_core::Mode::exact(2560, 1440, 119_880);
-        let capped = delivered_mode(2560, 1440, frame_interval(stream_mhz(asked, 60_000)));
-        assert_eq!(capped, punktfunk_core::Mode::exact(2560, 1440, 60_000));
-    }
+    use crate::native::bitrate::pyrowave_mode_kbps;
 
     /// The stream runs at the display's own cadence where the display runs the session's
     /// whole rate or a multiple, and is told so: a display that stayed at 60 Hz under a
@@ -1003,7 +941,7 @@ mod tests {
         let encoder = crate::encode::resolve();
         let open = |plan: &crate::session_plan::SessionPlan,
                     hz,
-                    bitrate_bps: fn(u32, u32) -> u64,
+                    bitrate_bps: fn(&punktfunk_core::video_fit::Reframe) -> u64,
                     bit_depth| {
             let mut asked = Vec::new();
             let (_, reframe) = open_session_encoder_with(
@@ -1031,10 +969,10 @@ mod tests {
             true,
             crate::session_plan::DEFAULT_SLICES,
         );
-        let asked = open(&native, 120, |w, h| u64::from(w * h), 10);
+        let asked = open(&native, 120, |f| u64::from(f.out.0 * f.out.1), 10);
         assert_eq!(asked, [want(&native, 120, 64 * 32, 10)]);
         let gamestream = plan(crate::encode::ChromaFormat::Yuv420, false, 4);
-        let asked = open(&gamestream, 60, |_, _| 16_287_878, 8);
+        let asked = open(&gamestream, 60, |_| 16_287_878, 8);
         assert_eq!(asked, [want(&gamestream, 60, 16_287_878, 8)]);
 
         let sdr = crate::capture::SyntheticCapturer::new(64, 32, 60);
@@ -1045,7 +983,7 @@ mod tests {
             &frame,
             None,
             120,
-            |w, h| u64::from(w * h),
+            |f| u64::from(f.out.0 * f.out.1),
             10,
             None,
             1,
@@ -1152,24 +1090,25 @@ mod tests {
             refresh_hz: 60,
             refresh_mhz: 0,
         };
+        use crate::native::geometry::{tests::whole, Picture};
         let mut p = plan(crate::encode::ChromaFormat::Yuv420, false, 1);
         let intent = crate::native::geometry::tests::asked(mode, Some((1366, 768)));
-        let priced = intent.picture();
-        let fell_back = intent.encoded((mode.width, mode.height));
-        assert_eq!(
-            rate_at_encoded(37_000, true, &priced, &fell_back, &p, None),
-            37_000
-        );
+        let fell_back = whole(intent, (mode.width, mode.height));
+        assert_eq!(fell_back.rate_kbps(37_000, true, &p, None), 37_000);
         p.codec = crate::encode::Codec::PyroWave;
         p.pyrowave_bpp = 4.0;
-        let at_view = pyrowave_mode_kbps(None, &priced, &p, None);
-        let framed = intent.encoded((1366, 768));
-        assert_eq!(
-            rate_at_encoded(at_view, false, &priced, &framed, &p, None),
-            at_view
+        let at_view = pyrowave_mode_kbps(None, &intent.picture(), &p, None);
+        let framed = fell_back.reframed(
+            intent,
+            punktfunk_core::video_fit::Reframe::plan(Default::default(), (2048, 1152), (1366, 768)),
         );
-        let at_mode = rate_at_encoded(at_view, false, &priced, &fell_back, &p, None);
-        assert_eq!(at_mode, pyrowave_mode_kbps(None, &fell_back, &p, None));
+        assert_eq!(framed.encoded(), (1366, 768));
+        assert_eq!(framed.rate_kbps(at_view, false, &p, None), at_view);
+        let at_mode = fell_back.rate_kbps(at_view, false, &p, None);
+        assert_eq!(
+            at_mode,
+            pyrowave_mode_kbps(None, &Picture::of(mode), &p, None)
+        );
         assert!(at_mode > at_view);
     }
 
@@ -1356,7 +1295,7 @@ mod tests {
             &frame,
             intent.framing(),
             mode.refresh_hz,
-            |_, _| 0,
+            |_| 0,
             8,
             None,
             0,
@@ -1371,13 +1310,12 @@ mod tests {
             },
         )
         .expect("an encoder");
-        let priced = intent.picture();
-        let pin = pyrowave_mode_kbps(None, &priced, &p, None);
-        let encoded = intent.encoded(reframe.out);
-        (
-            reframe.out,
-            rate_at_encoded(pin, false, &priced, &encoded, &p, None),
-        )
+        let pin = pyrowave_mode_kbps(None, &intent.picture(), &p, None);
+        let built = crate::native::geometry::tests::whole(intent, captured);
+        let rate = built
+            .reframed(intent, reframe)
+            .rate_kbps(pin, false, &p, None);
+        (reframe.out, rate)
     }
 
     /// One first build: the negotiated mode, the source it captures, how it is framed.

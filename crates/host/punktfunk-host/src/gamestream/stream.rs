@@ -1015,7 +1015,7 @@ fn gs_open_encoder(
         frame,
         gs_framing(cfg),
         cfg.fps,
-        |_, _| enc_bps,
+        |_| enc_bps,
         gs_bit_depth(frame.format),
         None,
         wire_seq_base,

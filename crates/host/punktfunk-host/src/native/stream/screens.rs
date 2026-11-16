@@ -623,13 +623,13 @@ fn run_screen(base: ScreenBase, mut run: ScreenRun) {
                 break;
             }
         };
-        let delivered = delivered_mode(pipe.frame.width, pipe.frame.height, pipe.interval);
+        let delivered = pipe.geometry.delivered();
         let (x, y) = place(&mut *vd, fp, &base, &run.ask, pipe.display_gen);
         let mut cfg = StreamConfig {
             stream: run.stream,
             epoch,
             mode: delivered,
-            picture: intent.encoded(pipe.reframe.out).wire(delivered),
+            picture: pipe.geometry.picture().wire(delivered),
             ..Default::default()
         };
         cfg.set_format(super::state::format_of(
@@ -750,10 +750,11 @@ fn stream_screen(
         mut capturer,
         mut enc,
         mut frame,
-        interval,
+        geometry,
         display_gen,
         ..
     } = pipe;
+    let interval = geometry.interval();
     // Capture times of the frames handed to the encoder and not yet polled.
     let mut inflight = std::collections::VecDeque::<u64>::new();
     let mut rate = (base.live_bitrate.load(Ordering::Relaxed), enc_of(base, run));

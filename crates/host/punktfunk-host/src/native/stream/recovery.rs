@@ -448,8 +448,11 @@ impl StreamState {
             .keyframe_left
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        self.kf_gate
-            .measure(self.facts.conn.rtt(), self.live.interval, keyframe_left);
+        self.kf_gate.measure(
+            self.facts.conn.rtt(),
+            self.live.geometry.interval(),
+            keyframe_left,
+        );
         match self.kf_gate.decide(
             now,
             base,

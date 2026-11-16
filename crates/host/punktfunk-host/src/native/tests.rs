@@ -236,50 +236,11 @@ fn a_node_less_output_reaches_the_client_in_words() {
 }
 
 #[test]
-fn live_mode_pack_roundtrips_and_interval_recovers_hz() {
+fn live_mode_pack_roundtrips() {
     use crate::session_status::{pack_mode, unpack_mode};
-    // Pack → unpack is exact for real modes.
     for (w, h, hz) in [(1280u32, 720u32, 60u32), (3840, 2160, 144), (320, 200, 24)] {
         assert_eq!(unpack_mode(pack_mode(w, h, hz)), (w, h, hz));
     }
-    // `interval` is 1/effective_hz — the round-trip recovers the integer rate.
-    for hz in [24u32, 30, 60, 75, 90, 120, 144, 165, 240] {
-        let interval = std::time::Duration::from_secs_f64(1.0 / hz as f64);
-        assert_eq!(interval_mhz(interval), hz * 1000);
-    }
-}
-
-#[test]
-fn delivered_mode_reports_captured_dims_and_triggers_corrective_ack() {
-    let hz60 = std::time::Duration::from_secs_f64(1.0 / 60.0);
-    let requested = punktfunk_core::Mode {
-        width: 2560,
-        height: 1440,
-        refresh_hz: 60,
-        refresh_mhz: 0,
-    };
-
-    // Honored: captured frame matches the request → no corrective ack.
-    let honored = delivered_mode(2560, 1440, hz60);
-    assert_eq!(honored, requested);
-
-    // Fallback dims differ from the acked request → a corrective ack is owed.
-    let fell_back = delivered_mode(1920, 1080, hz60);
-    assert_ne!(fell_back, requested);
-    assert_eq!(
-        fell_back,
-        punktfunk_core::Mode {
-            width: 1920,
-            height: 1080,
-            refresh_hz: 60,
-            refresh_mhz: 0
-        }
-    );
-
-    // Refresh cap: same dims, achieved rate recovered from the interval.
-    let capped = delivered_mode(2560, 1440, std::time::Duration::from_secs_f64(1.0 / 30.0));
-    assert_ne!(capped, requested);
-    assert_eq!(capped.refresh_hz, 30);
 }
 
 #[test]

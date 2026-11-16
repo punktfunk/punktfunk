@@ -369,7 +369,10 @@ fn run_fed(
     let feed_st = feed.st.clone();
     f.st.live.capturer = Box::new(feed);
     f.st.live.enc = Box::new(enc);
-    f.st.live.interval = period;
+    let g = f.st.live.geometry;
+    let size = (g.delivered().width, g.delivered().height);
+    f.st.live.geometry =
+        crate::native::geometry::Geometry::of(g.intent(), size, period, g.reframe());
     f.st.src_period_ns = Some(period.as_nanos() as u64);
     f.st.clock.inflight.clear();
     f.st.next = Instant::now();

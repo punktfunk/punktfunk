@@ -2690,22 +2690,6 @@ fn bind_data_plane(
     }
 }
 
-/// The rate in millihertz whose frame lasts `interval`. Exact below 1 kHz, where a
-/// nanosecond is under half a millihertz. Differs from the request when e.g. KWin caps at 60.
-fn interval_mhz(interval: std::time::Duration) -> u32 {
-    (1_000.0 / interval.as_secs_f64()).round() as u32
-}
-
-/// Mode the pipeline is actually delivering, for a corrective `Reconfigured` ack. Diverges
-/// when a backend cannot honor the request (KWin refresh cap; Windows `SetMode` not in EDID).
-fn delivered_mode(
-    frame_width: u32,
-    frame_height: u32,
-    interval: std::time::Duration,
-) -> punktfunk_core::Mode {
-    punktfunk_core::Mode::exact(frame_width, frame_height, interval_mhz(interval))
-}
-
 /// The seat a profile streams on: the head of its id. Short enough for a socket name, and
 /// stable, so keep-alive hands a kept spawn back to the same profile.
 #[cfg(target_os = "linux")]

@@ -299,7 +299,7 @@ impl StreamState {
         if source {
             if let Some(prev) = self.last_real_cap {
                 let d = t_cap.duration_since(prev).as_nanos() as u64;
-                if d <= self.live.interval.as_nanos() as u64 * 8 {
+                if d <= self.live.geometry.interval().as_nanos() as u64 * 8 {
                     self.src_period_ns = Some(match self.src_period_ns {
                         Some(e) => (e as i64 + (d as i64 - e as i64) / 8) as u64,
                         None => d,
@@ -390,7 +390,7 @@ impl StreamState {
             .capturer
             .colour()
             .hdr_meta
-            .map(|m| self.facts.client_hdr.unwrap_or(m));
+            .map(|m| self.facts.terms.client_hdr().unwrap_or(m));
         self.live.enc.set_hdr_meta(hdr_meta);
         if hdr_meta != self.last_hdr_meta {
             self.last_hdr_meta = hdr_meta;
@@ -422,7 +422,7 @@ impl StreamState {
         let au_wait = if repeat {
             t_submit
         } else {
-            t_submit + self.live.interval
+            t_submit + self.live.geometry.interval()
         };
         let owed = crate::send_pacing::owed_aus(&self.live.frame, &mut *self.live.enc, au_wait);
         // Every backend gets the floor and the confirmations, the pixel-less driver encoder
@@ -445,9 +445,12 @@ impl StreamState {
         };
         if let Err(e) = submitted {
             let mut was_reset = false;
-            let backoff = on_submit_error(&mut self.clock.watchdog, e, self.live.interval, || {
-                reset_stalled_encoder(&mut *self.live.enc, || was_reset = true)
-            })?;
+            let backoff = on_submit_error(
+                &mut self.clock.watchdog,
+                e,
+                self.live.geometry.interval(),
+                || reset_stalled_encoder(&mut *self.live.enc, || was_reset = true),
+            )?;
             if was_reset {
                 self.clock.after_reset();
             }
@@ -466,9 +469,9 @@ impl StreamState {
             push_stage(&mut self.diag.st_submit, us, self.facts.perf);
         }
         self.next = if frame_driven_enabled() && self.live.capturer.feed().is_some() {
-            std::time::Instant::now() + self.live.interval
+            std::time::Instant::now() + self.live.geometry.interval()
         } else {
-            self.next + self.live.interval
+            self.next + self.live.geometry.interval()
         };
         for _ in 0..owed.unwrap_or(1) {
             self.clock.inflight.push_back((capture_ns, submit_ns));
@@ -738,19 +741,23 @@ impl StreamState {
     /// A poll failure, or owed frames with no AU for the stall window: rebuild the encoder in
     /// place, up to [`MAX_ENCODER_RESETS`] times, and wait out each reset's backoff.
     fn check_encode_stall(&mut self, poll_err: Option<anyhow::Error>) -> Result<()> {
-        let stalled = self
-            .clock
-            .watchdog
-            .stalled(self.clock.inflight.len(), 1, self.live.interval);
+        let stalled = self.clock.watchdog.stalled(
+            self.clock.inflight.len(),
+            1,
+            self.live.geometry.interval(),
+        );
         let why = match (&poll_err, stalled) {
             (Some(e), _) => format!("poll failed: {e:#}"),
             (None, Some(why)) => why,
             (None, None) => return Ok(()),
         };
         let mut was_reset = false;
-        let recovered = self.clock.watchdog.recover(self.live.interval, || {
-            reset_stalled_encoder(&mut *self.live.enc, || was_reset = true)
-        });
+        let recovered = self
+            .clock
+            .watchdog
+            .recover(self.live.geometry.interval(), || {
+                reset_stalled_encoder(&mut *self.live.enc, || was_reset = true)
+            });
         if was_reset {
             self.clock.after_reset();
         }
@@ -784,9 +791,9 @@ impl StreamState {
         self.diag
             .chain
             .push((self.encode_chain_ns / 1_000).min(u64::from(u32::MAX)) as u32);
-        let budget = cadence_budget(self.live.interval, self.src_period_ns);
+        let budget = cadence_budget(self.live.geometry.interval(), self.src_period_ns);
         let schedule_behind =
-            std::time::Instant::now() >= self.next + (budget - self.live.interval);
+            std::time::Instant::now() >= self.next + (budget - self.live.geometry.interval());
         let encode_pressure =
             encode_chain_pressure(budget, self.encode_chain_ns, p.pipelined_active);
         let behind = schedule_behind || encode_pressure;
@@ -889,7 +896,7 @@ impl StreamState {
                     chain_us_p50 = chain.percentile(0.50),
                     chain_us_p90 = chain.percentile(0.90),
                     budget_us = budget.as_micros() as u64,
-                    interval_us = self.live.interval.as_micros() as u64,
+                    interval_us = self.live.geometry.interval().as_micros() as u64,
                     src_period_us = self.src_period_ns.map(|p| p / 1_000),
                     src_fps = source_fps(self.src_period_ns),
                     capture,
@@ -935,7 +942,7 @@ impl StreamState {
             &mut self.pace,
             &mut self.next,
             (!repeat).then_some(t_cap),
-            self.live.interval,
+            self.live.geometry.interval(),
             self.src_period_ns,
             owed,
         );

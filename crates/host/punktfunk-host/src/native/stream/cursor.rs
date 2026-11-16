@@ -125,7 +125,7 @@ impl StreamState {
             self.plan.bit_depth,
             self.plan.hdr,
             route,
-            &self.facts.encoder,
+            &self.facts.terms.encoder,
         );
         self.plan.gamescope_cursor = crate::session_plan::gamescope_cursor_for(gamescope, route);
         self.plan.sdr10_native = crate::session_plan::sdr10_native_for(&self.plan, c, route);

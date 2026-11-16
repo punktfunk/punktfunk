@@ -1,18 +1,21 @@
 //! What a session streams and how it holds its display. [`Intent`] is the mode a session means
 //! to encode, the view it keeps and what its encoder frames for: settled at the Hello, moved by
-//! the client's asks. [`Tenure`] is settled once at admission ([`Tenure::of`]): its own display,
-//! one it joined, or a host monitor. [`Hold`] is whether another session is on that display now,
-//! read from the display registry by generation, which comes in as an input: this module does no
-//! I/O. The stream writes each display it adopts into a [`TenureCell`], which the control task
-//! reads at each ask.
+//! the client's asks. [`Geometry`] is what a build delivered: the rate the stream runs, the size
+//! captured and the framing its encoder took. A [`Picture`] is priced from one or the other.
+//! [`Tenure`] is settled once at admission ([`Tenure::of`]): its own display, one it joined, or
+//! a host monitor. [`Hold`] is whether another session is on that display now, read from the
+//! display registry by generation, which comes in as an input: this module does no I/O. The
+//! stream writes each display it adopts into a [`TenureCell`], which the control task reads at
+//! each ask.
 //!
 //! Every mode, view and tenure question is a method here; a caller never re-derives one. Pinned
 //! by `mode_view_vectors`, the `geometry_rows` and `tenure_rows`.
 
 use crate::encode::Codec;
-use punktfunk_core::video_fit::VideoFit;
+use punktfunk_core::video_fit::{Reframe, VideoFit};
 use punktfunk_core::Mode;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 /// The mode a session means to encode, the view the client shows it at, and what the encoder
 /// frames the capture for.
@@ -106,7 +109,7 @@ impl Intent {
     }
 
     /// The mode at the size an encoder opened for this intent took it to.
-    pub(crate) fn encoded(&self, (width, height): (u32, u32)) -> Picture {
+    fn encoded(&self, (width, height): (u32, u32)) -> Picture {
         Picture(Mode {
             width,
             height,
@@ -115,8 +118,120 @@ impl Intent {
     }
 }
 
-/// The size and rate a bitrate is priced at. Only an [`Intent`] makes one, so every price
-/// follows from what the session means to encode or what its encoder took.
+/// What a build delivers: its intent, one frame at the rate the stream runs, the size its
+/// capture delivers and the framing its encoder took.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Geometry {
+    intent: Intent,
+    interval: Duration,
+    /// The display's refresh period when it runs faster than the stream: its frames' stamps sit
+    /// on that finer tick and are corrected onto the content's cadence.
+    #[cfg(target_os = "linux")]
+    panel_tick_ns: Option<u64>,
+    captured: (u32, u32),
+    framing: Reframe,
+}
+
+impl Geometry {
+    /// A build of `intent` on a display that runs `display`, the whole and exact rate its
+    /// backend reads back (`display_rate`). The stream runs at `stream_mhz` of it. Nothing is
+    /// captured or framed until the encoder opens ([`Self::reframed`]).
+    pub(crate) fn built(intent: Intent, (display_hz, display_mhz): (u32, u32)) -> Self {
+        use super::stream::{frame_interval, stream_mhz};
+        let mhz = stream_mhz(intent.mode, display_mhz);
+        #[cfg(not(target_os = "linux"))]
+        let _ = display_hz;
+        Geometry {
+            intent,
+            interval: frame_interval(mhz),
+            #[cfg(target_os = "linux")]
+            panel_tick_ns: (display_hz > super::stream::whole_hz(mhz))
+                .then(|| 1_000_000_000 / u64::from(display_hz)),
+            captured: (0, 0),
+            framing: Reframe::default(),
+        }
+    }
+
+    /// The same capture with an encoder opened for `intent` that took `framing`. What is
+    /// captured is the size the framing reads.
+    pub(crate) fn reframed(&self, intent: Intent, framing: Reframe) -> Self {
+        Geometry {
+            intent,
+            captured: framing.source,
+            framing,
+            ..*self
+        }
+    }
+
+    /// The captured size at the rate the stream runs.
+    pub(crate) fn delivered(&self) -> Mode {
+        let (width, height) = self.captured;
+        Mode::exact(width, height, interval_mhz(self.interval))
+    }
+
+    pub(crate) fn encoded(&self) -> (u32, u32) {
+        self.framing.out
+    }
+
+    /// The encoded size at the rate the stream runs: what the session is priced at once built.
+    pub(crate) fn picture(&self) -> Picture {
+        let (width, height) = self.framing.out;
+        Picture(Mode {
+            width,
+            height,
+            ..self.delivered()
+        })
+    }
+
+    pub(crate) fn reframe(&self) -> Reframe {
+        self.framing
+    }
+
+    pub(crate) fn intent(&self) -> Intent {
+        self.intent
+    }
+
+    pub(crate) fn interval(&self) -> Duration {
+        self.interval
+    }
+
+    /// Whole hertz of the rate the stream runs, for the encoder and the capture offer.
+    pub(crate) fn hz(&self) -> u32 {
+        super::stream::whole_hz(interval_mhz(self.interval))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn panel_tick_ns(&self) -> Option<u64> {
+        self.panel_tick_ns
+    }
+
+    /// The wire budget a build priced at its intent's picture runs once its encoder took this
+    /// framing. A PyroWave pin follows the pixels: a mirrored head's fit, a view the backend
+    /// could not frame, a size the display delivered. Every other codec's rate stands.
+    pub(crate) fn rate_kbps(
+        &self,
+        bitrate_kbps: u32,
+        bitrate_auto: bool,
+        plan: &crate::session_plan::SessionPlan,
+        pyrowave_max_kbps: Option<u32>,
+    ) -> u32 {
+        let (priced, encoded) = (self.intent.picture(), self.intent.encoded(self.framing.out));
+        if plan.codec != Codec::PyroWave || encoded == priced {
+            return bitrate_kbps;
+        }
+        let running = bitrate_auto.then_some(bitrate_kbps);
+        super::bitrate::pyrowave_mode_kbps(running, &encoded, plan, pyrowave_max_kbps)
+    }
+}
+
+/// The rate in millihertz whose frame lasts `interval`. Exact below 1 kHz, where a nanosecond
+/// is under half a millihertz.
+fn interval_mhz(interval: Duration) -> u32 {
+    (1_000.0 / interval.as_secs_f64()).round() as u32
+}
+
+/// The size and rate a bitrate is priced at. Only an [`Intent`] and a [`Geometry`] make one, so
+/// every price follows from what the session means to encode or what its encoder took.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Picture(Mode);
 
@@ -312,6 +427,82 @@ pub(crate) mod tests {
         pub(crate) fn of(mode: Mode) -> Self {
             Picture(mode)
         }
+    }
+
+    impl Geometry {
+        /// A fixture: `intent` captured at `captured`, one frame every `interval`, framed as
+        /// `framing`.
+        pub(crate) fn of(
+            intent: Intent,
+            captured: (u32, u32),
+            interval: Duration,
+            framing: Reframe,
+        ) -> Self {
+            Geometry {
+                intent,
+                interval,
+                #[cfg(target_os = "linux")]
+                panel_tick_ns: None,
+                captured,
+                framing,
+            }
+        }
+    }
+
+    /// A build's geometry on `captured`, framed whole, at `intent`'s own rate.
+    pub(crate) fn whole(intent: Intent, captured: (u32, u32)) -> Geometry {
+        Geometry::of(
+            intent,
+            captured,
+            intent.mode().frame_interval(),
+            Reframe::full(captured),
+        )
+    }
+
+    /// The delivered mode is the captured size at the interval's rate: a size or a rate the
+    /// backend did not honour differs from the mode asked, which is what a correction tells.
+    #[test]
+    fn a_geometry_delivers_the_captured_size_at_its_interval() {
+        let at = |size: (u32, u32), hz: f64| {
+            let interval = Duration::from_secs_f64(1.0 / hz);
+            Geometry::of(
+                asked(Mode::default(), None),
+                size,
+                interval,
+                Reframe::default(),
+            )
+            .delivered()
+        };
+        let requested = Mode::exact(2560, 1440, 60_000);
+        assert_eq!(at((2560, 1440), 60.0), requested);
+        assert_eq!(at((1920, 1080), 60.0), Mode::exact(1920, 1080, 60_000));
+        assert_eq!(at((2560, 1440), 30.0).refresh_hz, 30);
+        for hz in [24u32, 30, 60, 75, 90, 120, 144, 165, 240] {
+            let interval = Duration::from_secs_f64(1.0 / f64::from(hz));
+            assert_eq!(interval_mhz(interval), hz * 1000);
+        }
+        for mhz in (1_000u32..1_000_000).step_by(997) {
+            assert_eq!(interval_mhz(Mode::exact(64, 64, mhz).frame_interval()), mhz);
+        }
+    }
+
+    /// A session at an exact rate is delivered at it, and a display that runs below the
+    /// session paces at its own rate.
+    #[test]
+    fn a_built_geometry_runs_the_rate_the_display_reads_back() {
+        let delivered = |mode: Mode, display_mhz| {
+            let intent = asked(mode, None);
+            let built = Geometry::built(intent, (display_mhz / 1000, display_mhz));
+            built
+                .reframed(intent, Reframe::full((2560, 1440)))
+                .delivered()
+        };
+        for mhz in [23_976u32, 59_800, 59_940, 119_880, 143_856, 239_760, 60_000] {
+            let asked = Mode::exact(2560, 1440, mhz);
+            assert_eq!(delivered(asked, mhz), asked, "{mhz} mHz");
+        }
+        let asked = Mode::exact(2560, 1440, 119_880);
+        assert_eq!(delivered(asked, 60_000), Mode::exact(2560, 1440, 60_000));
     }
 
     /// The client's ask for `mode` at `view`, as the control task hands it on.

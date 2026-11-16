@@ -9,11 +9,9 @@ use crate::native::bitrate::EncoderCeiling;
 pub(super) struct SessionFacts {
     /// The session's `seconds` cap: the loop ends here.
     pub(super) deadline: std::time::Instant,
-    /// What the handshake settled, which every build and encoder-rate derivation reads.
+    /// What the handshake settled, which every build and encoder-rate derivation reads. Its
+    /// encode resolution is every rebuild's, so an Encoder-row change applies at the next session.
     pub(super) terms: Arc<crate::native::handshake::SessionTerms>,
-    /// The handshake's encode resolution. Every rebuild opens on it, so an Encoder-row change
-    /// applies at the next session.
-    pub(super) encoder: Arc<crate::encode::Resolved>,
     /// The knobs read at admission; a console change applies at the next session.
     pub(super) knobs: crate::native::knobs::SessionKnobs,
     /// The flags every thread reads, and `end`, which the path that knows why calls first:
@@ -22,12 +20,8 @@ pub(super) struct SessionFacts {
     /// Session totals; this loop notes every encoder rate it adopts.
     pub(super) counters: Arc<crate::session_status::SessionCounters>,
     pub(super) conn: super::super::link::SessionLink,
-    pub(super) bitrate_auto: bool,
-    /// PyroWave: an explicit-rate stream paces at the link.
-    pub(super) pyrowave: bool,
     pub(super) streamed_wire: bool,
     pub(super) perf: bool,
-    pub(super) client_hdr: Option<pf_frame::HdrMeta>,
     pub(super) bringup: Arc<crate::bringup::Trace>,
     pub(super) stats: Arc<StatsRecorder>,
     /// What the handshake's depth, HDR and chroma rule read, for a codec change to re-run it.
