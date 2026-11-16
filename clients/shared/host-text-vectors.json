@@ -41,6 +41,7 @@
     {"id": "apierr_device_display_not_saved", "params": {}, "english": "The host's own English.", "sentence": "Couldn't save the display settings for this device"},
     {"id": "apierr_door_missing_package", "params": {"command": "sudo apt install punktfunk-seats"}, "english": "The host's own English.", "sentence": "This install is missing the punktfunk-seats package. Install it: sudo apt install punktfunk-seats"},
     {"id": "apierr_door_not_in_update_group", "params": {"user": "kid"}, "english": "The host's own English.", "sentence": "Add kid to the punktfunk-update group first: sudo usermod -aG punktfunk-update kid"},
+    {"id": "apierr_door_on_for_other", "params": {"owner": "kid"}, "english": "The host's own English.", "sentence": "Reachable without logging in is on for kid. Turn it off from that account first."},
     {"id": "apierr_door_update_group_restart", "params": {"user": "kid"}, "english": "The host's own English.", "sentence": "Restart the host to finish adding kid to the punktfunk-update group. Punktfunk started before it."},
     {"id": "apierr_plugin_needs_newer_host", "params": {"version": "0.47.0"}, "english": "The host's own English.", "sentence": "This plugin can't run on this host — needs Punktfunk 0.47.0 or newer"},
     {"id": "apierr_plugin_needs_platform", "params": {"platforms": "Linux"}, "english": "The host's own English.", "sentence": "This plugin can't run on this host — requires Linux"},
