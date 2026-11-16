@@ -2416,28 +2416,41 @@ pub(crate) mod tests {
         }
     }
 
-    /// U12: a mode switch runs no format rule at the new size: the depth and chroma stay, for a
-    /// size the format takes and for PyroWave 4:4:4 past the rate controller's block range,
-    /// where the handshake would have negotiated 4:2:0.
+    /// U12: a mode switch runs no format rule at the new size: the depth and chroma stay under
+    /// the client's decoder. A size the format does not take is the encoder's to refuse:
+    /// PyroWave 4:4:4 past the rate controller's block range fails its open, and the session
+    /// keeps the mode it ran.
     #[test]
     fn a_mode_switch_keeps_a_format_the_new_size_takes() {
         use crate::encode::{ChromaFormat, Codec};
-        use crate::native::tests::Verdict;
+        let verdict = crate::native::tests::Verdict::Wanted;
         let keyframes = Arc::new(AtomicU32::new(0));
-        for (codec, to, verdict) in [
-            (Codec::H265, mode(WIDE, 60), Verdict::Wanted),
-            (Codec::PyroWave, mode((7680, 4320), 60), Verdict::Other),
+        for (codec, to, opens) in [
+            (Codec::H265, mode(WIDE, 60), true),
+            (Codec::PyroWave, mode((7680, 4320), 60), false),
         ] {
             let mut f = super::super::swap::tests::fake();
             (f.st.plan.codec, f.st.plan.chroma) = (codec, ChromaFormat::Yuv444);
             (f.st.plan.bit_depth, f.st.bit_depth) = (10, 10);
+            let ran = f.st.live.geometry.intent().mode();
             let ask = RebuildAsk::Mode(ask(to, None));
             let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
             assert_eq!(plan.display, None, "{codec:?} ({verdict:?})");
             let built = f.st.perform(plan, ask, |_, plan, _, _| {
-                script(Script::Pipeline(WIDE, 20_000), plan, &keyframes)
+                let open = if opens {
+                    Script::Pipeline(WIDE, 20_000)
+                } else {
+                    Script::Fails
+                };
+                script(open, plan, &keyframes)
             });
-            assert!(matches!(built, Ok(Rebuilt::Built)), "{codec:?}");
+            assert_eq!(matches!(built, Ok(Rebuilt::Built)), opens, "{codec:?}");
+            let runs = f.st.live.geometry.intent().mode();
+            assert_eq!(
+                runs == ran,
+                !opens,
+                "{codec:?}: a refused size keeps the mode"
+            );
             let kept = (f.st.plan.chroma, f.st.plan.bit_depth, f.st.bit_depth);
             assert_eq!(
                 kept,
@@ -2448,12 +2461,13 @@ pub(crate) mod tests {
     }
 
     /// U17: a mode build that loses its capture keeps the mode and view that ran and corrects
-    /// the client; the capture loss after it rebuilds at that intent, not at the one asked.
+    /// the client. The capture loss after it rebuilds at that intent, the one the client was
+    /// told, not at the one it asked.
     #[test]
-    fn a_loss_inside_a_mode_build_retries_at_the_asked_intent() {
+    fn a_loss_inside_a_mode_build_keeps_the_intent_that_ran() {
         use crate::native::tests::Verdict;
         use punktfunk_core::video_fit::VideoFit;
-        let verdict = Verdict::Other;
+        let verdict = Verdict::Wanted;
         let view = Some((VideoFit::Fit, (8, 8)));
         let keyframes = Arc::new(AtomicU32::new(0));
         let mut f = super::super::swap::tests::fake();

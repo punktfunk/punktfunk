@@ -3498,10 +3498,9 @@ fn a_client_that_stops_reading_its_control_stream_is_closed() {
     host.join().unwrap().unwrap();
 }
 
-/// What a characterisation row says of the behaviour it pins: wanted, or an accident the named
-/// decision settles. `Other` is an accident no decision covers.
+/// What a characterisation row says of the behaviour it pins. A row that pins an accident gets
+/// a variant of its own here until a decision settles it; none is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::native) enum Verdict {
     Wanted,
-    Other,
 }
