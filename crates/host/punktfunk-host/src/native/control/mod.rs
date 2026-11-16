@@ -409,10 +409,13 @@ struct ControlTask {
     /// First-of-class `warn!` for grant drops: a revoked client spamming the gated messages
     /// must not flood the log.
     denied: crate::session_status::GrantDrops,
-    /// The mode the client holds, with the view of the last accepted switch, else the
-    /// handshake's: every `Reconfigured` this task sends carries the mode, adaptive FEC sizes a
-    /// frame at its refresh, and the next ask keeps the view while the size stays.
+    /// The intent the client holds: the stream's last told one, or an accepted ask in flight.
+    /// Every `Reconfigured` this task sends carries its mode, adaptive FEC sizes a frame at its
+    /// refresh, and the next ask keeps its view while the size stays.
     held: crate::native::geometry::Intent,
+    /// The epoch of the last `Delivered`, and the one an ask in flight was accepted at.
+    told_epoch: u8,
+    asked_at: Option<u8>,
     /// What the client holds; `None` for a client that takes no configs.
     held_config: Option<v2msg::StreamConfig>,
     pyrowave_pin: rate::PyroWavePin,
@@ -549,6 +552,8 @@ impl ControlTask {
             closed: Closed::default(),
             denied: crate::session_status::GrantDrops::new(task.plane),
             held: task.terms.intent,
+            told_epoch: 0,
+            asked_at: None,
             held_config: task.anchored.then_some(task.stream_config),
             pyrowave_pin,
             last_accepted_switch: None,
@@ -949,12 +954,13 @@ impl ControlTask {
         self.send(&ack).await
     }
 
-    /// What an epoch delivers. Keeps the held mode truthful for later refusal echoes, an
-    /// Automatic PyroWave session's bounds on the size it encodes, and the codec a mode is
-    /// checked for; then tells the client what it does not hold.
+    /// What an epoch delivers. Keeps the held intent truthful for later asks and refusal echoes
+    /// ([`held_after`]), an Automatic PyroWave session's bounds on the size it encodes, and the
+    /// codec a mode is checked for; then tells the client what it does not hold.
     async fn on_delivered(&mut self, delivered: Option<super::wiring::Delivered>) -> Step {
         let d = delivered.ok_or(Ended)?;
-        self.held = self.held.delivered_at(d.mode);
+        (self.held, self.asked_at) = held_after(self.held, self.asked_at, &d);
+        self.told_epoch = d.epoch;
         self.task.codec = crate::encode::codec_from_wire(d.format.codec);
         if self.pyrowave_pin.automatic {
             let encoded = d.intent.delivered_at(d.mode).encoded(d.encoded);
@@ -966,6 +972,20 @@ impl ControlTask {
             None => Ok(()),
         }
     }
+}
+
+/// What the control task holds after `d`, and the epoch an ask still in flight was accepted
+/// at. A `Delivered` of that epoch predates the ask: it moves the held mode and the ask stands.
+/// Any other tells what the stream runs, its view and framing with it.
+pub(super) fn held_after(
+    held: crate::native::geometry::Intent,
+    asked_at: Option<u8>,
+    d: &super::wiring::Delivered,
+) -> (crate::native::geometry::Intent, Option<u8>) {
+    if asked_at == Some(d.epoch) {
+        return (held.delivered_at(d.mode), asked_at);
+    }
+    (d.intent.delivered_at(d.mode), None)
 }
 
 /// Operator policy (`None` = off), then CLIPBOARD grant (AND, never override),
@@ -1390,6 +1410,30 @@ pub(crate) mod tests {
             let got = after_connect(r.mode, r.picture, d);
             assert_eq!(got, r.held, "{} ({:?})", r.name, r.verdict);
         }
+    }
+
+    /// An ask accepted between two `Delivered`s stands across the first, which predates it; a
+    /// later epoch tells what the stream runs, its view included.
+    #[test]
+    fn an_ask_stands_until_a_later_epoch_tells() {
+        use punktfunk_core::video_fit::VideoFit;
+        let (hd, hd120) = (mode(1920, 1080, 60), mode(1920, 1080, 120));
+        let framed = crate::native::geometry::Intent::of(hd, Some((VideoFit::Fit, (1280, 720))));
+        let d = |epoch| super::super::wiring::Delivered {
+            intent: framed,
+            mode: hd,
+            encoded: (1280, 720),
+            format: Default::default(),
+            epoch,
+            corrects: true,
+        };
+        let ask = asked(hd120, None);
+        assert_eq!(
+            held_after(ask, Some(3), &d(3)),
+            (ask.delivered_at(hd), Some(3))
+        );
+        assert_eq!(held_after(ask, Some(3), &d(4)), (framed, None));
+        assert_eq!(held_after(asked(hd, None), None, &d(3)), (framed, None));
     }
 
     /// A format change is told even at the same epoch and mode; the same format twice is not.

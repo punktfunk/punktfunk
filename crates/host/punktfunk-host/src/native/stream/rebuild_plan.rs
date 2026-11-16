@@ -1041,7 +1041,7 @@ mod tests {
 
     #[rustfmt::skip]
     fn geometry_rows_table() -> Vec<GeometryRow> {
-        use crate::native::tests::Verdict::{Other, Wanted, D3};
+        use crate::native::tests::Verdict::{Other, Wanted};
         use Build::{Encoder, Once};
         let (uhd, hd120, small120) = (mode(3840, 2160, 60), mode(1920, 1080, 120), mode(1280, 720, 120));
         let row = |name, ask, facts: &'static [fn(&mut RebuildFacts)], want: Geometry, verdict| {
@@ -1093,10 +1093,7 @@ mod tests {
                 Some((Encoder, LIVE, Some((1280, 720)), 88_473)), Wanted),
             row("shared, framed: the framed size at another rate changes nothing",
                 RebuildAsk::Mode(ask(small120, None)), &[pyro, shared, framed_at_720], None, Wanted),
-            row("shared, framed: a refresh at the told size clears the framing",
-                RebuildAsk::Mode(ask(hd120, None)), &[pyro, shared, framed_at_720],
-                Some((Encoder, LIVE, None, 199_065)), D3),
-            row("shared, framed: the told size at another rate with its view changes nothing",
+            row("shared, framed: a refresh at the told size with its view changes nothing",
                 RebuildAsk::Mode(ask(hd120, Some((1280, 720)))), &[pyro, shared, framed_at_720],
                 None, Wanted),
             row("shared: a larger size changes nothing", RebuildAsk::Mode(ask(BIG, None)),

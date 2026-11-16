@@ -2170,12 +2170,13 @@ pub(crate) mod tests {
         assert_eq!(told, [(8, 8)]);
     }
 
-    /// U8 (D3): the owner of a display another session holds asks a smaller size, which is
-    /// framed on the live mode and corrected; then a rate pick. At the told size with no view,
-    /// the ask a ring sends, it clears the framing. At the asked size it keeps it and nothing
-    /// builds. The control task holds the told mode and the view of the ask it accepted.
+    /// U8: the owner of a display another session holds asks a smaller size, which is framed
+    /// on the live mode and corrected; the control task takes the told view. A rate pick at the
+    /// told size with no view, the ask a ring sends, keeps the framing, as one at the asked size
+    /// does, and nothing builds.
     #[test]
     fn a_refresh_ask_on_a_shared_display_keeps_the_framed_view() {
+        use crate::native::control::held_after;
         use crate::native::control::tests::control_ask;
         use crate::native::tests::Verdict;
         use punktfunk_core::quic::Reconfigure;
@@ -2188,26 +2189,15 @@ pub(crate) mod tests {
         };
         let (live, small) = (mode((1920, 1080), 60), mode((1280, 720), 60));
         let framed_720 = Some((VideoFit::Fit, (1280, 720)));
-        for (pick, rebuilds, kept, encoded, verdict) in [
-            (
-                mode((1920, 1080), 120),
-                true,
-                None,
-                (1920, 1080),
-                Verdict::D3,
-            ),
-            (
-                mode((1280, 720), 120),
-                false,
-                framed_720,
-                (1280, 720),
-                Verdict::Wanted,
-            ),
+        for (pick, view, verdict) in [
+            (mode((1920, 1080), 120), Some((1280, 720)), Verdict::Wanted),
+            (mode((1280, 720), 120), None, Verdict::Wanted),
         ] {
             let mut f = hd_session();
             let held = Intent::of(live, None);
             let (asked, held) = control_ask(req(small, None), held, codec, false, true);
             let asked = asked.expect("the owner may resize");
+            let asked_at = Some(f.st.live.epoch);
             assert!(rebuild_with(
                 &mut f,
                 RebuildAsk::Mode(asked),
@@ -2219,20 +2209,23 @@ pub(crate) mod tests {
                 framed_720,
                 "framed on the live mode"
             );
-            let told = heard(&mut f);
-            assert_eq!(told.last(), Some(&(live, (1280, 720), true)), "corrected");
-            let held = held.delivered_at(live);
+            let told: Vec<_> = std::iter::from_fn(|| f.told.try_recv().ok()).collect();
+            let last = told.last().expect("a correction");
+            let correction = (last.mode, last.encoded, last.corrects);
+            assert_eq!(correction, (live, (1280, 720), true), "corrected");
+            let (held, _) = held_after(held, asked_at, last);
             let (asked, _) = control_ask(req(pick, None), held, codec, false, true);
             let asked = asked.expect("a rate pick is accepted");
             let carried = (asked.mode(), asked.view());
-            assert_eq!(carried, (pick, None), "{pick:?}: the ask carries no view");
+            assert_eq!(carried, (pick, view), "{pick:?} ({verdict:?})");
             let built = rebuild_with(&mut f, RebuildAsk::Mode(asked), true, Open::Frames);
-            assert_eq!(built, rebuilds, "{pick:?} ({verdict:?})");
-            assert_eq!(f.st.live.intent.framing(), kept, "{pick:?} ({verdict:?})");
+            assert!(!built, "{pick:?} ({verdict:?})");
+            let framing = f.st.live.intent.framing();
+            assert_eq!(framing, framed_720, "{pick:?} ({verdict:?})");
             let told = heard(&mut f);
             assert_eq!(
                 told.last(),
-                Some(&(live, encoded, true)),
+                Some(&(live, (1280, 720), true)),
                 "{pick:?} ({verdict:?})"
             );
         }

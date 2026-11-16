@@ -105,7 +105,7 @@ impl ControlTask {
             Ask::Refused => None,
         };
         if let Some(asked) = accepted {
-            self.held = asked;
+            (self.held, self.asked_at) = (asked, Some(self.told_epoch));
             self.last_accepted_switch = Some(now);
         }
         let ack = Reconfigured {
@@ -404,7 +404,7 @@ pub(crate) mod tests {
 
     #[rustfmt::skip]
     fn ask_rows() -> Vec<AskRow> {
-        use crate::native::tests::Verdict::{D3, Wanted};
+        use crate::native::tests::Verdict::Wanted;
         let (hd, uhd) = (mode(1920, 1080, 60), mode(3840, 2160, 60));
         let viewed = (uhd, Some((1920, 1080)));
         let req = |mode, view| Reconfigure { mode, exclude_codecs: 0, view };
@@ -439,9 +439,10 @@ pub(crate) mod tests {
                     exclude_codecs: punktfunk_core::quic::CODEC_HEVC, ..req(uhd, None) },
                 on, None, viewed, Wanted),
             row("after a framed resize on a shared display was corrected, a rate pick at the \
-                 told size asks no view: the task never learned the framed one", (hd, None),
-                req(mode(1920, 1080, 120), None), on, Some((mode(1920, 1080, 120), None)),
-                (mode(1920, 1080, 120), None), D3),
+                 told size keeps the told view", (hd, Some((1280, 720))),
+                req(mode(1920, 1080, 120), None), on,
+                Some((mode(1920, 1080, 120), Some((1280, 720)))),
+                (mode(1920, 1080, 120), Some((1280, 720))), Wanted),
         ]
     }
 
