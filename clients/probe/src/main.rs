@@ -71,8 +71,9 @@ struct Args {
     /// the client-initiated close (with/without `--quit`) fires promptly.
     seconds: Option<u64>,
     pin: Option<[u8; 32]>,
-    /// `--remode WxHxFPS:SECS` — request this mode SECS seconds into the stream.
-    remode: Option<(Mode, u32)>,
+    /// `--remode WxHxFPS:SECS[:noview]`, once per step — request this mode SECS seconds into
+    /// the stream. `noview` sends the ask without `--view`, as a rate pick does.
+    remode: Vec<(Mode, u32, bool)>,
     /// `--rebitrate KBPS:SECS` — send a mid-stream [`SetBitrate`] (the adaptive-bitrate control
     /// message) SECS seconds into the stream: the headless validator for the host's in-place
     /// encoder rate retarget (Phase 3.2) / rebuild fallback. Wiggles the cursor around the switch
@@ -169,11 +170,16 @@ struct Args {
     /// frames; screen k's go to `<out>.s<stream>`. 1 asks for none.
     screens: u8,
     /// `--view WxH` — name the size the picture is shown at, smaller than `--mode`: a host that
-    /// reads it scales the picture down before encoding. A `--remode` carries it too.
+    /// reads it scales the picture down before encoding. A `--remode` step carries it too,
+    /// unless it says `noview`.
     view: Option<(u32, u32)>,
+    /// `--configs` — say this client takes a `StreamConfig` per epoch, as the shipped clients
+    /// do. Without it the host answers as to an older client: one config at connect, then a
+    /// second `Reconfigured` where it corrects a mode.
+    configs: bool,
 }
 
-/// The screens `--screens` asks for: `--mode` each, left to right; empty for one.
+/// The screens `--screens` asks for: `--mode` each at `--view`, left to right; empty for one.
 fn screens_ask(args: &Args) -> Vec<punktfunk_core::quic::v2::msg::Screen> {
     if args.screens < 2 {
         return Vec::new();
@@ -184,6 +190,7 @@ fn screens_ask(args: &Args) -> Vec<punktfunk_core::quic::v2::msg::Screen> {
             mode: args.mode,
             x: i32::from(i) * args.mode.width as i32,
             primary: i == 0,
+            view: args.view,
             ..Default::default()
         })
         .collect()
@@ -256,10 +263,16 @@ fn parse_argv(argv: Vec<String>) -> Args {
         refresh_hz: 60,
         refresh_mhz: 0,
     });
-    let remode = get("--remode").and_then(|s| {
-        let (m, secs) = s.split_once(':')?;
-        Some((parse_mode(m)?, secs.parse().ok()?))
-    });
+    let remode = argv
+        .windows(2)
+        .filter(|w| w[0] == "--remode")
+        .filter_map(|w| {
+            let mut parts = w[1].split(':');
+            let mode = parse_mode(parts.next()?)?;
+            let secs = parts.next()?.parse().ok()?;
+            Some((mode, secs, parts.next() != Some("noview")))
+        })
+        .collect();
     let rebitrate = get("--rebitrate").and_then(|s| {
         let (kbps, secs) = s.split_once(':')?;
         Some((kbps.parse().ok()?, secs.parse().ok()?))
@@ -417,6 +430,7 @@ fn parse_argv(argv: Vec<String>) -> Args {
             let (w, h) = v.split_once('x')?;
             Some((w.parse().ok()?, h.parse().ok()?))
         }),
+        configs: argv.iter().any(|a| a == "--configs"),
     }
 }
 
@@ -960,8 +974,13 @@ async fn handshake(
         suites: extra.suites,
         // A host answers a `Redirect` only to a client that says it follows one.
         features: {
-            use punktfunk_core::quic::v2::registry::{FEATURE_PROFILES, FEATURE_SCREENS};
+            use punktfunk_core::quic::v2::registry::{
+                FEATURE_PROFILES, FEATURE_SCREENS, FEATURE_STREAM_CONFIG,
+            };
             let mut set = punktfunk_core::quic::v2::features::FeatureSet::default();
+            if args.configs {
+                set = set.with(FEATURE_STREAM_CONFIG);
+            }
             if args.as_profile.is_some() {
                 set = set.with(FEATURE_PROFILES);
             }
@@ -1099,8 +1118,8 @@ async fn control_plane(
             .map_err(|e| anyhow!("link rate datagram: {e}"))?;
         tracing::info!(link_kbps, "sent the link rate");
     }
-    if let Some((new_mode, after_secs)) = args.remode {
-        spawn_remode(send, recv, new_mode, args.view, after_secs);
+    if !args.remode.is_empty() {
+        spawn_remode(send, recv, args.remode.clone(), args.view);
     } else if let Some((new_kbps, after_secs)) = args.rebitrate {
         spawn_rebitrate(conn, send, recv, new_kbps, after_secs);
     } else if let Some(test) = args.speed_test {
@@ -1114,7 +1133,13 @@ async fn control_plane(
     Ok(())
 }
 
-/// Log what the host says about screens past the first: each layout and each stream's config.
+/// One line per `StreamConfig`: the stream, its epoch, the mode it delivers and the picture it
+/// encodes when that is not the mode's size.
+fn log_config(cfg: &punktfunk_core::quic::v2::msg::StreamConfig) {
+    tracing::info!(stream = cfg.stream, epoch = cfg.epoch, mode = ?cfg.mode, picture = ?cfg.picture, codec = cfg.codec, "stream config");
+}
+
+/// Log what the host says unasked: each screen layout and each stream's config.
 fn spawn_screen_log(mut recv: CtlRx) {
     use punktfunk_core::quic::v2::msg::{ScreenLayout, StreamConfig};
     tokio::spawn(async move {
@@ -1130,19 +1155,13 @@ fn spawn_screen_log(mut recv: CtlRx) {
                         "host screen layout"
                     );
                 }
-            } else if let Some(cfg) = decode::<StreamConfig>(ty, &body)
-                .ok()
-                .filter(|c| c.stream != 0)
-            {
-                tracing::info!(stream = cfg.stream, epoch = cfg.epoch, mode = ?cfg.mode, codec = cfg.codec, "screen stream config");
+            } else if let Ok(cfg) = decode::<StreamConfig>(ty, &body) {
+                log_config(&cfg);
             }
         }
     });
 }
 
-/// `--remode`: after a delay, ask the host to switch modes on the still-open control stream.
-/// The stream then carries new-mode AUs (IDR + in-band parameter sets); ffprobe the `--out`
-/// file to see both resolutions.
 /// The next control frame of type `M`. The host also sends a `StreamConfig` and its notices
 /// unasked, so an answer is not always the next frame.
 async fn next_of<M: V2Message>(r: &mut CtlRx) -> std::io::Result<M> {
@@ -1154,32 +1173,48 @@ async fn next_of<M: V2Message>(r: &mut CtlRx) -> std::io::Result<M> {
     }
 }
 
+/// `--remode`: ask the host for each step's mode at its second, on the still-open control
+/// stream, and log every answer and every `StreamConfig` it tells. The stream then carries
+/// new-mode AUs (IDR + in-band parameter sets); ffprobe the `--out` file to see each size.
 fn spawn_remode(
     mut rs: CtlTx,
     mut rr: CtlRx,
-    new_mode: Mode,
+    steps: Vec<(Mode, u32, bool)>,
     view: Option<(u32, u32)>,
-    after_secs: u32,
 ) {
+    use punktfunk_core::quic::v2::msg::StreamConfig;
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(after_secs as u64)).await;
-        tracing::info!(?new_mode, "requesting mid-stream mode switch");
-        let ask = Reconfigure {
-            mode: new_mode,
-            view,
-            ..Default::default()
-        };
-        if v2io::send(&mut rs, &ask).await.is_err() {
-            tracing::error!("Reconfigure write failed");
-            return;
-        }
-        match next_of::<Reconfigured>(&mut rr).await {
-            Ok(ack) if ack.accepted => {
-                tracing::info!(mode = ?ack.mode, "mode switch ACCEPTED")
+        while let Ok((ty, body)) = rr.read_frame().await {
+            if let Ok(ack) = decode::<Reconfigured>(ty, &body) {
+                if ack.accepted {
+                    tracing::info!(mode = ?ack.mode, "mode switch ACCEPTED");
+                } else {
+                    tracing::warn!(active = ?ack.mode, "mode switch REJECTED");
+                }
+            } else if let Ok(cfg) = decode::<StreamConfig>(ty, &body) {
+                log_config(&cfg);
             }
-            Ok(ack) => tracing::warn!(active = ?ack.mode, "mode switch REJECTED"),
-            other => tracing::error!(?other, "bad Reconfigured"),
         }
+    });
+    tokio::spawn(async move {
+        let start = tokio::time::Instant::now();
+        for (new_mode, after_secs, carries_view) in steps {
+            tokio::time::sleep_until(start + std::time::Duration::from_secs(after_secs as u64))
+                .await;
+            let view = view.filter(|_| carries_view);
+            tracing::info!(?new_mode, ?view, "requesting mid-stream mode switch");
+            let ask = Reconfigure {
+                mode: new_mode,
+                view,
+                ..Default::default()
+            };
+            if v2io::send(&mut rs, &ask).await.is_err() {
+                tracing::error!("Reconfigure write failed");
+                return;
+            }
+        }
+        // The control stream stays open for the answers.
+        std::future::pending::<()>().await;
     });
 }
 
@@ -2520,6 +2555,24 @@ mod tests {
                 .map(String::from)
                 .collect(),
         )
+    }
+
+    #[test]
+    fn each_remode_is_a_step_and_noview_drops_the_view() {
+        let a = args(&[
+            "--remode",
+            "1280x720x60:5",
+            "--remode",
+            "1920x1080x120:9:noview",
+        ]);
+        let steps: Vec<_> = (a.remode.iter())
+            .map(|(m, at, view)| ((m.width, m.height, m.refresh_hz), *at, *view))
+            .collect();
+        assert_eq!(
+            steps,
+            [((1280, 720, 60), 5, true), ((1920, 1080, 120), 9, false)]
+        );
+        assert!(args(&["--remode", "1280x720x60"]).remode.is_empty());
     }
 
     #[test]
