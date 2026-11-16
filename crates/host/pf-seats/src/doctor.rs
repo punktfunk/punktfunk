@@ -368,7 +368,7 @@ fn resources_row(seat: &Seat) -> Option<Diagnostic> {
 /// nobody signs in to it at the PC meanwhile.
 fn account_row(seat: &Seat, inspection: &AccountInspection, group: &str) -> Diagnostic {
     let account = &seat.account;
-    let adopted = seat.adopted_sid.is_some();
+    let adopted = !seat.kind.supervisor_owns_account();
     let problem = if !inspection.identity_matches {
         Some(if adopted {
             ("seatcheck_account_gone", format!(
@@ -551,7 +551,8 @@ fn seat_diagnostic(level: DiagnosticLevel, code: &str, message: String, seat: &S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::SeatId;
+    use crate::backend::Adopted;
+    use crate::model::{RowKind, SeatId};
     use DiagnosticLevel::{Error, Info, Warning};
 
     fn healthy() -> BoxFacts {
@@ -1016,13 +1017,8 @@ mod tests {
             mgmt_port: DEFAULT_MGMT_PORTS[at],
             autostart: false,
             runtime: RuntimeStatus::stopped(),
-            owner: false,
-            owner_uid: None,
+            kind: RowKind::made(),
             fingerprint: None,
-            adopted_sid: None,
-            adopted_uid: None,
-            rdp_granted: false,
-            console_deny_kept: false,
             lent: Vec::new(),
         }
     }
@@ -1226,9 +1222,10 @@ mod tests {
     fn an_adopted_account_row_names_the_person_s_move() {
         let seat = Seat {
             account: "Bärbel Ott".into(),
-            adopted_sid: Some("S-1-5-21-1-2-3-1001".into()),
-            adopted_uid: None,
-            rdp_granted: true,
+            kind: RowKind::windows_person("S-1-5-21-1-2-3-1001".into()).with_adopted(Adopted {
+                rdp_granted: true,
+                console_deny_kept: false,
+            }),
             ..seat(12)
         };
         let row = |account: AccountInspection| {

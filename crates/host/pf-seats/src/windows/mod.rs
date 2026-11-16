@@ -557,7 +557,7 @@ fn native_x64() -> WinResult<bool> {
 mod tests {
     use super::{finished, wraps_termsrv, WindowsBackend, ENABLING};
     use crate::backend::PlatformBackend as _;
-    use crate::model::{RuntimeStatus, Seat, SeatId};
+    use crate::model::{RowKind, RuntimeStatus, Seat, SeatId};
     use std::path::PathBuf;
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
@@ -593,13 +593,8 @@ mod tests {
             mgmt_port: 47995,
             autostart: false,
             runtime: RuntimeStatus::stopped(),
-            owner: false,
-            owner_uid: None,
+            kind: RowKind::made(),
             fingerprint: None,
-            adopted_sid: None,
-            adopted_uid: None,
-            rdp_granted: false,
-            console_deny_kept: false,
             lent: Vec::new(),
         };
         let (stopped, starting) = (seat("pfs-absent"), seat("pfs-absent-2"));

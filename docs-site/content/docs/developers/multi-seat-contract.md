@@ -537,8 +537,8 @@ the installed unit.
   `start|stop|delete <id>`, `doctor`, `seating`, `pads`, `lend <seat id> <key>` and
   `take-back <key>` send the [socket's](#the-supervisor) requests;
   `release-owner` deletes the owner's row and `stop-all` stops every live seat.
-  `check-owner on|off <user>` sends none: it applies the switch rules below and prints
-  `<uid> <home>` or `gone`.
+  `door on|off <user>` and `door ports` send none and need no running supervisor: they are the
+  [door switch](#the-owners-row-and-the-door) itself, root's, which `door-helper` execs.
 - **Box-wide Flatpaks.** `install_flatpak {id}` adds Flathub to the system installation when the
   box lacks it and installs the app there, for every account; each user keeps its own data in
   `~/.var/app/<id>`. `remove_flatpak {id, purge}` uninstalls it; `purge` deletes root's data of
@@ -790,27 +790,32 @@ browsers. A seat host without Seat defaults follows its `PUNKTFUNK_WEBTRANSPORT*
   owner's session is never ended.
 - **Switching.** `PUT /api/v1/profiles/door` with `{"on": true}` or `{"on": false}` answers 202, or
   204 when the box is already so. The owner's host starts `punktfunk-door-on@<user>.service`, the
-  door `punktfunk-door-off@<user>.service`; both run `door-helper`, which moves the box's files
-  between the owner's `~/.config/punktfunk` and `/var/lib/punktfunk` and turns the units on or off.
+  door `punktfunk-door-off@<user>.service`; both run `door-helper`, which execs
+  `punktfunk-seats door on|off <user>`. It moves the box's files between the owner's
+  `~/.config/punktfunk` and `/var/lib/punktfunk`, reading and writing each as the owner or as the
+  door through `runuser`, and turns the units on or off.
   The console's `web-session-key` and `web-session-epoch` move with them (on SteamOS, its
   `PUNKTFUNK_UI_SECRET` line), so a signed-in console stays signed in. `on` also gives the door the
   owner's `host-settings.json`, so the door's own rows start as the owner set them; before `off`,
   the door sends the rows it stored to the owner's host, and answers 503 while that host starts. The
   user must be in the `punktfunk-update` group, and a member switches the door for their own account
-  only. The helper writes that account to `/var/lib/punktfunk-seats/owner` first. It refuses to
-  switch on while the file names another account, and to switch off for any but the one it names,
-  which may have left the group since. A name whose account no longer exists names no one: a
-  member's switch-on takes the door over, replacing the box's files with their own where they have
-  the same file, and a switch-off for it leaves the box's files in `/var/lib/punktfunk`. Only a
-  `getent` miss on a box whose `passwd` sources are all local counts; any other `getent` status, or
-  a `passwd` source such as `sss` or `ldap`, refuses both. The helper and the owner's host ask
-  `check-owner` for these rules. A switch the helper refuses or abandons sets `door_switch_failed`
-  on the starting host's `GET /host`, and the console stops waiting.
+  only. The switch writes that account to `/var/lib/punktfunk-seats/owner` first. Who may switch
+  is decided under the switch's lock, from that file: it refuses to switch on while the file names another account, and to switch off for
+  any but the one it names, which may have left the group since. A name whose account no longer
+  exists names no one: a member's switch-on takes the door over, replacing the box's files with
+  their own where they have the same file, and a switch-off for it leaves the box's files in
+  `/var/lib/punktfunk`. Only a `getent` miss on a box whose `passwd` sources are all local counts;
+  any other `getent` status, or a `passwd` source such as `sss` or `ldap`, refuses both. The
+  owner's host applies the same rules before it starts a switch, so the console names the account
+  the door is on for instead of asking. A switch it refuses or abandons sets
+  `door_switch_failed` on the starting host's `GET /host`, and the console stops waiting.
 - **The box's ports.** The door binds the ports the owner's `host.env` names
   (`PUNKTFUNK_MGMT_BIND`, `PUNKTFUNK_NATIVE_PORT`), and its console binds where the owner's
-  console did (`PUNKTFUNK_UI_BIND`, from `web.env` on SteamOS). `door-helper ports` copies those
-  lines to `/var/lib/punktfunk-seats/host.env`, root's, before each door start, so an update or
-  a later edit reaches the door. On NixOS the door also takes the two port keys from
+  console did (`PUNKTFUNK_UI_BIND`, from `web.env` on SteamOS). Before each door start,
+  `door-helper ports` (`punktfunk-seats door ports`) reads both files as the owner and writes
+  those lines to `/var/lib/punktfunk-seats/host.env`, root's, so an update or a later
+  edit reaches the door: per key the last line, one pair of matching quotes off, and only a value
+  of address characters (letters, digits, `.:%_-[]`). On NixOS the door also takes the two port keys from
   `services.punktfunk.host.settings`, and its console follows `services.punktfunk.web.bind`.
 
 ### A seat on a person's own account

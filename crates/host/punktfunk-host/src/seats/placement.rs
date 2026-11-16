@@ -309,7 +309,7 @@ mod tests {
         assert_eq!(ledger_seat(&Full { seat: None }), None);
         assert_eq!(ledger_seat(&Operator), None);
         let mut owner = seat(RuntimeState::Running);
-        owner.owner = true;
+        owner.kind = pf_seats::model::RowKind::owner();
         assert_eq!(
             crate::seats::row_in(&Operator, Some(&owner), true),
             Some(row)
@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn the_owner_row_is_placed_like_any_seat() {
         let mut owner = seat(RuntimeState::Running);
-        owner.owner = true;
+        owner.kind = pf_seats::model::RowKind::owner();
         let Placement::Redirect(r) =
             decide("owner", &asker(true, false), true, on(&owner), &[], None)
         else {

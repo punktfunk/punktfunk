@@ -50,7 +50,8 @@ mod linux {
         \x20 adopt-owner <account>       the owner's row, for the user door-helper recorded\n\
         \x20 release-owner               delete the owner's row, if there is one\n\
         \x20 stop-all                    stop every seat that runs or starts\n\
-        \x20 check-owner on|off <account>  door-helper's account rules: `<uid> <home>` or `gone`\n\
+        \x20 door on|off <account>       switch Reachable without logging in, for door-helper (root)\n\
+        \x20 door ports                  the recorded owner's ports, at each door start (root)\n\
         \x20 start <id> | stop <id> | delete <id>\n\
         \x20 pads                        the controllers plugged into this PC, and whose each is\n\
         \x20 lend <id> <key>             give a controller plugged into this PC to a seat\n\
@@ -78,6 +79,12 @@ mod linux {
                 return ExitCode::from(pf_seats::linux::loopback::run(account));
             }
         }
+        // No flags here: the user is data from a door unit's instance name.
+        if let [verb, rest @ ..] = args.as_slice()
+            && verb == "door"
+        {
+            return ExitCode::from(pf_seats::linux::door::main(rest));
+        }
         // No flags here: every word is data from a seat unit's drop-in.
         if let [verb, check, mount, options, source, stage] = args.as_slice()
             && verb == pf_seats::linux::stage::VERB
@@ -100,19 +107,6 @@ mod linux {
             && verb == pf_seats::linux::PAM_CHECK_VERB
         {
             pf_seats::linux::pam_check(account);
-            return Ok(());
-        }
-        // No flags here: the account is data from a unit's instance name.
-        if let [verb, direction, account] = args.as_slice()
-            && verb == "check-owner"
-        {
-            let on = match direction.as_str() {
-                "on" => true,
-                "off" => false,
-                _ => return Err(USAGE.into()),
-            };
-            let line = pf_seats::linux::check_owner(account, on).map_err(|e| e.to_string())?;
-            println!("{line}");
             return Ok(());
         }
         let mut socket_path = PathBuf::from(SOCKET_PATH);
@@ -204,7 +198,7 @@ mod linux {
 
     /// Deletes the owner's row; none is not an error. The account and its home stay.
     fn release_owner(socket_path: &std::path::Path) -> Result<(), String> {
-        let Some(owner) = seats(socket_path)?.into_iter().find(|s| s.owner) else {
+        let Some(owner) = seats(socket_path)?.into_iter().find(|s| s.kind.is_owner()) else {
             return Ok(());
         };
         ask(socket_path, Command::Delete { id: owner.id }).map(drop)
@@ -250,7 +244,7 @@ mod linux {
                 seat.account,
                 seat.native_port,
                 seat.mgmt_port,
-                seat.owner,
+                seat.kind.is_owner(),
                 seat.name,
             );
         };

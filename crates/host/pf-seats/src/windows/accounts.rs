@@ -129,7 +129,7 @@ impl AccountManager {
         require_local_system()?;
         require_identity(seat)?;
         let credential = self.credentials.load(&seat.id)?;
-        let adopted = seat.adopted_sid.is_some();
+        let adopted = !seat.kind.supervisor_owns_account();
         verify_password(&seat.account, &credential, |error| {
             if adopted {
                 changed_fault(&seat.account)
@@ -154,7 +154,7 @@ impl AccountManager {
     /// refused. The SID outlives the account, so a profile still loaded goes after it.
     pub(super) fn delete(&self, seat: &Seat) -> WinResult<()> {
         require_local_system()?;
-        if let Some(sid) = &seat.adopted_sid {
+        if let Some(sid) = seat.kind.sid() {
             return self.release(seat, sid);
         }
         match account_comment(&seat.account)? {
@@ -174,16 +174,16 @@ impl AccountManager {
     /// Whether `seat` is an adopted row whose name now holds another account: the person deleted
     /// and made it again. Its sessions are a stranger's.
     pub(super) fn name_reassigned(&self, seat: &Seat) -> bool {
-        seat.adopted_sid
-            .as_deref()
+        seat.kind
+            .sid()
             .is_some_and(|sid| sid_string(&seat.account).is_some_and(|found| found != sid))
     }
 
     /// Refuses an account that exists and isn't the row's by [`identity_matches`]. One that
     /// doesn't exist passes: there is nothing of ours to stop or delete.
     pub(super) fn ensure_owned_or_absent(&self, seat: &Seat) -> WinResult<()> {
-        let owned = match &seat.adopted_sid {
-            Some(sid) => sid_string(&seat.account).is_none_or(|found| found == *sid),
+        let owned = match seat.kind.sid() {
+            Some(sid) => sid_string(&seat.account).is_none_or(|found| found == sid),
             None => {
                 account_comment(&seat.account)?.is_none_or(|comment| comment == marker(&seat.id))
             }
@@ -204,8 +204,8 @@ impl AccountManager {
         require_local_system()?;
         let account = seat.account.as_str();
         let Some(sid) = seat
-            .adopted_sid
-            .as_deref()
+            .kind
+            .sid()
             .filter(|sid| sid_string(account).as_deref() == Some(*sid))
         else {
             return Err(backend_error(
@@ -301,11 +301,11 @@ impl AccountManager {
         let present = sid_string(&seat.account).is_some_and(|found| found == sid);
         let mut results = with_sid(sid, |sid| {
             let mut results = Vec::new();
-            if seat.releases_console_deny() {
+            if !seat.kind.adopted().console_deny_kept {
                 results.push(remove_account_right(sid, DENY_CONSOLE));
             }
             results.push(remove_member(SEATS_GROUP, sid));
-            if seat.rdp_granted {
+            if seat.kind.adopted().rdp_granted {
                 let rdp = localized_alias(RDP_USERS_SID);
                 results.push(rdp.and_then(|group| remove_member(&group, sid)));
             }
@@ -347,7 +347,7 @@ pub(super) fn marker(id: &SeatId) -> String {
 
 /// `account_not_owned` for `seat`. An adopted row's message is the console's sentence.
 fn not_ours(seat: &Seat) -> BackendError {
-    let message = match seat.adopted_sid {
+    let message = match seat.kind.sid() {
         None => format!(
             "local account '{}' is not marked for seat {}",
             seat.account, seat.id
@@ -363,8 +363,8 @@ fn not_ours(seat: &Seat) -> BackendError {
 /// Whether `seat.account` exists and is the row's own: a made row's carries the seat's comment
 /// marker, an adopted row's name resolves to the SID the row stores.
 fn identity_matches(seat: &Seat) -> WinResult<bool> {
-    Ok(match &seat.adopted_sid {
-        Some(sid) => sid_string(&seat.account).as_deref() == Some(sid.as_str()),
+    Ok(match seat.kind.sid() {
+        Some(sid) => sid_string(&seat.account).as_deref() == Some(sid),
         None => account_comment(&seat.account)?.as_deref() == Some(marker(&seat.id).as_str()),
     })
 }

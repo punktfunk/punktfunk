@@ -47,6 +47,7 @@
 	"apierr_door_missing_steamos": "The command and \"Konsole\" (an app name) are literal: keep them.",
 	"apierr_door_missing_sysext": "The command after the colon is literal: keep it.",
 	"apierr_door_not_in_update_group": "Why the door can't turn on. {user} is the login name; the command is literal.",
+	"apierr_door_on_for_other": "Why Reachable without logging in can't turn on for this account: it is on for another. {owner} is that account's login name.",
 	"apierr_door_update_group_restart": "{user} is the login name.",
 	"apierr_hooks_elevated_off": "Refusal of an elevated hook. The command after the colon is literal: keep it exactly.",
 	"apierr_hooks_secret_file_person": "A person saving their own hooks inside their seat on a Windows PC, when a hook signs its webhook with a secret file.",

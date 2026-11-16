@@ -185,7 +185,7 @@ impl<B: PlatformBackend> SeatService<B> {
     /// meanwhile; a failed start is recorded on its row, and the first one is returned once all
     /// have run. A person's Linux row never autostarts: only its person's proof starts it.
     pub fn reconcile_startup(&self) -> Result<(), ApiError> {
-        let autostarts = |seat: &Seat| seat.autostart && seat.adopted_uid.is_none();
+        let autostarts = |seat: &Seat| seat.autostart && !seat.kind.starts_on_proof();
         let autostart: Vec<SeatId> = {
             let mut current = self.lock();
             let mut next = current.clone();
@@ -196,8 +196,8 @@ impl<B: PlatformBackend> SeatService<B> {
             // A uid a person's row already holds stays off: the save would refuse the whole ledger.
             if let Some(uid) = self.backend.owner_uid() {
                 let mut noted = next.clone();
-                for owner in noted.seats.iter_mut().filter(|s| s.owner) {
-                    owner.owner_uid = Some(uid);
+                for owner in noted.seats.iter_mut().filter(|s| s.kind.is_owner()) {
+                    owner.kind = owner.kind.clone().prepared(uid);
                 }
                 match noted.validate() {
                     Ok(()) => next = noted,
@@ -333,7 +333,9 @@ impl<B: PlatformBackend> SeatService<B> {
                 None => ApiError::from(error),
             });
         }
-        seat.owner_uid = self.backend.owner_uid();
+        if let Some(uid) = self.backend.owner_uid() {
+            seat.kind = seat.kind.prepared(uid);
+        }
         // Released after the new row is adopted, so what they share stays with the new owner.
         if let Some(owner) = &stale
             && let Err(error) = self.backend.remove(owner)
@@ -376,8 +378,7 @@ impl<B: PlatformBackend> SeatService<B> {
             account: Some(&account),
         };
         let adopted = self.limited(target, || self.backend.adopt_account(&seat, password))?;
-        seat.rdp_granted = adopted.rdp_granted;
-        seat.console_deny_kept = adopted.console_deny_kept;
+        seat.kind = seat.kind.with_adopted(adopted);
         self.land(seat)
     }
 
@@ -391,7 +392,7 @@ impl<B: PlatformBackend> SeatService<B> {
         password: &Secret,
     ) -> Result<CommandResult, ApiError> {
         let checked = self.person_row(&request)?;
-        let account = format!("uid:{}", checked.adopted_uid.unwrap_or_default());
+        let account = format!("uid:{}", checked.kind.uid().unwrap_or_default());
         let target = Target {
             device: Some((&account, CONSOLE)),
             account: Some(&account),
@@ -399,7 +400,7 @@ impl<B: PlatformBackend> SeatService<B> {
         self.limited(target, || self.backend.check_password(&checked, password))?;
         let _op = self.op();
         let seat = self.person_row(&request)?;
-        if seat.adopted_uid != checked.adopted_uid {
+        if seat.kind.uid() != checked.kind.uid() {
             return Err(ApiError::new(
                 ErrorCode::Conflict,
                 format!(
@@ -433,7 +434,7 @@ impl<B: PlatformBackend> SeatService<B> {
     fn credential(&self, id: &SeatId, password: &Secret) -> Result<CommandResult, ApiError> {
         let _op = self.op();
         let seat = self.lock().seat(id).cloned().ok_or_else(|| not_found(id))?;
-        let Some(sid) = &seat.adopted_sid else {
+        let Some(sid) = seat.kind.sid() else {
             return Err(ApiError::new(
                 ErrorCode::InvalidRequest,
                 "only an adopted Windows account's password can be updated",
@@ -488,7 +489,7 @@ impl<B: PlatformBackend> SeatService<B> {
         } else if self
             .lock()
             .seat(id)
-            .is_some_and(|s| s.adopted_uid.is_some())
+            .is_some_and(|s| s.kind.starts_on_proof())
         {
             return Err(unlock::unlock_required());
         }

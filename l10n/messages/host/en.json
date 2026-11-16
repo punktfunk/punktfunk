@@ -80,6 +80,7 @@
 	"apierr_door_no_owner": "This host has no owner's host to answer that. Turn Reachable without logging in off and on again.",
 	"apierr_door_no_owner_account": "This host has no owner to hand its files back to.",
 	"apierr_door_not_in_update_group": "Add {user} to the punktfunk-update group first: sudo usermod -aG punktfunk-update {user}",
+	"apierr_door_on_for_other": "Reachable without logging in is on for {owner}. Turn it off from that account first.",
 	"apierr_door_own_user_unknown": "Couldn't tell which account this host runs as.",
 	"apierr_door_switch_failed": "Couldn't start the switch. Check the host log.",
 	"apierr_door_switch_not_allowed": "This account isn't allowed to switch it. Add it to the punktfunk-update group, then try again.",

@@ -160,7 +160,7 @@ fn a_start_that_loses_the_unit_s_state_stops_the_unit() {
         ("systemctl", ["show", ..]) if shows.replace(shows.get() + 1) == 0 => (1, String::new()),
         _ => base(program, args),
     });
-    let asked = rig.backend.inner.stops.load(Ordering::SeqCst);
+    let asked = rig.backend.stops(&rig.seat.id);
     let failed = rig.backend.wait_ready(&rig.seat, asked, false).unwrap_err();
     assert_eq!(failed.code, "systemctl_failed");
     assert_eq!(fake::calls(), [SHOW, SHOW, STOP, RESET]);
@@ -173,8 +173,7 @@ fn only_a_made_seat_s_linger_and_manager_are_ours() {
     let rig = rig();
     let _machine = fake::install(machine(&rig.home, 1500, "active", false));
     let owner = Seat {
-        owner: true,
-        adopted_uid: None,
+        kind: RowKind::owner(),
         ..person()
     };
     rig.backend.stop(&owner).unwrap();
@@ -281,28 +280,166 @@ fn a_name_that_is_another_user_now_is_not_the_row() {
 #[test]
 fn only_a_made_seat_is_ours_to_end() {
     let made = Seat {
-        adopted_uid: None,
+        kind: RowKind::made(),
         ..person()
     };
     let owner = Seat {
-        owner: true,
-        adopted_uid: None,
+        kind: RowKind::owner(),
         ..person()
     };
-    assert_eq!(Own::of(&made), Own::Seat);
-    assert_eq!(Own::of(&owner), Own::Owner);
-    assert_eq!(Own::of(&person()), Own::Person);
+    assert_eq!(Own::of(&made.kind), Own::Seat);
+    assert_eq!(Own::of(&owner.kind), Own::Owner);
+    assert_eq!(Own::of(&person().kind), Own::Person);
     for (seat, ours, yields) in [
         (made, true, false),
         (owner, false, true),
         (person(), false, true),
     ] {
-        let kind = Own::of(&seat);
+        let kind = Own::of(&seat.kind);
         assert_eq!(
-            (kind.ours(), kind.yields_to_the_desk()),
+            (kind.ours(), seat.kind.yields_to_the_desk()),
             (ours, yields),
             "{kind:?}"
         );
+    }
+}
+
+/// What every rule about a row's kind answers, each in the words of the sites that decide it.
+#[derive(Debug, PartialEq)]
+struct Rules {
+    owner: bool,
+    /// On a person's own account: the console's release wording.
+    person: bool,
+    /// Starts only on its person's proof: no autostart, keep-warm, door or dial start.
+    proof: bool,
+    /// Keep-warm may start it and the idle stop end it.
+    upkeep: bool,
+    own: Own,
+    ours: bool,
+    yields: bool,
+    /// Windows: an account the supervisor made, marked by comment.
+    windows_ours: bool,
+    /// Windows: the host runs with `PUNKTFUNK_SEAT_OWN_ACCOUNT`.
+    own_marker: bool,
+    uid: Option<u32>,
+    sid: Option<String>,
+    /// Release takes the account out of Remote Desktop Users, and takes the console deny off.
+    release: (bool, bool),
+}
+
+fn rules(seat: &Seat) -> Rules {
+    let kind = &seat.kind;
+    let own = Own::of(kind);
+    Rules {
+        owner: kind.is_owner(),
+        person: kind.is_person(),
+        proof: kind.starts_on_proof(),
+        upkeep: kind.upkeep(),
+        own,
+        ours: own.ours(),
+        yields: kind.yields_to_the_desk(),
+        windows_ours: kind.supervisor_owns_account(),
+        own_marker: kind.is_person(),
+        uid: kind.uid(),
+        sid: kind.sid().map(Into::into),
+        release: (
+            kind.adopted().rdp_granted,
+            !kind.adopted().console_deny_kept,
+        ),
+    }
+}
+
+/// One row per kind: a made seat, the owner's, a person's own Linux and Windows account.
+#[test]
+fn row_kind_policy_table() {
+    const SID: &str = "S-1-5-21-1-2-3-1001";
+    let made = Seat {
+        kind: RowKind::made(),
+        ..person()
+    };
+    let owner = Seat {
+        kind: RowKind::owner().prepared(1000),
+        ..person()
+    };
+    let windows = Seat {
+        kind: RowKind::windows_person(SID.into()).with_adopted(Adopted {
+            rdp_granted: true,
+            console_deny_kept: true,
+        }),
+        ..person()
+    };
+    let table = [
+        (
+            made,
+            Rules {
+                owner: false,
+                person: false,
+                proof: false,
+                upkeep: true,
+                own: Own::Seat,
+                ours: true,
+                yields: false,
+                windows_ours: true,
+                own_marker: false,
+                uid: None,
+                sid: None,
+                release: (false, true),
+            },
+        ),
+        (
+            owner,
+            Rules {
+                owner: true,
+                person: false,
+                proof: false,
+                upkeep: false,
+                own: Own::Owner,
+                ours: false,
+                yields: true,
+                windows_ours: false,
+                own_marker: false,
+                uid: Some(1000),
+                sid: None,
+                release: (false, true),
+            },
+        ),
+        (
+            person(),
+            Rules {
+                owner: false,
+                person: true,
+                proof: true,
+                upkeep: false,
+                own: Own::Person,
+                ours: false,
+                yields: true,
+                windows_ours: false,
+                own_marker: true,
+                uid: Some(1500),
+                sid: None,
+                release: (false, true),
+            },
+        ),
+        (
+            windows,
+            Rules {
+                owner: false,
+                person: true,
+                proof: false,
+                upkeep: true,
+                own: Own::Person,
+                ours: false,
+                yields: true,
+                windows_ours: false,
+                own_marker: true,
+                uid: None,
+                sid: Some(SID.into()),
+                release: (true, false),
+            },
+        ),
+    ];
+    for (seat, expected) in table {
+        assert_eq!(rules(&seat), expected, "{seat:?}");
     }
 }
 

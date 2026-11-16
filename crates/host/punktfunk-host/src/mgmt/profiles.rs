@@ -406,7 +406,7 @@ fn seat_line(st: &MgmtState, p: &Profile, seats: &Snapshot, operator: bool) -> S
     if let Some(id) = seats.row_of(&p.os_account) {
         let account = seats
             .seat(id)
-            .filter(|(row, _)| operator && row.adopted())
+            .filter(|(row, _)| operator && row.kind.is_person())
             .map(|(row, _)| row.account.clone());
         return SeatPublic {
             account,
@@ -935,7 +935,7 @@ pub(super) fn needs_start(state: &RuntimeState) -> bool {
 /// Whether the door may start `seat`: one that is down, and never a person's own Linux account,
 /// which starts only for its person's unlock.
 fn may_start(seat: &pf_seats::Seat) -> bool {
-    needs_start(&seat.runtime.state) && seat.adopted_uid.is_none()
+    needs_start(&seat.runtime.state) && !seat.kind.starts_on_proof()
 }
 
 /// Starts a stopped seat in the background when [`may_start`] lets it: a first logon takes tens
@@ -1383,7 +1383,7 @@ fn seat_profile(
     if ledger
         .seats
         .iter()
-        .any(|s| !s.owner && crate::profiles::same_name(&s.name, name))
+        .any(|s| !s.kind.is_owner() && crate::profiles::same_name(&s.name, name))
     {
         return Err(edit_error(EditError::NameTaken).into());
     }
@@ -1598,7 +1598,7 @@ pub(crate) async fn delete_profile(
         let adopted = seats_now(&st)
             .await
             .seat(&seat)
-            .is_some_and(|(row, _)| row.adopted());
+            .is_some_and(|(row, _)| row.kind.is_person());
         return api_error(
             StatusCode::CONFLICT,
             if adopted {
@@ -2098,6 +2098,7 @@ async fn sign_out(st: &MgmtState, id: &str, fingerprint: Option<String>) -> Resp
 mod tests {
     use super::*;
     use crate::seats::Occupant;
+    use pf_seats::model::RowKind;
 
     const ID: &str = "0123456789abcdef0123456789abcdef";
 
@@ -2186,9 +2187,9 @@ mod tests {
     fn the_door_never_starts_a_person_s_own_account() {
         let mut seat = snap(true, RuntimeState::Stopped, false).seats.remove(0);
         assert!(may_start(&seat));
-        seat.adopted_sid = Some("S-1-5-21-1-2-3-1001".into());
+        seat.kind = RowKind::windows_person("S-1-5-21-1-2-3-1001".into());
         assert!(may_start(&seat));
-        (seat.adopted_sid, seat.adopted_uid) = (None, Some(1500));
+        seat.kind = RowKind::linux_person(1500);
         assert!(!may_start(&seat));
         seat.runtime.state = RuntimeState::Running;
         assert!(!may_start(&seat));

@@ -2564,11 +2564,11 @@ const PERSON: &str = "7a11ce00e001";
 fn person_ledger() -> Vec<pf_seats::Seat> {
     let row = |id: &str, port: u16| {
         let mut seat = crate::native::unlock::fake::person(id, port);
-        seat.adopted_uid = None;
+        seat.kind = pf_seats::model::RowKind::made();
         seat
     };
     let mut windows = row(WINDOWS_SEAT, 9781);
-    windows.adopted_sid = Some("S-1-5-21-1-2-3-1001".into());
+    windows.kind = pf_seats::model::RowKind::windows_person("S-1-5-21-1-2-3-1001".into());
     vec![
         crate::native::unlock::fake::person(PERSON_SEAT, 9780),
         windows,
@@ -2977,7 +2977,7 @@ fn dial_host(
     let dir = crate::test_support::scratch();
     let seat_id = format!("{port:032x}");
     let mut seat = fake::person(&seat_id, port + 1000);
-    seat.adopted_uid = None;
+    seat.kind = pf_seats::model::RowKind::made();
     let file = serde_json::json!({"version": 1, "profiles": [
         {"id": OWNER_PROFILE, "display_name": "Enrico", "os_account": {"kind": "operator"}},
         {"id": KID_PROFILE, "display_name": "Kid", "os_account": {"kind": "seat", "seat": seat_id}},
@@ -3335,7 +3335,7 @@ fn a_dial_starts_a_stopped_seat_only_as_a_wake_would() {
     let (open_seat, locked_seat) = ("0a".repeat(16), "0b".repeat(16));
     let stopped = |id: &str| {
         let mut seat = fake::person(id, port + 1000);
-        seat.adopted_uid = None;
+        seat.kind = pf_seats::model::RowKind::made();
         seat.fingerprint = None;
         seat.runtime.state = pf_seats::RuntimeState::Stopped;
         seat

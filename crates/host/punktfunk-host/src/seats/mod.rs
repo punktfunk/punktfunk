@@ -110,7 +110,7 @@ impl Snapshot {
         if !(cfg!(windows) || self.on) {
             return Err(Silent);
         }
-        Ok(self.seats.iter().find(|s| s.owner))
+        Ok(self.seats.iter().find(|s| s.kind.is_owner()))
     }
 
     /// The ledger row a profile plays on. A full seat names its own. On a door the owner and a
@@ -128,7 +128,7 @@ impl Snapshot {
     /// supervisor's unlock lets a device onto it or starts it.
     pub(crate) fn person_row(&self, account: &OsAccount) -> Option<&pf_seats::Seat> {
         let (seat, _) = self.seat(self.row_of(account)?)?;
-        seat.adopted_uid.is_some().then_some(seat)
+        seat.kind.starts_on_proof().then_some(seat)
     }
 }
 
@@ -142,7 +142,7 @@ pub(crate) fn profile_on(
         .iter()
         .find(|p| match &p.os_account {
             OsAccount::Seat { seat: Some(id) } => id == seat.id.as_str(),
-            OsAccount::Operator => seat.owner,
+            OsAccount::Operator => seat.kind.is_owner(),
             _ => false,
         })
         .map(|p| p.id.to_string())

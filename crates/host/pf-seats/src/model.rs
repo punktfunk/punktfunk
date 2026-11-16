@@ -7,12 +7,13 @@
 //! Every value is validated again after deserialization. Runtime state is an
 //! observation, not a substitute for the backend's own process identity.
 //!
-//! On Linux one row may be the box owner's: an account that already exists,
-//! adopted rather than created. It takes a slot and ports like any seat. Any other
-//! Linux row may adopt a person's own account too, recorded by its uid.
-//! On Windows a row may adopt a person's own account, named by its SID; its
-//! account follows the SAM naming rule instead of the one for made accounts.
+//! Whose account a row runs on is its [`RowKind`]: one the supervisor made, the box owner's
+//! (Linux), or a person's own, recorded by uid on Linux and by SID on Windows, where its name
+//! follows the SAM rule. The ledger and every IPC frame spell the kind as six flat fields;
+//! `SeatRecord` is the one place they are read and written, and every rule about a kind is a
+//! method of [`RowKind`]. An adopted account takes a slot and ports like any seat.
 
+use crate::backend::Adopted;
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -244,7 +245,9 @@ impl RuntimeStatus {
     }
 }
 
+/// A ledger row. The ledger and every IPC frame hold it as `SeatRecord` spells it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "SeatRecord", into = "SeatRecord")]
 pub struct Seat {
     pub id: SeatId,
     pub name: String,
@@ -252,58 +255,281 @@ pub struct Seat {
     pub display_slot: u8,
     pub native_port: u16,
     pub mgmt_port: u16,
-    #[serde(default)]
     pub autostart: bool,
-    #[serde(default)]
     pub runtime: RuntimeStatus,
-    /// The box owner's row (Linux). Its account is never created or deleted by the ledger.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub owner: bool,
-    /// The owner's row: the uid their account resolved to when the row was last prepared, which
-    /// no person's row may hold. `None`: a row not prepared since the field existed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_uid: Option<u32>,
+    /// Whose account the row runs on.
+    pub kind: RowKind,
     /// SHA-256 of the seat host's certificate DER, lowercase hex: the pin a client dials it
     /// with, carried by the box's `Redirect`. Learned while the seat runs; `None` before its
     /// host has minted an identity.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
-    /// A person's own account this row adopted, by SID. `None`: an account the ledger made and
-    /// marks by comment. Never created or deleted; released with its rights put back.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adopted_sid: Option<String>,
-    /// A person's own Linux account this row adopted, by the uid the daemon resolved at adopt.
-    /// A name that later resolves to another uid is not the row's. Never created or deleted.
-    /// `None`: a made account, the owner's row or a Windows one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adopted_uid: Option<u32>,
-    /// Adopt put the account in Remote Desktop Users; release takes it out again.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub rdp_granted: bool,
-    /// The account held `SeDenyInteractiveLogonRight` before adopt; release leaves it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub console_deny_kept: bool,
     /// The desk pads lent to this seat, at most [`MAX_LENT_PADS`]. A key is on one row only.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lent: Vec<LentPad>,
 }
 
 impl Seat {
-    /// Whether the row runs on a person's own account, adopted by SID or by uid. The box
-    /// owner's row is not one: it is the owner's by role.
-    pub fn adopted(&self) -> bool {
-        self.adopted_sid.is_some() || self.adopted_uid.is_some()
-    }
-
-    /// Whether releasing this adopted Windows row takes the console deny off its account: only
-    /// when adopt added it. A row saved before [`Self::console_deny_kept`] existed takes it off.
-    pub fn releases_console_deny(&self) -> bool {
-        !self.console_deny_kept
-    }
-
     /// The UDP port this seat's browser plane listens on ([`browser_port_for`]).
     pub fn browser_port(&self) -> Option<u16> {
         browser_port_for(self.native_port)
+    }
+}
+
+/// Whose account a row runs on. `TryFrom<SeatRecord>` is the one place the ledger's six account
+/// fields are read; every rule about a kind is a method here, an exhaustive match.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowKind(Kind);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Kind {
+    /// An account the supervisor made and marks by comment.
+    Made,
+    /// The box owner's (Linux), never created or deleted by the ledger. `uid` is what their
+    /// account resolved to when the row was last prepared; `None`: not prepared since then.
+    Owner { uid: Option<u32> },
+    /// A person's own Linux account, by the uid the daemon resolved at adopt. A name that later
+    /// resolves to another uid is not the row's.
+    LinuxPerson { uid: u32 },
+    /// A person's own Windows account, by SID, with what adopt changed for release to put back.
+    WindowsPerson { sid: String, adopted: Adopted },
+}
+
+impl RowKind {
+    pub fn made() -> Self {
+        Self(Kind::Made)
+    }
+
+    pub fn owner() -> Self {
+        Self(Kind::Owner { uid: None })
+    }
+
+    pub fn linux_person(uid: u32) -> Self {
+        Self(Kind::LinuxPerson { uid })
+    }
+
+    pub fn windows_person(sid: String) -> Self {
+        Self(Kind::WindowsPerson {
+            sid,
+            adopted: Adopted::default(),
+        })
+    }
+
+    /// The box owner's row (Linux).
+    pub fn is_owner(&self) -> bool {
+        match self.0 {
+            Kind::Owner { .. } => true,
+            Kind::Made | Kind::LinuxPerson { .. } | Kind::WindowsPerson { .. } => false,
+        }
+    }
+
+    /// On a person's own account. The owner's row is not one: it is the owner's by role.
+    pub fn is_person(&self) -> bool {
+        match self.0 {
+            Kind::LinuxPerson { .. } | Kind::WindowsPerson { .. } => true,
+            Kind::Made | Kind::Owner { .. } => false,
+        }
+    }
+
+    /// The supervisor made the account, so it may close and delete it and end its every
+    /// process. Any other row's account is someone's, whichever platform adopted it.
+    pub fn supervisor_owns_account(&self) -> bool {
+        match self.0 {
+            Kind::Made => true,
+            Kind::Owner { .. } | Kind::LinuxPerson { .. } | Kind::WindowsPerson { .. } => false,
+        }
+    }
+
+    /// Starts only on its person's proof: no autostart, keep-warm, door or dial starts it, and a
+    /// plain Start answers `unlock_required`.
+    pub fn starts_on_proof(&self) -> bool {
+        match self.0 {
+            Kind::LinuxPerson { .. } => true,
+            Kind::Made | Kind::Owner { .. } | Kind::WindowsPerson { .. } => false,
+        }
+    }
+
+    /// Keep-warm may start the row and the idle stop end it: not the owner's, the box's host,
+    /// and not a Linux person's, whose desktop may hold unsaved work.
+    pub fn upkeep(&self) -> bool {
+        match self.0 {
+            Kind::Made | Kind::WindowsPerson { .. } => true,
+            Kind::Owner { .. } | Kind::LinuxPerson { .. } => false,
+        }
+    }
+
+    /// The row's unit ends when its user sits down at the machine.
+    pub fn yields_to_the_desk(&self) -> bool {
+        match self.0 {
+            Kind::Owner { .. } | Kind::LinuxPerson { .. } | Kind::WindowsPerson { .. } => true,
+            Kind::Made => false,
+        }
+    }
+
+    /// The uid the row's Linux account was recorded at, the owner's or a person's. No two rows
+    /// hold one.
+    pub fn uid(&self) -> Option<u32> {
+        match self.0 {
+            Kind::Owner { uid } => uid,
+            Kind::LinuxPerson { uid } => Some(uid),
+            Kind::Made | Kind::WindowsPerson { .. } => None,
+        }
+    }
+
+    /// A Windows person's account SID, which outlives a rename of the account.
+    pub fn sid(&self) -> Option<&str> {
+        match &self.0 {
+            Kind::WindowsPerson { sid, .. } => Some(sid),
+            Kind::Made | Kind::Owner { .. } | Kind::LinuxPerson { .. } => None,
+        }
+    }
+
+    /// What adopt changed on a Windows person's account, for release to take back alone.
+    pub fn adopted(&self) -> Adopted {
+        match self.0 {
+            Kind::WindowsPerson { adopted, .. } => adopted,
+            Kind::Made | Kind::Owner { .. } | Kind::LinuxPerson { .. } => Adopted::default(),
+        }
+    }
+
+    /// The owner's row, prepared for the account at `uid`. Another kind stays as it is.
+    pub(crate) fn prepared(self, uid: u32) -> Self {
+        match self.0 {
+            Kind::Owner { .. } => Self(Kind::Owner { uid: Some(uid) }),
+            Kind::Made | Kind::LinuxPerson { .. } | Kind::WindowsPerson { .. } => self,
+        }
+    }
+
+    /// A Windows person's row once adopt changed `adopted`. Another kind stays as it is.
+    pub(crate) fn with_adopted(self, adopted: Adopted) -> Self {
+        match self.0 {
+            Kind::WindowsPerson { sid, .. } => Self(Kind::WindowsPerson { sid, adopted }),
+            Kind::Made | Kind::Owner { .. } | Kind::LinuxPerson { .. } => self,
+        }
+    }
+
+    /// Whether `account` can be this kind's: a made row's by [`validate_account`], the Linux
+    /// owner's and a Linux person's by [`valid_owner_account`], the latter on an ordinary uid, a
+    /// Windows person's by the SAM rule with a local user's SID.
+    fn check(&self, account: &str) -> Result<(), ValidationError> {
+        let linux = || {
+            valid_owner_account(account)
+                .then_some(())
+                .ok_or(ValidationError::InvalidOwnerAccount)
+        };
+        match &self.0 {
+            Kind::Made => validate_account(account),
+            Kind::Owner { .. } => linux(),
+            Kind::LinuxPerson { uid } if ordinary_uid(*uid) => linux(),
+            Kind::LinuxPerson { .. } => Err(ValidationError::InvalidUid),
+            Kind::WindowsPerson { sid, .. } => {
+                validate_sam_account(account)?;
+                validate_sid(sid)
+            }
+        }
+    }
+}
+
+/// A row as the ledger and every IPC frame spell it: the kind as six flat fields, each written
+/// only when set.
+#[derive(Clone, Serialize, Deserialize)]
+struct SeatRecord {
+    id: SeatId,
+    name: String,
+    account: String,
+    display_slot: u8,
+    native_port: u16,
+    mgmt_port: u16,
+    #[serde(default)]
+    autostart: bool,
+    #[serde(default)]
+    runtime: RuntimeStatus,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    owner: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owner_uid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adopted_sid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adopted_uid: Option<u32>,
+    /// Adopt put the account in Remote Desktop Users.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    rdp_granted: bool,
+    /// The account held `SeDenyInteractiveLogonRight` before adopt. Absent: release takes it off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    console_deny_kept: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    lent: Vec<LentPad>,
+}
+
+impl TryFrom<SeatRecord> for Seat {
+    type Error = ValidationError;
+
+    /// A row adopted by both SID and uid, an owner's adopted by either, or an account its kind
+    /// can't name is refused. Adopt flags on a kind that has none are dropped.
+    fn try_from(record: SeatRecord) -> Result<Self, ValidationError> {
+        let adopted = Adopted {
+            rdp_granted: record.rdp_granted,
+            console_deny_kept: record.console_deny_kept,
+        };
+        let kind = RowKind(
+            match (record.owner, record.adopted_sid, record.adopted_uid) {
+                (_, Some(_), Some(_)) | (true, _, Some(_)) => {
+                    return Err(ValidationError::InvalidUid);
+                }
+                (true, Some(_), None) => return Err(ValidationError::OwnerWithSid),
+                (true, None, None) => Kind::Owner {
+                    uid: record.owner_uid,
+                },
+                (false, None, None) => Kind::Made,
+                (false, None, Some(uid)) => Kind::LinuxPerson { uid },
+                (false, Some(sid), None) => Kind::WindowsPerson { sid, adopted },
+            },
+        );
+        kind.check(&record.account)?;
+        Ok(Self {
+            id: record.id,
+            name: record.name,
+            account: record.account,
+            display_slot: record.display_slot,
+            native_port: record.native_port,
+            mgmt_port: record.mgmt_port,
+            autostart: record.autostart,
+            runtime: record.runtime,
+            kind,
+            fingerprint: record.fingerprint,
+            lent: record.lent,
+        })
+    }
+}
+
+impl From<Seat> for SeatRecord {
+    fn from(seat: Seat) -> Self {
+        let none = Adopted::default();
+        let (owner, owner_uid, adopted_sid, adopted_uid, adopted) = match seat.kind.0 {
+            Kind::Made => (false, None, None, None, none),
+            Kind::Owner { uid } => (true, uid, None, None, none),
+            Kind::LinuxPerson { uid } => (false, None, None, Some(uid), none),
+            Kind::WindowsPerson { sid, adopted } => (false, None, Some(sid), None, adopted),
+        };
+        Self {
+            id: seat.id,
+            name: seat.name,
+            account: seat.account,
+            display_slot: seat.display_slot,
+            native_port: seat.native_port,
+            mgmt_port: seat.mgmt_port,
+            autostart: seat.autostart,
+            runtime: seat.runtime,
+            owner,
+            owner_uid,
+            fingerprint: seat.fingerprint,
+            adopted_sid,
+            adopted_uid,
+            rdp_granted: adopted.rdp_granted,
+            console_deny_kept: adopted.console_deny_kept,
+            lent: seat.lent,
+        }
     }
 }
 
@@ -356,7 +582,13 @@ impl Ledger {
         let mut slots = HashSet::new();
         let mut ports = HashSet::new();
         let mut pads = HashSet::new();
-        if self.seats.iter().filter(|seat| seat.owner).count() > 1 {
+        if self
+            .seats
+            .iter()
+            .filter(|seat| seat.kind.is_owner())
+            .count()
+            > 1
+        {
             return Err(ValidationError::Duplicate {
                 kind: "owner",
                 value: "a second owner row".into(),
@@ -365,12 +597,7 @@ impl Ledger {
         for seat in &self.seats {
             SeatId::parse(seat.id.as_str())?;
             validate_name(&seat.name)?;
-            validate_identity(
-                &seat.account,
-                seat.owner,
-                seat.adopted_sid.as_deref(),
-                seat.adopted_uid,
-            )?;
+            seat.kind.check(&seat.account)?;
             if !DISPLAY_SLOTS.contains(&seat.display_slot) {
                 return Err(ValidationError::InvalidDisplaySlot(seat.display_slot));
             }
@@ -391,16 +618,16 @@ impl Ledger {
 
             unique(&mut ids, seat.id.as_str().to_owned(), "id")?;
             // The owner's row is named for their login, which no host ever announces.
-            if !seat.owner {
+            if !seat.kind.is_owner() {
                 unique(&mut names, seat.name.to_lowercase(), "name")?;
             }
             unique(&mut accounts, seat.account.to_lowercase(), "account")?;
             // A renamed account keeps its SID, so a second row for it differs only there.
-            if let Some(sid) = &seat.adopted_sid {
-                unique(&mut sids, sid.clone(), "account SID")?;
+            if let Some(sid) = seat.kind.sid() {
+                unique(&mut sids, sid.to_owned(), "account SID")?;
             }
             // Two names can resolve to one user: `jdoe` and `jdoe@corp.example.com`.
-            for uid in [seat.adopted_uid, seat.owner_uid].into_iter().flatten() {
+            if let Some(uid) = seat.kind.uid() {
                 unique(&mut uids, uid, "account uid")?;
             }
             unique(&mut slots, seat.display_slot, "display slot")?;
@@ -461,7 +688,7 @@ impl Ledger {
                 break id;
             }
         };
-        self.allocate_with_id(request, id, false, None, None)
+        self.allocate_with_id(request, id, RowKind::made())
     }
 
     /// The row for a person's own account `request.account`, whose SID is `sid`, with the slot
@@ -471,7 +698,7 @@ impl Ledger {
         request: CreateSeat,
         sid: String,
     ) -> Result<Seat, ValidationError> {
-        self.allocate_with_id(request, SeatId::random(), false, Some(sid), None)
+        self.allocate_with_id(request, SeatId::random(), RowKind::windows_person(sid))
     }
 
     /// The row for a person's own Linux account `request.account`, which the daemon resolved to
@@ -481,7 +708,7 @@ impl Ledger {
         request: CreateSeat,
         uid: u32,
     ) -> Result<Seat, ValidationError> {
-        self.allocate_with_id(request, SeatId::random(), false, None, Some(uid))
+        self.allocate_with_id(request, SeatId::random(), RowKind::linux_person(uid))
     }
 
     /// The owner's row for `account`, with the slot and ports a seat gets. The caller checks
@@ -492,18 +719,15 @@ impl Ledger {
             account: account.to_owned(),
             autostart: false,
         };
-        self.allocate_with_id(request, SeatId::random(), true, None, None)
+        self.allocate_with_id(request, SeatId::random(), RowKind::owner())
     }
 
-    /// Adds the row `request` asks for under `id`; `adopted_sid` or `adopted_uid` marks a
-    /// person's own account.
+    /// Adds the row of `kind` that `request` asks for under `id`.
     fn allocate_with_id(
         &mut self,
         request: CreateSeat,
         id: SeatId,
-        owner: bool,
-        adopted_sid: Option<String>,
-        adopted_uid: Option<u32>,
+        kind: RowKind,
     ) -> Result<Seat, ValidationError> {
         self.validate()?;
         if self.seats.len() == MAX_SEATS {
@@ -512,7 +736,7 @@ impl Ledger {
 
         let request = request.normalized();
         validate_name(&request.name)?;
-        validate_identity(&request.account, owner, adopted_sid.as_deref(), adopted_uid)?;
+        kind.check(&request.account)?;
         let used_slots: HashSet<_> = self.seats.iter().map(|seat| seat.display_slot).collect();
         let used_ports: HashSet<_> = self
             .seats
@@ -533,13 +757,8 @@ impl Ledger {
             mgmt_port,
             autostart: request.autostart,
             runtime: RuntimeStatus::stopped(),
-            owner,
-            owner_uid: None,
+            kind,
             fingerprint: None,
-            adopted_sid,
-            adopted_uid,
-            rdp_granted: false,
-            console_deny_kept: false,
             lent: Vec::new(),
         };
         self.insert(seat.clone())?;
@@ -561,7 +780,7 @@ impl Ledger {
     }
 
     pub fn owner(&self) -> Option<&Seat> {
-        self.seats.iter().find(|seat| seat.owner)
+        self.seats.iter().find(|seat| seat.kind.is_owner())
     }
 
     pub fn remove(&mut self, id: &SeatId) -> Option<Seat> {
@@ -606,6 +825,8 @@ pub enum ValidationError {
     InvalidSid,
     #[error("an adopted Linux account is an ordinary user's uid, on a row that isn't the owner's")]
     InvalidUid,
+    #[error("the owner's row adopts no Windows account")]
+    OwnerWithSid,
     #[error("display slot {0} is outside the reserved 12..=15 range")]
     InvalidDisplaySlot(u8),
     #[error("{0} port {1} is zero or reserved for the console host")]
@@ -644,32 +865,6 @@ fn validate_account(value: &str) -> Result<(), ValidationError> {
         return Err(ValidationError::InvalidAccount);
     }
     Ok(())
-}
-
-/// A made row's account follows [`validate_account`]. The Linux owner's and a Linux person's
-/// follow [`valid_owner_account`], the latter with an ordinary uid. A Windows adopted row's
-/// follows the SAM rule and carries a local user's SID. No row is adopted by both SID and uid.
-fn validate_identity(
-    account: &str,
-    owner: bool,
-    adopted_sid: Option<&str>,
-    adopted_uid: Option<u32>,
-) -> Result<(), ValidationError> {
-    let linux = || {
-        valid_owner_account(account)
-            .then_some(())
-            .ok_or(ValidationError::InvalidOwnerAccount)
-    };
-    match (adopted_sid, adopted_uid) {
-        (None, None) if owner => linux(),
-        (None, None) => validate_account(account),
-        (Some(sid), None) => {
-            validate_sam_account(account)?;
-            validate_sid(sid)
-        }
-        (None, Some(uid)) if !owner && ordinary_uid(uid) => linux(),
-        (_, Some(_)) => Err(ValidationError::InvalidUid),
-    }
 }
 
 /// A Windows SAM account name: 1..=20 characters, no controls, no surrounding whitespace, none of
@@ -752,7 +947,7 @@ mod tests {
         let mut ledger = Ledger::new();
         let first_id = SeatId::parse("01".repeat(16)).unwrap();
         let first = ledger
-            .allocate_with_id(request(1), first_id.clone(), false, None, None)
+            .allocate_with_id(request(1), first_id.clone(), RowKind::made())
             .unwrap();
         let second = ledger.allocate(request(2)).unwrap();
         assert_eq!(
@@ -907,7 +1102,7 @@ mod tests {
         let mut ledger = Ledger::new();
         let first = ledger.allocate(request(1)).unwrap();
         let owner = ledger.allocate_owner("enrico").unwrap();
-        assert!(owner.owner && !first.owner);
+        assert!(owner.kind.is_owner() && !first.kind.is_owner());
         assert_eq!(
             (owner.display_slot, owner.native_port, owner.mgmt_port),
             (13, 9780, 47996)
@@ -916,7 +1111,7 @@ mod tests {
         assert_eq!(ledger.owner().map(|s| &s.id), Some(&owner.id));
 
         let mut second = ledger.clone();
-        second.seats[0].owner = true;
+        second.seats[0].kind = RowKind::owner();
         assert!(matches!(
             second.validate(),
             Err(ValidationError::Duplicate { kind: "owner", .. })
@@ -929,7 +1124,7 @@ mod tests {
         );
         assert_eq!(serde_json::to_value(&owner).unwrap()["owner"], true);
         let old: Seat = serde_json::from_value(wire).unwrap();
-        assert!(!old.owner);
+        assert!(!old.kind.is_owner());
     }
 
     /// The owner may be a directory service's `user@domain`. Nothing that could leave a unit
@@ -1005,8 +1200,8 @@ mod tests {
             (adopted.display_slot, adopted.native_port, adopted.mgmt_port),
             (13, 9780, 47996)
         );
-        assert_eq!(adopted.adopted_sid.as_deref(), Some(SID));
-        assert!(!adopted.rdp_granted && !adopted.owner);
+        assert_eq!(adopted.kind.sid(), Some(SID));
+        assert!(!adopted.kind.adopted().rdp_granted && !adopted.kind.is_owner());
         assert!(ledger.validate().is_ok());
 
         assert!(matches!(
@@ -1072,7 +1267,10 @@ mod tests {
         let old: Seat = serde_json::from_value(wire).unwrap();
         assert_eq!(old, first);
         let granted = Seat {
-            rdp_granted: true,
+            kind: adopted.kind.clone().with_adopted(Adopted {
+                rdp_granted: true,
+                console_deny_kept: false,
+            }),
             ..adopted
         };
         let wire = serde_json::to_value(&granted).unwrap();
@@ -1102,7 +1300,7 @@ mod tests {
                 saved["console_deny_kept"] = kept.into();
             }
             let seat: Seat = serde_json::from_value(saved).unwrap();
-            assert_eq!(seat.releases_console_deny(), releases, "{kept:?}");
+            assert_eq!(!seat.kind.adopted().console_deny_kept, releases, "{kept:?}");
             let written = serde_json::to_value(&seat).unwrap();
             assert_eq!(written.get("console_deny_kept").is_some(), !releases);
         }
@@ -1123,8 +1321,8 @@ mod tests {
         let person = ledger
             .allocate_adopted_user(named("jdoe@corp.example.com"), 1500)
             .unwrap();
-        assert_eq!(person.adopted_uid, Some(1500));
-        assert!(person.adopted() && !person.owner && person.adopted_sid.is_none());
+        assert_eq!(person.kind.uid(), Some(1500));
+        assert!(person.kind.is_person() && !person.kind.is_owner() && person.kind.sid().is_none());
         assert!(ledger.validate().is_ok());
 
         let again = ledger.clone().allocate_adopted_user(named("jdoe"), 1500);
@@ -1145,16 +1343,20 @@ mod tests {
             Ledger::new().allocate_adopted_user(named("Jdoe"), 1500),
             Err(ValidationError::InvalidOwnerAccount)
         ));
-        let mut both = person.clone();
-        both.adopted_sid = Some("S-1-5-21-1-2-3-1001".into());
-        let mut owner = person.clone();
-        owner.owner = true;
+        let record = SeatRecord::from(person.clone());
+        let both = SeatRecord {
+            adopted_sid: Some("S-1-5-21-1-2-3-1001".into()),
+            ..record.clone()
+        };
+        let owner = SeatRecord {
+            owner: true,
+            ..record
+        };
         for bad in [both, owner] {
-            let one = Ledger {
-                seats: vec![bad],
-                ..Ledger::new()
-            };
-            assert!(matches!(one.validate(), Err(ValidationError::InvalidUid)));
+            assert!(matches!(
+                Seat::try_from(bad),
+                Err(ValidationError::InvalidUid)
+            ));
         }
 
         let wire = serde_json::to_value(&made).unwrap();
@@ -1213,13 +1415,8 @@ mod tests {
                 mgmt_port: 2000 + n as u16,
                 autostart: false,
                 runtime: RuntimeStatus::default(),
-                owner: false,
-                owner_uid: None,
+                kind: RowKind::made(),
                 fingerprint: None,
-                adopted_sid: None,
-                adopted_uid: None,
-                rdp_granted: false,
-                console_deny_kept: false,
                 lent: Vec::new(),
             })
             .collect();
@@ -1227,5 +1424,80 @@ mod tests {
             ledger.validate(),
             Err(ValidationError::TooManySeats(5))
         ));
+    }
+
+    /// A record becomes a row of one kind or is refused by name; an adopt flag on a kind that has
+    /// none is dropped, so a ledger holding one still loads.
+    #[test]
+    fn a_record_is_one_row_kind_or_refused() {
+        const SID: &str = "S-1-5-21-1-2-3-1001";
+        let made = SeatRecord::from(Ledger::new().allocate(request(1)).unwrap());
+        let record = |account: &str, owner, sid: Option<&str>, uid| SeatRecord {
+            account: account.into(),
+            owner,
+            adopted_sid: sid.map(Into::into),
+            adopted_uid: uid,
+            ..made.clone()
+        };
+        for (bad, error) in [
+            (
+                record("jdoe", false, Some(SID), Some(1500)),
+                ValidationError::InvalidUid,
+            ),
+            (
+                record("jdoe", true, None, Some(1500)),
+                ValidationError::InvalidUid,
+            ),
+            (
+                record("jdoe", false, None, Some(999)),
+                ValidationError::InvalidUid,
+            ),
+            (
+                record("Ben", true, Some(SID), None),
+                ValidationError::OwnerWithSid,
+            ),
+            (
+                record("jdoe@corp", false, None, None),
+                ValidationError::InvalidAccount,
+            ),
+            (
+                record("Jdoe", true, None, None),
+                ValidationError::InvalidOwnerAccount,
+            ),
+            (
+                record("Jdoe", false, None, Some(1500)),
+                ValidationError::InvalidOwnerAccount,
+            ),
+            (
+                record("a:b", false, Some(SID), None),
+                ValidationError::InvalidSamAccount,
+            ),
+            (
+                record("Ben", false, Some("S-1-5-32-544"), None),
+                ValidationError::InvalidSid,
+            ),
+        ] {
+            assert_eq!(Seat::try_from(bad).map(|s| s.kind), Err(error));
+        }
+
+        let stray = |record: SeatRecord| SeatRecord {
+            owner_uid: Some(1000),
+            rdp_granted: true,
+            console_deny_kept: true,
+            ..record
+        };
+        for (record, kind) in [
+            (record("pf-seat-1", false, None, None), RowKind::made()),
+            (
+                record("jdoe", false, None, Some(1500)),
+                RowKind::linux_person(1500),
+            ),
+            (
+                record("enrico", true, None, None),
+                RowKind::owner().prepared(1000),
+            ),
+        ] {
+            assert_eq!(Seat::try_from(stray(record)).unwrap().kind, kind);
+        }
     }
 }

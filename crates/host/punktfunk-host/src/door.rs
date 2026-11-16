@@ -278,6 +278,19 @@ mod linux {
         // The helper's own rule, so the console says so before it asks.
         if let Err(refused) = pf_seats::linux::check_owner(user, on) {
             return Some(match refused.code.as_str() {
+                "door_on_for_other" => {
+                    let owner = refused.params.get("owner").map_or("", String::as_str);
+                    (
+                        StatusCode::CONFLICT,
+                        ApiError::coded(
+                            "door_on_for_other",
+                            format!(
+                                "Reachable without logging in is on for {owner}. Turn it off from that account first."
+                            ),
+                        )
+                        .param("owner", owner),
+                    )
+                }
                 "account_invalid" => (
                     StatusCode::CONFLICT,
                     ApiError::coded(

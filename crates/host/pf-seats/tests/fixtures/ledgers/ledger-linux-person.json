@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "generation": 482,
+  "seats": [
+    {
+      "id": "1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b",
+      "name": "bazzite",
+      "account": "bazzite",
+      "display_slot": 12,
+      "native_port": 9779,
+      "mgmt_port": 47995,
+      "autostart": false,
+      "runtime": {
+        "state": "running"
+      },
+      "owner": true,
+      "owner_uid": 1000,
+      "fingerprint": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+    },
+    {
+      "id": "2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c",
+      "name": "Kim",
+      "account": "kim",
+      "display_slot": 13,
+      "native_port": 9780,
+      "mgmt_port": 47996,
+      "autostart": false,
+      "runtime": {
+        "state": "stopped"
+      },
+      "fingerprint": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+      "adopted_uid": 1001,
+      "lent": [
+        {
+          "key": "usb-054c-0ce6-2c2c2c",
+          "name": "DualSense Wireless Controller",
+          "vendor_id": 1356,
+          "product_id": 3302,
+          "port": "9-2"
+        }
+      ]
+    }
+  ]
+}

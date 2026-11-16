@@ -159,7 +159,7 @@ impl PlatformBackend for FakeBackend {
         }
         refuse_wrong(&seat.account, password)?;
         Ok(Adopted {
-            rdp_granted: seat.adopted_uid.is_none(),
+            rdp_granted: seat.kind.uid().is_none(),
             console_deny_kept: seat.account == "Bärbel Ott",
         })
     }
@@ -389,7 +389,7 @@ fn the_owner_row_is_adopted_once_and_released_by_delete() {
     assert!(service.ledger().seats.is_empty());
 
     let first = owner(service.dispatch(adopt("enrico")));
-    assert!(first.owner);
+    assert!(first.kind.is_owner());
     let again = owner(service.dispatch(adopt("enrico")));
     assert_eq!(again.id, first.id);
     assert_eq!(
@@ -405,7 +405,7 @@ fn the_owner_row_is_adopted_once_and_released_by_delete() {
     assert_eq!(other.code, ErrorCode::Conflict);
 
     let seat = service.dispatch(create("Kid", "pf-kid", false)).unwrap();
-    assert!(matches!(seat, CommandResult::Created { seat } if !seat.owner));
+    assert!(matches!(seat, CommandResult::Created { seat } if !seat.kind.is_owner()));
     service
         .dispatch(Command::Delete {
             id: first.id.clone(),
@@ -572,8 +572,8 @@ fn an_adopted_account_is_resealed_and_released_through_the_backend() {
 
     let sid = "S-1-5-21-1-2-3-1001";
     let adopted = created(adopt_existing("Bärbel Ott", sid));
-    assert_eq!(adopted.adopted_sid.as_deref(), Some(sid));
-    assert!(adopted.rdp_granted && adopted.console_deny_kept);
+    assert_eq!(adopted.kind.sid(), Some(sid));
+    assert!(adopted.kind.adopted().rdp_granted && adopted.kind.adopted().console_deny_kept);
     assert_eq!(service.ledger().seats, std::slice::from_ref(&adopted));
     let made = created(create("Kid", "pf-kid", false));
     backend.clear_calls();
@@ -720,8 +720,8 @@ fn a_person_s_account_is_adopted_by_the_uid_the_backend_names() {
         expected,
         "the uid is named again after the check"
     );
-    assert_eq!(seat.adopted_uid, Some(1500));
-    assert!(seat.adopted_sid.is_none() && !seat.rdp_granted && !seat.owner);
+    assert_eq!(seat.kind.uid(), Some(1500));
+    assert!(seat.kind.sid().is_none() && !seat.kind.adopted().rdp_granted && !seat.kind.is_owner());
     assert_eq!(service.ledger().seats, std::slice::from_ref(&seat));
 
     let twice = service.dispatch(adopt_user("jdoe", "pw")).unwrap_err();
@@ -770,7 +770,7 @@ fn the_owner_and_a_person_never_share_a_uid() {
     let temp = tempfile::tempdir().unwrap();
     let service = SeatService::open(temp.path(), FakeBackend::default()).unwrap();
     let owner = created(&service, adopt("jdoe@corp.example.com"));
-    assert_eq!(owner.owner_uid, Some(1500));
+    assert_eq!(owner.kind.uid(), Some(1500));
     let refused = service.dispatch(adopt_user("jdoe", "pw")).unwrap_err();
     assert_eq!(refused.code, ErrorCode::Conflict, "{}", refused.message);
     assert_eq!(service.ledger().seats, [owner]);
@@ -796,7 +796,7 @@ fn startup_records_the_owner_s_uid_unless_a_person_holds_it() {
         *backend.state.owner.lock().unwrap() = Some(prepared);
         let service = SeatService::open(temp.path(), backend).unwrap();
         service.reconcile_startup().unwrap();
-        let owner = service.ledger().owner().unwrap().owner_uid;
+        let owner = service.ledger().owner().unwrap().kind.uid();
         assert_eq!(owner, recorded, "prepared as {prepared}");
     }
 }
@@ -866,6 +866,35 @@ fn a_failed_save_is_not_loaded_later() {
     assert!(store.save(&second).is_err());
     std::fs::remove_dir(&blocker).unwrap();
     assert_eq!(store.load().unwrap().generation, 1);
+}
+
+/// Every ledger in `tests/fixtures/ledgers` loads and saves to its own bytes: a ledger an
+/// installed box holds reads unchanged, and a downgrade reads what this build writes. The two
+/// `-box` files are copies from a Bazzite box and a Windows seats VM, ids and pins replaced.
+#[test]
+fn a_ledger_loads_and_saves_byte_for_byte() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ledgers");
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let store = LedgerStore::open(temp.path()).unwrap();
+        store.root().write_atomic(LEDGER_FILE, &bytes).unwrap();
+        let ledger = store.load().unwrap();
+        store.save(&ledger).unwrap();
+        let saved = std::fs::read(temp.path().join(LEDGER_FILE)).unwrap();
+        assert!(
+            saved == bytes,
+            "{} changed in a load and save",
+            path.display()
+        );
+        seen += 1;
+    }
+    assert!(seen >= 4, "the fixtures are gone: {seen}");
 }
 
 #[cfg(unix)]
