@@ -1388,7 +1388,7 @@ pub(crate) mod tests {
 
     #[rustfmt::skip]
     fn connect_rows() -> Vec<ConnectRow> {
-        use crate::native::tests::Verdict::{D4, Wanted};
+        use crate::native::tests::Verdict::Wanted;
         let (hd, uhd) = (mode(1920, 1080, 60), mode(3840, 2160, 60));
         let row = |name, mode, picture, encoded, told, held, verdict| ConnectRow {
             name, mode, picture, encoded, told, held, verdict,
@@ -1396,11 +1396,11 @@ pub(crate) mod tests {
         vec![
             row("framed at the Welcome's view: bounds and picture at the view", uhd, hd,
                 (1920, 1080), false, ((62_208, 199_065), Some((1920, 1080))), Wanted),
-            row("a framing that fell back at connect: the task keeps the view's bounds and \
-                 picture while the stream encodes the mode", uhd, hd, (3840, 2160), false,
-                ((62_208, 199_065), Some((1920, 1080))), D4),
-            row("a mirror fitted at connect: the task keeps the mode's bounds", mode(1920, 1200, 60),
-                mode(1920, 1200, 60), (1920, 1080), false, ((69_120, 221_184), None), D4),
+            row("a framing that fell back at connect is told: bounds at the mode it encodes",
+                uhd, hd, (3840, 2160), true, ((248_832, 796_262), None), Wanted),
+            row("a mirror fitted at connect is told: bounds and picture at the fit",
+                mode(1920, 1200, 60), mode(1920, 1200, 60), (1920, 1080), true,
+                ((62_208, 199_065), Some((1920, 1080))), Wanted),
             row("an ask adopted at connect is told: bounds and picture follow what it encodes",
                 uhd, hd, (1280, 720), true, ((27_648, 88_473), Some((1280, 720))), Wanted),
         ]

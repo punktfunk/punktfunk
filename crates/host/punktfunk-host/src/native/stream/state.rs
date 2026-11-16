@@ -527,12 +527,16 @@ impl StreamState {
             });
     }
 
-    /// Epoch 0 is told when bring-up adopted an ask the control task's first config does not
-    /// name, as a correction when the display delivers another mode.
+    /// Epoch 0 is told when bring-up adopted an ask, or when the first build delivers or
+    /// encodes other than the Welcome said. Only an adopted ask the display missed corrects a
+    /// client that takes no configs.
     fn tell_connect(&self, adopted: bool) {
-        let g = &self.live.geometry;
-        if adopted {
-            self.tell(g.delivered() != g.intent().mode());
+        let (g, t) = (&self.live.geometry, &self.facts.terms);
+        let delivered = g.delivered();
+        let built = (delivered, g.picture().wire(delivered));
+        let welcome = (t.hello.mode, t.intent.picture().wire(t.hello.mode));
+        if adopted || built != welcome {
+            self.tell(adopted && delivered != g.intent().mode());
         }
     }
 
@@ -2062,7 +2066,7 @@ mod tests {
     ) -> (Option<crate::native::wiring::Delivered>, Option<u32>) {
         if !adopted {
             let terms = Arc::get_mut(&mut f.st.facts.terms).expect("the fake's own terms");
-            terms.intent = intent;
+            (terms.intent, terms.hello.mode) = (intent, intent.mode());
         }
         let (retarget_tx, mut retarget) = tokio::sync::mpsc::unbounded_channel();
         let built = pipe.geometry.reframed(intent, pipe.geometry.reframe());
@@ -2088,28 +2092,28 @@ mod tests {
     }
 
     /// U4: a first build whose framing fell back encodes the capture, not the Welcome's view.
-    /// Epoch 0 is not told: a client that takes configs holds the view's picture, and one that
+    /// Epoch 0 is told: a client that takes configs holds the captured picture, and one that
     /// takes none hears nothing.
     #[test]
     fn a_first_build_that_misses_the_view_is_told() {
         use crate::native::control::tests::{after_connect, older_client_hears};
-        let verdict = crate::native::tests::Verdict::D4;
+        let verdict = crate::native::tests::Verdict::Wanted;
         let d = fell_back_at_connect();
         let older = d.as_ref().is_some_and(older_client_hears);
         let (uhd, hd) = (mode(3840, 2160, 60), mode(1920, 1080, 60));
         let (_, picture) = after_connect(uhd, hd, d);
-        assert_eq!((picture, older), (Some((1920, 1080)), false), "{verdict:?}");
+        assert_eq!((picture, older), (None, false), "{verdict:?}");
     }
 
-    /// U16: the control task's PyroWave bounds after that connect. They stay at the Welcome's
-    /// view, which the stream does not encode.
+    /// U16: the control task's PyroWave bounds after that connect follow the captured picture
+    /// the stream encodes.
     #[test]
     fn control_bounds_follow_the_first_builds_picture() {
         use crate::native::control::tests::after_connect;
-        let verdict = crate::native::tests::Verdict::D4;
+        let verdict = crate::native::tests::Verdict::Wanted;
         let (uhd, hd) = (mode(3840, 2160, 60), mode(1920, 1080, 60));
         let (bounds, _) = after_connect(uhd, hd, fell_back_at_connect());
-        assert_eq!(bounds, (62_208, 199_065), "{verdict:?}");
+        assert_eq!(bounds, (248_832, 796_262), "{verdict:?}");
     }
 
     /// One connect: the Welcome's mode, rate and view, what the first build delivers, encodes
@@ -2129,7 +2133,7 @@ mod tests {
 
     #[rustfmt::skip]
     fn connects() -> Vec<ConnectRow> {
-        use crate::native::tests::Verdict::{D4, Wanted};
+        use crate::native::tests::Verdict::Wanted;
         let (wide, small) = (mode(64, 32, 60), mode(32, 16, 60));
         let row = |name, (mode, kbps, view), (delivered, encoded, built_kbps), adopted, told,
                    verdict| ConnectRow {
@@ -2138,16 +2142,18 @@ mod tests {
         vec![
             row("framed as the Welcome said: nothing told", (wide, 20_000, Some((32, 16))),
                 (wide, (32, 16), 20_000), false, (None, None), Wanted),
-            row("a framing that fell back: nothing told", (wide, 20_000, Some((32, 16))),
-                (wide, (64, 32), 20_000), false, (None, None), D4),
-            row("a mirror fitted inside the Welcome's mode: nothing told", (small, 20_000, None),
-                (wide, (32, 16), 20_000), false, (None, None), D4),
-            row("a display that runs below the Welcome's rate: nothing told",
-                (wide, 20_000, None), (mode(64, 32, 30), (64, 32), 20_000), false, (None, None),
-                D4),
-            row("a first build that re-pinned its rate: the rate retargeted, the picture untold",
+            row("a framing that fell back: epoch 0 told at what it encodes",
+                (wide, 20_000, Some((32, 16))), (wide, (64, 32), 20_000), false,
+                (Some((wide, (64, 32), false)), None), Wanted),
+            row("a mirror fitted inside the Welcome's mode: told, no correction",
+                (small, 20_000, None), (wide, (32, 16), 20_000), false,
+                (Some((wide, (32, 16), false)), None), Wanted),
+            row("a display that runs below the Welcome's rate: told, no correction",
+                (wide, 20_000, None), (mode(64, 32, 30), (64, 32), 20_000), false,
+                (Some((mode(64, 32, 30), (64, 32), false)), None), Wanted),
+            row("a first build that re-pinned its rate: the rate retargeted, the picture told",
                 (wide, 20_000, Some((32, 16))), (wide, (64, 32), 40_000), false,
-                (None, Some(40_000)), D4),
+                (Some((wide, (64, 32), false)), Some(40_000)), Wanted),
             row("an adopted ask: epoch 0 told at what it encodes", (wide, 20_000, Some((32, 16))),
                 (wide, (32, 16), 20_000), true, (Some((wide, (32, 16), false)), None), Wanted),
             row("an adopted ask the display runs below: told as a correction",
