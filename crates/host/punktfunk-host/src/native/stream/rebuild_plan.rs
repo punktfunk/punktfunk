@@ -81,6 +81,10 @@ pub(super) enum DisplayChange {
     /// The plan re-resolved for this codec at the plan's mode; the live display takes its HDR
     /// verdict and cursor plan.
     Format(Codec),
+    /// [`Self::Format`] on a display another session is on. The display stays as it is lit: a
+    /// codec that would relight it, or move the format of a capture its sessions share, is
+    /// refused.
+    FormatKept(Codec),
     /// The plan re-resolved for content that turned HDR or SDR. The display stays lit as it
     /// is: only the capture reopens in the other range.
     Content(bool),
@@ -299,10 +303,14 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
             },
             ..at_live
         },
-        // The depth, HDR and chroma rule judges the mode the session runs (S2-5).
+        // The depth, HDR and chroma rule judges the mode the session runs (S2-5). A joiner
+        // took the display's format at admission and does not follow it.
         RebuildAsk::Format(codec) => RebuildPlan {
             reason: SwapReason::Format,
-            display: Some(DisplayChange::Format(codec)),
+            display: Some(match f.hold {
+                Hold::Shared => DisplayChange::FormatKept(codec),
+                _ => DisplayChange::Format(codec),
+            }),
             trace: Some("format"),
             stops_joining,
             epilogue: Epilogue {

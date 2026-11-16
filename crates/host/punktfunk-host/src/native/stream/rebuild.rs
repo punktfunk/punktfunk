@@ -294,6 +294,8 @@ struct Prepared {
     params: Option<crate::vdisplay::SessionParams>,
     /// The live display was handed the new request's HDR and cursor.
     shown: bool,
+    /// The display change was refused: nothing is built and the plan rolls back.
+    refused: Option<anyhow::Error>,
     /// The session switch's launch, for the display it opens.
     launch: Option<String>,
     /// The lost capturer's keepalive, for the re-attach.
@@ -345,7 +347,11 @@ impl StreamState {
             .trace
             .map(|kind| Trace::start(kind, self.shared.resize_ms.clone()));
         let mut prep = self.prepare(&plan, ask);
-        match build(self, &plan, &mut prep, trace.as_deref()) {
+        let built = match prep.refused.take() {
+            Some(refused) => Err(refused),
+            None => build(self, &plan, &mut prep, trace.as_deref()),
+        };
+        match built {
             Ok(built) => {
                 self.commit(&plan, built, prep, t0, trace.as_deref());
                 Ok(Rebuilt::Built)
@@ -363,8 +369,9 @@ impl StreamState {
 
     /// Snapshot what the plan changes, take the ask's payload — the framing of the intent the
     /// plan builds goes into the session plan — and apply its display change:
-    /// a joiner that stops joining, a switch's env, route, format and cursor plan, a codec's,
-    /// or the format of content that turned HDR or SDR.
+    /// a joiner that stops joining, a switch's env, route, format and cursor plan, a codec's
+    /// (refused where it would relight a display another session is on), or the format of
+    /// content that turned HDR or SDR.
     fn prepare(&mut self, plan: &RebuildPlan, ask: RebuildAsk) -> Prepared {
         let d = &self.display;
         let mut prep = Prepared {
@@ -379,6 +386,7 @@ impl StreamState {
             },
             params: None,
             shown: false,
+            refused: None,
             launch: None,
             keepalive: None,
         };
@@ -446,6 +454,19 @@ impl StreamState {
                     bit_depth = v.bit_depth, hdr = v.hdr, chroma = ?v.chroma,
                     "rebuilding the pipeline for a codec change");
             }
+            Some(DisplayChange::FormatKept(codec)) => {
+                let read = self.joiners_read(self.display.vd_params.hdr);
+                let v = self.resolve_live(codec, plan.intent.mode());
+                if self.joiners_read(v.display_hdr) == read {
+                    self.show(v.display_hdr, &mut prep);
+                    tracing::info!(from = ?prep.before.plan.codec, to = ?codec,
+                        "rebuilding the pipeline for a codec change on a shared display");
+                } else {
+                    prep.refused = Some(anyhow::anyhow!(
+                        "{codec:?} needs the display lit otherwise, and another session is on it"
+                    ));
+                }
+            }
             Some(DisplayChange::Content(hdr)) => {
                 self.facts.format_facts.content_hdr = Some(hdr);
                 let v = self.resolve_live(self.plan.codec, plan.intent.mode());
@@ -485,6 +506,22 @@ impl StreamState {
         );
         self.bit_depth = v.bit_depth;
         v
+    }
+
+    /// The samples the session's capture hands out as the plan stands.
+    fn sample_format(&self) -> crate::vdisplay::admission::SampleFormat {
+        crate::vdisplay::admission::SampleFormat {
+            bit_depth: self.bit_depth,
+            chroma_444: self.plan.chroma.is_444(),
+            full_range: self.plan.full_range(self.plan.hdr, self.bit_depth),
+        }
+    }
+
+    /// What a session joined to this display took at admission and does not follow: whether
+    /// the display is lit in `hdr`, and the samples of a capture it shares.
+    fn joiners_read(&self, hdr: bool) -> (bool, Option<crate::vdisplay::admission::SampleFormat>) {
+        let shares = crate::vdisplay::admission::shares_capture(Some(self.display.compositor));
+        (hdr, shares.then(|| self.sample_format()))
     }
 
     /// [`Self::resolve_format`] on the display the session runs.
@@ -693,11 +730,7 @@ impl StreamState {
         if let Some(DisplayChange::Switch(to)) = plan.display {
             self.display.compositor = to;
         }
-        let format = crate::vdisplay::admission::SampleFormat {
-            bit_depth: self.bit_depth,
-            chroma_444: self.plan.chroma.is_444(),
-            full_range: self.plan.full_range(self.plan.hdr, self.bit_depth),
-        };
+        let format = self.sample_format();
         // The request every later display of this session starts from.
         if let Some(params) = prep.params {
             let stop = self.facts.life.stop_flag();
@@ -743,7 +776,10 @@ impl StreamState {
         match (e.tell, plan.display) {
             (Some(Tell::Mode), _) => self.tell(self.live.geometry.delivered() != m),
             (Some(Tell::Correction), _) => self.tell(true),
-            (Some(Tell::Codec), Some(DisplayChange::Format(codec))) => {
+            (
+                Some(Tell::Codec),
+                Some(DisplayChange::Format(codec) | DisplayChange::FormatKept(codec)),
+            ) => {
                 let _ = self.ends.format_result_tx.send(Some(codec));
             }
             _ => {}
@@ -2247,36 +2283,45 @@ pub(crate) mod tests {
         }
     }
 
-    /// U9: the owner of a display another session holds may change codec: the plan rebuilds as
-    /// for a display of its own, the shared display takes the new HDR verdict and the control
-    /// task hears the codec runs. A content change is refused there.
+    /// U9: the owner of a display another session is on changes codec only where the display
+    /// stays as it is lit. One that would relight it is refused: nothing builds, the display and
+    /// the plan stay, and the control task hears the codec kept. A content change is refused
+    /// there too.
     #[test]
     fn an_owners_codec_change_under_a_joiner() {
+        use crate::encode::Codec::H264;
         use crate::native::tests::Verdict;
-        let verdict = Verdict::Other;
-        let mut f = super::super::swap::tests::fake();
-        f.st.display.vd_params.hdr = true;
-        let keyframes = Arc::new(AtomicU32::new(0));
-        let facts = RebuildFacts {
-            hold: Hold::Shared,
-            ..f.st.rebuild_facts()
-        };
-        assert!(rebuild_plan::plan(&RebuildAsk::Content(false), &facts).is_none());
-        let ask = RebuildAsk::Format(crate::encode::Codec::H264);
-        let plan = rebuild_plan::plan(&ask, &facts).expect("a codec rebuild");
-        assert_eq!(
-            plan.display,
-            Some(DisplayChange::Format(crate::encode::Codec::H264))
-        );
-        let built = f.st.perform(plan, ask, |_, plan, _, _| {
-            script(Script::Pipeline(SMALL, 20_000), plan, &keyframes)
-        });
-        assert!(matches!(built, Ok(Rebuilt::Built)), "{verdict:?}");
-        assert_eq!(f.display.lock().unwrap().hdr, Some(false), "{verdict:?}");
-        assert_eq!(
-            f.codecs.try_recv().ok(),
-            Some(Some(crate::encode::Codec::H264))
-        );
+        let verdict = Verdict::Wanted;
+        // The display lit in HDR, which H.264 does not carry, then in SDR.
+        for (lit, changes) in [(true, false), (false, true)] {
+            let mut f = super::super::swap::tests::fake();
+            f.st.display.vd_params.hdr = lit;
+            let keyframes = Arc::new(AtomicU32::new(0));
+            let facts = RebuildFacts {
+                hold: Hold::Shared,
+                ..f.st.rebuild_facts()
+            };
+            assert!(rebuild_plan::plan(&RebuildAsk::Content(false), &facts).is_none());
+            let (ask, before) = (RebuildAsk::Format(H264), f.st.plan.codec);
+            assert_ne!(before, H264);
+            let plan = rebuild_plan::plan(&ask, &facts).expect("a codec rebuild");
+            assert_eq!(plan.display, Some(DisplayChange::FormatKept(H264)));
+            let built = f.st.perform(plan, ask, |_, plan, _, _| {
+                script(Script::Pipeline(SMALL, 20_000), plan, &keyframes)
+            });
+            let built = matches!(built, Ok(Rebuilt::Built));
+            assert_eq!(built, changes, "lit {lit} ({verdict:?})");
+            let relit = f.display.lock().unwrap().hdr;
+            assert_ne!(
+                relit,
+                Some(!lit),
+                "lit {lit}: the display stays as it is lit"
+            );
+            let runs = if changes { H264 } else { before };
+            assert_eq!(f.st.plan.codec, runs, "lit {lit}");
+            let heard = f.codecs.try_recv().ok();
+            assert_eq!(heard, Some(changes.then_some(H264)), "lit {lit}");
+        }
     }
 
     /// U10: an owner's commit republishes what a later joiner reads off its row: the mode a
