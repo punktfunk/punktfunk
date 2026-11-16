@@ -2345,7 +2345,7 @@ pub(crate) mod tests {
     /// Where a Welcome's session streams: a display of its own, one capped by the operator to a
     /// mode, a display another session runs at its mode, or a host monitor.
     #[derive(Clone, Copy, Debug)]
-    enum Welcomed {
+    pub(in crate::native) enum Welcomed {
         Own,
         Capped(punktfunk_core::Mode),
         Joiner(punktfunk_core::Mode),
@@ -2355,7 +2355,7 @@ pub(crate) mod tests {
     /// The Welcome's mode, rate and `ServerHello` picture for a client that asked `asked` at
     /// `view` and `kbps`, through `negotiate`'s steps in its order on a mutter host. The cap
     /// and the join enter as the mode they leave; PyroWave runs at 1.6 bits per pixel.
-    fn welcomed(
+    pub(in crate::native) fn welcomed(
         asked: punktfunk_core::Mode,
         view: Option<(u32, u32)>,
         codec: crate::encode::Codec,
@@ -2410,7 +2410,7 @@ pub(crate) mod tests {
     #[rustfmt::skip]
     fn welcome_rows() -> Vec<WelcomeRow> {
         use crate::encode::Codec::{PyroWave, H265};
-        use crate::native::tests::Verdict::{Other, Wanted};
+        use crate::native::tests::Verdict::Wanted;
         let (hd, qhd, uhd) = (mode(1920, 1080, 60), mode(2560, 1440, 60), mode(3840, 2160, 60));
         let row = |name, asked, view, codec, kbps, at, welcome, verdict| WelcomeRow {
             name,
@@ -2452,11 +2452,11 @@ pub(crate) mod tests {
                 PyroWave, 0, Welcomed::Joiner(qhd), (qhd, 199_065, Some((1920, 1080))), Wanted),
             row("a joiner at the owner's size: the mode, whole hertz", exact, None, PyroWave, 0,
                 Welcomed::Joiner(hd), (hd, 199_065, None), Wanted),
-            row("a joiner asking more than the owner runs: priced and told at a size its fit \
-                 never reaches", uhd, None, PyroWave, 0, Welcomed::Joiner(hd),
-                (hd, 796_262, Some((3840, 2160))), Other),
-            row("an HEVC joiner asking more: the default, told a picture past the mode", uhd,
-                None, H265, 0, Welcomed::Joiner(hd), (hd, 20_000, Some((3840, 2160))), Other),
+            row("a joiner asking more than the owner runs: priced and told at the mode its fit \
+                 encodes", uhd, None, PyroWave, 0, Welcomed::Joiner(hd), (hd, 199_065, None),
+                Wanted),
+            row("an HEVC joiner asking more: the default, told the mode", uhd, None, H265, 0,
+                Welcomed::Joiner(hd), (hd, 20_000, None), Wanted),
             row("a mirror: its view dropped, priced and told at the mode", hd,
                 Some((1280, 720)), PyroWave, 0, Welcomed::Mirror, (hd, 199_065, None), Wanted),
             row("a cap keeps a view inside the capped mode", mode(3840, 2160, 120),

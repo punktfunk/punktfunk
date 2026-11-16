@@ -2644,6 +2644,26 @@ pub(crate) mod tests {
         })
     }
 
+    /// A Hello row: the Welcome a joiner gets on a display of the `owner` mode, Automatic.
+    fn vector_hello(row: &serde_json::Value) -> serde_json::Value {
+        use crate::native::handshake::tests::{welcomed, Welcomed};
+        let codec = match row["codec"].as_str() {
+            Some("pyrowave") => crate::encode::Codec::PyroWave,
+            _ => crate::encode::Codec::H265,
+        };
+        let (asked, view) = (
+            vector_mode(&row["hello"]["mode"]),
+            vector_size(&row["hello"]["view"]),
+        );
+        let owner = Welcomed::Joiner(vector_mode(&row["owner"]));
+        let (m, kbps, picture) = welcomed(asked, view, codec, 0, owner);
+        serde_json::json!({
+            "mode": [m.width, m.height, m.refresh_hz],
+            "kbps": kbps,
+            "picture": picture.map(|(w, h)| [w, h]),
+        })
+    }
+
     /// The mode-and-view ask rule, rules 1 to 4, as `clients/shared/mode-view-vectors.json`
     /// pins it for every reader.
     #[test]
@@ -2660,6 +2680,10 @@ pub(crate) mod tests {
                 _ => false,
             };
             if host_skips || (row["codec"] == "pyrowave" && !pyrowave_runs) {
+                continue;
+            }
+            if row["at"] == "hello" {
+                assert_eq!(vector_hello(row), row["welcome"], "{name}");
                 continue;
             }
             let want = serde_json::json!({

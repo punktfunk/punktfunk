@@ -1,5 +1,5 @@
 {
-  "$comment": "Mode-and-view ask rule, rules 1-4 of design/stream-geometry-overhaul.md §6, read by the host's native::stream::rebuild mode_view_vectors test. A session runs `live` (mode [w, h, hz], view [w, h] or null) on a display of its `tenure`: own, shared (its own, another session joined it), joiner-held or joiner-alone. The control task holds `hold` and is asked `ask` for `codec`. `build` is refused (the control task hands nothing on), none, encoder (the encoder alone, on the live display) or display (a new display mode). `kept` is the mode and view the session runs after; `told` is the last mode, encoded picture and correction the stream tells, null when it tells nothing. `only` names the one host OS a row holds on. `verdict` is wanted, or the decision that settles what the row pins today.",
+  "$comment": "Mode-and-view ask rule, rules 1-4 of design/stream-geometry-overhaul.md §6, read by the host's native::stream::rebuild mode_view_vectors test. A session runs `live` (mode [w, h, hz], view [w, h] or null) on a display of its `tenure`: own, shared (its own, another session joined it), joiner-held or joiner-alone. The control task holds `hold` and is asked `ask` for `codec`. `build` is refused (the control task hands nothing on), none, encoder (the encoder alone, on the live display) or display (a new display mode). `kept` is the mode and view the session runs after; `told` is the last mode, encoded picture and correction the stream tells, null when it tells nothing. `only` names the one host OS a row holds on. A row `at` `hello` is a Hello instead: a client asks `hello` of a display of the `owner` mode it joins, and `welcome` is the mode, Automatic rate (kbps) and picture its Welcome names. `verdict` is wanted, or the decision that settles what the row pins today.",
   "rows": [
     {"name": "a view inside the mode, smaller on both axes, is kept", "rule": 1,
      "live": {"mode": [1920, 1080, 60], "view": null}, "tenure": "own",
@@ -98,6 +98,16 @@
      "ask": {"mode": [1920, 1080, 120], "view": null}, "codec": "hevc",
      "build": "none", "kept": {"mode": [1920, 1080, 60], "view": [1280, 720]},
      "told": {"mode": [1920, 1080, 60], "picture": [1280, 720], "corrects": true},
+     "verdict": "wanted"},
+    {"name": "a joiner asking more than the owner runs keeps no view: priced and told at the mode",
+     "rule": 1, "at": "hello",
+     "hello": {"mode": [3840, 2160, 60], "view": null}, "owner": [1920, 1080, 60],
+     "codec": "pyrowave", "welcome": {"mode": [1920, 1080, 60], "kbps": 199065, "picture": null},
+     "verdict": "wanted"},
+    {"name": "an HEVC joiner asking more than the owner runs is told the mode", "rule": 1,
+     "at": "hello",
+     "hello": {"mode": [3840, 2160, 60], "view": null}, "owner": [1920, 1080, 60],
+     "codec": "hevc", "welcome": {"mode": [1920, 1080, 60], "kbps": 20000, "picture": null},
      "verdict": "wanted"},
     {"name": "a joiner held by another session is refused", "rule": 4,
      "live": {"mode": [1920, 1080, 60], "view": null}, "tenure": "joiner-held",

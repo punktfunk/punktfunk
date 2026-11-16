@@ -28,8 +28,9 @@ pub(crate) struct Intent {
 
 impl Intent {
     /// The Hello's intent at `asked`, the mode the session gets: the client's `view` kept by
-    /// [`kept`]. A joiner's `asked` is the owner's mode, shown at the view and fit of its
-    /// tenure; a mirror fits its head to `asked` and keeps no view.
+    /// [`kept`]. A joiner's `asked` is the owner's mode, framed at the view and fit of its
+    /// tenure, which [`kept`] keeps as its view against that mode; a mirror fits its head to
+    /// `asked` and keeps no view.
     pub(crate) fn at_hello(
         asked: Mode,
         view: Option<(u32, u32)>,
@@ -39,7 +40,7 @@ impl Intent {
         if let Some((fit, shown)) = tenure.framing() {
             return Intent {
                 mode: asked,
-                view: Some(shown),
+                view: kept(Some(shown), &asked, codec),
                 framing: Some((fit, shown)),
             };
         }
