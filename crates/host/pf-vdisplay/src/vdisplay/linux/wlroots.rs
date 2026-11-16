@@ -730,8 +730,26 @@ fn dpms_argv(name: &str, on: bool) -> [&str; 4] {
 }
 
 /// `output <name> dpms on|off`. Sway's dpms sets state, so every accepted call counts as a change.
-fn set_dpms(name: &str, on: bool) -> Result<bool> {
+pub(crate) fn set_dpms(name: &str, on: bool) -> Result<bool> {
     swaymsg(&dpms_argv(name, on)).map(|_| true)
+}
+
+/// Whether sway reports `name` powered. `None` when unlisted, or off sway (river has no swaymsg).
+pub(crate) fn head_powered(name: &str) -> Option<bool> {
+    let outputs = swaymsg_query("get_outputs").ok()?;
+    outputs
+        .as_array()?
+        .iter()
+        .find(|o| o.get("name").and_then(|n| n.as_str()) == Some(name))
+        .and_then(output_powered)
+}
+
+/// One `get_outputs` row's power state: `power` since sway 1.9, the deprecated `dpms` before it.
+fn output_powered(output: &serde_json::Value) -> Option<bool> {
+    output
+        .get("power")
+        .or_else(|| output.get("dpms"))
+        .and_then(|v| v.as_bool())
 }
 
 /// DPMS off every head but a sibling's for a **gamescope** `exclusive` stream
@@ -1314,6 +1332,18 @@ mod tests {
         assert_eq!(dpms_argv("DP-1", false), ["output", "DP-1", "dpms", "off"]);
         assert_eq!(dpms_argv("DP-1", true), ["output", "DP-1", "dpms", "on"]);
         assert_eq!(disable_argv("DP-1"), ["output", "DP-1", "disable"]);
+    }
+
+    /// sway 1.9 reports `power` beside the deprecated `dpms`; 1.8 only `dpms`.
+    #[test]
+    fn power_wins_over_the_deprecated_dpms_field() {
+        let row = |v: serde_json::Value| output_powered(&v);
+        assert_eq!(
+            row(serde_json::json!({"power": false, "dpms": true})),
+            Some(false)
+        );
+        assert_eq!(row(serde_json::json!({"dpms": false})), Some(false));
+        assert_eq!(row(serde_json::json!({"name": "DP-1"})), None);
     }
 
     /// Gamescope DPMS reuses the disable filter with empty `ours`: nothing of ours

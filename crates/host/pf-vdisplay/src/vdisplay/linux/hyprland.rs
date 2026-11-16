@@ -743,7 +743,7 @@ pub(crate) fn relight_heads(names: &[String]) -> Vec<String> {
 /// DPMS state Hyprland reports for `name` (`hyprctl -j monitors all`'s
 /// `dpmsStatus`). `None` when unlisted or the field is missing. A DPMS-off
 /// monitor stays listed — the readback [`dpms_one`] is built around.
-fn monitor_dpms(name: &str) -> Option<bool> {
+pub(crate) fn monitor_dpms(name: &str) -> Option<bool> {
     monitor(name, true).ok()??.get("dpmsStatus")?.as_bool()
 }
 
@@ -758,7 +758,7 @@ fn monitor_dpms(name: &str) -> Option<bool> {
 /// `hl.dispatch(...)`). No stable probe for which manager is loaded, so try
 /// classic, then Lua. Never omit the monitor name: `hl.dsp.dpms("on")` answers
 /// `ok` and toggles *something*.
-fn dpms_one(name: &str, want_on: bool) -> Result<bool> {
+pub(crate) fn dpms_one(name: &str, want_on: bool) -> Result<bool> {
     if monitor_dpms(name) == Some(want_on) {
         return Ok(false); // toggling would break it
     }
