@@ -1589,6 +1589,25 @@ mod tests {
         }
     }
 
+    /// U7: a further screen is priced at the view it asked for. The set reads nothing of what
+    /// its build encodes, so one whose framing fell back to 2560×1440 still weighs 1920×1080.
+    #[test]
+    fn a_further_screen_is_priced_at_what_it_encodes() {
+        let verdict = crate::native::tests::Verdict::D5;
+        let (one, qhd) = (mode(1920, 1080, 60), mode(2560, 1440, 60));
+        let (base, _frames, _told, wire) = kwin_base();
+        let (_screens_tx, screens_rx) = std::sync::mpsc::channel();
+        let further = Screen {
+            view: Some((1920, 1080)),
+            ..asked(1, qhd)
+        };
+        let mut set = ScreenSet::new(base, screens_rx, vec![asked(0, one), further]);
+        set.poll(one, Picture::of(one), None);
+        let share = wire.primary_share.load(Ordering::Relaxed);
+        set.shutdown();
+        assert_eq!(share, 500, "{verdict:?}");
+    }
+
     /// S8-5: the first screen's new mode re-splits the video with no new list.
     #[test]
     fn s8_5_the_first_screens_new_mode_re_splits_the_video() {

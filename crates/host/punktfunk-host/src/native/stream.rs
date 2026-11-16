@@ -22,7 +22,8 @@ mod ramp;
 mod rebuild;
 mod rebuild_plan;
 mod recovery;
-#[cfg(target_os = "windows")]
+// Windows resizes in place; a test drives what follows the mode set on any host.
+#[cfg(any(target_os = "windows", test))]
 mod resize;
 mod screens;
 mod send;

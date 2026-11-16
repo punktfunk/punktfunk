@@ -2039,10 +2039,31 @@ mod tests {
     fn connect(
         f: &mut super::super::swap::tests::Fake,
         pipe: Pipeline,
-        (intent, kbps): (Intent, u32),
+        at: (Intent, u32),
         adopted: bool,
         plan: &crate::session_plan::SessionPlan,
     ) -> Told {
+        let (d, rate) = connected(f, pipe, at, adopted, plan);
+        let d = d.map(|d| {
+            let p = d.picture.mode();
+            (d.delivered, (p.width, p.height), d.corrects)
+        });
+        (d, rate)
+    }
+
+    /// [`connect`]: the epoch-0 `Delivered` itself, and the rate retargeted. Without an
+    /// adopted ask the Welcome named `intent`.
+    fn connected(
+        f: &mut super::super::swap::tests::Fake,
+        pipe: Pipeline,
+        (intent, kbps): (Intent, u32),
+        adopted: bool,
+        plan: &crate::session_plan::SessionPlan,
+    ) -> (Option<crate::native::wiring::Delivered>, Option<u32>) {
+        if !adopted {
+            let terms = Arc::get_mut(&mut f.st.facts.terms).expect("the fake's own terms");
+            terms.intent = intent;
+        }
         let (retarget_tx, mut retarget) = tokio::sync::mpsc::unbounded_channel();
         let built = pipe.geometry.reframed(intent, pipe.geometry.reframe());
         let pipe = Pipeline {
@@ -2052,11 +2073,43 @@ mod tests {
         f.st.live = first_live(pipe, &mut f.st.display, &f.st.shared, kbps, &retarget_tx);
         (f.st.plan, f.st.bit_depth) = (*plan, 8);
         f.st.tell_connect(adopted);
-        let d = f.told.try_recv().ok().map(|d| {
-            let p = d.picture.mode();
-            (d.delivered, (p.width, p.height), d.corrects)
-        });
-        (d, retarget.try_recv().ok().map(|(kbps, _)| kbps))
+        let rate = retarget.try_recv().ok().map(|(kbps, _)| kbps);
+        (f.told.try_recv().ok(), rate)
+    }
+
+    /// A connect at 3840×2160 with a 1920×1080 view whose first build's framing fell back to
+    /// the capture: what epoch 0 tells.
+    fn fell_back_at_connect() -> Option<crate::native::wiring::Delivered> {
+        let mut f = super::super::swap::tests::fake();
+        let (plan, uhd) = (f.st.plan, mode(3840, 2160, 60));
+        let pipe = first_pipeline(uhd, (3840, 2160), 20_000);
+        let at = asked(uhd, Some((1920, 1080)));
+        connected(&mut f, pipe, (at, 20_000), false, &plan).0
+    }
+
+    /// U4: a first build whose framing fell back encodes the capture, not the Welcome's view.
+    /// Epoch 0 is not told: a client that takes configs holds the view's picture, and one that
+    /// takes none hears nothing.
+    #[test]
+    fn a_first_build_that_misses_the_view_is_told() {
+        use crate::native::control::tests::{after_connect, older_client_hears};
+        let verdict = crate::native::tests::Verdict::D4;
+        let d = fell_back_at_connect();
+        let older = d.as_ref().is_some_and(older_client_hears);
+        let (uhd, hd) = (mode(3840, 2160, 60), mode(1920, 1080, 60));
+        let (_, picture) = after_connect(uhd, hd, d);
+        assert_eq!((picture, older), (Some((1920, 1080)), false), "{verdict:?}");
+    }
+
+    /// U16: the control task's PyroWave bounds after that connect. They stay at the Welcome's
+    /// view, which the stream does not encode.
+    #[test]
+    fn control_bounds_follow_the_first_builds_picture() {
+        use crate::native::control::tests::after_connect;
+        let verdict = crate::native::tests::Verdict::D4;
+        let (uhd, hd) = (mode(3840, 2160, 60), mode(1920, 1080, 60));
+        let (bounds, _) = after_connect(uhd, hd, fell_back_at_connect());
+        assert_eq!(bounds, (62_208, 199_065), "{verdict:?}");
     }
 
     /// One connect: the Welcome's mode, rate and view, what the first build delivers, encodes

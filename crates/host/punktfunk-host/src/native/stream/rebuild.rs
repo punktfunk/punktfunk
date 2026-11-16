@@ -2898,4 +2898,211 @@ pub(crate) mod tests {
             assert_eq!(l.calls, ["build first"]);
         }
     }
+
+    /// U6: a swap installs the geometry its build returned and writes the input plane's frame
+    /// map from it, for a whole pipeline and for an encoder alone.
+    #[test]
+    fn a_swap_writes_the_frame_map_it_encodes() {
+        let verdict = crate::native::tests::Verdict::Wanted;
+        let keyframes = Arc::new(AtomicU32::new(0));
+        let view_ask = || RebuildAsk::Mode(ask(ASKED, Some((8, 8))));
+        for (ask, built) in [
+            (
+                RebuildAsk::CaptureLost(None),
+                Script::Pipeline(SMALL, 20_000),
+            ),
+            (view_ask(), Script::Encoder),
+        ] {
+            let mut f = super::super::swap::tests::fake();
+            let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
+            let built = framed(script(built, &plan, &keyframes)).expect("a build");
+            let installs = match &built.next {
+                Next::Pipeline(p) => p.geometry,
+                Next::Encoder { geometry, .. } => *geometry,
+            };
+            f.st.swap_pipeline(built.next, plan.reason);
+            let name = format!("{:?} ({verdict:?})", plan.reason);
+            assert_eq!(f.st.live.geometry, installs, "{name}");
+            let map = *f.st.shared.frame_map.lock().unwrap();
+            assert_eq!((map, installs.reframe()), (framing(), framing()), "{name}");
+        }
+    }
+
+    /// A mirror fits its head to the client's size. A source that delivers another mode keeps
+    /// that framing, and the capture loss after it rebuilds framed at the client's size.
+    #[test]
+    fn a_mirror_keeps_the_clients_size_across_its_sources_mode() {
+        use punktfunk_core::video_fit::VideoFit;
+        let verdict = crate::native::tests::Verdict::Wanted;
+        let keyframes = Arc::new(AtomicU32::new(0));
+        let mut f = super::super::swap::tests::fake();
+        let mirror = Tenure::of(None, true);
+        (f.st.display.tenure, f.st.plan.mirrored) = (mirror, true);
+        let g = f.st.live.geometry;
+        let at = Intent::at_hello(g.intent().mode(), None, &mirror, f.st.plan.codec);
+        running(&mut f, at, g.interval(), g.reframe());
+        let fit = Some((VideoFit::Fit, SMALL));
+        assert_eq!(at.framing(), fit, "fitted to the client's size");
+        f.st.live.frame = frame(WIDE);
+        let ask = RebuildAsk::SourceMode(DELIVERED_WIDE);
+        let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("an encoder rebuild");
+        let opened = std::sync::Mutex::new(Vec::new());
+        let built = f.st.perform(plan, ask, |st, plan, _, _| {
+            st.build_encoder(plan, opener(Open::Frames, WIDE, &opened))
+        });
+        assert!(matches!(built, Ok(Rebuilt::Built)));
+        let g = f.st.live.geometry;
+        let after = (g.intent().framing(), g.delivered(), g.encoded());
+        let fitted = punktfunk_core::video_fit::Reframe::plan(VideoFit::Fit, WIDE, SMALL).out;
+        assert_eq!(after, (fit, DELIVERED_WIDE, fitted), "{verdict:?}");
+        let ask = RebuildAsk::CaptureLost(None);
+        let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a loss rebuild");
+        let mut retried = None;
+        let built = f.st.perform(plan, ask, |st, plan, _, _| {
+            retried = Some(
+                st.build_request(plan.intent, plan.rate_kbps)
+                    .intent
+                    .framing(),
+            );
+            script(Script::Pipeline(WIDE, 20_000), plan, &keyframes)
+        });
+        assert!(matches!(built, Ok(Rebuilt::Built)));
+        assert_eq!(retried, Some(fit), "{verdict:?}");
+    }
+
+    /// An IDD-push monitor as the in-place resize sees it: a mode set and a presentation
+    /// restart each answer `restores`, then it delivers `frames`, oldest first.
+    struct IddMonitor {
+        restores: bool,
+        frames: VecDeque<crate::capture::CapturedFrame>,
+    }
+
+    impl crate::capture::Capturer for IddMonitor {
+        fn next_frame(
+            &mut self,
+            _: pf_capture::FirstFrame,
+        ) -> Result<crate::capture::CapturedFrame> {
+            anyhow::bail!("the resize takes frames as they come")
+        }
+        fn try_latest(&mut self) -> Result<Option<crate::capture::CapturedFrame>> {
+            Ok(self.frames.pop_front())
+        }
+        fn display(&mut self) -> Option<&mut dyn pf_capture::DisplayControl> {
+            Some(self)
+        }
+    }
+
+    impl pf_capture::DisplayControl for IddMonitor {
+        fn target_id(&self) -> u32 {
+            1
+        }
+        fn resize(&mut self, _: u32, _: u32) -> bool {
+            self.restores
+        }
+        fn restart_presentation(&mut self) -> bool {
+            self.restores
+        }
+    }
+
+    /// A frame of `size` the source composed as its `seq`th.
+    fn composed(size: (u32, u32), seq: u64) -> crate::capture::CapturedFrame {
+        crate::capture::CapturedFrame {
+            provenance: pf_frame::Provenance::source(seq, 0),
+            ..frame(size)
+        }
+    }
+
+    /// The in-place resize past its mode set on the fake, for `plan` on a display that reads
+    /// back 60 Hz, over `monitor`, its encoder opened as `how`: the geometry it swaps in and
+    /// the rate it runs, or `None` for the full build. The driver's own open is Windows', so
+    /// the fake's encoder opens on the host.
+    fn resized(
+        f: &mut Session,
+        plan: &RebuildPlan,
+        monitor: IddMonitor,
+        recover_ring: bool,
+        how: Open,
+    ) -> Option<(Geometry, u32)> {
+        let size = monitor.frames.back().map_or(SMALL, |m| (m.width, m.height));
+        let portal = crate::session_plan::CaptureBackend::Portal;
+        (f.st.live.capturer, f.st.plan.capture) = (Box::new(monitor), portal);
+        let trace = Trace::start("resize-test", Arc::new(AtomicU32::new(0)));
+        let (built, price) = (
+            Geometry::built(plan.intent, (60, 60_000)),
+            f.st.pricing(plan),
+        );
+        let opened = std::sync::Mutex::new(Vec::new());
+        let open = opener(how, size, &opened);
+        match f.st.resize_on(built, &price, &trace, recover_ring, open)? {
+            Next::Encoder { geometry, .. } => Some((geometry, price(&geometry))),
+            Next::Pipeline(_) => unreachable!("an in-place resize opens the encoder alone"),
+        }
+    }
+
+    /// U1: an in-place resize delivers the size it mode-set at the rate the display runs,
+    /// framed for the intent's view where the encoder takes it and at the capture where the
+    /// framed open fails, and PyroWave runs at the picture it encodes.
+    #[test]
+    fn an_in_place_resize_frames_and_prices_what_it_opened() {
+        use crate::native::bitrate::pyrowave_mode_kbps;
+        use crate::native::geometry::Picture;
+        use punktfunk_core::video_fit::VideoFit;
+        let verdict = crate::native::tests::Verdict::Wanted;
+        let (qhd, view) = (mode((2560, 1440), 60), (1280, 720));
+        for (how, encoded) in [(Open::Frames, view), (Open::FailsFramed, (2560, 1440))] {
+            let mut f = hd_session();
+            pyrowave(&mut f, false);
+            let ask = RebuildAsk::Mode(ask(qhd, Some(view)));
+            let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
+            let monitor = IddMonitor {
+                restores: true,
+                frames: [frame((2560, 1440))].into(),
+            };
+            let (g, rate) = resized(&mut f, &plan, monitor, false, how).expect("in place");
+            let name = format!("{how:?} ({verdict:?})");
+            let at = |(width, height)| {
+                Picture::of(punktfunk_core::Mode {
+                    width,
+                    height,
+                    ..qhd
+                })
+            };
+            let framing = g.intent().framing();
+            assert_eq!(
+                (g.delivered(), framing),
+                (qhd, Some((VideoFit::Fit, view))),
+                "{name}"
+            );
+            assert_eq!((g.encoded(), g.picture()), (encoded, at(encoded)), "{name}");
+            let priced = pyrowave_mode_kbps(None, &at(encoded), &f.st.plan, None);
+            assert_eq!(rate, priced, "{name}");
+        }
+    }
+
+    /// U2: a topology re-assert in place restores the presentation at the mode that runs and
+    /// waits for a newer present: it keeps the live intent, size and framing, and falls back to
+    /// the full build when the presentation does not come back.
+    #[test]
+    fn a_reassert_in_place_keeps_the_geometry_or_falls_back() {
+        use punktfunk_core::video_fit::VideoFit;
+        let verdict = crate::native::tests::Verdict::Wanted;
+        for restores in [true, false] {
+            let mut f = super::super::swap::tests::fake();
+            frame_at(&mut f, Some((VideoFit::Fit, (8, 8))));
+            idd_push(&mut f);
+            let ask = RebuildAsk::TopologyReassert(5);
+            let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a re-assert");
+            let live = f.st.live.geometry.intent();
+            let monitor = IddMonitor {
+                restores,
+                frames: [composed(SMALL, 5), composed(SMALL, 6)].into(),
+            };
+            let got = resized(&mut f, &plan, monitor, true, Open::Frames);
+            let size = |g: &Geometry| (g.delivered().width, g.delivered().height);
+            let kept = got.map(|(g, _)| (g.intent(), size(&g), g.encoded()));
+            let fitted = punktfunk_core::video_fit::Reframe::plan(VideoFit::Fit, SMALL, (8, 8));
+            let want = restores.then_some((live, SMALL, fitted.out));
+            assert_eq!(kept, want, "restores {restores} ({verdict:?})");
+        }
+    }
 }

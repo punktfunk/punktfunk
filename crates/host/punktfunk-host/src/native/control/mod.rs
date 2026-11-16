@@ -1342,10 +1342,15 @@ pub(crate) mod tests {
     use crate::native::geometry::tests::asked;
     use crate::native::handshake::tests::mode;
 
+    /// A client that takes no configs hears `d`.
+    pub(crate) fn older_client_hears(d: &super::super::wiring::Delivered) -> bool {
+        tell(&mut None, d).is_some()
+    }
+
     /// An Automatic PyroWave session's task after its connect: the floor and pin it holds and
     /// the picture its config names. It starts at the Welcome's `picture` of `mode`; only an
-    /// epoch-0 `Delivered`, which bring-up sends for an adopted ask alone, moves either.
-    fn after_connect(
+    /// epoch-0 `Delivered` moves either.
+    pub(crate) fn after_connect(
         mode: punktfunk_core::Mode,
         picture: punktfunk_core::Mode,
         delivered: Option<super::super::wiring::Delivered>,
