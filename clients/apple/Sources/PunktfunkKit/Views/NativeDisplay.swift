@@ -47,6 +47,17 @@ public enum NativeDisplay {
     }
     #endif
 
+    /// `mode`'s refresh to the millihertz: 59 940 on a display running at 59.94 Hz, which its
+    /// whole hertz round to 60. Only a Mac reads a fraction: the other platforms state whole
+    /// hertz.
+    public static var refreshMilliHz: Int {
+        #if os(macOS)
+        return NSScreen.main?.refreshMilliHz ?? 60_000
+        #else
+        return mode.hz * 1000
+        #endif
+    }
+
     /// This app's display in landscape pixels, at its top refresh. On a Mac that is the panel
     /// below the camera housing (`NSScreen.notchSafePixelSize`), never the framebuffer a scaled
     /// mode renders into: native fullscreen stops below the housing, and only that fullscreen
@@ -65,3 +76,19 @@ public enum NativeDisplay {
         #endif
     }
 }
+
+#if os(macOS)
+extension NSScreen {
+    /// This screen's rate to the millihertz, off its current display mode. A mode that states
+    /// no rate, or one a hertz or more from `maximumFramesPerSecond` (a variable-rate panel
+    /// held under its top), reads the whole top rate.
+    public var refreshMilliHz: Int {
+        let whole = maximumFramesPerSecond * 1000
+        guard let number = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+            let mode = CGDisplayCopyDisplayMode(CGDirectDisplayID(number.uint32Value))
+        else { return whole }
+        let exact = Int((mode.refreshRate * 1000).rounded())
+        return abs(exact - whole) < 1000 ? exact : whole
+    }
+}
+#endif

@@ -961,8 +961,11 @@ public final class StreamViewController: StreamViewControllerBase {
             width: Int32(mode.width), height: Int32(mode.height),
             extensions: ext as CFDictionary, formatDescriptionOut: &desc)
         guard let desc else { return }
+        // The stream's exact rate, so a TV asked for 59.94 Hz is not switched to 60.
+        let exact = connection.currentRefreshMilliHz()
         manager.preferredDisplayCriteria = AVDisplayCriteria(
-            refreshRate: Float(mode.refreshHz), formatDescription: desc)
+            refreshRate: exact > 0 ? Float(exact) / 1000 : Float(mode.refreshHz),
+            formatDescription: desc)
         sessionDisplayManager = manager
         // The switch runs for a second or two; its end is taken as the output being in our mode.
         // The hop lands only while this request stands: frames that turned SDR meanwhile, or a

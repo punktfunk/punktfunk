@@ -257,23 +257,25 @@ pub(crate) fn position(
     })
 }
 
-/// `(width, height, refresh_hz)` of an output's mode.
-pub(crate) type ModeHz = (u32, u32, u32);
+/// `(width, height, refresh in millihertz)` of an output's mode.
+pub(crate) type ModeMhz = (u32, u32, u32);
 
 /// Install and select `want` on our output, which sits at `at` now. Both halves answer the
-/// active mode they read back; `kscreen-doctor` also the address it used.
+/// active mode they read back; `kscreen-doctor` also the address it used. `kscreen-doctor`
+/// takes and reports whole hertz.
 pub(crate) fn custom_mode(
     sess: Option<&mut mgmt::Session>,
     name: &str,
     our_prefix: &str,
     at: (u32, u32),
-    want: ModeHz,
-) -> Resolved<ModeHz, (String, Option<ModeHz>)> {
-    let (w, h, hz) = want;
-    let in_process = mgmt::set_custom_mode(sess, our_prefix, at.0, at.1, w, h, hz);
+    want: ModeMhz,
+) -> Resolved<ModeMhz, (String, Option<ModeMhz>)> {
+    let (w, h, mhz) = want;
+    let in_process = mgmt::set_custom_mode(sess, our_prefix, at.0, at.1, w, h, mhz);
     resolve(Op::CustomMode, in_process, || {
         let addr = kscreen::resolve_kscreen_addr(name, at.0, at.1);
-        let active = kscreen::set_custom_refresh(w, h, hz, &addr);
+        let active = kscreen::set_custom_refresh(w, h, (mhz + 500) / 1000, &addr)
+            .map(|(w, h, hz)| (w, h, hz.saturating_mul(1000)));
         Some((addr, active))
     })
 }

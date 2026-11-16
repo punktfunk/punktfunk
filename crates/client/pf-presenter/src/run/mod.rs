@@ -486,6 +486,8 @@ struct StreamState {
     /// Host's pinned fingerprint once connected — the key the pre-fetched host-actions cache uses.
     fp_hex: String,
     native_mode: (u32, u32, u32),
+    /// The exact rate of `native_mode` in millihertz: the fraction its whole hertz rounds off.
+    native_mhz: u32,
     /// The further screens' windows, empty unless the stream asked for screens.
     screens: screens::ScreenWindows,
     /// Launch params, kept for codec-fallback re-dial. Clone is at start, so a mid-session
@@ -641,11 +643,9 @@ fn native_mode(w: i32, h: i32, pixel_density: f32, refresh_rate: f32) -> Mode {
         1.0
     };
     let px = |v: i32| (v.max(0) as f32 * density).round().max(0.0) as u32;
-    Mode {
-        width: px(w),
-        height: px(h),
-        refresh_hz: refresh_rate.round().max(0.0) as u32,
-    }
+    // To the millihertz: a 59.94 Hz panel is not a 60 Hz one.
+    let mhz = (refresh_rate * 1000.0).round().max(0.0) as u32;
+    Mode::exact(px(w), px(h), mhz)
 }
 
 /// The HDR volume of the display the window is on now, read per launch, so a console
@@ -686,6 +686,19 @@ mod tests {
             (1706, 1066),
             "the pre-fix mode, kept here so the regression is legible"
         );
+    }
+
+    /// The display's rate is read to the millihertz, so Native asks for 59.94 Hz and not 60.
+    #[test]
+    fn native_keeps_the_fraction_of_the_displays_rate() {
+        let m = native_mode(1920, 1080, 1.0, 59.94);
+        assert_eq!((m.refresh_hz, m.millihz()), (60, 59_940));
+        let ntsc = native_mode(3840, 2160, 1.0, 60_000.0 / 1001.0);
+        assert_eq!(ntsc.millihz(), 59_940);
+        assert_eq!(native_mode(1920, 1080, 1.0, 59.8).millihz(), 59_800);
+        let whole = native_mode(1920, 1080, 1.0, 120.0);
+        assert_eq!((whole.refresh_hz, whole.refresh_mhz), (120, 0));
+        assert_eq!(native_mode(1920, 1080, 1.0, f32::NAN).refresh_hz, 0);
     }
 
     #[test]

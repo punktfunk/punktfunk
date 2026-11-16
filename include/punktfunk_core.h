@@ -478,7 +478,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 73
+#define PUNKTFUNK_ABI_VERSION 74
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -1904,6 +1904,13 @@ typedef struct {
     // or `monitor:<connector>`. Null, empty, which a shorter prefix defaults to, or any other
     // spelling asks for none. [`punktfunk_connection_screen_role`] reads what the session got.
     const char *host_screen;
+    // The display's exact rate in millihertz when it is not whole hertz: `59940` beside
+    // `refresh_hz = 60`. `0`, which a shorter prefix defaults to, or a rate that does not
+    // round to `refresh_hz`, asks for the whole rate.
+    // [`punktfunk_connection_refresh_mhz`] reads what the host delivers.
+    uint32_t refresh_mhz;
+    // Always `0`. Fills what would otherwise be padding.
+    uint32_t reserved7;
 } PunktfunkConnectOpts;
 #endif
 
@@ -3759,6 +3766,17 @@ PunktfunkStatus punktfunk_connection_mode(const PunktfunkConnection *c,
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
+// The active session mode's exact rate in millihertz: `59940` at 59.94 Hz, `60000` at
+// 60 Hz. What the host delivers, so a host that takes no fraction answers the whole rate.
+// Safe any time after connect.
+//
+// # Safety
+// `c` is a valid connection handle; `refresh_mhz` is null or writable.
+PunktfunkStatus punktfunk_connection_refresh_mhz(const PunktfunkConnection *c,
+                                                 uint32_t *refresh_mhz);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
 // Virtual gamepad the host resolved (`PUNKTFUNK_GAMEPAD_*`; Welcome echo of
 // [`punktfunk_connect_ex2`]). `AUTO` = a host that didn't say — assume X-Box 360,
 // no HID-output. Safe any time after connect.
@@ -4074,6 +4092,24 @@ PunktfunkStatus punktfunk_connection_request_mode_view(const PunktfunkConnection
                                                        uint32_t refresh_hz,
                                                        uint32_t view_width,
                                                        uint32_t view_height);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// A mode switch at an exact rate: `refresh_mhz` is the rate in millihertz, `59940` for
+// 59.94 Hz, and the whole rate is its rounding. `keep_view` leaves the host's view in place
+// as [`punktfunk_connection_request_mode`] does, and the view arguments are not read; without
+// it they are [`punktfunk_connection_request_mode_view`]'s. A host that takes no fraction
+// switches to the whole rate; [`punktfunk_connection_refresh_mhz`] reads which.
+//
+// # Safety
+// `c` is a valid connection handle.
+PunktfunkStatus punktfunk_connection_request_mode_exact(const PunktfunkConnection *c,
+                                                        uint32_t width,
+                                                        uint32_t height,
+                                                        uint32_t refresh_mhz,
+                                                        bool keep_view,
+                                                        uint32_t view_width,
+                                                        uint32_t view_height);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

@@ -16,21 +16,25 @@ const MODE: Mode = Mode {
     width: 1920,
     height: 1080,
     refresh_hz: 60,
+    refresh_mhz: 0,
 };
 const SMALL: Mode = Mode {
     width: 1280,
     height: 720,
     refresh_hz: 60,
+    refresh_mhz: 0,
 };
 const QHD: Mode = Mode {
     width: 2560,
     height: 1440,
     refresh_hz: 60,
+    refresh_mhz: 0,
 };
 const UHD: Mode = Mode {
     width: 3840,
     height: 2160,
     refresh_hz: 60,
+    refresh_mhz: 0,
 };
 
 /// For a child whose released displays must stay kept for the length of the test.

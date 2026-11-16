@@ -310,6 +310,7 @@ fn update_modes(owner: u32, request: Request) {
         req.width,
         req.height,
         req.refresh_hz,
+        req.refresh_mhz,
     );
     request.complete(st);
 }

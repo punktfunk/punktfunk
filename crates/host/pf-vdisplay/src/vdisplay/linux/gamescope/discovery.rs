@@ -763,6 +763,12 @@ pub(crate) fn gamescope_captures_sdr10() -> bool {
     gamescope_patch_level() >= 26 && !flags_lost()
 }
 
+/// `-r` reads a decimal and the frame limiter paces off the exact refresh. Below this a
+/// gamescope refuses a refresh with a fraction and does not start.
+pub(crate) fn gamescope_runs_exact_rates() -> bool {
+    gamescope_patch_level() >= 37 && !flags_lost()
+}
+
 /// `GAMESCOPE_SET_OUTPUT_MODE`. Below this a spawn serves the one mode it was started at, and
 /// a client asking for another retires it.
 pub(crate) fn gamescope_can_resize_output() -> bool {
@@ -784,11 +790,7 @@ pub(crate) fn resize_kept_output(seat: Option<&str>, mode: crate::Mode) -> bool 
         return false;
     };
     // `-r` at spawn is `game_hz`, so the resize asks for the rate a fresh spawn would.
-    let want = [
-        mode.width,
-        mode.height,
-        super::game_hz(mode.refresh_hz.max(1)) * 1000,
-    ];
+    let want = [mode.width, mode.height, super::game_mhz(mode)];
     xwayland_cursor_targets(Some(seat))
         .into_iter()
         .any(|(dpy, _xauth)| set_output_mode(&dpy, want))

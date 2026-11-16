@@ -475,17 +475,42 @@ fun nativeDisplayMode(
     val mode = display.mode
     val w = mode.physicalWidth
     val h = mode.physicalHeight
-    val rate = if (isTvDevice(context)) {
-        mode.refreshRate
-    } else {
-        display.sameResolutionModes().maxOfOrNull { it.refreshRate } ?: mode.refreshRate
-    }
     // ROUNDED, not truncated: 59.94 must not become 59, a rate no display mode has, which the
-    // host serves by clamping DOWN. Agrees with `Display.streamPanelFps`, which also rounds.
-    val hz = kotlin.math.round(rate).toInt().coerceAtLeast(1)
+    // host serves by clamping DOWN. The fraction it rounds off rides beside it
+    // ([nativeRefreshMilliHz]).
+    val hz = wholeHz(nativeRefreshMilliHz(display, isTvDevice(context)))
     // A picture spanning two screens is two equal halves at this screen's size
     // (design/android-dual-screen.md §3.2); the codec ceiling clamps the ask later.
     return Triple(maxOf(w, h), minOf(w, h) * (if (spanned && secondScreen) 2 else 1), hz)
+}
+
+/** Whole hertz of a rate in millihertz, rounded: 60 for 59 940. */
+internal fun wholeHz(milliHz: Int): Int = ((milliHz + 500) / 1000).coerceAtLeast(1)
+
+/** A rate for a player: `60` for whole hertz, else two decimals, `59.94`. */
+internal fun hzLabel(milliHz: Int): String = if (milliHz % 1000 == 0) {
+    (milliHz / 1000).toString()
+} else {
+    String.format(java.util.Locale.getDefault(), "%.2f", milliHz / 1000.0)
+}
+
+/** [display]'s rate under Native, in millihertz ([nativeDisplayMode] says which rate that is). */
+private fun nativeRefreshMilliHz(display: Display, tv: Boolean): Int {
+    val rate = if (tv) {
+        display.mode.refreshRate
+    } else {
+        display.sameResolutionModes().maxOfOrNull { it.refreshRate } ?: display.mode.refreshRate
+    }
+    return kotlin.math.round(rate * 1000f).toInt().coerceAtLeast(1000)
+}
+
+/**
+ * The rate [nativeDisplayMode] rounds to whole hertz, to the millihertz: 59 940 on a panel at
+ * 59.94 Hz. A Native stream asks the host for this, so it runs at the panel's rate.
+ */
+fun nativeRefreshMilliHz(context: Context, secondScreen: Boolean = true): Int {
+    val display = probeDisplay(context, secondScreen) ?: return 60_000
+    return nativeRefreshMilliHz(display, isTvDevice(context))
 }
 
 /**
@@ -682,6 +707,13 @@ fun Settings.effectiveMode(context: Context, spanned: Boolean = pictureSpanned(c
     val hz = if (hz > 0) hz else base.third
     return Triple(w, h, hz)
 }
+
+/**
+ * The exact rate behind [effectiveMode]'s whole hertz, in millihertz: the display's under Native,
+ * a picked rate as picked.
+ */
+fun Settings.effectiveRefreshMilliHz(context: Context): Int =
+    if (hz > 0) hz * 1000 else nativeRefreshMilliHz(context, secondScreen)
 
 /**
  * Client-side render-scale geometry — the Kotlin twin of `punktfunk-core`'s `render_scale` module

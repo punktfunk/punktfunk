@@ -424,7 +424,7 @@ mod tests {
     fn phased_at(source_hz: u32, priority: PresentPriority, hold: bool) -> (Slots, Counters) {
         let mut s = Slots::new(
             120,
-            frame_interval_ns(source_hz),
+            frame_interval_ns(source_hz * 1000),
             priority,
             true,
             hold,
@@ -708,7 +708,7 @@ mod tests {
     fn glassed(source_hz: u32, spacing: i64, presents: i64) -> Slots {
         let mut s = Slots::new(
             60,
-            frame_interval_ns(source_hz),
+            frame_interval_ns(source_hz * 1000),
             PresentPriority::Latency,
             true,
             false,
@@ -739,7 +739,7 @@ mod tests {
         );
         // A panel at the source's rate, one slower by a crystal's drift, a source the panel
         // never keeps up with, and one slower than the panel keep the plain band.
-        let exact = frame_interval_ns(60);
+        let exact = frame_interval_ns(60_000);
         for (hz, spacing) in [(60, exact), (60, exact + 500), (120, P5994), (50, P5994)] {
             assert_eq!(glassed(hz, spacing, 2000).hold_band_ns(), HOLD_BAND_NS);
         }
@@ -771,7 +771,7 @@ mod tests {
     /// it is due, one in 25 up to 10 ms later than that. Returns (slots shared, slots skipped).
     fn outrun(band: Option<i64>) -> (u32, u32) {
         const P5994: i64 = 16_683_333;
-        let interval = frame_interval_ns(60);
+        let interval = frame_interval_ns(60_000);
         let mut s = Slots::new(60, interval, PresentPriority::Latency, true, false, band);
         let mut c = Counters::default();
         // Settle the fence reading, then let the presents run on from slot `n`.

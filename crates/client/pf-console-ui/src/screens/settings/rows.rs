@@ -702,6 +702,7 @@ fn native_mode(device: &crate::screens::Device) -> punktfunk_core::Mode {
             width,
             height,
             refresh_hz: 60,
+            refresh_mhz: 0,
         }
     })
 }
@@ -1489,10 +1490,10 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         RowId::Refresh => (
             None,
             m::player_refresh_hz(),
-            if s.refresh_hz == 0 {
-                m::player_refresh_hz_native().into()
-            } else {
-                common::common_hz(s.refresh_hz)
+            match (s.refresh_hz, ctx.device.native_mode) {
+                (0, Some(native)) => pf_client_core::settings::native_refresh_label(native),
+                (0, None) => m::player_refresh_hz_native().into(),
+                (hz, _) => common::common_hz(hz),
             },
         ),
         RowId::RenderScale => {

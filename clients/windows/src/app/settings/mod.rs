@@ -171,15 +171,86 @@ fn primary_mode() -> Option<punktfunk_core::Mode> {
             &mut dm,
         )
     };
-    (ok.as_bool() && dm.dmPelsWidth > 0).then_some(punktfunk_core::Mode {
-        width: dm.dmPelsWidth,
-        height: dm.dmPelsHeight,
-        // 0 and 1 are "the hardware's default".
-        refresh_hz: if dm.dmDisplayFrequency > 1 {
-            dm.dmDisplayFrequency
-        } else {
-            60
-        },
+    if !ok.as_bool() || dm.dmPelsWidth == 0 {
+        return None;
+    }
+    // 0 and 1 are "the hardware's default".
+    let whole = if dm.dmDisplayFrequency > 1 {
+        dm.dmDisplayFrequency
+    } else {
+        60
+    };
+    // DEVMODEW cuts 59.94 Hz to 59: the display path states the rate it cut.
+    let mhz = primary_refresh_mhz()
+        .filter(|m| m.abs_diff(whole.saturating_mul(1000)) < 1000)
+        .unwrap_or(whole.saturating_mul(1000));
+    Some(punktfunk_core::Mode::exact(
+        dm.dmPelsWidth,
+        dm.dmPelsHeight,
+        mhz,
+    ))
+}
+
+/// The primary display's exact rate in millihertz, off the active display path Windows names
+/// for it. `None` when it names none.
+fn primary_refresh_mhz() -> Option<u32> {
+    use windows::Win32::windef::POINT;
+    use windows::Win32::wingdi::{
+        DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO,
+        DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
+    };
+    use windows::Win32::winuser::{
+        DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, GetMonitorInfoW, MonitorFromPoint,
+        QueryDisplayConfig, MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTOPRIMARY,
+    };
+    let mut info = MONITORINFOEXW::default();
+    info.base.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    // SAFETY: the primary monitor's handle goes straight back to Win32. `info` is a local
+    // whose `cbSize` names the EX form, which starts with the MONITORINFO the call is typed for.
+    let named = unsafe {
+        let monitor = MonitorFromPoint(POINT::default(), MONITOR_DEFAULTTOPRIMARY as u32);
+        GetMonitorInfoW(monitor, (&raw mut info).cast::<MONITORINFO>())
+    };
+    if !named.as_bool() {
+        return None;
+    }
+    let flags = QDC_ONLY_ACTIVE_PATHS as u32;
+    let (mut np, mut nm) = (0u32, 0u32);
+    // SAFETY: both counts are live locals the call fills.
+    if unsafe { GetDisplayConfigBufferSizes(flags, &mut np, &mut nm) } != 0 || np == 0 {
+        return None;
+    }
+    let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); np as usize];
+    let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); nm as usize];
+    // SAFETY: each array holds the count passed beside it, and the call writes no more. The
+    // topology id is only written under `QDC_DATABASE_CURRENT`, so null is allowed here.
+    let rc = unsafe {
+        QueryDisplayConfig(
+            flags,
+            &mut np,
+            paths.as_mut_ptr(),
+            &mut nm,
+            modes.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    paths.truncate(np as usize);
+    paths.iter().find_map(|p| {
+        let mut name = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
+        name.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        name.header.size = std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
+        name.header.adapterId = p.sourceInfo.adapterId;
+        name.header.id = p.sourceInfo.id;
+        // SAFETY: the header states the packet's own type and size, and `name` outlives the call.
+        let found = unsafe { DisplayConfigGetDeviceInfo(&mut name.header) } == 0;
+        let rate = p.targetInfo.refreshRate;
+        (found && name.viewGdiDeviceName == info.szDevice && rate.Denominator > 0).then(|| {
+            let den = u64::from(rate.Denominator);
+            ((u64::from(rate.Numerator) * 1000 + den / 2) / den) as u32
+        })
     })
 }
 

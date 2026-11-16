@@ -941,8 +941,8 @@ impl StreamState {
     }
 }
 
-/// One frame at `refresh_hz`, in ns — the source's nominal interval, and the cadence
-/// cushion's ceiling.
+/// One frame at `refresh_mhz` millihertz, in ns — the source's nominal interval, and the
+/// cadence cushion's ceiling.
 ///
 /// The negotiated stream mode's refresh is the only source-rate signal a client has.
 /// Measured fps sags when the transport is struggling, which is when a ceiling
@@ -950,13 +950,13 @@ impl StreamState {
 ///
 /// `0` = "native", which the host resolves to this client's reported display rate.
 /// Neither known falls back to 60 Hz, the same last resort [`native_mode`]'s caller takes.
-pub(super) fn frame_interval_ns(refresh_hz: u32, fallback_hz: u32) -> i64 {
-    let hz = match (refresh_hz, fallback_hz) {
-        (0, 0) => 60,
+pub(super) fn frame_interval_ns(refresh_mhz: u32, fallback_mhz: u32) -> i64 {
+    let mhz = match (refresh_mhz, fallback_mhz) {
+        (0, 0) => 60_000,
         (0, f) => f,
         (r, _) => r,
     };
-    1_000_000_000 / i64::from(hz)
+    punktfunk_core::config::millihz_period_ns(mhz) as i64
 }
 
 /// Whether a present error is `VK_ERROR_DEVICE_LOST` in its chain. A lost device is
@@ -1297,13 +1297,15 @@ mod tests {
     /// Cadence cushion is bounded by the source's frame interval, not the panel's.
     #[test]
     fn the_cadence_interval_comes_from_the_stream_mode_not_the_panel() {
-        assert_eq!(frame_interval_ns(120, 60), 8_333_333);
-        assert_eq!(frame_interval_ns(60, 165), 16_666_666);
+        assert_eq!(frame_interval_ns(120_000, 60_000), 8_333_333);
+        assert_eq!(frame_interval_ns(60_000, 165_000), 16_666_667);
+        // A stream at the panel's exact rate: 59.94 Hz frames are 16.68 ms apart.
+        assert_eq!(frame_interval_ns(59_940, 60_000), 16_683_350);
         // A `0 = native` request is resolved by the host to the display this client
         // reported, so that display's rate is what it will produce.
-        assert_eq!(frame_interval_ns(0, 165), 6_060_606);
+        assert_eq!(frame_interval_ns(0, 165_000), 6_060_606);
         // Neither known: 60 Hz, never an unbounded ceiling.
-        assert_eq!(frame_interval_ns(0, 0), 16_666_666);
+        assert_eq!(frame_interval_ns(0, 0), 16_666_667);
     }
 
     fn counters() -> PresentCounters {

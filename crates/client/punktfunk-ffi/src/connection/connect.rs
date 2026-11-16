@@ -835,6 +835,13 @@ pub struct PunktfunkConnectOpts {
     /// or `monitor:<connector>`. Null, empty, which a shorter prefix defaults to, or any other
     /// spelling asks for none. [`punktfunk_connection_screen_role`] reads what the session got.
     pub host_screen: *const std::os::raw::c_char,
+    /// The display's exact rate in millihertz when it is not whole hertz: `59940` beside
+    /// `refresh_hz = 60`. `0`, which a shorter prefix defaults to, or a rate that does not
+    /// round to `refresh_hz`, asks for the whole rate.
+    /// [`punktfunk_connection_refresh_mhz`] reads what the host delivers.
+    pub refresh_mhz: u32,
+    /// Always `0`. Fills what would otherwise be padding.
+    pub reserved7: u32,
 }
 
 /// [`PunktfunkProfileUnlock::kind`]: the account password as typed.
@@ -1021,7 +1028,7 @@ const _: () = {
     use core::mem::{offset_of, size_of};
     #[cfg(target_pointer_width = "64")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 216
+        size_of::<PunktfunkConnectOpts>() == 224
             && offset_of!(PunktfunkConnectOpts, video_fit) == 100
             && offset_of!(PunktfunkConnectOpts, delivery_flags) == 121
             && offset_of!(PunktfunkConnectOpts, profile_id) == 128
@@ -1035,11 +1042,12 @@ const _: () = {
             && offset_of!(PunktfunkConnectOpts, view_width) == 192
             && offset_of!(PunktfunkConnectOpts, screen_views) == 200
             && offset_of!(PunktfunkConnectOpts, host_screen) == 208
+            && offset_of!(PunktfunkConnectOpts, refresh_mhz) == 216
             && size_of::<PunktfunkProfileUnlock>() == 40
     );
     #[cfg(target_pointer_width = "32")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 152
+        size_of::<PunktfunkConnectOpts>() == 160
             && offset_of!(PunktfunkConnectOpts, video_fit) == 72
             && offset_of!(PunktfunkConnectOpts, delivery_flags) == 85
             && offset_of!(PunktfunkConnectOpts, profile_id) == 92
@@ -1053,6 +1061,7 @@ const _: () = {
             && offset_of!(PunktfunkConnectOpts, view_width) == 136
             && offset_of!(PunktfunkConnectOpts, screen_views) == 144
             && offset_of!(PunktfunkConnectOpts, host_screen) == 148
+            && offset_of!(PunktfunkConnectOpts, refresh_mhz) == 152
             && size_of::<PunktfunkProfileUnlock>() == 24
     );
 };
@@ -1109,6 +1118,8 @@ impl Default for PunktfunkConnectOpts {
             view_height: 0,
             screen_views: ptr::null(),
             host_screen: ptr::null(),
+            refresh_mhz: 0,
+            reserved7: 0,
         }
     }
 }
@@ -1402,7 +1413,9 @@ unsafe fn connect_params(
         width: o.width,
         height: o.height,
         refresh_hz: o.refresh_hz,
-    };
+        refresh_mhz: 0,
+    }
+    .stating(o.refresh_mhz);
     let n = usize::from(o.screen_count).min(PUNKTFUNK_SCREENS_MAX);
     // SAFETY: `screens` and `screen_views` are null or readable for `screen_count >= n` records
     // (caller contract).
@@ -1476,6 +1489,7 @@ pub extern "C" fn punktfunk_pyrowave_kbps(
         width,
         height,
         refresh_hz,
+        refresh_mhz: 0,
     };
     let bpp = bpp_of_x100(bpp_x100).unwrap_or(BPP_DEFAULT);
     kbps_for(&mode, chroma_444, bit_depth, bpp)
@@ -1842,6 +1856,31 @@ mod tests {
         // SAFETY: `o` is readable for more than the size it declares.
         let older = unsafe { opts_prefix(&o) }.unwrap();
         assert!(older.host_screen.is_null());
+    }
+
+    /// `refresh_mhz` reaches the dial as the mode's exact rate. A rate that is not
+    /// `refresh_hz`'s fraction, and a caller whose `struct_size` ends before it, ask whole.
+    #[test]
+    fn connect_opts_carry_the_exact_rate() {
+        let mut o = PunktfunkConnectOpts {
+            host: c"127.0.0.1".as_ptr(),
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+            refresh_mhz: 59_940,
+            ..Default::default()
+        };
+        // SAFETY: every pointer field is null or a live C-string literal.
+        let mode = |o: &PunktfunkConnectOpts| unsafe { connect_params(o) }.unwrap().mode;
+        assert_eq!(mode(&o).millihz(), 59_940);
+        o.refresh_mhz = 119_880;
+        assert_eq!(mode(&o).millihz(), 60_000);
+
+        o.refresh_mhz = 59_940;
+        o.struct_size = core::mem::offset_of!(PunktfunkConnectOpts, refresh_mhz) as u32;
+        // SAFETY: `o` is readable for more than the size it declares.
+        let older = unsafe { opts_prefix(&o) }.unwrap();
+        assert_eq!(mode(&older).millihz(), 60_000);
     }
 
     /// `profile_id` reaches the dial; one longer than the wire carries is no ask.

@@ -118,6 +118,7 @@ pub fn insert(
     session_id: u64,
     hw_cursor: bool,
     preferred_id: u32,
+    exact_mhz: u32,
     mut modes: Vec<Mode>,
 ) -> Arc<Monitor> {
     let mut reg = registry();
@@ -128,7 +129,9 @@ pub fn insert(
     if let Some((_, prev)) = reg.mode_history.iter().find(|(i, _)| *i == id) {
         vdisplay::accumulate_modes(&mut modes, crate::adapter::is_seat_role(), prev);
     }
-    let monitor = Arc::new(Monitor::pending(owner, id, session_id, hw_cursor, modes));
+    let monitor = Arc::new(Monitor::pending(
+        owner, id, session_id, hw_cursor, exact_mhz, modes,
+    ));
     reg.monitors.push(monitor.clone());
     monitor
 }

@@ -24,6 +24,7 @@ fn main() {
         width: w,
         height: h,
         refresh_hz: 60,
+        refresh_mhz: 0,
     };
     let client = NativeClient::connect(ConnectParams {
         compositor: CompositorPref::Gamescope,

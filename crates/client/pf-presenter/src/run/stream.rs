@@ -21,7 +21,10 @@ impl StreamState {
         let preset = params.hud_preset();
         // Rate we asked for, until Welcome resolves it. No frames flow before that,
         // so this only has to be sane, not right.
-        let source_interval_ns = frame_interval_ns(params.mode.refresh_hz, native_refresh_hz);
+        let source_interval_ns = frame_interval_ns(
+            params.mode.millihz(),
+            native_refresh_hz.saturating_mul(1000),
+        );
         let retry_params = params.clone();
         let handle = session::start(params);
         let (wake_tx, wake_rx) = async_channel::bounded(2);
@@ -60,6 +63,7 @@ impl StreamState {
             mode_line: String::new(),
             fp_hex: String::new(),
             native_mode: (0, 0, 0),
+            native_mhz: 0,
             preset,
             clock_offset: None,
             video_e2e: None,
@@ -176,6 +180,12 @@ pub(super) fn window_mode(
     )
 }
 
+/// `1920×1080@59.94`: a session's mode, for the title and the log.
+fn mode_line(m: &Mode) -> String {
+    let hz = punktfunk_core::config::hz_label(m.millihz());
+    format!("{}×{}@{hz}", m.width, m.height)
+}
+
 /// Follow the live mode slot (any accepted ack — follower, another trigger, or rollback), and
 /// title the window with the picture on screen.
 pub(super) fn hud_mode_tick(
@@ -189,17 +199,18 @@ pub(super) fn hud_mode_tick(
     let m = c.mode();
     // The title names the picture on screen: a host that scales sends less than its mode.
     let picture = st.last_video.unwrap_or((m.width, m.height));
-    if st.titled != Some((picture, m.refresh_hz)) {
-        st.titled = Some((picture, m.refresh_hz));
+    if st.titled != Some((picture, m.millihz())) {
+        st.titled = Some((picture, m.millihz()));
         let (w, h) = picture;
-        let _ = window.set_title(&format!("{title_base} · {w}×{h}@{}", m.refresh_hz));
+        let hz = punktfunk_core::config::hz_label(m.millihz());
+        let _ = window.set_title(&format!("{title_base} · {w}×{h}@{hz}"));
     }
     if st.shown_mode.is_some_and(|prev| prev != m) {
-        st.mode_line = format!("{}×{}@{}", m.width, m.height, m.refresh_hz);
+        st.mode_line = mode_line(&m);
         tracing::info!(mode = %st.mode_line, "stream mode switched");
         // A switch is a full host-side rebuild: the interval the cushion is bounded by
         // can change, and the gap must re-anchor the cadence estimate rather than slew over.
-        st.source_interval_ns = frame_interval_ns(m.refresh_hz, 0);
+        st.source_interval_ns = frame_interval_ns(m.millihz(), 0);
         st.pacer.reset();
     }
     st.shown_mode = Some(m);
@@ -244,10 +255,11 @@ pub(super) fn resize_tick(
             }
             let Some(((w, h), view)) = target else { return };
             tracing::info!(w, h, ?view, "window resized — requesting mode switch");
+            // The live rate stays, fraction and all.
             let mode = Mode {
                 width: w,
                 height: h,
-                refresh_hz: m.refresh_hz,
+                ..m
             };
             if c.request_mode_view(mode, view).is_err() {
                 tracing::warn!("mode-switch request dropped — control channel closed");
@@ -656,8 +668,9 @@ impl Shell {
             c.disconnect_quit();
             return;
         }
-        st.mode_line = format!("{}×{}@{}", m.width, m.height, m.refresh_hz);
+        st.mode_line = mode_line(&m);
         st.native_mode = (m.width, m.height, m.refresh_hz);
+        st.native_mhz = m.millihz();
         st.fp_hex = pf_client_core::trust::hex(&fingerprint);
         // Pre-fetch the ring's host-action slots here, never when it opens.
         let host_addr = st.params.host.clone();
@@ -666,7 +679,7 @@ impl Shell {
         pf_client_core::library::refresh_running(&host_addr, ports.0, ports.1, &st.fp_hex);
         // The resolved rate — a `0 = native` request becomes a real number
         // here, last moment before frames start arriving.
-        st.source_interval_ns = frame_interval_ns(m.refresh_hz, self.native.refresh_hz);
+        st.source_interval_ns = frame_interval_ns(m.millihz(), self.native.millihz());
         tracing::info!(mode = %st.mode_line, "connected");
         // Which touch devices SDL sees. Under gamescope this is the tell
         // for whether Steam Input hands the touchscreen through as touch:
@@ -1075,11 +1088,15 @@ impl Shell {
             } => {
                 if let Some(c) = &st.connector {
                     let live = c.mode();
-                    if let Err(e) = c.request_mode(punktfunk_core::config::Mode {
-                        width,
-                        height,
-                        refresh_hz,
-                    }) {
+                    // The ring's own rate is the one this session connected at, fraction and
+                    // all; every other rate it offers is whole hertz.
+                    let mhz = if refresh_hz == st.native_mode.2 {
+                        st.native_mhz
+                    } else {
+                        refresh_hz.saturating_mul(1000)
+                    };
+                    let mode = punktfunk_core::config::Mode::exact(width, height, mhz);
+                    if let Err(e) = c.request_mode(mode) {
                         tracing::warn!(error = %e, "ring: mode request");
                     }
                     if (live.width, live.height) != (width, height) {

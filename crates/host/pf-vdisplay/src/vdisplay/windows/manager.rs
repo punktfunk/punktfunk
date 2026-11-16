@@ -628,6 +628,12 @@ fn committed_mode_or(key: CcdTargetKey, requested: Mode) -> Mode {
         );
         return requested;
     }
+    // GDI truncates a rate with a fraction to 59 for 59.94 Hz. The path states it exactly.
+    let exact = pf_win_display::win_display::active_refresh_mhz(key)
+        .filter(|mhz| mhz % 1000 != 0 && (mhz + 500) / 1000 == requested.refresh_hz);
+    if let Some(mhz) = exact {
+        return Mode::exact(width, height, mhz);
+    }
     if refresh_hz != requested.refresh_hz {
         tracing::warn!(
             target = %key,
@@ -641,6 +647,7 @@ fn committed_mode_or(key: CcdTargetKey, requested: Mode) -> Mode {
         width,
         height,
         refresh_hz,
+        refresh_mhz: 0,
     }
 }
 
@@ -939,6 +946,13 @@ pub fn driver_protocol() -> Option<u32> {
     let m = init(Box::new(crate::driver::PfVdisplayDriver));
     let v = m.driver_proto.load(Ordering::Relaxed);
     (v != 0).then_some(v)
+}
+
+/// Whether the driver runs a monitor at a rate that is not whole hertz. A driver nobody
+/// opened yet counts as one that does: the first session asks, and its display's read-back
+/// answers.
+pub fn runs_exact_rates() -> bool {
+    driver_protocol().is_none_or(|v| v >= pf_driver_proto::EXACT_RATE_SINCE)
 }
 
 pub fn hw_cursor_capable() -> bool {
@@ -1643,6 +1657,7 @@ impl VirtualDisplayManager {
         VirtualOutput {
             node_id: 0,
             preferred_mode: Some((mon.mode.width, mon.mode.height, mon.mode.refresh_hz)),
+            refresh_mhz: Some(mon.mode.millihz()),
             win_capture: mon.target(),
             pool_gen: Some(mon.generation),
             keepalive: Box::new(MonitorLease {
@@ -3010,6 +3025,7 @@ mod tests {
             width,
             height,
             refresh_hz,
+            refresh_mhz: 0,
         }
     }
 

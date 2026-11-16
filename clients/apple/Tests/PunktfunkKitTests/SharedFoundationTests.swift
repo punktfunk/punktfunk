@@ -796,6 +796,21 @@ final class SharedFoundationTests: XCTestCase {
         XCTAssertEqual([set.width, set.height, set.hz], [1_920, 1_080, 120])
     }
 
+    /// Native asks for the display's exact rate; a picked rate is whole hertz as picked.
+    func testNativeRefreshIsTheDisplaysExactRate() {
+        var s = EffectiveSettings()
+        s.refreshHz = 0
+        XCTAssertEqual(s.streamRefreshMilliHz(nativeMilliHz: 59_940), 59_940)
+        XCTAssertEqual(s.streamRefreshMilliHz(nativeMilliHz: 23_976), 30_000)
+        s.refreshHz = 60
+        XCTAssertEqual(s.streamRefreshMilliHz(nativeMilliHz: 59_940), 60_000)
+        XCTAssertEqual(RefreshRate.whole(milliHz: 59_940), 60)
+        XCTAssertEqual(RefreshRate.whole(milliHz: 119_880), 120)
+        XCTAssertEqual(RefreshRate.label(milliHz: 144_000), "144")
+        let fraction = RefreshRate.label(milliHz: 59_940)
+        XCTAssertTrue(fraction == "59.94" || fraction == "59,94", fraction)
+    }
+
     /// Above 1x the connect names the chosen size as its view beside the scaled mode; 1x and
     /// below name none. An override that brings the mode down to the view drops it. The desktop
     /// twin is `the_connect_names_the_view_above_1x`.

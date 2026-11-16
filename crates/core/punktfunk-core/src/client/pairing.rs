@@ -230,6 +230,7 @@ async fn knock_once(conn: &quinn::Connection, name: &str) -> Result<()> {
                 width: 1280,
                 height: 720,
                 refresh_hz: 60,
+                refresh_mhz: 0,
             },
             compositor: crate::config::CompositorPref::Auto,
             gamepad: crate::config::GamepadPref::Auto,

@@ -1424,6 +1424,7 @@ struct Agreed {
     /// `Copy` so the control task's `async move` and SessionContext both keep it.
     codec: crate::encode::Codec,
     live_reconfig_ok: bool,
+    exact_rate_ok: bool,
     format_change_ok: bool,
     /// The further screens the client asked for, when it speaks them.
     screens: Option<Vec<v2msg::Screen>>,
@@ -1480,6 +1481,7 @@ async fn negotiate_session(
             .is_some_and(|e| e.identity == crate::vdisplay::policy::Identity::PerClientMode);
         reconfig_allowed(n.compositor, per_client_mode_identity, mirrored)
     };
+    let exact_rate_ok = handshake::runs_exact_rate(n.compositor, mirrored);
     // A mirror shares another session's capture: its format stays.
     let format_change_ok = !mirrored;
     let codec = crate::encode::codec_from_wire(n.welcome.codec);
@@ -1501,6 +1503,7 @@ async fn negotiate_session(
         n,
         codec,
         live_reconfig_ok,
+        exact_rate_ok,
         format_change_ok,
         screens,
     })
@@ -1827,6 +1830,7 @@ fn spawn_control(
         anchored: features.has(punktfunk_core::quic::v2::registry::FEATURE_STREAM_CONFIG),
         codec,
         live_reconfig_ok: agreed.live_reconfig_ok,
+        exact_rate_ok: agreed.exact_rate_ok,
         // `0` is an older client's byte: it decodes HEVC.
         client_codecs: match hello.video_codecs {
             0 => punktfunk_core::quic::CODEC_HEVC,
@@ -2722,9 +2726,10 @@ fn bind_data_plane(
     }
 }
 
-/// Integer Hz from `1/effective_hz` (exact). Differs from the request when e.g. KWin caps at 60.
-fn interval_hz(interval: std::time::Duration) -> u32 {
-    (1.0 / interval.as_secs_f64()).round() as u32
+/// The rate in millihertz whose frame lasts `interval`. Exact below 1 kHz, where a
+/// nanosecond is under half a millihertz. Differs from the request when e.g. KWin caps at 60.
+fn interval_mhz(interval: std::time::Duration) -> u32 {
+    (1_000.0 / interval.as_secs_f64()).round() as u32
 }
 
 /// Mode the pipeline is actually delivering, for a corrective `Reconfigured` ack. Diverges
@@ -2734,11 +2739,7 @@ fn delivered_mode(
     frame_height: u32,
     interval: std::time::Duration,
 ) -> punktfunk_core::Mode {
-    punktfunk_core::Mode {
-        width: frame_width,
-        height: frame_height,
-        refresh_hz: interval_hz(interval),
-    }
+    punktfunk_core::Mode::exact(frame_width, frame_height, interval_mhz(interval))
 }
 
 /// The seat a profile streams on: the head of its id. Short enough for a socket name, and

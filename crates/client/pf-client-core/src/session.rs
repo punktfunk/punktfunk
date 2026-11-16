@@ -2269,6 +2269,7 @@ fn parse_debug_reconfigure(s: &str) -> Option<(Mode, Duration)> {
         width: w.trim().parse().ok()?,
         height: h.trim().parse().ok()?,
         refresh_hz: hz.trim().parse().ok()?,
+        refresh_mhz: 0,
     };
     Some((mode, Duration::from_secs(secs_s.trim().parse().ok()?)))
 }
@@ -2489,6 +2490,7 @@ mod tests {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
+            refresh_mhz: 0,
         }
     }
 

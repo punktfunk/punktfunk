@@ -2421,6 +2421,7 @@ mod tests {
                 width: 2560,
                 height: 1440,
                 refresh_hz: 10,
+                refresh_mhz: 0,
             },
             identity: ("client".into(), "desk".into()),
             vulkan: None,
@@ -2466,6 +2467,7 @@ mod tests {
                 width: 2560,
                 height: 1440,
                 refresh_hz: 30,
+                refresh_mhz: 0,
             }
         );
         assert_eq!(params.pin, Some([9; 32]));
@@ -2527,6 +2529,7 @@ mod tests {
                 width: n(0),
                 height: n(1),
                 refresh_hz: n(2),
+                refresh_mhz: 0,
             }
         };
         let probes = |native: Mode, hdr_enabled: bool| Probes {
@@ -2670,6 +2673,7 @@ mod tests {
                         width: 1920,
                         height: 1080,
                         refresh_hz: 60,
+                        refresh_mhz: 0,
                     },
                     identity: ("client".into(), "desk".into()),
                     vulkan: None,

@@ -1128,6 +1128,7 @@ mod tests {
             width: WIDE.0,
             height: WIDE.1,
             refresh_hz: 60,
+            refresh_mhz: 0,
         }
     }
 
@@ -1282,13 +1283,15 @@ mod tests {
             width,
             height,
             refresh_hz,
+            refresh_mhz: 0,
         }
     }
 
-    /// The fake's mode, and what its 16 ms interval delivers at each size.
+    /// The fake's mode, and what its 16 ms interval delivers at each size: 62.5 Hz.
     const ASKED: punktfunk_core::Mode = mode(SMALL, 60);
-    const DELIVERED: punktfunk_core::Mode = mode(SMALL, 63);
-    const DELIVERED_WIDE: punktfunk_core::Mode = mode(WIDE, 63);
+    const DELIVERED: punktfunk_core::Mode = punktfunk_core::Mode::exact(SMALL.0, SMALL.1, 62_500);
+    const DELIVERED_WIDE: punktfunk_core::Mode =
+        punktfunk_core::Mode::exact(WIDE.0, WIDE.1, 62_500);
 
     /// `rate_kbps` is the plan's, which an encoder-only build opens at.
     fn script(s: Script, rate_kbps: u32, keyframes: &Arc<AtomicU32>) -> Result<Built> {

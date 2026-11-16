@@ -121,6 +121,12 @@ fun StreamScreen(
     // The negotiated stream refresh, known from the handshake (0 = unknown / older native lib) —
     // drives the panel mode pin, the render-rate vote, and the presenter's latch grid.
     val streamHz = remember(handle) { NativeBridge.nativeVideoSize(handle)?.getOrNull(2) ?: 0 }
+    // The same rate to the millihertz: 59 940 where the host delivers the panel's 59.94 Hz. The
+    // mode pin and the rate votes take this one, so a table with 59.94 and 60 lands on the first.
+    val streamMilliHz = remember(handle) {
+        NativeBridge.nativeVideoSize(handle)?.getOrNull(3)?.takeIf { it > 0 } ?: (streamHz * 1000)
+    }
+    val streamRate = streamMilliHz / 1000f
     // The negotiated size, landscape — a stream of the panel's own size pins the panel to it.
     val streamSize = remember(handle) {
         NativeBridge.nativeVideoSize(handle)?.takeIf { it.size >= 2 && it[0] > 0 && it[1] > 0 }
@@ -210,7 +216,7 @@ fun StreamScreen(
 
     // Video, audio and the mic, started and stopped with the video surface.
     val planes = remember(handle) {
-        StreamPlanes(context, session, ui, isTv, isChromeOs, streamHz, streamSize)
+        StreamPlanes(context, session, ui, isTv, isChromeOs, streamRate, streamSize)
     }
 
     // Everything that runs beside the picture for the session — the pad router and its chords,
@@ -328,7 +334,7 @@ fun StreamScreen(
     // Everything this stream does to the window — wake/Wi-Fi locks, the refresh pin, ALLM, the
     // cutout and soft-keyboard modes — and the prior values it puts back.
     val streamWindow = remember(handle) {
-        StreamWindow(activity, context, composeView, lowLatencyMode, isTv, streamHz, streamSize)
+        StreamWindow(activity, context, composeView, lowLatencyMode, isTv, streamRate, streamSize)
     }
 
 
@@ -442,10 +448,11 @@ fun StreamScreen(
     // A live mode switch, shown at [view] when the mode is larger, none clearing it; [keepView]
     // keeps the host's own instead. The asked-for mode shows at once, the host's answer half a
     // second later.
-    fun switchMode(w: Int, h: Int, hz: Int, view: Pair<Int, Int>?, keepView: Boolean = false) {
+    // [milliHz] is the exact rate behind [hz], `hz * 1000` for a whole one.
+    fun switchMode(w: Int, h: Int, hz: Int, milliHz: Int, view: Pair<Int, Int>?, keepView: Boolean = false) {
         val (vw, vh) = if (keepView) -1 to -1 else (view?.first ?: 0) to (view?.second ?: 0)
-        if (NativeBridge.nativeRequestMode(handle, w, h, hz, vw, vh)) {
-            requestedMode = intArrayOf(w, h, hz)
+        if (NativeBridge.nativeRequestMode(handle, w, h, hz, milliHz, vw, vh)) {
+            requestedMode = intArrayOf(w, h, hz, milliHz)
             scope.launch {
                 delay(500)
                 NativeBridge.nativeVideoSize(handle)?.takeIf { it.size >= 3 }?.let { requestedMode = it }
@@ -469,7 +476,13 @@ fun StreamScreen(
         val base = initialSettings.effectiveMode(context, spanned = l == ScreenLayout.SPANNED)
         val (mode, view) = initialSettings.streamAsk(base, null) { base }
         val (w, h, hz) = mode
-        if (!intArrayOf(w, h, hz).contentEquals(requestedMode)) switchMode(w, h, hz, view)
+        // Native's exact rate, unless the ask landed on another whole one.
+        val exact = initialSettings.effectiveRefreshMilliHz(context)
+        val milliHz = if (wholeHz(exact) == hz) exact else hz * 1000
+        val live = requestedMode
+        val same = live.size >= 3 && live[0] == w && live[1] == h &&
+            live.getOrElse(3) { live[2] * 1000 } == milliHz
+        if (!same) switchMode(w, h, hz, milliHz, view)
     }
 
     /** The pair's next layout, remembered, and the mode that goes with it. */
@@ -570,7 +583,10 @@ fun StreamScreen(
         // the view.
         requestMode = { w, h, hz ->
             modePicked = true
-            switchMode(w, h, hz, null, keepView = true)
+            // The ring's own rate is the one this session connected at, fraction and all; every
+            // other rate it offers is whole hertz.
+            val milliHz = if (hz == streamHz) streamMilliHz else hz * 1000
+            switchMode(w, h, hz, milliHz, null, keepView = true)
         },
         screenLayouts = { layoutsOffered },
         screenLayout = { layout },
@@ -608,7 +624,10 @@ fun StreamScreen(
                     .joinToString(" · ").ifEmpty { "Punktfunk" },
                 // The size that arrives: a host that scales sends less than its mode.
                 detail = requestedMode.takeIf { it.size >= 3 && it[0] > 0 }
-                    ?.let { m -> (decodedSize ?: m).let { "${it[0]}×${it[1]} · ${m[2]} Hz" } }.orEmpty(),
+                    ?.let { m ->
+                        val rate = hzLabel(m.getOrElse(3) { m[2] * 1000 })
+                        (decodedSize ?: m).let { "${it[0]}×${it[1]} · $rate Hz" }
+                    }.orEmpty(),
             ),
             history = statsHistory,
             stats = statsLines,

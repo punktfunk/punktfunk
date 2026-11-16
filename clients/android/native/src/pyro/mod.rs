@@ -294,7 +294,7 @@ mod imp {
                 window,
                 opts.surface_size.clone(),
                 opts.src_crop.clone(),
-                client.mode().refresh_hz as f32,
+                client.mode().millihz() as f32 / 1000.0,
                 opts.force_rate_switch(),
             )
             .unwrap_or_else(|e| {
