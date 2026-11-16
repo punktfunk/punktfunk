@@ -500,12 +500,16 @@ impl StreamState {
 
     /// Tell what the current epoch delivers and encodes, off the live geometry: the control
     /// task, which sends the client what it does not hold and, when `corrects`, a correction to
-    /// a client that takes no configs; `/status` the mode and format.
+    /// a client that takes no configs; `/status` the mode and format; the admission row the
+    /// mode a later joiner is admitted at.
     pub(super) fn tell(&self, corrects: bool) {
         let g = &self.live.geometry;
         let delivered = g.delivered();
         let packed = pack_mode(delivered.width, delivered.height, delivered.refresh_hz);
         self.shared.live_mode.store(packed, Ordering::Relaxed);
+        let m = g.intent().mode();
+        let admitted = (m.width, m.height, m.refresh_hz);
+        crate::vdisplay::admission::publish_mode(self.facts.life.stop_flag(), admitted);
         let format = format_of(&self.plan, &*self.live.capturer, self.bit_depth);
         crate::session_status::set_format(
             self.live_session.id,

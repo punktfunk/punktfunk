@@ -672,8 +672,8 @@ impl StreamState {
 
     /// Swap the build in, then the plan's epilogue: the display request it commits to, what later
     /// joiners read off it (colour, format, and the compositor and route it moved to), the input
-    /// route, the rate, the further screens, the mode, which a switch also gives later joiners,
-    /// and who hears it, the gap.
+    /// route, the rate, the further screens, who hears the mode, the gap. The swap's tell gives
+    /// later joiners the mode.
     fn commit(
         &mut self,
         plan: &RebuildPlan,
@@ -683,7 +683,6 @@ impl StreamState {
         trace: Option<&Trace>,
     ) {
         let e = plan.epilogue;
-        let ran = self.live.geometry.intent().mode();
         // The open frame is the old encoder's until the new one takes over: a failed build keeps
         // both, and the new encoder numbered its first AU past it.
         self.close_open_frame();
@@ -736,10 +735,6 @@ impl StreamState {
             }
         }
         let m = plan.intent.mode();
-        if plan.reason == super::swap::SwapReason::ModeSwitch && m != ran {
-            let mode = (m.width, m.height, m.refresh_hz);
-            crate::vdisplay::admission::publish_mode(self.facts.life.stop_flag(), mode);
-        }
         if e.keyframe {
             self.live.enc.request_keyframe();
         }
@@ -2285,12 +2280,11 @@ pub(crate) mod tests {
     }
 
     /// U10: an owner's commit republishes what a later joiner reads off its row: the mode a
-    /// switch built, the colour a codec change lit, the compositor, route and shared format a
-    /// session switch moved to. A failed build leaves what runs. A source that moved its mode
-    /// with no ask leaves the row at the mode it ran before.
+    /// switch built or a source moved to, the colour a codec change lit, the compositor, route
+    /// and shared format a session switch moved to. A failed build leaves what runs.
     #[test]
     fn a_commit_republishes_what_joiners_read() {
-        use crate::native::tests::Verdict::{self, Other, Wanted};
+        use crate::native::tests::Verdict::{self, Wanted};
         use crate::vdisplay::admission;
         // The ask, its build, whether a joiner then reads the mode that runs.
         type Row = (&'static str, fn() -> RebuildAsk, Script, bool, Verdict);
@@ -2322,8 +2316,8 @@ pub(crate) mod tests {
                 "source mode",
                 || RebuildAsk::SourceMode(DELIVERED),
                 Script::Encoder,
-                false,
-                Other,
+                true,
+                Wanted,
             ),
         ];
         for (name, ask, built, mode_told, verdict) in rows {
