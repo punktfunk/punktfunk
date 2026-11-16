@@ -128,10 +128,6 @@ pub struct SessionPlan {
     /// wedge on multi-slice frames). Applied to every encoder this plan opens so slicing cannot
     /// change shape across a rebuild.
     pub slices: u32,
-    /// The view and fit the encoder frames the picture for: a joiner's own, or the view a client
-    /// shows its larger mode at. `None` streams the source as captured, or a mirrored head
-    /// fitted to the negotiated size. Says nothing about whose display it is.
-    pub reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     /// The session streams a host monitor, not a display of its own: the device's screen as the
     /// handshake resolved it. Set only through [`Self::mirroring`], which picks the capture.
     pub mirrored: bool,
@@ -258,7 +254,6 @@ impl SessionPlan {
             gamescope_cursor: false,
             sdr10_native: false,
             slices,
-            reframe_to: None,
             mirrored: false,
         }
     }
@@ -563,15 +558,13 @@ impl SessionPlan {
 }
 
 /// Open the encoder for a `captured` picture through `open(framing)`, which opens at
-/// `framing.out`, and return it with the framing it encodes. `reframe_to` frames the picture
-/// for its view; a `mirrored` head larger than the client's `negotiated` picture fits inside
-/// it. Either crops and scales on ingest; a backend whose caps cannot, or whose framed open
-/// fails, is reopened unframed.
+/// `framing.out`, and return it with the framing it encodes. `framing` fits or crops the picture
+/// into a view: the client's own, a joiner's, or the client's size for a mirrored head. It crops
+/// and scales on ingest; a backend whose caps cannot, or whose framed open fails, is reopened
+/// unframed.
 pub(crate) fn open_encoder_fitted(
     captured: (u32, u32),
-    negotiated: (u32, u32),
-    reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
-    mirrored: bool,
+    framing: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     mut open: impl FnMut(
         punktfunk_core::video_fit::Reframe,
     ) -> anyhow::Result<Box<dyn crate::encode::Encoder>>,
@@ -579,10 +572,9 @@ pub(crate) fn open_encoder_fitted(
     Box<dyn crate::encode::Encoder>,
     punktfunk_core::video_fit::Reframe,
 )> {
-    use punktfunk_core::video_fit::{Reframe, VideoFit};
+    use punktfunk_core::video_fit::Reframe;
     let full = Reframe::full(captured);
-    let Some((fit, view)) = reframe_to.or_else(|| mirrored.then_some((VideoFit::Fit, negotiated)))
-    else {
+    let Some((fit, view)) = framing else {
         return Ok((open(full)?, full));
     };
     let framed = Reframe::plan(fit, captured, view);
@@ -703,7 +695,7 @@ pub(crate) mod tests {
         let view = Some((VideoFit::Fit, (1366, 768)));
         for capable in [true, false] {
             let (mut opens, crop) = (Vec::new(), std::sync::Arc::default());
-            let (_, framed) = open_encoder_fitted((2048, 1152), (2048, 1152), view, false, |r| {
+            let (_, framed) = open_encoder_fitted((2048, 1152), view, |r| {
                 assert_eq!(r.source, (2048, 1152), "the opener sees the whole framing");
                 opens.push(r.out);
                 Ok(Box::new(Frames(capable, std::sync::Arc::clone(&crop))))
@@ -720,7 +712,7 @@ pub(crate) mod tests {
         }
         // A framed open that fails is tried once more unframed.
         let mut opens = Vec::new();
-        let (_, framed) = open_encoder_fitted((2048, 1152), (2048, 1152), view, false, |r| {
+        let (_, framed) = open_encoder_fitted((2048, 1152), view, |r| {
             opens.push(r.out);
             if r.is_full() {
                 Ok(Box::new(Frames(true, Default::default())))
@@ -733,7 +725,7 @@ pub(crate) mod tests {
         assert!(framed.is_full());
         // No view and no mirror: the capture as it is, opened once.
         let mut opens = Vec::new();
-        let (_, framed) = open_encoder_fitted((2048, 1152), (1366, 768), None, false, |r| {
+        let (_, framed) = open_encoder_fitted((2048, 1152), None, |r| {
             opens.push(r.out);
             Ok(Box::new(Frames(true, Default::default())))
         })

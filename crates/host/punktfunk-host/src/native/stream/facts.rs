@@ -22,9 +22,6 @@ pub(super) struct SessionFacts {
     /// Session totals; this loop notes every encoder rate it adopts.
     pub(super) counters: Arc<crate::session_status::SessionCounters>,
     pub(super) conn: super::super::link::SessionLink,
-    /// The client's ask at bring-up. A mirror's encoder fits to it; the display may deliver
-    /// another size.
-    pub(super) negotiated: punktfunk_core::Mode,
     pub(super) bitrate_auto: bool,
     /// PyroWave: an explicit-rate stream paces at the link.
     pub(super) pyrowave: bool,

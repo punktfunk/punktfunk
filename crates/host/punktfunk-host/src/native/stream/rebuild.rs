@@ -400,7 +400,6 @@ impl StreamState {
             RebuildAsk::Mode(asked) => {
                 let (new_mode, view) = (asked.mode(), plan.intent.view());
                 tracing::info!(?new_mode, ?view, "rebuilding pipeline for mode switch");
-                self.plan.reframe_to = plan.intent.framing();
             }
             RebuildAsk::TopologyReassert(_) => tracing::info!(
                 "exclusive-topology eviction bounced the virtual display's modes — rebuilding \
@@ -481,7 +480,6 @@ impl StreamState {
             &self.facts.terms,
             codec,
             &v,
-            self.plan.reframe_to,
             &self.display.tenure,
             compositor,
             route,
@@ -606,7 +604,7 @@ impl StreamState {
             &self.plan,
             &*self.live.capturer,
             &self.live.frame,
-            (self.facts.negotiated.width, self.facts.negotiated.height),
+            intent.framing(),
             self.delivered_mode().refresh_hz,
             |w, h| ed.enc_kbps(kbps_for(w, h)) as u64 * 1000,
             self.bit_depth,
@@ -662,7 +660,13 @@ impl StreamState {
             }
             Rate::Applied => plan.rate_kbps,
         };
-        let next = self.resize(plan.intent.mode(), kbps_for, trace, recover_ring)?;
+        let next = self.resize(
+            intent.mode(),
+            intent.framing(),
+            kbps_for,
+            trace,
+            recover_ring,
+        )?;
         let rate_kbps = match &next {
             Next::Encoder { reframe, .. } => kbps_for(reframe.out.0, reframe.out.1),
             _ => plan.rate_kbps,
@@ -1110,7 +1114,6 @@ pub(crate) mod tests {
     /// The fake framed for `view` at the mode it runs.
     fn frame_at(f: &mut Session, view: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>) {
         f.st.live.intent = Intent::of(f.st.live.intent.mode(), view);
-        f.st.plan.reframe_to = view;
     }
 
     /// What a site leaves when nothing new runs: its build failed (the fake's display never
@@ -1735,8 +1738,8 @@ pub(crate) mod tests {
             RebuildAsk::Mode(ask(ASKED, None)),
         ] {
             let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
-            let built = f.st.perform(plan, ask, |st, plan, _, _| {
-                opened_for.push(st.plan.reframe_to);
+            let built = f.st.perform(plan, ask, |_, plan, _, _| {
+                opened_for.push(plan.intent.framing());
                 script(Script::Encoder, plan.rate_kbps, &keyframes)
             });
             assert!(matches!(built, Ok(Rebuilt::Built)));
@@ -1787,8 +1790,8 @@ pub(crate) mod tests {
             (Build::Encoder, ASKED)
         );
         let mut opened_for = None;
-        let built = f.st.perform(plan, ask, |st, plan, _, _| {
-            opened_for = st.plan.reframe_to;
+        let built = f.st.perform(plan, ask, |_, plan, _, _| {
+            opened_for = plan.intent.framing();
             script(Script::Encoder, plan.rate_kbps, &keyframes)
         });
         assert!(matches!(built, Ok(Rebuilt::Built)));
@@ -1909,7 +1912,7 @@ pub(crate) mod tests {
         let mut f = super::super::swap::tests::fake();
         let hd = mode((1920, 1080), 60);
         f.st.live.frame = frame((1920, 1080));
-        (f.st.live.intent, f.st.facts.negotiated) = (Intent::of(hd, None), hd);
+        f.st.live.intent = Intent::of(hd, None);
         f.st.live.interval = hd.frame_interval();
         f
     }
@@ -2124,14 +2127,14 @@ pub(crate) mod tests {
             let built = f.st.perform(plan, ask, |st, plan, _, _| {
                 opened_for = Some(
                     st.build_request(plan.intent, plan.rate_kbps)
-                        .plan
-                        .reframe_to,
+                        .intent
+                        .framing(),
                 );
                 script(Script::Pipeline(SMALL, 20_000), plan.rate_kbps, &keyframes)
             });
             assert!(matches!(built, Ok(Rebuilt::Built)));
             assert_eq!(opened_for, Some(view), "the build opens framed");
-            assert_eq!(f.st.plan.reframe_to, view, "the view stays");
+            assert_eq!(f.st.live.intent.framing(), view, "the view stays");
         }
     }
 
@@ -2151,8 +2154,8 @@ pub(crate) mod tests {
         let built = f.st.perform(plan, ask, |st, plan, _, _| {
             opened_for = Some(
                 st.build_request(plan.intent, plan.rate_kbps)
-                    .plan
-                    .reframe_to,
+                    .intent
+                    .framing(),
             );
             framed(script(
                 Script::Pipeline(SMALL, 20_000),
@@ -2162,7 +2165,7 @@ pub(crate) mod tests {
         });
         assert!(matches!(built, Ok(Rebuilt::Built)));
         assert_eq!(f.st.display.compositor, Compositor::Gamescope);
-        assert_eq!((opened_for, f.st.plan.reframe_to), (Some(view), view));
+        assert_eq!((opened_for, f.st.live.intent.framing()), (Some(view), view));
         let told: Vec<_> = heard(&mut f).into_iter().map(|(_, e, _)| e).collect();
         assert_eq!(told, [(8, 8)]);
     }
@@ -2211,7 +2214,11 @@ pub(crate) mod tests {
                 true,
                 Open::Frames
             ));
-            assert_eq!(f.st.plan.reframe_to, framed_720, "framed on the live mode");
+            assert_eq!(
+                f.st.live.intent.framing(),
+                framed_720,
+                "framed on the live mode"
+            );
             let told = heard(&mut f);
             assert_eq!(told.last(), Some(&(live, (1280, 720), true)), "corrected");
             let held = held.delivered_at(live);
@@ -2221,7 +2228,7 @@ pub(crate) mod tests {
             assert_eq!(carried, (pick, None), "{pick:?}: the ask carries no view");
             let built = rebuild_with(&mut f, RebuildAsk::Mode(asked), true, Open::Frames);
             assert_eq!(built, rebuilds, "{pick:?} ({verdict:?})");
-            assert_eq!(f.st.plan.reframe_to, kept, "{pick:?} ({verdict:?})");
+            assert_eq!(f.st.live.intent.framing(), kept, "{pick:?} ({verdict:?})");
             let told = heard(&mut f);
             assert_eq!(
                 told.last(),
@@ -2405,7 +2412,7 @@ pub(crate) mod tests {
         });
         assert!(matches!(kept, Ok(Rebuilt::Kept(_))));
         assert_eq!(
-            (f.st.live.intent.mode(), f.st.plan.reframe_to),
+            (f.st.live.intent.mode(), f.st.live.intent.framing()),
             (ASKED, view)
         );
         let told: Vec<_> = heard(&mut f).into_iter().map(|(m, _, c)| (m, c)).collect();
@@ -2415,7 +2422,7 @@ pub(crate) mod tests {
         let mut retried = None;
         let built = f.st.perform(plan, ask, |st, plan, _, _| {
             let req = st.build_request(plan.intent, plan.rate_kbps);
-            retried = Some((req.intent.mode(), req.plan.reframe_to));
+            retried = Some((req.intent.mode(), req.intent.framing()));
             script(Script::Pipeline(SMALL, 20_000), plan.rate_kbps, &keyframes)
         });
         assert!(matches!(built, Ok(Rebuilt::Built)));
@@ -2463,7 +2470,6 @@ pub(crate) mod tests {
             &terms,
             crate::encode::Codec::H265,
             &terms.verdict,
-            None,
             &tenure,
             Compositor::Mutter,
             None,
@@ -2525,7 +2531,7 @@ pub(crate) mod tests {
         Box<dyn crate::encode::Encoder>,
         punktfunk_core::video_fit::Reframe,
     )> {
-        crate::session_plan::open_encoder_fitted(size, size, view, false, |_| {
+        crate::session_plan::open_encoder_fitted(size, view, |_| {
             let crop = Default::default();
             Ok(Box::new(crate::session_plan::tests::Frames(true, crop)))
         })
@@ -2534,12 +2540,7 @@ pub(crate) mod tests {
     /// A full build at the plan's mode, framed for the view `prepare` set.
     fn display_built(st: &StreamState, plan: &RebuildPlan) -> Result<Built> {
         let size = (plan.intent.mode().width, plan.intent.mode().height);
-        let (enc, reframe) = fitted(
-            size,
-            st.build_request(plan.intent, plan.rate_kbps)
-                .plan
-                .reframe_to,
-        )?;
+        let (enc, reframe) = fitted(size, plan.intent.framing())?;
         let pipeline = Pipeline {
             capturer: Box::new(crate::capture::SyntheticCapturer::new(size.0, size.1, 60)),
             enc,
@@ -2592,7 +2593,6 @@ pub(crate) mod tests {
         let live = vector_mode(&row["live"]["mode"]);
         let size = (live.width, live.height);
         f.st.live.frame = frame(size);
-        f.st.facts.negotiated = live;
         f.st.live.intent = Intent::of(live, None);
         f.st.live.interval = live.frame_interval();
         let view = vector_size(&row["live"]["view"]).map(|v| (VideoFit::Fit, v));
@@ -2645,7 +2645,7 @@ pub(crate) mod tests {
             "build": build,
             "kept": {
                 "mode": [kept.width, kept.height, kept.refresh_hz],
-                "view": f.st.plan.reframe_to.map(|(_, v)| [v.0, v.1]),
+                "view": f.st.live.intent.framing().map(|(_, v)| [v.0, v.1]),
             },
             "told": told,
         })

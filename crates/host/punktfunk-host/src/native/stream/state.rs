@@ -579,8 +579,8 @@ impl StreamState {
         let mut plan = session_plan(&ctx, compositor);
         let (cursor, vd_params) = display_request(&ctx, &plan, compositor);
         let (streamed_wire, slice_wire) = wire_request(&ctx);
-        let (intent, bitrate_kbps, adopted) = settle_mode(&ctx, &mut plan, prepared.is_some());
-        let mut facts = session_facts(&ctx, &plan, intent.mode(), streamed_wire);
+        let (intent, bitrate_kbps, adopted) = settle_mode(&ctx, &plan, prepared.is_some());
+        let mut facts = session_facts(&ctx, &plan, streamed_wire);
         let (shared, fec) = shared_handles(&ctx);
         let c = ctx.common;
         // The data plane is bound and idle until the send thread starts. Answer the client's
@@ -987,13 +987,12 @@ fn wire_request(ctx: &SessionContext) -> (bool, bool) {
 }
 
 /// The intent and total wire budget (kbps) bring-up builds at, and whether it adopted a mode ask
-/// the control task accepted meanwhile; an adopted framing moves into `plan`. Adopting builds
-/// once: two RecordVirtual monitors ~400 ms apart segfault mutter inside
-/// `meta_monitor_manager_rebuild`. A prepared pipeline stays as built. PyroWave's pin follows
-/// an adopted ask's picture.
+/// the control task accepted meanwhile. Adopting builds once: two RecordVirtual monitors
+/// ~400 ms apart segfault mutter inside `meta_monitor_manager_rebuild`. A prepared pipeline
+/// stays as built. PyroWave's pin follows an adopted ask's picture.
 fn settle_mode(
     ctx: &SessionContext,
-    plan: &mut crate::session_plan::SessionPlan,
+    plan: &crate::session_plan::SessionPlan,
     prepared: bool,
 ) -> (crate::native::geometry::Intent, u32, bool) {
     let c = &ctx.common;
@@ -1013,7 +1012,6 @@ fn settle_mode(
              instead of building twice"
         );
         intent = ask;
-        plan.reframe_to = ask.framing();
         if plan.codec == crate::encode::Codec::PyroWave {
             let running = ctx.terms.bitrate_auto().then_some(bitrate_kbps);
             let picture = ask.picture();
@@ -1035,7 +1033,6 @@ fn settle_mode(
 fn session_facts(
     ctx: &SessionContext,
     plan: &crate::session_plan::SessionPlan,
-    mode: punktfunk_core::Mode,
     streamed_wire: bool,
 ) -> SessionFacts {
     let c = &ctx.common;
@@ -1047,7 +1044,6 @@ fn session_facts(
         life: c.life.clone(),
         counters: c.counters.clone(),
         conn: ctx.conn.clone(),
-        negotiated: mode,
         bitrate_auto: ctx.terms.bitrate_auto(),
         pyrowave: plan.codec == crate::encode::Codec::PyroWave,
         streamed_wire,
@@ -1964,17 +1960,12 @@ mod tests {
     fn settled(w: Welcomed, queued: &[ModeAsk], prepared: bool) -> Settled {
         let f = super::super::swap::tests::fake();
         let ctx = context(&f, w, queued);
-        let mut plan = session_plan(&ctx, crate::vdisplay::Compositor::Mutter);
-        let (intent, kbps, adopted) = settle_mode(&ctx, &mut plan, prepared);
+        let plan = session_plan(&ctx, crate::vdisplay::Compositor::Mutter);
+        let (intent, kbps, adopted) = settle_mode(&ctx, &plan, prepared);
         let mode = intent.mode();
-        let facts = session_facts(&ctx, &plan, mode, false);
-        assert_eq!(
-            facts.negotiated, mode,
-            "the first build runs at the settled mode"
-        );
         let left = ctx.common.ends.reconfig.try_iter().last();
         let left = left.map(|a| (a.mode(), a.view()));
-        ((mode, kbps, adopted), plan.reframe_to.map(|(_, v)| v), left)
+        ((mode, kbps, adopted), intent.view(), left)
     }
 
     struct SettleRow {
@@ -2054,11 +2045,10 @@ mod tests {
             view: None,
         };
         let ctx = context(&f, w, &[(asked, Some((32, 16)))]);
-        let mut plan = session_plan(&ctx, crate::vdisplay::Compositor::Mutter);
-        let (settled, kbps, adopted) = settle_mode(&ctx, &mut plan, false);
+        let plan = session_plan(&ctx, crate::vdisplay::Compositor::Mutter);
+        let (settled, kbps, adopted) = settle_mode(&ctx, &plan, false);
         assert!(adopted);
-        let facts = session_facts(&ctx, &plan, settled.mode(), false);
-        assert_eq!(facts.negotiated, asked);
+        assert_eq!(settled.mode(), asked);
         assert!(
             ctx.common.ends.reconfig.try_recv().is_err(),
             "no second build"
@@ -2195,10 +2185,7 @@ mod tests {
     fn connect_rows() {
         for r in connects() {
             let mut f = super::super::swap::tests::fake();
-            let mut plan = f.st.plan;
-            plan.reframe_to = r
-                .view
-                .map(|v| (punktfunk_core::video_fit::VideoFit::Fit, v));
+            let plan = f.st.plan;
             let pipe = first_pipeline(r.delivered, r.encoded, r.built_kbps);
             let at = asked(r.mode, r.view);
             let told = connect(&mut f, pipe, (at, r.kbps), r.adopted, &plan);

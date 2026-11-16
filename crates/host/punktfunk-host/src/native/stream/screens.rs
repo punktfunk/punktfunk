@@ -482,8 +482,9 @@ impl Drop for ScreenSet {
     }
 }
 
-/// A further screen's intent: a display of its own at the record's mode and view. Each list
-/// asks afresh, so a record with no view clears the one its loop runs.
+/// A further screen's intent: a display of its own at the record's mode and view, framed at
+/// Fit. Fit only scales: absolute input in the picture's own extent lands with no frame map.
+/// Each list asks afresh, so a record with no view clears the one its loop runs.
 fn screen_intent(s: &Screen, codec: crate::encode::Codec) -> crate::native::geometry::Intent {
     let own = crate::native::geometry::Tenure::of(None, false);
     crate::native::geometry::Intent::at_hello(s.mode, s.view, &own, codec)
@@ -566,11 +567,6 @@ fn run_screen(base: ScreenBase, mut run: ScreenRun) {
         cursor_forward: false,
         cursor_blend: false,
         gamescope_cursor: false,
-        // Fit only scales: absolute input in the picture's own extent lands with no frame map.
-        reframe_to: run
-            .ask
-            .view
-            .map(|v| (punktfunk_core::video_fit::VideoFit::Fit, v)),
         ..base.plan
     };
     if let Some(why) = over_budget() {
@@ -1003,7 +999,6 @@ mod tests {
                 gamescope_cursor: false,
                 sdr10_native: false,
                 slices: 1,
-                reframe_to: None,
                 mirrored: false,
                 rgb_full_range: crate::encode::RgbFullRange::BOTH,
                 studio_asked: crate::session_plan::StudioAsk::default(),

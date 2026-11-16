@@ -10,14 +10,15 @@ use super::*;
 
 impl StreamState {
     /// Mode-set the live monitor, restore its presentation, and open an encoder at the first
-    /// frame of the new size, at `kbps_for` the picture it encodes, for the rebuild performer to
-    /// swap in. `None` → full rebuild.
+    /// frame of the new size, framed as `framing` says, at `kbps_for` the picture it encodes, for
+    /// the rebuild performer to swap in. `None` → full rebuild.
     /// With the driver's encoder, only its pool taking a frame proves the new size; a second
     /// without one restarts the presentation once. `recover_ring` re-attaches the ring at the
     /// current mode and demands a second, newer present as proof the OS resumed presenting.
     pub(super) fn resize(
         &mut self,
         new_mode: punktfunk_core::Mode,
+        framing: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
         kbps_for: impl Fn(u32, u32) -> u32,
         trace: &crate::bringup::Trace,
         recover_ring: bool,
@@ -65,13 +66,9 @@ impl StreamState {
         let new_size = (new_mode.width, new_mode.height);
         let pre_opened = if self.plan.capture == crate::session_plan::CaptureBackend::IddPush {
             let opened = loop {
-                // Framed for the plan's view, as the new-size frames will be.
-                let fitted = crate::session_plan::open_encoder_fitted(
-                    new_size,
-                    new_size,
-                    self.plan.reframe_to,
-                    false,
-                    |framing| {
+                // Framed for the intent's view, as the new-size frames will be.
+                let fitted =
+                    crate::session_plan::open_encoder_fitted(new_size, framing, |framing| {
                         crate::capture::open_driver_encoder(
                             &self.plan,
                             &*self.live.capturer,
@@ -82,8 +79,7 @@ impl StreamState {
                             self.facts.client_hdr,
                             wire_seq_base,
                         )
-                    },
-                );
+                    });
                 match fitted {
                     Ok(e) => break Some(e),
                     Err(e) => {
@@ -197,7 +193,7 @@ impl StreamState {
                 &self.plan,
                 &*self.live.capturer,
                 &new_frame,
-                (new_mode.width, new_mode.height),
+                framing,
                 effective_hz,
                 |w, h| enc_of.enc_kbps(kbps_for(w, h)) as u64 * 1000,
                 self.bit_depth,

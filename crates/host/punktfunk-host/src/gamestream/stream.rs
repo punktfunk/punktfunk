@@ -986,16 +986,20 @@ fn gs_session_plan(cfg: &StreamConfig, cursor_blend: bool) -> crate::session_pla
     if cfg.joined.is_none() {
         return plan;
     }
-    plan.reframe_to = Some((
-        punktfunk_core::video_fit::VideoFit::Fit,
-        (cfg.width, cfg.height),
-    ));
     plan.sharing_live_display()
 }
 
-/// [`open_session_encoder`] for `frame` at the client's negotiated size, rate and depth, on the
-/// session's resolution. An IDD-push source gets the driver's encoder, which then owes access
-/// units through `ready_aus`; its wire domain continues at `wire_seq_base` (the loop's `au_seq`).
+/// What a GameStream encoder frames for: a joined display or a mirrored head fits into the
+/// client's size.
+fn gs_framing(cfg: &StreamConfig) -> Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))> {
+    let fit = punktfunk_core::video_fit::VideoFit::Fit;
+    (cfg.joined.is_some() || cfg.mirrored).then_some((fit, (cfg.width, cfg.height)))
+}
+
+/// [`open_session_encoder`] for `frame`, framed as [`gs_framing`] says, at the client's rate
+/// and depth, on the session's resolution. An IDD-push source gets the driver's encoder, which
+/// then owes access units through `ready_aus`; its wire domain continues at `wire_seq_base`
+/// (the loop's `au_seq`).
 fn gs_open_encoder(
     plan: &crate::session_plan::SessionPlan,
     capturer: &dyn Capturer,
@@ -1009,7 +1013,7 @@ fn gs_open_encoder(
         plan,
         capturer,
         frame,
-        (cfg.width, cfg.height),
+        gs_framing(cfg),
         cfg.fps,
         |_, _| enc_bps,
         gs_bit_depth(frame.format),
@@ -2512,16 +2516,16 @@ mod tests {
         }
     }
 
-    /// A joined display streams at the owner's size, so the plan fits it into the client's.
+    /// A joined display streams at the owner's size, so the encoder fits it into the client's.
     #[test]
-    fn a_joined_plan_fits_the_shared_picture_into_the_clients_size() {
-        assert_eq!(gs_session_plan(&cfg(1, false), false).reframe_to, None);
+    fn a_joined_stream_fits_the_shared_picture_into_the_clients_size() {
+        assert_eq!(gs_framing(&cfg(1, false)), None);
         let joined = StreamConfig {
             joined: Some(((3840, 2160, 120), Default::default())),
             ..cfg(1, false)
         };
         assert_eq!(
-            gs_session_plan(&joined, false).reframe_to,
+            gs_framing(&joined),
             Some((punktfunk_core::video_fit::VideoFit::Fit, (1920, 1080)))
         );
     }

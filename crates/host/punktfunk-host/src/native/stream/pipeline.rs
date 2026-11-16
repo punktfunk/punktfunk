@@ -90,8 +90,6 @@ pub(super) fn resolve_plan(
         terms,
         terms.codec,
         &terms.verdict,
-        // A mirror's fit is `SessionPlan::mirrored`'s.
-        terms.intent.framing().filter(|_| !terms.tenure.mirrors()),
         &terms.tenure,
         compositor,
         route,
@@ -99,13 +97,11 @@ pub(super) fn resolve_plan(
 }
 
 /// [`resolve_plan`] for a codec the session moved to, at the depth, HDR and chroma `v` settled
-/// for it, framed as `reframe_to` says, on the display it holds as `tenure`: what the session
-/// runs now.
+/// for it, on the display it holds as `tenure`: what the session runs now.
 pub(super) fn plan_for(
     terms: &super::super::handshake::SessionTerms,
     codec: crate::encode::Codec,
     v: &super::super::handshake::Verdict,
-    reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     tenure: &crate::native::geometry::Tenure,
     compositor: crate::vdisplay::Compositor,
     route: Option<&crate::vdisplay::GamescopeRoute>,
@@ -141,7 +137,6 @@ pub(super) fn plan_for(
     if codec == crate::encode::Codec::PyroWave {
         plan.wire_chunk = Some(terms.shard_payload);
     }
-    plan.reframe_to = reframe_to;
     if tenure.join_live() {
         plan.sharing_live_display()
     } else {
@@ -531,21 +526,21 @@ fn report_achieved_hz(
     }
 }
 
-/// Open the session's encoder for `frame` on `encoder`, the session's resolution — framed for the
-/// plan's view, or at the client's `negotiated` size when a larger head is mirrored
-/// (`session_plan::open_encoder_fitted`) — with the plan's chunking, slice ceiling and the
-/// capturer's ring depth applied, and return the framing it encodes. `bitrate_bps` is asked for
-/// that size; depth and HDR are what the source composes now (`session_plan::live_depth`). A
-/// remote-encoder source gets the driver's or worker's encoder instead, framed only for the
-/// plan's view, its wire-index domain continuing at `wire_seq_base` (the loop's `au_seq`). Both
-/// stream loops open here: GameStream's plan carries the client's own slice count.
+/// Open the session's encoder for `frame` on `encoder`, the session's resolution, framed as the
+/// intent's `framing` says (`session_plan::open_encoder_fitted`), with the plan's chunking, slice
+/// ceiling and the capturer's ring depth applied, and return the framing it encodes.
+/// `bitrate_bps` is asked for that size; depth and HDR are what the source composes now
+/// (`session_plan::live_depth`). A remote-encoder source gets the driver's or worker's encoder
+/// instead, framed only for a view on the driver, its wire-index domain continuing at
+/// `wire_seq_base` (the loop's `au_seq`). Both stream loops open here: GameStream's plan carries
+/// the client's own slice count.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn open_session_encoder(
     encoder: &crate::encode::Resolved,
     plan: &crate::session_plan::SessionPlan,
     capturer: &dyn crate::capture::Capturer,
     frame: &crate::capture::CapturedFrame,
-    negotiated: (u32, u32),
+    framing: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     hz: u32,
     bitrate_bps: impl Fn(u32, u32) -> u64,
     bit_depth: u8,
@@ -560,7 +555,7 @@ pub(crate) fn open_session_encoder(
         plan,
         capturer,
         frame,
-        negotiated,
+        framing,
         hz,
         bitrate_bps,
         bit_depth,
@@ -579,7 +574,7 @@ pub(super) fn open_session_encoder_with(
     plan: &crate::session_plan::SessionPlan,
     capturer: &dyn crate::capture::Capturer,
     frame: &crate::capture::CapturedFrame,
-    negotiated: (u32, u32),
+    framing: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     hz: u32,
     bitrate_bps: impl Fn(u32, u32) -> u64,
     bit_depth: u8,
@@ -601,9 +596,7 @@ pub(super) fn open_session_encoder_with(
         let driver = plan.capture == crate::session_plan::CaptureBackend::IddPush;
         return crate::session_plan::open_encoder_fitted(
             captured,
-            negotiated,
-            plan.reframe_to.filter(|_| driver),
-            false,
+            framing.filter(|_| driver && !plan.mirrored),
             |framing| {
                 crate::windows::idd::open_driver_encoder(
                     plan,
@@ -620,12 +613,8 @@ pub(super) fn open_session_encoder_with(
     }
     let (hdr, bit_depth) =
         crate::session_plan::live_depth(plan.hdr, capturer.colour().hdr_meta.is_some(), bit_depth);
-    let (mut enc, framed) = crate::session_plan::open_encoder_fitted(
-        captured,
-        negotiated,
-        plan.reframe_to,
-        plan.mirrored,
-        |framing| {
+    let (mut enc, framed) =
+        crate::session_plan::open_encoder_fitted(captured, framing, |framing| {
             let (width, height) = framing.out;
             open_video(
                 encoder,
@@ -645,8 +634,7 @@ pub(super) fn open_session_encoder_with(
                     full_range: plan.full_range(hdr, bit_depth),
                 },
             )
-        },
-    )?;
+        })?;
     if let Some(c) = plan.wire_chunk {
         enc.set_wire_chunking(c);
     }
@@ -800,7 +788,6 @@ fn attach_pipeline(
     if let Some(t) = trace {
         t.mark("first_frame");
     }
-    let negotiated = (mode.width, mode.height);
     let priced = intent.picture();
     let kbps_for = |w: u32, h: u32| {
         let encoded = intent.encoded((w, h));
@@ -818,7 +805,7 @@ fn attach_pipeline(
         &plan,
         &*capturer,
         &frame,
-        negotiated,
+        intent.framing(),
         effective_hz,
         |w, h| enc_of.enc_kbps(kbps_for(w, h)) as u64 * 1000,
         bit_depth,
@@ -974,7 +961,6 @@ mod tests {
             gamescope_cursor: false,
             sdr10_native: false,
             slices,
-            reframe_to: None,
             mirrored: false,
             rgb_full_range: crate::encode::RgbFullRange::BOTH,
             studio_asked: crate::session_plan::StudioAsk::default(),
@@ -1025,7 +1011,7 @@ mod tests {
                 plan,
                 &cap,
                 &frame,
-                (64, 32),
+                None,
                 hz,
                 bitrate_bps,
                 bit_depth,
@@ -1057,7 +1043,7 @@ mod tests {
             &native,
             &sdr,
             &frame,
-            (64, 32),
+            None,
             120,
             |w, h| u64::from(w * h),
             10,
@@ -1090,14 +1076,12 @@ mod tests {
                 &terms,
                 terms.codec,
                 &terms.verdict,
-                view,
                 &tenure,
                 crate::vdisplay::Compositor::Kwin,
                 None,
             )
         };
         let own = plan(Tenure::of(None, false));
-        assert_eq!(own.reframe_to, view);
         assert_eq!(own.capture, CaptureBackend::resolve(false));
         if cfg!(target_os = "windows") {
             let joiner = Tenure::of(view, false);
@@ -1144,7 +1128,6 @@ mod tests {
             &terms,
             terms.codec,
             &terms.verdict,
-            None,
             &crate::native::geometry::Tenure::of(joined, false),
             crate::vdisplay::Compositor::Kwin,
             None,
@@ -1364,7 +1347,6 @@ mod tests {
                 Intent::at_hello(mode, None, &Tenure::of(None, true), p.codec)
             }
         };
-        p.reframe_to = intent.framing().filter(|_| !p.mirrored);
         let cap = crate::capture::SyntheticCapturer::new(captured.0, captured.1, 60);
         let frame = super::super::swap::tests::frame(captured);
         let (_, reframe) = open_session_encoder_with(
@@ -1372,7 +1354,7 @@ mod tests {
             &p,
             &cap,
             &frame,
-            (mode.width, mode.height),
+            intent.framing(),
             mode.refresh_hz,
             |_, _| 0,
             8,
