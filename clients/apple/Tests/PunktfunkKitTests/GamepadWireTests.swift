@@ -11,13 +11,30 @@ final class GamepadWireTests: XCTestCase {
     func testAllButtonsListsEachForwardedButtonOnce() {
         // The values come from the C header; this pins which of them `releaseAll` walks.
         let combined: UInt32 = GamepadWire.allButtons.reduce(0) { $0 | $1 }
-        XCTAssertEqual(combined, 0x0030_F7FF)
-        XCTAssertEqual(GamepadWire.allButtons.count, 17)
+        XCTAssertEqual(combined, 0x003F_F7FF)
+        XCTAssertEqual(GamepadWire.allButtons.count, 21)
         XCTAssertEqual(GamepadWire.allButtons.count, Set(GamepadWire.allButtons).count)
-        // Paddles are defined but not yet forwarded, so they stay out of allButtons for now.
-        for paddle in [GamepadWire.paddle1, GamepadWire.paddle2, GamepadWire.paddle3, GamepadWire.paddle4] {
-            XCTAssertFalse(GamepadWire.allButtons.contains(paddle))
-        }
+    }
+
+    /// A Kishi's bumpers are its printed L4/R4 and its M2/M1 back pair goes to L5/R5. An Elite
+    /// has no bumpers, so its near back pair (P3/P1) is L4/R4 and the far one (P4/P2) L5/R5.
+    @MainActor
+    func testGripsFillL4R4ThenL5R5InGameControllerOrder() throws {
+        guard #available(macOS 14.4, iOS 17.4, tvOS 17.4, *) else { throw XCTSkip("needs 17.4") }
+        let backL = { GCButtonElementName.backLeftButton(position: $0).rawValue }
+        let backR = { GCButtonElementName.backRightButton(position: $0).rawValue }
+        let bumperL = GCButtonElementName.leftBumper.rawValue, bumperR = GCButtonElementName.rightBumper.rawValue
+        let kishi: Set = [bumperL, bumperR, backL(0), backR(0)]
+        XCTAssertEqual(GamepadCapture.grips(has: kishi.contains), [
+            GamepadWire.paddle2: bumperL, GamepadWire.paddle1: bumperR,
+            GamepadWire.paddle4: backL(0), GamepadWire.paddle3: backR(0),
+        ])
+        let elite: Set = [backL(0), backR(0), backL(1), backR(1)]
+        XCTAssertEqual(GamepadCapture.grips(has: elite.contains), [
+            GamepadWire.paddle2: backL(0), GamepadWire.paddle1: backR(0),
+            GamepadWire.paddle4: backL(1), GamepadWire.paddle3: backR(1),
+        ])
+        XCTAssertEqual(GamepadCapture.grips { _ in false }, [:])
     }
 
     /// Steam reads Quick Access on a pad without the button as Guide held, then A. The tap

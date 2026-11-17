@@ -38,21 +38,19 @@ public enum GamepadWire {
         hasButton ? [misc1] : [guide, a]
     }
 
-    /// Back-grip paddles (Xbox Elite P1–P4 / DualSense Edge / Steam-Deck L4-L5-R4-R5, as
-    /// R4/L4/R5/L5). `GamepadCapture.buttonMask` does not read them yet: GameController's
-    /// `paddleButton1..4` (Elite P1..P4) map to paddle1, paddle3, paddle2, paddle4. They stay
-    /// out of `allButtons` until that forwarding lands.
+    /// The wire's four grips, R4, L4, R5, L5 as on a Steam Deck. A pad's extra buttons land
+    /// here through `GamepadCapture.grips`.
     public static let paddle1 = UInt32(PUNKTFUNK_BTN_PADDLE1)
     public static let paddle2 = UInt32(PUNKTFUNK_BTN_PADDLE2)
     public static let paddle3 = UInt32(PUNKTFUNK_BTN_PADDLE3)
     public static let paddle4 = UInt32(PUNKTFUNK_BTN_PADDLE4)
 
     /// Every button a capture can set — walked by `GamepadCapture.feed`'s transition diff and by
-    /// each capture's `flush` on release. Paddles stay out until their capture lands (see above).
+    /// each capture's `flush` on release.
     public static let allButtons: [UInt32] = [
         dpadUp, dpadDown, dpadLeft, dpadRight, start, back,
         leftStickClick, rightStickClick, leftShoulder, rightShoulder, guide,
-        a, b, x, y, touchpadClick, misc1,
+        a, b, x, y, touchpadClick, misc1, paddle1, paddle2, paddle3, paddle4,
     ]
 
     public static let axisLSX = UInt32(PUNKTFUNK_AXIS_LS_X)
