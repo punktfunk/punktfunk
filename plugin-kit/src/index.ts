@@ -3,9 +3,13 @@
 export {
 	type AccessRequestOutcome,
 	type AccessRequestPath,
+	type LocalServer,
+	localServer,
+	reachServer,
 	requestAccess,
 	requestCores,
 	requestEmulators,
+	requestPorts,
 	unreachable,
 } from "./access.js";
 export { type CacheStore, makeCacheStore } from "./cache-store.js";

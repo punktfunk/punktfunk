@@ -147,6 +147,7 @@ host; read [Plugins](/docs/plugins) first.
 | `punktfunk-host plugins disable` | Stop and disable the runner. |
 | `punktfunk-host plugins status` | Show whether the runner is installed, enabled and running. |
 | `punktfunk-host plugins grant <plugin> <dir> [--write]` | Let a plugin reach a folder; read-only unless `--write`. |
+| `punktfunk-host plugins grant <plugin> 127.0.0.1:<port>` | Let a plugin connect to a server on this computer. `revoke` takes it back. |
 | `punktfunk-host plugins access` | List grants, pending requests and denials. |
 | `punktfunk-host plugins revoke <plugin> <dir>` | Take one grant back. |
 

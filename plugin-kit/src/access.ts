@@ -71,6 +71,77 @@ export const requestCores = (
 	post({ paths: [], cores: [...cores], ...(reason ? { reason } : {}) });
 
 /**
+ * Ask the host for TCP ports on the computer it runs on, for the operator to approve. A Linux
+ * plugin's network leads to other machines only, so a server beside the host is reached through
+ * a granted port. Each outcome's `path` is `127.0.0.1:<port>`, where the plugin connects once
+ * it is `granted`. A host that forwards no ports answers `refused:unsupported` (Windows) or
+ * nothing at all (a host before ports): there the plugin's network is as it always was.
+ */
+export const requestPorts = (
+	ports: ReadonlyArray<number>,
+	reason?: string,
+): Effect.Effect<AccessRequestOutcome[], never, HostClient> =>
+	post({ paths: [], ports: [...ports], ...(reason ? { reason } : {}) });
+
+/** A server on the computer the host runs on: the port to ask for, and where to dial it. */
+export interface LocalServer {
+	readonly port: number;
+	/** `url` with its host as `127.0.0.1`, for plain http; https keeps its name for the certificate. */
+	readonly url: string;
+}
+
+/**
+ * {@link LocalServer} when `url` names this computer: `localhost`, a loopback address, its
+ * hostname, or one of its own addresses, which a plugin's network copies and which therefore
+ * lead back into the plugin. `undefined` for a server elsewhere, or a `url` that isn't http(s).
+ */
+export const localServer = (url: string): LocalServer | undefined => {
+	let u: URL;
+	try {
+		u = new URL(url.trim());
+	} catch {
+		return undefined;
+	}
+	if (u.protocol !== "http:" && u.protocol !== "https:") return undefined;
+	const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+	const own = Object.values(os.networkInterfaces()).flatMap((list) =>
+		(list ?? []).map((a) => a.address.toLowerCase()),
+	);
+	const name = os.hostname().toLowerCase();
+	const here =
+		host === "localhost" ||
+		host.endsWith(".localhost") ||
+		/^127\.\d+\.\d+\.\d+$/.test(host) ||
+		host === "::1" ||
+		host === name ||
+		host === `${name}.local` ||
+		own.includes(host);
+	if (!here) return undefined;
+	const port = Number(u.port) || (u.protocol === "https:" ? 443 : 80);
+	if (u.protocol === "http:") u.hostname = "127.0.0.1";
+	return { port, url: u.toString().replace(/\/$/, "") };
+};
+
+/**
+ * Where to reach the server the person configured at `url`, right now. A server on another
+ * machine: `url` as it is. One on this computer ({@link localServer}): the host is asked for
+ * its port, and the answer is the loopback address once that is granted, `url` itself where
+ * the host forwards no ports, and `undefined` while the operator hasn't allowed it: say so in
+ * the plugin's status and try again later.
+ */
+export const reachServer = (
+	url: string,
+	reason?: string,
+): Effect.Effect<string | undefined, never, HostClient> =>
+	Effect.gen(function* () {
+		const local = localServer(url);
+		if (!local) return url;
+		const [answer] = yield* requestPorts([local.port], reason);
+		if (!answer || answer.outcome === "refused:unsupported") return url;
+		return answer.outcome === "granted" ? local.url : undefined;
+	});
+
+/**
  * Ask the host to put these folders before the operator; this never grants access itself. It
  * never fails either: a host that can't take the request is logged once, and the scan goes on
  * with what it can reach.

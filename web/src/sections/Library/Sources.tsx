@@ -500,10 +500,12 @@ const SourceRow: FC<{
 						className="text-left text-sm font-medium text-amber-600 hover:underline dark:text-amber-500"
 						onClick={() => setAccessOpen((open) => !open)}
 					>
-						{m.library_source_access_pending({
-							title: source.label,
-							count: access.pending.length,
-						})}
+						{access.pending.some((row) => !row.port)
+							? m.library_source_access_pending({
+									title: source.label,
+									count: access.pending.filter((row) => !row.port).length,
+								})
+							: m.library_source_port_pending({ title: source.label })}
 					</button>
 					{accessOpen && (
 						<PendingAccess

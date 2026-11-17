@@ -23,6 +23,7 @@ import type { Loadable } from "@/lib/query";
 import { m } from "@/paraglide/messages";
 import {
 	type AccessDecision,
+	AllowPort,
 	PendingAccess,
 	RecordedAccess,
 	usePluginAccess,
@@ -90,15 +91,18 @@ const InstalledAccess: FC<{
 	const person = usePerson() !== null;
 	const id = plugin.plugin_id ?? plugin.entry_id;
 	const snapshot = access.find((row) => row.plugin === id);
-	if (!id || !snapshot) return null;
+	if (!id || (!snapshot && !plugin.takes_ports)) return null;
 	const onDecide = (paths: string[], decision: AccessDecision) =>
 		onDecision(id, paths, decision);
 	return (
 		<>
-			{person && snapshot.pending.length > 0 && (
+			{snapshot && person && snapshot.pending.length > 0 && (
 				<PendingAccess access={snapshot} busy={busy} onDecide={onDecide} />
 			)}
-			<RecordedAccess access={snapshot} busy={busy} onDecide={onDecide} />
+			{snapshot && (
+				<RecordedAccess access={snapshot} busy={busy} onDecide={onDecide} />
+			)}
+			{plugin.takes_ports && <AllowPort busy={busy} onDecide={onDecide} />}
 		</>
 	);
 };

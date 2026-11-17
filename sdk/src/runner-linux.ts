@@ -16,6 +16,7 @@ import type { LogSink } from "./runner-log.js";
 import {
 	bwrapArgv,
 	expandHome,
+	grantedPorts,
 	grantedRoots,
 	homeLink,
 	netlinkFilter,
@@ -247,11 +248,13 @@ export const runSandboxed = (
 		// A bwrap that dies before reading surfaces through `exit`, not an EPIPE here.
 		(child.stdio[3] as Writable).on("error", () => {}).end(filter);
 		if (tools && net) {
-			stopNet = connectNetwork(child, tools.pasta, net, (why) => {
+			const failed = (why: string): void => {
 				log(`[runner] ${id}: its network did not come up — ${why}`, "error");
 				stopNet?.();
 				child.kill("SIGTERM");
-			});
+			};
+			// The ports on this computer the operator granted, and no other of its loopback.
+			stopNet = connectNetwork(child, tools.pasta, net, failed, grantedPorts(config, id));
 		}
 		child.on("error", (e) => {
 			release();
@@ -272,7 +275,8 @@ export const runSandboxed = (
 /**
  * Connect a network plugin's namespace once bwrap reports on `--info-fd` (fd 4): run pasta on
  * `child`, which holds the namespace `unshare` made, then let the sandbox go on through
- * `--block-fd` (fd 5). `fail` hears why the network did not come up.
+ * `--block-fd` (fd 5). `fail` hears why the network did not come up. `ports` are the TCP ports
+ * on this computer the plugin may connect to ({@link pastaArgv}).
  *
  * The returned stop ends the setup or the daemon it left and only then removes `dir`, which holds
  * the daemon's pid file. A sandbox still blocked gets SIGKILL: until it reads fd 5 it has no
@@ -283,6 +287,7 @@ export const connectNetwork = (
 	pasta: string,
 	dir: string,
 	fail: (why: string) => void,
+	ports: readonly number[] = [],
 ): (() => void) => {
 	const pidFile = path.join(dir, "pasta.pid");
 	const [info, block] = (child.stdio as readonly unknown[]).slice(4) as [Readable, Writable];
@@ -318,7 +323,9 @@ export const connectNetwork = (
 			return;
 		}
 		blocked = pid;
-		setup = spawn(pasta, pastaArgv(child.pid, pidFile), { stdio: ["ignore", "ignore", "pipe"] });
+		setup = spawn(pasta, pastaArgv(child.pid, pidFile, ports), {
+			stdio: ["ignore", "ignore", "pipe"],
+		});
 		running = true;
 		const lastLines = tailStderr(setup);
 		setup.on("error", (e) => {

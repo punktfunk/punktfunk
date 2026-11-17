@@ -8,6 +8,7 @@ import {
 	bwrapArgv,
 	DNS_FORWARD,
 	expandHome,
+	grantedPorts,
 	grantedRoots,
 	homeLink,
 	netlinkFilter,
@@ -680,6 +681,37 @@ describe("pastaArgv", () => {
 		}
 		expect(argv.join(" ")).toContain(`--dns-forward ${DNS_FORWARD}`);
 		expect(argv.at(-1)).toBe("4242");
+	});
+
+	test("forwards only the granted ports to this computer's loopback", () => {
+		const forwarded = (ports?: number[]) => {
+			const argv = pastaArgv(4242, "/run/user/1000/punktfunk/net-demo-ab12/pasta.pid", ports);
+			return argv[argv.indexOf("-T") + 1];
+		};
+		expect(forwarded()).toBe("none");
+		expect(forwarded([])).toBe("none");
+		expect(forwarded([8080, 5000])).toBe("8080,5000");
+	});
+});
+
+describe("grantedPorts", () => {
+	test("reads the granted ports, and never one of Punktfunk's own", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ports-"));
+		try {
+			fs.mkdirSync(path.join(dir, "plugin-run"));
+			const write = (v: unknown) =>
+				fs.writeFileSync(path.join(dir, "plugin-run", "plugin-grants.json"), JSON.stringify(v));
+			expect(grantedPorts(dir, "demo")).toEqual([]);
+			write({ demo: { grants: [], ports: [8080, 47990, 47992, 0, 70000, "22", 1.5, 5000] } });
+			expect(grantedPorts(dir, "demo")).toEqual([8080, 5000]);
+			expect(grantedPorts(dir, "other")).toEqual([]);
+			write({ demo: ["/mnt/old"] });
+			expect(grantedPorts(dir, "demo")).toEqual([]);
+			write({ demo: { ports: "8080" } });
+			expect(grantedPorts(dir, "demo")).toEqual([]);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 

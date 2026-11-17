@@ -8,7 +8,7 @@
 
 use super::shared::*;
 use crate::events::{emit, EventKind};
-use crate::plugins::access::{AskedPath, Decision, Mutation, PluginAccessSnapshot};
+use crate::plugins::access::{with_listeners, AskedPath, Decision, Mutation, PluginAccessSnapshot};
 use axum::Extension;
 
 /// How long a decision waits for a folder's ACL before it answers. A large Windows tree takes
@@ -57,6 +57,12 @@ pub(crate) struct AccessRequest {
     /// answer names the folder the grant lands on.
     #[serde(default)]
     pub saves: bool,
+    /// TCP ports on this computer the plugin wants to connect to, for a server that runs
+    /// beside the host. Each answers as `127.0.0.1:<port>`, where the plugin connects once the
+    /// operator says yes: a network plugin reaches nothing else on this computer. Refused for
+    /// a plugin without `network`, for a port of the host's own, and off Linux.
+    #[serde(default)]
+    pub ports: Vec<u16>,
     /// Why the plugin wants it, in the plugin's words. Optional, sanitized, ≤120 chars.
     #[serde(default)]
     pub reason: Option<String>,
@@ -79,7 +85,8 @@ pub(crate) enum DecisionInput {
 
 #[derive(Deserialize, ToSchema)]
 pub(crate) struct DecideRequest {
-    /// The path as it appears in the request or grant list.
+    /// The path as it appears in the request or grant list. A port on this computer is spelled
+    /// `127.0.0.1:<port>`; `allow` grants one with or without a pending request.
     pub path: String,
     pub decision: DecisionInput,
     /// With `allow`: grant the path directly, pending request or not, read-write when true.
@@ -263,6 +270,30 @@ pub(crate) async fn request_plugin_access(
             Err(e) => return store_err(e, "record the saves request"),
         }
     }
+    if !req.ports.is_empty() {
+        let networked =
+            crate::plugins::manifest::for_provider(&id).is_some_and(|manifest| manifest.network);
+        for &port in &req.ports {
+            // Only the Linux runner gives a plugin a network of its own to forward a port into.
+            if !cfg!(target_os = "linux") {
+                outcomes.push(crate::plugins::access::RequestOutcome {
+                    path: crate::plugins::access::port_path(port),
+                    outcome: "refused:unsupported".into(),
+                });
+                continue;
+            }
+            let asked = st
+                .access
+                .request_port(&id, port, networked, st.port, reason.clone());
+            match asked {
+                Ok(m) => {
+                    changed |= m.changed;
+                    outcomes.push(m.value);
+                }
+                Err(e) => return store_err(e, "record the port request"),
+            }
+        }
+    }
     if changed {
         // A link the plugin asked through is a new root: the runner's ACE for it lands now, not
         // at the next minute's converge.
@@ -324,7 +355,14 @@ pub(crate) async fn get_plugin_access_requests(
 )]
 pub(crate) async fn get_plugin_access(State(st): State<Arc<MgmtState>>) -> Response {
     match st.access.snapshot() {
-        Ok(snaps) => Json(snaps).into_response(),
+        Ok(snaps) => {
+            let listed = move || snaps.into_iter().map(with_listeners).collect::<Vec<_>>();
+            match blocking("plugin_access", move || Ok::<_, std::io::Error>(listed())).await {
+                Ok(Ok(snaps)) => Json(snaps).into_response(),
+                Ok(Err(e)) => store_err(e, "read the access requests"),
+                Err(resp) => resp,
+            }
+        }
         Err(e) => console_store_err(e, ("plugin_access_not_read", "Couldn't read plugin access")),
     }
 }
@@ -374,6 +412,17 @@ pub(crate) async fn decide_plugin_access(
         let st = Arc::clone(&st);
         blocking("plugin_access", move || f(&st))
     };
+    let said = (
+        "plugin_access_decision_not_recorded",
+        "Couldn't record the decision",
+    );
+    if let Some(port) = crate::plugins::access::port_of(&req.path) {
+        let id = plugin.clone();
+        let work = store(Box::new(move |st| {
+            st.access.decide_port(&id, port, decision, st.port)
+        }));
+        return settle(&st, plugin, said, work).await;
+    }
     let work = match (decision, req.write) {
         (Decision::Allow, Some(write)) => {
             let (plugin, path, form) = (plugin.clone(), req.path.clone(), req.form.clone());
@@ -458,10 +507,6 @@ pub(crate) async fn decide_plugin_access(
             }))
         }
     };
-    let said = (
-        "plugin_access_decision_not_recorded",
-        "Couldn't record the decision",
-    );
     settle(&st, plugin, said, work).await
 }
 
@@ -494,7 +539,7 @@ where
         };
     };
     match outcome {
-        Ok(Ok(Ok(m))) => Json(m.value).into_response(),
+        Ok(Ok(Ok(m))) => Json(with_listeners(m.value)).into_response(),
         Ok(Ok(Err(e))) => console_store_err(e, said),
         Ok(Err(resp)) => resp,
         Err(_) => worker_stopped("plugin_access"),

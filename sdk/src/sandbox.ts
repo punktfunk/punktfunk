@@ -542,12 +542,14 @@ export const sandboxCommand = (
 		: ["bwrap", [...argv]];
 
 /**
- * pasta's argv to connect the network namespace `pid` holds. No port is forwarded either way and
- * no address leads to the host's loopback; only DNS to {@link DNS_FORWARD} reaches the host's
- * resolver. pasta exits once the namespace is up, its daemon's pid in `pidFile`. The daemon stays
- * until that pid is signalled: SELinux's pasta domain can't watch another domain's namespace.
+ * pasta's argv to connect the network namespace `pid` holds. No port is forwarded inward and no
+ * address leads to the host's loopback. Outward, only DNS to {@link DNS_FORWARD} reaches the
+ * host's resolver, and each of `ports`, the TCP ports the operator granted, reaches that port
+ * on the host's loopback from the namespace's own. pasta exits once the namespace is up, its
+ * daemon's pid in `pidFile`. The daemon stays until that pid is signalled: SELinux's pasta
+ * domain can't watch another domain's namespace.
  */
-export const pastaArgv = (pid: number, pidFile: string): string[] => [
+export const pastaArgv = (pid: number, pidFile: string, ports: readonly number[] = []): string[] => [
 	"--config-net",
 	"--quiet",
 	"--no-map-gw",
@@ -557,7 +559,7 @@ export const pastaArgv = (pid: number, pidFile: string): string[] => [
 	"-u",
 	"none",
 	"-T",
-	"none",
+	ports.length > 0 ? ports.join(",") : "none",
 	"-U",
 	"none",
 	"--dns-forward",
@@ -566,6 +568,27 @@ export const pastaArgv = (pid: number, pidFile: string): string[] => [
 	pidFile,
 	String(pid),
 ];
+
+/**
+ * The TCP ports on this computer the operator granted `id`, from `plugin-run/plugin-grants.json`.
+ * Anything that is no port, and every port of Punktfunk's own (47980–48010, which trust a
+ * loopback caller), is dropped: the host refuses those too.
+ */
+export const grantedPorts = (configDir: string, id: string): number[] => {
+	try {
+		const map = JSON.parse(
+			fs.readFileSync(path.join(configDir, "plugin-run", "plugin-grants.json"), "utf8"),
+		) as Record<string, unknown>;
+		const ports = (map[id] as { ports?: unknown } | null)?.ports;
+		if (!Array.isArray(ports)) return [];
+		return ports.filter(
+			(p): p is number =>
+				Number.isInteger(p) && p >= 1 && p <= 65535 && !(p >= 47980 && p <= 48010),
+		);
+	} catch {
+		return [];
+	}
+};
 
 /**
  * The operator's extra roots for `id` from `plugin-run/plugin-grants.json`. Accepts a legacy array

@@ -596,7 +596,7 @@ describe("supervision", () => {
 			expect(starts.two).toBe(1);
 			expect(active).toEqual({ one: 1, two: 1 });
 			const restartLines = () =>
-				logs.filter((line) => line.includes("[runner] one: folder access changed — restarting"));
+				logs.filter((line) => line.includes("[runner] one: access changed — restarting"));
 			expect(restartLines()).toHaveLength(1);
 			expect(logs.some((line) => line.includes("[one] restarting (attempt 2)"))).toBe(false);
 			fs.writeFileSync(grantsFile, changed);

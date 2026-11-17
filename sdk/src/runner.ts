@@ -32,7 +32,7 @@ import { discoverUnits } from "./discover.js";
 import { layer as hostLayer } from "./effect.js";
 import { type ConnectOptions, configDir } from "./config.js";
 import { connect, type PluginDef, type Punktfunk } from "./index.js";
-import { grantedRoots, type PluginManifest, sandboxProbe } from "./sandbox.js";
+import { grantedPorts, grantedRoots, type PluginManifest, sandboxProbe } from "./sandbox.js";
 import { pluginToken, runSandboxed } from "./runner-linux.js";
 import { defaultLog, type LogSink, type RunnerLogLevel } from "./runner-log.js";
 import { runInContainer, runInOwnProcess } from "./runner-windows.js";
@@ -339,8 +339,11 @@ const grantFileStamp = (config: string): FileStamp => {
 const sameStamp = (a: FileStamp, b: FileStamp): boolean =>
 	a === undefined ? b === undefined : b !== undefined && a.mtimeMs === b.mtimeMs && a.size === b.size;
 
-const grantKey = (config: string, unit: Unit): string =>
-	JSON.stringify(grantedRoots(config, unit.manifest?.id ?? unit.name));
+/** What the operator granted a unit: its folders, and its ports on this computer. */
+const grantKey = (config: string, unit: Unit): string => {
+	const id = unit.manifest?.id ?? unit.name;
+	return JSON.stringify([grantedRoots(config, id), grantedPorts(config, id)]);
+};
 
 /** Poll effective grants and replace only the supervisor whose roots changed. */
 const watchGrantChanges = (
@@ -363,7 +366,7 @@ const watchGrantChanges = (
 						const nextKey = grantKey(config, unit);
 						if (grantKeys.get(unit.name) === nextKey) continue;
 						const id = unit.manifest?.id ?? unit.name;
-						log(`[runner] ${id}: folder access changed — restarting`);
+						log(`[runner] ${id}: access changed — restarting`);
 						const old = fibers.get(unit.name);
 						if (old) yield* Fiber.interrupt(old);
 						fibers.set(

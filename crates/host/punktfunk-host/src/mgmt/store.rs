@@ -119,6 +119,11 @@ pub(crate) struct InstalledView {
     /// Revocation of the installed version. Reported, never auto-removed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked: Option<String>,
+    /// The plugin uses the network on a host that can forward it a port of this computer
+    /// (Linux): the console offers to allow one.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[schema(required = false)]
+    pub takes_ports: bool,
 }
 
 /// Catalog `{source, id}` or a raw `spec` the operator owns.
@@ -288,7 +293,11 @@ fn build_installed(live: &[String]) -> Vec<InstalledView> {
                 .as_ref()
                 .map(|(e, _)| e.id.clone())
                 .or_else(|| store::plugin_id_for_pkg(&p.pkg));
+            let networked = (plugin_id.as_deref())
+                .and_then(crate::plugins::manifest::for_provider)
+                .is_some_and(|manifest| manifest.network);
             InstalledView {
+                takes_ports: cfg!(target_os = "linux") && networked,
                 // No manifest record means the CLI put it there (`cli` tier).
                 tier: rec
                     .map(|r| r.tier)
