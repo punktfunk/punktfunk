@@ -5,9 +5,9 @@ use pf_client_core::overlay_actions::SlotId;
 use pf_client_core::shortcuts::{Action, Device, Shortcuts};
 
 impl Shell {
-    /// SDL, the window and its presenter, the overlay and the pads: everything the loop
-    /// owns across streams. Browse needs the console, so its init failure is fatal there.
-    pub(super) fn open(mut opts: SessionOpts, browse: bool) -> Result<Shell> {
+    /// SDL, the window and its presenter, the pads' service and the shortcuts: what a stream
+    /// needs to dial. [`Self::finish_open`] builds the rest while the dial runs.
+    pub(super) fn open(opts: SessionOpts, browse: bool) -> Result<Shell> {
         // Before any window exists: unpackaged runs adopt the shell's AppUserModelID so
         // shell⇄session windows group as one taskbar app (MSIX identity wins).
         #[cfg(windows)]
@@ -148,36 +148,18 @@ impl Shell {
 
         let osd_scale_pref = knobs.osd_scale.unwrap_or(1.0);
 
-        let mut overlay = opts.overlay.take();
-        if let Some(o) = overlay.as_mut() {
-            let init = match presenter.shared_device() {
-                Some(shared) => o.init(&shared),
-                None => Err(anyhow::anyhow!(
-                    "console overlay needs the Vulkan presenter; stats stay on stdout"
-                )),
-            };
-            if let Err(e) = init {
-                if browse {
-                    return Err(e).context("console UI init (required for --browse)");
-                }
-                tracing::warn!(error = %format!("{e:#}"),
-                    "console-UI overlay init failed — continuing without it");
-                overlay = None;
-            }
-        }
-
-        let gamepad_subsystem = sdl.gamepad().context("SDL gamepad")?;
-        let (gamepad, pump) = GamepadService::pumped(gamepad_subsystem);
+        // The service before its SDL subsystem: a dial's params read it, and Auto reads no pad
+        // until the loop pumps the first event either way.
+        let (gamepad, pump) = GamepadService::pumped();
         let shortcut_rx = gamepad.shortcut_events();
+        // With the ring the overlay will carry; `finish_open` adopts again if it does not.
         let (shortcuts, keys) =
-            super::shortcuts::adopt(&opts.shortcuts, &gamepad, overlay.is_some());
+            super::shortcuts::adopt(&opts.shortcuts, &gamepad, opts.overlay.is_some());
         let menu_rx = gamepad.menu_events();
         if browse {
             // Menu mode for the launcher's lifetime (an attached session supersedes translation).
             gamepad.set_menu_mode(true);
         }
-        #[cfg(target_os = "linux")]
-        let overlay_focus = pf_client_core::overlay_focus::OverlayFocus::start();
 
         let native = native_mode_of(&window).unwrap_or(Mode {
             width: 1920,
@@ -204,7 +186,7 @@ impl Shell {
             focus_lost: false,
             mask_applied: false,
             #[cfg(target_os = "linux")]
-            overlay_focus,
+            overlay_focus: None,
             menu_rx,
             shortcut_rx,
             shortcuts,
@@ -219,7 +201,7 @@ impl Shell {
             screen_held: true,
             pump,
             gamepad,
-            overlay,
+            overlay: None,
             osd_scale_pref,
             pacing_active: !arrival_override,
             knobs,
@@ -230,11 +212,44 @@ impl Shell {
             window,
             sdl_events: events,
             sdl_video: video,
-            _sdl: sdl,
+            sdl,
             opts,
             browse,
             pad_absence: PadAbsence::default(),
         })
+    }
+
+    /// The console overlay, the SDL gamepad subsystem and the overlay focus watch: the loop
+    /// needs them, a dial does not. Pads the subsystem finds wait in SDL's queue for the
+    /// loop's first pass. Browse needs the console, so its init failure is fatal there.
+    pub(super) fn finish_open(&mut self) -> Result<()> {
+        if let Some(mut o) = self.opts.overlay.take() {
+            let init = match self.presenter.shared_device() {
+                Some(shared) => o.init(&shared),
+                None => Err(anyhow::anyhow!(
+                    "console overlay needs the Vulkan presenter; stats stay on stdout"
+                )),
+            };
+            match init {
+                Ok(()) => self.overlay = Some(o),
+                Err(e) if self.browse => {
+                    return Err(e).context("console UI init (required for --browse)");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %format!("{e:#}"),
+                        "console-UI overlay init failed — continuing without it");
+                    let shortcuts = &self.opts.shortcuts;
+                    (self.shortcuts, self.keys) =
+                        super::shortcuts::adopt(shortcuts, &self.gamepad, false);
+                }
+            }
+        }
+        self.pump.bind(self.sdl.gamepad().context("SDL gamepad")?);
+        #[cfg(target_os = "linux")]
+        {
+            self.overlay_focus = pf_client_core::overlay_focus::OverlayFocus::start();
+        }
+        Ok(())
     }
 
     /// Lock and grab for an engaged capture, in its mouse model and within its grants.

@@ -247,7 +247,8 @@ where
     run_inner(opts, ModeCtl::Browse(Box::new(on_action))).map(|_| ())
 }
 
-/// Params builder for the one single-mode session (called once, after setup).
+/// Params builder for the one single-mode session. It runs once, after the presenter and
+/// before the overlay and the pads' SDL subsystem.
 type BuildParams<'a> = Box<
     dyn FnMut(
             &GamepadService,
@@ -347,7 +348,7 @@ struct Shell {
     window: sdl3::video::Window,
     sdl_events: sdl3::EventSubsystem,
     sdl_video: sdl3::VideoSubsystem,
-    _sdl: sdl3::Sdl,
+    sdl: sdl3::Sdl,
     opts: SessionOpts,
     /// Browse mode: the console idles between streams.
     browse: bool,
@@ -519,6 +520,8 @@ fn wait_event(pump: &mut sdl3::EventPump, timeout: Duration) -> Option<Event> {
     pump.wait_event_timeout(timeout)
 }
 
+/// One process's loop. A single stream dials as soon as the presenter is up, and
+/// [`Shell::finish_open`] builds the overlay and the pads while the handshake runs.
 fn run_inner(opts: SessionOpts, mut mode: ModeCtl) -> Result<Outcome> {
     let mut sh = Shell::open(opts, matches!(mode, ModeCtl::Browse(_)))?;
     let mut stream: Option<StreamState> = match &mut mode {
@@ -541,8 +544,10 @@ fn run_inner(opts: SessionOpts, mut mode: ModeCtl) -> Result<Outcome> {
         ModeCtl::Browse(_) => None,
     };
 
-    // A closure, so an error exit (device lost, a failed resize) still reaches the teardown.
+    // A closure, so an error exit (the shell's rest, device lost, a failed resize) still
+    // reaches the teardown, which stops a dial already running.
     let outcome = (|| -> Result<Outcome> {
+        sh.finish_open()?;
         Ok('main: loop {
             // Block in SDL's wait: input/window events and decoded frames (FrameWake) all
             // land in this queue. The timeout only bounds stop-flag/pump-tick latency.
