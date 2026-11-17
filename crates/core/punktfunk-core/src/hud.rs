@@ -642,13 +642,16 @@ fn pct(part: u32, whole: u32) -> f64 {
     }
 }
 
-/// How the overlay names a pad-slot mask; `None` when this session holds no pad. One
-/// place, so no client invents its own numbering for which player it is.
+/// How the overlay names a pad-slot mask; `None` when this session holds no pad, or
+/// slot 0 alone. One place, so no client invents its own numbering for which player it is.
 ///
 /// Slot `n` is player `n + 1`: a local co-op game reads the OS slot order, and slot 0
-/// is its P1.
+/// is its P1. A lone player 1 is every solo session, so naming it only confuses.
 #[cfg(any(test, feature = "l10n"))]
 pub fn player_label(slots: u16) -> Option<String> {
+    if slots == 1 {
+        return None;
+    }
     let players: Vec<String> = (0..crate::input::MAX_PADS)
         .filter(|n| slots & (1 << n) != 0)
         .map(|n| (n + 1).to_string())
@@ -1102,7 +1105,7 @@ impl Stats {
 ///
 /// The player line leads, in both vocabularies and at every tier: which controller
 /// this session is is a session fact, not a diagnostic, and a co-op guest reads it
-/// before anything else. Silent unless the session holds a pad.
+/// before anything else. Silent with no pad or a lone player 1 ([`player_label`]).
 #[cfg(any(test, feature = "l10n"))]
 pub fn format(s: &StatsSnapshot, tier: StatsVerbosity, advanced: bool) -> Vec<HudLine> {
     if tier == StatsVerbosity::Off {
@@ -2485,11 +2488,12 @@ mod tests {
     }
 
     /// Slot 0 is Player 1, and the line leads the overlay so a co-op guest reads it
-    /// first. Silent for the sessions that hold no pad, which is most of them.
+    /// first. Silent with no pad or a lone player 1, which is most sessions.
     #[test]
     fn the_player_line_names_every_slot_this_session_holds() {
         assert_eq!(player_label(0), None);
-        assert_eq!(player_label(0b1).as_deref(), Some("player 1"));
+        assert_eq!(player_label(0b1), None);
+        assert_eq!(player_label(0b11).as_deref(), Some("players 1 · 2"));
         assert_eq!(player_label(0b10).as_deref(), Some("player 2"));
         assert_eq!(player_label(0b1010).as_deref(), Some("players 2 · 4"));
 
