@@ -483,18 +483,17 @@ pub(crate) fn start_apply(force: bool, session_active: bool) -> Result<(), Apply
             #[cfg(target_os = "linux")]
             {
                 let _ = &asset; // unused: Linux legs use the package manager
-                let run = if leg == Leg::SteamosSource {
+                if leg == Leg::SteamosSource {
+                    // The script queued our restart; boot reconcile writes the outcome.
                     linux::run_apply_steamos(&target_version, serial, &stage)
+                        .map(|()| PostApply::AwaitRestart)
                         .map_err(jobs::ApplyFailed::from)
                 } else {
-                    linux::run_apply(&target_version, serial, &stage)
-                };
-                run.map(|()| {
                     // Staged / nothing-to-do wrote a durable result; in-place
                     // wrote the intent and queued restart. Either way the
                     // in-process job is finished.
-                    PostApply::Done
-                })
+                    linux::run_apply(&target_version, serial, &stage).map(|()| PostApply::Done)
+                }
             }
             #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             {
