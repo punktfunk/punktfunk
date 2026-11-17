@@ -12,3 +12,12 @@ BUILD_EXPERIMENTAL=ON defines ONEVPL_EXPERIMENTAL: the D3D11 surface-import
 API (mfxMemoryInterface / mfxSurfaceD3D11Tex2D) is experimental ABI that is
 release-coupled — bumping this pin requires re-checking every ONEVPL_EXPERIMENTAL
 symbol qsv.rs touches (design/native-qsv-encoder.md §3.1/§3.4).
+
+Local changes (libvpl/src/mfx_dispatcher_vpl_loader.cpp, each marked "punktfunk:"):
+- BuildListOfCandidateLibs (Windows) no longer searches PATH. The dispatcher
+  loads every candidate DLL before it checks exports, the host and the display
+  driver run it as a service account, and a standard user may write a folder
+  on the machine PATH.
+- GetSearchPathsLegacy no longer reads the HKCU dispatcher key.
+Kept: the driver store, the module's own folder, ONEVPL_PRIORITY_PATH,
+ONEVPL_SEARCH_PATH, the HKLM key, System32 and SysWOW64. Re-apply on a pin bump.
