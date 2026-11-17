@@ -25,7 +25,7 @@ use crate::touch::{
 use pf_client_core::trust::{MouseMode, TouchMode};
 use punktfunk_core::client::{NativeClient, SurfaceTouch};
 use punktfunk_core::input::scroll::{ScrollAccumulator, ScrollEvent, ScrollPhase, ScrollSource};
-use punktfunk_core::input::{InputEvent, InputKind};
+use punktfunk_core::input::{InputEvent, InputKind, MOUSE_MOVE_COUNTS};
 use punktfunk_core::quic::{GRANT_KEYBOARD, GRANT_POINTER};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -379,7 +379,8 @@ impl Capture {
     }
 
     /// One datagram per loop. Only one store is populated; the run loop routes
-    /// by [`desktop`](Self::desktop). Relative motion goes out in whole pixels.
+    /// by [`desktop`](Self::desktop). Relative motion goes out in whole counts, marked as the
+    /// mouse's own: the client stamps the send, and the host's pointer settings apply.
     pub fn flush_motion(&mut self) {
         let (dx, dy) = (self.pending_rel.0.trunc(), self.pending_rel.1.trunc());
         self.pending_rel.0 -= dx;
@@ -391,7 +392,7 @@ impl Capture {
                 0,
                 dx as i32,
                 dy as i32,
-                0,
+                MOUSE_MOVE_COUNTS,
             );
         }
         if let Some((screen, a)) = self.pending_abs.take() {

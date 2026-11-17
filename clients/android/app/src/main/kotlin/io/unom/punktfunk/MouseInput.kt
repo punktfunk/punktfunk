@@ -255,7 +255,7 @@ class MouseForwarder internal constructor(
         if (!ev.isFromSource(InputDevice.SOURCE_MOUSE_RELATIVE)) return false
         when (ev.actionMasked) {
             MotionEvent.ACTION_MOVE, MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP ->
-                moveBy(ev, MotionEvent.AXIS_X, MotionEvent.AXIS_Y)
+                moveBy(ev, MotionEvent.AXIS_X, MotionEvent.AXIS_Y, counts = true)
             MotionEvent.ACTION_BUTTON_PRESS -> button(ev.actionButton, true)
             MotionEvent.ACTION_BUTTON_RELEASE -> button(ev.actionButton, false)
             MotionEvent.ACTION_SCROLL -> wheel(ev)
@@ -354,8 +354,9 @@ class MouseForwarder internal constructor(
         if (padOn() && hasTouchpad()) padSurface(0, false, false, SystemClock.uptimeMillis() * 1000)
     }
 
-    /** Relative motion off `ev`'s [axisX]/[axisY], history included, whole pixels only. */
-    private fun moveBy(ev: MotionEvent, axisX: Int, axisY: Int) {
+    /** Relative motion off `ev`'s [axisX]/[axisY], history included, whole pixels only. With
+     *  [counts] they are a mouse's own, sent with the time of the event's last sample. */
+    private fun moveBy(ev: MotionEvent, axisX: Int, axisY: Int, counts: Boolean = false) {
         var dx = ev.getAxisValue(axisX)
         var dy = ev.getAxisValue(axisY)
         for (i in 0 until ev.historySize) {
@@ -367,7 +368,12 @@ class MouseForwarder internal constructor(
         val ox = moveAccX.toInt() // truncate toward zero — sub-pixel remainder kept w/ sign
         val oy = moveAccY.toInt()
         if (ox != 0 || oy != 0) {
-            NativeBridge.nativeSendPointerMove(handle, ox, oy)
+            if (counts) {
+                val us = if (Build.VERSION.SDK_INT >= 34) ev.eventTimeNanos / 1000 else ev.eventTime * 1000
+                NativeBridge.nativeSendMouseCounts(handle, ox, oy, us)
+            } else {
+                NativeBridge.nativeSendPointerMove(handle, ox, oy)
+            }
             moveAccX -= ox
             moveAccY -= oy
         }
