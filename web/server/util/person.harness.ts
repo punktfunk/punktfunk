@@ -167,6 +167,12 @@ export const seat = Bun.serve({
 				},
 				{ status: 401 },
 			);
+		// `?type=` answers a page of that type, as a seat host its person controls could.
+		const type = new URLSearchParams(call.search).get("type");
+		if (call.path === "/api/v1/host" && type)
+			return new Response("<script>parent.pwned = 1</script>", {
+				headers: { "content-type": type },
+			});
 		if (call.path === "/api/v1/host")
 			return Response.json({ hostname: "Wohnzimmer" });
 		if (call.path === `/api/v1/plugins/${SEAT_PLUGIN}/ui-credential`)

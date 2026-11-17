@@ -20,12 +20,20 @@ export const PROFILE_HEADER = "x-punktfunk-person-profile";
 
 /** What a person's call carries upstream, and what comes back. Cookies never cross. */
 const REQUEST_HEADERS = ["accept", "content-type", "if-none-match"];
-const RESPONSE_HEADERS = [
-	"content-type",
-	"etag",
-	"cache-control",
-	"last-modified",
-];
+const RESPONSE_HEADERS = ["etag", "cache-control", "last-modified"];
+
+/**
+ * JSON and images keep their type on the console's origin. SVG runs script, so it does not, and
+ * neither does a list of types: a browser renders the last one.
+ */
+const keepsType = (type: string): boolean => {
+	if (type.includes(",")) return false;
+	const media = (type.split(";")[0] ?? "").trim().toLowerCase();
+	return (
+		media === "application/json" ||
+		(media.startsWith("image/") && !media.includes("svg"))
+	);
+};
 
 /** Why a person's console closed under them; the page says each in its own words. */
 export type Ended = "person_session_ended" | "person_seat_stopped";
@@ -77,7 +85,7 @@ async function boxCall(
 	} as RequestInit);
 }
 
-/** Answers a person's `/api/**` call. */
+/** Answers a person's `/api/**` call, sandboxed and typed as JSON, an image or bytes. */
 export async function personApi(
 	event: H3Event,
 	session: PersonSession,
@@ -141,5 +149,15 @@ export async function personApi(
 		const value = res.headers.get(name);
 		if (value) out.set(name, value);
 	}
+	// The seat host runs as the person: what it answers goes out as inert bytes, never a page. A
+	// 304 names no type, so the browser keeps the one it cached.
+	const type = res.headers.get("content-type") ?? "";
+	if (res.status !== 304)
+		out.set(
+			"content-type",
+			keepsType(type) ? type : "application/octet-stream",
+		);
+	out.set("content-security-policy", "sandbox");
+	out.set("x-content-type-options", "nosniff");
 	return new Response(res.body, { status: res.status, headers: out });
 }

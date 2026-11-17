@@ -4,8 +4,21 @@
 // seat host with their token, or to the box with the person headers (personApi.ts).
 import { createHash, randomBytes, X509Certificate } from "node:crypto";
 import { connect } from "node:tls";
-import { deleteCookie, getCookie, type H3Event, setCookie } from "h3";
-import { cookieSecure } from "./auth";
+import {
+	deleteCookie,
+	getCookie,
+	type H3Event,
+	setCookie,
+	useSession,
+} from "h3";
+import {
+	authConfigured,
+	cookieSecure,
+	SESSION_NAME,
+	type SessionData,
+	sessionConfig,
+	sessionEpoch,
+} from "./auth";
 
 /** The person's session id, httpOnly. */
 export const PERSON_COOKIE = "pf_person";
@@ -141,6 +154,15 @@ export function personCookie(event: H3Event): PersonCookie | null {
 /** Every session still live, for a plugin page whose path one of them signed. */
 export function liveSessions(now = Date.now()): PersonSession[] {
 	return [...live.values()].filter((s) => s.expiresAt > now);
+}
+
+/** A live operator session, read only when its cookie exists: `useSession` would mint one. */
+export async function operatorSignedIn(event: H3Event): Promise<boolean> {
+	if (!authConfigured() || !getCookie(event, SESSION_NAME)) return false;
+	const session = await useSession<SessionData>(event, sessionConfig());
+	return (
+		session.data.authenticated === true && session.data.epoch === sessionEpoch()
+	);
 }
 
 /** Forgets the browser's person session here and drops both cookies. The seat host's stays. */
