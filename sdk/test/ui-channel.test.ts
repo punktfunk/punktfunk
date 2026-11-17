@@ -1,7 +1,6 @@
 // The reverse tunnel a Windows plugin serves its page through, against a stand-in host on a unix
 // socket: the plugin dials, asks for the upgrade, and the host sends requests down the parked
-// connection, one each. The stand-in is a raw socket server: bun's `node:http` server hands no
-// usable socket out of an upgrade, and the real host is hyper.
+// connection, one each. The stand-in is a raw socket server; the real host is hyper.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -42,8 +41,8 @@ afterAll(() => {
 });
 
 /**
- * The host's side of one request: raw HTTP/1.1 down a parked connection (bun's client cannot
- * take a ready socket), the answer read to the close and its chunks joined.
+ * The host's side of one request: raw HTTP/1.1 down a parked connection, the answer read to the
+ * close and its chunks joined.
  */
 const down = (socket: net.Socket, method: string, pathname: string, body = "") =>
 	new Promise<{ status: number; text: string }>((resolve, reject) => {

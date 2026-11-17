@@ -122,8 +122,9 @@ export const DetectHint = Schema.Struct({
 	process_name: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	/**
 	 * The Steam appid, for a title Steam itself installed. On Linux this is the **sharpest** signal
-	 * there is: Steam wraps every launch — native or Proton — in `reaper SteamLaunch AppId=<appid>`,
-	 * whose lifetime is exactly the game's. Send it if you have it.
+	 * there is: Steam wraps every launch — native or Proton — in `reaper SteamLaunch AppId=<appid>`.
+	 * The same wrapper runs Steam's pre-launch work (shader precompile, install scripts), which the
+	 * host skips. Send it if you have it.
 	 */
 	steam_appid: Schema.optionalKey(Schema.NullOr(Schema.Number)),
 	/**

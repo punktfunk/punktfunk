@@ -30,8 +30,9 @@ export interface ReadOnlyDb {
 }
 
 /**
- * Open a launcher database read-only and immutably. `undefined` if the file is absent or not a
- * database — the normal "this launcher isn't installed" case, not an error.
+ * Open a launcher database read-only and immutably. `undefined` if the file is absent or will not
+ * open — the normal "this launcher isn't installed" case, not an error. A file that is not a
+ * database still opens, and its queries return `[]`.
  *
  * Always `close()` when done (or use {@link withReadOnlyDb}, which does it for you).
  */
