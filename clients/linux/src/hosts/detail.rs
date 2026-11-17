@@ -1,7 +1,8 @@
-//! The host page (design §2.4): everything about one saved host beyond the daily act, as
-//! grouped rows pushed over the hosts page — presets, screen, connection, pairing, power,
-//! support and removal. Opened from a card's ⓘ or its Host Details… row. The hosts page
-//! refreshes it on every change it draws; a row being edited keeps what was typed.
+//! The host page (design/linux-client-overhaul.md §2.4): everything about one saved host
+//! beyond the daily act, as grouped rows pushed over the hosts page — presets, screen,
+//! connection, pairing, power, support and removal. Opened from a card's ⓘ or its Host
+//! details… row. The hosts page refreshes it on every change it draws; a row being edited
+//! keeps what was typed.
 
 use super::card::os_icon_name;
 use super::model::{Preset, Status};

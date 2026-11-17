@@ -1,8 +1,9 @@
 //! The hosts page: saved hosts as cards in the device's order and bands, the hosts on this
-//! network below them, and each saved host's page one ⓘ away (design §2.2–2.4). Cards are
-//! built from [`model`] values; a build equal to the last redraws nothing, so an open menu
-//! survives an unchanged probe sweep. What an advert or a probe teaches is written when it
-//! arrives, never while drawing. Actions leave as typed [`HostsOutput`]s.
+//! network below them, and each saved host's page one ⓘ away
+//! (design/linux-client-overhaul.md §2.2–2.4). Cards are built from [`model`] values; a build
+//! equal to the last redraws nothing, so an open menu survives an unchanged probe sweep. What
+//! an advert or a probe teaches is written when it arrives, never while drawing. Actions leave
+//! as typed [`HostsOutput`]s.
 
 mod card;
 mod detail;

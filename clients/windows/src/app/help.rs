@@ -1,7 +1,7 @@
 //! The Stream controls screen: a short note on the in-stream capture model plus this device's
-//! keyboard, touch and controller shortcuts — reached from the Shortcuts button on the host
-//! list, with Change into Settings → Shortcuts. The Windows counterpart of the GTK client's
-//! Keyboard Shortcuts window; both read `pf_client_core::shortcuts`.
+//! keyboard, touch and controller shortcuts — reached from the Keyboard shortcuts item in the
+//! navigation pane's footer, with Change into Settings → Shortcuts. The Windows counterpart of
+//! the GTK client's Keyboard Shortcuts window; both read `pf_client_core::shortcuts`.
 
 use super::style::*;
 use super::{AppCtx, AsyncSetState, Screen};

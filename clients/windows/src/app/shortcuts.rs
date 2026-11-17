@@ -1,4 +1,4 @@
-//! The Shortcuts page on Windows (design/client-shortcuts.md §5): the Stream controls rows,
+//! The Shortcuts page on Windows: the Stream controls rows,
 //! each binding's chord a button that opens its editor. *Does* is the dial's own catalogue
 //! plus Quick actions itself. *Press* records a key chord off the real keyboard (Ctrl, Alt,
 //! Shift and a grid key; Windows keeps Win) or chooses keys or buttons from a grid: this shell
@@ -26,7 +26,7 @@ use pf_l10n::{client, common, desktop};
 use std::rc::Rc;
 use windows_reactor::*;
 
-/// A pad shortcut holds at most four buttons (design D3).
+/// The editor lets a pad shortcut hold at most four buttons.
 const MAX_BUTTONS: usize = 4;
 
 /// The shortcuts of `s`, or this client's defaults while it has none. Windows has no Game Mode.

@@ -21,9 +21,9 @@
 #[allow(dead_code)]
 mod logfile;
 
-// The hand-off itself, verbatim the shell's `--console` flag — including the CREATE_NO_WINDOW
-// the console-subsystem session binary needs from a GUI parent. Kept in one file precisely
-// because the two copies of this hand-off had already drifted apart on that flag.
+// The hand-off itself, shared verbatim with the shell's `--console` flag — including the
+// CREATE_NO_WINDOW the console-subsystem session binary needs from a GUI parent. One file,
+// so the flag is stated once.
 #[cfg(windows)]
 #[path = "../couch.rs"]
 #[allow(dead_code)]

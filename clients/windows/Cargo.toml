@@ -60,10 +60,10 @@ pf-fluent = { path = "../../crates/core/pf-fluent" }
 # Win32 / DXGI for the GPU picker and the shell's window plumbing. Features are header-named:
 # one per SDK header (#4689).
 windows = { workspace = true, features = [
-    # GetCurrentPackageFullName — the packaged-run probe guarding the explicit
-    # AppUserModelID (main.rs; MSIX identity must win over the dev-run tag).
+    # GetCurrentPackageFullName — the packaged-run probe (deeplink::has_package_identity) that
+    # guards the explicit AppUserModelID (main.rs; MSIX identity must win over the dev-run tag).
     "appmodel",
-    # CoCreateInstance/CoInitializeEx (+ objbase/objidl/wtypesbase below) for the
+    # CoCreateInstance/CoInitializeEx (+ objbase/objidl below) for the
     # "Create shortcut" writer (deeplink.rs).
     "combaseapi",
     "consoleapi",
@@ -88,10 +88,12 @@ windows = { workspace = true, features = [
     "UI",
 ] }
 
-# Gamepad enumeration + pin persistence for Settings runs on pf-client-core's shared SDL service
-# (see the `gamepad` field in app/); the spawned punktfunk-session does the actual forwarding. SDL3
-# itself (built from source via the bundled CMake on Windows) is pulled transitively by
-# pf-client-core with the same `build-from-source,hidapi` features, so it is not a direct dep here.
+# No direct SDL3 dep. Gamepad enumeration + pin persistence for Settings runs on pf-client-core's
+# shared SDL service (see the `gamepad` field in app/); the spawned punktfunk-session does the
+# actual forwarding. SDL3 itself is pulled transitively by pf-client-core, which builds it from
+# source on Windows (`build-from-source,hidapi`).
+#
+# Log events from the shell.
 tracing = "0.1"
 
 # The settings rows' catalog test reads `clients/shared/settings-catalog.json`, and the rows

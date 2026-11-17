@@ -990,8 +990,8 @@ fn run_host_action(svc: &Svc, target: &Target, a: &ActionInfo) {
         });
 }
 
-/// Uploads this device's log ring to the host. Blocking network (the library agent's 5 s
-/// connect / 10 s global budgets), so on a worker thread, the outcome on the status line.
+/// Uploads this device's log ring to the host. Blocking network (bounded by the timeouts of
+/// `pf_client_core::library::agent`), so on a worker thread, the outcome on the status line.
 fn send_logs(svc: &Svc, target: &Target) {
     let identity = svc.ctx.identity.clone();
     let (svc, target) = (svc.clone(), target.clone());

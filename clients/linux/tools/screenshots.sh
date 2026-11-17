@@ -5,7 +5,8 @@
 # ITSELF (PUNKTFUNK_SHOT_OUT: widget snapshot → gsk render → PNG) before printing
 # `PF_SHOT_READY`. Self-capture needs no Xvfb/ImageMagick and runs under a live Wayland
 # session too; the X11 root-grab path is kept as a fallback for old binaries. No host,
-# GPU, or live stream — only the chrome scenes (the stream page needs a live connector).
+# GPU, or live stream — only the chrome scenes (the stream runs in the punktfunk-session
+# binary).
 #
 #   cargo build --release -p punktfunk-client-linux
 #   bash clients/linux/tools/screenshots.sh            # → clients/linux/screenshots/<scene>.png
@@ -13,8 +14,8 @@
 #
 # Env knobs: BIN (client binary), OUT (output dir), GEOMETRY (Xvfb WxHxDepth),
 # SETTLE (extra seconds after PF_SHOT_READY, X11-fallback only), SHOT_DISPLAY (X display),
-# GSK_RENDERER (gl|ngl|cairo — cairo is the safe headless/no-GPU choice), FORCE_XVFB=1
-# (ignore a live Wayland session and go through Xvfb anyway).
+# GSK_RENDERER (gl|ngl|cairo), FORCE_XVFB=1 (ignore a live Wayland session and go through
+# Xvfb anyway).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" # clients/linux
@@ -36,8 +37,8 @@ if [ "$#" -gt 0 ]; then SCENES=("$@"); else SCENES=(hosts settings trust pair ad
 
 # Isolated scratch HOME: the client generates its identity here on first run, and the
 # saved-hosts grid is read from client-known-hosts.json, so seed mock hosts for the
-# `hosts` scene (the dialogs/settings build their own mock state in-app). `last_used`
-# on the first entry renders the most-recent accent bar.
+# `hosts` scene (the dialogs/settings build their own mock state in-app). `last_used` on
+# the first entry is what the `lastConnected` host sort orders by.
 WORK="$(mktemp -d)"
 export HOME="$WORK"
 mkdir -p "$HOME/.config/punktfunk"
@@ -116,8 +117,7 @@ for scene in "${SCENES[@]}"; do
 	# Up to ~60s: a warm scene signals in ~1-2s, but the FIRST launch pays a large one-time
 	# cold-start under software rendering (llvmpipe GL-shader + fontconfig cache build, plus
 	# first-run client-identity generation into the shared scratch HOME) that can run ~25s on a
-	# loaded CI runner. A 20s cap tripped exactly one scene (the first) even though every scene
-	# rendered fine — give it headroom instead of red-lighting the whole capture on cold start.
+	# loaded CI runner.
 	for _ in $(seq 1 600); do
 		if grep -q "PF_SHOT_READY" "$WORK/log"; then
 			ready=1

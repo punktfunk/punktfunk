@@ -37,8 +37,9 @@ _NATIVE_PROCS = (client.NATIVE_BIN, client.CLI_BIN, "punktfunk-session")
 
 def _native_pids(bindir: Path, proc: Path = Path("/proc")) -> list[int]:
     """This user's processes running a client binary out of ``bindir``, found by executable.
-    Not by name: the kernel keeps 15 characters of one, and these are longer, so ``pkill -x``
-    matches nothing. Another user's ``exe`` link is unreadable and skipped."""
+    Not by name: the kernel keeps 15 characters of one, and ``punktfunk-client`` and
+    ``punktfunk-session`` are longer, so ``pkill -x`` matches nothing. Another user's ``exe``
+    link is unreadable and skipped."""
     wanted = {str(bindir / name) for name in _NATIVE_PROCS}
     pids = []
     for entry in proc.iterdir():

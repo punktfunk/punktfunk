@@ -1,14 +1,13 @@
 //! The library's launcher-tile brand marks: the monochrome PNGs under `assets/launchers/`
 //! (mid-gray — legible on both WinUI themes; derived from the `assets/launcher-icons` masters,
-//! see that README for provenance/licensing), embedded in the exe. Baked much taller
-//! than the OS marks (128 px vs 32), because this mark fills a poster tile rather than sitting
-//! in a status row.
+//! see that README for provenance/licensing), embedded in the exe. Baked taller than the OS
+//! marks (`WIN_HEIGHT` in scripts/gen-launcher-icons.sh vs gen-os-icons.sh), because this mark
+//! fills a poster tile rather than an avatar.
 
 use windows_reactor::EncodedImage;
 
 /// PNG per icon token. A plugin may name a mark a newer build ships; a tile whose token
-/// isn't here falls back to naming its launcher, which is how every launcher tile looked before
-/// icons existed.
+/// isn't here falls back to naming its launcher.
 static ICONS: &[(&str, &[u8])] = &[
     ("steam", include_bytes!("../../assets/launchers/steam.png")),
     (

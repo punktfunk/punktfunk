@@ -1,9 +1,9 @@
-//! The Shortcuts page (planning design/client-shortcuts.md §5): what the player presses in a
-//! stream, by device, each binding a row that opens its editor. The editor takes the action
-//! from the quick-action picker, records keys on the real keyboard and has controller buttons
-//! chosen from a grid, since this shell reads no controller. The blob lives in the dialog's
-//! state and the binder writes it to the scope in view on every change, as it does the ring's.
-//! Rows, defaults and rules are `pf_client_core::shortcuts`.
+//! The Shortcuts page: what the player presses in a stream, by device, each binding a row
+//! that opens its editor. The editor takes the action from the quick-action picker, records
+//! keys on the real keyboard and has controller buttons chosen from a grid, since this shell
+//! reads no controller. The blob lives in the dialog's state and the binder writes it to the
+//! scope in view on every change, as it does the ring's. Rows, defaults and rules are
+//! `pf_client_core::shortcuts`.
 
 use super::quick_actions::{action_picker, describe, held_modifiers, key_name, unshifted_key_name};
 use crate::trust::Settings;
@@ -20,7 +20,7 @@ use pf_l10n::{client, common, desktop};
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
-/// The most buttons one controller shortcut takes (design D3).
+/// The most buttons the editor lets one controller shortcut hold.
 const MAX_BUTTONS: usize = 4;
 /// Columns of the button grid.
 const GRID_COLUMNS: i32 = 6;

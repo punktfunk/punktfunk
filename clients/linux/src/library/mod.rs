@@ -1,7 +1,8 @@
-//! The Library destination (design §2.5): one shelf at a time — a paired host, or a host with
-//! one of its pinned presets — laid out in the sections this device keeps. The catalog comes
-//! from the disk first, then the host; posters load as their rows are drawn. The rows are one
-//! virtualized list, so a library of thousands scrolls like one of ten.
+//! The Library destination (design/linux-client-overhaul.md §2.5): one shelf at a time — a
+//! paired host, or a host with one of its pinned presets — laid out in the sections this
+//! device keeps. The catalog comes from the disk first, then the host; posters load as their
+//! rows are drawn. The rows are one virtualized list, so a library of thousands scrolls like
+//! one of ten.
 
 pub mod art;
 mod canvas;
@@ -588,9 +589,9 @@ fn connect(req: ConnectRequest) -> LibraryOutput {
     }
 }
 
-/// How many columns a list `width` wide holds at the smallest poster: n posters take
-/// n·150 + (n−1)·16, and the row's margins take the 16 the last gap leaves over. The posters
-/// stretch into whatever is left.
+/// How many columns a list `width` wide holds at the natural poster width: n posters take
+/// n·`NATURAL_W` + (n−1)·`GAP`, and the row's margins (8 a side) take one more `GAP`. The
+/// posters stretch into whatever is left.
 fn columns_for(width: f64) -> usize {
     (width / f64::from(poster::NATURAL_W + tile::GAP))
         .floor()

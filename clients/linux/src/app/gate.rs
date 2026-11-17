@@ -22,7 +22,7 @@ pub type WaitingSlot =
 /// known MAC (`AppMsg::WakeConnect` dials first — mDNS absence ≠ unreachable). A magic packet,
 /// then mDNS polled until the host advertises — re-sending every few seconds up to a timeout —
 /// and back into the trust gate, dialling the address it came back on. The "Waking…" dialog
-/// offers Cancel; on a timeout it parks with Try Again, a fresh wake of the same request.
+/// offers Cancel; on a timeout it parks with Retry, a fresh wake of the same request.
 ///
 /// The cadence is [`WakeWait`] and the advert match `AdvertWatch`, both shared with the WinUI
 /// shell (design/client-architecture-split.md §3).
@@ -281,11 +281,7 @@ pub fn approval_dialog(
     dialog.present(Some(&parent));
 }
 
-/// The no-PIN "request access" flow: ask the host, which parks the request until the
-/// operator approves it in the console, under a cancelable "waiting" dialog. Approval
-/// saves the host as paired and never starts a stream.
-///
-/// The "Waiting for Approval" dialog over `window`, filed in `waiting_slot`; its Cancel runs
+/// The "Waiting for approval" dialog over `window`, filed in `waiting_slot`; its Cancel runs
 /// `on_cancel`. `close()` emits the close response, so whoever closes it disconnects the
 /// handler first ([`super::connect::Flight::close_waiting`]).
 pub(super) fn present_waiting(
@@ -331,6 +327,10 @@ pub(super) fn present_wait(
     waiting
 }
 
+/// The no-PIN "request access" flow: ask the host, which parks the request until the
+/// operator approves it in the console, under a cancelable "waiting" dialog. Approval
+/// saves the host as paired and never starts a stream.
+///
 /// The pin is the advertised fingerprint (defence against an impostor while we wait), so a
 /// manually-typed host, which has none, pairs with a PIN instead.
 fn request_access(

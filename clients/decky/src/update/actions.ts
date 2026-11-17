@@ -22,8 +22,9 @@ declare global {
 // PluginInstallType.UPDATE in decky-loader's browser.py (INSTALL=0/REINSTALL=1/UPDATE=2/…).
 const INSTALL_TYPE_UPDATE = 2;
 
-/** The update state, checked on mount. The backend caches the check for 30 min and survives
- *  being offline; `check(true)` bypasses the cache for the explicit "Check for updates" button. */
+/** The update state, checked on mount. The backend caches the check (`_UPDATE_TTL_S`) and
+ *  survives being offline; `check(true)` bypasses the cache for the explicit "Check for
+ *  updates" button. */
 export function useUpdate() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
@@ -110,10 +111,10 @@ function clientUpdateResultBody(r: Awaited<ReturnType<typeof updateClient>>): st
 /**
  * Apply whichever updates are pending.
  *
- * The CLIENT goes first and is awaited, by whichever route its install supports — a user-scope
- * `flatpak update`, or the packaged root helper via `punktfunk-client --apply-update`. An
- * install neither can serve is not attempted at all: the user gets the command in a toast,
- * because a button that can only fail teaches nothing.
+ * The CLIENT goes first and is awaited, by whichever route its install supports — a `flatpak
+ * update` in the scope it is installed in, or the packaged root helper via `punktfunk-client
+ * --apply-update`. An install neither can serve is not attempted at all: the user gets the
+ * command in a toast, because a button that can only fail teaches nothing.
  *
  * The PLUGIN goes last and is fire-and-forget: Decky's install RPC reinstalls and reloads the
  * plugin, tearing this panel down before any result could arrive. `check` (when passed)
@@ -151,7 +152,7 @@ export async function applyUpdate(
 
   if (info.update_available) {
     // The manifest names the channel's alias zip, which every publish replaces. Read it again
-    // now, past the backend's 30 min cache, so the hash is the one beside the zip Decky fetches.
+    // now, past the backend's cache, so the hash is the one beside the zip Decky fetches.
     const fresh = await checkUpdate(true).catch(() => null);
     const plugin = fresh?.update_available ? fresh : info;
     try {

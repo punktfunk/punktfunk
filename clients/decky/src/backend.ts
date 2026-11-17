@@ -1,9 +1,8 @@
 // Bridge to the Python backend (main.py) + shared types.
 //
-// Every call here is a thin shell over the headless `punktfunk` CLI, so these types are the
-// CLI's JSON shapes rather than anything this plugin invents. That is deliberate: the plugin
-// used to model the client's stores itself and drifted from them with every field the client
-// added.
+// The calls under "The CLI shells" are thin shells over the headless `punktfunk` CLI, so their
+// types are the CLI's JSON shapes rather than anything this plugin invents. The plugin never
+// models the client's stores itself: it would drift from them with every field the client adds.
 
 import { callable } from "@decky/api";
 
@@ -138,7 +137,7 @@ export interface RunnerInfo {
   app_id: string; // flatpak app id
   exists: boolean;
   // Which client the backend resolved: the flatpak, a native install (.deb/rpm/sysext/AUR/nix),
-  // or none at all. Older backends send neither field — hence optional.
+  // or none at all. `runner_info` sends both; a missing `client_bin` reads as the flatpak.
   client_kind?: "flatpak" | "native" | "none";
   // Absolute path of the native binary; "" for flatpak. Passed to the wrapper as PF_CLIENT_BIN.
   client_bin?: string;
@@ -152,13 +151,16 @@ export interface UpdateInfo {
   channel: string; // "latest" (stable) | "canary"
   update_available: boolean; // a newer PLUGIN build is available
   // The CLIENT versions independently of this plugin, and how it updates depends on how it was
-  // installed. A flatpak is a per-user install `sudo flatpak update` never touches, compared by
-  // OSTree commit; every other install (.deb/.rpm/pacman/sysext/nix/source) is compared by the
-  // client itself against the signed per-channel manifest (`punktfunk-client --check-update`).
+  // installed. A flatpak is compared by OSTree commit, in the scope it is installed in (a
+  // system-wide `sudo flatpak update` misses a per-user install); every other install is
+  // compared by the client itself against the signed per-channel manifest
+  // (`punktfunk-client --check-update`).
   client_update_available: boolean;
   client_current: string; // installed client commit (flatpak) or version (native)
   client_latest: string; // newest client commit (flatpak) or version (native)
-  client_install: string; // "flatpak" | "apt" | "dnf" | "pacman" | "sysext" | "nix" | "source" | ""
+  // "flatpak" | "apt" | "dnf" | "pacman" | "rpm-ostree" | "sysext" | "steamos-source" | "nix" |
+  // "source" | "" (`InstallKind::as_str` in pf-update-check).
+  client_install: string;
   // Who can perform the update: "flatpak" (this plugin runs it), "helper" (the client drives the
   // packaged root helper), "none" (nothing here can — show `client_command`).
   client_applier: string;
@@ -181,9 +183,10 @@ export interface ShortcutArt {
   icon_path: string;
 }
 
-// ---- The four CLI shells --------------------------------------------------------------
+// ---- The CLI shells -------------------------------------------------------------------
 
-/** Browse the LAN over mDNS. Bounded by the CLI (3 s) plus a cold-start allowance. */
+/** Browse the LAN over mDNS. Bounded by the CLI's browse (`DISCOVER_DEFAULT_SECS`) plus a
+ *  cold-start allowance. */
 export const discover = callable<[], DiscoverResult>("discover");
 /** The saved hosts, probed for reachability, with profiles and pinned cards resolved. */
 export const hosts = callable<[], HostsResult>("hosts");
@@ -193,9 +196,9 @@ export const pair = callable<
   PairResult
 >("pair");
 /**
- * No-PIN pairing: wait (up to ~185 s) for the host's operator to approve this Deck, pinned to
- * `fp`, the advertised fingerprint `trustHost` saved. The address alone names both OS installs of
- * a dual-boot box. Never streams. On failure `detail` is a sentence for the user.
+ * No-PIN pairing: wait for the host's operator to approve this Deck (`REQUEST_ACCESS_TIMEOUT` in
+ * pf-client-core), pinned to `fp`, the advertised fingerprint `trustHost` saved. The address
+ * alone names both OS installs of a dual-boot box. Never streams.
  */
 export const requestAccess = callable<
   [addr: string, port: number, name: string, fp: string],
@@ -211,8 +214,8 @@ export const deviceCode = callable<
 >("device_code");
 /**
  * Step 1 of request access: save the host with its ADVERTISED fingerprint, pinned but unpaired.
- * The launch that follows pins the same fingerprint, which is the only thing standing between a
- * 185 s wait for approval and an impostor answering for the host. Idempotent; a host already
+ * The launch that follows pins the same fingerprint, which is the only thing standing between
+ * the wait for approval and an impostor answering for the host. Idempotent; a host already
  * saved under a DIFFERENT fingerprint comes back `refused` rather than being overwritten.
  */
 export const trustHost = callable<
@@ -247,7 +250,8 @@ export const runAction = callable<
   [ref: string, actionId: string],
   { ok: boolean; error?: string; notice?: string }
 >("run_action");
-/** Wake a saved host and wait for it, up to 90 s. `unresolved`: no MAC is known. */
+/** Wake a saved host and wait for it (`WAKE_TIMEOUT_SECS` in pf-client-core). `unresolved`: no
+ *  MAC is known. */
 export const wake = callable<[ref: string], CliResult>("wake");
 
 /** One row of the host's Screen section (`punktfunk screen <ref> --json`), as data to word. */
@@ -314,15 +318,15 @@ export const saveIcon = callable<
 >("save_icon");
 // Install the Steam Input layout (native touchscreen `ts_n` + gamepad passthrough) and point our
 // shortcut(s) at it, so the Deck touchscreen reaches the client as native touch with no manual
-// controller setup. Best-effort + idempotent; keyed by the shared shortcut NAME (both shortcuts
-// use the same name → the same lowercase configset key), so one call covers both.
+// controller setup. Best-effort + idempotent; keyed by the shortcut NAME (the two fixed
+// shortcuts share one name, so one call covers both; a per-game shortcut calls under its own).
 export const applyControllerConfig = callable<
   [name: string],
   { ok: boolean; applied?: string[]; errors?: string[]; accounts?: number; error?: string; detail?: string }
 >("apply_controller_config");
 export const killStream = callable<[], { ok: boolean }>("kill_stream");
-// Whether the streaming client's control socket exists (a stream/console client is up) —
-// gates the QAM panel's host-button section.
+// Whether the streaming client's control socket accepts a connection (a stream/console client
+// is up) — one of two signals behind the QAM panel's Streaming section (panel/model.ts).
 export const streamRunning = callable<[], { running: boolean }>("stream_running");
 // Press a HOST system button on the running stream: "guide" | "qam". The raw Steam/QAM
 // presses stay on the Deck by default (the client's Controllers settings), so this — and
@@ -337,8 +341,8 @@ export const endGame = callable<
   { ok: boolean; error?: string; notice?: string }
 >("end_game");
 export const checkUpdate = callable<[force: boolean], UpdateInfo>("check_update");
-// Update the client by whichever route its install supports: `flatpak update --user` for the
-// flatpak, `punktfunk-client --apply-update` (the packaged root helper) for a one-tap-capable
+// Update the client by whichever route its install supports: `flatpak update` in its scope for
+// the flatpak, `punktfunk-client --apply-update` (the packaged root helper) for a one-tap-capable
 // native install. Everything else comes back `ok: false, error: "manual"` with `command` — the
 // line to run by hand. A package-manager run can take minutes; the backend allows 15.
 export const updateClient = callable<

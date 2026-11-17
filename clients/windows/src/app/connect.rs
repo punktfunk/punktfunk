@@ -572,9 +572,9 @@ fn wake_and_connect(
     set_screen: &AsyncSetState<Screen>,
     set_status: &AsyncSetState<String>,
 ) {
-    // The packets are the wait's business: `WakeWait` asks for one on its first tick and every
-    // 6 s after (a single one can be missed, and some NICs only wake on a fresh packet after
-    // dropping into a deeper sleep state).
+    // The packets are the wait's business: `WakeWait` asks for one on its first tick and again
+    // every `WAKE_RESEND_SECS` (a single one can be missed, and some NICs only wake on a fresh
+    // packet after dropping into a deeper sleep state).
     // A fresh cancel flag per wake, installed where the "Waking…" screen's Cancel button reads it
     // back (the same shared channel as the request-access flow); the poll loop checks the same `Arc`.
     let cancel = Arc::new(AtomicBool::new(false));

@@ -1,7 +1,8 @@
-//! `--browse [host[:port]]` — the console shell. Bare `--browse` opens the host list
-//! (discovery, pairing, settings, wake — the whole couch flow); with a target it opens
-//! straight into that host's library (the Decky per-host launch), B backing out to the
-//! list in one press. A launches in the SAME window (no gamescope window handoff — the
+//! `--browse [host[:port]]` — the console shell. Bare `--browse` opens where the
+//! start-screen setting says, by default the host list (discovery, pairing, settings, wake —
+//! the whole couch flow); with a paired target it opens straight into that host's library
+//! (the Decky per-host launch), B backing out to the list in one press; an unpaired one
+//! lands on the list. A launches in the SAME window (no gamescope window handoff — the
 //! whole point of one process), the session's end returns to the console, B at the root
 //! quits to Gaming Mode.
 //!
@@ -215,8 +216,9 @@ impl Launcher {
                 params.unlock = Arc::new(Mutex::new(unlock));
                 if request_access {
                     // The host PARKS the connect until the operator approves — outlast its
-                    // approval window (host `PENDING_APPROVAL_WAIT`), matching the desktop
-                    // shells' 185 s. On success `note_connected` persists the host as paired.
+                    // approval window (host `PENDING_APPROVAL_WAIT`), as the desktop shells'
+                    // `trust::REQUEST_ACCESS_TIMEOUT` does. On success `note_connected`
+                    // persists the host as paired.
                     params.connect_timeout = Duration::from_secs(185);
                     *self.pending_approval.lock().unwrap() = Some(PendingApproval {
                         name: title.clone(),
@@ -349,13 +351,13 @@ pub fn run(target: Option<&str>) -> u8 {
         overlay: Some(Box::new(overlay)),
         window_size: crate::session_main::window_size(&settings_at_start),
         match_window: settings_at_start.match_window,
-        // The console owns its own window across every launch, and no parent is listening to
-        // its stdout, so it keeps persisting the size itself.
+        // The console owns its own window across every launch, and a Steam shortcut starts
+        // it with nobody reading its stdout, so it persists the size itself.
         on_window_size: crate::session_main::on_window_size(true),
         render_scale: settings_at_start.render_scale,
         render_scale_max_dim: punktfunk_core::render_scale::max_dimension(&settings_at_start.codec),
         video_fit: punktfunk_core::video_fit::VideoFit::from_name(&settings_at_start.video_fit),
-        // The desktop shell opened this console because a controller connected.
+        // Passed when a desktop shell opened this console because a controller connected.
         until_no_pads: arg_flag("--until-no-controller"),
     };
 
@@ -435,7 +437,8 @@ fn seed_row(k: Option<&trust::KnownHost>, addr: &str, port: u16) -> HostRow {
         saved: k.is_some(),
         online: false,
         // Explicit --mgmt wins; else the port this host's advert taught us and we saved;
-        // else 47990. The middle rung is what survives mDNS being unavailable later.
+        // else `DEFAULT_MGMT_PORT`. The middle rung is what survives mDNS being unavailable
+        // later.
         mgmt_port: arg_value("--mgmt")
             .and_then(|p| p.parse().ok())
             .or_else(|| k.and_then(|h| h.mgmt_port))
@@ -803,8 +806,8 @@ impl ServiceState {
                     r.request();
                 }
             }
-            // Grants and rumble tests from the controllers screen, Android-only: the settings row
-            // that opens that screen is not on the desktop's list.
+            // Grants (Android) and rumble tests (Android, Apple) come from the controllers tab;
+            // the desktop console never raises them.
             ConsoleCmd::PadAction { .. } => {}
             // While on, the menu pads feed the test instead of moving the menu.
             ConsoleCmd::PadTest { on } => {
@@ -963,9 +966,9 @@ impl ServiceState {
     }
 
     fn send_logs(&self, addr: String, mgmt: u16, fp_hex: String, host_name: String) {
-        // Blocking network (5 s connect / 10 s global, the library agent's budgets) —
-        // a worker thread keeps the service loop's host refresh alive meanwhile. The
-        // result lands as a shared-model notice; the shell toasts it on its next sync.
+        // Blocking network on the library agent's timeouts — a worker thread keeps the
+        // service loop's host refresh alive meanwhile. The result lands as a shared-model
+        // notice; the shell toasts it on its next sync.
         let identity = self.identity.clone();
         let console = self.console.clone();
         std::thread::Builder::new()
@@ -987,8 +990,8 @@ impl ServiceState {
     }
 
     fn speed_test(&self, key: String, addr: String, port: u16, fp_hex: String, host_name: String) {
-        // A worker like every other command here, but a long one: the probe opens
-        // its own session and bursts for two seconds. The shell already raised the
+        // A worker like every other command here, but a long one: the check opens its
+        // own session and runs several probe rounds. The shell already raised the
         // takeover, so this only advances the phase and feeds its graph.
         let identity = self.identity.clone();
         let console = self.console.clone();
@@ -1424,9 +1427,9 @@ impl ServiceState {
     }
 
     fn set_pin(&self, key: String, preset_id: String, pin: bool) {
-        // Presentation only (design §5.2a): order = card order, appended at the
-        // end; never touches `preset_id` (the default binding). Idempotent, so
-        // a repeated press inside one refresh window can't double-pin.
+        // Presentation only (client-settings-profiles.md §5.2a): order = card order,
+        // appended at the end; never touches `preset_id` (the default binding).
+        // Idempotent, so a repeated press inside one refresh window can't double-pin.
         self.edit_host(&key, "pin toggle", |h| {
             if pin && !h.pinned_presets.contains(&preset_id) {
                 h.pinned_presets.push(preset_id);
@@ -1480,8 +1483,8 @@ impl ServiceState {
 
     /// One parallel reachability pass over every row. Advertising ones are NOT online by
     /// definition — an advert is a cache entry with a 75-minute TTL that a suspending host sends
-    /// no goodbye for, so skipping them left a sleeping machine reading Online (and, since the
-    /// wake item is gated on `!online`, unwakeable). A saved host found at an address it left
+    /// no goodbye for, so skipping them would leave a sleeping machine reading Online (and, since
+    /// the wake item is gated on `!online`, unwakeable). A saved host found at an address it left
     /// moves back there. Runs on its own thread; at most one in flight.
     fn sweep(&self, rows: &[HostRow]) {
         if self.probe_inflight.swap(true, Ordering::SeqCst) {
@@ -1607,9 +1610,10 @@ impl ServiceState {
 }
 
 /// The console home's rows: saved hosts in store order, each followed by its pinned
-/// preset cards (design §5.2a), then discovered-but-unsaved ones by name, then a
-/// still-uncovered `--browse` seed. `home::arrange` applies the player's sort; the Apple
-/// and Android producers send the same order (`clients/shared/host-row-vectors.json`).
+/// preset cards (client-settings-profiles.md §5.2a), then discovered-but-unsaved ones by
+/// name, then a still-uncovered `--browse` seed. `home::arrange` applies the player's sort;
+/// the Apple and Android producers send the same order
+/// (`clients/shared/host-row-vectors.json`).
 fn build_rows(
     known: &trust::KnownHosts,
     catalog: &pf_client_core::presets::PresetsFile,
@@ -1647,9 +1651,10 @@ fn build_rows(
                 paired: h.paired,
                 saved: true,
                 online,
-                // Live advert first, then what we saved from an earlier one, then 47990 —
-                // the same three rungs `os` uses just below. Reading the advert ALONE is why
-                // a host on a moved mgmt port lost its library the moment mDNS went quiet.
+                // Live advert first, then what we saved from an earlier one, then
+                // `DEFAULT_MGMT_PORT`; `os` just below takes the first two in the same order.
+                // Reading the advert ALONE would cost a host on a moved mgmt port its library
+                // the moment mDNS goes quiet.
                 mgmt_port: advert
                     .and_then(|d| d.mgmt_port)
                     .or(h.mgmt_port)
@@ -1681,7 +1686,7 @@ fn build_rows(
                     .as_deref()
                     .and_then(|id| catalog.find_by_id(id))
                     .map(chip),
-                // What this host last said it has up, from the same TTL'd cache the
+                // What this host last said it has up, from the same kind of TTL'd cache the
                 // actions come from. Empty until the first refresh answers — and for
                 // an unpaired host, which has nothing to authenticate the ask with.
                 running: library::now_playing(&h.fp_hex),
@@ -1862,9 +1867,9 @@ fn spawn_fetch(
     std::thread::Builder::new()
         .name("punktfunk-library".into())
         .spawn(move || {
-            // This worker retries for up to 90 s and cannot be cancelled, so the player can
-            // be two hosts further on by the time it answers. Every write below asks first
-            // whether this fetch still owns the model.
+            // This worker retries for up to `WAKE_TIMEOUT_SECS` and cannot be cancelled, so
+            // the player can be two hosts further on by the time it answers. Every write below
+            // asks first whether this fetch still owns the model.
             let mine = || shared.fetch_epoch() == req.epoch;
             if let Ok(path) = std::env::var("PUNKTFUNK_FAKE_LIBRARY") {
                 load_fake(&shared, &req, &path);
@@ -1904,8 +1909,8 @@ fn spawn_fetch(
                     Err(e) => {
                         // Anything other than "can't reach it" is settled — a rejected
                         // certificate does not become acceptable by waiting, and retrying an
-                        // unpaired host for 90 s only delays telling the user what is
-                        // actually wrong.
+                        // unpaired host across the whole wake budget only delays telling the
+                        // user what is actually wrong.
                         let retryable = matches!(e, library::LibraryError::Unreachable(_));
                         last_err = Some(e);
                         let budget = Duration::from_secs(WAKE_TIMEOUT_SECS);
@@ -1988,9 +1993,9 @@ fn spawn_fetch(
 
 /// The wire catalog in the shell's own terms.
 ///
-/// One conversion, because there are now three callers (a live fetch, a cached one and the dev
-/// hook) and a fourth that quietly dropped a field would be a shelf missing its launcher grouping
-/// or its platform line on one path only.
+/// One conversion, because there are four callers (a live fetch, a cached one, the hidden
+/// shelf and the dev hook) and one that quietly dropped a field would be a shelf missing its
+/// launcher grouping or its platform line on one path only.
 ///
 /// `running` is deliberately NOT derived here: it is host state that arrives from `/status`,
 /// separately and later, and the catalog this reads from is the same shape that gets written to

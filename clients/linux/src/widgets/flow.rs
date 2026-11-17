@@ -1,4 +1,4 @@
-//! One shared fix for a GTK4 footgun every card grid in this shell walks into.
+//! One shared fix for a GTK4 footgun any card grid walks into.
 //!
 //! A pointer click (and keyboard activate) on a [`gtk::FlowBoxChild`] emits
 //! `child-activated` on the *FlowBox*, never the child's own `activate` signal — so a
@@ -35,11 +35,9 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    // Reproduces the exact FlowBox/FlowBoxChild wiring the card grids use: the bridge
-    // calls `child.activate()`, whose own default handler re-emits `child-activated` —
-    // that ping-pong recursed forever (a real stack overflow on every card click/Enter,
-    // reported on the hosts page and then again on the library page) until the
-    // re-entrancy guard landed here, where both pages share it.
+    // Reproduces the FlowBox/FlowBoxChild wiring the card grid uses: the bridge calls
+    // `child.activate()`, whose own default handler re-emits `child-activated`. Without the
+    // re-entrancy guard that ping-pong recurses until the stack overflows.
     #[test]
     #[ignore = "needs a Wayland/X display"]
     fn flow_box_activation_bridge_does_not_recurse() {

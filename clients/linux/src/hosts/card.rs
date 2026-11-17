@@ -1,7 +1,7 @@
-//! One host card: a tile, two lines (a third when a connect mirrors a host monitor) and a menu
-//! of at most five rows (design §2.2–2.3). Built from a [`CardModel`]; the page rebuilds cards
-//! only when the models change, so an open menu survives an unchanged probe sweep. Everything
-//! else about a host is on its page.
+//! One host card: a tile, two lines (a third when `Targets::card_line_under` names a host
+//! screen) and a menu of at most five rows (design/linux-client-overhaul.md §2.2–2.3). Built
+//! from a [`CardModel`]; the page rebuilds cards only when the models change, so an open menu
+//! survives an unchanged probe sweep. Everything else about a host is on its page.
 
 use super::model::{CardKind, CardModel, Preset, Status};
 use super::{Act, HostRef, HostsMsg};
@@ -47,7 +47,7 @@ pub fn build(
     }
     row.append(&text);
     // The address is identity for a machine, not what a click does: it lives on the host page
-    // and here, one hover away (design P4).
+    // and here, one hover away (design/apple-touch-ui-overhaul.md P4).
     row.set_tooltip_text(Some(&m.address));
 
     let host = saved_ref(m);
@@ -201,8 +201,8 @@ fn status_line(m: &CardModel) -> gtk::Box {
     line
 }
 
-/// At most five rows and one submenu (design §2.3). A pinned card is a shortcut: it browses,
-/// hands out its link and unpins itself.
+/// At most five rows and one submenu (design/linux-client-overhaul.md §2.3). A pinned card is
+/// a shortcut: it browses, hands out its link and unpins itself.
 fn menu(
     m: &CardModel,
     host: &HostRef,

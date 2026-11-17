@@ -56,7 +56,8 @@ impl DeviceKeys for Hello {
             HSTRING::from(name),
             KeyCredentialCreationOption::ReplaceExisting,
         );
-        // The window-parented call needs a recent Windows; an older one takes the plain call.
+        // The window-parented call is UniversalApiContract 20; an older Windows takes the
+        // plain call.
         let made = window()
             .and_then(|w| {
                 let op = KeyCredentialManager::RequestCreateForWindowAsync(w, &name, option);

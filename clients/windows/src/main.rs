@@ -122,8 +122,8 @@ fn main() {
 
     // The shared SDL gamepad service (pf-client-core). The shell only enumerates pads (Settings
     // list) and persists the pin; the spawned punktfunk-session runs the SAME service and does the
-    // actual forwarding — so, unlike the old shell fork, we never `attach()` here. Idle it stays
-    // hands-off the hardware (id-getter metadata, no device open, the Deck HIDAPI driver off).
+    // actual forwarding — so we never `attach()` here. Idle it stays hands-off the hardware
+    // (id-getter metadata, no device open, the Deck HIDAPI driver off).
     let gamepad = pf_client_core::gamepad::GamepadService::start();
     // From here this process IS the shell: queue the link it was launched with (the router
     // picks it up once the window is live) and start listening for links from later instances.
@@ -145,7 +145,7 @@ fn main() {
     }
 }
 
-/// Tag unpackaged (dev) runs with the explicit AppUserModelID that `pf-presenter`'s
+/// Tag unpackaged runs (dev, installer, portable) with the AppUserModelID that `pf-presenter`'s
 /// session window also adopts, so the shell and the stream window group as ONE taskbar
 /// app across the shell⇄session visibility handoff. MSIX runs already carry the package
 /// identity — overriding it would detach the window from the Start-menu pin, so packaged
@@ -165,8 +165,8 @@ fn set_app_user_model_id() {
 }
 
 /// `--headless --speed-test --connect host[:port]`: measure the path over the real data plane and
-/// print the outcome — the Windows analogue of `punktfunk-probe`. The former in-process
-/// frame-count connect path went with the legacy builtin stream; real streaming is windowed-only.
+/// print the outcome — the Windows analogue of `punktfunk-probe`. Real streaming is
+/// windowed-only.
 #[cfg(windows)]
 fn run_headless_cli(args: &[String], identity: (String, String)) {
     let arg = |name: &str| -> Option<String> {
@@ -217,8 +217,8 @@ fn run_headless_cli(args: &[String], identity: (String, String)) {
         }
         return;
     }
-    // Only --speed-test remains headless: real streaming runs in the windowed app's spawned
-    // punktfunk-session binary, which the deleted in-process frame-count path was replaced by.
+    // Only --speed-test is headless: real streaming runs in the windowed app's spawned
+    // punktfunk-session binary.
     eprintln!("--headless supports only --speed-test now \u{2014} run the windowed app to stream");
     std::process::exit(2);
 }
@@ -258,9 +258,8 @@ fn discover_and_print() {
     }
 }
 
-/// WinUI 3 / Direct3D11 / WASAPI / SDL3 are Windows turf; this stub keeps `cargo build
-/// --workspace` green on Linux/macOS (the other native clients live in
-/// clients/linux and clients/apple).
+/// WinUI 3 is Windows-only; this stub keeps `cargo build --workspace` green on Linux/macOS
+/// (the other native clients live in clients/linux and clients/apple).
 #[cfg(not(windows))]
 fn main() {
     eprintln!(
