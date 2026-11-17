@@ -288,8 +288,7 @@ fun LaunchHoldOverlay(hold: LaunchHold, handle: Long, onRetry: () -> Unit, onSho
                 .graphicsLayer {
                     rotationY = 360f * p
                     // Viewer distance in pixels, taken from the card rather than a constant, so
-                    // the turn has the same depth at any size — a couple of card widths, which
-                    // is the Apple hold's `CoverFlip.distance`.
+                    // the turn has the same depth at any size — a couple of card widths.
                     cameraDistance = 2.2f * size.width
                 }
                 .shadow(24.dp, RoundedCornerShape(14.dp))

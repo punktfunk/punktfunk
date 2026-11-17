@@ -64,8 +64,7 @@ class ScreenshotTest {
     ) {
         compose.mainClock.autoAdvance = false
         compose.setContent { ShotTheme { if (statusBar) ShotStatusFrame(content) else content() } }
-        // 1.6 s, not 0.8: a ModalBottomSheet's entrance spring is still mid-rise at 0.8 s and the
-        // add-host sheet's Connect button was captured half below the frame.
+        // 1.6 s, not 0.8: a ModalBottomSheet's entrance spring is still mid-rise at 0.8 s.
         compose.mainClock.advanceTimeBy(1600)
         captureScreenRoboImage("$out/phone-$name.png")
     }

@@ -3,7 +3,7 @@ package io.unom.punktfunk
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** The second-screen size rule (design/android-dual-screen.md §7), pure. */
+/** The second-screen size rule ([companionFits]), pure. */
 class CompanionFitsTest {
     @Test
     fun aMeasuredPanelCountsByItsDiagonal() {

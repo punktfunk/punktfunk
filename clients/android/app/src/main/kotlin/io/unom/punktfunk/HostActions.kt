@@ -16,9 +16,9 @@ import org.json.JSONObject
  * (`design/host-actions.md` §7), over the same mTLS identity the library fetch and the log
  * upload use.
  *
- * The HOST is the only enforcer: [Action.permitted] is what it says about *this* device's
- * access, so a device without the Host-power grant is offered nothing rather than shown a row
- * that will be refused. Discovery is best-effort by contract — an older host (no such route),
+ * The HOST is the only enforcer: each action's `permitted` flag is what it says about *this*
+ * device's access, so a device without the Host-power grant is offered nothing rather than shown
+ * a row that will be refused. Discovery is best-effort by contract — an older host (no such route),
  * an unreachable one, or a shape we don't recognise yields an empty list, because a missing
  * menu row costs a menu row and a thrown exception costs the screen.
  *

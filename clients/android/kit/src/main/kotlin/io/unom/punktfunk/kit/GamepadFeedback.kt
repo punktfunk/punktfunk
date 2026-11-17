@@ -19,8 +19,9 @@ import java.nio.ByteBuffer
  * Host→client gamepad feedback for one session, routed per controller by wire pad index. Two daemon
  * poll threads drain the blocking native pulls and render in Kotlin: rumble → the addressed
  * controller's `VibratorManager` (API 31+) or its single legacy `Vibrator` on API 28–30; HID-output
- * → that controller's lightbar / player-LED via `LightsManager` (API 33+); adaptive triggers are
- * parse-validated and logged (Android has no public adaptive-trigger API).
+ * → that controller's lightbar / player-LED via `LightsManager` (bound only on API 33+); adaptive
+ * triggers on an InputDevice pad are parse-validated and logged (Android has no public
+ * adaptive-trigger API through API 37; a capture link's [PadFeedbackSink] renders them).
  *
  * Each pull carries the wire pad index it is addressed to; [GamepadRouter.deviceForPad] resolves it
  * to the physical controller currently holding that index — so a rumble the host aimed at pad 1
@@ -54,7 +55,8 @@ class GamepadFeedback(
      * (its slot is an [GamepadRouter.ExternalPad] on a synthetic id, so [GamepadRouter.deviceForPad]
      * resolves null and the platform paths no-op) — the link renders instead, by composing USB
      * output reports on the physical pad. This is also the ONLY route to adaptive triggers:
-     * Android has no platform API for them, so without a sink a Trigger event is log-and-drop.
+     * Android has no platform API for them (through API 37), so without a sink a Trigger event
+     * is log-and-drop.
      * Invoked on the feedback poll threads; implementations must be thread-safe.
      */
     interface PadFeedbackSink {
@@ -110,7 +112,10 @@ class GamepadFeedback(
         val amplitudeControlled: Boolean,
     )
 
-    /** One controller's lights binding (API 33+): its open session + the RGB / player-id lights it exposes. */
+    /**
+     * One controller's lights binding (bound only on API 33+): its open session + the RGB /
+     * player-id lights it exposes.
+     */
     private class LightBind(
         val session: LightsManager.LightsSession,
         val rgb: Light?,
@@ -147,8 +152,8 @@ class GamepadFeedback(
                 // Rendering is binder calls into the vibrator service, and every one of them can
                 // throw unchecked — DeadSystemRuntimeException when system_server goes down, and
                 // the ordinary RuntimeException a dying service wraps its RemoteException in.
-                // Unguarded, ONE of those killed this thread outright: `running` stayed true, so
-                // nothing noticed and nothing restarted it, and rumble was gone for the rest of
+                // Unguarded, ONE of those would kill this thread outright: `running` stays true, so
+                // nothing notices and nothing restarts it, and rumble is gone for the rest of
                 // the session. Losing a single command is recoverable; losing the loop is not.
                 runCatching {
                     renderRumble(cmd.pad, cmd.low, cmd.high, cmd.backstopMs)
@@ -307,7 +312,7 @@ class GamepadFeedback(
                 // VibratorManager.getVibratorIds(), so a pad that enumerates heavy-first would
                 // invert the feel: the stronger amplitude drives the physically-lighter motor.
                 // Failure mode is tactile only — both motors still fire, nothing silences or
-                // crashes — so this stays the default pending per-pad on-glass verification (G20).
+                // crashes — so this stays the default pending per-pad on-glass verification.
                 // ids beyond the first two (rare) are left alone here.
                 if (hi != 0) combo.addVibrator(bind.ids[0], oneShot(hi, durationMs))
                 if (lo != 0) combo.addVibrator(bind.ids[1], oneShot(lo, durationMs))
@@ -357,12 +362,11 @@ class GamepadFeedback(
         }
     }
 
-    // One-shot held for `durationMs` — the host's v2 TTL (renewed while the level holds), so it
-    // self-terminates on a lost stop; cancel on zero. Floor the duration at 1 ms: `createOneShot`
-    // throws IllegalArgumentException on a non-positive duration, and a lease can carry ttl_ms==0
-    // (e.g. the legacy-Deck ceiling) with a nonzero amplitude — which reaches here past the (0,0)
-    // stop guard. On the VibratorManager path the effect is built OUTSIDE the vibrate() runCatching,
-    // so an uncaught throw here would kill the whole rumble poll thread.
+    // One-shot held for `durationMs`, the command's backstop (see [renderRumble]), so it
+    // self-terminates on a lost stop; cancel on zero. The duration is floored at 1 ms:
+    // `createOneShot` throws IllegalArgumentException on a non-positive one. On the VibratorManager
+    // path the effect is built OUTSIDE the vibrate() runCatching, so a throw here drops the
+    // command at the poll loop's runCatching.
     private fun oneShot(amp: Int, durationMs: Long): VibrationEffect =
         VibrationEffect.createOneShot(durationMs.coerceAtLeast(1), amp)
 
@@ -390,7 +394,7 @@ class GamepadFeedback(
                 else if (Build.VERSION.SDK_INT >= 33) setPlayerId(pad, player)
             }
             TAG_MIC_LED -> {
-                // No platform API lights it: only a captured DualSense can.
+                // No InputDevice route is wired for it: only a captured DualSense lights it.
                 val mode = buf.get().toInt() and 0xFF
                 sink?.takeIf { it.ownsPad(pad) }?.micLed(pad, mode)
             }

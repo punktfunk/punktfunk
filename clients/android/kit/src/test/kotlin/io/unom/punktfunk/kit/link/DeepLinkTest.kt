@@ -113,7 +113,7 @@ class DeepLinkResolutionTest {
         assertEquals(HostResolution.Confirm(desk), resolve("punktfunk://connect/DESK"))
         assertEquals(HostResolution.Confirm(desk), resolve("punktfunk://connect/192.168.1.50"))
         assertEquals(HostResolution.Confirm(desk), resolve("punktfunk://connect/192.168.1.50:9777"))
-        // …including the `host=` recovery path, exactly as its own doc always claimed.
+        // …including the `host=` recovery path, as `resolveHost`'s doc says.
         assertEquals(
             HostResolution.Confirm(desk),
             resolve("punktfunk://connect/00000000-0000-4000-8000-000000000000?host=192.168.1.50"),

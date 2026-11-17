@@ -67,10 +67,10 @@ pub(crate) fn low_latency_profile<'a>(
 /// `refresh_hz` is the stream rate (`mtk-tv`'s `operating-rate`), `sdk` the Android release
 /// (`qti-fence`'s gate).
 ///
-/// `aggressive` is the "Low-latency mode" master toggle. Off, the set is the plain profile every
-/// device once streamed with: the Qualcomm vendor twin set blind (other vendors ignore an unknown
-/// key), `priority = 0` and `operating-rate = MAX` together. That is the per-device escape hatch.
-/// On (the default), the set is Moonlight-Android's: MediaTek's `vdec-lowlatency`, the vendor keys
+/// `aggressive` is the "Low-latency mode" master toggle. Off, the set is the plain profile: the
+/// Qualcomm vendor twin set blind (other vendors ignore an unknown key), `priority = 0` and
+/// `operating-rate = MAX` together. That is the per-device escape hatch.
+/// On, the set is Moonlight-Android's: MediaTek's `vdec-lowlatency`, the vendor keys
 /// of the decoder's name prefix (a key one vendor honours means nothing to another) and one clock
 /// hint. NVIDIA Tegra and Rockchip have no such key, and Realtek's is set in `decode/` once
 /// the framework is read for it; the standard key, the clock hint and a first rank in
@@ -939,7 +939,7 @@ mod tests {
         };
         assert_eq!(rate(120), Some(("operating-rate", 120)));
         assert_eq!(rate(24), Some(("operating-rate", 24)));
-        // A mode without a rate writes 0, though `frame-rate` is left out for it.
+        // A mode without a rate sets no `operating-rate` at all.
         assert_eq!(
             rate(0),
             Some(("vendor.mtk-codec2.low-latency-mode", 1)),

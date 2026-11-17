@@ -12,8 +12,8 @@ import org.robolectric.annotation.Config
 /**
  * [padShaped] decides which keys the console's pad route claims. It exists because the source
  * class on a key event is the platform's per-device guess: a keyboard on a composite receiver
- * reports `SOURCE_GAMEPAD` on every key it sends, and claiming those by source left its Enter
- * and its typing dead in the menus while the same keys still reached a running stream.
+ * reports `SOURCE_GAMEPAD` on every key it sends, and claiming those by source would leave its
+ * Enter and its typing dead in the menus while the same keys still reach a running stream.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])

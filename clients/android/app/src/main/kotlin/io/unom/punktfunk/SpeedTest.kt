@@ -15,19 +15,17 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
- * The network speed test: measure the path to a host **over the real data plane** — connect, ask
- * the host to burst filler for two seconds, report goodput and loss, and offer to apply a
- * recommended bitrate in one tap.
+ * The network speed test: measure the path to a host **over the real data plane** — connect, run
+ * the core's network check ([runSpeedTest]), report goodput, loss and findings, and offer to
+ * apply a recommended bitrate in one tap.
  *
- * The measurement is the easy half. The half that was wrong everywhere for a long time is *where
- * the answer goes*: a measured bitrate belongs in the layer the tested host actually resolves
- * bitrate from (design/client-settings-profiles.md §5.3). Writing it to the global — the
- * long-standing behaviour — meant measuring the slow retro box downstairs quietly re-tuned the
- * desktop too. [SpeedTestTarget] is that decision, and because it depends only on the host it is
- * known *before* the result lands, so the button can say where it will write.
+ * A measured bitrate belongs in the layer the tested host resolves bitrate from
+ * (design/client-settings-profiles.md §5.3).
+ * [SpeedTestTarget] is that decision, and because it depends only on the host it is known
+ * *before* the result lands, so the button can say where it will write.
  */
 sealed interface SpeedTestTarget {
-    /** No preset in play — the global default, i.e. what has always happened. */
+    /** No preset in play — the global default. */
     data object Global : SpeedTestTarget
 
     /** The preset this host uses already overrides bitrate, so that override is what it reads. */

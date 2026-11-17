@@ -20,9 +20,12 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** The touch shell's profile unlock (CONTRACT §6) over a software P-256 key and a scripted host. */
+/**
+ * The touch shell's profile unlock (`multi-seat-contract.md`, "A profile's lock") over a software
+ * P-256 key and a scripted host.
+ */
 class ProfileUnlockTest {
-    // The pinned box fingerprint, as the contract's vector has it: 32 × bb.
+    // The pinned box fingerprint, as `clients/shared/profile-unlock-vectors.json` has it: 32 × bb.
     private val hostFp = "bb".repeat(32)
     private val deviceFp = ByteArray(32) { 0xaa.toByte() }
     private val boxFp = ByteArray(32) { 0xbb.toByte() }
@@ -31,7 +34,7 @@ class ProfileUnlockTest {
 
     private fun row(unlock: UnlockNeed) = ListedProfile(id = "ada", displayName = "Ada", unlock = unlock)
 
-    /** CONTRACT §3, built here byte by byte: the production builder is the native one. */
+    /** The vectors' `seat` form, built byte by byte; the production builder is the native one. */
     private fun contractMessage(challenge: ByteArray, seat: String, device: ByteArray, box: ByteArray) =
         "punktfunk-seat-unlock-v1".toByteArray() + challenge + seat.toByteArray() + device + box
 
@@ -341,7 +344,7 @@ class ProfileUnlockTest {
         row = { id -> host.fresh?.takeIf { it.id == id } },
     )
 
-    /** The contract's 187-byte form for a locked profile: its id zero-padded to 64 bytes. */
+    /** The vectors' 187-byte `profile` form for a locked profile: its id zero-padded to 64. */
     private fun profileMessage(challenge: ByteArray, id: String, device: ByteArray, box: ByteArray) =
         "punktfunk-profile-unlock-v1".toByteArray() + challenge + id.toByteArray().copyOf(64) + device + box
 

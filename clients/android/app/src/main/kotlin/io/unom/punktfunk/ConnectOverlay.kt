@@ -56,14 +56,14 @@ internal sealed interface ConnectPhase {
     /** A dial's unlock is starting [profile]'s desktop, which can take a minute. */
     data class Starting(override val hostName: String, val profile: String) : ConnectPhase
 
-    /** A sleeping host is being Wake-on-LAN'd and we're waiting for it to advertise again. */
+    /** A sleeping host is being Wake-on-LAN'd and we're waiting for it to answer again. */
     data class Waking(override val hostName: String, val seconds: Int, val connectsAfter: Boolean) : ConnectPhase
 
     /** The wake wait ran out — offer retry / cancel. */
     data class WakeTimedOut(override val hostName: String) : ConnectPhase
 }
 
-/** Per-phase copy, shared by the console takeover and the touch modal so both read identically. */
+/** Per-phase copy for [ConnectModal]. */
 private data class ConnectCopy(
     val title: String,
     val subtitle: String,
@@ -107,15 +107,16 @@ private fun connectCopy(phase: ConnectPhase): ConnectCopy = when (phase) {
  * out to be asleep:
  *
  *  - **Connecting** ([connectingHostName] non-null): the dial is in flight. Shown immediately on tap,
- *    so a host that takes a beat to answer no longer looks like nothing happened. With
+ *    so a host that takes a beat to answer doesn't look like nothing happened. With
  *    [startingProfile], the dial's unlock is starting that profile's desktop.
- *  - **Waking** ([WakeController.waking] non-null): the dial failed on a sleeping host, so we're firing
- *    Wake-on-LAN and waiting for it to advertise again, escalating to a retry/cancel prompt on timeout.
+ *  - **Waking** ([WakeController.waking] non-null): a dial failed on a sleeping host, or its card's
+ *    Wake was picked, so we're firing Wake-on-LAN and waiting for it to answer again, escalating
+ *    to a retry/cancel prompt on timeout.
  *
  * Drawn as a Material [ConnectModal] over the host grid, matching the app's other dialogs.
  *
- * The two phases hand off within a single Compose frame (see ConnectScreen's `doConnectDirect` →
- * `waker.start` → redial), so nothing blinks between them.
+ * The two phases hand off within a single Compose frame (see ConnectController's
+ * `doConnectDirect` → `waker.start` → redial), so nothing blinks between them.
  */
 @Composable
 fun ConnectOverlay(
@@ -125,8 +126,8 @@ fun ConnectOverlay(
     startingProfile: String? = null,
 ) {
     val waking = waker.waking
-    // Waking takes precedence (it only exists after a dial has failed) so a stray overlap can't strand
-    // the "Connecting…" phase over a wake in progress.
+    // Waking takes precedence so a stray overlap can't strand the "Connecting…" phase over a wake
+    // in progress.
     val phase = when {
         waking != null && waking.timedOut -> ConnectPhase.WakeTimedOut(waking.hostName)
         waking != null -> ConnectPhase.Waking(waking.hostName, waking.seconds, waking.connectsAfter)
@@ -174,7 +175,7 @@ internal fun ConnectModal(
                 fontFamily = if (copy.monoSubtitle) FontFamily.Monospace else FontFamily.Default,
             )
         },
-        // No confirm action until the wake times out; then "Try again" is the primary button.
+        // No confirm action until the wake times out; then "Retry" is the primary button.
         confirmButton = {
             if (timedOut) TextButton(onClick = onRetry) { Text(stringResource(R.string.common_retry)) }
         },

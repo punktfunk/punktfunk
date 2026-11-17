@@ -42,8 +42,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * The link re-acquires by itself — `autoConnect` leaves the request with the stack, so a pad that
  * powers off mid-session reconnects on its own and [onClosed] only means "release the slot".
  *
- * Requires BLUETOOTH_CONNECT (the caller gates on it); connection priority is bumped to HIGH to
- * pull the connection interval from ~50 ms down to ~11 ms.
+ * Needs [CONNECT_PERMISSION] where the platform has one: [pairedControllers] and [start] refuse
+ * without it. Connection priority is bumped to HIGH to pull the connection interval from ~50 ms
+ * down to ~11 ms.
  */
 @SuppressLint("MissingPermission")
 class Sc2BleLink(
@@ -77,7 +78,8 @@ class Sc2BleLink(
     /** A write is with the stack; its callback clears this and sends the next. */
     private val inFlight = AtomicBoolean(false)
 
-    /** A write the stack refused as busy: it goes before the queue. Touched only under [inFlight]. */
+    /** A write the stack refused as busy: it goes before the queue. [pump] sets and takes it
+     *  only while holding [inFlight]. */
     @Volatile private var held: GattWrite? = null
     private var lizardTicker: Thread? = null
 
@@ -454,7 +456,7 @@ class Sc2BleLink(
             deliver(ch, value)
         }
 
-        /** Below 33 only; from 33 the stack calls both, and the overload above has the value. */
+        /** Below 33 only; from 33 the overload above has the value. */
         @Deprecated("Replaced at API 33 by the overload that carries the value")
         override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic) {
             if (Build.VERSION.SDK_INT >= 33) return
@@ -482,8 +484,8 @@ class Sc2BleLink(
             Log.i(TAG, "SC2 BLE link up (${pendingSubs.size} notify chars, classic=$isClassic)")
             sendLizard(Sc2Device.DISABLE_LIZARD)
             if (isClassic) return
-            // The firmware watchdog re-enables lizard mode; refresh on SDL's cadence until the
-            // host's Steam takes over via the raw plane (its writes land through writeRaw too).
+            // The firmware watchdog re-enables lizard mode; refresh on SDL's cadence while READY.
+            // The host's Steam sends its own through the raw plane too (it lands in writeRaw).
             lizardTicker = Thread({
                 while (state == State.READY) {
                     try {

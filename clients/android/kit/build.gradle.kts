@@ -15,7 +15,7 @@ val ndkVer = providers.gradleProperty("punktfunk.ndkVersion").get() // gradle.pr
 
 android {
     namespace = "io.unom.punktfunk.kit"
-    compileSdk = 37 // Android 17 — align with :app (androidx.core 1.19.0 requires it)
+    compileSdk = 37 // Android 17 — align with :app, whose androidx.core requires it
     ndkVersion = ndkVer
 
     defaultConfig {
@@ -49,12 +49,13 @@ dependencies {
 // cargo-ndk: cross-compile clients/android/native (punktfunk-client-android) into this module's jniLibs/<abi>/ so the
 // resulting libpunktfunk_android.so is packaged into the app (and any AAR this module produces).
 // NDK r28+ aligns to 16 KB pages by default — no extra linker flags. Prereqs (see clients/android
-// /README.md): `cargo install cargo-ndk` + `rustup target add aarch64-linux-android x86_64-linux-android`.
+// /README.md): `cargo install cargo-ndk` + `rustup target add aarch64-linux-android
+// armv7-linux-androideabi x86_64-linux-android`.
 // ------------------------------------------------------------------------------------------------
 val repoRoot = rootDir.parentFile.parentFile // clients/android -> clients -> repo root
 // CARGO_HOME first: rustup puts every binary in $CARGO_HOME/bin, and the CI image
 // (ci/android-ci.Dockerfile) installs the shared toolchain at /usr/local/cargo — the
-// historical ~/.cargo fallback is what a GUI Android Studio launch (no env) still needs.
+// ~/.cargo fallback is what a GUI Android Studio launch (no env) still needs.
 val cargoBin = System.getenv("CARGO_HOME")?.let { "$it/bin" }
     ?: "${System.getProperty("user.home")}/.cargo/bin"
 
@@ -115,7 +116,7 @@ fun Exec.cargoNdkEnvironment() {
     // target + features (see the fetchSkiaBinaries block below for provenance and digests).
     // The default hands skia-bindings a file:// template into the directory fetchSkiaBinaries
     // has already SHA-256-verified — skia-bindings itself downloads without any content check,
-    // so it must only ever see verified local bytes (security-review 2026-08-31 H-2).
+    // so it must only ever see verified local bytes.
     // Override with `-PskiaBinariesUrl=<template>` or the `SKIA_BINARIES_URL` env (`{tag}`/`{key}`
     // placeholders, `file://` allowed) — e.g. a local mirror while cutting the next bump's
     // archives. 🛑 The override bypasses the digest check (its archives are by definition not the
@@ -138,10 +139,11 @@ fun Exec.cargoNdkEnvironment() {
 // A release asset is replaceable under the same name, so the download is authenticated by the
 // digests COMMITTED here, not by its URL: fetchSkiaBinaries downloads each archive, verifies its
 // SHA-256, and fails the build on any mismatch; the cargo-ndk tasks then read only the verified
-// local files (security-review 2026-08-31 H-2).
+// local files.
 //
-// The archives at rust-skia tag 0.153.3, key `<skia-hash>-<target>-ganesh-gl-jpegd-jpege-pdf-textlayout`
-// (hash b7f043e0b1e2a850e702). Re-derive tag + hash + digests on every skia-safe bump.
+// The archives sit at rust-skia tag `skiaBinariesTag`, under the key
+// `<skia-hash>-<target>-ganesh-gl-jpegd-jpege-pdf-textlayout` (hash `skiaBinariesHash`).
+// Re-derive tag + hash + digests on every skia-safe bump.
 // armv7 provenance: SKIA_GN_ARGS='extra_cflags+=["-D__ANDROID_MIN_SDK_VERSION__=26"]'
 // FORCE_SKIA_BUILD=1 cargo ndk -t armeabi-v7a build -p pf-console-ui --no-default-features, then
 // OUT_DIR/skia/{libskia,libskshaper,libskparagraph,libskunicode_core,libskunicode_icu,
@@ -216,7 +218,7 @@ fun registerCargoNdk(taskName: String, release: Boolean) =
     tasks.register<Exec>(taskName) {
         group = "rust"
         description = "cargo-ndk build of punktfunk-client-android (${if (release) "release" else "debug"})"
-        dependsOn(fetchSkiaBinaries) // skia-bindings must only see digest-verified archives (H-2)
+        dependsOn(fetchSkiaBinaries) // skia-bindings must only see digest-verified archives
         workingDir = repoRoot
         // cargo-ndk only adds to jniLibs. Empty it first, so no library an older tree built ships.
         val jniLibs = file("src/main/jniLibs")
@@ -232,10 +234,10 @@ fun registerCargoNdk(taskName: String, release: Boolean) =
             "-t", "arm64-v8a", "-t", "armeabi-v7a", "-t", "x86_64",
             // Link against the minSdk-28 sysroot (libaaudio, API 26, is present). NOTE: this does
             // NOT reject an accidental >28 hard import — a cdylib link permits undefined symbols,
-            // which then fail at System.loadLibrary on every device below the symbol's API level
-            // (the 0.9.0 Android-≤12 regression). The checkJniImports* task after this build is
-            // what actually enforces the floor; >28 entry points must be dlsym-resolved (see
-            // decode::try_set_frame_rate, decode::install_render_callback, adpf).
+            // which then fail at System.loadLibrary on every device below the symbol's API level.
+            // The checkJniImports* task after this build is what actually enforces the floor;
+            // >28 entry points must be dlsym-resolved (see decode::try_set_frame_rate,
+            // decode::install_render_callback, adpf).
             "--platform", "28",
             "-o", jniLibs.absolutePath,
             "build", "-p", "punktfunk-client-android",
@@ -246,18 +248,15 @@ fun registerCargoNdk(taskName: String, release: Boolean) =
 
 // ------------------------------------------------------------------------------------------------
 // Lint the ANDROID target. `punktfunk-client-android` and every `#[cfg(target_os = "android")]`
-// module elsewhere in the workspace were, until this task existed, **completely unlinted**: ci.yml
-// runs `cargo clippy --workspace` on the HOST, where all of that code is compiled out, and this
-// workflow only ever ran `build`. The gap was found in 2026-08 with five lints sitting in
-// clients/android/native (two of them `unnecessary_cast`, which is exactly the class that decides
-// whether a cast is redundant BY POINTER WIDTH).
+// module elsewhere in the workspace are compiled out on the HOST, where ci.yml runs
+// `cargo clippy --workspace`, so this task is what lints them.
 //
 // Both widths are linted, and that is the load-bearing part: arm64-v8a is 64-bit and armeabi-v7a is
-// 32-bit, so a cast that is redundant on one can be required on the other. Linting only the primary
-// ABI would license "fixes" that break the 32-bit build — the shipping ABI for the many 32-bit
-// Google TV / Android TV boxes this client targets. x86_64 is deliberately omitted: it is
-// emulator-only and shares its pointer width with arm64, so it costs a third of the job's lint time
-// for no signal these two do not already carry.
+// 32-bit, so a cast that is redundant on one can be required on the other (`unnecessary_cast`
+// decides BY POINTER WIDTH). Linting only the primary ABI would license "fixes" that break the
+// 32-bit build — the shipping ABI for the many 32-bit Google TV / Android TV boxes this client
+// targets. x86_64 is deliberately omitted: it is emulator-only and shares its pointer width with
+// arm64, so it costs a third of the job's lint time for no signal these two do not already carry.
 //
 // `--all-targets` for the same reason ci.yml spells it out: without it the `#[cfg(test)]` modules
 // are never compiled, and un-compiled test code drifts silently.
@@ -265,7 +264,7 @@ fun registerCargoNdkClippy(taskName: String) =
     tasks.register<Exec>(taskName) {
         group = "verification"
         description = "clippy (deny warnings) for punktfunk-client-android on both Android widths"
-        dependsOn(fetchSkiaBinaries) // skia-bindings must only see digest-verified archives (H-2)
+        dependsOn(fetchSkiaBinaries) // skia-bindings must only see digest-verified archives
         workingDir = repoRoot
         cargoNdkEnvironment()
         commandLine(
@@ -281,9 +280,9 @@ fun registerCargoNdkClippy(taskName: String) =
 val cargoNdkClippy = registerCargoNdkClippy("cargoNdkClippy")
 
 // Post-link floor check: every undefined symbol in the built .so must exist in the API-28 stubs,
-// else System.loadLibrary fails on devices at the minSdk floor (see the script header for the
-// 0.9.0 incident this guards against). Runs right after its cargo-ndk task; the APK build depends
-// on this task (not the cargo one directly), so a violation fails the build, local and CI alike.
+// else System.loadLibrary fails on devices at the minSdk floor (the script header says why).
+// Runs right after its cargo-ndk task; the APK build depends on this task (not the cargo one
+// directly), so a violation fails the build, local and CI alike.
 fun registerCheckJniImports(taskName: String, cargoTask: TaskProvider<Exec>) =
     tasks.register<Exec>(taskName) {
         group = "rust"
@@ -362,17 +361,15 @@ afterEvaluate {
     tasks.named("preReleaseBuild").configure { dependsOn(checkJniNames) }
     // `-PskipRustBuild` skips the cargo-ndk native build — for JVM-only tasks (the Roborazzi
     // screenshot unit tests render Compose on the JVM and never load libpunktfunk_android.so), so
-    // CI/local screenshot runs don't need the Rust toolchain or NDK. The native build stays wired
-    // for every normal APK/AAR build.
+    // those runs need no NDK or Android Rust targets (generateMessages still runs host cargo).
+    // The native build stays wired for every normal APK/AAR build.
     //
     // DEBUG APKs SHIP RELEASE RUST. Cargo's debug profile is not "a bit slower" for this library —
     // it is unusable: the AES-GCM data-plane decrypt runs through generic-array iterator closures
-    // with per-byte UB checks instead of ARMv8 hardware AES. Profiled live on a phone (simpleperf):
-    // ~800 µs of user CPU per 1.4 KB packet, the receive pump pinned over a full core yet unable to
-    // drain a 20 Mbps stream — every debug-APK on-device test was silently benchmarking unoptimized
-    // crypto, not the streaming pipeline. Kotlin debuggability is untouched (the APK is still a
-    // debug build); only the cargo profile changes. `-PrustDebug` restores a debug-profile native
-    // build for the rare session that actually steps through Rust.
+    // with per-byte UB checks instead of ARMv8 hardware AES, and on a phone the receive pump
+    // cannot drain a 20 Mbps stream. Kotlin debuggability is untouched (the APK is still a debug
+    // build); only the cargo profile changes. `-PrustDebug` restores a debug-profile native build
+    // for the rare session that actually steps through Rust.
     if (!project.hasProperty("skipRustBuild")) {
         val debugRust =
             if (project.hasProperty("rustDebug")) checkJniImportsDebug else checkJniImportsRelease

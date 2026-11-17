@@ -35,8 +35,9 @@ private const val FIELD_SEP = '\u001F'
 /**
  * Parse one record from [NativeBridge.nativeDiscoveryPoll] (`key␟name␟addr␟port␟fp␟pair␟mac␟os␟mgmt`),
  * or null if it's malformed. Fields past the 6th are optional — an older native lib omits them
- * (`mac` 7th, `os` 8th). Pure — unit-tested without Android (see ParseRecordTest). The native side
- * already applied the protocol gate and address selection, so this is just field marshaling.
+ * (`mac` 7th, `os` 8th, `mgmt` 9th). Pure — unit-tested without Android (see ParseRecordTest). The
+ * native side already applied the protocol gate and address selection, so this is just field
+ * marshaling.
  */
 fun parseHostRecord(record: String): DiscoveredHost? {
     val f = record.split(FIELD_SEP)
@@ -104,7 +105,7 @@ fun osIconTokens(chain: String): List<String> =
  *
  * We hold a Wi-Fi [WifiManager.MulticastLock] for the browse lifetime — raw multicast *reception*
  * needs it. (The Android emulator's SLIRP NAT drops multicast, so on the emulator discovery starts
- * but never finds a LAN host — same as before; that's the network, not the API.)
+ * but never finds a LAN host; that's the network, not the API.)
  *
  * The daemon's sockets belong to the interface they were built on. A TV that moves from Wi-Fi to
  * Ethernet never backgrounds the app, so nothing else would rebuild them: the default-network

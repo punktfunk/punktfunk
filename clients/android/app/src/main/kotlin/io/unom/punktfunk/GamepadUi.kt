@@ -17,8 +17,7 @@ import androidx.compose.ui.platform.LocalContext
 import io.unom.punktfunk.kit.Gamepad
 
 /**
- * [Settings.gamepadUiMode]: take over only while a controller is attached. The default, and what
- * the switch meant when it was a lone Boolean.
+ * [Settings.gamepadUiMode]: take over only while a controller is attached. The default.
  */
 const val GAMEPAD_UI_WHEN_CONNECTED = "connected"
 

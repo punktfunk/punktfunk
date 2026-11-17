@@ -5,15 +5,15 @@ import android.view.KeyEvent
 /**
  * Hardware key → Windows Virtual-Key code (the punktfunk wire contract: **US-positional** — we
  * forward the physical key, not the typed character; the host maps VK → evdev via
- * `inject::vk_to_evdev`). The Android analogue of the Linux client's evdev→VK table
- * (`punktfunk-client-linux/src/keymap.rs`) and the Apple client's `hidToVK`.
+ * `vk_to_evdev`). The Android analogue of the Linux client's evdev→VK table
+ * (`punktfunk_core::input::evdev_to_vk`) and the Apple client's `hidToVK`.
  *
  * Prefer [toVk] with the full [KeyEvent]: it reads the raw evdev scancode first, because
  * `KeyEvent.keyCode` is only positional under the stock US key layout — a user-selected physical
  * keyboard layout (Settings → Physical keyboard) remaps keycodes semantically (AOSP's German .kcm
  * carries `map key 21 Z` / `map key 44 Y`), which would apply the layout twice: once here, once on
  * the host (the y↔z / ü-on-ö scramble). Unmapped keys → 0 (the Rust side drops them). Extend this
- * alongside `punktfunk-host/src/inject.rs::vk_to_evdev` (emit only VKs the host knows).
+ * alongside `pf-inject/src/inject/keymap.rs::vk_to_evdev` (emit only VKs the host knows).
  */
 object Keymap {
     /**
@@ -111,7 +111,7 @@ object Keymap {
         KeyEvent.KEYCODE_DPAD_CENTER -> 0x0D
 
         // Consumer/media keys — forwarded to the host while streaming (volume stays local:
-        // MainActivity's pass-through list wins before the map is consulted).
+        // MainActivity's SYSTEM_KEYS wins before the map is consulted).
         KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
         KeyEvent.KEYCODE_MEDIA_PLAY,
         KeyEvent.KEYCODE_MEDIA_PAUSE -> 0xB3 // VK_MEDIA_PLAY_PAUSE

@@ -185,7 +185,7 @@ fun LinkConnectPrompt(
 /**
  * The no-PIN "request access" wait: the connect is parked on the host until the operator approves
  * this device. Cancel returns the UI immediately — the caller trips the per-attempt flag so a late
- * approval is torn down silently (see ConnectScreen.requestAccess) and resumes discovery.
+ * approval is dropped silently (see ConnectController.requestAccess) and resumes discovery.
  *
  * Outside taps are ignored: a connect is parked on the host, and a stray tap beside the card is not
  * a decision to abandon it.
@@ -250,10 +250,8 @@ fun LocalNetworkPrompt(
 }
 
 /**
- * The link measurement and what to do with the result. A TV box on a powerline adapter is exactly
- * the machine whose link is worth measuring, so this belongs on the couch surface too — and so
- * does [speedTestTargetNote], which the console used to omit, leaving a console user to guess
- * which layer Apply would write to.
+ * The link measurement and what to do with the result. [speedTestTargetNote] says which layer
+ * Apply will write to.
  */
 @Composable
 fun SpeedTestPrompt(

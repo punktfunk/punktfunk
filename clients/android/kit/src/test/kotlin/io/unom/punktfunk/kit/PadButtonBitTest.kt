@@ -9,20 +9,14 @@ import org.junit.Test
  * (`KeyEvent`'s keycode/flag constants are compile-time-inlined ints, so no Android runtime is
  * involved). Run: `./gradlew :kit:testDebugUnitTest`.
  *
- * The regression it pins is a field report: one press of Select disconnected the session. Plenty
- * of pads deliver that button as the plain `KEYCODE_BACK` a remote uses, with no `BUTTON_SELECT`
- * scancode behind it — so it mapped to nothing, fell out of the gamepad branch unconsumed, and
- * reached the activity back stack, which is the deliberate-quit exit. The same gap made
- * [Gamepad.BTN_BACK] unreachable on those pads, and with it every shortcut built on Select: the
- * exit chord `StreamScreen`'s own start banner advertises, the mic mute, the stats tier.
- *
- * Which controller the report came from is not knowable from the logs and does not matter:
- * `KEYCODE_BACK` is the only keycode that reaches the back stack from a SOURCE_GAMEPAD device, so
- * a one-press quit identifies the button's keycode on its own.
+ * A pad that delivers Select as the plain `KEYCODE_BACK` a remote uses has no `BUTTON_SELECT`
+ * scancode behind it. Left unmapped, that press reaches the activity back stack, the
+ * deliberate-quit exit, and [Gamepad.BTN_BACK] — with every shortcut built on Select — is
+ * unreachable on those pads. So a gamepad's `KEYCODE_BACK` is the Select bit.
  */
 class PadButtonBitTest {
 
-    /** The report: Select on an Android-TV pad arrives as BACK and must be the Select bit. */
+    /** Select on an Android-TV pad arrives as BACK and must be the Select bit. */
     @Test
     fun `a pad's BACK is its Select button`() {
         assertEquals(Gamepad.BTN_BACK, Gamepad.padButtonBit(KeyEvent.KEYCODE_BACK, 0))

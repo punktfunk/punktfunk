@@ -20,7 +20,7 @@ use super::SESSIONS;
 /// `NativeBridge.nativeAccessState(handle): IntArray?` — the live access state as
 /// `[grants, remainingSecs, updateSeq]`; `null` on a `0` handle. `grants` is the
 /// `GRANT_GAMEPAD`-family bitmask, seeded from the Welcome's advert (an old host reads as
-/// `GRANT_ALL` — full control, today's behavior); `remainingSecs` counts down to the access
+/// `GRANT_ALL` — full control); `remainingSecs` counts down to the access
 /// deadline on the CLIENT's clock (`0` = permanent, clamped to ≥ 1 once a deadline exists so
 /// the sentinel can never be reached by counting); `updateSeq` increments once per
 /// `AccessUpdate` drained from the connector's event plane. Not android-gated — pure `jni` +

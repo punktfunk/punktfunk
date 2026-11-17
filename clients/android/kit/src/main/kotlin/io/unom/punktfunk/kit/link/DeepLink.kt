@@ -351,7 +351,10 @@ object DeepLinks {
     }
 }
 
-/** What the URL asks for. `WAKE`/`BROWSE` are reserved in the grammar and parse today. */
+/**
+ * What the URL asks for. `WAKE`/`BROWSE` are reserved in the grammar and parse; the shells only
+ * act on `CONNECT`.
+ */
 enum class LinkRoute(val word: String) {
     CONNECT("connect"),
     WAKE("wake"),

@@ -251,7 +251,7 @@ class RingActions(
     val audioMute: () -> Int,
     val audioMuteLabel: () -> Int?,
     val toggleStreamMute: () -> Unit,
-    /** `[w, h, hz]` as last requested (Android has no live read-back of the negotiated mode). */
+    /** `[w, h, hz]`: the asked-for mode at once, then the host's answer (`nativeVideoSize`). */
     val currentMode: () -> IntArray,
     val requestMode: (Int, Int, Int) -> Unit,
     val scrollInverted: () -> Boolean = { false },
@@ -436,7 +436,7 @@ internal fun spec(slot: SlotId, cfg: OverlayConfig, a: RingActions, ctx: Context
     )
     is SlotId.Host -> {
         val act = a.hostActions().firstOrNull { it.id == slot.actionId }
-        // Three power actions, three glyphs — the same icon on all three made them one button.
+        // Three power actions, three glyphs: one icon on all three would read as one button.
         val icon = when (slot.actionId) {
             "power.sleep" -> Icons.Filled.Bedtime
             "power.reboot" -> Icons.Filled.RestartAlt
@@ -718,10 +718,10 @@ private fun perform(slot: SlotId, state: RingState, cfg: OverlayConfig, actions:
 internal class ShortcutArm(var id: String? = null, var at: Long = 0L)
 
 /**
- * A shortcut fired [action] outside the dial (design §4, D9): the slot's own effect behind the
- * ring's gate. A dimmed slot [tell]s why; a host danger action or End game asks for a second
- * press within [ARM_MS] in the ring's words, and End stream fires at once. A key combination
- * goes down and up by [phase]; Quick actions opens the ring through [openRing].
+ * A shortcut fired [action] outside the dial (design/client-shortcuts.md §4, D9): the slot's own
+ * effect behind the ring's gate. A dimmed slot [tell]s why; a host danger action or End game asks
+ * for a second press within [ARM_MS] in the ring's words, and End stream fires at once. A key
+ * combination goes down and up by [phase]; Quick actions opens the ring through [openRing].
  */
 internal fun fireShortcut(
     action: Shortcuts.Action,
@@ -878,8 +878,8 @@ private fun Modifier.slotDrag(
                 o[k] = o[target]
                 o[target] = t
             }
-            // Past the spring's settle: a reset while the discs still move jumped them the
-            // last few pixels as the contents swapped.
+            // Past the spring's settle: a reset while the discs still move would jump them the
+            // last few pixels as the contents swap.
             scope.launch {
                 delay(650)
                 edit.swapping = false
@@ -961,8 +961,8 @@ private fun RingButton(
 
 /**
  * A chord as a stacked keycap: modifiers small on top, the key large under them — one legend
- * line ran past the disc's edge. [chip] is `chordChip`'s text. The editor previews a chord with
- * this same composable.
+ * line would run past the disc's edge. [chip] is `chordChip`'s text. The editor previews a
+ * chord with this same composable.
  */
 @Composable
 internal fun ChordKeycap(chip: String, tint: Color, size: androidx.compose.ui.unit.Dp) {

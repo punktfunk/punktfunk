@@ -83,7 +83,7 @@ class SettingsFieldsTest {
         val back = SettingsOverlay.fromJson(JSONObject(overlay.toJson().toString()))
         assertEquals(overlay, back)
         for (f in SettingsFields.PRESET) assertEquals(f.name, f.get(want), f.get(back.apply(Settings())))
-        // Clearing every override by key leaves nothing — including keys a stale KNOWN list once missed.
+        // Clearing every override by key leaves nothing.
         val cleared = SettingsFields.PRESET.fold(back) { o, f -> o.clear(f.key) }
         assertEquals(emptySet<String>(), cleared.overridden())
         assertEquals(0, cleared.toJson().length())

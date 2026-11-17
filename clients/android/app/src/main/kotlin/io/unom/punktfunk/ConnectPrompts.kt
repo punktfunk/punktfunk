@@ -10,9 +10,8 @@ import io.unom.punktfunk.models.PendingTrust
 
 /**
  * Everything `ConnectScreen` puts ON TOP of whichever home it drew — the trust and pairing
- * ceremony, a link's connect confirmation, the parked "Waiting for approval…", the console's host
- * options, the speed test, the edit form, the local-network rationale, and finally the connect
- * takeover.
+ * ceremony, a link's connect confirmation, the parked "Waiting for approval…", the speed test,
+ * the edit form, the local-network rationale, and finally the connect takeover.
  *
  * They live together because their ORDER is the contract: this is a stack of siblings in one tree,
  * so the last one drawn is the one on top, and [ConnectOverlay] is last on purpose — a dial can
@@ -135,7 +134,7 @@ internal fun ConnectPrompts(
         )
     }
 
-    // Topmost: the full-screen connect takeover — instant "Connecting…" feedback on any dial, flowing
+    // Topmost: the connect takeover — instant "Connecting…" feedback on any dial, flowing
     // seamlessly into the "Waking…" wait if the host turns out to be asleep.
     ConnectOverlay(
         connectingHostName = connectingHostName,

@@ -15,10 +15,10 @@ import kotlinx.coroutines.withContext
  * Wake a sleeping host and WAIT for it to come back before proceeding — the Android mirror of the
  * Apple client's `HostWaker`, driving [HostServices.wake] behind a visible "Waking…" state.
  *
- * A magic packet is fire-and-forget, and a cold box can take 20–60 s to POST, boot, and start
- * answering again — far longer than a connect attempt will sit. On success this runs [onOnline]
- * (the real connect for a Wake-&-Connect, or nothing for a wake-only); on timeout it parks in a
- * retry/cancel state. One wake at a time.
+ * A magic packet is fire-and-forget, and a cold box can take a minute or more to POST, boot, and
+ * start answering again — far longer than a connect attempt will sit. On success this runs
+ * [onOnline] (the real connect for a Wake-&-Connect, or nothing for a wake-only); on timeout it
+ * parks in a retry/cancel state. One wake at a time.
  *
  * [isOnline] is a blocking probe run off the main thread: mDNS presence is a cache a sleeping
  * host keeps warm for up to 75 minutes, so it cannot answer this.

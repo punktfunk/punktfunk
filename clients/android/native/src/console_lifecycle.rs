@@ -503,7 +503,7 @@ mod tests {
         let rows = [
             (false, IDLE_AFTER, false),
             (true, IDLE_AFTER, true),
-            // R7-4: back from a stream, with no input since before it.
+            // Back from a stream, with no input since before it.
             (true, ms(0), false),
             (true, IDLE_AFTER - ms(1), false),
         ];

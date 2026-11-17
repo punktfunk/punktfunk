@@ -12,10 +12,9 @@ use punktfunk_core::session::Frame;
 use crate::au_intake::hand_on;
 use crate::feed_rules::{gate, spoiled, Cause, Gate, PartFeed, Piece, Spoiled};
 
-/// Cap on whole AUs parked awaiting a free codec input slot. Matches the connector's own
-/// frame-channel depth, which also counts AUs, not pieces; past it the oldest AU is dropped and a
-/// keyframe requested, the recovery of a reassembler drop. In steady state the park stays
-/// near-empty.
+/// Cap on whole AUs parked awaiting a free codec input slot; pieces of an AU count once. Past it
+/// the oldest AU is dropped and a keyframe requested, the recovery of a reassembler drop. In
+/// steady state the park stays near-empty.
 pub(crate) const FRAME_PARK_CAP: usize = 16;
 
 /// Oversize AUs in a row that end the run as a hung codec's does. Each one asks for a keyframe;

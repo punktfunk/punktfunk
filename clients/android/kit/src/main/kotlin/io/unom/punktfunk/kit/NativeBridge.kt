@@ -84,10 +84,11 @@ object NativeBridge {
 
     /**
      * Has the underlying QUIC session ended? `true` once the connection closed — a host suspend /
-     * crash / network drop idle-timed it out (~8 s), or the host closed it — from then on no frame
-     * ever arrives and the video sits frozen on its last one. The stream watchdog polls this (~1 Hz)
-     * to leave a dead stream and return to the menu, where the user can Wake-on-LAN the host, instead
-     * of stranding them on a frozen frame. `false` on a `0` handle. Cheap (one atomic load); UI-safe.
+     * crash / network drop idle-timed it out (`quic::endpoint::DEFAULT_IDLE_TIMEOUT`), or the host
+     * closed it — from then on no frame ever arrives and the video sits frozen on its last one.
+     * The stream watchdog polls this (~1 Hz) to leave a dead stream and return to the menu, where
+     * the user can Wake-on-LAN the host, instead of stranding them on a frozen frame. `false` on a
+     * `0` handle. Cheap (one atomic load); UI-safe.
      */
     external fun nativeSessionEnded(handle: Long): Boolean
 
@@ -96,10 +97,9 @@ object NativeBridge {
      * [SessionEndReason.fromNative]. `0` (NONE) before it ends, or on a `0` handle.
      *
      * The companion to [nativeSessionEnded], which only says THAT it ended. Both are needed: the
-     * flag to leave a dead stream, this to decide what to tell the user. A player quitting their
-     * game and a host falling off the network both end the session, and with no way to separate
-     * them the watchdog said "the host may be asleep" for all of them — wrong for every deliberate
-     * ending. Cheap (one atomic load); UI-safe.
+     * flag to leave a dead stream, this to decide what to tell the user, since a player quitting
+     * their game and a host falling off the network both end the session. Cheap (one atomic
+     * load); UI-safe.
      */
     external fun nativeEndReason(handle: Long): Int
 
@@ -122,8 +122,8 @@ object NativeBridge {
      * expiry (`0` = permanent); `updateSeq` increments once per `AccessUpdate` the host sent
      * (latest-wins — the state IS the fold, this counter is how a poller tells a fresh T−5 m /
      * T−1 m warning arrived and owes a toast). Seeded from the Welcome's access advert; an old
-     * host — or an old native lib — reads as full control, permanent, exactly what such a host
-     * enforces. Poll ~1 Hz alongside [nativeSessionEnded]. Cheap; safe on the UI thread.
+     * host reads as full control, permanent, exactly what such a host enforces. Poll ~1 Hz
+     * alongside [nativeSessionEnded]. Cheap; safe on the UI thread.
      */
     external fun nativeAccessState(handle: Long): IntArray?
 
@@ -149,10 +149,11 @@ object NativeBridge {
     ): String
 
     /**
-     * Ask for access with no PIN and wait (up to ~185 s) for the host's operator to approve.
-     * [pinHex] is the advertised fingerprint, `""` to trust on first use. Returns the host's
-     * fingerprint (64-hex) to persist as paired, or `""` with the cause in [nativeTakeLastError].
-     * Never streams. Blocking — call off the main thread.
+     * Ask for access with no PIN and wait (up to `pf_client_core::trust::REQUEST_ACCESS_TIMEOUT`)
+     * for the host's operator to approve. [pinHex] is the host's advertised fingerprint; a host
+     * that advertised none pairs by PIN, and `""` comes back for it at once. Otherwise returns the
+     * host's fingerprint (64-hex) to persist as paired, or `""` with the cause in
+     * [nativeTakeLastError]. Never streams. Blocking — call off the main thread.
      */
     external fun nativeRequestAccess(
         host: String,
@@ -166,13 +167,13 @@ object NativeBridge {
     /**
      * The native client's log rendered as one text bundle, oldest first, prefixed by [header]
      * (this app's identity line) — the body for "Send logs to host" (`POST /api/v1/client-logs`
-     * over the same mTLS client the library fetch uses). It is the newest 768 KiB of the file
-     * [nativeOpenLogFile] opened, earlier runs included, or the in-memory ring when none is open.
-     * Never empty; reads the file, so call it off the main thread.
+     * over the same mTLS client the library fetch uses). It is the newest `logring::MAX_BYTES` of
+     * the file [nativeOpenLogFile] opened, earlier runs included, or the in-memory ring when none
+     * is open. Never empty; reads the file, so call it off the main thread.
      */
     external fun nativeRenderLogs(header: String): String
 
-    /** Keep every native log line in [dir]`/client.log` from now on, rotated at 768 KiB. */
+    /** Keep every native log line in [dir]`/client.log` from now on, rotated at `MAX_BYTES`. */
     external fun nativeOpenLogFile(dir: String)
 
     /** Each line of [text] as an ERROR `pf.crash` line in the log, on disk before this returns. */
@@ -208,10 +209,9 @@ object NativeBridge {
     /**
      * The machine token of the most recent failed [nativeConnect]/[nativePair], cleared on read
      * (`""` when none) — call right after a `0` handle / `""` fingerprint. A typed host rejection
-     * yields its wire token ("not-armed", "denied", "approval-timeout", "superseded", "busy",
-     * "rate-limited", "bound-other", "identity-required", "wire-version"); transport-level causes
-     * yield "crypto" (wrong PIN / identity mismatch), "timeout", "io", or "error". Lets the UI say
-     * WHY instead of the old catch-all that blamed the PIN for dead network paths.
+     * yields its `RejectReason::as_str` token ("not-armed", "denied", "busy", …);
+     * transport-level causes yield "crypto" (wrong PIN / identity mismatch), "timeout", "io", or
+     * "error". Lets the UI say WHY a connect or pairing failed.
      */
     external fun nativeTakeLastError(): String
 
@@ -250,13 +250,13 @@ object NativeBridge {
     external fun nativeClose(handle: Long)
 
     // ---- LAN discovery: mDNS browse of `_punktfunk._udp` in Rust (mdns-sd), polled by Kotlin ----
-    // Replaces NsdManager. The caller holds the Wi-Fi MulticastLock for the browse lifetime; raw
-    // multicast *reception* needs it. See io.unom.punktfunk.kit.discovery.HostDiscovery.
+    // The caller holds the Wi-Fi MulticastLock for the browse lifetime; raw multicast *reception*
+    // needs it. See io.unom.punktfunk.kit.discovery.HostDiscovery.
 
     /**
      * Start browsing `_punktfunk._udp` on the LAN. Returns an opaque discovery handle, or `0` on
      * failure. Pair with exactly one [nativeDiscoveryStop]. Cheap + non-blocking (spawns the mDNS
-     * daemon + a fold thread).
+     * daemon + a worker thread).
      */
     external fun nativeDiscoveryStart(): Long
 
@@ -269,12 +269,15 @@ object NativeBridge {
 
     /**
      * The current resolved-host snapshot for [handle]: newline-joined records, each
-     * `key␟name␟addr␟port␟fp␟pair␟mac` (`␟` = U+001F). Empty string = no hosts / `0` handle. Poll ~1 Hz;
-     * cheap (a lock + string build), safe to call on the main thread.
+     * `key␟name␟addr␟port␟fp␟pair␟mac␟os␟mgmt` (`␟` = U+001F). Empty string = no hosts / `0`
+     * handle. Poll ~1 Hz; cheap (a lock + string build), safe to call on the main thread.
      */
     external fun nativeDiscoveryPoll(handle: Long): String
 
-    /** Stop the browse, shut the mDNS daemon down and join its thread. No-op on `0`. */
+    /**
+     * Stop the browse. The worker thread sees the dropped receiver within 250 ms and shuts the
+     * mDNS daemon down; this does not wait for it. No-op on `0`.
+     */
     external fun nativeDiscoveryStop(handle: Long)
 
     /**
@@ -372,9 +375,8 @@ object NativeBridge {
      * `0` handle. `refreshMilliHz` is the exact rate the host delivers, `59940` at 59.94 Hz.
      * Resolved at the handshake, so it is known before the first frame — the stream view sizes
      * itself to THIS aspect rather than stretching the picture to the panel's, and pins the
-     * panel's display mode to the stream refresh. The trailing `refreshHz` was appended later
-     * (an older native lib returns only `[width, height]` — index defensively). Follows an
-     * accepted [nativeRequestMode] switch once the host's ack lands. Cheap; UI-safe.
+     * panel's display mode to the stream refresh. Follows an accepted [nativeRequestMode] switch
+     * once the host's ack lands. Cheap; UI-safe.
      */
     external fun nativeVideoSize(handle: Long): IntArray?
 
@@ -393,10 +395,9 @@ object NativeBridge {
      * emits a codec nothing here can decode.
      *
      * Unlike every other codec on this client, PyroWave is not a `MediaCodec`: it decodes as
-     * Vulkan compute and presents through its own swapchain on the same `SurfaceView`. Always
-     * false on the 32-bit ABI, where the codec is not built. The first call creates and destroys
-     * a Vulkan instance and native caches the answer for the process — do that one off the main
-     * thread; later calls are free.
+     * Vulkan compute and presents through its own swapchain on the same `SurfaceView`. The first
+     * call creates and destroys a Vulkan instance and native caches the answer for the process —
+     * do that one off the main thread; later calls are free.
      */
     external fun nativePyrowaveCapable(): Boolean
 
@@ -404,9 +405,9 @@ object NativeBridge {
      * Start the decode thread rendering onto [surface] (a SurfaceView's surface). Decode runs
      * entirely in Rust (NDK AMediaCodec → ANativeWindow) — no per-frame JNI. [decoderName] is the
      * decoder Kotlin ranked from `MediaCodecList` (`""` = let the platform resolve the default for
-     * the MIME — what the pre-overhaul client always did); [lowLatencyMode] is the user's
-     * "Low-latency mode" master toggle (ON by default: per-SoC tuning + thread boosts; off runs
-     * the same loop with plain keys, the per-device escape hatch); [lowLatencyFeature] is whether
+     * the MIME); [lowLatencyMode] is the user's "Low-latency mode" master toggle
+     * (`Settings.lowLatencyMode`: per-SoC tuning + thread boosts; off runs the same loop with
+     * plain keys, the per-device escape hatch); [lowLatencyFeature] is whether
      * [decoderName] advertised `FEATURE_LowLatency` (HUD label only). [isTv] drives an active HDMI
      * mode switch to the stream refresh on TV boxes when the toggle is on (vs. the softer seamless
      * hint otherwise). [presentPriority]/[smoothBuffer] are the timeline presenter's intent
@@ -563,12 +564,13 @@ object NativeBridge {
     const val STAT_WIDTH = 21
     const val STAT_HEIGHT = 22
     const val STAT_RFIS_LAST_MIN = 23
-    /** Frames behind the end-to-end figures; 0 = nothing displayed this window. */
+    /** Frames behind the end-to-end figures (displayed, else decoded); 0 = none this window. */
     const val STAT_E2E_SAMPLES = 24
     const val STAT_COUNT = 25
 
     /**
-     * Start host→client audio: Opus decode → jitter ring → AAudio, all in Rust.
+     * Start host→client audio: decode (Opus, or PCM on the `0xD3` plane) → jitter ring → AAudio
+     * (or an AudioTrack rung), all in Rust.
      * [lowLatencyMode] (the experimental toggle) additionally tags the stream usage=Game for the
      * HAL's game-audio routing. No-op if already started. Best-effort — a failure leaves video
      * streaming.
@@ -895,9 +897,9 @@ object NativeBridge {
     external fun nativeNextClip(handle: Long): String?
 
     // ---- Gamepad: each controller forwarded on its own wire pad index (0..15, low byte of flags) ----
-    // The pad index is assigned per Android device by GamepadRouter; a single controller lands on 0,
-    // so its wire is byte-identical to the old single-pad path. The core folds the per-transition
-    // events into seq'd GamepadState snapshots keyed on this index and owns the per-pad seq.
+    // The pad index is assigned per Android device by GamepadRouter. The core folds the
+    // per-transition events into seq'd GamepadState snapshots keyed on this index and owns the
+    // per-pad seq.
 
     /** One gamepad button transition on wire pad [pad] (0..15). bit: a [Gamepad].BTN_* bit. down: press/release. */
     external fun nativeSendGamepadButton(handle: Long, bit: Int, down: Boolean, pad: Int)
@@ -921,8 +923,8 @@ object NativeBridge {
     /**
      * Declare the controller KIND presented on wire pad [pad] (0..15) so the host builds a matching
      * virtual device (mixed types across pads). pref: a [Gamepad].PREF_* wire byte. Send ONCE when a
-     * pad opens, BEFORE any of its input; an older host ignores it (that pad then uses the handshake's
-     * session-default kind — the pre-existing single-pad behaviour on pad 0).
+     * pad opens, BEFORE any of its input; an older host ignores it, and a pad that never declared
+     * gets the handshake's session-default kind.
      */
     external fun nativeSendGamepadArrival(handle: Long, pref: Int, pad: Int)
 
@@ -967,7 +969,8 @@ object NativeBridge {
      * One raw HID input report from a client-captured controller (the as-is Steam Controller 2
      * passthrough), forwarded verbatim on the rich-input plane. [buf] is a DIRECT ByteBuffer whose
      * first [len] bytes are the report, id byte first (0x42/0x45/0x47 state, 0x43 battery, …);
-     * len is clamped to 64. Called from the capture thread at the controller's own report rate.
+     * len is clamped to `HID_REPORT_MAX`. Called from the capture thread at the controller's own
+     * report rate.
      */
     external fun nativeSendPadHidReport(handle: Long, pad: Int, buf: java.nio.ByteBuffer, len: Int)
 
@@ -1031,9 +1034,10 @@ object NativeBridge {
 
     /**
      * Block up to ~100 ms for the next rumble update. Returns a packed positive long: bits 49..52 =
-     * wire pad index (0..15), bit 48 = has a v2 lease, bits 32..47 = ttl_ms, bits 16..31 = low, bits
-     * 0..15 = high (each amplitude 0..0xFFFF; 0/0 = stop), or -1 on timeout / session closed. Kotlin
-     * routes the update to the controller holding that pad index. Call from a dedicated poll thread.
+     * wire pad index (0..15), bits 32..47 = backstop_ms (the one-shot duration), bits 16..31 = low,
+     * bits 0..15 = high (each amplitude 0..0xFFFF; 0/0 = stop), or -1 on timeout / session closed.
+     * Kotlin routes the update to the controller holding that pad index. Call from a dedicated
+     * poll thread. The layout is `pack_rumble` in `clients/android/native/src/feedback.rs`.
      */
     external fun nativeNextRumble(handle: Long): Long
 
@@ -1054,12 +1058,14 @@ object NativeBridge {
     // types' own serde shape (HostRow, LibraryGame, ConsoleCmd, OverlayAction, Settings — see
     // `crates/client/pf-console-ui/src/model.rs` and `pf-client-core/src/trust.rs`); what the console
     // raises comes back through [nativeConsoleNextEvent]. Every call is main-thread-safe and cheap
-    // except the two polls, which block ~100 ms and belong on their own threads.
+    // except [nativeConsoleNextEvent], which blocks ~100 ms and belongs on its own thread, and
+    // [nativeConsoleSurfaceDestroyed], which waits for the render thread.
 
     /**
-     * Whether this `.so` carries the console host at all. Present on EVERY ABI — armeabi-v7a has no
-     * prebuilt Skia archive yet, so there the rest of these symbols DO NOT EXIST and calling one is
-     * an UnsatisfiedLinkError. Ask this first.
+     * Whether this `.so` carries the console host at all. Every shipping ABI does today (the
+     * armeabi-v7a Skia archive is self-hosted — see `kit/build.gradle.kts`); ask first anyway, so
+     * a build that drops the host on some ABI falls back to the touch UI instead of an
+     * UnsatisfiedLinkError.
      */
     external fun nativeConsoleAvailable(): Boolean
 
@@ -1072,9 +1078,10 @@ object NativeBridge {
 
     /**
      * Build the console: [optionsJson] = `{device_name, gpu_cache_bytes, settings: <trust::Settings>,
-     * presets: [[id, name]], known_hosts: <KnownHosts>, entry: {} | {"library": <HostRow>}}`.
-     * Returns a handle (its render thread parked until a surface arrives), or `0` on a bad options
-     * document. EGL/Skia failures arrive later as a `{"dead": …}` event.
+     * presets: [{id, name, overrides}], known_hosts: <KnownHosts>, entry: {} | {"library":
+     * <HostRow>}, …}`; `CreateOptions` in `crates/client/pf-console-ui/src/bridge.rs` lists the
+     * rest. Returns a handle (its render thread parked until a surface arrives), or `0` on a bad
+     * options document. EGL/Skia failures arrive later as a `{"dead": …}` event.
      */
     external fun nativeConsoleCreate(optionsJson: String): Long
 
@@ -1113,8 +1120,9 @@ object NativeBridge {
     external fun nativeConsoleMenu(handle: Long, event: Int)
 
     /**
-     * Pointer input in surface pixels: [kind] 0 move, 1 primary down, 2 primary up, 3 secondary
-     * down (= Back), 4 wheel ([dy] steps, + = up), 5 cancel.
+     * Pointer input in surface pixels: [kind] 0 move, 1 primary down (a mouse — acts at once),
+     * 2 primary up, 3 secondary down (= Back), 4 wheel ([dy] steps, + = up), 5 cancel, 6 primary
+     * down from a finger or stylus on the glass (the shell defers it so a swipe scrolls).
      */
     external fun nativeConsolePointer(handle: Long, kind: Int, x: Float, y: Float, dy: Float)
 
@@ -1153,16 +1161,17 @@ object NativeBridge {
     external fun nativeConsoleNavigate(handle: Long, entryJson: String)
 
     /**
-     * The connected controllers: `{"label": "DualSense", "pref": 2, "pads": [{name, key, pref,
-     * steam_virtual, battery: {percent, charging} | null}]}` — the chip and the settings rows.
+     * The connected controllers, in the shape `PadsJson` takes (`crates/client/pf-console-ui/src/
+     * bridge.rs`): a legend `label`, the glyph `pref`, the `pads` and the `others` — the chip, the
+     * settings rows and the controllers screen.
      */
     external fun nativeConsoleSetPads(handle: Long, padsJson: String)
 
     /**
      * Block up to ~100 ms for the next event: `{"action": <OverlayAction>}`, `{"pulse": "move" |
-     * "confirm" | "boundary"}`, `{"editing": bool}`, `{"announce": "<focused row>"}` (speak it),
-     * `{"settings": <Settings>}` (persist it), `{"gles": 2 | 3}`, `{"dead": "<why>"}`. `""` on
-     * timeout. Call from a dedicated poll thread.
+     * "confirm" | "boundary"}`, `{"editing": bool}`, `{"edit_text": <EditField>}`,
+     * `{"announce": "<focused row>"}` (speak it), `{"settings": <Settings>}` (persist it),
+     * `{"gles": 2 | 3}`, `{"dead": "<why>"}`. `""` on timeout. Call from a dedicated poll thread.
      */
     external fun nativeConsoleNextEvent(handle: Long): String
 
@@ -1172,10 +1181,13 @@ object NativeBridge {
     /** The home carousel's rows: `[HostRow]`. */
     external fun nativeConsoleSetHosts(handle: Long, json: String)
 
-    /** The pairing ceremony's phase: `"Idle"`, `"Busy"`, `{"Failed": "why"}`, `{"Paired": {"key": …}}`. */
+    /**
+     * The pairing ceremony's phase under the command's `req`: `{"req": …, "phase": "Idle" |
+     * "Busy" | {"Failed": "why"} | {"Paired": {"key": …}}}`.
+     */
     external fun nativeConsoleSetPair(handle: Long, json: String)
 
-    /** The wake card's status (`WakeStatus` JSON) or `null` to clear it. */
+    /** The wake card's status (`WakeStatus` JSON, under the `Wake`'s `req`); `null` ends it. */
     external fun nativeConsoleSetWake(handle: Long, json: String)
 
     /**
@@ -1219,10 +1231,16 @@ object NativeBridge {
     /** A library fetch is starting for the shelf on screen (bumps the epoch, sets Loading). */
     external fun nativeConsoleLibraryBegin(handle: Long)
 
-    /** `"Loading"`, `"Empty"`, `"Ready"`, or `{"Error": {"title", "body", "can_retry"}}`. */
+    /**
+     * `{"req": …, "phase": "Loading" | "Empty" | "Ready" | {"Error": {"title", "body",
+     * "can_retry"}}}`, `req` the `FetchLibrary`'s.
+     */
     external fun nativeConsoleLibraryPhase(handle: Long, json: String)
 
-    /** The catalog `[LibraryGame]`; [cached] = the last-known list shown while the fetch runs. */
+    /**
+     * The catalog as `{"req": …, "games": [LibraryGame]}`, `req` the `FetchLibrary`'s; [cached] =
+     * the last-known list shown while the fetch runs.
+     */
     external fun nativeConsoleLibraryGames(handle: Long, json: String, cached: Boolean)
 
     /** One title's poster, encoded (JPEG/PNG bytes). */
@@ -1243,7 +1261,7 @@ object NativeBridge {
     /** A settings change made elsewhere (touch UI, deep link): the shell reads it next. Not a save. */
     external fun nativeConsoleSetSettings(handle: Long, json: String)
 
-    /** The preset catalog `[[id, name]]`. */
+    /** The preset catalog `[{id, name, overrides}]`. */
     external fun nativeConsoleSetPresets(handle: Long, json: String)
 
     /** The known-hosts records (`KnownHosts` JSON) the console builds `punktfunk://` links from. */
