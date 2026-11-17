@@ -1,11 +1,11 @@
 // What goes in `Authorization`, and how to get it back when the host says 401.
 //
 // Two kinds of caller reach the management API and they hold different things. A plugin, the
-// runner or the console holds a bearer token the host wrote to a file — that is `staticBearer`,
-// and it is every credential the SDK had until now. A browser holds no token and no client
-// certificate; it holds a non-extractable P-256 key it paired with, and proves that the same way
-// it does on the streaming control stream: the host issues a nonce, the key signs it bound to
-// the host's own identity, and the exchange returns a short-lived token. That is `deviceKey`.
+// runner or the console holds a bearer token the host wrote to a file — that is `staticBearer`.
+// A browser holds no token and no client certificate; it holds a non-extractable P-256 key it
+// paired with, and proves that the same way it does on the streaming control stream: the host
+// issues a nonce, the key signs it bound to the host's own identity, and the exchange returns a
+// short-lived token. That is `deviceKey`.
 //
 // The seam is deliberately small — a header, and "drop it" — so the HTTP paths on both surfaces
 // stay indifferent to which kind they were given. A refresh is the credential's own business.
@@ -71,15 +71,16 @@ export interface DeviceKeyOptions {
 	readonly renewMarginSeconds?: number;
 }
 
+/** Domain separation for the device signature: `punktfunk_core::quic::AUTH_SIG_CONTEXT`. */
+export const DEVICE_AUTH_CONTEXT = "punktfunk-device-auth-v1:";
+
 /**
  * The exact bytes a device signature covers: context, the channel, then the nonce.
  *
  * The same construction as `punktfunk_core::quic::auth_signed_message`, which is what the host
  * verifies against. Both halves have to agree byte for byte, so this is the one place the SDK
- * writes it and `credential.test.ts` pins it against a known vector.
+ * writes it and `credential.test.ts` pins its layout and context.
  */
-export const DEVICE_AUTH_CONTEXT = "punktfunk-device-auth-v1:";
-
 export const signedMessage = (
 	hostFingerprintHex: string,
 	nonceHex: string,
@@ -115,7 +116,7 @@ export class DeviceRefused extends Error {
  * accepting one.
  *
  * The token is held here and nowhere else: it is authority, and one place to drop it is the
- * point. A burst of calls runs one exchange rather than four.
+ * point. A burst of calls shares one exchange instead of running one each.
  */
 export const deviceKey = (opts: DeviceKeyOptions): Credential => {
 	const doFetch: Fetch = opts.fetch ?? ((i, init) => globalThis.fetch(i, init));

@@ -4,11 +4,10 @@
 // Design-system-free on purpose: ResultGate takes render props (the plugin wraps it once
 // with its @unom/ui skeleton/error visuals), so the kit's only peer here is react.
 //
-// Routing model (fixes the broken deep-link restore of the first-generation UIs): the
-// console pins the iframe src to the deep-linked PATH (`/plugin-ui/<id>-…/<route>`), so
-// route init must read the last pathname segment — the hash is only a standalone-tab
-// fallback. Navigation posts `pf-ui:navigate` so the console mirrors the route into its
-// own URL (replace: true; the iframe src stays pinned — no reload loop).
+// Routing model: the console pins the iframe src to the deep-linked PATH
+// (`/plugin-ui/<id>-…/<route>`), so route init must read the last pathname segment — the hash
+// is only a standalone-tab fallback. Navigation posts `pf-ui:navigate` so the console mirrors
+// the route into its own URL (replace: true; the iframe src stays pinned — no reload loop).
 
 import { Option, Schema } from "effect";
 import { AsyncResult, Atom } from "effect/reactivity";

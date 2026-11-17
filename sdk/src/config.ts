@@ -5,15 +5,14 @@
 //   PUNKTFUNK_MGMT_URL     else <config_dir>/mgmt-endpoint (the URL the host actually bound,
 //                          rewritten on every start), else https://127.0.0.1:47990
 //   PUNKTFUNK_MGMT_TOKEN   (admin override), else PUNKTFUNK_PLUGIN_TOKEN,
-//                          else <config_dir>/plugin-token, else <config_dir>/mgmt-token
+//                          else <config_dir>/plugin-token
 //   PUNKTFUNK_MGMT_CA      (path; else <config_dir>/native-cert.pem, else cert.pem when present)
 //
 // Token precedence is deliberate: the host mints a capability-limited `plugin-token` for the
 // scripting runner (it cannot register hooks or administer pairing), and that is what a plugin's
-// zero-config connect() should hold — the full-admin `mgmt-token` is only a fallback for hosts
-// that predate the plugin token (and on Windows the runner's LocalService principal can't read it
-// at all). A script that legitimately needs the admin surface sets PUNKTFUNK_MGMT_TOKEN or passes
-// { token } explicitly.
+// zero-config connect() should hold. The full-admin `mgmt-token` is never read here (on Windows
+// the runner's LocalService principal can't read it at all). A script that legitimately needs the
+// admin surface sets PUNKTFUNK_MGMT_TOKEN or passes { token } explicitly.
 //
 // The CA is the host's own identity certificate — trusting exactly it (not the system roots)
 // IS the pin for the loopback hop. Per-runtime plumbing differs: Bun takes `tls.ca` on fetch,
@@ -27,23 +26,26 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 export interface ConnectOptions {
-	/** Management API base URL (default `https://127.0.0.1:47990`). */
+	/** Management API base URL. The default is decided in `resolveConfig`. */
 	url?: string;
-	/** Bearer token (default: `PUNKTFUNK_MGMT_TOKEN`, else the host's `mgmt-token` file). */
+	/** Bearer token. The default is decided in `resolveConfig`. */
 	token?: string;
-	/** PEM of the CA to trust — the host's identity cert (default: `PUNKTFUNK_MGMT_CA`, else `native-cert.pem`, else `cert.pem`). */
+	/** PEM of the CA to trust — the host's identity cert. The default is decided in `resolveCa`. */
 	ca?: string;
 }
 
 /**
- * A Node-resolved connection: a [`Connection`] plus the bearer it was built from, kept because
- * the log shipper and the runner read it directly.
+ * A Node-resolved connection: a [`Connection`] plus the bearer it was built from, empty on a
+ * plugin's own pipe. `Punktfunk.config` exposes it.
  */
 export interface ResolvedConfig extends Connection {
 	token: string;
 }
 
-/** The host's config dir — the same resolution the host itself uses. */
+/**
+ * The host's config dir, resolved like `pf_paths::config_dir` except that an empty or relative
+ * `XDG_CONFIG_HOME` is taken as given here, where the host ignores it.
+ */
 export const configDir = (): string => {
 	const explicit = process.env.PUNKTFUNK_CONFIG_DIR;
 	if (explicit) return explicit;
@@ -61,11 +63,12 @@ export const configDir = (): string => {
  * `<config_dir>/plugin-state[/<name>]`.
  *
  * WHY this and not `<config_dir>/<name>` directly: on Windows the managed runner is de-privileged
- * (runs as `NT AUTHORITY\LocalService`), and the config dir is locked to Users-read — so a plugin
- * writing straight under it fails with EPERM. `punktfunk-host plugins enable` grants the runner
- * **Modify** on exactly `plugin-state` (the config dir and the plugin *code* stay read-only), so
- * this is the one place a supervised plugin can write. On Linux the runner is a `systemd --user`
- * unit owning the whole config dir, so the path is writable there too — same code, no branch.
+ * (runs as `NT AUTHORITY\LocalService`), and in the config dir it may write only `plugin-state` —
+ * so a plugin writing straight under it fails with EPERM. `punktfunk-host plugins enable` grants
+ * the runner **Modify** on exactly `plugin-state` (the config dir and the plugin *code* stay
+ * read-only), so this is the one place a supervised plugin can write. On Linux the runner is a
+ * `systemd --user` unit owning the whole config dir, so the path is writable there too — same
+ * code, no branch.
  *
  * `name` is a plugin's own kebab-case id; omit it for the shared root. The directory is NOT created
  * here (the caller decides permissions/timing) — `fs.mkdirSync(pluginStateDir(name), {recursive:
@@ -105,7 +108,7 @@ const readIfExists = (p: string): string | undefined => {
 	}
 };
 
-/** First token-looking line of the mgmt-token file (tolerates `TOKEN=`-style and blank lines). */
+/** First token-looking line of a host file (tolerates `TOKEN=`-style and blank lines). */
 const parseTokenFile = (raw: string): string | undefined => {
 	for (const line of raw.split(/\r?\n/)) {
 		const t = line.trim();
@@ -121,9 +124,9 @@ const parseTokenFile = (raw: string): string | undefined => {
  * it REALLY bound. This is how a `PUNKTFUNK_MGMT_BIND` move (the supported way to share a box with
  * Sunshine/Apollo, whose web UI owns 47990) reaches a plugin: the runner is a scheduled task /
  * systemd unit that inherits nothing from `host.env` (which on Windows it can't even read), so
- * before this a moved port left every plugin — and the runner's own log shipper — dialing
- * `127.0.0.1:47990` forever, silently. Field report 2026-08-18. `undefined` when the file is absent
- * (an old host, or a plugin CLI run on another machine); the caller falls back to the default.
+ * without this file a moved port would leave every plugin, and the runner's own log shipper,
+ * dialing `127.0.0.1:47990`. `undefined` when the file is absent (an old host, or a plugin CLI
+ * run on another machine); the caller falls back to the default.
  */
 export const publishedMgmtUrl = (): string | undefined =>
 	parseTokenFile(readIfExists(path.join(configDir(), "mgmt-endpoint")) ?? "");
@@ -139,7 +142,7 @@ export const resolveConfig = async (
 	).replace(/\/+$/, "");
 	// Never falls back to the admin `mgmt-token` file. On Linux the runner shares the operator's
 	// uid, so reading it is one line away — and a zero-config `connect()` that silently picked it
-	// up handed every plugin full admin on any host whose plugin token was missing.
+	// up would hand every plugin full admin on any host whose plugin token was missing.
 	const token =
 		options?.token ??
 		process.env.PUNKTFUNK_MGMT_TOKEN ??
@@ -190,10 +193,9 @@ export const hostFetch = (url: string, options?: ConnectOptions): Promise<typeof
  * A fetch that PINS `ca` — the host's self-signed identity cert — on this runtime.
  *
  * The pin is chain verification against exactly that certificate (nothing else can pass),
- * with the HOSTNAME check waived: the host identity cert is deliberately CN-only/no-SAN
- * (native clients pin its fingerprint; see `web/nitro-entry/bun-https.mjs` for the same
- * finding), so standard SAN matching would always fail — and it adds nothing when the chain
- * already admits only the one pinned cert.
+ * with the HOSTNAME check waived: the legacy `cert.pem` identity is CN-only with no SAN (see
+ * `web/nitro-entry/bun-https.mjs`), so SAN matching fails against it — and it adds nothing when
+ * the chain already admits only the one pinned cert.
  */
 const makeFetch = async (ca: string | undefined): Promise<typeof fetch> => {
 	// Inside a sandbox there is no route to the host's port: the supervisor listens on this

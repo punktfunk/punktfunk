@@ -94,7 +94,7 @@ export interface Punktfunk {
 /**
  * Connect to the host's management API: resolves the URL, bearer token, and the host's
  * self-signed identity cert from the environment/host files (zero config on the host box),
- * verifies the credentials with a `/health`-adjacent probe, and returns the client.
+ * verifies the credentials with an authenticated `GET /host` probe, and returns the client.
  */
 export const connect = async (options?: ConnectOptions): Promise<Punktfunk> => {
 	const cfg = await resolveConfig(options);
@@ -177,9 +177,8 @@ export interface PluginDef {
 }
 
 /**
- * Declare a plugin (the `punktfunk-plugin-*` convention, RFC §8). In v1 a plugin is a script
- * the operator runs; the managed runner (a later, optional package) discovers this default
- * export and supervises `main`.
+ * Declare a plugin (the `punktfunk-plugin-*` convention, RFC §8). The managed runner
+ * (`runner.ts`) discovers this default export and supervises `main`.
  */
 export const definePlugin = (def: PluginDef): PluginDef => {
 	if (!/^[a-z][a-z0-9-]*$/.test(def.name)) {

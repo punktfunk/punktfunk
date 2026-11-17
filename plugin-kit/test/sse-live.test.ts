@@ -1,15 +1,15 @@
-// Regression: the production shape of sseRoute — a long-lived PubSub-backed stream
-// (the engine's status feed) plus the keepalive. The original suite only covered a
-// finite, self-driving stream, which hid the fact that nothing ever reached the wire.
+// The production shape of sseRoute — a long-lived PubSub-backed stream (the engine's status
+// feed) plus the keepalive. A finite, self-driving stream (sse.test.ts) cannot show that frames
+// published after the response opened reach the wire.
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer, PubSub, Stream } from "effect";
 import { HttpRouter } from "effect/http";
 import { httpApiEnv, sseRoute } from "../src/index.js";
 
 /**
- * Read until the first bytes arrive or `ms` elapses. One sequential read at a time —
- * re-entering read() while a previous read is pending is a spec violation and silently
- * swallows data (which is exactly how this harness first lied about the ping path).
+ * Read until the first bytes arrive or `ms` elapses; the deadline cancels the reader. One read
+ * at a time: a read() abandoned to a timer still takes the next chunk, and no later read() sees
+ * it.
  */
 const readSome = async (res: Response, ms: number): Promise<string> => {
 	const reader = res.body?.getReader();

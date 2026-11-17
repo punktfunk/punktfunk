@@ -113,7 +113,7 @@ describe("redirectUiServeToChannel", () => {
 			const second = await down(parked.shift() as net.Socket, "POST", "/api/save", "{\"a\":1}");
 			expect(second.text).toBe('hello {"a":1}');
 			expect(seen).toEqual(["GET /__health Bearer s3cret", "POST /api/save Bearer s3cret"]);
-			// Two used, two dialed again: the plugin keeps four parked.
+			// Two used, two dialed again: the plugin tops up to PARKED (ui-forward.ts).
 			await waitFor(() => parked.length >= 4);
 		} finally {
 			server.stop(true);

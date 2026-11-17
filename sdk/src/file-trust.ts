@@ -166,7 +166,7 @@ const processSid = (): string | undefined => {
 };
 
 // Full System32 path, never PATH — a planted powershell.exe must not run with our privileges
-// (mirrors the host CLI's powershell_path, security-review 2026-07-17).
+// (mirrors the host CLI's powershell_path).
 const windowsPowershell = (): string =>
 	path.join(
 		process.env.SystemRoot ?? "C:\\Windows",
@@ -179,8 +179,7 @@ const windowsPowershell = (): string =>
 // Spawn env for Windows PowerShell 5.1 with PSModulePath STRIPPED (5.1 rebuilds its default).
 // An inherited PSModulePath that includes a PowerShell 7 module dir (pwsh adds a machine-scope
 // entry) makes 5.1 fail to autoload Microsoft.PowerShell.Security — type-data conflict
-// ("AuditToString is already present") — so Get-Acl dies and every unit is refused. Seen live
-// on the .173 host box; intermittent per spawn, deterministic once stripped.
+// ("AuditToString is already present") — so Get-Acl dies and every unit is refused.
 const windowsPowershellEnv = (): Record<string, string | undefined> => {
 	const env: Record<string, string | undefined> = { ...process.env };
 	delete env.PSModulePath;

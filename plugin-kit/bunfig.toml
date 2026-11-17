@@ -1,5 +1,5 @@
 # Resolve the `@punktfunk` scope from the Gitea npm registry. During local development the
-# SDK is consumed via the `link:../sdk` devDependency; this matters once the kit is depended
+# SDK is consumed via the `file:../sdk` devDependency; this matters once the kit is depended
 # on from outside the repo.
 [install.scopes]
 "@punktfunk" = "https://git.unom.io/api/packages/unom/npm/"

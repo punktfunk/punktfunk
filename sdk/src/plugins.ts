@@ -1,8 +1,8 @@
 // `punktfunk-host plugins …` package operations, run on the vendored bun. The host CLI forwards
 // add/remove/list here (crates/host/punktfunk-host/src/plugin_host/plugins.rs) and the runner-cli
 // exposes them as subcommands. Everything a plugin needs to be installed — the plugins dir, the
-// `@punktfunk` registry scope in bunfig.toml, and the right bun — is handled here so the operator
-// types one line instead of the old create-dir / write-bunfig / `bun add` ritual.
+// `@punktfunk` registry scope in bunfig.toml, and the right bun — is handled here, so the operator
+// types one line.
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -12,7 +12,7 @@ import { SDK_VERSION } from "./version.js";
 /** The `@punktfunk` package registry (Gitea's npm registry for the `unom` org). */
 export const REGISTRY = "https://git.unom.io/api/packages/unom/npm/";
 
-/** Where plugin packages install: `<config_dir>/plugins` (matches runner.ts discovery). */
+/** Where plugin packages install: `<config_dir>/plugins` (matches discover.ts discovery). */
 export const pluginsDirDefault = (): string => path.join(configDir(), "plugins");
 
 export interface ResolveOptions {
@@ -63,13 +63,12 @@ const isFirstParty = (pkg: string): boolean => pkg.startsWith("@punktfunk/");
  * The `package.json` is load-bearing, not decoration: `bun add` installs into the nearest ancestor
  * `package.json`, not into its working directory. Without one here, a stray `~/package.json` — one
  * old `bun add`/`npm init` in a home dir — silently captures every plugin install. bun reports
- * success and exits 0, the packages land in that tree, and the plugins dir stays empty (reproduced
- * on-glass 2026-07-31; it presented as a plugin store that installs nothing).
+ * success and exits 0, the packages land in that tree, and the plugins dir stays empty.
  *
  * Only seeds a tree with no `node_modules`. A dir with packages but no `package.json` is
- * hand-assembled or an older layout, and both this module's [`listInstalled`] and the host's
- * installed-package scan fall back to the naming convention there; an empty `dependencies` would
- * make the host report every plugin already installed as gone.
+ * hand-assembled or an older layout, and both `discoverUnits` and the host's installed-package
+ * scan fall back to the naming convention there; an empty `dependencies` would make the host
+ * report every plugin already installed as gone.
  */
 export const ensurePluginsDir = (dir = pluginsDirDefault()): string => {
 	fs.mkdirSync(dir, { recursive: true });
@@ -175,8 +174,8 @@ const runBun = (action: "add" | "remove", pkgs: string[], opts: PkgOpts): void =
 	// Windows: install file COPIES, never bun's default hardlinks. A hardlinked file's canonical
 	// path resolves into the installing admin's per-user bun cache
 	// (C:\Users\<admin>\.bun\install\cache\…), which the de-privileged LocalService runner cannot
-	// traverse — imports die with EPERM even though the plugins-dir DACL grants read (seen live
-	// on-glass). copyfile keeps the plugins tree self-contained under %ProgramData%.
+	// traverse — imports die with EPERM even though the plugins-dir DACL grants read. copyfile
+	// keeps the plugins tree self-contained under %ProgramData%.
 	if (action === "add" && process.platform === "win32") {
 		args.push("--backend=copyfile");
 	}
@@ -257,11 +256,8 @@ const refreshKey = (dir: string, have: string): string => {
  * **Why this exists.** The SDK is the seam every plugin registers through, but each plugin resolves
  * it from the plugins tree, and `bun.lock` pins it to an exact version with an integrity hash. No
  * user-facing flow re-resolves that pin: installing a plugin, reinstalling it, even updating it to a
- * newer release all leave the SDK where it is, because the plugin's `^0.1.x` range is already
- * satisfied. Measured on 2026-08-08 — publishing `@punktfunk/host@0.1.3` (the release that lets a
- * library scanner register `category`, so it stays out of the console nav) reached **no existing
- * install**, and the only thing that moved it was deleting the lockfile by hand over ssh. Shipping a
- * fix that needs an ssh session is not shipping a fix.
+ * newer release all leave the SDK where it is, because the plugin's range is already satisfied.
+ * Only deleting the lockfile moves it, and a fix that needs an ssh session is not shipped.
  *
  * The runner is the right owner: it is bundled from this same `sdk/` at the host's release commit
  * (`packaging/arch/PKGBUILD` builds `src/runner-cli.ts` into the punktfunk-scripting package), so
@@ -269,16 +265,16 @@ const refreshKey = (dir: string, have: string): string => {
  * carries the SDK with it and nobody touches a runner.
  *
  * **Why the whole lockfile.** A targeted `bun add @punktfunk/host@<v>` at the root does NOT work
- * while plugins still declare the SDK in their own `dependencies` (they do, though none import it):
- * bun honours their locked resolution and gives each plugin a private nested copy, which then
- * SHADOWS the root — measured, 5 nested copies. A lockless resolve hoists one copy for everyone,
- * also measured. Once the plugins drop that spurious dependency this can become the targeted form.
+ * while a plugin declares the SDK in its own `dependencies`: bun honours that locked resolution
+ * and gives the plugin a private nested copy, which then SHADOWS the root. A lockless resolve
+ * hoists one copy for everyone.
  *
- * Safety: the plugins' own versions are pinned exactly in the root `package.json`, so a re-resolve
- * cannot move them; only shared transitive deps float within their declared ranges. The lockfile is
- * backed up first and restored if the install fails, and any failure is logged and swallowed — a
- * dependency refresh must never stop the plugins that are already working from loading. One that
- * failed is not retried until the SDK or the installed plugin set changes.
+ * Safety: a plugin installed with `exact` (the store always sets it) is pinned in the root
+ * `package.json`, so a re-resolve cannot move it; every other dependency floats within its
+ * declared range. The lockfile is backed up first and restored if the install fails, and any
+ * failure is logged and swallowed — a dependency refresh must never stop the plugins that are
+ * already working from loading. One that failed is not retried until the SDK or the installed
+ * plugin set changes.
  */
 export const reconcileSharedSdk = (
 	dir = pluginsDirDefault(),
@@ -378,8 +374,8 @@ export interface InstalledPlugin {
 /**
  * Enumerate installed plugin packages under `<dir>/node_modules` — the unscoped convention
  * (`punktfunk-plugin-*`) and **any** scope's `plugin-*` (`@punktfunk/plugin-rom-manager`,
- * `@retro-hub/plugin-x`). Mirrors the discovery in runner.ts so `list` shows exactly what the
- * runner would supervise.
+ * `@retro-hub/plugin-x`). Follows the naming convention of `discoverUnits` (discover.ts), but
+ * lists every match, whether or not it is a top-level dependency of the plugins dir.
  */
 export const listInstalled = (dir = pluginsDirDefault()): InstalledPlugin[] => {
 	const modules = path.join(dir, "node_modules");

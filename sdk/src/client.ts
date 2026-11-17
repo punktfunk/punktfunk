@@ -1,8 +1,8 @@
 // The Effect-native surface (RFC §7): the `PunktfunkHost` service — a typed management-API
 // client plus the lifecycle-event `Stream` — provided by [`PunktfunkHostLive`]. Wire shapes
-// are the generated Effect Schemas in ./gen/punktfunk.ts, events included; API responses are
-// validated by default, so host/SDK version skew surfaces as a typed [`VersionSkew`] instead of
-// an `undefined` three frames later.
+// are the generated Effect Schemas in ./gen/punktfunk.ts, events included; `get` validates a
+// response against its schema, so host/SDK version skew surfaces as a typed [`VersionSkew`]
+// instead of an `undefined` three frames later.
 import {
 	Context,
 	Data,
@@ -116,9 +116,8 @@ export const makeService = (cfg: Connection): PunktfunkHostService => {
 	const events = (opts?: EventStreamOptions) => {
 		const warn =
 			opts?.onWarning ?? ((m: string) => console.warn(`[punktfunk] ${m}`));
-		// Drop-or-emit per frame. v4's `Stream.filterMap` wants a `Filter`; flat-mapping to
-		// `Stream.empty` (drop) / `Stream.succeed` (emit) expresses the same in stable
-		// primitives and keeps the `warn` side effects exactly where they were.
+		// Drop-or-emit per frame, with the `warn` side effects in the drop arms. `Stream.filterMap`
+		// takes a `Filter`, so this flat-maps to `Stream.empty` (drop) / `Stream.succeed` (emit).
 		return eventsRaw(opts).pipe(
 			Stream.flatMap((frame) => {
 				const c = classifyFrame(frame);

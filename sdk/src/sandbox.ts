@@ -7,8 +7,8 @@
 // so there is nothing to reach through.
 //
 // Each plugin gets: an empty home, its own state dir, the paths its manifest declares, its own
-// token, and a unix socket to the host. No network unless it declared one; then its UI reaches the
-// console through a second socket (`ui-forward.ts`). Pin: `sandbox.test.ts`.
+// token, and a unix socket to the host. No network unless it declared one; without one, its UI
+// reaches the console through a second socket (`ui-forward.ts`). Pin: `sandbox.test.ts`.
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -30,7 +30,7 @@ export interface PluginManifest {
 /** An id names the plugin's state dir and socket: one lowercase path component. */
 const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-/** Read `package.json`'s `punktfunk` block, or `undefined` when there is none or its id is unusable. */
+/** Read `package.json`'s `punktfunk` block; `undefined` unless `schema` is 1 and the id is valid. */
 export const readManifest = (packageDir: string): PluginManifest | undefined => {
 	try {
 		const pkg = JSON.parse(
@@ -99,19 +99,6 @@ export const homeLink = (p = "/home"): HomeLink | undefined => {
 };
 
 /**
- * The `bwrap` argv for one plugin: everything before the program it runs.
- *
- * Read-only for the system, the plugin's own code, manifest `reads`, and granted roots; read-write
- * for exactly its state dir, manifest `writes` under `/tmp`, grants marked `write: true`, and `/tmp`
- * (VirtualHere's client IPC is a FIFO pair there, which is why the unit keeps the real `/tmp`).
- * Any other manifest write binds through the grant the owner gives its request.
- *
- * The host's `/home` link is mirrored and every host path binds where it resolves, so a canonical
- * grant and a launcher's `$HOME` path both resolve, and `realpath` inside agrees with the host.
- * A link the plugin asked through into a grant (`~/Games/SteamLibrary` → `/mnt/ssd/games`) is
- * recreated the same way. A manifest path, grant or link with a `..` component is left out.
- */
-/**
  * The namespaces and the minimal root every sandbox gets, shared with {@link sandboxProbe} so a
  * box is never called capable on flags the real sandbox does not use — and so a flag added here
  * is a flag the probe actually exercises.
@@ -163,6 +150,19 @@ const BASE_ARGV: readonly string[] = [
 	"/sbin",
 ];
 
+/**
+ * The `bwrap` argv for one plugin: everything before the program it runs.
+ *
+ * Read-only for the system, the plugin's own code, manifest `reads`, and granted roots; read-write
+ * for exactly its state dir, manifest `writes` under `/tmp`, grants marked `write: true`, and `/tmp`
+ * (VirtualHere's client IPC is a FIFO pair there, which is why the unit keeps the real `/tmp`).
+ * Any other manifest write binds through the grant the owner gives its request.
+ *
+ * The host's `/home` link is mirrored and every host path binds where it resolves, so a canonical
+ * grant and a launcher's `$HOME` path both resolve, and `realpath` inside agrees with the host.
+ * A link the plugin asked through into a grant (`~/Games/SteamLibrary` → `/mnt/ssd/games`) is
+ * recreated the same way. A manifest path, grant or link with a `..` component is left out.
+ */
 export const bwrapArgv = (
 	manifest: PluginManifest,
 	paths: SandboxPaths,
@@ -559,8 +559,6 @@ const PROBE_BINDS: readonly string[] = [
 	"/run/current-system",
 ];
 
-/** Host `true` as an absolute path. `/bin/true` is an FHS path NixOS does not have.
- *  Do not realpath: Nix `true` is a symlink onto the coreutils multicall binary. */
 /**
  * The host binary beside the runner bundle: `<install>\scripting\runner-cli.js` and
  * `<install>\punktfunk-host.exe`, which `plugins spawn` runs a plugin's AppContainer through.
@@ -572,6 +570,8 @@ export const hostExe = (): string =>
 		"punktfunk-host.exe",
 	);
 
+/** Host `true` as an absolute path. `/bin/true` is an FHS path NixOS does not have.
+ *  Do not realpath: Nix `true` is a symlink onto the coreutils multicall binary. */
 const whichTrue = (): string => {
 	for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
 		if (!dir) continue;

@@ -1,7 +1,6 @@
 // SSE support. `effect/http-api` has no event-stream media type (verified at
-// 4.0.1), so the status feed is a raw HttpRouter route beside the HttpApi contract —
-// same wire shape the first-generation plugins used (`event: <name>` frames + comment
-// pings), which is already proven through the console's reverse proxy.
+// 4.0.1), so the status feed is a raw HttpRouter route beside the HttpApi contract:
+// `event: <name>` frames plus comment pings.
 import { Effect, type Layer, Schedule, Stream } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 

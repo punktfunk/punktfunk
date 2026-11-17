@@ -1,13 +1,11 @@
 // Where Steam lives on this host, and which `steamapps` dirs hold installed titles.
 //
-// Ported from the host scanner (steam.rs `steam_roots` / `steam_library_dirs`) with one deliberate
-// addition and one deliberate exclusion, both about the Windows runner's account:
+// Two choices follow from the Windows runner's account:
 //
-//   * ADDED: HKLM `WOW6432Node\Valve\Steam\InstallPath`, so a non-default Steam install dir is
-//     found. The host scanner never covered this (it relied on an explorer.exe protocol fallback at
-//     launch time), but a plugin that can't find the root finds no games at all.
-//   * EXCLUDED: HKCU `Software\Valve\Steam`. The runner is LocalService, whose HKCU is its own empty
-//     hive, not the operator's — reading it would look like "Steam isn't installed".
+//   * READ: HKLM `Valve\Steam\InstallPath` (and its `WOW6432Node` twin), so a non-default Steam
+//     install dir is found; a plugin that can't find the root finds no games at all.
+//   * NOT READ: HKCU `Software\Valve\Steam`. The runner is LocalService, whose HKCU is its own
+//     empty hive, not the operator's — reading it would look like "Steam isn't installed".
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
