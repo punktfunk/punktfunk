@@ -75,6 +75,9 @@ const PASSED: [HeaderName; 4] = [
     header::ACCEPT,
     header::IF_NONE_MATCH,
 ];
+/// The slowest an answer may leave at, bytes a second over each [`REQUEST_TIMEOUT`]: the floor
+/// HTTPS holds its answers to. An answer the peer takes slower is cut, and its slot returns.
+const MIN_ANSWER_RATE: f64 = 1024.0;
 /// Application close code for a tunnel refused before its first stream.
 const REFUSED: u32 = 0x4d;
 
@@ -156,8 +159,15 @@ pub(crate) async fn tunnel(
             }
             Err(_) => continue,
         };
-        let permit = streams.clone().try_acquire_owned().ok();
-        tokio::spawn(answer(permit, rx, tx, router.clone(), peer, local, None));
+        tokio::spawn(answer(
+            streams.clone(),
+            rx,
+            tx,
+            router.clone(),
+            peer,
+            local,
+            None,
+        ));
     }
 }
 
@@ -211,7 +221,7 @@ pub(crate) async fn tunnel_quic(
                 Err(_) => continue,
             },
         };
-        let permit = streams.clone().try_acquire_owned().ok();
+        let streams = streams.clone();
         let router = router.clone();
         let fingerprint = fingerprint.clone();
         tokio::spawn(async move {
@@ -223,15 +233,17 @@ pub(crate) async fn tunnel_quic(
                     return;
                 }
             }
-            answer(permit, rx, tx, router, peer, local, fingerprint).await;
+            answer(streams, rx, tx, router, peer, local, fingerprint).await;
         });
     }
 }
 
-/// One stream's request answered: refused without a `permit` (the in-flight cap), timed out,
-/// or dispatched with the client certificate its connection proved, if any.
+/// One stream's request answered once it holds one of the tunnel's `streams`: refused when none
+/// frees within [`REQUEST_TIMEOUT`], timed out, or dispatched with the client certificate its
+/// connection proved, if any. A burst waits for its turn; the turn is held until the answer is
+/// written or cut at [`MIN_ANSWER_RATE`].
 async fn answer<R, W>(
-    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    streams: Arc<tokio::sync::Semaphore>,
     mut rx: R,
     tx: W,
     router: Router,
@@ -242,8 +254,12 @@ async fn answer<R, W>(
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let response = match permit {
-        Some(_held) => match tokio::time::timeout(REQUEST_TIMEOUT, read_request(&mut rx)).await {
+    let permit = tokio::time::timeout(REQUEST_TIMEOUT, streams.acquire_owned())
+        .await
+        .ok()
+        .and_then(Result::ok);
+    let response = match &permit {
+        Some(_) => match tokio::time::timeout(REQUEST_TIMEOUT, read_request(&mut rx)).await {
             Ok(Ok((head, body))) => dispatch(&router, peer, local, fingerprint, head, body).await,
             Ok(Err(refusal)) => refusal,
             Err(_) => api_error(
@@ -256,9 +272,10 @@ async fn answer<R, W>(
             "too many requests in flight on this tunnel",
         ),
     };
-    if let Err(e) = write_response(tx, response).await {
+    if let Err(e) = write_response(tx, response, REQUEST_TIMEOUT).await {
         tracing::debug!(%peer, error = %e, "tunnel response not delivered");
     }
+    drop(permit);
 }
 
 /// Length-prefixed head, then the body until FIN, both capped. `Err` is the response to send.
@@ -396,8 +413,13 @@ fn percent_decode(s: &str) -> String {
 }
 
 /// The reply head, then the body streamed frame by frame, then FIN. Covers run to megabytes,
-/// so the body is never collected first.
-async fn write_response<W: AsyncWrite + Unpin>(mut tx: W, response: Response) -> Result<()> {
+/// so the body is never collected first. Each write must leave at [`MIN_ANSWER_RATE`] over
+/// `quiet` ([`send`]); time waiting on the router is not charged, so an event stream stays open.
+async fn write_response<W: AsyncWrite + Unpin>(
+    mut tx: W,
+    response: Response,
+    quiet: Duration,
+) -> Result<()> {
     let (parts, mut body) = response.into_parts();
     let h = parts
         .headers
@@ -413,17 +435,29 @@ async fn write_response<W: AsyncWrite + Unpin>(mut tx: W, response: Response) ->
         h,
     })
     .context("encode the reply head")?;
-    tx.write_all(&(head.len() as u32).to_be_bytes()).await?;
-    tx.write_all(&head).await?;
+    send(&mut tx, &(head.len() as u32).to_be_bytes(), quiet).await?;
+    send(&mut tx, &head, quiet).await?;
     while let Some(frame) =
         std::future::poll_fn(|cx| std::pin::Pin::new(&mut body).poll_frame(cx)).await
     {
         let frame = frame.map_err(|e| anyhow::anyhow!("read the response body: {e}"))?;
         if let Ok(data) = frame.into_data() {
-            tx.write_all(&data).await?;
+            send(&mut tx, &data, quiet).await?;
         }
     }
     tx.shutdown().await?;
+    Ok(())
+}
+
+/// Writes `data` in pieces of [`MIN_ANSWER_RATE`] × `quiet` bytes, each within `quiet`. A peer
+/// that takes less than that in any `quiet` window loses the stream and frees what it held.
+async fn send<W: AsyncWrite + Unpin>(tx: &mut W, data: &[u8], quiet: Duration) -> Result<()> {
+    let piece = ((MIN_ANSWER_RATE * quiet.as_secs_f64()) as usize).max(1);
+    for chunk in data.chunks(piece) {
+        tokio::time::timeout(quiet, tx.write_all(chunk))
+            .await
+            .context("write the answer at the minimum rate")??;
+    }
     Ok(())
 }
 
@@ -472,6 +506,36 @@ mod tests {
         assert_eq!(refused.status(), StatusCode::PAYLOAD_TOO_LARGE);
         drop(host);
         let _ = writer.await;
+    }
+
+    /// An answer the page takes above [`MIN_ANSWER_RATE`] arrives whole, however long past
+    /// `quiet` it takes. One the page never reads is cut once a write waits `quiet`.
+    #[tokio::test]
+    async fn an_answer_the_page_never_reads_is_cut() {
+        let quiet = Duration::from_millis(200);
+        let answer = || Response::new(Body::from(vec![b'x'; 4096]));
+
+        let (host, _page) = duplex(64);
+        let cut = tokio::time::timeout(quiet * 5, write_response(host, answer(), quiet))
+            .await
+            .expect("a stalled answer is cut");
+        assert!(cut.is_err());
+
+        let (host, mut page) = duplex(64);
+        let reader = tokio::spawn(async move {
+            let (mut got, mut buf) = (Vec::new(), [0u8; 64]);
+            loop {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                match page.read(&mut buf).await {
+                    Ok(0) | Err(_) => return got,
+                    Ok(n) => got.extend_from_slice(&buf[..n]),
+                }
+            }
+        });
+        write_response(host, answer(), quiet)
+            .await
+            .expect("a slow reader is not cut");
+        assert!(reader.await.unwrap().ends_with(&[b'x'; 4096]));
     }
 
     #[tokio::test]
@@ -654,8 +718,8 @@ mod tests {
         let (status, _, _) = call(&page, r#"{"m":"TRACE","p":"/api/v1/health"}"#, b"").await;
         assert_eq!(status, 405);
 
-        // Sixteen streams opened and left without FIN hold every slot; the seventeenth is told
-        // so at once rather than queued behind them.
+        // Sixteen streams opened and left without FIN hold every slot; the seventeenth waits for
+        // one rather than failing, and is answered once one frees.
         let mut held = Vec::new();
         for _ in 0..MAX_STREAMS {
             let (mut tx, rx) = page.open_bi().await.unwrap().await.unwrap();
@@ -664,8 +728,21 @@ mod tests {
                 .unwrap();
             held.push((tx, rx));
         }
-        let (status, _, _) = call(&page, r#"{"m":"GET","p":"/api/v1/health"}"#, b"").await;
-        assert_eq!(status, 429, "one over the in-flight cap");
+        let (mut tx, mut waiting) = page.open_bi().await.unwrap().await.unwrap();
+        tx.write_all(&frame(r#"{"m":"GET","p":"/api/v1/health"}"#, b""))
+            .await
+            .unwrap();
+        let _ = tx.finish().await;
+        let early = tokio::time::timeout(Duration::from_millis(300), read_reply(&mut waiting));
+        assert!(early.await.is_err(), "one over the cap waits");
+        let (mut tx, mut rx) = held.pop().unwrap();
+        tx.finish().await.unwrap();
+        assert_eq!(read_reply(&mut rx).await.0, 200);
+        assert_eq!(
+            read_reply(&mut waiting).await.0,
+            200,
+            "then takes the freed slot"
+        );
         for (mut tx, mut rx) in held {
             tx.finish().await.unwrap();
             let (status, _, _) = read_reply(&mut rx).await;
