@@ -168,6 +168,9 @@ pub(crate) struct DecodeOptions {
     /// named here is not necessarily the one the panel ends up in. The measured timeline spacing
     /// corrects it in both directions ([`punktfunk_core::phase::PanelGrid`]).
     pub panel_hz: i32,
+    /// What the display states about its refresh, which aims a release where a vsync callback
+    /// carries no frame timeline ([`crate::vsync_grid::GridFacts`]).
+    pub grid: crate::vsync_grid::GridFacts,
     /// The video `SurfaceView`'s LIVE on-screen pixel size (the aspect-fitted display footprint),
     /// packed by [`crate::session::pack_surface_size`] and re-reported by Kotlin on every
     /// `surfaceChanged`. The ASurfaceControl backend composites its layer in this coordinate space

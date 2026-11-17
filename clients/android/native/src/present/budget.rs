@@ -98,7 +98,9 @@ pub(crate) struct Pick<F> {
 }
 
 impl TimelineBudget {
-    /// `pinned_margin_ns`: the sysprop's pin; `None` starts adaptive at 0.
+    /// `pinned_margin_ns`: a margin that never adapts, which is the sysprop's pin, or the
+    /// display's stated latch lead where releases are aimed on the callback grid and no confirm
+    /// arrives to adapt one from. `None` starts adaptive at 0.
     pub(crate) fn new(pinned_margin_ns: Option<i64>) -> TimelineBudget {
         TimelineBudget {
             inflight: None,

@@ -435,6 +435,11 @@ object NativeBridge {
         /** The display mode's own refresh rate (0 = unknown) — the latch grid the presenter
          *  subdivides onto when the platform down-rates the app's choreographer stream. */
         panelFps: Int,
+        /** `Display.getAppVsyncOffsetNanos` and `Display.getPresentationDeadlineNanos` (0 =
+         *  unknown): where the display refreshes against the choreographer's frame time, and how
+         *  long before a refresh a buffer must be queued. Below API 33 they aim each frame. */
+        appVsyncOffsetNs: Long,
+        presentationDeadlineNs: Long,
         /** The video SurfaceView's on-screen pixel size (0 = not laid out yet). The ASurfaceControl
          *  present backend composites its layer in this coordinate space — the aspect-fitted display
          *  footprint — rather than the window's rotated/scaled buffer geometry. */

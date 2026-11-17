@@ -88,6 +88,8 @@ internal class StreamPlanes(
             // override, not the panel. Fallback: the live rate.
             view.display?.streamPanelFps(streamHz, streamSize)?.takeIf { it > 0 }
                 ?: (view.display?.refreshRate ?: 0f).roundToInt(),
+            view.display?.appVsyncOffsetNanos ?: 0L,
+            view.display?.presentationDeadlineNanos ?: 0L,
             // The view's on-screen size, the space the ASurfaceControl layer composites in. 0
             // before layout, and native falls back to the window buffer size.
             view.width,

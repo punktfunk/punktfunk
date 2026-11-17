@@ -24,7 +24,8 @@ use std::time::Duration;
 
 use crate::sys::now_monotonic_ns;
 use crate::vsync_grid::{
-    next_vsync, onto_panel_grid, pick_timeline, smoothed_period, FrameTimeline,
+    grid_aim, next_vsync, onto_panel_grid, pick_timeline, smoothed_period, Aim, FrameTimeline,
+    GridFacts,
 };
 
 /// State the choreographer thread publishes and the decode loop reads. All monotonic ns.
@@ -49,6 +50,9 @@ pub(super) struct VsyncShared {
     /// The latest callback's upcoming timelines, soonest first. Empty on the
     /// `postFrameCallback64` fallback.
     timelines: Mutex<Vec<FrameTimeline>>,
+    /// The display's stated facts on the `postFrameCallback64` fallback, where a release is
+    /// aimed on the callback grid. `None` where the platform sends timelines.
+    grid: Option<GridFacts>,
 }
 
 impl VsyncShared {
@@ -83,20 +87,43 @@ impl VsyncShared {
             .map_or(0, |t| t.expected_present_ns - t.deadline_ns)
     }
 
-    /// The release target for a frame that must not be presented before `not_before_ns`:
-    /// [`pick_timeline`] over the stored set, then [`onto_panel_grid`]. `None` on the
-    /// `postFrameCallback64` fallback; the caller releases ASAP.
-    pub(super) fn next_target(&self, not_before_ns: i64) -> Option<FrameTimeline> {
+    /// Where to aim a frame that must not be presented before `not_before_ns`: [`pick_timeline`]
+    /// over the stored set, then [`onto_panel_grid`]. Without a platform timeline it is
+    /// [`grid_aim`] on the callback grid, stepped by the panel's period where the callbacks run
+    /// at least one and a half times slower. `None` before the grid is measured; the caller
+    /// then releases as soon as possible.
+    pub(super) fn next_target(&self, not_before_ns: i64) -> Option<Aim> {
         let picked = {
             let g = self
                 .timelines
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            pick_timeline(&g, self.period_ns(), not_before_ns)?
+            pick_timeline(&g, self.period_ns(), not_before_ns)
         };
         let panel = self.panel_period_ns.load(Ordering::Relaxed);
-        Some(onto_panel_grid(picked, panel, not_before_ns))
+        if let Some(t) = picked {
+            return Some(Aim::at(onto_panel_grid(t, panel, not_before_ns)));
+        }
+        let facts = self.grid?;
+        let period = self.period_ns();
+        let step = if panel > 0 && period * 2 >= panel * 3 {
+            panel
+        } else {
+            period
+        };
+        grid_aim(
+            self.last_vsync_ns.load(Ordering::Relaxed),
+            step,
+            facts.offset_on(step),
+            not_before_ns,
+        )
     }
+}
+
+/// Whether releases are aimed on the callback grid: vsync callbacks without frame timelines
+/// (API 29 to 32). Decided by the same two symbols the clock starts on.
+pub(super) fn aims_on_grid() -> bool {
+    ChoreoApi::resolve().is_some_and(|api| api.post_vsync.is_none())
 }
 
 // ---- dlsym'd AChoreographer surface ----
@@ -309,10 +336,15 @@ impl VsyncClock {
     /// only do something cheap and `Send` (the decode loop passes an event-channel send).
     /// `panel_hz` SEEDS the panel-grid learner (0 = unknown) — the latch grid that
     /// [`VsyncShared::next_target`] subdivides onto. A seed, not a fact: it names the display
-    /// mode Kotlin *requested*, and the observed timeline spacing is what settles it. `None`
-    /// when neither `AChoreographer` post entry point resolves (API < 29) or the thread does not
-    /// spawn — the presenter then runs clock-less (ASAP targets, predicted-latch budget).
-    pub(super) fn start(panel_hz: i32, on_tick: Box<dyn Fn() + Send>) -> Option<VsyncClock> {
+    /// mode Kotlin *requested*, and the observed timeline spacing is what settles it. `facts`
+    /// are the display's own, kept where callbacks carry no timeline. `None` when neither
+    /// `AChoreographer` post entry point resolves (API < 29) or the thread does not spawn — the
+    /// presenter then runs clock-less (ASAP targets, predicted-latch budget).
+    pub(super) fn start(
+        panel_hz: i32,
+        facts: GridFacts,
+        on_tick: Box<dyn Fn() + Send>,
+    ) -> Option<VsyncClock> {
         let api = ChoreoApi::resolve()?;
         let timelines_live = api.post_vsync.is_some();
         let shared = Arc::new(VsyncShared {
@@ -324,6 +356,7 @@ impl VsyncClock {
             ),
             ticks: std::sync::atomic::AtomicU32::new(0),
             timelines: Mutex::new(Vec::new()),
+            grid: (!timelines_live).then_some(facts),
         });
         let thread_shared = shared.clone();
         let join = std::thread::Builder::new()
@@ -354,14 +387,16 @@ impl VsyncClock {
                 // only ever fire inside this thread's poll).
             })
             .ok()?;
-        log::info!(
-            "vsync: choreographer clock started ({})",
-            if timelines_live {
-                "frame timelines"
-            } else {
-                "frame callback fallback"
-            }
-        );
+        if timelines_live {
+            log::info!("vsync: choreographer clock started (frame timelines)");
+        } else {
+            log::info!(
+                "vsync: choreographer clock started (frame callbacks, aimed on their grid: \
+                 app offset {:.2}ms, latch lead {:.2}ms as stated)",
+                facts.app_offset_ns as f64 / 1e6,
+                facts.lead_ns as f64 / 1e6,
+            );
+        }
         Some(VsyncClock {
             shared,
             join: Some(join),

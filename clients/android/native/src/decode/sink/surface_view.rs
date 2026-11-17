@@ -6,8 +6,8 @@
 //! (`Stage2Pipeline.swift`, `.deadline` pacing), holds frames in a [`Store`] and releases them
 //! under a [`TimelineBudget`], each timed to the platform's own frame timeline (API 33+, via
 //! [`VsyncShared::next_target`]) so the latch phase is deterministic instead of inheriting
-//! network and decode jitter. Below API 33 the release is ASAP and the budget reopens on the
-//! callback grid.
+//! network and decode jitter. Below API 33 the target is a refresh on the callback grid, placed
+//! by the display's own vsync offset and reached by its presentation deadline.
 //!
 //! `adb shell setprop debug.punktfunk.presenter arrival` selects the arrival path instead: the
 //! newest ready buffer releases at once, unbudgeted — the on-device A/B needs no rebuild. The
@@ -36,13 +36,14 @@ use crate::present::{
 };
 use crate::sys::{now_monotonic_ns, sysprop};
 
-/// `debug.punktfunk.latch_margin_us` (0..=8000 µs): PIN the submit margin for a sweep —
-/// setprop + stream restart, no rebuild. Unset/invalid = `None` = the adaptive default.
+/// `debug.punktfunk.latch_margin_us` (0..=40000 µs): PIN the submit margin for a sweep —
+/// setprop + stream restart, no rebuild. Unset/invalid = `None` = the default. 40 ms is two
+/// refreshes at 50 Hz, the longest latch lead a display's stated one is taken for.
 fn latch_margin_ns() -> Option<i64> {
     let us = sysprop(c"debug.punktfunk.latch_margin_us")?
         .parse::<i64>()
         .ok()?;
-    (0..=8_000).contains(&us).then_some(us * 1_000)
+    (0..=40_000).contains(&us).then_some(us * 1_000)
 }
 
 /// Latch samples + display confirms recorded by the `OnFrameRendered` callback thread, drained by
@@ -216,16 +217,26 @@ fn grid_period_ns(clock: Option<&VsyncShared>) -> i64 {
 
 impl Timeline {
     /// `source_mhz` is the negotiated stream rate in millihertz, the cadence cushion's ceiling
-    /// ([`frame_interval_ns`]); `panel_hz` the mode-table rate Kotlin asked for.
-    fn new(priority: PresentPriority, source_mhz: u32, panel_hz: i32) -> Timeline {
-        let budget = TimelineBudget::new(latch_margin_ns());
+    /// ([`frame_interval_ns`]); `panel_hz` the mode-table rate Kotlin asked for. `grid_lead_ns`
+    /// is the display's latch lead where releases are aimed on the callback grid: it is the
+    /// margin there, since no confirm arrives to adapt one from.
+    fn new(
+        priority: PresentPriority,
+        source_mhz: u32,
+        panel_hz: i32,
+        grid_lead_ns: Option<i64>,
+    ) -> Timeline {
+        let pin = latch_margin_ns();
+        let budget = TimelineBudget::new(pin.or(grid_lead_ns));
         log::info!(
-            "presenter: latch margin {}us{}",
+            "presenter: latch margin {}us ({})",
             budget.margin_ns() / 1_000,
-            if budget.margin_pinned() {
-                " (debug.punktfunk.latch_margin_us pin)"
+            if !budget.margin_pinned() {
+                "adaptive — widens on latch misses"
+            } else if pin.is_some() {
+                "debug.punktfunk.latch_margin_us pin"
             } else {
-                " (adaptive — widens on latch misses)"
+                "the display's presentation deadline"
             }
         );
         let interval_ns = frame_interval_ns(source_mhz);
@@ -274,10 +285,12 @@ impl Timeline {
     }
 
     /// The present decision point, run on every loop pass (frame arrivals, vsync ticks and the
-    /// 5 ms housekeeping wake). Releases at most one frame: timeline-timed when the clock has
-    /// one, ASAP otherwise. On a down-rated grid the budget stays open and the confirm ledger
-    /// is not kept, since SurfaceFlinger drops superseded buffers unconfirmed. Returns `true`
-    /// when a frame was released to glass.
+    /// 5 ms housekeeping wake). Releases at most one frame, aimed at a refresh wherever the
+    /// clock names one. An unaimed release carries the media timestamp, which SurfaceFlinger
+    /// ignores: it then shows every buffer in turn, a refresh late while one is still queued.
+    /// On a down-rated grid the budget stays open and the confirm ledger is not kept, since
+    /// SurfaceFlinger drops superseded buffers unconfirmed. Returns `true` when a frame was
+    /// released to glass.
     fn pump(
         &mut self,
         codec: &MediaCodec,
@@ -305,11 +318,10 @@ impl Timeline {
         };
         // Under cadence targeting the floor is the frame's due time: the source's grid rather
         // than the network's.
-        let target =
-            clock.and_then(|c| c.next_target(self.budget.not_before_ns(now_mono_ns, due_ns)));
-        let released = match target {
-            Some(t) => codec
-                .release_output_buffer_at_time_by_index(frame.index, t.expected_present_ns)
+        let aim = clock.and_then(|c| c.next_target(self.budget.not_before_ns(now_mono_ns, due_ns)));
+        let released = match aim {
+            Some(a) => codec
+                .release_output_buffer_at_time_by_index(frame.index, a.stamp_ns)
                 .map_err(|e| log::warn!("presenter: release_at_time({}): {e}", frame.index)),
             None => codec
                 .release_output_buffer_by_index(frame.index, true)
@@ -320,7 +332,7 @@ impl Timeline {
         }
         self.budget.released(
             now_mono_ns,
-            target.map(|t| t.expected_present_ns),
+            aim.map(|a| a.present_ns),
             clock.and_then(|c| c.next_vsync_ns(now_mono_ns)),
             &mut self.counters,
         );
@@ -496,15 +508,17 @@ pub(super) struct SurfaceViewSink {
 
 impl SurfaceViewSink {
     /// The timeline presenter at `priority`; `source_mhz` is the negotiated stream rate in
-    /// millihertz, `panel_hz` the mode-table rate Kotlin asked for.
+    /// millihertz, `panel_hz` the mode-table rate Kotlin asked for, `grid_lead_ns` the display's
+    /// latch lead where releases are aimed on the callback grid.
     pub(super) fn timeline(
         window: &NativeWindow,
         color: &ColorInfo,
         priority: PresentPriority,
         source_mhz: u32,
         panel_hz: i32,
+        grid_lead_ns: Option<i64>,
     ) -> SurfaceViewSink {
-        let timeline = Timeline::new(priority, source_mhz, panel_hz);
+        let timeline = Timeline::new(priority, source_mhz, panel_hz, grid_lead_ns);
         SurfaceViewSink::tagged(window, color, Some(timeline))
     }
 

@@ -627,6 +627,7 @@ struct LoopAux {
     /// The clock's tick sender, taken when it starts; `None` from the outset without a presenter.
     vsync_tx: Option<mpsc::Sender<DecodeEvent>>,
     panel_hz: i32,
+    grid: crate::vsync_grid::GridFacts,
     hint: Option<crate::adpf::HintSession>,
     hint_tried: bool,
     refresh_hz: u32,
@@ -646,6 +647,7 @@ impl LoopAux {
             vsync: None,
             vsync_tx,
             panel_hz: opts.panel_hz,
+            grid: opts.grid,
             hint: None,
             hint_tried: false,
             refresh_hz,
@@ -673,6 +675,7 @@ impl LoopAux {
             if let Some(tx) = self.vsync_tx.take() {
                 self.vsync = VsyncClock::start(
                     self.panel_hz,
+                    self.grid,
                     Box::new(move || {
                         let _ = tx.send(DecodeEvent::Vsync);
                     }),
