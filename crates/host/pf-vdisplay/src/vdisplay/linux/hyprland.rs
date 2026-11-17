@@ -723,8 +723,8 @@ fn focus_argv(name: &str) -> [&str; 3] {
 
 /// DPMS off every head but a sibling's for a **gamescope** `exclusive` stream
 /// ([`crate::monitors::dpms_others`]), with `record(plan)` run before the first goes dark.
-/// Returns only heads [`dpms_one`] moved: the dispatcher toggles, so a re-light of an
-/// untouched head would darken it.
+/// Returns only heads [`dpms_one`] moved, so the re-light leaves a head that was already
+/// dark as the operator had it.
 ///
 /// Not [`disable_other_heads`]: a disabled Hyprland head's only undo is re-reading the
 /// whole config ([`restore_heads`]). `dispatch dpms on` does not re-enable a disabled head.
@@ -750,48 +750,39 @@ pub(crate) fn monitor_dpms(name: &str) -> Option<bool> {
 
 /// Put one monitor into `want_on`, reporting whether this call changed it.
 ///
-/// Classic `dispatch dpms on|off <name>` is a set; the Lua form ([`lua_dpms_expr`])
-/// toggles every enabled head. Read → act only if it differs → verify.
+/// Read → act only if it differs → verify. Both forms set the named head. From 0.55
+/// a name Hyprland can't resolve sets every head instead, so an unlisted head is
+/// refused before the dispatch.
 ///
 /// Classic `hyprctl dispatch dpms off <name>` dies under Lua (`dispatch` is
 /// `hl.dispatch(...)`). No stable probe for which manager is loaded, so try
 /// classic, then Lua.
 pub(crate) fn dpms_one(name: &str, want_on: bool) -> Result<bool> {
-    if monitor_dpms(name) == Some(want_on) {
-        return Ok(false); // toggling would break it
+    match monitor_dpms(name) {
+        Some(now) if now == want_on => return Ok(false),
+        Some(_) => {}
+        None => bail!("hyprland reports no dpms state for {name}, left alone"),
     }
-    let classic =
-        match hyprctl_dispatch(&["dispatch", "dpms", if want_on { "on" } else { "off" }, name]) {
-            Ok(()) => None,
-            Err(e) => {
-                let lua = lua_dpms_expr(name, want_on);
-                match hyprctl_dispatch(&["dispatch", &lua]) {
-                    Ok(()) => None,
-                    Err(lua_err) => Some(format!("hyprlang: {e:#}; lua: {lua_err:#}")),
-                }
-            }
-        };
-    if let Some(why) = classic {
-        bail!("neither dispatch form was accepted for {name} — {why}");
-    }
-    // Verify: a toggle that fired against a state we misread is worse than one
-    // that did not fire at all.
+    hyprctl_dispatch_both(
+        &["dispatch", "dpms", if want_on { "on" } else { "off" }, name],
+        &lua_dpms_expr(name, want_on),
+    )
+    .with_context(|| format!("dpms dispatch for {name}"))?;
     match monitor_dpms(name) {
         Some(now) if now == want_on => Ok(true),
         Some(now) => bail!(
             "hyprland accepted the dpms dispatch for {name} but it is now dpmsStatus={now}, \
-             wanted {want_on} (the dispatcher toggles — the readback disagreed with reality)"
+             wanted {want_on}"
         ),
         None => bail!("hyprland stopped listing {name} after its dpms dispatch"),
     }
 }
 
-/// Lua-config-manager DPMS expression. Pure so a test pins the shape. Not Hyprland's
-/// per-monitor form: `hl.dsp.dpms` reads only a table `{ action = "off", monitor = "<name>" }`
-/// (0.55–0.57), so these positional strings toggle every enabled head.
+/// Lua-config-manager DPMS expression. Pure so a test pins the shape. `hl.dsp.dpms`
+/// reads only a table (0.55–0.57): any other argument toggles every enabled head.
 fn lua_dpms_expr(name: &str, on: bool) -> String {
     format!(
-        "hl.dsp.dpms(\"{}\", \"{name}\")",
+        "hl.dsp.dpms({{ action = \"{}\", monitor = \"{name}\" }})",
         if on { "on" } else { "off" }
     )
 }
@@ -1901,19 +1892,19 @@ mod tests {
         assert!(!is_config_reload("workspace>>configreloaded"));
     }
 
-    /// Lua config manager parses a `dispatch` argument as a Lua expression,
-    /// so both arguments must be quoted. Pinning the shape because quoting is
-    /// the entire difference between working and silently doing nothing.
+    /// `hl.dsp.dpms` reads a table and nothing else. Positional strings answer `ok`
+    /// and toggle every head, so the shape is the whole difference between darkening
+    /// one screen and flipping all of them.
     #[test]
-    fn the_lua_dpms_expression_quotes_both_arguments() {
+    fn the_lua_dpms_expression_is_a_table_naming_one_monitor() {
         assert_eq!(
             lua_dpms_expr("HDMI-A-1", false),
-            r#"hl.dsp.dpms("off", "HDMI-A-1")"#
+            r#"hl.dsp.dpms({ action = "off", monitor = "HDMI-A-1" })"#
         );
-        assert_eq!(lua_dpms_expr("DP-2", true), r#"hl.dsp.dpms("on", "DP-2")"#);
-        // Never omit the monitor name: the no-name form answers `ok` and
-        // toggles, which would flip a just-restored head back off.
-        assert!(lua_dpms_expr("DP-2", true).contains("\"DP-2\""));
+        assert_eq!(
+            lua_dpms_expr("DP-2", true),
+            r#"hl.dsp.dpms({ action = "on", monitor = "DP-2" })"#
+        );
     }
 
     /// Lua spellings of the resize workspace hand-off. Both dispatchers answer
