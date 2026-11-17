@@ -1,8 +1,7 @@
 //! HEVC encode parameter buffers, hand-declared: the mirror of [`crate::enc_h264`]
-//! for `va_enc_hevc.h`. Layouts and every bitfield position were measured on the
-//! target (libva 2.22, `.50`) and are pinned below; the union halves are `u32`s
-//! built by the `*_fields` helpers so the driver and the packed headers cannot
-//! disagree on a bit.
+//! for `va_enc_hevc.h`. Layouts and every bitfield position are pinned below against
+//! libva 2.22; the union halves are `u32`s built by the `*_fields` helpers so the
+//! driver and the packed headers cannot disagree on a bit.
 
 use std::mem::offset_of;
 use std::mem::size_of;
@@ -243,7 +242,7 @@ pub fn pic_fields(is_idr: bool, f: &HevcFeatures) -> u32 {
 pub struct VaEncSliceParameterBufferHEVC {
     pub slice_segment_address: u32,
     pub num_ctu_in_slice: u32,
-    /// 0 = B, 1 = P, 2 = I — HEVC's own numbering, the reverse of H.264's.
+    /// 0 = B, 1 = P, 2 = I — HEVC's own numbering; H.264's puts P and B the other way.
     pub slice_type: u8,
     pub slice_pic_parameter_set_id: u8,
     pub num_ref_idx_l0_active_minus1: u8,
@@ -321,7 +320,7 @@ pub fn slice_fields(is_idr: bool, f: &HevcFeatures) -> u32 {
         | 1 << 13
 }
 
-/// Measured by `layout-probe.c` against libva 2.22 on `.50`.
+/// Pinned against libva 2.22; `layout-probe.c` does not print these structs.
 const _: () = {
     assert!(size_of::<VaEncSequenceParameterBufferHEVC>() == 116);
     assert!(offset_of!(VaEncSequenceParameterBufferHEVC, intra_period) == 4);
@@ -388,8 +387,8 @@ const _: () = {
 mod tests {
     use super::*;
 
-    /// The two boxes' attribute words, as probed: Intel requires AMP and CU QP delta
-    /// and offers depth 2; AMD has no temporal MVP and allows depth 0 only.
+    /// Attribute words from an Intel and an AMD driver: Intel requires AMP and CU QP
+    /// delta and offers depth 2; AMD has no temporal MVP and allows depth 0 only.
     #[test]
     fn the_probed_attribute_words_decode_to_what_the_drivers_said() {
         let intel = HevcFeatures::from_attributes(0x0190_0464, 0x88c7);
@@ -408,7 +407,7 @@ mod tests {
         assert_eq!(amd.max_transform_hierarchy_depth_intra, 0);
     }
 
-    /// The measured bit positions, restated as the values the probe printed.
+    /// The measured bit positions, restated as masks.
     #[test]
     fn the_bitfield_helpers_match_the_probe() {
         let f = HevcFeatures {

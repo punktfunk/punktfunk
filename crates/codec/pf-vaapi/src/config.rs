@@ -14,7 +14,7 @@ pub const VA_PROFILE_H264_HIGH: i32 = 7;
 pub const VA_PROFILE_H264_CONSTRAINED_BASELINE: i32 = 13;
 pub const VA_PROFILE_HEVC_MAIN: i32 = 17;
 pub const VA_PROFILE_HEVC_MAIN10: i32 = 18;
-/// Not a count from the top of the enum: ten VP9/HEVC values sit between HEVC and AV1.
+/// Not a count from the top of the enum: other VP9 and HEVC profiles sit between HEVC and AV1.
 pub const VA_PROFILE_AV1_PROFILE0: i32 = 32;
 pub const VA_PROFILE_AV1_PROFILE1: i32 = 33;
 
@@ -69,8 +69,7 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 /// H.264 8-bit 4:2:0 is always High, not the SPS `profile_idc`. Main would
-/// fail mid-stream on 8×8 transforms; High is a superset. Narrower values
-/// exist for the capability probe (what the device offers).
+/// fail mid-stream on 8×8 transforms; High is a superset.
 ///
 /// 4:4:4 is refused: the header has High444, drivers here do not, Vulkan does.
 /// AV1 Profile 0 is 8 and 10 bit under one enumerator — `rt_format` must differ

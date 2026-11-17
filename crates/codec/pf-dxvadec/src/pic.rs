@@ -3,9 +3,10 @@
 //! `ID3D11VideoContext::SubmitDecoderBuffers` is built from —
 //! `pf_vkdecode::pic`'s job, one hardware API over.
 //!
-//! Surfaces are slots. A `DXVA_PicEntry_H264` carries the uncompressed surface
-//! index, so DPB slot and decode-texture `ArraySlice` are the same number and
-//! this module drives the shared [`SlotMap`] unchanged.
+//! A `DXVA_PicEntry_H264` carries the uncompressed surface index. Under
+//! [`Surfaces::Identity`] that is the DPB slot, so slot and decode-texture
+//! `ArraySlice` are the same number; [`Surfaces::Bound`] resolves each slot to its
+//! bound surface. Either way this module drives the shared [`SlotMap`] unchanged.
 //!
 //! `RefFrameList` is the marked DPB ([`AuPlan::dpb_refs`]), not the AU's
 //! reference set — DXVA asks for every picture currently used for reference;
@@ -43,7 +44,7 @@ const REF_FRAME_LIST_LEN: usize = 16;
 /// Kept beside the packed params so tests can assert the mapping, not the bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DxvaRef {
-    /// DPB slot = decode texture `ArraySlice`.
+    /// DPB slot; the decode texture `ArraySlice` under [`Surfaces::Identity`].
     pub slot: u8,
     pub id: PicId,
     pub is_long_term: bool,
@@ -76,7 +77,8 @@ pub struct DecodePlanDxva {
     pub qmatrix: QmatrixH264,
     /// Slice NAL byte ranges, start code dropped — what [`crate::pack::pack`] takes.
     pub slice_ranges: Vec<Range<usize>>,
-    /// Decode target surface (`CreateVideoDecoderOutputView` / `DecoderBeginFrame`).
+    /// DPB slot of the decoded picture; [`Surfaces::target`] names its decode surface
+    /// (`CreateVideoDecoderOutputView` / `DecoderBeginFrame`).
     pub setup_slot: u8,
     /// Planner id of the decoded picture (`AuPlan.dpb.stored`).
     pub setup_id: PicId,
@@ -133,7 +135,7 @@ pub enum PlanToDxvaError {
     /// truncation: a dropped reference decodes to a wrong picture.
     TooManyReferences(usize),
     /// FMO (`num_slice_groups_minus1 != 0`). This backend does not build
-    /// `SliceGroupMap`; refusing hands the session to the FFmpeg rung.
+    /// `SliceGroupMap`; refusing sends the session down the decoder ladder.
     SliceGroups {
         count: u32,
     },
@@ -390,12 +392,12 @@ pub fn plan_to_dxva_on(
     // NonExistingFrameFlags stays 0: pf-bitstream substitutes a lost reference
     // and warns; it never hands over a placeholder for the hardware to invent.
 
-    // Coded (zig-zag) order, both the parser and DXVA. PPS lists are
-    // authoritative: Table 7-2 fallbacks already applied (SPS or flat default).
+    // Coded (zig-zag) order, both the parser and DXVA. PPS lists are authoritative:
+    // Table 7-2 fallbacks already applied (default, SPS or flat lists).
     let mut qm = QmatrixH264::zeroed();
     qm.bScalingLists4x4 = pps.scaling_lists_4x4;
     // Only Intra-Y and Inter-Y: DXVA has two 8x8 slots because 8x8 chroma
-    // lists exist only in 4:4:4, refused above. Parser stores the 4:2:0 pair
+    // lists exist only in 4:4:4, refused by `profile_for`. Parser stores the 4:2:0 pair
     // at 0 and 1, not 0 and 3 (libavcodec's `scaling_matrix8` indexing).
     qm.bScalingLists8x8[0] = pps.scaling_lists_8x8[0];
     qm.bScalingLists8x8[1] = pps.scaling_lists_8x8[1];
@@ -460,7 +462,7 @@ mod tests {
 
     /// Host-emitted low-delay IPPP: `max_num_reorder_frames = 0` and a DPB
     /// as deep as its reference count — the shape `release_after_decode`
-    /// exists for. Shared with `pf-vkdecode` and `pf-client-core` GPU legs.
+    /// exists for. Shared with `pf-vkdecode` and `pf-client-video` GPU legs.
     const LOWDELAY_640X480: &[u8] =
         include_bytes!("../../pf-vkdecode/tests/data/lowdelay-640x480.h264");
 
@@ -1018,7 +1020,7 @@ mod tests {
         }
     }
 
-    /// The identity binding is today's conversion, byte for byte.
+    /// `Surfaces::Identity` through `plan_to_dxva_on` is `plan_to_dxva`, byte for byte.
     #[test]
     fn the_identity_binding_converts_exactly_as_before() {
         let mut planner = H264Planner::new();

@@ -1,7 +1,6 @@
 //! Does the native encoder produce bytes a decoder accepts?
 //!
-//! Ignored: needs a VAAPI encode device. `.25` (AMD 780M) and `.50` (Intel UHD 750)
-//! both have one.
+//! Ignored: needs a VAAPI encode device.
 //!
 //! ```text
 //! cargo test -p pf-libva --test encode_h264 -- --ignored --nocapture

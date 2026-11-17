@@ -3,8 +3,7 @@
 //! from a driver's offers, how large the decode surfaces are, and how many.
 //!
 //! `video_d3d11_native.rs` enumerates and creates; this module chooses, against
-//! values the driver already returned. Same split as `pf-vkdecode`'s
-//! `caps`. Profile GUIDs match `video_d3d11.rs`.
+//! values the driver already returned. Same split as `pf-vkdecode`'s `caps`.
 
 /// GUID `ID3D11VideoDevice::GetVideoDecoderProfile` returns and
 /// `D3D11_VIDEO_DECODER_DESC::Guid` takes.
@@ -99,7 +98,7 @@ pub fn profile_for(codec: Codec, chroma_format_idc: u8, bit_depth: u8) -> Option
 ///
 /// Long format also carries derived reference lists and prediction weights
 /// already in the picture parameters. A device with no short-format config is
-/// refused; the FFmpeg rung implements both. libavcodec's
+/// refused and the decoder ladder walks on. libavcodec implements both: its
 /// `dxva_get_decoder_configuration` scores `ConfigBitstreamRaw == 1` for every
 /// codec and accepts `2` only for H.264.
 pub const fn short_slice_config(codec: Codec) -> u32 {
@@ -205,7 +204,7 @@ mod tests {
         assert_eq!(AV1_VLD_PROFILE0.guid, AV1_VLD_PROFILE0_10BIT.guid);
         assert_eq!(AV1_VLD_PROFILE0.dxgi_format, DXGI_FORMAT_NV12);
         assert_eq!(AV1_VLD_PROFILE0_10BIT.dxgi_format, DXGI_FORMAT_P010);
-        // Same GUID `video_d3d11.rs` hands FFmpeg (`PROFILE_AV1_VLD_PROFILE0`).
+        // `D3D11_DECODER_PROFILE_AV1_VLD_PROFILE0`.
         assert_eq!(
             AV1_VLD_PROFILE0.guid,
             0xb8be4ccb_cf53_46ba_8d59_d6b8a6da5d2a
