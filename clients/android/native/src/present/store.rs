@@ -6,6 +6,10 @@
 //! of measured arrival jitter, floor 0.5 ms — widened by the late tail: the desktop presenter's
 //! grid-latency rule, so a frame costs the jitter this link shows, up to one period where the
 //! tail is one. Under `smooth` it is 1–3 deep on the snapping cushion.
+//!
+//! Under `latency` a frame that is due when a slot frees takes it from an older one still
+//! waiting ([`Store::take_sharer`]): a frame shown a slot late would keep every later frame a
+//! slot late. Under `smooth` each frame shows in its turn.
 
 use punktfunk_core::phase::{CadenceClock, CadenceHealth, CadenceTuning};
 use std::collections::VecDeque;
@@ -32,6 +36,8 @@ pub(crate) struct Store<F> {
     cadence: CadenceClock,
     /// The source's frame interval, the loop's cushion ceiling ([`super::frame_interval_ns`]).
     frame_interval_ns: i64,
+    /// Latency: a frame due for a taken slot shares it ([`Store::take_sharer`]).
+    shares: bool,
 }
 
 impl<F> Store<F> {
@@ -55,6 +61,7 @@ impl<F> Store<F> {
             frames: VecDeque::new(),
             cadence,
             frame_interval_ns,
+            shares: matches!(priority, PresentPriority::Latency),
         }
     }
 
@@ -127,6 +134,16 @@ impl<F> Store<F> {
     /// The oldest held frame.
     pub(crate) fn take(&mut self) -> Option<Held<F>> {
         self.frames.pop_front()
+    }
+
+    /// The frame behind the one just taken, where it shares that frame's slot: under latency,
+    /// and due by `now_ns` itself. It is the one to show; the caller drops the older. A frame
+    /// due later keeps the slot after, which is how two frames that arrived together still both
+    /// show. `None` under smooth, which shows every frame in turn.
+    pub(crate) fn take_sharer(&mut self, now_ns: i64) -> Option<Held<F>> {
+        (self.shares && self.head_is_releasable(now_ns))
+            .then(|| self.frames.pop_front())
+            .flatten()
     }
 
     /// Put back the frame [`Store::take`] returned when the budget was closed.
@@ -318,6 +335,22 @@ mod tests {
             (evicted, s.fifo_len(), s.cadence_health().reanchors),
             (1, 2, 1)
         );
+    }
+
+    #[test]
+    fn only_a_due_frame_under_latency_shares_the_slot_ahead_of_it() {
+        let held = |due_ns| Held {
+            frame: 0i64,
+            due_ns: Some(due_ns),
+        };
+        let mut s = store(PresentPriority::Latency, true);
+        s.frames.push_back(held(MONO0 + P));
+        assert!(s.take_sharer(MONO0).is_none(), "not due yet");
+        assert!(s.take_sharer(MONO0 + P).is_some());
+        assert!(s.take_sharer(MONO0 + P).is_none(), "nothing behind");
+        let mut s = store(PresentPriority::Smooth { buffer: 2 }, true);
+        s.frames.push_back(held(MONO0));
+        assert!(s.take_sharer(MONO0 + P).is_none(), "smooth queues");
     }
 
     #[test]

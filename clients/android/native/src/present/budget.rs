@@ -93,6 +93,8 @@ struct InFlight {
 /// What one SurfaceView pump may release.
 pub(crate) struct Pick<F> {
     pub(crate) frame: Option<Held<F>>,
+    /// Older frames that shared `frame`'s slot under latency: the sink returns them unshown.
+    pub(crate) shed: Vec<F>,
     /// The rail wrote off the unconfirmed releases: the sink clears its confirm ledger.
     pub(crate) forgive: bool,
 }
@@ -161,6 +163,7 @@ impl TimelineBudget {
         let (backlogged, forgive) = self.rail(confirms.unconfirmed, live, now_ns, c);
         let none = Pick {
             frame: None,
+            shed: Vec::new(),
             forgive,
         };
         // The FIFO releases on the due time, never one frame per tick: at 60 fps on 120 Hz that
@@ -173,7 +176,7 @@ impl TimelineBudget {
             self.vsync_tick = false;
             return none;
         }
-        let Some(held) = store.take() else {
+        let Some(mut held) = store.take() else {
             return none;
         };
         if self.inflight.is_some() || backlogged {
@@ -184,9 +187,18 @@ impl TimelineBudget {
             store.park(held);
             return none;
         }
+        // One slot is free. Under latency a later frame that is due by now takes it: shown a
+        // slot late, it would put every frame after it a slot late for as long as the source
+        // keeps up with the panel.
+        let mut shed = Vec::new();
+        while let Some(later) = store.take_sharer(now_ns) {
+            shed.push(std::mem::replace(&mut held, later).frame);
+        }
+        c.skipped += shed.len() as u64;
         self.vsync_tick = false;
         Pick {
             frame: Some(held),
+            shed,
             forgive,
         }
     }
@@ -452,14 +464,18 @@ mod tests {
         assert_eq!((c.released, c.forced), (3, 0));
     }
 
-    /// A minute of a 60.00 fps source through the latency store and this budget with no timeline
-    /// and no confirms. The callback grid runs at 59.88 Hz and its tick reaches the loop 0.1 to
-    /// 0.7 ms late; the loop passes on a decoded frame, a tick and its 5 ms wake. `reopen` maps
-    /// (now, last vsync) to the prediction a release hands the budget. Returns (released, evicted).
-    fn minute(reopen: impl Fn(i64, i64) -> Option<i64>) -> (u64, u64) {
+    /// A minute of a 60.00 fps source through the store and this budget with no timeline and no
+    /// confirms. The callback grid runs at 59.88 Hz and its tick reaches the loop 0.1 to 0.7 ms
+    /// late; the loop passes on a decoded frame, a tick and its 5 ms wake. `reopen` maps (now,
+    /// last vsync) to the prediction a release hands the budget. Returns (released, dropped,
+    /// median wait in the store).
+    fn minute(
+        priority: PresentPriority,
+        reopen: impl Fn(i64, i64) -> Option<i64>,
+    ) -> (u64, u64, i64) {
         const SOURCE: i64 = 16_666_666;
         const WAKE: i64 = 5_000_000;
-        let mut s: Store<u32> = Store::new(PresentPriority::Latency, SOURCE, true);
+        let mut s: Store<i64> = Store::new(priority, SOURCE, true);
         let mut b = TimelineBudget::new(None);
         let mut c = Counters::default();
         let mut rng: u64 = 0x9E37_79B9_7F4A_7C15;
@@ -473,6 +489,7 @@ mod tests {
         let mut frame_at = T + noise(2_000_000);
         let mut tick_at = T + PANEL + 100_000 + noise(600_000);
         let (mut last_pass, mut last_vsync) = (T, T);
+        let mut waits = Vec::new();
         while frame < 3600 {
             let now = frame_at.min(tick_at).min(last_pass + WAKE);
             if now == tick_at {
@@ -483,17 +500,19 @@ mod tests {
             }
             if now == frame_at {
                 let pts_us = (frame * SOURCE / 1000) as u64;
-                s.push(frame as u32, pts_us, now, &mut c, drop);
+                s.push(now, pts_us, now, &mut c, drop);
                 frame += 1;
                 frame_at = T + frame * SOURCE + noise(2_000_000);
             }
             last_pass = now;
             let pick = b.pick(&mut s, now, PANEL, ledger(0, false), false, &mut c);
-            if pick.frame.is_some() {
+            if let Some(held) = pick.frame {
+                waits.push(now - held.frame);
                 b.released(now, None, reopen(now, last_vsync), &mut c);
             }
         }
-        (c.released, c.skipped)
+        waits.sort_unstable();
+        (c.released, c.skipped, waits[waits.len() / 2])
     }
 
     /// One callback period of a panel that states 60 Hz and runs at 59.88.
@@ -501,16 +520,67 @@ mod tests {
 
     #[test]
     fn a_source_at_the_panel_rate_is_shown_whole_without_a_timeline() {
-        let (released, evicted) = minute(|now, last_vsync| next_vsync(last_vsync, PANEL, now));
+        let on_grid = |now, last_vsync| next_vsync(last_vsync, PANEL, now);
+        let (released, dropped, _) = minute(PresentPriority::Latency, on_grid);
         // 60.00 on 59.88 is seven surplus frames a minute, and they are all it costs.
-        assert!(evicted <= 8, "{evicted} evicted");
+        assert!(dropped <= 8, "{dropped} dropped");
         assert!(released >= 3590, "{released} released");
         // A period counted from the release never gets back the wait for a pass.
-        let (released, evicted) = minute(|now, _| Some(now + PANEL));
+        let (released, dropped, _) = minute(PresentPriority::Latency, |now, _| Some(now + PANEL));
         assert!(
-            released < 3300 && evicted > 300,
-            "{released} released, {evicted} evicted"
+            released < 3300 && dropped > 300,
+            "{released} released, {dropped} dropped"
         );
+    }
+
+    #[test]
+    fn a_source_outrunning_the_panel_queues_under_smooth_and_not_under_latency() {
+        let on_grid = |now, last_vsync| next_vsync(last_vsync, PANEL, now);
+        let (_, _, wait) = minute(PresentPriority::Latency, on_grid);
+        assert!(wait < PANEL, "latency waits {wait} ns: under a period");
+        // Smooth shows every frame in turn, so its buffer stands full; the drops are the same.
+        let (_, dropped, wait) = minute(PresentPriority::Smooth { buffer: 2 }, on_grid);
+        assert!(wait > PANEL && dropped <= 8, "{wait} ns, {dropped} dropped");
+    }
+
+    #[test]
+    fn two_frames_due_for_one_slot_share_it_under_latency_and_queue_under_smooth() {
+        // Two frames decode while the slot is taken, and both are due when it frees.
+        let waiting = |mut s: Store<u32>| {
+            let mut b = TimelineBudget::new(None);
+            let mut c = Counters::default();
+            b.released(T, None, Some(T + P), &mut c);
+            s.push(1, 0, T, &mut c, drop);
+            s.push(2, 0, T, &mut c, drop);
+            let closed = b.pick(&mut s, T + P - 1, P, PENDING, false, &mut c);
+            assert!(closed.frame.is_none() && closed.shed.is_empty());
+            let open = b.pick(&mut s, T + P, P, PENDING, false, &mut c);
+            (
+                open.frame.map(|h| h.frame),
+                open.shed,
+                c.skipped,
+                s.fifo_len(),
+            )
+        };
+        assert_eq!(
+            waiting(latency()),
+            (Some(2), vec![1], 1, 0),
+            "the newer shows"
+        );
+        assert_eq!(
+            waiting(smooth()),
+            (Some(1), vec![], 0, 1),
+            "each in its turn"
+        );
+        // Two frames that arrive together are one source interval apart in due time: the
+        // second keeps the slot after.
+        let mut b = TimelineBudget::new(None);
+        let mut c = Counters::default();
+        let mut s = latency();
+        s.push(1, 0, T, &mut c, drop);
+        s.push(2, (P / 1000) as u64, T, &mut c, drop);
+        let first = b.pick(&mut s, T + P / 2, P, PENDING, false, &mut c);
+        assert_eq!((frame_of(first), s.fifo_len(), c.skipped), (Some(1), 1, 0));
     }
 
     #[test]

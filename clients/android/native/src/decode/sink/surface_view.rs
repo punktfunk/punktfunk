@@ -205,6 +205,8 @@ struct Timeline {
     /// Decoded outputs, and whether an AU was lost, in this 1 Hz window.
     outputs: u64,
     lost: bool,
+    /// Frames a pump dropped for sharing a slot, for the next [`Routed`] to carry.
+    shed: u64,
     pace_us: Vec<u64>,
     last_flush: Instant,
 }
@@ -253,6 +255,7 @@ impl Timeline {
             counters: Counters::default(),
             outputs: 0,
             lost: false,
+            shed: 0,
             pace_us: Vec::with_capacity(256),
             last_flush: Instant::now(),
         }
@@ -312,6 +315,10 @@ impl Timeline {
         );
         if pick.forgive {
             meter.forgive_outstanding();
+        }
+        self.shed += pick.shed.len() as u64;
+        for older in pick.shed {
+            release_unrendered(codec, older.index);
         }
         let Some(Held { frame, due_ns }) = pick.frame else {
             return false;
@@ -569,7 +576,12 @@ impl Sink for SurfaceViewSink {
             return arrival(ctx, ready, shows);
         };
         let codec = &ctx.codec;
-        let mut r = Routed::default();
+        let shed = std::mem::take(&mut t.shed);
+        let mut r = Routed {
+            skipped: shed,
+            discarded: shed,
+            rendered: 0,
+        };
         t.outputs += ready.len() as u64;
         for o in ready {
             if shows(o.pts_us) {
