@@ -476,7 +476,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 74
+#define PUNKTFUNK_ABI_VERSION 75
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -560,6 +560,18 @@
 // what makes the content travel as far as the finger; any other value re-introduces a scale
 // factor.
 #define PRECISE_PX_PER_DETENT 10.0
+
+// [`InputKind::MouseMove`] `flags` bit: `x`/`y` are a mouse's own counts, and the low 16
+// bits their capture time in 100 µs units, wrapping
+// ([`ScanClock`](crate::quic::ScanClock)). A host with a mouse device of its own reports them
+// there, under the host's pointer speed and acceleration. Without the bit a move is a
+// finished pointer distance, as a touch or a controller makes one. A host that predates the
+// bit ignores `flags`, so nothing needs negotiating.
+#define PUNKTFUNK_MOUSE_MOVE_COUNTS 2147483648
+
+// With [`MOUSE_MOVE_COUNTS`], embedder to client only: the low 16 bits already hold the
+// capture time. Without it the client stamps the move as it is sent.
+#define PUNKTFUNK_MOUSE_MOVE_TIMED 1073741824
 
 // [`InputKind::GamepadArrival`] `flags` bit 8: this pad renders haptics
 // ([`PAD_AUDIO_KIND_HAPTICS`](crate::quic::PAD_AUDIO_KIND_HAPTICS)). Sent only toward
