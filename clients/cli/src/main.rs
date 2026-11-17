@@ -50,6 +50,12 @@ mod cli {
     /// give up while the approval prompt is still on their screen.
     const REQUEST_ACCESS_TIMEOUT_SECS: u64 = 185;
 
+    /// Host or advert text as this CLI prints it: every control character (C0, DEL, C1) is
+    /// dropped, so a name can't carry a terminal escape, a carriage return or a line break.
+    fn shown(text: &str) -> String {
+        text.chars().filter(|c| !c.is_control()).collect()
+    }
+
     const USAGE: &str = "\
 punktfunk — the Punktfunk client, headless
 
@@ -500,25 +506,26 @@ from the config directory for a true factory reset."
             // The resolver ignores an unpaired record, so writing one here would set a
             // pointer that never resolves — refuse rather than lie about it.
             if !host.paired || host.fp_hex.is_empty() {
-                eprintln!("{} isn't paired — pair it first", host.name);
+                eprintln!("{} isn't paired — pair it first", shown(&host.name));
                 return NEEDS_INTERACTION;
             }
             let Some(id) = host.id.clone() else {
-                eprintln!("{} has no record id — re-save it", host.name);
+                eprintln!("{} has no record id — re-save it", shown(&host.name));
                 return UNRESOLVED;
             };
             Settings::update(|s| {
                 s.default_host = Some(id);
                 true
             });
-            println!("{}\t{}:{}", host.name, host.addr, host.port);
+            println!("{}\t{}:{}", shown(&host.name), shown(&host.addr), host.port);
             return OK;
         }
         let known = KnownHosts::load();
         match start::default_host_with_source(&Settings::load(), &known) {
             (Some(i), source) => {
                 let h = &known.hosts[i];
-                println!("{}\t{}:{}\t{}", h.name, h.addr, h.port, source.as_str());
+                let (name, addr) = (shown(&h.name), shown(&h.addr));
+                println!("{name}\t{addr}:{}\t{}", h.port, source.as_str());
                 OK
             }
             (None, _) => {
@@ -662,8 +669,8 @@ from the config directory for a true factory reset."
             for (d, saved) in &rows {
                 println!(
                     "{}\t{}:{}\t{}\t{}",
-                    d.name,
-                    d.addr,
+                    shown(&d.name),
+                    shown(&d.addr),
                     d.port,
                     if saved.is_some() { "saved" } else { "new" },
                     if saved.is_some_and(|h| h.paired) {
@@ -858,7 +865,7 @@ from the config directory for a true factory reset."
                 OK
             }
             Err(failure) => {
-                eprintln!("{}", failure.msg);
+                eprintln!("{}", shown(&failure.msg));
                 TRUST_REJECTED
             }
         }
@@ -919,8 +926,8 @@ from the config directory for a true factory reset."
         };
         format!(
             "{}\t{}:{}\t{}\t{state}",
-            h.name,
-            h.addr,
+            shown(&h.name),
+            shown(&h.addr),
             h.port,
             if h.paired { "paired" } else { "trusted" }
         )
@@ -1020,7 +1027,9 @@ from the config directory for a true factory reset."
             Ok(AddOutcome::Unchanged) => Err((format!("{addr}:{port} is already saved"), OK)),
             Ok(AddOutcome::Added) => Ok(format!("added {addr}:{port}")),
             Ok(AddOutcome::Pinned | AddOutcome::Edited) => Ok(format!("updated {addr}:{port}")),
-            Ok(AddOutcome::Moved { from }) => Ok(format!("moved {from} to {addr}:{port}")),
+            Ok(AddOutcome::Moved { from }) => {
+                Ok(format!("moved {} to {addr}:{port}", shown(&from)))
+            }
             Err(e) => Err((e, UNRESOLVED)),
         }
     }
@@ -1040,7 +1049,7 @@ from the config directory for a true factory reset."
         };
         match orchestrate::forget_host(pick) {
             Ok(Some(gone)) => {
-                println!("forgot {}", gone.name);
+                println!("forgot {}", shown(&gone.name));
                 OK
             }
             Ok(None) => refused,
@@ -1067,12 +1076,12 @@ from the config directory for a true factory reset."
         if host.mac.is_empty() {
             // A MAC is learned from the host's mDNS advert, never from a connect — say so, since
             // "connect to it once" sent at least one Deck owner looking in the wrong place (#322).
-            eprintln!("no Wake-on-LAN address known for {} — run `punktfunk discover` while it's awake (the Deck panel does this every time it opens) so the client learns it from the host's advert", host.name);
+            eprintln!("no Wake-on-LAN address known for {} — run `punktfunk discover` while it's awake (the Deck panel does this every time it opens) so the client learns it from the host's advert", shown(&host.name));
             return UNRESOLVED;
         }
         if !has(args, "--wait") {
             wol::wake(&host.mac, host.addr.parse().ok());
-            println!("sent a wake packet to {}", host.name);
+            println!("sent a wake packet to {}", shown(&host.name));
             return OK;
         }
         let last =
@@ -1083,13 +1092,13 @@ from the config directory for a true factory reset."
                 seconds,
                 ..
             }) => {
-                println!("{} is up after {seconds}s", host.name);
+                println!("{} is up after {seconds}s", shown(&host.name));
                 OK
             }
             _ => {
                 eprintln!(
                     "{} didn't come online within {WAKE_TIMEOUT_SECS}s",
-                    host.name
+                    shown(&host.name)
                 );
                 CONNECT_FAILED
             }
@@ -1116,7 +1125,8 @@ from the config directory for a true factory reset."
         if pin.is_none() {
             eprintln!(
                 "{} isn't paired yet — punktfunk pair {}",
-                host.name, host.addr
+                shown(&host.name),
+                shown(&host.addr)
             );
             return NEEDS_INTERACTION;
         }
@@ -1141,14 +1151,15 @@ from the config directory for a true factory reset."
                     println!("{}", serde_json::json!({ "games": rows }));
                 } else {
                     for g in &games {
-                        println!("{}\t{}\t{}", g.id, g.store, g.title);
+                        let (id, store) = (shown(&g.id), shown(&g.store));
+                        println!("{id}\t{store}\t{}", shown(&g.title));
                     }
                     println!("{} game(s)", games.len());
                 }
                 OK
             }
             Err(e) => {
-                eprintln!("library: {e}");
+                eprintln!("library: {}", shown(&e.to_string()));
                 CONNECT_FAILED
             }
         }
@@ -1169,7 +1180,8 @@ from the config directory for a true factory reset."
         let Some(pin) = trust::parse_hex32(&host.fp_hex) else {
             eprintln!(
                 "{} isn't paired yet — punktfunk pair {}",
-                host.name, host.addr
+                shown(&host.name),
+                shown(&host.addr)
             );
             return NEEDS_INTERACTION;
         };
@@ -1188,7 +1200,7 @@ from the config directory for a true factory reset."
             Some(pin),
             &game,
         );
-        println!("{}", outcome.notice(&game));
+        println!("{}", shown(&outcome.notice(&game)));
         match outcome {
             library::GameEnd::Ended => OK,
             library::GameEnd::NotRunning => UNRESOLVED,
@@ -1209,7 +1221,8 @@ from the config directory for a true factory reset."
         let Some(pin) = trust::parse_hex32(&host.fp_hex) else {
             eprintln!(
                 "{} isn't paired yet — punktfunk pair {}",
-                host.name, host.addr
+                shown(&host.name),
+                shown(&host.addr)
             );
             return NEEDS_INTERACTION;
         };
@@ -1243,7 +1256,7 @@ from the config directory for a true factory reset."
                 label,
             );
             let code = if said.is_ok() { OK } else { CONNECT_FAILED };
-            println!("{}", said.unwrap_or_else(|e| e));
+            println!("{}", shown(&said.unwrap_or_else(|e| e)));
             return code;
         }
         let rows: Vec<_> = host_actions::fetch_actions(addr, mgmt, host.port, &identity, Some(pin))
@@ -1270,7 +1283,8 @@ from the config directory for a true factory reset."
                     (true, _) => "available",
                     (false, why) => why.unwrap_or("unavailable"),
                 };
-                println!("{}\t{}\t{state}", a.id, a.label());
+                let (id, label, state) = (shown(&a.id), shown(a.label()), shown(state));
+                println!("{id}\t{label}\t{state}");
             }
         }
         OK
@@ -1289,7 +1303,8 @@ from the config directory for a true factory reset."
         let Some(pin) = trust::parse_hex32(&host.fp_hex) else {
             eprintln!(
                 "{} isn't paired yet — punktfunk pair {}",
-                host.name, host.addr
+                shown(&host.name),
+                shown(&host.addr)
             );
             return NEEDS_INTERACTION;
         };
@@ -1318,19 +1333,19 @@ from the config directory for a true factory reset."
         let mut t = fetched.unwrap_or_default();
         if let Some(id) = value(args, "--pick") {
             if !answered {
-                println!("Couldn't ask {} for its screens", host.name);
+                println!("Couldn't ask {} for its screens", shown(&host.name));
                 return CONNECT_FAILED;
             }
             let (pick, label) = match screen_pick(&t, bound, &id) {
                 Ok(v) => v,
                 Err((code, said)) => {
-                    println!("{said}");
+                    println!("{}", shown(&said));
                     return code;
                 }
             };
             let fp = &host.fp_hex;
             if let Err(e) = display_targets::set_pick(addr, mgmt, host.port, &identity, fp, &pick) {
-                println!("{label} failed — {e}");
+                println!("{} failed — {}", shown(&label), shown(&e.to_string()));
                 return CONNECT_FAILED;
             }
             // `set_pick` read the host's rows back; a miss lists none rather than the old check.
@@ -1423,9 +1438,11 @@ from the config directory for a true factory reset."
         let rows = t.rows_under(preset).into_iter().map(|r| {
             let why = r.reason.or(r.hint.map(String::from)).unwrap_or_default();
             let mark = if r.checked { "\t*" } else { "" };
-            format!("{}\t{}\t{}\t{why}{mark}", r.id, r.label, r.detail)
+            let (id, label, detail) = (shown(&r.id), shown(&r.label), shown(&r.detail));
+            format!("{id}\t{label}\t{detail}\t{}{mark}", shown(&why))
         });
-        rows.chain(t.note_under(preset)).collect()
+        rows.chain(t.note_under(preset).as_deref().map(shown))
+            .collect()
     }
 
     /// `launch <host-ref> [--game ID] [--preset REF] [--exec]` — start a stream, wake included.
@@ -1474,7 +1491,8 @@ from the config directory for a true factory reset."
         let Some(pin) = trust::parse_hex32(&host.fp_hex) else {
             eprintln!(
                 "{} isn't paired yet — punktfunk pair {}",
-                host.name, host.addr
+                shown(&host.name),
+                shown(&host.addr)
             );
             return Err(NEEDS_INTERACTION);
         };
@@ -1484,7 +1502,7 @@ from the config directory for a true factory reset."
         })?;
         let mgmt = host.effective_mgmt_port();
         profiles::fetch_enumerate(&host.addr, mgmt, host.port, &identity, Some(pin)).map_err(|e| {
-            eprintln!("profiles: {e}");
+            eprintln!("profiles: {}", shown(&e.to_string()));
             CONNECT_FAILED
         })
     }
@@ -1547,20 +1565,21 @@ from the config directory for a true factory reset."
         let listed = match list_profiles(&known.hosts[i]) {
             Ok(Some(listed)) => listed,
             Ok(None) => {
-                eprintln!("{} has no profiles", known.hosts[i].name);
+                eprintln!("{} has no profiles", shown(&known.hosts[i].name));
                 return UNRESOLVED;
             }
             Err(code) => return code,
         };
         if let Some(wanted) = value(args, "--pick") {
             let Some(p) = profiles::find(&listed, &wanted) else {
-                eprintln!("{} has no profile called \"{wanted}\"", known.hosts[i].name);
+                let name = shown(&known.hosts[i].name);
+                eprintln!("{name} has no profile called \"{}\"", shown(&wanted));
                 return UNRESOLVED;
             };
             if !save_pick(id, Some(p.pick())) {
                 return CONNECT_FAILED;
             }
-            println!("{}\t{}", p.id, p.display_name);
+            println!("{}\t{}", shown(&p.id), shown(&p.display_name));
             return OK;
         }
         let picked = known.hosts[i].profile.as_ref().map(|p| p.id.as_str());
@@ -1595,9 +1614,9 @@ from the config directory for a true factory reset."
                 };
                 println!(
                     "{}\t{}\t{}{mark}",
-                    p.id,
-                    p.display_name,
-                    p.note().unwrap_or_default()
+                    shown(&p.id),
+                    shown(&p.display_name),
+                    shown(&p.note().unwrap_or_default())
                 );
             }
         }
@@ -1637,11 +1656,12 @@ from the config directory for a true factory reset."
                         eprintln!(
                             "that link names {} by label or address, not by its id — re-run with \
                              --yes to open it",
-                            plan.host.name
+                            shown(&plan.host.name)
                         );
                         return NEEDS_INTERACTION;
                     }
-                    eprint!("Connect to {} ({})? [y/N] ", plan.host.name, plan.host.addr);
+                    let (name, addr) = (shown(&plan.host.name), shown(&plan.host.addr));
+                    eprint!("Connect to {name} ({addr})? [y/N] ");
                     let mut line = String::new();
                     if std::io::stdin().read_line(&mut line).is_err()
                         || !line.trim().eq_ignore_ascii_case("y")
@@ -1657,8 +1677,8 @@ from the config directory for a true factory reset."
             Ok(PlanOutcome::ConfirmUnknown(u)) => {
                 eprintln!(
                     "{} isn't paired with this device — punktfunk pair {}:{}",
-                    u.name.unwrap_or_else(|| u.addr.clone()),
-                    u.addr,
+                    shown(&u.name.unwrap_or_else(|| u.addr.clone())),
+                    shown(&u.addr),
                     u.port
                 );
                 NEEDS_INTERACTION
@@ -1685,7 +1705,8 @@ from the config directory for a true factory reset."
         let Some(fp) = plan.host.pin() else {
             eprintln!(
                 "{} has no pinned fingerprint — punktfunk pair {}",
-                plan.host.name, plan.host.addr
+                shown(&plan.host.name),
+                shown(&plan.host.addr)
             );
             return NEEDS_INTERACTION;
         };
@@ -1699,7 +1720,7 @@ from the config directory for a true factory reset."
                 Duration::from_millis(900),
             )
         {
-            eprintln!("waking {}…", plan.host.name);
+            eprintln!("waking {}…", shown(&plan.host.name));
             let last = orchestrate::wake_by_probe(
                 &plan.host.addr,
                 plan.host.port,
@@ -1708,7 +1729,7 @@ from the config directory for a true factory reset."
                 |_| true,
             );
             if last.and_then(|t| t.outcome) != Some(WakeOutcome::Online) {
-                eprintln!("{} didn't come online", plan.host.name);
+                eprintln!("{} didn't come online", shown(&plan.host.name));
                 return CONNECT_FAILED;
             }
         }
@@ -1746,19 +1767,19 @@ from the config directory for a true factory reset."
                     }
                 }
                 SessionEvent::Error(e) => failure = Some(e),
-                SessionEvent::Ended(reason) => eprintln!("{reason}"),
+                SessionEvent::Ended(reason) => eprintln!("{}", shown(&reason)),
                 // The window size is persisted by the brain on the way past.
                 SessionEvent::Window { .. } | SessionEvent::Stats(_) => {}
                 // `ended` is printed as it arrives; its absence changes no exit code.
                 SessionEvent::Exited(code) => {
                     return match ConnectOutcome::from_exit(code, failure.take(), None, false) {
                         ConnectOutcome::TrustRejected(msg) => {
-                            eprintln!("{msg}");
+                            eprintln!("{}", shown(&msg));
                             TRUST_REJECTED
                         }
                         ConnectOutcome::ConnectFailed(msg)
                         | ConnectOutcome::Refused { msg, .. } => {
-                            eprintln!("{msg}");
+                            eprintln!("{}", shown(&msg));
                             CONNECT_FAILED
                         }
                         ConnectOutcome::RendererFailed { .. } => RENDERER_FAILED,
@@ -1817,7 +1838,7 @@ from the config directory for a true factory reset."
         let (known, i) = resolve(&reference)?;
         let host = &known.hosts[i];
         let Some(pin) = trust::parse_hex32(&host.fp_hex) else {
-            eprintln!("{} isn't paired yet", host.name);
+            eprintln!("{} isn't paired yet", shown(&host.name));
             return Err(NEEDS_INTERACTION);
         };
         let identity = match trust::load_or_create_identity() {
@@ -2147,6 +2168,25 @@ from the config directory for a true factory reset."
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        /// An advertised name with an escape sequence, a line break or a C1 control prints as
+        /// its visible characters only, on its own row.
+        #[test]
+        fn host_text_prints_without_control_characters() {
+            assert_eq!(shown("desk\u{1b}]0;title\u{7}"), "desk]0;title");
+            assert_eq!(shown("a\r\nb\tc\u{9b}2J\u{7f}"), "abc2J");
+            assert_eq!(shown("Wohnzimmer-PC ✓"), "Wohnzimmer-PC ✓");
+            let h = KnownHost {
+                name: "x\nfake\t1.2.3.4:1\tpaired".into(),
+                addr: "10.0.0.2".into(),
+                port: 9777,
+                ..Default::default()
+            };
+            assert_eq!(
+                host_line(&h, None),
+                "xfake1.2.3.4:1paired\t10.0.0.2:9777\ttrusted\t-"
+            );
+        }
 
         /// The other OS of a dual-boot box answers at the saved one's lease with its own pin.
         /// It is not that record, so `discover` must not call it saved or paired.
