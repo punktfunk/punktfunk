@@ -5,7 +5,7 @@
 use super::reported_proc;
 #[cfg(target_os = "linux")]
 use super::OwnedChild;
-use super::{report_exit, LeaseKind, LeaseShared, POLL, TERM_GRACE};
+use super::{report_exit, LeaseKind, LeaseShared, TERM_GRACE};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -269,12 +269,15 @@ pub fn end_previous_launch(title: &str, procs: &[crate::procscan::ProcRef], why:
     first.len()
 }
 
-/// Polls `closed` every [`POLL`] until it holds or `grace` runs out; whether it held. The first
-/// look comes after one poll, so a game just asked to close is given time to start.
+/// How often [`closed_within`] looks: a few process reads, and the next title waits on it.
+const CLOSE_LOOK: Duration = Duration::from_millis(50);
+
+/// Looks at `closed` every [`CLOSE_LOOK`] until it holds or `grace` runs out; whether it held.
+/// The first look comes after one gap, so a game just asked to close is given time to start.
 fn closed_within(grace: Duration, mut closed: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + grace;
     while Instant::now() < deadline {
-        std::thread::sleep(POLL);
+        std::thread::sleep(CLOSE_LOOK);
         if closed() {
             return true;
         }
@@ -356,6 +359,15 @@ mod tests {
             looks == 2
         }));
         assert_eq!(looks, 2);
+    }
+
+    /// A game that closed at once is seen at the first look, inside the 1 s the exit watcher
+    /// waits between its own.
+    #[test]
+    fn a_game_that_closed_at_once_is_seen_within_a_second() {
+        let started = Instant::now();
+        assert!(closed_within(Duration::from_secs(60), || true));
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
