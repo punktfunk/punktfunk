@@ -2,8 +2,9 @@
 # under its own name so it sits BESIDE the system gamescope instead of replacing it.
 #
 # An override rather than a from-scratch derivation on purpose: gamescope vendors wlroots,
-# vkroots, libliftoff, libdisplay-info, SPIRV-Headers and reshade as git submodules plus two meson
-# wraps, and nixpkgs already solves all of that. What we add is the patch set and a rename.
+# vkroots, libliftoff, libdisplay-info, openvr, SPIRV-Headers and reshade as git submodules plus
+# two meson wraps, and nixpkgs already solves all of that. What we add is the patch set and a
+# rename.
 #
 # This is also why the override needs none of the `force_fallback_for` armour
 # `build-punktfunk-gamescope.sh` carries: that exists because meson silently prefers a SYSTEM
@@ -17,7 +18,7 @@
 #
 # `gamescope` is the recipe from the flake's pinned nixpkgs, called with the system's libraries
 # (flake.nix). Its NixOS patches and postPatch match the source pinned below; another release's
-# recipe patches files our source does not have, and nixos-26.05's fails at patchPhase.
+# recipe patches code our source does not have, and nixos-26.05's fails at patchPhase.
 #
 # Patch `0001` does not call upstream's `vulkan_get_rgb10_capture_format()`: it offers
 # `xBGR_210LE` ahead of `xRGB_210LE`, which gives the same result on a device that cannot store
@@ -126,10 +127,10 @@ unwrapped.overrideAttrs (old: {
   '';
 
   # Ship the compositor, renamed, its reaper, AND the WSI layer built beside it. gamescope starts
-  # its primary child through `gamescopereaper`, which it resolves next to /proc/self/exe — the
-  # real gamescope package on PATH cannot answer that, so without the reaper here a spawned
-  # session comes up empty and logs "Primary child shut down!". The rest (gamescopectl,
-  # gamescopestream, .desktop files) is the real package's to install.
+  # its primary child through `gamescopereaper`, which nixpkgs' recipe execs as
+  # `$out/bin/gamescopereaper`; without the reaper here the child never starts and gamescope logs
+  # "Primary child shut down!". The rest (gamescopectl, gamescopestream, .desktop files) is the
+  # real package's to install.
   #
   # The layer is not dressing: a game nested under this compositor gets its HDR10 swapchain from it
   # or from nowhere, and a layer built for a DIFFERENT gamescope makes the compositor reject the
@@ -178,7 +179,6 @@ unwrapped.overrideAttrs (old: {
       "$out/lib/punktfunk/vulkan/implicit_layer.d/punktfunk_gamescope_wsi.json"
   '';
 
-  # `gamescope --version` exits non-zero on some builds; the grep is the real assertion.
   doInstallCheck = true;
   installCheckPhase = ''
     runHook preInstallCheck
@@ -212,7 +212,7 @@ unwrapped.overrideAttrs (old: {
         | sort -u | head -5 | sed 's/^/    | /' >&2 || true
       exit 1
     }
-    # The compositor spawns its child through this, by a path next to /proc/self/exe. Missing, it
+    # The compositor spawns its child through this, by its absolute $out path. Missing, it
     # still starts, still paints, and never runs the game.
     [ -x $out/bin/gamescopereaper ] \
       || { echo "punktfunk-gamescope: no gamescopereaper, so a spawned session would run nothing"; exit 1; }

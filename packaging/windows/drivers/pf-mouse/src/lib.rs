@@ -294,8 +294,8 @@ fn on_get_feature(request: &Request) -> NTSTATUS {
 }
 
 // IOCTL_HID_GET_STRING: the input is a ULONG whose low word is the string id and whose high word
-// is the language id. Windows polls ids 0x0E/0x0F/0x10 (manufacturer/product/serial) as well as
-// the 0/1/2 HID_STRING_ID_* constants — serve both (the pf-gamepad finding).
+// is the language id. Windows asks with the HID_STRING_ID_* ids 0x0E/0x0F/0x10
+// (manufacturer/product/serial); 0/1/2 answer the same three strings.
 fn on_get_string(request: &Request) -> NTSTATUS {
     let (bytes, _) = match request.input_bytes(4) {
         Ok(v) => v,

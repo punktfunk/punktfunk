@@ -1,9 +1,9 @@
 // Punktfunk's winget REST source — the read path only.
 //
-// The winget client consumes exactly three endpoints. `microsoft/winget-cli-restsource`'s other 20
-// (`/packages/**` CRUD) are that reference implementation's ADMIN API for mutating a CosmosDB —
-// they are not part of what a client calls, and a source whose data is generated at release time
-// has nothing to mutate. So this serves:
+// The winget client consumes exactly three endpoints. `microsoft/winget-cli-restsource`'s other 23
+// (`/packages/**` CRUD and the manifest writes) are that reference implementation's ADMIN API for
+// mutating a CosmosDB — they are not part of what a client calls, and a source whose data is
+// generated at release time has nothing to mutate. So this serves:
 //
 //   GET  /information                        server identity + declared capabilities
 //   POST /manifestSearch                     search; 204 when nothing matches

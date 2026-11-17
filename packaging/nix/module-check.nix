@@ -2,11 +2,11 @@
 # The units under them are the packages' own (scripts/*.service, packaging/linux/*.service);
 # vm-test.nix runs them.
 #
-# WHY THIS FILE EXISTS. `nix flake check` does NOT check `nixosModules`. It forces the value and
-# asserts it is a lambda taking an open attribute set — nothing more; nix's own source carries
-# `// FIXME: if we have a 'nixpkgs' input, use it to check the module.` MEASURED: a flake whose
-# `nixosModules.default` sets a nonexistent OPTION, references a nonexistent `pkgs` attribute AND
-# calls a nonexistent `lib` function passes clean, printing the thoroughly reassuring
+# WHY THIS FILE EXISTS. `nix flake check` does NOT evaluate `nixosModules`. Nix 2.24+ only forces
+# the value, and Determinate Nix 3.23 (CI's) only checks it is a function or an attribute set.
+# MEASURED: a flake whose `nixosModules.default` sets a nonexistent OPTION, references a
+# nonexistent `pkgs` attribute AND calls a nonexistent `lib` function passes clean, printing the
+# thoroughly reassuring
 #
 #     checking NixOS module 'nixosModules.default'... all checks passed!
 #

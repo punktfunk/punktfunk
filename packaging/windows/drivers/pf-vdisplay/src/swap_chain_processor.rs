@@ -307,7 +307,7 @@ impl Ctx {
         );
         // Best-effort, never fatal (see [`rt_gpu_enabled`]), issued while our borrowed device
         // reference is alive: IddCx uses it synchronously. The DDI may still decline (E_NOTIMPL
-        // on pre-WDDM-3.0 hardware).
+        // on a WDDM 1.x device).
         if rt_gpu_enabled() {
             let rt = IDARG_IN_SETREALTIMEGPUPRIORITY {
                 pDevice: dxgi_device.as_raw().cast(),

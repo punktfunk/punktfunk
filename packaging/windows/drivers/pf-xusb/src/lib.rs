@@ -60,7 +60,8 @@ const IOCTL_XUSB_GET_INFORMATION_EX: u32 = 0x8000_E3FC;
 /// into us.
 const IOCTL_PF_GET_CHANNEL_PROOF: u32 = pf_driver_proto::gamepad::IOCTL_PF_GET_CHANNEL_PROOF;
 
-// Xbox 360 wired identity (what GET_INFORMATION reports). 0x0103 unblocks SET_STATE (vibration).
+// Xbox 360 wired identity (what GET_INFORMATION reports); XInputSetState reaches the driver at
+// 0x0103.
 const XUSB_VID: u16 = 0x045E;
 const XUSB_PID: u16 = 0x028E;
 const XUSB_VERSION: u16 = 0x0103;
@@ -181,8 +182,8 @@ extern "C" fn evt_device_add(_driver: WDFDRIVER, mut device_init: PWDFDEVICE_INI
     }
 
     // Manual queue for the ASYNC input wait (`IOCTL_XUSB_WAIT_FOR_INPUT`), completed by the timer.
-    // Classic XInput falls back to GET_STATE polling when it is declined; WGI/GameInput poll
-    // asynchronously and never admit a device that declines it.
+    // Classic XInput falls back to GET_STATE polling when it is declined; WGI and GameInput read
+    // the pad through these waits.
     // SAFETY: `device` is the live device just created.
     let wait_queue = match unsafe { skeleton::create_manual_queue(device) } {
         Ok(q) => q,

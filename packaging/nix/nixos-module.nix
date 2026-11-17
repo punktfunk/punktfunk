@@ -592,7 +592,7 @@ in
       };
 
       # CPU-side thread priority for the host's data-plane threads (capture/encode/send and the
-      # 5 ms audio loop) rides RealtimeKit: the host asks rtkit to renice the thread when a direct
+      # audio loop) rides RealtimeKit: the host asks rtkit to renice the thread when a direct
       # setpriority() is refused — the same unprivileged broker PipeWire clients use, so nothing
       # ever enters the host's permitted set and the KWin identification above stays intact.
       # NixOS is the one distro family where rtkit is not a given, hence the default here;

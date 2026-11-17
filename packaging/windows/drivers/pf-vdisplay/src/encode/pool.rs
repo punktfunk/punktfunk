@@ -591,7 +591,8 @@ impl Attached {
                 if let Some(s) = &self.session
                     && !s.stale.swap(true, Ordering::AcqRel)
                 {
-                    // Say so in the header: the host answers a wedge with a fresh SET_ENCODE.
+                    // Mark the header wedged; an ENCODE_CTL reset or the next SET_ENCODE clears
+                    // `stale`.
                     s.section
                         .store_u32(offset_of!(AuHeader, encoder_state), ENCODER_WEDGED);
                     let (epoch, pool_epoch) = (device.epoch(), pool.device_epoch);
