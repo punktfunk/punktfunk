@@ -1,13 +1,13 @@
 //! Embedder events → QUIC datagrams.
 //!
 //! Toward `HOST_CAP_GAMEPAD_STATE`, per-transition gamepad events fold into seq-stamped
-//! `GamepadSnapshot`s. The datagram plane drops, reorders, and sheds oldest-first at
-//! the 4 KiB send cap, so a lost edge would leave a held trigger stuck until the next
-//! change. Snapshots heal on the next send; seq drops stale reorders; a 100 ms refresh
-//! of every touched pad bounds loss to one interval (host rumble refresh is the same
-//! idea at 500 ms). Keyboard/mouse/touch pass through. An older host keeps the legacy
-//! per-transition gamepad events. `HOST_CAP_PAD_AUDIO` gates flags bits 8/9; without
-//! it the whole flags word is the pad index.
+//! `GamepadSnapshot`s. The datagram plane drops, reorders, and sheds oldest-first at the 4 KiB
+//! send cap. Snapshots heal on the next send; seq drops stale reorders; a 100 ms refresh of
+//! every touched pad bounds loss to one interval. A snapshot that changes buttons goes out
+//! again with the same seq ([`EDGE_REPEATS`]), so a lost press heals within milliseconds.
+//! Keyboard/mouse/touch pass through. An older host keeps the legacy per-transition gamepad
+//! events. `HOST_CAP_PAD_AUDIO` gates flags bits 8/9; without it the whole flags word is the
+//! pad index.
 //!
 //! Events already queued behind the one just received fold into the same snapshot: an
 //! embedder pushes one pad report as one event per axis, and a datagram per axis was six
@@ -165,13 +165,63 @@ fn sync_mouse(
     }
 }
 
-/// One seq-stamped snapshot per pad flagged in `dirty`; clears the flags.
+/// When copies of a snapshot that changed buttons follow it. Same datagram, same seq: the host
+/// applies the first copy that lands and drops the rest as stale, so a tap whose press is lost
+/// still reaches the game, in order, ahead of its release.
+const EDGE_REPEATS: [Duration; 2] = [Duration::from_millis(4), Duration::from_millis(16)];
+
+/// Per pad: the buttons last stamped, and the copies still owed of a snapshot that changed them.
+#[derive(Default)]
+struct EdgeRepeats {
+    buttons: [u32; MAX_PADS],
+    /// The datagram, when it went out, and how many [`EDGE_REPEATS`] have followed it.
+    owed: [Option<(InputEvent, tokio::time::Instant, usize)>; MAX_PADS],
+}
+
+impl EdgeRepeats {
+    /// Pad `idx` just sent `snap`. It supersedes the copies owed there, and owes its own when
+    /// its buttons changed; an axis-only change owes none.
+    fn sent(&mut self, idx: usize, snap: &GamepadSnapshot, now: tokio::time::Instant) {
+        let changed = std::mem::replace(&mut self.buttons[idx], snap.buttons) != snap.buttons;
+        self.owed[idx] = changed.then(|| (snap.to_event(), now, 0));
+    }
+
+    /// Pad `idx` was removed: nothing more goes out for it, and its next state starts at rest.
+    fn forget(&mut self, idx: usize) {
+        self.buttons[idx] = 0;
+        self.owed[idx] = None;
+    }
+
+    fn next_due(&self) -> Option<tokio::time::Instant> {
+        let due = |&(_, at, n): &(InputEvent, tokio::time::Instant, usize)| at + EDGE_REPEATS[n];
+        self.owed.iter().flatten().map(due).min()
+    }
+
+    /// Hands each copy due by `now` to `send`. A pad whose copies fell behind sends one.
+    fn send_due(&mut self, now: tokio::time::Instant, mut send: impl FnMut(InputEvent)) {
+        for slot in &mut self.owed {
+            let Some((ev, at, n)) = slot else { continue };
+            let reached = EDGE_REPEATS.iter().filter(|&&d| *at + d <= now).count();
+            if reached > *n {
+                send(*ev);
+                *n = reached;
+            }
+            if *n == EDGE_REPEATS.len() {
+                *slot = None;
+            }
+        }
+    }
+}
+
+/// One seq-stamped snapshot per pad flagged in `dirty`; clears the flags. Each send replaces
+/// the pad's owed copies ([`EdgeRepeats::sent`]).
 fn flush_dirty(
     conn: &ClientConn,
     grants: &AtomicU32,
     pads: &mut [Option<GamepadSnapshot>; MAX_PADS],
     seq: &mut [u8; MAX_PADS],
     dirty: &mut [bool; MAX_PADS],
+    repeats: &mut EdgeRepeats,
 ) {
     for idx in 0..MAX_PADS {
         if !std::mem::take(&mut dirty[idx]) {
@@ -181,6 +231,7 @@ fn flush_dirty(
             seq[idx] = seq[idx].wrapping_add(1);
             snap.seq = seq[idx];
             send_granted(conn, grants, snap.to_event());
+            repeats.sent(idx, snap, tokio::time::Instant::now());
         }
     }
 }
@@ -242,7 +293,14 @@ pub(super) async fn run(
     };
     let mut refresh = tokio::time::interval(Duration::from_millis(100));
     refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut repeats = EdgeRepeats::default();
+    let repeat_at = tokio::time::sleep(Duration::ZERO);
+    tokio::pin!(repeat_at);
     loop {
+        let repeat_due = repeats.next_due();
+        if let Some(at) = repeat_due.filter(|&at| at != repeat_at.deadline()) {
+            repeat_at.as_mut().reset(at);
+        }
         tokio::select! {
             ev = input_rx.recv() => {
                 let Some(first) = ev else { break };
@@ -253,7 +311,7 @@ pub(super) async fn run(
                         && ev.code == BTN_TOUCHPAD
                         && mouse.mode(idx) != PadMouseMode::Off
                     {
-                        flush_dirty(&conn, &mouse_args.client.access_grants, &mut pads, &mut seq, &mut dirty);
+                        flush_dirty(&conn, &mouse_args.client.access_grants, &mut pads, &mut seq, &mut dirty, &mut repeats);
                         let grants = mouse_args.client.access_grants.load(Ordering::Relaxed);
                         send_all(&conn, &mut scroll_out, &mouse_args, mouse.touchpad_click(idx, ev.x != 0, grants));
                         continue;
@@ -261,7 +319,7 @@ pub(super) async fn run(
                     if matches!(ev.kind, InputKind::GamepadButton | InputKind::GamepadAxis)
                         && mouse.is_on(idx)
                     {
-                        flush_dirty(&conn, &mouse_args.client.access_grants, &mut pads, &mut seq, &mut dirty);
+                        flush_dirty(&conn, &mouse_args.client.access_grants, &mut pads, &mut seq, &mut dirty, &mut repeats);
                         let grants = mouse_args.client.access_grants.load(Ordering::Relaxed);
                         send_all(&conn, &mut scroll_out, &mouse_args, mouse.fold(idx, &ev, grants));
                         continue;
@@ -285,13 +343,14 @@ pub(super) async fn run(
                         continue;
                     }
                     // Anything else goes out behind the snapshots folded so far.
-                    flush_dirty(&conn, &mouse_args.client.access_grants, &mut pads, &mut seq, &mut dirty);
+                    flush_dirty(&conn, &mouse_args.client.access_grants, &mut pads, &mut seq, &mut dirty, &mut repeats);
                     if gamepad_snapshots && ev.kind == InputKind::GamepadRemove && idx < MAX_PADS {
                         // Seq-stamped removal in the shared seq space so no reorder resurrects
                         // the pad. Arm the burst; drop owed arrival (a re-plug sends its own).
                         pads[idx] = None;
                         arrival[idx] = None;
                         arrival_owed[idx] = 0;
+                        repeats.forget(idx);
                         seq[idx] = seq[idx].wrapping_add(1);
                         remove_owed[idx] = REMOVE_RESENDS;
                         let rem = crate::input::InputEvent {
@@ -324,7 +383,7 @@ pub(super) async fn run(
                     }
                     send_input(&conn, &mut scroll_out, &mouse_args, ev);
                 }
-                flush_dirty(&conn, &mouse_args.client.access_grants, &mut pads, &mut seq, &mut dirty);
+                flush_dirty(&conn, &mouse_args.client.access_grants, &mut pads, &mut seq, &mut dirty, &mut repeats);
                 if !mouse.moving() {
                     last_mouse_tick = None;
                 }
@@ -335,7 +394,7 @@ pub(super) async fn run(
             }
             _ = mouse_args.client.pad_mouse.changed.notified() => {
                 sync_mouse(&conn, &mut mouse, &mouse_args, &mut scroll_out, &mut pads, &mut dirty);
-                flush_dirty(&conn, &mouse_args.client.access_grants, &mut pads, &mut seq, &mut dirty);
+                flush_dirty(&conn, &mouse_args.client.access_grants, &mut pads, &mut seq, &mut dirty, &mut repeats);
                 if !mouse.moving() {
                     last_mouse_tick = None;
                 }
@@ -352,6 +411,10 @@ pub(super) async fn run(
                 let height = mouse_args.client.mode.lock().map(|m| m.height).unwrap_or(0);
                 let grants = mouse_args.client.access_grants.load(Ordering::Relaxed);
                 send_all(&conn, &mut scroll_out, &mouse_args, mouse.tick(dt.as_secs_f64(), height, grants));
+            }
+            () = &mut repeat_at, if repeat_due.is_some() => {
+                let grants = &mouse_args.client.access_grants;
+                repeats.send_due(tokio::time::Instant::now(), |ev| send_granted(&conn, grants, ev));
             }
             _ = refresh.tick() => {
                 // Grants arrive without a wake-up; losing the pointer grant ends mouse mode here.
@@ -400,7 +463,7 @@ pub(super) async fn run(
                         send_granted(&conn, &mouse_args.client.access_grants, rem);
                     }
                 }
-                flush_dirty(&conn, &mouse_args.client.access_grants, &mut pads, &mut seq, &mut dirty);
+                flush_dirty(&conn, &mouse_args.client.access_grants, &mut pads, &mut seq, &mut dirty, &mut repeats);
             }
         }
     }
@@ -622,21 +685,134 @@ mod tests {
         }
     }
 
-    /// Next datagram that is not a snapshot of a pad in `skip`. Pad 0 is the mouse pad.
-    async fn next_event(host: &quinn::Connection, skip: &[u8]) -> InputEvent {
+    /// Next datagram that is not a snapshot of a pad in `skip`, each `(pad, buttons)`: a skipped
+    /// snapshot must hold those buttons. A mouse pad holds none.
+    async fn next_event(host: &quinn::Connection, skip: &[(u8, u32)]) -> InputEvent {
         loop {
             let dg = tokio::time::timeout(Duration::from_secs(2), host.read_datagram())
                 .await
                 .expect("a datagram")
                 .unwrap();
             let ev = InputEvent::decode(&input_payload(&dg)).unwrap();
-            match GamepadSnapshot::from_event(&ev) {
-                Some(s) if skip.contains(&s.pad) => {
-                    assert!(s.pad != 0 || s.buttons == 0, "a mouse pad stays neutral")
-                }
-                _ => return ev,
+            let Some(s) = GamepadSnapshot::from_event(&ev) else {
+                return ev;
+            };
+            match skip.iter().find(|&&(pad, _)| pad == s.pad) {
+                Some(&(pad, held)) => assert_eq!(s.buttons, held, "pad {pad} holds its buttons"),
+                None => return ev,
             }
         }
+    }
+
+    /// The next datagram within `wait_ms`, as sent, and the snapshot it carries.
+    async fn next_snapshot(
+        host: &quinn::Connection,
+        wait_ms: u64,
+    ) -> Option<(Vec<u8>, GamepadSnapshot)> {
+        let dg = tokio::time::timeout(Duration::from_millis(wait_ms), host.read_datagram())
+            .await
+            .ok()?
+            .unwrap();
+        let ev = InputEvent::decode(&input_payload(&dg)).unwrap();
+        Some((
+            dg.to_vec(),
+            GamepadSnapshot::from_event(&ev).expect("a snapshot"),
+        ))
+    }
+
+    /// A tap whose press snapshot is lost: a copy with the same seq follows within milliseconds,
+    /// so the host's seq gate applies the press, then the release sent 60 ms later.
+    #[tokio::test]
+    async fn a_tap_whose_press_is_lost_still_reaches_the_host_before_its_release() {
+        let (_server, _client, client_conn, host_conn) = loopback().await;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let client = client(crate::quic::GRANT_ALL);
+        let task = tokio::spawn(run(
+            client_conn,
+            rx,
+            no_touch(),
+            true,
+            false,
+            mouse_args(&client),
+        ));
+        // The refresh ticks once at start; a press after it has 95 ms before the next.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        let pressed = tokio::time::Instant::now();
+        tx.send(button(gamepad::BTN_A, 0)).unwrap();
+        let (lost, _) = next_snapshot(&host_conn, 2000).await.expect("the press");
+        let (copy, press) = next_snapshot(&host_conn, 2000).await.expect("its copy");
+        assert_eq!(copy, lost, "the same datagram");
+        tokio::time::sleep_until(pressed + Duration::from_millis(60)).await;
+        tx.send(InputEvent {
+            x: 0,
+            ..button(gamepad::BTN_A, 0)
+        })
+        .unwrap();
+
+        // The host's gate: a newer seq applies, the same or an older one is stale. Wait for the
+        // release however long it takes, then until 50 ms pass with nothing.
+        let (mut gate, mut seen) = (None, Vec::new());
+        let mut next = Some(press);
+        while let Some(s) = next {
+            if GamepadSnapshot::seq_newer(s.seq, gate) {
+                gate = Some(s.seq);
+                if seen.last() != Some(&s.buttons) {
+                    seen.push(s.buttons);
+                }
+            }
+            let wait = if seen.last() == Some(&0) { 50 } else { 2000 };
+            next = next_snapshot(&host_conn, wait).await.map(|(_, s)| s);
+        }
+        assert_eq!(seen, [gamepad::BTN_A, 0], "press, then release");
+        task.abort();
+    }
+
+    /// A newer snapshot of the pad ends the copies owed of the one before, and a stick-only
+    /// change owes none: after it, neither seq goes out again.
+    #[tokio::test]
+    async fn a_newer_snapshot_ends_the_copies_owed() {
+        let (_server, _client, client_conn, host_conn) = loopback().await;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let client = client(crate::quic::GRANT_ALL);
+        let task = tokio::spawn(run(
+            client_conn,
+            rx,
+            no_touch(),
+            true,
+            false,
+            mouse_args(&client),
+        ));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        tx.send(button(gamepad::BTN_A, 0)).unwrap();
+        let (_, press) = next_snapshot(&host_conn, 2000).await.expect("the press");
+        tx.send(InputEvent {
+            kind: InputKind::GamepadAxis,
+            code: gamepad::AXIS_LS_X,
+            x: 1_000,
+            ..button(0, 0)
+        })
+        .unwrap();
+        // A copy that left before the stick moved arrives ahead of it.
+        let moved = loop {
+            let (_, s) = next_snapshot(&host_conn, 2000).await.expect("the stick");
+            if s.seq != press.seq {
+                break s;
+            }
+        };
+        assert_eq!(
+            (moved.seq, moved.buttons, moved.ls_x),
+            (press.seq.wrapping_add(1), gamepad::BTN_A, 1_000)
+        );
+        while let Some((_, s)) = next_snapshot(&host_conn, 50).await {
+            assert!(
+                s.seq != press.seq && s.seq != moved.seq,
+                "seq {} went out again",
+                s.seq
+            );
+        }
+        task.abort();
     }
 
     /// Entering sends the pad neutral; its presses become keys and its touchpad moves the pointer
@@ -664,7 +840,7 @@ mod tests {
         );
 
         client.pad_mouse.request(1);
-        // A refresh of the held A may still be in flight; the neutral snapshot follows it.
+        // Copies or a refresh of the held A may come first; the neutral snapshot follows them.
         loop {
             let snap = GamepadSnapshot::from_event(&next_event(&host_conn, &[]).await)
                 .expect("only snapshots so far");
@@ -675,18 +851,18 @@ mod tests {
         }
 
         tx.send(button(gamepad::BTN_B, 0)).unwrap();
-        let esc = next_event(&host_conn, &[0]).await;
+        let esc = next_event(&host_conn, &[(0, 0)]).await;
         assert_eq!((esc.kind, esc.code), (InputKind::KeyDown, 0x1B));
 
         for x in [0.0, 1.0 / 3.0] {
             touch_tx.send(lead(0, x)).unwrap();
         }
-        let moved = next_event(&host_conn, &[0]).await;
+        let moved = next_event(&host_conn, &[(0, 0)]).await;
         assert_eq!(moved.kind, InputKind::MouseMove);
         assert!((539..=540).contains(&moved.x), "{}", moved.x);
 
         tx.send(button(gamepad::BTN_A, 1)).unwrap();
-        let other = next_event(&host_conn, &[0]).await;
+        let other = next_event(&host_conn, &[(0, 0)]).await;
         let other = GamepadSnapshot::from_event(&other).expect("pad 1 forwards");
         assert_eq!((other.pad, other.buttons), (1, gamepad::BTN_A));
         assert_eq!(
@@ -696,7 +872,7 @@ mod tests {
         );
 
         client.pad_mouse.request(0);
-        let up = next_event(&host_conn, &[0, 1]).await;
+        let up = next_event(&host_conn, &[(0, 0), (1, gamepad::BTN_A)]).await;
         assert_eq!(
             (up.kind, up.code),
             (InputKind::KeyUp, 0x1B),
@@ -729,13 +905,13 @@ mod tests {
         assert_eq!(snap.buttons, gamepad::BTN_A, "the game still gets A");
 
         tx.send(button(BTN_TOUCHPAD, 0)).unwrap();
-        let click = next_event(&host_conn, &[0]).await;
+        let click = next_event(&host_conn, &[(0, gamepad::BTN_A)]).await;
         assert_eq!((click.kind, click.code), (InputKind::MouseButtonDown, 1));
         for x in [0.0, 0.5] {
             touch_tx.send(lead(0, x)).unwrap();
         }
         assert_eq!(
-            next_event(&host_conn, &[0]).await.kind,
+            next_event(&host_conn, &[(0, gamepad::BTN_A)]).await.kind,
             InputKind::MouseMove
         );
         task.abort();
