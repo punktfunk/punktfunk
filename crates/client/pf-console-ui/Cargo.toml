@@ -30,8 +30,8 @@ desktop = ["pf-client-core/desktop"]
 
 # Skia's GL backend for a Linux consumer that has no Vulkan presenter and no SDL3 — a TV app
 # drawing on an EGL surface it owns (design/webos-skia-console-port.md §2.1). Android already
-# asks for `gl` from its own target block; this is the same ask spelled for Linux, where the
-# default is Vulkan and there was previously no way to request a GPU canvas at all.
+# asks for `gl` from its own target block; this is the same ask spelled for Linux, where a
+# build without `vulkan-overlay` rasters on the CPU.
 # ⚠ Changes the prebuilt key to `ganesh-gl-jpegd-jpege-pdf-textlayout`. rust-skia publishes no
 # armv7-unknown-linux-gnueabi archive for it; ours is built and hosted like the armeabi-v7a one
 # (provenance in clients/android/kit/build.gradle.kts).
@@ -48,7 +48,7 @@ pf-presenter = { path = "../pf-presenter", optional = true }
 # `default-features = false` like every other consumer (pf-presenter, cli, session, clients/windows):
 # pf-client-core's default is `pyrowave`, which compiles the vendored PyroWave C++ — fatal on
 # Windows ARM64. Whether that backend is on is the session binary's call (it forwards a `pyrowave`
-# feature); this crate needs none of it, and taking defaults here quietly turned it on.
+# feature); this crate needs none of it, and taking defaults here would turn it on.
 pf-client-core = { path = "../pf-client-core", default-features = false }
 
 # Skia on the presenter's VkDevice (`vulkan`, which needs `ganesh`); `textlayout` = skparagraph
@@ -126,11 +126,9 @@ sdl3 = { version = "0.20", features = ["hidapi", "ash"], optional = true }
 [target.'cfg(windows)'.dependencies]
 sdl3 = { version = "0.20", features = ["hidapi", "ash", "build-from-source"], optional = true }
 
-# The shared console parity vectors (`clients/shared/console-vectors.json`) are read by tests
-# here — the tab names and the transition motion — and the library
-# collation vectors (`clients/shared/library-collate-vectors.json`) by a fourth (`collate.rs`).
-# Dev-only: nothing in the shipping crate parses JSON. `pf-client-core` reads its own deeplink
-# vectors the same way.
+# The shared parity vectors (`clients/shared/console-vectors.json`, `console-bridge-vectors.json`)
+# are read by tests here: pinned keys, tab names, motion springs, the bridge codes.
+# `pf-client-core` reads its own vectors the same way.
 [dev-dependencies]
 serde_json = "1"
 # `en-XA`, the pseudo-language the tests draw in to find text that does not come from pf-l10n.

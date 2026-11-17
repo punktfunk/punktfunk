@@ -1,7 +1,7 @@
-//! The frames the CSC pass samples. The CPU I420 lane: three `R8_UNORM` textures sized to
-//! the frame, filled by `UpdateSubresource`. A D3D11VA pool slice: sampled in place on the
-//! decoder's own device, after a GPU wait on its `written` fence, through two plane views
-//! cached per pool generation; no copy, no `Map`, no CPU wait.
+//! The frames the CSC pass samples. The CPU I420 lane: three `R8_UNORM` textures sized by
+//! `CpuPlanarFrame::plane_dims`, filled by `UpdateSubresource`. A D3D11VA pool slice:
+//! sampled in place on the decoder's own device, after a GPU wait on its `written` fence,
+//! through two plane views cached per pool generation; no copy, no `Map`, no CPU wait.
 
 use crate::slice_model::{uv_scale, ViewCache};
 use anyhow::{bail, Context as _, Result};

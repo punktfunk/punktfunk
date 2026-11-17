@@ -1,11 +1,10 @@
-// YCbCr (2-plane 4:2:0) → RGBA with the stream's CICP signaling — the Vulkan port of
-// the GL presenter's fragment shader, grown depth- and HDR-aware.
+// YCbCr (2-plane 4:2:0) → RGBA with the stream's CICP signaling, depth- and HDR-aware.
 //
 // The YUV→RGB matrix + range expansion arrive as three push-constant rows precomputed
-// on the CPU (csc.rs `csc_rows` — bit-depth exact, including the P010/X6 MSB-packing
-// factor): rgb[i] = dot(r_i.xyz, yuv) + r_i.w. One shader for BT.601/709/2020,
+// on the CPU (`csc_rows` in video_color.rs — bit-depth exact, including the P010/X6
+// MSB-packing factor): rgb[i] = dot(r_i.xyz, yuv) + r_i.w. One shader for BT.601/709/2020,
 // full/limited, 8- and 10-bit. The chroma plane is half-res; the linear sampler
-// interpolates, same as the GL path.
+// interpolates it.
 //
 // params.x selects the output mode:
 //   0 — passthrough: the transfer stays baked (SDR BT.709 shown as-is; PQ BT.2020

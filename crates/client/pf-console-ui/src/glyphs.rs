@@ -1,6 +1,6 @@
 //! Face-button glyphs, device marks, and the bottom-leading hint-bar pill.
 //!
-//! Style is the last driver (`Shell::glyph_style`): PlayStation shapes, Nintendo
+//! Style is the last driver (`glyph_style` in `shell/render.rs`): PlayStation shapes, Nintendo
 //! engravings, ABXY letters, desktop keycaps, or Android TV-remote marks. A
 //! remote has no Y/X/shoulders; those hints resolve to `None` and take no layout.
 //! Apple draws SF Symbols via `sfSymbolsName`; this crate draws the shapes.
@@ -122,7 +122,7 @@ pub fn pad_mark(canvas: &Canvas, icon: Icon, x: f64, cy: f64, w: f64, k: f64, in
 /// Outline is always the full cell so the chip never reflows as bars drop.
 ///
 /// Charging uses accent and outranks the low warning (4 % on the cable is
-/// not 4 % off it). Under 20 % is a fixed red, not accent: on `moss`/`mint`
+/// not 4 % off it). Under 20 % is a fixed red, not accent: on `jade`/`emerald`
 /// the accent means "fine".
 pub fn battery_pip(
     canvas: &Canvas,

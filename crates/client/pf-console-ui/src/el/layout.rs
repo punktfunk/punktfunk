@@ -10,7 +10,7 @@ use skia_safe::{Canvas, Rect};
 use std::collections::HashMap;
 use taffy::{AvailableSpace, Dimension, NodeId, Size, TaffyTree};
 
-/// A released fling loses 1/e of its speed every this many seconds.
+/// A released fling's speed falls to 1/e every this many seconds.
 const FLING_TAU: f32 = 0.4;
 /// Slower than this, px/s, a fling has stopped.
 const FLING_STOP: f32 = 20.0;
@@ -164,7 +164,7 @@ impl Tree {
     pub fn new() -> Tree {
         let mut taffy = TaffyTree::new();
         let mut items = TaffyTree::new();
-        // Painters take fractional rects today; rounding would move a row by up to half a pixel.
+        // Painters take fractional rects; rounding would move a row by up to half a pixel.
         taffy.disable_rounding();
         items.disable_rounding();
         Tree {

@@ -13,7 +13,7 @@
 //!
 //! Each buffer is imported once under a key and reused; the caller's hold is kept until the
 //! compositor releases the buffer. The overlay rides on its own subsurface above the picture,
-//! with an empty input region. Opt-in (`PUNKTFUNK_NATIVE_SCANOUT=1`) until measured on a display.
+//! with an empty input region. Opt-in (`PUNKTFUNK_NATIVE_SCANOUT=1`).
 //!
 //! SDL owns the socket. A private queue takes this lane's events; SDL's pump reads them in
 //! and [`NativeLane::pump`] dispatches them. Presentation times arrive on CLOCK_MONOTONIC
@@ -564,7 +564,8 @@ pub struct NativeLane {
     /// `None` where the compositor lacks a subcompositor or viewporter: no overlay surface.
     hud_globals: Option<HudGlobals>,
     hud: Option<Hud>,
-    /// `None` without `wp_linux_drm_syncobj_manager_v1`: buffers go with implicit sync.
+    /// `None` without `wp_linux_drm_syncobj_manager_v1` or presenter timelines: buffers go
+    /// with implicit sync.
     syncobj: Option<sym::WpLinuxDrmSyncobjManagerV1>,
     /// Explicit sync on SDL's surface, only while the lane owns the window: Mesa's swapchain
     /// makes its own there, and a second is a fatal `surface_exists`.
@@ -871,7 +872,7 @@ impl NativeLane {
     /// Dispatch what SDL's socket reads brought for this lane. A protocol error retires the
     /// lane; the connection itself is SDL's to fail on, and so does a frame the compositor
     /// leaves unanswered past [`STALL_NS`]. After [`TRIAL_FRAMES`] judged frames on glass the
-    /// lane stays only if most of them went out zero-copy.
+    /// lane stays only if at least half of them went out zero-copy.
     pub fn pump(&mut self) {
         if self.dead {
             return;
@@ -1046,7 +1047,7 @@ impl NativeLane {
     }
 
     /// The HDR description for `meta`, built once per metadata and waited until the compositor
-    /// calls it ready (one roundtrip); a refusal keeps PQ off this lane for the session.
+    /// calls it ready (up to four roundtrips); a refusal keeps PQ off this lane for the session.
     fn ensure_hdr_desc(&mut self, meta: Option<HdrMeta>) -> bool {
         if self.hdr_desc.as_ref().is_some_and(|d| d.meta == meta) {
             return true;

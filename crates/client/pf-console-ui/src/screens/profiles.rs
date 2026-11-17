@@ -85,7 +85,8 @@ pub(crate) static NO_PROFILES: ProfileBook = ProfileBook {
     silent: false,
 };
 
-/// Decoded at this scale whatever the window: up to 600 across, twice a face on a 4K screen.
+/// Decoded at this scale whatever the window: up to 600 across (`ART_CACHE_W` × this), wider
+/// than a face on a 4K screen.
 const PICTURE_K: f64 = 2.0;
 
 thread_local! {

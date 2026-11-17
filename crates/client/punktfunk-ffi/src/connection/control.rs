@@ -362,7 +362,8 @@ pub struct PunktfunkHudFacts {
     pub struct_size: u32,
     /// The displayed stamps are true on-glass instants.
     pub on_glass: bool,
-    /// Take the measured OS present floor off end-to-end and display (iOS, tvOS).
+    /// Take the measured OS present floor off end-to-end and display (the Apple clients set
+    /// it on every OS but macOS).
     pub shave_os_floor: bool,
     /// Decoded audio queued ahead of the speaker, ms, for an embedder that plays audio itself.
     /// `0` keeps the core's reading.

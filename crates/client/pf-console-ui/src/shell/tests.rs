@@ -35,10 +35,8 @@ mod profile_gate;
 mod pseudo;
 mod unlock_gate;
 
-/// Pins `motion_spring` (vectors v2). v1 `motion` still exists for other clients; this
-/// transition is a spring, not that ease-out, so sampling v1 would pass a curve we do not run.
-///
-/// The redesign's motion table vs `motion_springs` in `console-vectors.json`.
+/// The redesign's motion table against `motion_springs` in `console-vectors.json`: each
+/// spring's response and damping, and the press, tab-slide and entrance numbers.
 #[test]
 fn the_motion_table_matches_the_shared_vectors() {
     use crate::anim::springs;
@@ -115,8 +113,8 @@ fn tabs_match_the_shared_vectors() {
     assert_eq!(have, want);
 }
 
-/// Shared throwaway config dir. Settings SAVE on adjust; a second `OnceLock` here
-/// would pick a second directory and the other test's loads would miss its writes.
+/// Shared throwaway config dir. One `OnceLock` for the binary: a second copy races the env
+/// write.
 use crate::screens::settings::tests::fake_home;
 
 fn hosts() -> Vec<HostRow> {
@@ -787,7 +785,7 @@ fn wake_gates_input_in_the_same_press() {
         .expect("Waking card raised in the SAME call as the A press");
     assert_eq!(w.name, "Office Tower");
     assert!(!w.online);
-    // Gate the next input. `sync` (first in handle_menu) must not clear the
+    // Gate the next input. `sync` (first in `menu_event`) must not clear the
     // placeholder before the service thread reports a real status.
     assert!(s.handle_menu(MenuEvent::Move(MenuDir::Right)).is_none());
     assert!(
@@ -1640,9 +1638,9 @@ fn frame(s: &mut Shell) {
     s.render(surface.canvas(), 480, 300, &fonts, None, None, &pads);
 }
 
-/// The shape of a double-card report: a tab switch into Games, Down onto the Desktops
-/// tile, and the plate a shift off the tile it rests on. Through the shell, with its clock,
-/// its tab slide and a TV's scale, the library tree's plate must sit on that tile.
+/// A tab switch into Games, then Down onto the Desktops tile: the library tree's plate must
+/// sit on that tile, not a shift off it. Through the shell, with its clock, its tab slide
+/// and a TV's scale.
 #[test]
 fn the_plate_sits_on_the_desktops_tile_after_a_tab_switch() {
     let fonts = crate::theme::build_fonts().unwrap();
@@ -2396,10 +2394,9 @@ fn column_means(surface: &mut skia_safe::Surface, w: i32, h: i32, rows: i32) -> 
         .collect()
 }
 
-/// The takeover's backdrop covers the surface, not the safe rect. It used to paint at the
-/// inset size under the layout translate, so the cutout strip kept the frame's first aurora
-/// with no vignette over it and seamed down the inset edge — barely visible in a capture,
-/// obvious on the glass.
+/// The takeover's backdrop covers the surface, not the safe rect. Painted at the inset size
+/// under the layout translate, the cutout strip would keep the frame's first aurora with no
+/// vignette over it and seam down the inset edge.
 #[test]
 fn the_takeover_field_reaches_past_a_side_cutout() {
     let (mut s, _console, _library) = shell(vec![Screen::Home(HomeScreen::new())]);

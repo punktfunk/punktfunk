@@ -6,9 +6,10 @@
 //! exits when it ends. **browse** (`run_browse`) idles the console library between
 //! streams; overlay actions launch, session end returns to the library.
 //!
-//! Stdout is the machine interface: `{"ready":true}` after the first presented frame, then
-//! once per window while the overlay tier is not Off: `stats: …` (the Advanced Detailed
-//! text, lines joined by ` | `) and `stats-json: …` (the snapshot). Logs go to stderr.
+//! Stdout is the machine interface. With `json_status`, `{"ready":true}` after the first
+//! presented frame; then once per window while the overlay tier is not Off: `stats: …`
+//! (the Advanced Detailed text, lines joined by ` | `) and `stats-json: …` (the snapshot).
+//! Logs go to stderr.
 //!
 //! Each pass runs the same phases in order: SDL events and the input ticks (`events.rs`),
 //! browse actions and the session drain (`stream.rs`), the overlay (`shell.rs`), then the
@@ -91,8 +92,8 @@ pub struct SessionOpts {
     /// `Latency` = newest-wins arrival pacing; `Smooth { buffer }` = FIFO one frame per latch
     /// slot. `PUNKTFUNK_PRESENTER=arrival` forces the latency drain without a rebuild.
     pub present_priority: PresentPriority,
-    /// Tear-free present (default on). Off asks for a tearing mode; the mode that took is
-    /// named in the stats line.
+    /// Tear-free present, from `Settings::vsync`. Off asks for a tearing mode; the mode that
+    /// took is named in the stats line.
     pub vsync: bool,
     /// Prefer a present mode that drives VRR when the session starts fullscreen.
     pub allow_vrr: bool,
@@ -103,9 +104,9 @@ pub struct SessionOpts {
     /// `None` is the Skia-free build (stats stay stdout-only). Init failure degrades to `None`
     /// with a warning rather than killing the session. Browse mode requires one.
     pub overlay: Option<Box<dyn Overlay>>,
-    /// Starting logical size; `None` = 1280×720, which a single stream without Match-window
-    /// then resizes to the stream. Match-window passes the persisted last size so the first
-    /// connect's mode already matches the glass.
+    /// Starting logical size; `None` = `Shell::open`'s fallback, which a single stream
+    /// without Match-window then resizes to the stream. Match-window passes the persisted
+    /// last size so the first connect's mode already matches the glass.
     pub window_size: Option<(u32, u32)>,
     /// Stream mode follows the window: start params use physical pixels, a mid-session resize
     /// sends a debounced `Reconfigure`. Off = never auto-resize.
@@ -115,7 +116,7 @@ pub struct SessionOpts {
     /// Multiplier on the window pixel size under Match-window. `> 1` supersamples; `1.0` is
     /// native pixels. See [`punktfunk_core::render_scale`].
     pub render_scale: f64,
-    /// Codec per-axis ceiling for the render-scale clamp (4096 for H.264, else 8192).
+    /// Codec per-axis ceiling for the render-scale clamp (`render_scale::max_dimension`).
     pub render_scale_max_dim: u32,
     /// How a frame of another aspect fills the window. The blit and every absolute input
     /// map through the same [`video_fit::place`].
@@ -228,7 +229,8 @@ where
 
 /// Console library idles between streams. `on_action` gets every overlay action plus what
 /// a launch needs: gamepad service, native display mode, the window display's HDR volume
-/// ([`window_display_hdr`]), a fresh `force_software` flag.
+/// ([`window_display_hdr`]), a fresh `force_software` flag, the presenter's Vulkan decode
+/// device.
 pub fn run_browse<F>(opts: SessionOpts, on_action: F) -> Result<()>
 where
     F: FnMut(
@@ -276,13 +278,14 @@ enum ModeCtl<'a> {
     Browse(OnAction<'a>),
 }
 
-/// Custom SDL event a decoded frame's arrival pushes (see [`StreamState::new`]).
-/// Pure wake-up: the loop drains the frame channel regardless of why it woke.
+/// Custom SDL event pushed when a decoded frame lands (see [`StreamState::new`]) and when a
+/// present completes. Pure wake-up: the loop drains the frame channel regardless of why it
+/// woke.
 struct FrameWake;
 
 /// What setup builds and every pass of the loop reads, across streams. Field order is
 /// drop order: the overlay before the presenter it renders on, the presenter before the
-/// window, the SDL context last.
+/// window, the SDL context after everything that uses it.
 struct Shell {
     overlay_damage: OverlayDamage,
     /// Ring Keyboard slot: hold text input on, which summons Steam's OSK under gamescope.
@@ -299,8 +302,8 @@ struct Shell {
     event_pump: sdl3::EventPump,
     /// Native display mode — the `0 = native` fallback for the requested stream mode.
     native: Mode,
-    /// Window focus and the gamescope overlay OR into one mask pushed on an edge.
-    /// Kept as separate inputs: either would otherwise clear the other's mask.
+    /// Window focus is one input to the pad mask (`ui_wants_mask`); `mask_applied` is what
+    /// was last pushed, so the mask changes on an edge only.
     focus_lost: bool,
     mask_applied: bool,
     /// Gaming Mode's Steam menu / QAM drive the same physical pad we forward, and
@@ -314,7 +317,8 @@ struct Shell {
     /// This launch's shortcuts, for the hints; the keyboard's engine over them.
     shortcuts: std::rc::Rc<pf_client_core::shortcuts::Shortcuts>,
     keys: shortcuts::Keys,
-    /// End game or a host action fired once, and when: the next fire within two seconds runs it.
+    /// End game or a dangerous host action fired once, and when: a second fire within
+    /// `shortcuts::ARM` runs it.
     armed: Option<(pf_client_core::overlay_actions::SlotId, Instant)>,
     /// Last audio-mute mask drawn and when it changed: a local mute's badge is timed off it.
     audio_mute_at: Instant,
@@ -378,7 +382,7 @@ struct StreamState {
     /// route its end back silently.
     canceled: bool,
     /// Redials of a lost session this stream is: 0 for a plain dial, and again once it
-    /// connects. A loss, or a failed redial, dials attempt `redials` next.
+    /// connects. A loss, or a failed redial, dials attempt `redials + 1` next.
     redials: u32,
     ready_announced: bool,
     mode_line: String,
@@ -390,8 +394,8 @@ struct StreamState {
     /// Video-leg e2e in ns, published on every presented frame for the audio plane.
     video_e2e: Option<Arc<std::sync::atomic::AtomicU64>>,
     hdr: bool,
-    /// OSD `HDR→SDR (raw)`: this lane showed PQ with no tone-map. Nothing sets it
-    /// today — every lane goes through planar CSC. Kept so a future bypass can say so.
+    /// OSD `HDR→SDR (raw)`: this lane showed PQ with no tone-map. Nothing sets it —
+    /// every lane goes through planar CSC. Kept so a future bypass can say so.
     hdr_untonemapped: bool,
     /// This second of presents: timings, latch misses, glass steps, busy retries.
     win: PresentWindow,
@@ -444,11 +448,13 @@ struct StreamState {
     /// Present-failure streaks and the once-per-session demote to software.
     health: PresentHealth,
     osd: Vec<HudLine>,
-    /// Last resize event's stamp. `Some` = pending; the tick fires once ~400 ms pass
-    /// with no further size events (never per drag-frame — each switch rebuilds the host).
+    /// Last resize event's stamp. `Some` = pending; the tick fires once `resize_decision`'s
+    /// debounce passes with no further size events (never per drag-frame — each switch
+    /// rebuilds the host).
     resize_pending: Option<Instant>,
-    /// When the last `Reconfigure` was sent — ≥ 1 s between requests. The accept ack
-    /// round-trips in milliseconds, so this also keeps at most ~one request outstanding.
+    /// When the last `Reconfigure` was sent; `resize_decision` spaces requests from it. The
+    /// accept ack round-trips in milliseconds, so this also keeps at most ~one request
+    /// outstanding.
     resize_sent_at: Option<Instant>,
     /// Last size and view actually requested. Each distinct ask at most once: a rejected
     /// one is not re-asked until it changes, and a host-side rollback cannot loop forever.
@@ -470,9 +476,9 @@ struct StreamState {
     /// Welcome advert, then every mid-session `AccessUpdate` (latest wins). Default is
     /// full control, permanent — what a host that never sent access decodes to.
     access: pf_client_core::access::SessionAccess,
-    /// Transient access toast and when it went up — cleared after
-    /// [`ACCESS_NOTICE_S`](shell::ACCESS_NOTICE_S). An access change outranks "click to
-    /// capture" for a few seconds.
+    /// Transient notice (an access change, a host action's answer, a confirm prompt) and when
+    /// it went up — cleared after [`ACCESS_NOTICE_S`](shell::ACCESS_NOTICE_S). An access
+    /// change outranks "click to capture" for a few seconds.
     session_notice: Option<(String, Instant)>,
     /// The ring's End game in flight: the title, and the host's answer once it lands.
     ending_game: Option<(
@@ -481,7 +487,8 @@ struct StreamState {
     )>,
     /// A shortcut's host action in flight: the host's answer, once it lands, is the notice.
     host_notice: Option<std::sync::mpsc::Receiver<String>>,
-    /// Gaming Mode touch-as-mouse: drops leaked Steam Input positions sent as deltas, once.
+    /// Gaming Mode touch-as-mouse: drops leaked Steam Input positions sent as deltas, and
+    /// says so once.
     touch_mouse: crate::touch::SteamTouchMouse,
     /// Host's pinned fingerprint once connected — the key the pre-fetched host-actions cache uses.
     fp_hex: String,
@@ -611,9 +618,9 @@ fn run_inner(opts: SessionOpts, mut mode: ModeCtl) -> Result<Outcome> {
     })();
 
     // Every loop exit, errors included, converges here, so gamepad teardown belongs here,
-    // not on the individual breaks. `detach` only queues; the close (flush, GamepadRemove,
-    // rumble stop) runs when the pump drains it. Breaking immediately after detach leaves
-    // pads unflushed and, if rumbling, still buzzing.
+    // not on the individual breaks. `shutdown` closes every slot itself (flush,
+    // GamepadRemove, rumble stop); `GamepadService::detach` only queues a close that waits
+    // for the next pump tick.
     sh.pump.shutdown();
     // Join the pump before the device-wide idle: its decode submissions would race
     // vkDeviceWaitIdle otherwise.

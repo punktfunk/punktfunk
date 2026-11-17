@@ -171,8 +171,8 @@ pub fn pair_and_save(
         .map(|fp| save_paired(name, addr, port, fp, mac))
 }
 
-/// The host waits 180 s for its operator to decide; this outlasts it so the client hears
-/// the host's own timeout.
+/// The host waits `PENDING_APPROVAL_WAIT` for its operator to decide; this outlasts it so the
+/// client hears the host's own timeout.
 pub const REQUEST_ACCESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(185);
 
 /// The code this device shows while it waits for approval, or `None` for a certificate that

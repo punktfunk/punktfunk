@@ -1071,14 +1071,15 @@ fn ps5_shots() {
     });
 }
 
-/// Website captures, each device at its panel size and the scale its client passes.
+/// Website captures, each device at its panel size and the scale its client passes, bar the
+/// Android phone and tablet.
 /// `PF_CONSOLE_STORE=<dir> cargo test -p pf-console-ui -- --ignored website_shots`.
 /// Apple scales are `ConsoleView.designScale`: iOS is screen scale × 0.75 on a phone and × 1
 /// on an iPad; macOS is max(short side px / 800, backing × 0.75). webOS passes none, so a
 /// panel takes the couch k = height / 800: 1.35 at 1080p, 2.7 at 4K. The Deck is twice its
-/// 1280×800 panel: k = 2 draws its 1× layout sharp enough for a close render. An Android phone
-/// or tablet passes none either, at 2400×1080 and 2560×1600. No safe-area
-/// insets: the backdrop runs edge to edge.
+/// 1280×800 panel: k = 2 draws its 1× layout sharp enough for a close render. The phone and
+/// tablet rows pass none and take the couch k; the Android client passes its own scale
+/// there (`SkiaConsoleShell.kt`). No safe-area insets: the backdrop runs edge to edge.
 #[test]
 #[ignore]
 fn website_shots() {

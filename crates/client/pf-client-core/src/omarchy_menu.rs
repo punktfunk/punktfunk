@@ -2,8 +2,8 @@
 //!
 //! One managed block in `~/.config/omarchy/extensions/omarchy-menu.jsonc`: a
 //! `punktfunk` submenu, Open, couch console, and a connect (and wake) row per
-//! saved host. Reusing the host tool's `"punktfunk"` root id is the format's
-//! own override rule — both packages merge into one submenu.
+//! saved host. The client owns the `"punktfunk"` root id; the host tool's rows sit
+//! under `"punktfunk-host"`.
 //!
 //! The menu cannot generate rows (`provider` is a map baked into the shell),
 //! so rows are static. [`sync_if_enabled`] rewrites the block from the

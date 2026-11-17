@@ -304,7 +304,7 @@ impl Plate {
             return;
         }
         if std::mem::take(&mut self.waiting) && empty && self.fresh {
-            // No plate left one: the first appears in place, as it always did.
+            // No plate left one: the first appears in place.
             self.shown = 1.0;
         }
         if self.edges.is_none() {

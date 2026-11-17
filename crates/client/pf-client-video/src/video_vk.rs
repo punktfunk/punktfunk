@@ -140,7 +140,7 @@ impl Drop for QueueLockGuard<'_> {
 ///
 /// The bundle exists with or without Vulkan Video: `video_decode` gates that
 /// rung while vendor and import facts keep answering either way. Plain integers:
-/// this crate has no ash. Handles stay valid for the owner's lifetime, which
+/// this module names no ash type. Handles stay valid for the owner's lifetime, which
 /// outlives every session pump.
 #[derive(Clone)]
 pub struct VulkanDecodeDevice {
@@ -152,7 +152,7 @@ pub struct VulkanDecodeDevice {
     /// PCI vendor of the presenter's physical device (0x10DE NVIDIA, 0x1002 AMD,
     /// 0x8086 Intel) — drives [`Self::prefer_vulkan_first`].
     pub vendor_id: u32,
-    /// Driver device-name string (logged on admission refusal).
+    /// Driver device-name string (logged when a `native-vulkan` pin is refused).
     pub device_name: String,
     /// The presenter's graphics+present family.
     pub graphics_qf: u32,
@@ -165,7 +165,7 @@ pub struct VulkanDecodeDevice {
     /// verbatim into pinned create-info, so they must match reality.
     pub instance_extensions: Vec<std::ffi::CString>,
     pub device_extensions: Vec<std::ffi::CString>,
-    /// Features enabled at device creation (reported via `device_features`).
+    /// Features enabled at device creation.
     pub f_sampler_ycbcr: bool,
     pub f_timeline_semaphore: bool,
     pub f_synchronization2: bool,

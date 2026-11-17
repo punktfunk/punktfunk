@@ -343,7 +343,7 @@ fn up_reaches_the_pills_from_the_grids_top_row_only() {
         library_view: LibraryView::Grid.id().to_string(),
         ..Default::default()
     };
-    // No test draws a frame; navigation reads this.
+    // This test draws no frame; navigation reads the last drawn column count.
     s.grid_cols_last = Some(3);
     press(&mut s, &library, &mut settings, down());
     assert_eq!(s.view_mode, LibraryView::Grid);
@@ -760,7 +760,8 @@ fn a_cached_poster_is_bounded_by_the_size_it_is_drawn_at() {
     }
 }
 
-/// 8-col clamp × ~3 visible rows; 6 is generous. `k` is height/800, so row count is stable.
+/// 8 columns at 16:9 × ~3 visible rows; 6 is generous. `k` is height/800, so the row count
+/// is stable.
 const SCREENFUL: usize = 8 * 6;
 
 /// What one screen of covers plus the render targets holds at `k`, bytes.
@@ -790,9 +791,9 @@ fn a_screenful_of_covers_fits_the_gpu_budget() {
 
 /// The floor a memory-tight host may pass, pinned to what 1080p actually needs.
 ///
-/// A television is `k` 1.35, and this is the number a TV client copies instead of
-/// guessing a fraction of the desktop default — a guess that put webOS on 64 MB,
-/// under the working set, re-decoding covers on the render thread every frame.
+/// A television is `k` 1.35. A TV client should copy this number, not a fraction of the
+/// desktop default: a cache under the working set re-decodes covers on the render thread
+/// every frame.
 #[test]
 fn the_gpu_budget_floor_covers_a_1080p_screenful() {
     for src in [(600, 900), (1000, 1500)] {
@@ -821,8 +822,7 @@ fn never_drawn_posters_are_evicted_before_merely_old_ones() {
     assert!(dropped.contains(&"g9".to_string()));
 }
 
-/// Platform-less Steam collates as store: `[None, None]` is one collection, `[Some, None]` two.
-/// 200 titles in the grid, the desktop tile's band above them.
+/// 200 titles in the grid, the desktop tile leading them.
 fn long_grid() -> (
     LibraryScreen,
     LibraryShared,
@@ -981,6 +981,7 @@ fn a_finger_pans_the_grid_until_the_pad_moves_focus() {
     assert!(!s.geom[focus].is_empty(), "focus {focus} back in view");
 }
 
+/// Platform-less Steam collates as store: `[None, None]` is one collection, `[Some, None]` two.
 fn games(spec: &[(&str, Option<&str>)]) -> Vec<LibraryGame> {
     spec.iter()
         .enumerate()
@@ -1265,8 +1266,8 @@ fn screens_on_one_host_share_a_cover() {
     assert!(!second.decoder.pending("g0"));
 }
 
-/// The decoder takes [`DECODE_QUEUE`] covers and then none until some finish, so a scroll's
-/// covers wait behind a bounded queue and not behind every cover it passed.
+/// The decoder has room for [`DECODE_QUEUE`] covers and then none until some finish, so a
+/// scroll's covers wait behind a bounded queue and not behind every cover it passed.
 #[test]
 fn the_decoder_queue_is_bounded() {
     let mut decoder = art::ArtDecoder::default();

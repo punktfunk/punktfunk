@@ -4,7 +4,7 @@
 //! Screen state stays plain data; `view()` rebuilds the tree each frame, so nothing is
 //! diffed. [`Tree`] keeps only what outlives a frame, keyed by [`Id`]: scroll offsets and
 //! the last painted rects. Layout is in device pixels; hand-drawn content is a
-//! [`Kind::Paint`] node that receives its rect, exactly what today's painters take.
+//! [`Kind::Paint`] node whose [`Painter`] receives its rect.
 //!
 //! A [`Kind::Scroll`] clips and offsets its children; [`Tree::follow`] glides it to keep
 //! the focused child in view, and a finger pans and flings it. A long list goes under it

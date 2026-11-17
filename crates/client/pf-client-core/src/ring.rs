@@ -42,9 +42,10 @@ pub enum RingCommand {
     },
     /// A custom chord as key NAMES (`ctrl`, `shift`, `escape`); see `overlay_actions::key_vk`.
     Shortcut(Vec<String>),
-    /// A synthetic tap of one system button on the host's pad — a `gamepad::wire::BTN_*` bit
-    /// (guide or `MISC1`), the same verb the session control socket exposes. `MISC1` is the
-    /// Quick Access action: the embedder presses what that pad's host device reads as it
+    /// A synthetic tap of one system button on the host's pad — a
+    /// `punktfunk_core::input::gamepad::BTN_*` bit (guide or `MISC1`), the same verb the
+    /// session control socket exposes. `MISC1` is the Quick Access action: the embedder
+    /// presses what that pad's host device reads as it
     /// (`punktfunk_core::input::gamepad::quick_access_presses`).
     TapButton(u32),
     /// Step [`RingFacts::pad_mouse_target`] to the next controller-mouse mode: off, touchpad,
@@ -166,7 +167,8 @@ pub struct RingFacts {
     /// Touch-model name: `trackpad` / `pointer` / `touch` / `off`.
     pub touch_mode: String,
     pub invert_scroll: bool,
-    /// Without this the `touch` model is skipped.
+    /// The host takes touch input (`HOST_CAP2_TOUCH`); `CycleTouchMode` skips the `touch` model
+    /// without it.
     pub host_accepts_touch: bool,
     pub stats_tier: String,
     pub mic_available: bool,

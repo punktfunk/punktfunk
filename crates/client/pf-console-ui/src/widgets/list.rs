@@ -62,7 +62,7 @@ pub struct RowSpec {
     pub note: Option<String>,
     /// A loss: label and value in the error tone.
     pub danger: bool,
-    /// Accent dot before the label — a value this scope overrides.
+    /// Accent dot at the value's trailing end — a value this scope overrides.
     pub dot: bool,
     /// Round icon buttons after the value (rename, remove). The pointer shells' rows carry
     /// these; a pad steps onto them with left/right, which is the screen's to track.
@@ -122,7 +122,7 @@ impl RowSpec {
         }
     }
 
-    /// A switch row. Activate flips it; the value string is the switch.
+    /// A switch row. Activate flips it; the switch draws in place of the On/Off value string.
     pub fn toggle(label: impl Into<String>, on: bool) -> RowSpec {
         RowSpec {
             label: label.into(),
@@ -412,7 +412,7 @@ pub fn blurb(canvas: &Canvas, ui: &Frame, fonts: &Fonts, text: &str, rect: Rect,
     )
 }
 
-/// The gutter a status dot takes before every row, when any row has one.
+/// The gutter a status dot takes at the end of every row's value field, when any row has one.
 fn dot_gutter(rows: &[RowSpec], k: f64) -> f64 {
     if rows.iter().any(|r| r.dot) {
         16.0 * k
@@ -470,8 +470,7 @@ fn track_rect(cell: Rect, row: &RowSpec, k: f64, dot_gutter: f64) -> Rect {
 const SLIP_DP: f64 = 14.0;
 /// Cap so a held repeat is one travel, not a value thrown off the row.
 const SLIP_MAX: f64 = 22.0;
-/// Confirm-dip floor (visual sibling of the haptic).
-/// Mount rise, design units. A twelfth of the carousel travel — same language, smaller.
+/// Mount rise, design units: the same as the carousel's `crate::anim::ENTER_RISE`.
 const ROW_RISE: f64 = 12.0;
 
 /// Room above a list's first row and left of its column for the plate's outset, design units.
@@ -1030,7 +1029,7 @@ impl MenuList {
         active: bool,
     ) -> bool {
         // Rows are cells in a scroll column, `ROW_GAP` apart, a header band above a
-        // sectioned row. Each cell's painter draws the row as it always has.
+        // sectioned row. Each cell's painter draws one row.
         let list = Id::new(LIST, 0);
         let col = column(ui, rect, k);
         let row_w = f64::from(col.width());
@@ -1212,8 +1211,8 @@ impl MenuList {
         crate::theme::panel(canvas, ui, r, 14.0, tint, stroke, k as f32);
 
         // A note under the label lifts the label; the two share the row's height. The value
-        // stays on the row's centre line with the switch and the chevrons — lifted with the
-        // label it sat visibly above them on every row that carries a note.
+        // stays on the row's centre line with the switch and the chevrons: lifted with the
+        // label it would sit above them.
         let centred = cy + 16.0 * k * 0.36;
         let baseline = if row.note.is_some() {
             cy - 2.0 * k
@@ -2211,7 +2210,7 @@ mod tests {
             "three-quarter fill lights the midpoint: {:?}",
             px(&on, mid)
         );
-        // The icon sits in the gutter the label used to start in, so its box holds ink. A box,
+        // The icon sits in the gutter before the label, so its box holds ink. A box,
         // not one pixel: the sun's centre is hollow and would read the row's ground.
         let gutter = (f64::from(r0.left) + 26.0, f64::from(r0.center_y()));
         let inked = (-10..=10).any(|dy| {

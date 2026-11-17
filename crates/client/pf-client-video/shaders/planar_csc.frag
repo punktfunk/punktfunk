@@ -1,9 +1,8 @@
-// Planar 3-plane YCbCr → RGBA — the PyroWave variant of nv12_csc.frag (separate Cb and
-// Cr R8 planes instead of an interleaved CbCr plane; design/pyrowave-codec-plan.md §4.5).
+// Planar 3-plane YCbCr → RGBA — the PyroWave and CPU-rung variant of nv12_csc.frag (separate
+// Cb and Cr planes instead of an interleaved CbCr plane; design/pyrowave-codec-plan.md §4.5).
 // Same push-constant contract (csc_rows precomputes the matrix + range expansion), same
-// output modes — though PyroWave itself is 8-bit SDR BT.709 limited, keeping parity means
-// one less divergence if the codec ever signals more. 4:4:4 needs no shader change: the
-// chroma planes arrive full-res and the siting correction self-disables.
+// output modes. 4:4:4 needs no shader change: the chroma planes arrive full-res and the
+// siting correction self-disables.
 //
 // Regenerate: shaders/build.sh (committed .spv, no build-time toolchain).
 #version 450

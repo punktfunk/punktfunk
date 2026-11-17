@@ -2,7 +2,7 @@
 //!
 //! [`crate::collate`] groups the shelf's list. OK on a tile pushes a `LibraryScreen` with
 //! the group as its filter rather than a filtered copy, so the art pump, fetch, and shared
-//! model never learn a collection exists. Tile metrics match the home's host tile.
+//! model never learn a collection exists. A tile is as wide as the home's host tile.
 
 use crate::collate::{collate, worth_browsing, GroupBy, GroupKey, SortKey};
 use crate::library::{initials, LibraryGame};
@@ -10,7 +10,7 @@ use crate::theme::{art_sampling, fill, stroke, Fonts, Frame, PanelStroke, W};
 use skia_safe::{Canvas, Color4f, Image, Matrix, Point, RRect, Rect, TileMode};
 use std::collections::HashMap;
 
-// Same numbers as home.rs — a collection tile is a host tile.
+// Same width as home.rs's host tile; the height and corner are this tile's own.
 pub(crate) const TILE_W: f64 = 340.0;
 pub(crate) const TILE_H: f64 = 224.0;
 pub(crate) const TILE_CORNER: f64 = 26.0;
@@ -108,7 +108,7 @@ pub(crate) fn paint_tile(
     // Never deeper than the group has titles. `have` is compact, so covers fill
     // from the front and ghosts trail.
     let slots = FAN.min(c.count.max(1));
-    // Device-pixel floor, same as `panel_highlight`: a sub-pixel hairline smears.
+    // Device-pixel floor, same as `theme::panel`: a sub-pixel hairline smears.
     let hair = fk.max(1.0) as f32;
     // Back to front so `fan[0]` (sort-first, the group's face) lands on top.
     for n in (0..slots).rev() {

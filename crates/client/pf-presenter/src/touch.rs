@@ -4,7 +4,7 @@
 //! The `touch` model never reaches here: those contacts go on the wire as
 //! real multi-touch (`Capture::on_touch_*`).
 //!
-//! `trackpad` (default): cursor stays put on down; relative delta with mild
+//! `trackpad`: cursor stays put on down; relative delta with mild
 //! acceleration. `pointer`: cursor jumps to the finger (absolute, letterbox).
 //! Tap = left click · two-finger tap = right · two-finger drag = scroll ·
 //! tap-then-press = held left drag · three-finger tap = cycle stats overlay.
@@ -44,7 +44,7 @@ const DIAL_FRAME_MS: f64 = 4.0;
 /// ms of stillness on the other finger: a thumb-pivot is a real twist and never
 /// completes a same-frame pair.
 const DIAL_PIVOT_MS: f64 = 50.0;
-/// Finger-px → host-px gain (~1:1).
+/// Base finger-px → host-px gain, before acceleration.
 const POINTER_SENS: f32 = 1.3;
 /// Extra gain per px/ms above `ACCEL_SPEED_FLOOR`. `ACCEL_MAX` stops a fast swipe
 /// flinging the cursor.
@@ -78,8 +78,8 @@ pub enum TouchScrollPhase {
 }
 
 /// Wire intent. `Capture` in `input.rs` sends each one and folds `CycleStats` back
-/// to the run loop; the `InputKind` translation lives there so this crate stays
-/// free of core.
+/// to the run loop; the `InputKind` translation lives there so this module takes no
+/// `punktfunk_core` dependency.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Act {
     MoveRel {

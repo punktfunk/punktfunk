@@ -1,6 +1,6 @@
 //! Decoder-input capture behind `PUNKTFUNK_DUMP_VIDEO`.
 //!
-//! Writes each AU as [`crate::video::Decoder::decode_frame`] received it.
+//! Writes each AU the session pump admits, before the AV1 intake rule and the decoder see it.
 //! The data file is the raw concatenation (a valid Annex-B / OBU stream for
 //! clean captures). The sidecar `.idx` holds what a byte stream cannot:
 //! `offset len flags complete` per AU, so fixtures do not re-parse start codes.
@@ -33,8 +33,8 @@ fn codec_ext(codec: u8) -> &'static str {
 }
 
 impl AuDump {
-    /// `PUNKTFUNK_DUMP_VIDEO` directory. `None` if unset or the files could not
-    /// be created; both cases are already logged.
+    /// `PUNKTFUNK_DUMP_VIDEO` directory. `None` if unset, or if the files could not
+    /// be created (that case is logged).
     pub fn from_env(codec: u8) -> Option<AuDump> {
         let dir = std::env::var_os("PUNKTFUNK_DUMP_VIDEO")?;
         let stamp = std::time::SystemTime::now()

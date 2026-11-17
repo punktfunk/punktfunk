@@ -8,8 +8,7 @@ use skia_safe::{Canvas, Rect};
 /// Strip band height, including air under the pills before the first row.
 pub const TAB_STRIP_H: f64 = 46.0;
 
-/// Pill row inside the band: top 2, height 30; the remaining 14 is air below.
-/// Published so a backdrop (library focus wash) uses the row, not the 46 band.
+/// Pill row inside the band: top 2, height 30; the rest of the band is air below.
 pub const TAB_PILL_TOP: f64 = 2.0;
 pub const TAB_PILL_H: f64 = 30.0;
 

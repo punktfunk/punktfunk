@@ -1,5 +1,6 @@
 //! App settings: the persisted [`Settings`] model, its typed views, and the preset
-//! resolver every front-end and the session go through. `trust` re-exports all of it.
+//! resolver every front-end and the session go through. `trust` re-exports `Settings`, the
+//! touch, mouse, presentation and overlay enums, and the resolvers.
 
 use crate::presets::{PresetsFile, Resolution, StreamPreset};
 use crate::trust::{
@@ -232,12 +233,12 @@ pub struct Settings {
     /// hosts ignore it.
     #[serde(default)]
     pub keep_host_audio: bool,
-    /// Preferred video codec: `"auto"` (host decides), `"hevc"`, `"h264"`, or `"av1"`.
-    /// Soft preference — the host honors it when it can, else falls back.
+    /// Preferred video codec: `"auto"` (host decides), `"hevc"`, `"h264"`, `"av1"`, or
+    /// `"pyrowave"`. Soft preference — the host honors it when it can, else falls back.
     #[serde(default = "default_codec")]
     pub codec: String,
     /// Decoder preference: `"auto"` (vendor-ordered native ladder), `"native-vulkan"`,
-    /// `"native-vaapi"`, `"native-d3d11va"`, or `"software"`.
+    /// `"native-vaapi"`, `"native-d3d11va"`, `"native-v4l2"`, or `"software"`.
     ///
     /// A stored value is not validated. Pre-native spellings `"vulkan"`/`"vaapi"`/`"d3d11va"`
     /// map in `video::migrate_decoder_pref` at warn; the store is not rewritten, so a
@@ -250,8 +251,8 @@ pub struct Settings {
     /// headroom; per-preset because a desktop wants it and a game usually does not.
     #[serde(default)]
     pub enable_444: bool,
-    /// Advertise 10-bit + HDR10. Off means never send HDR. Default true: Linux stores
-    /// never carried this and always advertised.
+    /// Advertise 10-bit + HDR10. Off means never send HDR. Default true, so a store
+    /// without the key advertises.
     #[serde(default = "default_true")]
     pub hdr_enabled: bool,
     /// Advertise 10-bit without HDR (`VIDEO_CAP_10BIT`): SDR desktop at Main10.
@@ -276,7 +277,7 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub vsync: bool,
     /// Let a VRR display follow the stream cadence when fullscreen. Inert on
-    /// fixed-refresh (measured from on-glass timestamps). Default on.
+    /// fixed-refresh displays. Default on.
     ///
     /// Desktop only, and deliberately absent on Android: that client pins a fixed display mode
     /// and declares its surface FIXED_SOURCE, because OEM refresh governors ignore the advisory
@@ -330,8 +331,9 @@ pub struct Settings {
     /// No portable OS "reduce motion" via SDL; also the OLED-friendly mode.
     #[serde(default)]
     pub reduce_motion: bool,
-    /// Library order within a group: `""`/unknown = host order, `"title"`,
-    /// `"platform"`, or `"store"`. Presentation only; unknown → default shelf.
+    /// Library order within a group: `""`/unknown = host order, `"title"`, `"platform"`,
+    /// `"store"`, `"recent"` or `"playtime"` ([`crate::collate::SortKey`]). Presentation only;
+    /// unknown → default shelf.
     #[serde(default)]
     pub library_sort: String,
     /// Library arrangement: `"grid"` (default, and unknown values) or `"shelf"`.
@@ -380,14 +382,14 @@ pub struct Settings {
     pub pad_rumble: bool,
     /// DualSense voice-coil haptics (0xD1 kind 0) on the pad, over USB or Bluetooth.
     /// Gates `CLIENT_CAP_PAD_AUDIO`; wire rumble is suppressed while the stream is
-    /// live (see `gamepad.rs`). Default on: no-op without a capable host and a DS5.
+    /// live (see `gamepad/feedback.rs`). Default on: no-op without a capable host and a DS5.
     #[serde(default = "default_true")]
     pub pad_haptics: bool,
     /// DualSense speaker stream (0xD1 kind 1): `"pad"` (default), `"mix"` (renders
     /// as `"off"` today; see `pad_audio::speaker_active`), or `"off"`.
     #[serde(default = "default_pad_speaker")]
     pub pad_speaker: String,
-    /// Stream mode follows the session window (design/midstream-resolution-resize.md).
+    /// Stream mode follows the session window.
     /// Overrides `width`/`height` while on; fullscreen degenerates to the display's
     /// native mode. Default off until per-backend validation is green.
     pub match_window: bool,
@@ -455,7 +457,7 @@ pub enum GamepadUi {
     Always,
 }
 
-/// Opus plane — the one an older client's store must load as. Named from `session`
+/// Opus plane — the one an older client's store must load as. Named from `audio_format`
 /// so the default and the menu's first row cannot be two different strings.
 fn default_audio_format() -> String {
     crate::audio_format::AUDIO_FORMAT_OPUS.into()

@@ -1,12 +1,13 @@
 //! In-stream quick-action ring (`design/touch-client-overlay.md`).
 //!
 //! Six slots plus a centre "More" that opens the sheet. A twist (`RingInput::Turn`)
-//! drives the opening; `⌃⌥⇧O` opens it at the window centre. No icon font: a
-//! button carries a short text label, a shortcut its keycap chord.
+//! drives the opening; an `Action::Ring` shortcut (`RingInput::Toggle`) opens it at the
+//! window centre. A slot shows its icon, a pad type its pad mark, a shortcut its keycap
+//! chord; a slot with none of these shows a short text label.
 //!
-//! Contract: nothing is drawn while closed; every pointer event is consumed while
-//! open (the scrim). Commands leave via [`Ring::take_command`]; host actions via
-//! [`Ring::take_cmds`].
+//! Contract: nothing is drawn while closed; every pointer event but a pan or long-press
+//! offer is consumed while open (the scrim). Commands leave via [`Ring::take_command`];
+//! host actions via [`Ring::take_cmds`].
 
 use crate::anim::{approach, springs, Spring};
 use crate::input::Key;
@@ -116,7 +117,8 @@ fn preview_host_label(id: &str) -> &str {
 }
 
 /// What an armed slot says until the second press. A host action this client has no words
-/// for goes by the host's own `label`. Only End stream, End game and host actions arm.
+/// for goes by the host's own `label`. Only End stream, End game and host actions with
+/// `danger` arm.
 fn confirm_text(slot: &SlotId, label: &str) -> String {
     match slot {
         SlotId::EndStream => c::ring_end_stream_confirm().into(),
@@ -268,8 +270,6 @@ impl Ring {
         self.facts = facts.clone();
     }
 
-    // In-stream surface (`skia_overlay`), so a build without that overlay sees these unused.
-    // `allow` rather than `cfg`, which would cascade into the parameter types' imports.
     pub fn input(&mut self, input: RingInput) {
         match input {
             RingInput::Turn {
@@ -917,8 +917,9 @@ impl Ring {
         }
     }
 
-    /// Consumed while open (the scrim). Editor: only hits on a disc or an in-flight
-    /// carry, so widgets under the ring keep their pointer.
+    /// Consumed while open (the scrim), bar the pan and long-press offers it declines.
+    /// Editor: only hits on a disc or an in-flight carry, so widgets under the ring keep
+    /// their pointer.
     pub(crate) fn pointer(&mut self, p: Pointer) -> bool {
         if !self.open() {
             return false;
@@ -1107,8 +1108,7 @@ impl Ring {
                 Some(MenuPulse::Move)
             }
             // Up is 12 o'clock, down is 6 — and once there, on into the centre, which is
-            // inside the ring. Without that a keyboard reaches the sheet only through Y,
-            // a letter nothing on screen names.
+            // inside the ring.
             MenuEvent::Move(MenuDir::Up) => {
                 self.highlight = Some(if h == 0 { 6 } else { 0 });
                 Some(MenuPulse::Move)
@@ -1570,7 +1570,7 @@ fn draw_disc(
         white(0.35 * alpha)
     };
     let size = f64::from(12.0 * scale * (r / (SLOT_D * scale / 2.0)).clamp(0.6, 1.2));
-    // Shortcut: stacked keycap. One line ran to the disc's edge and past it.
+    // Shortcut: stacked keycap, since one line overruns the disc.
     if spec.id.starts_with("shortcut:") && spec.short.contains('+') {
         keycap_text(canvas, fonts, x, y, r, size, &spec.short, color);
         return;
@@ -1765,9 +1765,8 @@ mod tests {
         assert!(!r.open());
     }
 
-    /// A keyboard has no stick to release, so every stop has to be reachable from the keys.
-    /// The centre used to be reachable only through Y, which nothing on screen names, and the
-    /// dial opened highlighting nothing while Enter already meant the centre.
+    /// A keyboard has no stick to release, so every stop has to be reachable from the keys,
+    /// and the dial opens on the centre, where Enter already goes.
     #[test]
     fn a_keyboard_reaches_every_stop_on_the_dial() {
         let mut r = Ring::new();
@@ -1814,8 +1813,7 @@ mod tests {
     }
 
     /// The sheet is the whole catalogue, so an action the ring can actually fire must be on
-    /// it. `stream_mute` reached the editor's palette and not this list, which left a JOIN
-    /// client spending one of its six discs to silence itself.
+    /// it.
     #[test]
     fn the_sheet_offers_every_action_this_platform_can_fire() {
         let desktop = RingFacts {

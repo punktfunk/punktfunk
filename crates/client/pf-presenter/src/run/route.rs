@@ -9,7 +9,8 @@
 /// What the route knows of an SDL event.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Kind {
-    /// A first key press: one of the loop's chords, or Super.
+    /// A first key press. `chord`: it fired one of the loop's chords; `super_key`: it is
+    /// Super.
     Key {
         chord: bool,
         super_key: bool,

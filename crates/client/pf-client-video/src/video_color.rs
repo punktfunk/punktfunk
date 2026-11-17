@@ -189,7 +189,7 @@ mod tests {
         }
     }
 
-    /// Same coefficients as `video_gl::yuv_to_rgb`, column-major packing.
+    /// Same coefficients as an independent column-major (GLSL `mat3`) apply.
     #[test]
     fn rows_match_the_gl_matrix_form() {
         for (matrix, full) in [(1u8, false), (1, true), (5, false), (9, false), (9, true)] {

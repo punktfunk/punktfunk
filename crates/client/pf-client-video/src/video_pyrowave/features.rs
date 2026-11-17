@@ -19,8 +19,8 @@ pub const MIN_API: u32 = vk::API_VERSION_1_1;
 
 /// What the codec and this lane turn on. Only `int16` and the two subgroup facts are
 /// required: pyrowave picks other paths without the rest, and the decoder fences its
-/// submits without `timeline`. Its storage-buffer kernels read 16-bit words, so
-/// `storage16` goes on wherever it exists.
+/// submits without `timeline`. Its storage-buffer kernels read 16-bit words; `pyrowave_bench`
+/// turns `storage16` on where the device has it, the presenter (`f_storage_buffer16`) never.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Facts {
     pub int16: bool,

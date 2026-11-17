@@ -245,7 +245,7 @@ fn draw_card(canvas: &Canvas, fonts: &Fonts, p: &Palette, rect: Rect, chosen: bo
     let rgb = |(r, g, b): (f64, f64, f64), a: f32| Color4f::new(r as f32, g as f32, b as f32, a);
     canvas.save();
     canvas.clip_rrect(rr, ClipOp::Intersect, true);
-    // The field's gradient along its backdrop diagonal: the stops the shader blends,
+    // The field's stops, evenly spaced along the card's diagonal: what the shader blends,
     // without the noise. Enough to tell the palettes apart at card size.
     let colors: Vec<Color4f> = p
         .stops

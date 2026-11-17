@@ -1,5 +1,6 @@
-// PQ BT.2020 → SDR BT.709 for an 8-bit sRGB target, shared by nv12_csc.frag and planar_csc.frag.
-// The same curve as the host's gamescope capture (patch 0017) and the Apple presenter: BT.2390
+// PQ BT.2020 → SDR BT.709 for an 8-bit sRGB target, shared by nv12_csc.frag, planar_csc.frag
+// and ycbcr_csc.frag. overlay_pq.frag includes this file for `pq_oetf`.
+// The same curve as the host's gamescope capture (patch 0018) and the Apple presenter: BT.2390
 // EETF in PQ from a `peak`×203-nit source onto 203-nit SDR white, applied to max(R,G,B) in
 // linear BT.709 so hue holds. Below ~88 nits (1000-nit source) it is the identity.
 
