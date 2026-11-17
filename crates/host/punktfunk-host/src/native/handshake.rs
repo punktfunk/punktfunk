@@ -416,6 +416,12 @@ fn pen_reaches(compositor: Option<crate::vdisplay::Compositor>) -> bool {
     compositor != Some(crate::vdisplay::Compositor::Gamescope)
 }
 
+/// [`pen_reaches`], and the compositor has said it reads uinput devices: `negotiate_compositor`
+/// asked it. A headless one reads none, and a device made for it would swallow its input.
+fn uinput_reaches(compositor: Option<crate::vdisplay::Compositor>) -> bool {
+    pen_reaches(compositor) && crate::inject::uinput_reach_known()
+}
+
 /// The touchpad features a session on `compositor` gets: the pad where the injector has one
 /// and the pen reaches ([`pen_reaches`]: gamescope gets neither), taps only beside it.
 fn touchpad_offer(
@@ -1077,7 +1083,7 @@ fn server_hello(n: &Negotiation<'_>, t: &SessionTerms, welcome: Welcome) -> Serv
         .with(punktfunk_core::quic::v2::registry::FEATURE_STUDIO_RANGE_HDR)
         .union(touchpad_offer(
             t.compositor,
-            crate::inject::touchpad_supported(),
+            crate::inject::touchpad_supported() && uinput_reaches(t.compositor),
             crate::inject::touchpad_taps(),
         ));
     // Further screens only where this session builds displays of its own on a compositor with
@@ -1461,7 +1467,7 @@ fn welcome_host_caps(n: &Negotiation<'_>, t: &SessionTerms) -> u8 {
         }
         // Pen batches → per-session uinput tablet. Without the bit, clients fold pen into
         // touch/pointer and `NativeClient::send_pen` refuses.
-        | if crate::inject::pen_supported() && pen_reaches(t.compositor) {
+        | if crate::inject::pen_supported() && uinput_reaches(t.compositor) {
             punktfunk_core::quic::HOST_CAP_PEN
         } else {
             0
@@ -1589,6 +1595,13 @@ async fn negotiate_compositor(
     // Split the pair: compositor for Welcome/cursor; gamescope route as a value, not process env.
     let gamescope_route = compositor.as_ref().and_then(|(_, r)| r.clone());
     let compositor = compositor.map(|(c, _)| c);
+    // The Welcome's pen and touchpad offers read the answer. A desktop gives it in about
+    // 100 ms; a headless one never does, and the connect does not wait out its two seconds.
+    #[cfg(target_os = "linux")]
+    if compositor.is_some_and(|c| pen_reaches(Some(c))) {
+        let asked = tokio::task::spawn_blocking(crate::inject::uinput_reaches);
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), asked).await;
+    }
     Ok((compositor, gamescope_route))
 }
 
