@@ -95,8 +95,8 @@ fn write_rows(path: &Path, rows: Option<&str>) -> Result<(), String> {
 /// reaps the child: every known-hosts save lands here, and a dropped `Child` is a zombie.
 fn refresh() {
     let mut cmd = std::process::Command::new("omarchy-menu");
-    // Login sessions export OMARCHY_PATH; ssh and a bare TTY do not, and the
-    // wrapper dies on the missing var. Seed the packaged default.
+    // A process started outside an Omarchy shell or the uwsm session (`ssh host cmd`)
+    // may lack OMARCHY_PATH, and `omarchy-shell` exits without it. Seed the packaged default.
     if std::env::var_os("OMARCHY_PATH").is_none() {
         cmd.env("OMARCHY_PATH", "/usr/share/omarchy");
     }

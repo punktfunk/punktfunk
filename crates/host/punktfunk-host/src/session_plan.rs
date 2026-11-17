@@ -109,9 +109,10 @@ pub struct SessionPlan {
     /// resolves uses it. The host's row `pyrowave_bpp` until the native handshake sets the
     /// client's.
     pub pyrowave_bpp: f64,
-    /// Encoder composites cursor bitmaps. Set only via [`cursor_blend_for`]: Linux
-    /// when the encoder is the compositing stage; Windows always `false` (IDD
-    /// composites the pointer). Encoders whose fast path cannot blend stay off
+    /// Encoder composites cursor bitmaps. Decided by [`cursor_blend_for`], or by its blend term
+    /// `encoder_blends_cursor` where a GameStream plan knows no compositor yet; a further
+    /// screen forces it off. Linux when the encoder is the compositing stage; Windows always
+    /// `false` (IDD composites the pointer). Encoders whose fast path cannot blend stay off
     /// those shapes — see [`Self::output_format`] and `Resolved::cursor_blend_capable`.
     pub cursor_blend: bool,
     /// Client draws the pointer locally, so `cursor_blend` is off and (on Windows)
@@ -210,7 +211,8 @@ pub const DEFAULT_SLICES: u32 = 4;
 
 /// Slices per frame a native client takes: 1 without
 /// [`VIDEO_CAP_MULTI_SLICE`](punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE), else its
-/// `ClientHello` ask, else [`DEFAULT_SLICES`]. An ask past 32 (NVENC's limit) is no ask.
+/// `ClientHello` ask, else [`DEFAULT_SLICES`]. An ask past 32 (the `PUNKTFUNK_NVENC_SLICES`
+/// range) is no ask.
 pub fn client_slices(video_caps: u8, asked: u8) -> u32 {
     if video_caps & punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE == 0 {
         return 1;

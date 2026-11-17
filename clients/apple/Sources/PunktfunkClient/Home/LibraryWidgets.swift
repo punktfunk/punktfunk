@@ -112,8 +112,8 @@ private extension Image {
 /// Decode cover art at the size it will be DRAWN, not the size the CDN shipped.
 ///
 /// A Steam capsule is 600×900 (some custom art 1000×1500); decoded, that is 2–6 MB per poster
-/// and stays resident for as long as its tile does. A grid holds dozens at once, and Apple TV's
-/// memory ceiling is the lowest of the platforms this runs on.
+/// and stays resident for as long as its tile does. A grid holds dozens at once, and the smallest
+/// devices this runs on (Apple TV HD, iPad 6th generation) have little memory to spare.
 /// `CGImageSourceCreateThumbnailAtIndex` decodes straight to a bounded bitmap and never
 /// materialises the full-size one. `maxPixels` is the longer edge, in
 /// PIXELS (the caller multiplies its point size by the screen scale, ×2 for headroom under the

@@ -146,8 +146,8 @@ mod vulkan_video;
 )]
 #[path = "enc/linux/vk_ring.rs"]
 mod vk_ring;
-// Vendored `VK_KHR_video_encode_av1` — pinned `ash` predates 1.3.290. Do not
-// bump `ash` (breaks the SDL/Vulkan client).
+// Vendored `VK_KHR_video_encode_av1` (Vulkan 1.3.302); pinned `ash` is 1.3.281. Do not bump
+// `ash`: `sdl3`'s `ash` feature binds ash 0.38 types, so the SDL/Vulkan client breaks.
 #[cfg(all(target_os = "linux", feature = "vulkan-encode"))]
 #[path = "enc/linux/vk_av1_encode.rs"]
 mod vk_av1_encode;

@@ -27,8 +27,8 @@ pub const VENDOR_NVIDIA: u32 = 0x10DE;
 pub const VENDOR_AMD: u32 = 0x1002;
 pub const VENDOR_INTEL: u32 = 0x8086;
 /// Adreno, which DXGI reports as the FourCC `"QCOM"` rather than a PCI id; `0x5143` is
-/// the PCI-SIG assignment the same driver uses elsewhere. Both mean Media Foundation is
-/// the only hardware encoder on the adapter.
+/// the id the same driver reports through Vulkan. Both mean Media Foundation is the only
+/// hardware encoder on the adapter.
 pub const VENDOR_QUALCOMM: u32 = 0x4D4F_4351;
 pub const VENDOR_QUALCOMM_PCI: u32 = 0x5143;
 

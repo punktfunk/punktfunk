@@ -390,9 +390,8 @@ class DsCapture(
      * Stop the renderer, then close the connection whose descriptor it borrows — in that order.
      *
      * Runs on [stop] and on unplug alike. Skipping it on unplug would leave the render thread
-     * writing to a descriptor whose device is gone, leak the connection, and — the started flag
-     * staying set and the native tier-A registry staying armed for that index — cost the pad both
-     * its pad audio and its wire rumble on the way back in.
+     * writing to a descriptor whose device is gone, leak the connection, and leave the started
+     * flag set, so the pad gets no pad audio on the way back in.
      */
     @Synchronized
     private fun stopPadAudio() {
@@ -540,9 +539,9 @@ class DsCapture(
      * clear.
      *
      * Rumble stops the moment nothing renews it, but these are LATCHED in the controller's
-     * firmware — they outlive the stream, the app, and being unplugged. Ending a session while a
-     * game holds a weapon's trigger resistance would leave the physical trigger stiff afterwards,
-     * with nothing to release it but another game that happens to set one.
+     * firmware: they outlive the stream and the app. Ending a session while a game holds a
+     * weapon's trigger resistance would leave the physical trigger stiff afterwards, with nothing
+     * to release it but another game that happens to set one.
      *
      * EP0-direct like the rumble stop above: the reader thread is stopping, so the interrupt-OUT
      * queue would never drain. Writes are best-effort — the pad may already be gone.

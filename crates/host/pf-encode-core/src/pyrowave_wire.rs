@@ -602,8 +602,9 @@ pub struct AuStream {
 }
 
 impl AuStream {
-    /// Take `shard_payload` as the boundary. Below one block header plus a payload word it
-    /// means nothing: `false`, and nothing changes.
+    /// Take `shard_payload` as the boundary. Below 64 B, a sanity floor far under any negotiated
+    /// shard (`MIN_SHARD_PAYLOAD` in `punktfunk-core`), it means nothing: `false`, and nothing
+    /// changes.
     pub fn set_chunking(&mut self, shard_payload: usize) -> bool {
         if shard_payload < 64 {
             return false;
@@ -1062,7 +1063,7 @@ mod tests {
         assert_eq!(b.rate_control(true), 64 * 1024);
     }
 
-    /// A boundary below one block header is ignored, never a switch back to dense.
+    /// A boundary below the 64 B floor is ignored, never a switch back to dense.
     #[test]
     fn chunking_below_the_floor_keeps_the_boundary() {
         let mut s = AuStream::default();

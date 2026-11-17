@@ -30,7 +30,7 @@ pub struct DecodePlanVk {
     pub std_pic: hh::StdVideoDecodeH264PictureInfo,
     /// Slice NALU byte offsets in the AU as planned, start code included.
     /// AU-relative, not submission-final: the recording layer packs SLICE
-    /// NALUs only (non-VCL in the decode range hangs VCN) and rebases these
+    /// NALUs only (the spec's decode range holds VCL NAL units) and rebases these
     /// for Vulkan's `pSliceOffsets`.
     pub slice_offsets: Vec<u32>,
     /// The slot the decoded picture activates (`pSetupReferenceSlot`).

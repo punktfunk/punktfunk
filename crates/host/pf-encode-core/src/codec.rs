@@ -425,8 +425,8 @@ impl Codec {
     pub fn max_dimension(self) -> u32 {
         match self {
             Codec::H264 => 4096,
-            // No codec-level dimension cap (arbitrary even sizes). 8192 matches
-            // the buffer-math guard the other codecs get.
+            // HEVC and AV1 levels cap a picture at 35 651 584 samples, not a side below
+            // 8704; PyroWave has no level. 8192 is the buffer-math guard for all three.
             Codec::H265 | Codec::Av1 | Codec::PyroWave => 8192,
         }
     }
@@ -449,19 +449,17 @@ impl Codec {
 /// Pixel rate (luma samples/s) at or above which NVENC split-frame encoding
 /// is forced 2-way. Both hosts select through [`resolve_split_mode`], so
 /// Windows and Linux cannot disagree.
-/// A single NVENC engine tops out ~1 Gpix/s on HEVC, and AUTO does not
-/// engage below ~2112 px height, so sessions that need the second engine
-/// must be forced. 4K120 is 3840×2160×120 = 995,328,000; 950 M keeps
-/// margin for fractional refresh while leaving 1440p240 (884.7 M) on AUTO.
+/// One GB203 engine measured ~1 Gpix/s on HEVC P1 ultra-low-latency, and AUTO splits only at
+/// 2112 px height and up (AV1: 2048), so sessions that need the second engine must be forced.
+/// 4K120 is 3840×2160×120 = 995,328,000; 950 M keeps margin for fractional refresh while
+/// leaving 1440p240 (884.7 M) on AUTO.
 pub const SPLIT_FORCE_PIXEL_RATE: u64 = 950_000_000;
 
 /// `NV_ENC_SPLIT_ENCODE_MODE` values as plain constants.
 ///
 /// They live here, not in `nvenc_core`, so the policy and the SDK enum have one
 /// home for both hosts. `nvenc_split_constants_match_the_sdk` pins them.
-// Split-policy cfg: union of callers. Linux always, Windows only with
-// `feature = "nvenc"`. Ungated this is `dead_code` on a featureless Windows
-// build — an item lint, not a module one.
+// Split-policy cfg: union of callers. Linux always, Windows only with `feature = "nvenc"`.
 #[cfg(any(target_os = "linux", all(target_os = "windows", feature = "nvenc")))]
 pub const SPLIT_AUTO: u32 = 0;
 #[cfg(any(target_os = "linux", all(target_os = "windows", feature = "nvenc")))]
@@ -489,7 +487,7 @@ pub const SPLIT_DISABLE: u32 = 15;
 ///    10-bit or 10-bit 4K120.
 /// 4. Else AUTO. AUTO splits only with sub-frame off; with sub-frame on
 ///    the driver resolves it to no-split (HEVC cannot do both).
-///    [`resolve_split_subframe`] logs that.
+///    `nvenc_core::resolve_split_subframe` logs that.
 ///
 /// Caller owns the rejection fallback (retry split-disabled). `engines` is
 /// `NV_ENC_CAPS_NUM_ENCODER_ENGINES`; `0` = unknown (assume a second engine).

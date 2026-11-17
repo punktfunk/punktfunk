@@ -381,8 +381,8 @@ final class SharedFoundationTests: XCTestCase {
     func testHostSortByLastConnectedPutsNeverConnectedLast() {
         let names = arranged(.lastConnected)[0].cards.map(\.host.name)
         XCTAssertEqual(names.prefix(4).map { $0 }, ["Couch", "Couch", "Couch", "Desk"])
-        // The two never-connected ones tie, so they keep their stored order — `sorted` is not
-        // stable in Swift, and equal rows swapping between redraws is a visible bug.
+        // The two never-connected ones tie, so they keep their stored order: equal rows swapping
+        // between redraws would be a visible bug.
         XCTAssertEqual(names.suffix(2).map { $0 }, ["Basement", "attic"])
     }
 

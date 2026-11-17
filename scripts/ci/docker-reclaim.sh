@@ -6,7 +6,7 @@
 # "No space left on device" at both the cargo and the Docker/overlayfs layer, and the stale
 # networks exhaust Docker's default address pool.
 #
-# Every runner host installs it, from here.
+# Install it on every runner host, from here.
 #
 # Install on a runner host (root):
 #   install -m755 scripts/ci/docker-reclaim.sh /usr/local/sbin/ci-docker-reclaim.sh

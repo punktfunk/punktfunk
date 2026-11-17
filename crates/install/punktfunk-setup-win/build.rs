@@ -10,9 +10,9 @@ fn main() {
         windows_reactor_setup::as_self_contained();
 
         // The elevation manifest. NOT a second /MANIFESTINPUT: link.exe always merges its own
-        // default UAC fragment (level='asInvoker'), and mt.exe refuses two snippets whose
-        // `level` disagree (c1010001) — /MANIFESTUAC replaces that default instead. Per-bin on
-        // purpose: the client artifact's bin stays unelevated.
+        // default UAC fragment (level='asInvoker'), and mt.exe (10.0.26100) refuses two snippets
+        // whose `level` disagree (c1010001) — /MANIFESTUAC replaces that default instead.
+        // Per-bin on purpose: the client artifact's bin stays unelevated.
         println!(
             "cargo:rustc-link-arg-bin=punktfunk-setup-win=/MANIFESTUAC:level='requireAdministrator' uiAccess='false'"
         );

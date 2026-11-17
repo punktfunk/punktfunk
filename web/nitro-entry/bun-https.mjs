@@ -6,14 +6,15 @@
 // already pin). One trust anchor across the data plane, the management API, and this console. Wired
 // in via `entry:` in vite.config.ts on top of Nitro's `bun` preset (which bundles the handler in).
 //
-// NOTE on HTTP/2 + HTTP/3: NOT offered here, on purpose. `Bun.serve` has no HTTP/2 server, and
-// HTTP/3 (which Bun *can* do) is useless to a browser against this cert: QUIC refuses any cert error,
-// and the host identity is SELF-SIGNED whichever pair we serve — the native one carries real SANs, so
-// a browser gets past the name check, but never past the untrusted issuer (and the legacy fallback is
-// CN-only with no SAN, which fails both). So browsers stay on HTTP/1.1 regardless — advertising h3 would just
-// dangle an `Alt-Svc` no browser can use. Real h2/h3 would need a browser-TRUSTED, SAN-matching cert
-// (a local CA installed per device) fronted by a server that speaks them (e.g. Caddy) — deliberately
-// out of scope for a LAN console; TLS (no cleartext login/session) is the win.
+// NOTE on HTTP/2 + HTTP/3: NOT offered here, on purpose. `Bun.serve` has both only as experimental
+// options (bun 1.4.4), and HTTP/3 is useless to a browser against this cert: QUIC refuses any cert
+// error, and the host identity is SELF-SIGNED whichever pair we serve — the native one carries real
+// SANs, so a browser gets past the name check, but never past the untrusted issuer (and the legacy
+// fallback is CN-only with no SAN, which fails both). So browsers stay on HTTP/1.1 regardless —
+// advertising h3 would just dangle an `Alt-Svc` no browser can use. Real h2/h3 would need a
+// browser-TRUSTED, SAN-matching cert (a local CA installed per device) fronted by a server that
+// speaks them (e.g. Caddy) — deliberately out of scope for a LAN console; TLS (no cleartext
+// login/session) is the win.
 //
 // TWO LISTENERS, on purpose — see `PLUGIN ORIGIN` below.
 //
@@ -142,9 +143,9 @@ const listenerOptions = (lane) => ({
 	// `fetch` below buffers the whole body with `await req.arrayBuffer()` before Nitro — and
 	// therefore before the auth gate — has seen the request, so without a cap Bun's 128 MB default
 	// would be the only bound on what a LAN peer could push into console RSS by POSTing to /login.
-	// Nothing the console legitimately accepts is remotely this large: the biggest real body
-	// is a hooks/library JSON edit, kilobytes. 4 MiB leaves several orders of headroom and still
-	// makes the memory cost of an unauthenticated request negligible.
+	// Nothing the console legitimately accepts reaches this: the biggest body is a profile
+	// picture, which the host caps at 1 MiB. 4 MiB leaves headroom over that and still makes the
+	// memory cost of an unauthenticated request negligible.
 	maxRequestBodySize:
 		Number.parseInt(process.env.NITRO_BUN_MAX_BODY_BYTES, 10) ||
 		4 * 1024 * 1024,

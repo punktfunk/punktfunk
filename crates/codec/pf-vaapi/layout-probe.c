@@ -11,7 +11,7 @@
  * Run it against real headers (no Linux box required):
  *
  *   docker run --rm --platform linux/amd64 -v "$PWD/crates/codec/pf-vaapi:/w" -w /w \
- *     pf-lxcheck2 bash -lc 'apt-get update -qq && apt-get install -y -qq libva-dev \
+ *     ubuntu:26.04 bash -lc 'apt-get update -qq && apt-get install -y -qq gcc libva-dev \
  *       && gcc -w -O0 layout-probe.c -o /tmp/probe && /tmp/probe'
  *
  * Its sizes, offsets and bit positions are pinned as `const` assertions in the modules

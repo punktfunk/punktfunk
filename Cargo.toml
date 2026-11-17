@@ -129,9 +129,10 @@ rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "prefer-post-quantum", "std"] }
 ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "rustls-webpki-roots"] }
 
-# microsoft/windows-rs at verified commits: no crates.io release carries reactor's Component
-# API. Re-run punktfunk-setup-win's tests/wizard_flow.rs on every reactor bump. Host crates
-# declare crates.io `windows = "0.62"` inline: cargo can't rename a workspace entry per member.
+# microsoft/windows-rs at verified commits: crates.io's windows-reactor (0.100.0) lacks the
+# ComponentCompletion and ComponentTimer the Windows client uses. Re-run punktfunk-setup-win's
+# tests/wizard_flow.rs on every reactor bump. Host crates declare crates.io `windows = "0.62"`
+# inline: cargo can't rename a workspace entry per member.
 #
 # Two revs on purpose. Past 58217a690 `windows` projects Win32 with pointer + count for a slice
 # and out-params for return values, which the D3D11 decode path would have to follow. No

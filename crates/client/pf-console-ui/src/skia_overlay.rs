@@ -233,7 +233,7 @@ impl Overlay for SkiaOverlay {
             ),
             &get_proc,
             // Must be the presenter's declared version, never `None`.
-            // `None` leaves Skia's `fMaxAPIVersion` at 0, so Skia calls
+            // `None` leaves Skia's `fMaxAPIVersion` at 0, so Skia takes
             // `vkEnumerateInstanceVersion()` (the loader's ceiling, not ours)
             // and validates a newer table against a 1.3 instance.
             Some(skvk::Version::from(shared.api_version)),
@@ -717,9 +717,10 @@ impl SkiaOverlay {
         }
         let gpu = self.gpu.as_mut().expect("init ran");
         if let Some(old) = self.slots[i].take() {
-            // SAFETY: the view belongs to the slot being replaced. Sampling of this
-            // slot ended two presents ago (ring alternates; presenter waits its fence
-            // before each record), so the GPU is done with it.
+            // SAFETY: the view belongs to the slot being replaced, not the one last handed
+            // out. Each present waits the previous submit's fence before it records, so the
+            // GPU is done with this slot once a later present has submitted; a `Busy`
+            // glass-gate frame submits nothing.
             unsafe { gpu.device.destroy_image_view(old.view, None) };
         }
         let info = skia_safe::ImageInfo::new(

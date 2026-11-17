@@ -800,7 +800,7 @@ impl ServiceState {
             ConsoleCmd::Probe => {
                 self.last_probe = None;
                 // Home's Rescan tile. It re-queries mDNS too: the browse lives as long as the
-                // process and `mdns-sd` backs its re-query off to an hour, so a host that
+                // process and `mdns-sd` 0.21 backs its re-query off to an hour, so a host that
                 // appeared since startup may otherwise never be asked for.
                 if let Some(r) = &self.rescan {
                     r.request();

@@ -144,8 +144,9 @@ pub struct SessionRef {
 /// ([`punktfunk_core::client::PunktfunkEndReason`]) so both ends name the same end the
 /// same way. The bytes match that ABI where the two overlap.
 ///
-/// [`Self::StoppedByOperator`] and [`Self::Stolen`] are the ones a client cannot see: the
-/// host closes them as code 0, which every client reads as `host_ended`.
+/// [`Self::StoppedByOperator`] from a console stop and [`Self::Stolen`] close as code 0, which
+/// every client reads as `host_ended`. A `stopped_by_operator` after an access expiry, an
+/// unpair, a power action or a closed profile closes with a typed reject code the client names.
 #[derive(Serialize, Deserialize, ToSchema, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[repr(u8)]

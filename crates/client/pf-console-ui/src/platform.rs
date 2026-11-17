@@ -28,7 +28,7 @@ pub enum Platform {
     /// The PS5 homebrew title (`punktfunk/client-ps5`): DualSense only, no touch, no window,
     /// the console's one 4K output. PlayStation glyphs, PyroWave decodes, and the title quits.
     Ps5,
-    /// The Switch homebrew title (`punktfunk/client-switch`): one pad, no touch, no window.
+    /// The Switch homebrew title (`punktfunk/client-switch`): up to four pads, no touch, no window.
     /// Its shortcuts name the buttons in the Nintendo legend; otherwise it offers the PS5's rows.
     Switch,
 }

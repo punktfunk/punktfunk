@@ -8,8 +8,8 @@ use crate::quic::v2::msg::StreamConfig;
 use crate::quic::VideoFormat;
 use std::sync::Mutex;
 
-/// Epochs whose format is kept. The host moves one epoch per pipeline swap, so a frame never
-/// trails its config by this many.
+/// Epochs whose format is kept. The host moves one epoch per pipeline swap, a rate rebuild
+/// excepted, so eight epochs is eight swaps between a frame and its config.
 const BOOKED: usize = 8;
 
 #[derive(Debug, Default)]

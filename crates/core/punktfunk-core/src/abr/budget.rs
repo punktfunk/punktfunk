@@ -329,8 +329,8 @@ mod tests {
         }
     }
 
-    /// A 1080p30 tunnel at 8.5 Mbps: the frame the rig measures, 19–30 data
-    /// shards. Every test below that names a frame means this one.
+    /// A 1080p30 tunnel at 8.5 Mbps: 23 wire shards a frame, inside the 19–30 the rig's
+    /// 7–11 Mbps span gives. Every test below that names a frame means this one.
     fn tunnel() -> FrameBudget {
         FrameBudget {
             budget_kbps: 8_500,
@@ -496,9 +496,9 @@ mod tests {
     }
 
     /// The rig's tunnel: 19–30 wire shards a frame at 0.7 %, where two parity
-    /// shards lose a frame every forty seconds. The rule asks for three or
-    /// four, as a percent the budget spends out of the encoder's rate — and
-    /// the percent it names buys exactly that, no shard over.
+    /// shards lose a frame every 28–110 s at 30 fps, about once a minute at 23.
+    /// The rule asks for three or four, as a percent the budget spends out of
+    /// the encoder's rate — and the percent it names buys exactly that, no shard over.
     #[test]
     fn the_tunnels_frame_asks_for_the_parity_its_loss_needs() {
         let asked: Vec<(u32, u8, u32)> = [19u32, 23, 27, 30]

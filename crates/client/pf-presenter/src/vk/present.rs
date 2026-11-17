@@ -1046,8 +1046,8 @@ impl Presenter {
                 )
             };
             // Clear and blit both write the swapchain image; transfer commands carry no
-            // implicit order. RDNA fast-clears DCC metadata beside the blit, and where
-            // the clear lands second the tile shows black.
+            // implicit order. RADV's clear can be a DCC metadata fast clear; where it
+            // lands after the blit, that tile shows black.
             barrier(
                 &self.device,
                 self.cmd_buf,

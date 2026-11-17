@@ -530,7 +530,7 @@ fn repairing(mut sc: Scenario, name: &'static str, repair: Repair) -> Scenario {
     with_ramp(sc)
 }
 
-/// The rig's Wi-Fi profile: a 237 Mbps link nothing touches, and a source that
+/// The rig's Wi-Fi profile: a static 245 Mbps link, and a source that
 /// fills 78 % of whatever allowance it is given.
 ///
 /// A clean window therefore delivers 78 % of the rate — the content is the
@@ -553,9 +553,8 @@ pub(super) fn wifi_content_bound() -> Scenario {
             capacity: vec![(0, 245_000)],
             buffer_ms: 250,
             base_delay_ms: 3,
-            // Two lost scheduling slices, 800 ms apart: the delay reads
-            // ~20 ms for one window and ~45 ms for the next, then subsides,
-            // with nothing lost — `lc-wifi-1` at 101.9 s and 102.7 s.
+            // Two 300 ms scheduling stalls, 1.5 s apart, and no loss — after
+            // `lc-wifi-1`'s delay steps at 101.9 s and 102.7 s.
             hiccups: vec![(120_000, 300), (121_500, 300)],
             ..LinkCfg::default()
         },
@@ -1034,10 +1033,10 @@ pub(super) fn decoder_headroom() -> Scenario {
     sc
 }
 
-/// A decoder with a fixed cost and a rate-driven one. HEVC at 4K120 on a PS5 takes 5.8 ms a
-/// picture plus 0.04 ms per Mbit/s on the wire: the budget runs out near 63 Mbit/s, a third
-/// of where the ramp opens over its Wi-Fi. A notch's answer shrinks with the rate and the floor
-/// never moves, so the last notches read as nothing on their own.
+/// A decoder with a fixed cost and a rate-driven one, after HEVC at 4K120 on a PS5: 5.8 ms a
+/// picture on average plus 0.034 ms per Mbit/s on the wire, so the budget runs out near 74
+/// Mbit/s. A notch's answer shrinks with the rate and the floor never moves, so the last
+/// notches read as nothing on their own.
 pub(super) fn decoder_slope() -> Scenario {
     let mut sc = decoder_knee();
     sc.name = "decoder_slope";
@@ -2689,7 +2688,7 @@ mod tests {
             .collect()
     }
 
-    /// C5: an open at four times the tunnel, and a wall the session keeps
+    /// C5: an open at 1.6 times the tunnel's wall, and a wall the session keeps
     /// walking back into — his 70-session aggregate.
     ///
     /// The first cut and the return trips are the link's. The rate 30 s in is

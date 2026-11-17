@@ -94,8 +94,8 @@ rand = "0.10"
 [target.'cfg(target_os = "linux")'.dependencies]
 # `v0_3_49` for `Buffer::requested` — the graph's per-cycle frame ask, without which the
 # playback callback can only size writes from the buffer CEILING (quantum-limit, ~170 ms).
-# Pure cfg gate; needs libpipewire ≥ 0.3.49 (2022-03) at runtime, which every ship target
-# (SteamOS, flatpak runtimes, Arch, Ubuntu ≥ 22.10) clears.
+# Pure cfg gate; `pw_buffer.requested` needs libpipewire ≥ 0.3.50 (2022-04) at runtime, which
+# every ship target (SteamOS, flatpak runtimes, Arch, Ubuntu ≥ 22.10) clears.
 pipewire = { version = "0.10", features = ["v0_3_49"], optional = true }
 sdl3 = { version = "0.20", features = ["hidapi"], optional = true }
 # Audio-thread priority (`audio_rt`): one blocking D-Bus call per boosted thread — the Realtime

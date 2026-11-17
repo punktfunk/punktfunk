@@ -680,14 +680,14 @@ mod session_main {
         pads.into_iter().chain(graphics.iter().copied()).collect()
     }
 
-    /// Mesa gates Vulkan Video decode — the `VK_KHR_video_decode_*` extensions AND the
-    /// decode-capable queue family — behind one switch per driver: RADV reads
-    /// `RADV_PERFTEST=video_decode`, ANV (Intel) `ANV_DEBUG=video-decode`. Without it the
-    /// presenter's device advertises no decode queue and `auto` falls to VAAPI, which
-    /// chroma-fringes on VanGogh and is unverified on Intel. Every other driver ignores
-    /// both, and a driver that already decodes by default no-ops. Appended, never
-    /// clobbered, so a user's own flags survive; `PUNKTFUNK_DECODER=native-vaapi` still
-    /// pins VAAPI.
+    /// ANV (Intel) exposes Vulkan Video decode — the `VK_KHR_video_decode_*` extensions AND
+    /// the decode-capable queue family — only under `ANV_DEBUG=video-decode`. RADV turns it on
+    /// where the VCN firmware can (Mesa 25.0+); `RADV_PERFTEST=video_decode` forces it
+    /// elsewhere. Without it the presenter's device advertises no decode queue and `auto` falls
+    /// to VAAPI, which chroma-fringes on VanGogh and is unverified on Intel. Every other driver
+    /// ignores both, and a driver that already decodes by default no-ops. Appended, never
+    /// clobbered, so a user's own flags survive; `PUNKTFUNK_DECODER=native-vaapi` still pins
+    /// VAAPI.
     ///
     /// ⚠⚠ Called from the TOP of [`run`], ahead of the `--list-adapters` / `--probe-decode`
     /// early exits. Those create Vulkan instances of their own and Mesa latches these
@@ -804,8 +804,8 @@ mod session_main {
 
         // Runs before ANY Vulkan call, including the probe flags below — hence the top of
         // `run`, ahead of the early exits, so triage answers the same question the streaming
-        // path asks. Makes RADV and ANV expose their video-decode queue and extensions so the
-        // decoder's `auto` path can take Vulkan Video. Windows drivers expose theirs already.
+        // path asks. Lets ANV, and RADV where its firmware leaves it off, expose Vulkan Video
+        // decode to the decoder's `auto` path. Windows drivers expose theirs already.
         #[cfg(target_os = "linux")]
         enable_mesa_video_decode();
 

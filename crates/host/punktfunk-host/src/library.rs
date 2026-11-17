@@ -423,9 +423,10 @@ pub(crate) fn listed_entries(
 /// The library in `view` including hidden titles, each flagged.
 ///
 /// Only the console list on the operator lane calls this: a hidden entry has to
-/// be visible somewhere or it could never be brought back. Paired clients,
-/// the GameStream app list, and launch resolution use [`all_games`]. With a profile in view the
-/// flag is the profile's, and a title the box hides is left out: only the box brings it back.
+/// be visible somewhere or it could never be brought back. Paired clients, the GameStream app
+/// list, and launch resolution use [`all_games_for`] and [`find_game_for`], which omit hidden
+/// titles. With a profile in view the flag is the profile's, and a title the box hides is left
+/// out: only the box brings it back.
 pub fn all_games_for_operator(view: &View) -> Vec<OperatorGameEntry> {
     let (by_box, by_profile) = hidden_layers(view);
     let own = OwnValues::load(view);

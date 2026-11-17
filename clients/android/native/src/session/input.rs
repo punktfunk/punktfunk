@@ -763,7 +763,7 @@ fn hid_report_len(len: jint, capacity: usize) -> usize {
 /// the rich-input plane (`RichInput::HidReport`, 0xCC). `buf` is a DIRECT ByteBuffer whose first
 /// `len` bytes are the report, id byte first (`0x42`/`0x45`/`0x47` state, `0x43` battery, …);
 /// `len` is bounded by [`hid_report_len`]. Called from the capture thread at the controller's
-/// own report rate (~250–500 Hz) — the direct-buffer read avoids a JNI array copy per report.
+/// own report rate (~250 Hz) — the direct-buffer read avoids a JNI array copy per report.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadHidReport(
     mut env: EnvUnowned,

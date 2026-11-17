@@ -59,8 +59,10 @@ pub(crate) struct Features {
 }
 
 impl Features {
-    /// pyrowave.h's requirements, plus storageBuffer16BitAccess: its shaders keep 16-bit
-    /// buffer members and the header omits it. The other four are optional.
+    /// What pyrowave's encoder checks (shaderInt16, storageBuffer8BitAccess, subgroupSizeControl,
+    /// computeFullSubgroups), plus storageBuffer16BitAccess for its shaders' 16-bit buffer
+    /// members, synchronization2 for this host's barriers, and timelineSemaphore. The other four
+    /// are optional.
     fn required(&self) -> [(bool, &'static str); 7] {
         [
             (self.shader_int16, "shaderInt16"),

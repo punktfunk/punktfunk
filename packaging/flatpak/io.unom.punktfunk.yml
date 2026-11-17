@@ -104,9 +104,9 @@ finish-args:
   # gamescope's private Wayland socket: the layer must reach the compositor over it to negotiate
   # HDR10, and the Deck runs games as X11 clients (DISPLAY=:1, no WAYLAND_DISPLAY exported) so
   # --socket=wayland binds nothing (chiaki-ng does the same). (4) GAMESCOPE_WAYLAND_DISPLAY must be
-  # set INSIDE the sandbox. The layer's `isRunningUnderGamescope()` reads that env var and nothing
-  # else; flatpak does not forward host env, so it arrives unset and the layer's CreateInstance
-  # early-returns before it ever creates a GamescopeInstance. The layer still LOADS and still logs
+  # set INSIDE the sandbox: `isRunningUnderGamescope()` is false while it is unset, flatpak does
+  # not forward host env, and the layer's CreateInstance then early-returns before it ever creates
+  # a GamescopeInstance. The layer still LOADS and still logs
   # its generic bits ("Forcing on VK_EXT_swapchain_maintenance1", swapchain destroys), so it looks
   # as if it works — but no gamescope surface is made, so no HDR10 format is ever appended and
   # (1)-(3) buy nothing. On SteamOS 3.8.16, client `--browse`, reading `pf_presenter::vk::setup`
@@ -217,7 +217,7 @@ modules:
   #
   # Vendored rather than taken from the flathub runtime extension
   # `org.freedesktop.Platform.VulkanLayer.gamescope` via `add-extensions` autodownload: that
-  # extension is 94 MB of whole-gamescope to deliver one 4 MB .so, its layer JSON hardcodes a
+  # extension is ~100 MB of whole-gamescope to deliver one layer .so, its layer JSON hardcodes a
   # /usr `library_path` that an app-scoped extension (mounted under /app) would not satisfy,
   # and it would make flathub a hard install-time dependency of an app we self-host on
   # flatpak.unom.io.

@@ -10,7 +10,7 @@
   The driver's encoder deps (pf-encode-win's `pyrowave` and `qsv` features) build PyroWave and
   oneVPL from source with CMake, and CMake probes the toolchain by building a tiny MSBuild
   project. MSBuild writes .tlog paths under the CMake tree and cannot exceed MAX_PATH, so a deep
-  checkout fails before anything compiles - the CI runner's root is ~78 characters, which is
+  checkout fails before anything compiles - the CI runner's root is ~80 characters, which is
   already most of the budget once the target dir is added.
 
   The target dir cannot move: wdk-build's find_top_level_cargo_manifest() walks UP from OUT_DIR

@@ -35,7 +35,7 @@ mod state {
     }
 }
 
-/// `WSASendMsg` segment cap; more fail the syscall.
+/// Segments per `WSASendMsg`: 512, the cap quinn-udp found empirically on Windows 11 x64.
 #[cfg(target_os = "windows")]
 const USO_MAX_SEGMENTS: usize = 512;
 

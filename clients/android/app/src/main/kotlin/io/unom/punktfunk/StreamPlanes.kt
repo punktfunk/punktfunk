@@ -130,9 +130,10 @@ internal class StreamPlanes(
         // layer left on the start-up rect paints the picture small, top-left. The view's own
         // size, not the buffer geometry: the layer composites in the view's space.
         NativeBridge.nativeVideoSurfaceSize(handle, view.width, view.height)
-        // Some OEM builds reset the frame-rate vote on a geometry change, dropping the 120 Hz pin.
-        // ALWAYS lets a phone leave the 60 Hz Android 15+ holds a game at; a TV forces its HDMI
-        // switch only in low-latency mode. Same rule as the native `force_rate_switch`.
+        // Re-assert the frame-rate vote on every geometry change, so a build that drops it with
+        // the geometry keeps the stream's rate. ALWAYS lets a phone leave the 60 Hz Android 15+
+        // holds a game at; a TV forces its HDMI switch only in low-latency mode. Same rule as
+        // the native `force_rate_switch`.
         if (streamHz > 0f) runCatching {
             holder.surface.setFrameRate(
                 streamHz,

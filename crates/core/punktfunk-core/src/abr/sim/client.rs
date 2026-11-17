@@ -21,8 +21,9 @@ use std::time::{Duration, Instant};
 const KEYFRAME_ASK_MS: u64 = 100;
 /// Android's no-output backstop: a starved decoder asks for a re-anchor this often.
 const STARVED_ASK_MS: u64 = 500;
-/// Header plus shard, the plaintext the reassembler counts per probe packet —
-/// not the sealed datagram. The field's `delivered_kbps` is in these bytes.
+/// The 40-byte v1 header plus a shard, not the sealed datagram. The reassembler counts the
+/// 30-byte v2 header (`V2_HEADER_LEN`) plus the shard per probe packet, the unit of the
+/// field's `delivered_kbps`, so this reads 10 bytes a packet high.
 const PROBE_PACKET_BYTES: u64 = 40 + 1408;
 /// The probe's own id in the link queue. Filler never reaches the decoder and
 /// never counts toward `actual_kbps` (`wire_bytes` nets it out).
@@ -30,7 +31,8 @@ pub(super) const PROBE_FRAME: u32 = u32::MAX;
 /// Stall the client reports with a host pipeline rebuild. ABR only logs it;
 /// what the rebuild costs is the discarded window and the lost reference.
 const REBUILD_GAP_MS: u32 = 400;
-/// The acked chain stays engaged this long after the last loss (D5).
+/// The acked chain stays engaged this long after the last loss, as the host's
+/// `LOSS_MODE_HOLD` does.
 const ACK_HOLD_MS: u64 = 10_000;
 /// Frames back an acked reference can reach: Vulkan Video's DPB. Past it the
 /// encoder falls back to the plain chain.

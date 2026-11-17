@@ -65,7 +65,8 @@ export const parseAppManifest = (text: string): AppManifest | undefined => {
  * and the parity harness compares entry sets, so a stray Proton row would fail it.
  */
 export const isSteamTool = (appid: number, name: string): boolean => {
-	// Steamworks Common Redistributables; Steam Linux Runtime 1.0/2.0/3.0 (Sniper/Soldier).
+	// Steamworks Common Redistributables; Steam Linux Runtime 1.0 (scout), 2.0 (soldier),
+	// 3.0 (sniper); Proton Experimental.
 	const TOOL_IDS = [228980, 1070560, 1391110, 1628350, 1493710];
 	if (TOOL_IDS.includes(appid)) return true;
 	const n = name.toLowerCase();

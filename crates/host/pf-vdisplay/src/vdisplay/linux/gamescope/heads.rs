@@ -3,8 +3,8 @@
 //! Nested and headless gamescopes have no connector of their own. A session that is the DRM
 //! master does: this module finds that connector from `/proc/<pid>/cmdline` (backend flag and
 //! `--prefer-output`) and `/sys/class/drm` (plug status + EDID), and its mode from the lit
-//! CRTC ([`crate::drm_dpms::lit_mode`]). gamescope has no protocol that reports the output it
-//! lights; `gamescope_control` only sets things.
+//! CRTC ([`crate::drm_dpms::lit_mode`]). `gamescope_control`'s `active_display_info` names the
+//! lit connector but not its mode.
 //!
 //! Only the driven head is listed. Mirror capture attaches to gamescope's composited PipeWire
 //! node (`vdisplay::mirror`), so an undriven connector cannot be streamed. The pin id is the

@@ -1136,8 +1136,8 @@ mod pool {
         }
 
         /// A kept spawn is retired so the acquire that follows never runs a second one.
-        /// Two live gamescopes lose the `gamescope-N` lock, and Steam then hands the URL to the
-        /// older instance and exits, killing the new spawn's primary child.
+        /// A second gamescope takes the next `gamescope-N` socket, but Steam's single instance
+        /// hands the URL to the older one and exits, killing the new spawn's primary child.
         #[test]
         fn a_sole_instance_acquire_retires_every_kept_sibling() {
             let mut pinned = test_entry("gamescope", 1, None);
@@ -1670,9 +1670,9 @@ mod linux {
 
     /// Hold this seat's create slot for the length of a create.
     ///
-    /// A create publishes no pool entry for about a second, so two on one seat — a pre-warm and
-    /// that device's own connect — leave two compositors under one Steam home, each killing the
-    /// other's. The waiter takes the slot only once the entry it wanted exists, so the reuse
+    /// A create publishes its pool entry only once it finishes, so two on one seat — a pre-warm
+    /// and that device's own connect — leave two compositors under one Steam home, each killing
+    /// the other's. The waiter takes the slot only once the entry it wanted exists, so the reuse
     /// probe under the same slot finds it. Shared-plane backends are never keyed.
     ///
     /// LOCK ORDER: this slot, then the pool lock. Never the reverse.

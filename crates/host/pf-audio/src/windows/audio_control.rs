@@ -273,7 +273,8 @@ fn enumerate_including_minted(with_hidden_sink: bool) -> (Vec<Endpoint>, Vec<End
         }
         (renders, captures)
     };
-    // 500 ms ceiling: measured appearance is ~12 ms, and the caller is on the session-open path.
+    // Ten tries 50 ms apart (450 ms of sleep plus enumeration): measured appearance is ~12 ms,
+    // and the caller is on the session-open path.
     let attempts = if MINTED_NEVER_LISTED.load(Ordering::Relaxed) {
         1
     } else {

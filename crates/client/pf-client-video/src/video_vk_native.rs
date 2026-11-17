@@ -139,7 +139,7 @@ pub(crate) enum NativeCodec {
 /// are codec-agnostic: the three [`DecodedVkFrame`] surfaces match. Forwarders stay
 /// identical per arm so dispatch cannot change the hardware-verified H.264 path.
 // Unboxed against `large_enum_variant`: one of these lives in the session's
-// `Box<NativeVulkanDecoder>`. Boxing would add a per-AU indirection for ~1.7 KB.
+// `Box<NativeVulkanDecoder>`. Boxing would add a per-AU indirection to save the arms' size gap.
 #[allow(clippy::large_enum_variant)]
 enum Codec {
     H264(VkH264Decoder),
@@ -640,8 +640,9 @@ impl NativeVulkanDecoder {
         // per-codec decode extensions. Decoders re-check the family's
         // `videoCodecOperations` — same fact `native_vulkan_gate` and `vk/setup.rs` use.
 
-        // Intel's media engine idles at 100 MHz and i915 raises it only for its own GEM
-        // wait, so this rung waits every decode through one, on the exported ring.
+        // Intel's media engine idles at its floor clock, and i915 boosts it only for a
+        // blocking wait on its own fence such as `I915_GEM_WAIT`, never a syncobj wait;
+        // so this rung waits every decode through one, on the exported ring.
         #[cfg(target_os = "linux")]
         let boost = (vk.vendor_id == crate::video::VENDOR_INTEL && vk.dmabuf_import)
             .then(pf_dmabuf::i915_boost::I915Boost::open)

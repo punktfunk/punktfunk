@@ -7,8 +7,8 @@
 .DESCRIPTION
   Ghost "Generic Monitor (Punktfunk)" device nodes each pin one of IddCx's ~16 monitor slots; once
   they pile up, IOCTL_ADD returns 0x80070490 ERROR_NOT_FOUND and every session fails to create a
-  virtual output. A host-service restart's IOCTL_CLEAR_ALL does NOT recover it; the driver
-  instance itself must be reloaded.
+  virtual output. A host restart's IOCTL_CLEAR_ALL departs only that host's live monitors; it
+  removes no ghost node.
 
   Steps (run ELEVATED):
     1. Stop the host service (it holds the driver's control device).

@@ -761,7 +761,7 @@ fn area_in_window(
 }
 
 /// SDL opens Steam's keyboard for text input: Steam sets this for a game it starts in Big
-/// Picture or Game Mode.
+/// Picture or Game Mode (SDL 3.4).
 fn steam_keyboard() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
@@ -1122,8 +1122,8 @@ pub(super) fn content_to_window(
 }
 
 /// The scale the backend applies to a custom cursor surface on its own. Wayland applies the
-/// display scale: SDL hands the compositor the bitmap's pixel size as a surface-local viewport
-/// destination. X11 and Windows show the surface at 1:1 physical pixels.
+/// display scale: SDL 3.4 hands the compositor the bitmap's pixel size as a surface-local
+/// viewport destination. X11 and Windows show the surface at 1:1 physical pixels.
 ///
 /// `SDL_GetWindowDisplayScale` returns `0.0` when it cannot resolve the display; dividing by 0
 /// would blow the cursor up to nothing usable.

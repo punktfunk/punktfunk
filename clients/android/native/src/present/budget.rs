@@ -27,14 +27,14 @@ pub(crate) const STALE_REOPEN_NS: i64 = 100_000_000;
 /// loss.
 pub(crate) const PRESENTED_CAP: usize = 8;
 
-/// The ceiling of the SurfaceView submit margin ahead of a timeline's EXPECTED PRESENT, which is
-/// SurfaceFlinger's own latch lead: a released buffer must be queued by SF's wakeup for that
-/// vsync, so a present closer than the margin is missed and the next one targeted. Not the
-/// timeline's `deadline`, which budgets GPU work a video buffer does not do.
+/// The ceiling of the SurfaceView submit margin ahead of a timeline's EXPECTED PRESENT: a release
+/// targets no present closer than the margin. Not the timeline's `deadline`, which budgets GPU
+/// work a video buffer does not do.
 ///
-/// 2.5 ms: SF latches ~1-2 ms before present and the release is a sub-ms binder call. Each ms of
-/// margin is a ms on every frame's display stage, so the margin starts at 0 and widens only on
-/// a measured late latch ([`TimelineBudget::adapt_margin`]).
+/// 2.5 ms covers the sub-ms release call. SurfaceFlinger latches at its wakeup, its `sf duration`
+/// before present (AOSP default: one period less 1 ms). Each ms of margin is a ms on every frame's
+/// display stage, so the margin starts at 0 and widens only on a measured late latch
+/// ([`TimelineBudget::adapt_margin`]).
 const LATCH_MARGIN_NS: i64 = 2_500_000;
 
 /// One widening step of the SurfaceView submit margin.

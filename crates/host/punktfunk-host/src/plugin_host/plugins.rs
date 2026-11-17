@@ -13,7 +13,7 @@
 //! (`native-cert.pem` or legacy `cert.pem`) — never `mgmt-token`. A Windows seat's runner is no
 //! task: its host starts it as the seat's account ([`seat_runner`]).
 //!
-//! Runner discovery is pinned in this module's tests.
+//! POSIX runner discovery is pinned by `posix::tests::runner_resolution_table`.
 
 use anyhow::{bail, Context, Result};
 use std::process::Command;

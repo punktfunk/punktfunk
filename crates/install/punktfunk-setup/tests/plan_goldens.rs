@@ -728,7 +728,8 @@ fn trap_every_host_install_trusts_the_console_cert_after_the_start() {
     )));
 }
 
-/// Omarchy's libalpm hook aborts any transaction carrying both -S and -u.
+/// Omarchy's libalpm hook aborts a transaction that upgrades a package when pacman ran with
+/// both -S and -u.
 #[test]
 fn trap_omarchy_installs_with_sy_then_s_not_syu() {
     let cmds = plan_for(&fresh("omarchy", Family::Pacman), &pins()).commands();

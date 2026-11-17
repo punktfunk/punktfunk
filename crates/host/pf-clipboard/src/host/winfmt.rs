@@ -157,8 +157,8 @@ const MAX_DIB_BYTES: usize = 256 * 1024 * 1024;
 /// allocate, so the peak stays a few times that whatever the source format.
 pub fn image_to_dib(bytes: &[u8]) -> Option<Vec<u8>> {
     // Decode caps, not result caps: `image` defaults to 512 MiB and would
-    // allocate a huge declared size before the check below. 32767 is the
-    // CF_DIB per-side max.
+    // allocate a huge declared size before the check below. 32767 per side is
+    // this code's own cap; a DIB header carries 32-bit sides.
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(32767);
     limits.max_image_height = Some(32767);

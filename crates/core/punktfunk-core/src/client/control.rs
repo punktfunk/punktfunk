@@ -14,8 +14,8 @@ pub(crate) enum CtrlRequest {
     ProbeShaped(crate::quic::ProbeShaped),
     /// The pump's [`BitrateController`] sends this (kbps) when bitrate is Automatic.
     SetBitrate(u32),
-    /// Pump sends this after the first no-op clock flush; the control task also fires one every
-    /// [`CLOCK_RESYNC_INTERVAL`].
+    /// Pump sends this after the first no-op clock flush and when standing latency escalates to
+    /// a re-sync; the control task also fires one every [`CLOCK_RESYNC_INTERVAL`].
     ClockResync,
     /// Idempotent. File-permission flag is in the payload (`design/clipboard-and-file-transfer.md`).
     ClipControl(ClipControl),

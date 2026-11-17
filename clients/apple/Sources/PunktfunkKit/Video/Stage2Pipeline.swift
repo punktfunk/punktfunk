@@ -1151,10 +1151,10 @@ struct DeadlineSelector {
 
 /// Stage-4's stale-link ladder. A link that stops vending is relinked; a link that stalls
 /// AGAIN within `rebuildWindow` of that relink means the CAMetalLayer itself is wedged, so
-/// the caller is told and its `WedgePolicy` picks the cure. A wedged layer's relink vends
-/// its pool once and is silent again within ≈0.3 s; 2 s covers that with margin, and a link
-/// that ran clean for longer has earned a fresh relink. Render-thread confined. Internal
-/// for tests.
+/// the caller is told and its `WedgePolicy` picks the cure. A wedged layer's relink vends once
+/// and stalls again ≈0.3 s later (one vend plus `LinkWatchdog.staleAfter`); 2 s covers that
+/// with margin, and a link that ran clean for longer has earned a fresh relink. Render-thread
+/// confined. Internal for tests.
 struct LinkStallPolicy {
     enum Action { case relink, rebuild }
     let rebuildWindow: CFTimeInterval
@@ -1173,7 +1173,7 @@ struct LinkStallPolicy {
 ///
 /// A stall relinks. A stall `LinkStallPolicy` reads as a wedged layer is reported once, and
 /// the watchdog then holds, the fresh link staying, until the system shows a frame again
-/// (`rearm`): a vend alone proves nothing, since a wedged layer vends its pool once. The caller
+/// (`rearm`): a vend alone proves nothing, since a wedged layer's relink still vends. The caller
 /// starts the links and does the reporting. Render-thread confined. Internal for tests.
 struct LinkWatchdog {
     enum Action: Equatable {
@@ -1349,7 +1349,7 @@ private final class DeadlineLinkDelegate: NSObject, CAMetalDisplayLinkDelegate {
     private var steps = [CFTimeInterval](repeating: .infinity, count: 16)
     private var stepIndex = 0
 
-    /// Apple accepts 1 or 2 here; 1 is the shorter.
+    /// Apple accepts 1 or 2 here (CAMetalDisplayLink docs, 27 SDKs); 1 is the shorter.
     static let frameLatency: Float = 1
 
     init(

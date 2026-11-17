@@ -484,9 +484,9 @@ pub fn vps_to_std_h265(vps: &Vps) -> Result<OwnedStdH265Vps, H265ParamsError> {
     std.vps_max_sub_layers_minus1 = vps.max_sub_layers_minus1;
     std.pDecPicBufMgr = &*dpb_backing;
     std.pProfileTierLevel = &*ptl_backing;
-    // Zeroed HRD with its sub-layer arrays: the flags say absent, but a driver
-    // that reads through these pointers regardless (Intel, Windows) must find a
-    // struct, not null. Same shape the FFmpeg decoder hands every driver.
+    // Zeroed HRD with its sub-layer arrays: the flags say absent, but a driver that reads
+    // through these pointers regardless (Intel, Windows) must find a struct, not null. FFmpeg
+    // likewise never hands a null `pHrdParameters`.
     let (hrd_backing, hrd_sub_backing) = zeroed_hrd();
     std.pHrdParameters = &*hrd_backing;
 

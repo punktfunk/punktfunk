@@ -81,7 +81,7 @@ impl SessionParams {
     ///
     /// `bitstream_restriction` is the point of packing our own: it states the
     /// reorder bound, so a client outputs on it instead of holding pictures until
-    /// the DPB fills. AMF and Media Foundation have no API for this at all.
+    /// the DPB fills. AMF (SDK 1.5.3) and Media Foundation (SDK 10.0.26100) have no API for it.
     pub fn sps(&self) -> Rc<Sps> {
         let mut sps = SpsBuilder::new()
             .seq_parameter_set_id(0)
@@ -106,7 +106,7 @@ impl SessionParams {
             .bitstream_restriction(self.max_num_reorder_frames)
             .build();
         // The colour a decoder sizes its matrix from: BT.709 at the range the VPP writes. Left
-        // untagged, ffmpeg reads a small stream as 601, and a client that trusts the SPS would
+        // untagged, swscale reads any stream as 601, and a client that trusts the SPS would
         // too. The builder has no setter; the Rc is still ours.
         let vui = &mut Rc::get_mut(&mut sps)
             .expect("fresh from build, unshared")

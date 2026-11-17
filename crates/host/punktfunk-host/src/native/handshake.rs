@@ -403,7 +403,7 @@ pub(super) fn cursor_forward(
     {
         // Windows: the v5 IddCx hardware-cursor channel. Without it DWM paints the pointer
         // into the IDD frame and a second copy doubles it. The encoder is not consulted: the
-        // IDD capturer composites on the capture-mouse flip; no Windows encode backend blends.
+        // driver blends the pointer on the capture-mouse flip; no Windows encode backend blends.
         // A capture worker's picture carries the pointer already.
         let _ = (compositor, codec, bit_depth, hdr, encoder);
         !worker && crate::windows::idd::hw_cursor_capable()
@@ -570,7 +570,7 @@ pub(in crate::native) struct SessionTerms {
     /// `PUNKTFUNK_PYROWAVE_MAX_MBPS`, kbps, over every PyroWave pin of the session.
     pub(in crate::native) pyrowave_max_kbps: Option<u32>,
     /// H.264/HEVC slices per frame ([`crate::session_plan::client_slices`]); 1 = single-slice.
-    /// TV-SoC decoders (Amlogic) wedge on multi-slice.
+    /// Amlogic decoders (Chromecast with Google TV) are reported to wedge on multi-slice.
     pub(in crate::native) slices: u32,
     pub(in crate::native) bitrate_kbps: u32,
     pub(in crate::native) shard_payload: usize,
@@ -1519,11 +1519,10 @@ fn welcome_host_caps2(source: Punktfunk1Source) -> u8 {
         }
         // Invites the client's `Start` extension block, which is where it names itself.
         | punktfunk_core::quic::HOST_CAP2_EXT
-        // The virtual path binds its data plane two to three seconds before its
-        // pipeline exists, and serves the client's bring-up ramp in that gap. The
-        // rate-following source holds its first frame back for the same span
-        // (`--bringup-ms`) so the rig measures the ramp the way a display session
-        // runs it. The byte-pattern source has no such gap: video leaves at once.
+        // The virtual path binds its data plane before its pipeline exists (bring-up trace:
+        // `plane_bound` to `first_packet`) and serves the client's ramp in that gap. The
+        // rate-following source holds its first frame back (`--bringup-ms`) to match. The
+        // byte-pattern source has no such gap: video leaves at once.
         | match source {
             Punktfunk1Source::Virtual => punktfunk_core::quic::HOST_CAP2_RAMP,
             Punktfunk1Source::SyntheticAbr(shape) if shape.serve_ramp => {
@@ -1737,10 +1736,9 @@ impl FormatFacts {
         let capture_supports_hdr =
             crate::capture::capturer_supports_hdr_for(compositor, gamescope_route, encoder);
         // An 8-bit desktop's SDR-10 only widens: a colour pass per frame for no source detail, and
-        // the operator opts in (`sdr10_widen`). Our gamescope composites 10-bit SDR itself, and
-        // Windows 11 24H2 composes the virtual display in SDR wide colour (`sdr10_source`); neither
-        // needs the opt-in. Either way the backend must write the 10 bits. Linux non-PyroWave 4:4:4
-        // SDR is clamped to 8-bit below.
+        // the operator opts in (`sdr10_widen`). Our gamescope composites 10-bit SDR, and Windows 11
+        // 24H2 composes the virtual display in SDR wide colour unless this host saw it refused
+        // (`sdr10_source`), with no opt-in. Linux non-PyroWave 4:4:4 SDR is clamped to 8-bit below.
         let sdr10_widen = self.sdr10_widen;
         // A Windows joiner captures through WGC, which reads an SDR display at 8 bits.
         let sdr10_source = crate::capture::capturer_delivers_sdr10_for(compositor, gamescope_route)

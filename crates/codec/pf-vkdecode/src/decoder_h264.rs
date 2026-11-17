@@ -7,11 +7,11 @@
 //! and recording are [`VkDecoder`]'s; this file plans and converts.
 //!
 //! Every decode op has a query slot. [`VkDecoder::poll_status`] reads it
-//! without waiting; a non-COMPLETE result is the concealment signal. FFmpeg
+//! without waiting; a non-COMPLETE result is the concealment signal. FFmpeg 8
 //! runs `nb_queries = 0` and cannot see driver-reported corruption.
 //!
-//! Residual: sampling a still-live reference while a decode reads it writes
-//! presenter layout metadata; `VK_KHR_unified_image_layouts` drops that trip.
+//! Residual: sampling a still-live reference round-trips its layout while a decode
+//! reads it; the `unifiedImageLayoutsVideo` feature lets GENERAL replace that trip.
 
 use ash::vk;
 use ash::vk::native as hh;
@@ -271,10 +271,9 @@ impl VkDecoder<H264> {
         // `release_after_decode`; the release runs whether or not this submits.
         self.submit_then_release(&vk_plan.release_after_decode, |dec| {
             let op = dec.prepare_op(&vk_plan.refs, vk_plan.setup_slot, vk_plan.setup_ref)?;
-            // Bitstream is slice NALUs only. A real AU opens with AUD/SEI
-            // (and SPS/PPS at IDRs); feeding those to VCN inside the decode
-            // range hangs it. `pack_slices` rebases offsets and puts each NAL
-            // behind a three-byte start code.
+            // Bitstream is slice NALUs only: the spec's decode range holds a picture's VCL
+            // NAL units. A real AU opens with AUD/SEI (and SPS/PPS at IDRs). `pack_slices`
+            // rebases offsets and puts each NAL behind a three-byte start code.
             let plan_segments: Vec<std::ops::Range<usize>> =
                 plan.slices.iter().map(|s| s.nal.clone()).collect();
             let Some(packed) = pack_slices(&plan_segments) else {

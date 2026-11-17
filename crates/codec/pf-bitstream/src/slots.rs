@@ -11,9 +11,9 @@ use crate::h264::DpbUpdate;
 use crate::h264::PicId;
 
 /// Extra pictures the consumer may hold (delivered, unreleased) on top of
-/// the stream's DPB depth. Pool size is `required_slots + HOLD_HEADROOM`.
-/// 8 covers ~4–7 in-flight frames with one frame of slack; holding more
-/// is `NoFreeSlot`.
+/// the stream's DPB depth. Pool size is `required_slots + HOLD_HEADROOM`;
+/// holding more is `NoFreeSlot`. The desktop client under `Smooth { buffer: 3 }`
+/// can hold 9: 2 pump, 1 forwarder, 2 wake, 3 store, 1 parked.
 pub const HOLD_HEADROOM: u32 = 8;
 
 /// The H.264 slot ceiling: 16 reference frames plus the picture being decoded.

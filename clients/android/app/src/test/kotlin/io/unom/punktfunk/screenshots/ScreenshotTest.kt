@@ -117,7 +117,8 @@ class ScreenshotTest {
     @Config(sdk = [36], qualifiers = "w800dp-h360dp-xxhdpi")
     fun streamBannerTouch() = shootRoot("stream-banner-touch", statusBar = false) { StreamBannerScene(pad = false) }
 
-    // The companion panel at an Ayn Thor lower screen's size (1240×1080 at about 420 dpi).
+    // The companion panel at an Ayn Thor lower screen's dp size (1240×1080 at about 420 dpi),
+    // drawn at xxhdpi.
     @Test
     @Config(sdk = [36], qualifiers = "w472dp-h411dp-xxhdpi")
     fun companionStats() = shootRoot("companion-stats", statusBar = false) {

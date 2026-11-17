@@ -45,8 +45,8 @@ pub(super) struct WinXboxIdentity {
 
 impl WinXboxIdentity {
     /// Xbox Wireless Controller (Series X|S) over Bluetooth, `045E:0B13`.
-    /// Default: `0B13` is on Microsoft's `xinputhid.inf` allow-list; a software
-    /// devnode still matches none of those entries, so `pfGamepadXbox`'s `AddReg`
+    /// Default: `0B13` is on Microsoft's `xinputhid.inf` allow-list (10.0.26100.9974); a
+    /// software devnode still matches none of those entries, so `pfGamepadXbox`'s `AddReg`
     /// writes the two registry values the inbox sections would have written.
     pub(super) const fn wireless() -> WinXboxIdentity {
         WinXboxIdentity {
@@ -59,8 +59,8 @@ impl WinXboxIdentity {
     }
 
     /// Xbox One S over Bluetooth, `045E:02FD`. `02FD` is only a `BTHENUM` id in
-    /// `xinputhid.inf` — no stage-2 `HID\…&IG_00` line, unlike `0B13`. Promotion
-    /// rides entirely on our `AddReg`. Unverified on hardware.
+    /// `xinputhid.inf` (10.0.26100.9974) — no stage-2 `HID\…&IG_00` line, unlike `0B13`.
+    /// Promotion rides entirely on our `AddReg`. Unverified on hardware.
     pub(super) const fn one_s() -> WinXboxIdentity {
         WinXboxIdentity {
             devtype: pf_driver_proto::gamepad::DEVTYPE_XBOX_ONE_S,

@@ -230,7 +230,7 @@ pub struct UhidManager<B: PadProto> {
 }
 
 /// Per-poll ring-overflow WARN limiter. A >2 kHz writer against the 8-slot v2.1 ring overflows
-/// every ~4 ms poll; unlimited that is ~230 WARN/s. One line per [`Self::PERIOD`] with a
+/// every 4 ms poll; unlimited that is up to 250 WARN/s. One line per [`Self::PERIOD`] with a
 /// `suppressed` count keeps the signal.
 #[derive(Default, Clone)]
 struct OverflowWarn {

@@ -1173,7 +1173,8 @@ mod linux {
 
     impl Drop for Gpu {
         fn drop(&mut self) {
-            // SAFETY: every picture was destroyed; the pool and device are idle.
+            // SAFETY: sound only after `run` destroyed every picture and the queue idled; an
+            // early `?` drops `Gpu` with pictures live, which `vkDestroyDevice` forbids.
             unsafe {
                 self.device.destroy_command_pool(self.pool, None);
                 self.device.destroy_device(None);
@@ -1576,7 +1577,7 @@ mod linux {
                         vp.set_destination(win_w, win_h);
                         vp
                     });
-                    // Coefficients belong to YCbCr buffers only; Mutter faults an RGB commit.
+                    // Coefficients belong to YCbCr buffers only; Mutter 50 faults an RGB commit.
                     let repr = app
                         .color_repr
                         .as_ref()

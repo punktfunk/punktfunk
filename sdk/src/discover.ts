@@ -58,8 +58,7 @@ export const discoverUnits = (
 	// `undefined` only when there is no readable `package.json` at all — a hand-assembled tree then
 	// falls back to the naming convention rather than discovering nothing. A package.json with no
 	// `dependencies` key yields an EMPTY set, not `undefined`: `bun remove` drops the key when the
-	// last plugin goes, and orphaned transitive packages can outlive it, so falling back there
-	// would start running a plugin's library the moment you uninstall the last real plugin.
+	// last plugin goes, so falling back there would start any library still left in node_modules.
 	let topLevel: Set<string> | undefined;
 	try {
 		const root = JSON.parse(

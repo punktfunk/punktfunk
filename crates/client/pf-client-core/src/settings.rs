@@ -276,8 +276,9 @@ pub struct Settings {
     /// something different per platform.
     #[serde(default = "default_true")]
     pub vsync: bool,
-    /// Let a VRR display follow the stream cadence when fullscreen. Inert on
-    /// fixed-refresh displays. Default on.
+    /// Let a VRR display follow the stream cadence when fullscreen. Desktop puts the
+    /// vblank-locked present modes ahead of MAILBOX without checking that the display is VRR
+    /// (`pf_presenter` `present_mode_chain`). Default on.
     ///
     /// Desktop only, and deliberately absent on Android: that client pins a fixed display mode
     /// and declares its surface FIXED_SOURCE, because OEM refresh governors ignore the advisory
@@ -328,7 +329,7 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub follow_os_theme: bool,
     /// Freeze decorative motion. Presentation only, like [`ui_palette`](Self::ui_palette).
-    /// No portable OS "reduce motion" via SDL; also the OLED-friendly mode.
+    /// No portable OS "reduce motion" via SDL (3.4); also the OLED-friendly mode.
     #[serde(default)]
     pub reduce_motion: bool,
     /// Library order within a group: `""`/unknown = host order, `"title"`, `"platform"`,
@@ -362,7 +363,8 @@ pub struct Settings {
     #[serde(default)]
     pub invert_scroll: bool,
     /// In-stream quick-action ring JSON ([`crate::overlay_actions::OverlayConfig::parse`]).
-    /// Empty = platform default. One opaque field: each cross-client setting is ~six edits.
+    /// Empty = platform default. One opaque field: each typed cross-client setting is an edit in
+    /// every client, the catalogue and the console.
     #[serde(default)]
     pub overlay_actions: String,
     /// In-stream shortcuts JSON ([`crate::shortcuts::Shortcuts::parse`]). Empty = this
@@ -390,8 +392,7 @@ pub struct Settings {
     #[serde(default = "default_pad_speaker")]
     pub pad_speaker: String,
     /// Stream mode follows the session window.
-    /// Overrides `width`/`height` while on; fullscreen degenerates to the display's
-    /// native mode. Default off until per-backend validation is green.
+    /// Overrides `width`/`height` while on; fullscreen asks for the display's size. Default off.
     pub match_window: bool,
     /// Last logical window size under `match_window`, so the next launch's first
     /// connect already matches. `0` = never stored → 1280×720.

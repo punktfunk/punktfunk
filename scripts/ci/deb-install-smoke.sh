@@ -23,11 +23,12 @@ REPO_URL="https://git.unom.io/api/packages/unom/debian"
 # there, and it is deliberately NOT asserted absent — that would turn every future improvement into
 # a red build. The omissions and their reasons:
 #   ubuntu:24.04   no client    — built on 26.04, floors at libc6 >= 2.43 (noble has 2.39)
-#                  no gamescope — noble's wayland is 1.22.0; the vendored wlroots needs >= 1.23.1,
-#                                 so the binary cannot even load there
-#   debian:trixie  no client    — same libc6 >= 2.43 floor (trixie has 2.41), plus GTK4 >= 4.20
-# Debian 12 (bookworm) is absent entirely: glibc 2.36 is below the host's 2.39 floor, so nothing
-# we ship installs there and there is nothing to smoke-test.
+#                  no gamescope — needs libavif16 >= 1.2.1 and libinput10 >= 1.26.0 (noble has
+#                                 1.0.4 and 1.25.0)
+#   debian:trixie  no client    — same libc6 >= 2.43 floor (trixie has 2.41), plus libadwaita
+#                                 >= 1.8 (trixie has 1.7)
+# Debian 12 (bookworm) is absent: glibc 2.36 is below the host's 2.39 floor; only web and
+# scripting install there.
 MATRIX=(
   "ubuntu:24.04|punktfunk-host punktfunk-web punktfunk-scripting punktfunk-seats"
   "ubuntu:26.04|punktfunk-host punktfunk-web punktfunk-scripting punktfunk-seats punktfunk-client punktfunk-gamescope"

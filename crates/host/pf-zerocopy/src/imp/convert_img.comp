@@ -6,8 +6,8 @@
 // encodes.
 //
 // SOURCE (push lin_fmt): 0 = the sampled image, for a tiled dmabuf. A LINEAR dmabuf is read as
-// words at its own offset and stride instead: a driver may read a LINEAR image at a rounded
-// row pitch (NVIDIA: 32 bytes), which shears any other stride. 1 = B,G,R,x bytes (XR24),
+// words at its own offset and stride instead: NVIDIA reads a LINEAR image at a row pitch of its
+// own, which shears a frame at another stride. 1 = B,G,R,x bytes (XR24),
 // 2 = R,G,B,x bytes (XB24), 3 = x:R:G:B 2:10:10:10 (XR30), 4 = x:B:G:R 2:10:10:10 (XB30).
 //
 // MODE (push): 0 = packed ARGB 8-bit (NVENC byte order B,G,R,A), 1 = NV12 (Y plane +

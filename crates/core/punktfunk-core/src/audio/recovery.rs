@@ -10,8 +10,7 @@ use super::*;
 /// it can run that many frames of libopus PLC (`decode` with empty input) first.
 ///
 /// Reorders and duplicates conceal nothing (no reorder buffer). A gap is capped at
-/// [`MAX_CONCEAL_MS`]; past that, libopus PLC has faded to silence and the ring underrun path
-/// takes over.
+/// [`MAX_CONCEAL_MS`]; the rest of it is left to the ring underrun path.
 #[derive(Debug)]
 pub struct AudioGapTracker {
     last_seq: Option<u32>,

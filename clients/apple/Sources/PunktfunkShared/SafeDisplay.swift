@@ -32,9 +32,9 @@ public enum SafeDisplay {
     public static let minHeight = 200
 
     /// A portrait top inset at or above this many points means a sensor housing rather than a
-    /// status bar. Notched and Dynamic Island iPhones report 44–59 pt; a plain status bar (older
-    /// iPhones, every iPad) reports 20–24 pt. Used only by [`sideInsetPoints`] and only when the
-    /// horizontal insets are unavailable — see there for why that case exists at all.
+    /// status bar. Notched and Dynamic Island iPhones report 44 pt or more; a plain status bar
+    /// (older iPhones, every iPad) reports 20–24 pt. Used only by [`sideInsetPoints`] and only when
+    /// the horizontal insets are unavailable — see there for why that case exists at all.
     public static let housingTopInsetThreshold: Double = 40
 
     /// The per-side inset, in points, that the **landscape** stream will be subject to — which is

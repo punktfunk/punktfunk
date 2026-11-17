@@ -12,7 +12,7 @@ import { UpdateCard, updateNeedsCard, useUpdate } from "./UpdateCard";
 /**
  * Host (design/web-console-structure-2026-10.md §5.6): one page — a strip that says who this host
  * is, then the settings groups. A competing server is the amber line on top; the update card
- * unfolds only while there is an update to act on.
+ * unfolds only when the strip's line is not enough (`updateNeedsCard`).
  */
 export const SectionHost: FC = () => {
 	useLocale();

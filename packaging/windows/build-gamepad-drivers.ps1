@@ -70,7 +70,8 @@ if (-not $env:LIBCLANG_PATH -and (Test-Path 'C:\Program Files\LLVM\bin\libclang.
 # X: root, so a target kept between CI runs never sees two checkout paths.
 $triple = if ($Arch -eq 'arm64') { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }
 $stampArch = if ($Arch -eq 'arm64') { 'arm64' } else { 'amd64' }
-$catOs = if ($Arch -eq 'arm64') { '10_NI_ARM64' } else { '10_X64' }   # both floor at 22H2 (22621)
+# Inf2Cat OS: Windows 10 x64, or Windows 11 22H2 Arm64.
+$catOs = if ($Arch -eq 'arm64') { '10_NI_ARM64' } else { '10_X64' }
 $rel = Join-Path $DriversDir "target\$triple\release"
 
 # --- 1. build (release) - one build covers the whole workspace --------------------------------

@@ -89,7 +89,8 @@ pub(crate) fn choice_group(
 }
 
 /// A page header's Sort and group button over its [`choice_group`]s. A flyout, not a menu: a
-/// button's menu opens upward, over the title bar, and has no placement to set.
+/// button's menu (windows-reactor 0.101) opens upward, over the title bar, and has no placement
+/// to set.
 pub(crate) fn arrange_flyout(name: &str, groups: Vec<View>) -> View {
     let body = vstack(groups).spacing(16.0).min_width(200.0);
     mark_button("arrow-up-down", name)

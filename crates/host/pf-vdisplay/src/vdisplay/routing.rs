@@ -173,7 +173,7 @@ pub fn input_backend_id(chosen: Compositor) -> &'static str {
         Compositor::Mutter => "libei",
         // Hyprland still speaks `zwlr_virtual_pointer_v1` + `zwp_virtual_keyboard_v1`
         // — same wlr injector as sway/river.
-        // niri serves both too, on stock builds and biri alike.
+        // niri 26.04 serves both too, and so does biri.
         Compositor::Wlroots | Compositor::Hyprland | Compositor::Niri => "wlr",
         // Same protocols, but Umbriel maps absolute motion over the whole layout and ignores
         // the pointer's output: the injector aims in layout space.
@@ -494,10 +494,10 @@ pub fn claim_workspace(
         Compositor::Umbriel if hyprland::is_managed_output(name) => {
             umbriel::desktop::claim_workspace(name, want)
         }
-        // No `_` arm: a new backend must decide here. KWin is a later step (its
-        // workspaces are a D-Bus script away); Mutter/GNOME has no per-output
-        // workspace to aim at; gamescope already gives the game the whole
-        // session; Windows has no workspaces at all.
+        // No `_` arm: a new backend must decide here. KWin is a later step: its desktops span
+        // every output unless 6.7's per-output desktops are on. Mutter 51 has no per-output
+        // workspace; gamescope gives the game the whole session; Windows virtual desktops are
+        // not wired here.
         Compositor::Hyprland
         | Compositor::Wlroots
         | Compositor::Kwin

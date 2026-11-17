@@ -369,10 +369,10 @@ fn tiles(
     sequence: &pf_bitstream::av1::ParsedSequenceHeader,
 ) -> Result<(hh::StdVideoAV1TileInfo, TileArrays), PlanToVkAv1Error> {
     let tile = &p.tile_info;
-    // `pMiColStarts`/`pMiRowStarts` take SUPERBLOCK starts, not the 4x4 units their
-    // names read as; libavcodec writes `tile_start_col_sb`/`tile_start_row_sb` there.
-    // The parser holds MI, so shift. Only entry 0 is common to both readings, which
-    // is why a one-tile frame survives either way and a tiled one does not.
+    // The spec defines `pMiColStarts`/`pMiRowStarts` in 4x4 MI units, but AMD's Windows
+    // driver reads superblock starts there, as libavcodec wrote them through n8.0. The parser
+    // holds MI, so shift. Only entry 0 is common to both readings, which is why a one-tile
+    // frame survives either way and a tiled one does not.
     let sb_shift = if sequence.use_128x128_superblock {
         5
     } else {

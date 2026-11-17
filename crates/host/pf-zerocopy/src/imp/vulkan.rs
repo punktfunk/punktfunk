@@ -1,6 +1,6 @@
-//! Vulkan LINEAR-dmabuf bridge. NVIDIA EGL cannot sample LINEAR; CUDA will not import a raw
-//! dmabuf fd. Vulkan imports via `VK_EXT_external_memory_dma_buf` and exports `OPAQUE_FD`
-//! memory CUDA can import:
+//! Vulkan LINEAR-dmabuf bridge. NVIDIA EGL cannot sample LINEAR; CUDA imports a raw dmabuf fd
+//! only on Tegra Thor (CUDA 13.5). Vulkan imports via `VK_EXT_external_memory_dma_buf` and
+//! exports `OPAQUE_FD` memory CUDA can import:
 //!
 //! ```text
 //!   dmabuf fd ──VkImportMemoryFdInfoKHR(DMA_BUF)──▶ VkBuffer (cached per fd)
@@ -11,7 +11,8 @@
 //!
 //! One exportable buffer + CUDA mapping, rebuilt when a frame outgrows it. Per frame: GPU copy,
 //! fence wait, pitched CUDA copy into the encoder pool. Cache imports by fd (PipeWire's pool
-//! is stable for a stream). Init/import failure disables the importer; CPU mmap takes over.
+//! is stable for a stream). A failed NV12 CSC drops the stream to RGB; a failed RGB import or
+//! init retires the importer and CPU mmap takes over (pf-capture `gpu_import`).
 
 use super::cuda::{self, DeviceBuffer};
 use super::vkdev::{self, VkBufferAlloc};

@@ -568,9 +568,9 @@ private const val SC2_PAD_KEY = "sc2:"
 
 /**
  * The Steam Controller 2 as a pad row, when it has no [android.view.InputDevice] of its own:
- * capture detaches the kernel node, and a USB one awaiting its grant never had one. Without the
- * row the console's chip reads "TV remote" while the pad is driving it. Probed through
- * [Sc2Capture] — USB first, then a bonded BLE controller — so the console and the touch
+ * a USB capture detaches the kernel driver, and a USB one awaiting its grant never had one.
+ * Without the row the console's chip reads "TV remote" while the pad is driving it. Probed
+ * through [Sc2Capture] — USB first, then a bonded BLE controller — so the console and the touch
  * Controllers screen cannot disagree about which pads exist.
  */
 private fun sc2Extras(activity: MainActivity?): List<ConsoleJson.ExtraPad> {

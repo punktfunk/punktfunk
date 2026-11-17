@@ -37,8 +37,8 @@ punktfunk-core = { path = "../../crates/core/punktfunk-core", features = ["quic"
 # `default-features = false` drops pf-client-core's default `pyrowave`, which would otherwise
 # build the vendored PyroWave C++ INTO THE SHELL — dead weight here (the shell never decodes;
 # it only offers "pyrowave" as a codec preference string the session binary acts on) and fatal
-# on ARM64, where Granite's math falls back to x86 SSE intrinsics and stops at
-# `simd.hpp: #error "Implement me."`. This does NOT drop PyroWave from the Windows client:
+# on ARM64, where cl.exe defines no `__ARM_NEON` and Granite's `simd.hpp` stops at
+# `#error "Implement me."`. This does NOT drop PyroWave from the Windows client:
 # decode lives in the spawned punktfunk-session binary, whose own default enables the feature,
 # and cargo's feature unification turns it back on for the shared pf-client-core whenever that
 # binary is in the same build (x64). On the ARM64 leg both are built --no-default-features, so
@@ -58,7 +58,7 @@ windows-reactor = { workspace = true }
 # installer wizard.
 pf-fluent = { path = "../../crates/core/pf-fluent" }
 # Win32 / DXGI for the GPU picker and the shell's window plumbing. Features are header-named:
-# one per SDK header (#4689).
+# one per SDK header (microsoft/windows-rs#4689, windows 0.100).
 windows = { workspace = true, features = [
     # GetCurrentPackageFullName — the packaged-run probe (deeplink::has_package_identity) that
     # guards the explicit AppUserModelID (main.rs; MSIX identity must win over the dev-run tag).

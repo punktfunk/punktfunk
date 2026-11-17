@@ -34,7 +34,7 @@ const G: f32 = 9.80665;
 /// Deck actuator keepalive, declared as [`ActuatorQuirks`] at slot open. The built-in
 /// actuator decays inside SDL's ~2 s rumble resend, and an identical `set_rumble` is a
 /// no-op, so a steady level pulses unless re-kicked sub-decay; 40 ms matches SDL's
-/// Steam-Controller driver. The engine owns timing and 1-LSB jitter.
+/// Steam Controller 2 driver. The engine owns timing and 1-LSB jitter.
 const DECK_RUMBLE_KEEPALIVE_MS: u16 = 40;
 
 /// Gap between two asks for a Deck's motion sensors. A write shows in the reports within
@@ -116,9 +116,9 @@ fn pref_for_type(t: sdl3::gamepad::GamepadType) -> GamepadPref {
     }
 }
 
-/// Pads whose own identity SDL's type cannot name: no Valve, 8BitDo or HORI type, the Edge
-/// reads as a PS5 and the Elite as an Xbox One. The host then builds that identity, so the
-/// extras land natively.
+/// Pads whose own identity SDL's type cannot name: SDL 3.4 has one STEAM type for every Valve
+/// and HORI Steam pad and none for 8BitDo, the Edge reads as a PS5 and the Elite as an Xbox
+/// One. The host then builds that identity, so the extras land natively.
 fn pref_for_ids(vid: u16, pid: u16) -> Option<GamepadPref> {
     match (vid, pid) {
         (0x28DE, 0x1205) => Some(GamepadPref::SteamDeck),

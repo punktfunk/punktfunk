@@ -305,10 +305,10 @@ pub(crate) fn cursor_upload(rgba: &[u8]) -> io::Result<(File, usize)> {
 }
 
 pub fn run_from_args(args: &[String]) -> Result<()> {
-    // Core dumps ON, and first: the kernel clears `PR_SET_DUMPABLE` when a process
-    // gains a file capability. This process fronts nothing, so a GPU-driver crash
-    // is exactly what we want a core for. Dumpable is not the KWin identifiability
-    // gate; the PERMITTED set is, and this process never speaks Wayland.
+    // Core dumps ON, and first: the kernel clears `PR_SET_DUMPABLE` when a process gains a file
+    // capability (prctl(2), man-pages 6.19). This process fronts nothing, so a GPU-driver crash
+    // is exactly what we want a core for. Dumpable is not the KWin identifiability gate; the
+    // PERMITTED set is, and this process never speaks Wayland.
 
     // SAFETY: `prctl(PR_SET_DUMPABLE, 1)` takes integers by value, touches no Rust memory and
     // affects only this process.

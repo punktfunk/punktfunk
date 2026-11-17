@@ -378,8 +378,8 @@ const MAX_PROBES: usize = 8;
 
 /// A local absolute path with at most one `*` segment: `X:\…` or `HKLM\…` on `windows`, `/…`
 /// on Linux. Relative would follow cwd; `//host`, `\\host`, `\\?\` and `\\.\` reach a server or
-/// a device, so a Windows probe is never `/`-rooted. One `*` bounds fan-out. `HKCU` is
-/// unreadable as LocalService; other hives are not for a remote index.
+/// a device, so a Windows probe is never `/`-rooted. One `*` bounds fan-out. `HKCU` here is the
+/// host's own hive, not the player's; other hives are not for a remote index.
 fn valid_probe(p: &str, windows: bool) -> bool {
     if p.is_empty() || p.len() > 260 {
         return false;

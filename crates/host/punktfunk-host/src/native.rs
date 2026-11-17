@@ -243,7 +243,8 @@ pub(crate) struct NativeServe {
     pub webtransport_bind: Option<std::net::SocketAddr>,
 }
 
-/// NVENC session cap (high-res split-encode holds two). Overflow waits in the accept queue.
+/// Default cap on concurrent streaming sessions, each with its own encoder. Overflow waits in the
+/// accept queue.
 pub(crate) const DEFAULT_MAX_CONCURRENT: usize = 4;
 
 pub(crate) fn native_serve_opts(cfg: &NativeServe) -> Punktfunk1Options {
@@ -312,8 +313,8 @@ pub(crate) async fn serve(
     let door = pf_paths::seat::role().is_door();
     // A sinkless capturer handed session to session (`AudioCapSlot`, `park_audio_capture`).
     let audio_cap: AudioCapSlot = Arc::new(std::sync::Mutex::new(None));
-    // Host-lifetime injector: one RemoteDesktop-portal grant. A CreateSession per session
-    // races portal teardown on reconnect and wedges KWin EIS. Gamepads stay per-session.
+    // Host-lifetime injector shared by every session: a portal session per stream session can
+    // stall EIS setup on rapid KWin reconnects. Gamepads stay per-session.
     let injector = (!door).then(crate::inject::InjectorService::start);
     let inj_sender = || {
         injector
@@ -649,9 +650,9 @@ fn install_shutdown_restore() {
 /// Bound the control phase; an unfinished handshake would otherwise wedge the host.
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Wait after `stop` before [`stream_session`] abandons the stream thread. Longer than a
-/// capture-loss rebuild's `encode_recovery::REBUILD_BUDGET`, though shorter than gamescope's
-/// `GAMESCOPE_REBUILD_BUDGET`; a cold pipeline-build can take ~10 s.
+/// Wait after `stop` before [`stream_session`] abandons the stream thread. A capture-loss
+/// rebuild checks `stop` only between attempts, and one managed gamescope attempt waits up to
+/// 45 s for its node, 90 s when the bind falls back.
 const STREAM_STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(90);
 
 /// Resolves once `stop` has been set for [`STREAM_STOP_GRACE`].

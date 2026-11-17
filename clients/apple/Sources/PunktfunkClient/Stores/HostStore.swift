@@ -84,9 +84,8 @@ final class HostStore: ObservableObject {
 
     /// One-time move of the saved-host JSON from `UserDefaults.standard` (where every build before
     /// the App Group wrote it) into the shared suite. Idempotent: only fires when the suite has no
-    /// hosts yet but standard does. The old value is LEFT in place — during a staged TestFlight
-    /// rollout an older build still reads `.standard`, so tombstoning it now would hide hosts from
-    /// the not-yet-updated app. Remove the standard copy a release later.
+    /// hosts yet but standard does. The old value is left in place: a pre-App-Group build (v0.12
+    /// or older, such as its Developer ID DMG) still reads `.standard`.
     private static func migrateToAppGroupIfNeeded() {
         let suite = AppGroup.defaults
         let standard = UserDefaults.standard

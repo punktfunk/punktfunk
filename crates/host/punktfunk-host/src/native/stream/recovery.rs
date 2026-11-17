@@ -1067,13 +1067,15 @@ impl KeyframeGate {
     }
 }
 
-/// ±10 % of [`FLUSH_COOLDOWN`]: a software cooldown is the most periodic thing in the system.
+/// ±10 % of [`punktfunk_core::reanchor::FLUSH_COOLDOWN`]: a software cooldown is the most
+/// periodic thing in the system.
 fn matches_client_flush_cadence(period: std::time::Duration) -> bool {
     let flush = punktfunk_core::reanchor::FLUSH_COOLDOWN;
     period.abs_diff(flush) < flush / 10
 }
 
-/// ±10 % of [`NO_VIDEO_RETRY`]. Opposite fault from flush cadence; only the delivery count tells which.
+/// ±10 % of [`punktfunk_core::reanchor::NO_VIDEO_RETRY`]. Opposite fault from flush cadence;
+/// only the delivery count tells which.
 fn matches_client_no_video_cadence(period: std::time::Duration) -> bool {
     let no_video = punktfunk_core::reanchor::NO_VIDEO_RETRY;
     period.abs_diff(no_video) < no_video / 10

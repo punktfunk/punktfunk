@@ -4,8 +4,9 @@
 // instead of a game. Drag moves a control; tap selects it for the size slider and the
 // visibility toggle; hidden controls stay visible here, ghosted. The overrides land in the
 // class the screen is in (wide or narrow, `padControls`' own split), so an iPad edited in
-// landscape keeps its upright preset untouched. The chrome sits where the trio of small discs
-// is not: they ride the bottom edge on a wide layer and the top edge on a narrow one.
+// landscape keeps its upright preset untouched. The chrome takes the bottom edge on a narrow
+// layer and the top on a wide one. The trio of small discs rides the bottom edge unless a cluster
+// covers it, so on the `full` preset between about 516 and 852 points the two share an edge.
 
 #if os(iOS) || os(visionOS)
 import PunktfunkKit

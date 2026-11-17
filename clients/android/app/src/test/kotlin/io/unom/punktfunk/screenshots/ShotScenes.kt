@@ -111,8 +111,8 @@ internal fun ShotTheme(content: @Composable () -> Unit) {
  * Robolectric has no system UI: with no status bar the content sits where the bar belongs and the
  * app title collides with a camera punch-hole. This frame draws a plausible bar (time left,
  * radios right, the CENTRE left empty for the hole) and pushes the scene below it, the same
- * geometry real insets produce. The height mirrors a
- * Pixel's tall bar as measured off a real 1344×2992 capture (~145 px ≈ 40 dp).
+ * geometry real insets produce. The height approximates a Pixel's tall bar (151 px on a
+ * 1344×2992 Pixel 8 Pro, 50 dp at its default 480 dpi).
  */
 @Composable
 internal fun ShotStatusFrame(content: @Composable () -> Unit) {

@@ -243,8 +243,9 @@ class PadButtonsTest {
 
     /**
      * A trigger axis that idles at −1 is rescaled; one that idles at 0 must NOT be, or it would
-     * read as a permanent half-pull. Which it is gets measured off the device, never assumed —
-     * both the DualSense's raw RX/RY and the Xbox pad's Z/Rz report an honest 0..1.
+     * read as a permanent half-pull. Which it is gets measured off the device, never assumed. A
+     * stock mapper centres Rx/Ry/Z/Rz on −1..1, so the DualSense's raw RX/RY and the Xbox pad's
+     * Z/Rz both rest at −1 there.
      */
     @Test
     fun `only a trigger that idles negative is rescaled`() {

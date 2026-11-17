@@ -70,8 +70,8 @@ pub fn spawn_pin(pad: u8) {
 
 /// Pins every DualSense card's active output routes and card sinks; returns the write count,
 /// `Ok(0)` while no card is in the graph. Matches the exact USB ids only, unlike the physical
-/// pads `pf_client_core::pad_audio` also matches by name. PipeWire 1.6 leaves
-/// `device.vendor.id`/`device.product.id` out of a card's announce, so each card is bound and
+/// pads `pf_client_core::pad_audio` also matches by name. PipeWire's device announce (0.3.40
+/// through 1.6.0) leaves `device.vendor.id`/`device.product.id` out, so each card is bound and
 /// read from its `info`.
 fn pin_pad_cards() -> Result<usize> {
     use pipewire as pw;

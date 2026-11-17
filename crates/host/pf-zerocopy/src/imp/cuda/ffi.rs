@@ -33,7 +33,8 @@ pub const CU_MEMORYTYPE_DEVICE: c_uint = 2;
 pub const CU_MEMORYTYPE_ARRAY: c_uint = 3;
 
 /// `CUctx_flags` (cuda.h). Spin would steal compositor/send cores while waiting on a copy.
-/// AUTO (0) picks SPIN vs YIELD by core count; we force BLOCKING_SYNC.
+/// AUTO (0) spins unless the process holds more contexts than logical CPUs; we force
+/// BLOCKING_SYNC.
 pub(crate) const CU_CTX_SCHED_BLOCKING_SYNC: c_uint = 0x04;
 
 /// `cuStreamCreateWithPriority` flag: don't implicitly synchronize with the legacy NULL stream.

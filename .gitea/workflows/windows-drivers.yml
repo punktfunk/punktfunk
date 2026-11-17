@@ -13,7 +13,7 @@ name: windows-drivers
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
 # cancel each other). Keeps a busy push cadence from piling ~10 queued runs per commit onto the
-# runner fleet. Gitea honors this for push triggers (PR triggers: see gitea#35933).
+# runner fleet. Gitea applies it to push and pull_request runs alike.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -202,7 +202,8 @@ jobs:
         # whose subst keeps MSBuild's CMake .tlog paths under MAX_PATH.
         working-directory: packaging/windows/drivers
     env:
-      # wdk-build otherwise picks 10.0.28000.0 (no km/crt) and bindgen fails — pin the WDK SDK version.
+      # wdk-build otherwise takes the newest SDK under Kits\10\Lib, which may lack the WDK's km
+      # headers; pin the WDK's SDK version.
       Version_Number: '10.0.26100.0'
       # No LIBCLANG_PATH pin: the vendored bindgen 0.72 builds clean on the runner's default clang 22
       # (the shipping pack proves it) — see design/windows-build-and-packaging.md.

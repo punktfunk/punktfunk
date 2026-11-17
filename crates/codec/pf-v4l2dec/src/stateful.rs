@@ -5,8 +5,9 @@
 //! source-change event; only then can the CAPTURE queue be allocated. The same
 //! event arrives again on a mid-stream resolution change, and some drivers
 //! raise it around keyframes with nothing changed. Both are answered by
-//! stopping the CAPTURE queue: pictures not yet dequeued are dropped, which the
-//! host's keyframe on a resize makes harmless.
+//! stopping the CAPTURE queue: pictures not yet dequeued are dropped. After a
+//! resize the host's new encoder opens on a keyframe, so no later picture
+//! depends on them.
 //!
 //! A CAPTURE buffer handed out by [`Stateful::pump`] belongs to the consumer
 //! until [`Stateful::release`]; `generation` keeps a buffer of a replaced pool

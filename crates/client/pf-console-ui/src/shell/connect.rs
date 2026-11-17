@@ -549,7 +549,8 @@ impl Shell {
         self.in_stream = false;
         self.connect.end_dial();
         self.connect.show_card(Connecting {
-            // `None` only if the shell never raised the connect (`--connect` has no console).
+            // The last connect card's title: `None` before the first, and an older connect's
+            // after a launch that took the hold, which raises no card. `--connect` has no console.
             title: self.last_connect_title.clone(),
             appear: 1.0,
             request_access: false,

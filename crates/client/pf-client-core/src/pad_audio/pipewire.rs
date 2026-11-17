@@ -435,9 +435,9 @@ fn unity_volume_pod(channels: u32) -> anyhow::Result<Vec<u8>> {
     .into_inner())
 }
 
-/// Pin the pad sink to unity. WirePlumber starts new cards at 0.4 (−24 dB, cubed UI 40%)
-/// globally, so both session ends stack. Not restored: putting −24 dB back would restore the
-/// bug. Failures cost attenuation, never audio. `PUNKTFUNK_PAD_SINK_VOLUME=0` skips.
+/// Pin the pad sink to unity. WirePlumber (0.4, 0.5) starts new cards at 0.4 (−24 dB, cubed
+/// UI 40%) globally, so both session ends stack. Not restored: putting −24 dB back would restore
+/// the bug. Failures cost attenuation, never audio. `PUNKTFUNK_PAD_SINK_VOLUME=0` skips.
 /// Two rounds under one deadline: registry bind, then `set_param`.
 fn pin_sink_volume(node_id: u32, channels: u32) -> anyhow::Result<()> {
     use anyhow::{anyhow, Context};

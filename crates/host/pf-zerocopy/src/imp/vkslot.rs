@@ -9,7 +9,7 @@
 //! Ring slots are Vulkan external memory both APIs address (`InputSurface`
 //! layouts via [`VkSlotBlend::alloc_slot`]). Pin the shader with
 //! `glslangValidator -V cursor_blend.comp -o cursor_blend.spv` (CI gates
-//! drift). SPIR-V, not PTX: a vendored PTX blob JIT-fails on older drivers.
+//! drift). SPIR-V, not PTX: a driver whose JIT predates a PTX blob's ISA version refuses it.
 //!
 //! Cursor frames: [`VkSlotBlend::blend_ref_ordered`] (timeline exported to
 //! CUDA, copy→blend→encode on-device) or [`VkSlotBlend::blend_ref`] (CPU

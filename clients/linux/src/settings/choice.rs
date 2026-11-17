@@ -6,8 +6,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// True inside a gamescope session (Steam game mode on the Deck / Bazzite): GTK popovers
-/// are xdg_popups, which gamescope never maps for nested apps — a ComboRow's dropdown
-/// flashes the row but no list ever appears. Selection UI must stay inside the toplevel.
+/// are xdg_popups, which gamescope up to 3.17 never shows — a ComboRow's dropdown flashes
+/// the row but no list ever appears. Selection UI must stay inside the toplevel.
 pub fn gamescope_session() -> bool {
     pf_client_core::gamescope::under_gamescope()
 }

@@ -73,9 +73,8 @@ const localFilenames = (kind: ArtKind): string[] =>
 			? ["library_hero.jpg"]
 			: kind === "logo"
 				? ["logo.png"]
-				: // Steam's local cache names the header asset differently from the store CDN's
-					// `header.jpg` — this trips everyone once. Newer entries use the CDN's name, so
-					// both belong here.
+				: // Steam's local cache holds the header as both `library_header.jpg` and the CDN's
+					// `header.jpg`, so both belong here.
 					["library_header.jpg", "header.jpg"];
 
 /**

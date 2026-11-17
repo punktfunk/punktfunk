@@ -1268,7 +1268,8 @@ pub mod isolate_journal {
 /// sees every active path; we deactivate all of them EXCEPT the managed virtual target **set**
 /// (`design/display-management.md` §6.1: "exclusive" means the managed set stays active — with
 /// parallel displays a sibling slot is never deactivated), leaving the virtual display(s) as the sole
-/// desktop so ALL content (incl. Winlogon) renders to them. Apollo isolates the same way (CCD).
+/// desktop so ALL content (incl. Winlogon) renders to them. Apollo's `ensure_only_display`
+/// deactivates the other paths the same way (CCD, via libdisplaydevice).
 /// Re-issued with the grown/shrunk set on each slot add/remove while the group lives; the FIRST call's
 /// returned config is what teardown restores (the caller keeps it on the group record and discards
 /// later returns). Returns the original active config to restore on teardown.

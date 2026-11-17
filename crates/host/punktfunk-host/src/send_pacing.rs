@@ -442,8 +442,9 @@ impl Pacer {
     }
 
     /// Per AU: the stream rate, the client's link report (`0` = none yet), a pinned
-    /// stream's wall, the client's shape, and the spread one frame may take. Returns `R`.
-    /// Every shape stays under [`cap_bps`].
+    /// stream's wall, the client's shape, and the spread one frame may take. Returns `R`, at
+    /// most [`cap_bps`] for every shape. A [`Shape::Burst`] frame ignores it and leaves at line
+    /// rate.
     pub(crate) fn update(
         &mut self,
         bitrate_kbps: u32,

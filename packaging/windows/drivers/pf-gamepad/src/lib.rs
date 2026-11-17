@@ -87,7 +87,7 @@ const OFF_INPUT_GEN: usize = core::mem::offset_of!(PadShm, input_gen);
 /// changes rate, while the input path runs on every [`TIMER_PERIOD_MS`] tick.
 const PUMP_EVERY_N_TICKS: u32 = 4;
 /// Tick period. One pended READ_REPORT completes per tick, so this caps what a game observes: 2 ms
-/// is about a real DualShock 4's Bluetooth cadence and leaves headroom above a Sony pad's 250 Hz.
+/// leaves headroom above a Sony pad's 250 Hz.
 /// The extra ticks only do the cheap half (read the input slot, complete one pended read), see
 /// [`PUMP_EVERY_N_TICKS`].
 const TIMER_PERIOD_MS: u32 = 2;

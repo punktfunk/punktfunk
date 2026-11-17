@@ -111,9 +111,10 @@ pub fn decode_gamepad_remove(flags: u32) -> (u8, u8) {
 pub const SCROLL_FLAG_PRECISE: u32 = 1;
 
 /// Pixels one detent of a [`SCROLL_FLAG_PRECISE`] delta is worth — the inverse of the
-/// 0.1-units-per-point factor SDL uses, and [`scroll::ScrollOutput`] applies toward an older
-/// host, to put measured pixels INTO 120-space. Undoing it exactly is what makes the content
-/// travel as far as the finger; any other value re-introduces a scale factor.
+/// 0.1-units-per-point factor SDL 3.4 uses on macOS and Wayland, and [`scroll::ScrollOutput`]
+/// applies toward an older host, to put measured pixels INTO 120-space. Undoing it exactly is
+/// what makes the content travel as far as the finger; any other value re-introduces a scale
+/// factor.
 pub const PRECISE_PX_PER_DETENT: f64 = 10.0;
 
 /// [`InputKind::GamepadArrival`] `flags` bit 8: this pad renders haptics

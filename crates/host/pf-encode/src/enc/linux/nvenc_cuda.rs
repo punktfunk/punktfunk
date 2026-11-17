@@ -1731,8 +1731,8 @@ impl NvencCudaEncoder {
             bufferUsage: nv::NV_ENC_BUFFER_USAGE::NV_ENC_INPUT_IMAGE,
             ..Default::default()
         };
-        // Padded planes: `chromaOffsetIn` (the 12.1 bindings' `reserved1[0]`), read only by
-        // struct version 5. A driver that refuses it fails the register and the lane.
+        // Padded planes: `chromaOffsetIn` (SDK 13.0; the 12.1 bindings' `reserved1[0]`), read
+        // only by struct version 5. A driver that refuses it fails the register and the lane.
         if chroma != 0 && u64::from(chroma) != u64::from(span.stride) * u64::from(height) {
             rr.version = nv::NVENCAPI_VERSION | (5 << 16) | (0x7 << 28);
             rr.reserved1[0] = chroma;

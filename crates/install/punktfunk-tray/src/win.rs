@@ -360,8 +360,8 @@ fn update_icon(hwnd: HWND, add: bool) -> bool {
     }
 }
 
-/// Toast on the idle → streaming edge. Windows 11 renders `NIF_INFO` as a native toast
-/// under the AUMID; a plain exe does not need WinRT. UI thread, on `WMAPP_STATUS`.
+/// Toast on the idle → streaming edge. Windows 11 shows `NIF_INFO` as a banner notification;
+/// a plain exe needs no WinRT. UI thread, on `WMAPP_STATUS`.
 fn notify_on_connect(hwnd: HWND) {
     let status = app().status().clone();
     let now: u8 = if status.is_streaming() { 2 } else { 1 };

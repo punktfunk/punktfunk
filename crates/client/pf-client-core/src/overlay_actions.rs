@@ -645,7 +645,7 @@ pub fn slot_icon(id: &str, muted: bool) -> Option<&'static str> {
     })
 }
 
-/// What the Controller type slot steps through: Automatic, then the pads every host builds.
+/// What the Controller type slot steps through: Automatic, then five pads both host OSes build.
 pub const PAD_TYPE_CYCLE: [GamepadPref; 6] = [
     GamepadPref::Auto,
     GamepadPref::Xbox360,

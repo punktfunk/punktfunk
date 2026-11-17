@@ -38,8 +38,8 @@ pub(crate) fn negotiated_space(color: &ColorInfo) -> Space {
 /// The tag for the colour a decoder reports: BT.2020 PQ or HLG, BT.709 for SDR (sRGB when full
 /// range), `None` without a transfer. `transfer` and `range` are the output format's
 /// `color-transfer` and `color-range`: SDR_VIDEO 3, ST2084 6 (PQ), HLG 7; FULL 1, LIMITED 2.
-/// Codec2 fills a decoder that reports nothing with its BT.709 default, so SDR here does not
-/// prove the stream is SDR.
+/// Codec2 fills a decoder that reports nothing with an SDR default, so SDR here does not prove
+/// the stream is SDR.
 pub(crate) fn reported_space(transfer: Option<i32>, range: Option<i32>) -> Option<Space> {
     let full = range == Some(1);
     match transfer {

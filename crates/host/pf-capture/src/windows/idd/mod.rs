@@ -91,8 +91,8 @@ pub struct IddPushCapturer {
     /// Complete CCD identity (adapter LUID + target id) for every display-global helper.
     ccd: pf_win_display::win_display::CcdTargetKey,
     /// The delivery gate, the supervisor and the encoder's telemetry, over the driver's
-    /// transport. The in-place resize waits for a delivery at the new size with the encoder
-    /// untouched.
+    /// transport. The in-place resize re-opens the driver's encoder at the new size, then waits
+    /// for a delivery its pool took.
     remote: RemoteSource<IddTransport>,
     /// Handle duplication into WUDFHost for the cursor channel; the transport shares it.
     broker: Arc<ChannelBroker>,

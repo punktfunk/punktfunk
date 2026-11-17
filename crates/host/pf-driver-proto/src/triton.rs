@@ -18,8 +18,8 @@ pub const ID_LOAD_DEFAULT_SETTINGS: u8 = 0x8E;
 
 /// Whether a feature SET from the host's stack goes on to the physical pad. Lizard mode and the
 /// factory settings stay on the virtual pad: the client holds lizard mode off while it forwards
-/// and restores it on release, and a reset would undo the settings Steam wrote. `set` is id-first
-/// or already stripped (a command is `0x80` or above).
+/// and lizard mode returns on release, and a reset would undo the settings Steam wrote. `set` is
+/// id-first or already stripped (a command is `0x80` or above).
 pub fn forwards_to_pad(set: &[u8]) -> bool {
     let cmd = match set {
         [first, ..] if *first >= 0x80 => *first,

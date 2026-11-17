@@ -49,11 +49,11 @@ pub(crate) const STATUS_ACCESS_DENIED: NTSTATUS = 0xC000_0022u32 as NTSTATUS;
 ///
 /// `10` = IddCx 1.10, the floor the driver needs: the drain loop calls
 /// `IddCxSwapChainReleaseAndAcquireBuffer2` (1.10) unconditionally and the swap-chain worker uses
-/// `IddCxSetRealtimeGPUPriority` (1.9); the product floor is Windows 11 22H2 / build 22621,
-/// whose framework is 1.10 (the installer gate — `MIN_HOST_BUILD` in punktfunk-setup —
-/// exists for this driver). A lower value would let the driver load against a SHORT
-/// `IddFunctions` table, where dispatching a newer DDI reads past the populated entries.
-/// With `10`, an older framework fails the bind cleanly (driver doesn't load) instead of
-/// limping into undefined dispatch.
+/// `IddCxSetRealtimeGPUPriority` (1.9). The product floor is build 22621 (`MIN_HOST_BUILD` in
+/// punktfunk-setup); its framework is 1.9 at release and 1.10 from the 22H2 September Update
+/// (0x1A00). A lower value would let the driver load against a SHORT `IddFunctions` table,
+/// where dispatching a newer DDI reads past the populated entries. With `10`, an older
+/// framework fails the bind cleanly (driver doesn't load) instead of limping into undefined
+/// dispatch.
 #[unsafe(no_mangle)]
 pub static IddMinimumVersionRequired: wdk_sys::ULONG = 10;

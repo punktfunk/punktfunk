@@ -849,8 +849,8 @@ private fun isForwarded(dev: InputDevice): Boolean =
  * Everything [PadRow] renders, decoupled from [InputDevice] so the screenshot harness can compose
  * the connected-pad card at all — Robolectric enumerates no input devices, and a marketing shot of
  * "no controller detected" sells nothing. Production always maps a real device via [padInfoOf];
- * [dev] powers the rumble test and is absent only in the harness (the button then says the pad
- * has no motor).
+ * [dev] powers the rumble test and is absent only in the harness (a press there reports that no
+ * motor answered).
  */
 internal data class PadInfo(
     val name: String,

@@ -97,8 +97,8 @@ pub enum RowId {
     FollowOsTheme,
     Palette,
     ReduceMotion,
-    /// The TV clients' low-cost interface mode: Android caps its surface at 1080p,
-    /// both draw the backdrop small and slow. The TVs default it on.
+    /// The TV clients' low-cost interface mode: Android caps its surface at 1920 px on the
+    /// long edge, both draw the backdrop small and slow. The TVs default it on.
     ReduceUiResolution,
     /// Same `library_view` key the library bar writes.
     LibraryView,
@@ -106,7 +106,7 @@ pub enum RowId {
     StartIn,
     // Where the typed struct has no field, a row's value lives in `trust::Settings::extra`
     // (see `Extra`); `row_on` names the platforms that offer each.
-    /// Slice-progressive decode plus DSCP. Android-only.
+    /// The fast pipeline: low-latency decoder and audio, slice parts, DSCP, ALLM. Android-only.
     LowLatency,
     /// `trust::Settings::keep_awake`. Off, the stream holds the screen awake only while the
     /// player's input is recent.
@@ -1055,7 +1055,8 @@ pub fn row_applies(id: RowId, ctx: &Ctx) -> bool {
         RowId::Vsync | RowId::InhibitShortcuts | RowId::Mouse | RowId::Screens if apple => {
             is_mac(ctx)
         }
-        // An Apple TV has no touchscreen, microphone, scroll wheel or variable refresh.
+        // An Apple TV has no touchscreen, scroll wheel (no GCMouse in the tvOS 27.0 SDK) or
+        // variable refresh, and the tvOS app opens no mic.
         RowId::Touch | RowId::Mic | RowId::EchoCancel | RowId::InvertScroll | RowId::AllowVrr
             if apple =>
         {

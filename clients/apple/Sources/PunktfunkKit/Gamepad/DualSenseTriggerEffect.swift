@@ -60,8 +60,8 @@ public enum DualSenseTriggerEffect: Equatable, Sendable {
 
         switch mode {
         case 0x00, 0x05, 0xF0...0xFF:
-            // 0x00/0x05 are the conventional off/reset modes; 0xFC/0xFB/0xFA show up from
-            // calibration-adjacent writes — all render as off.
+            // 0x00/0x05 are the conventional off/reset modes; 0xFC–0xFE are firmware
+            // debug/calibration modes — all render as off.
             return .off
 
         case 0x01:

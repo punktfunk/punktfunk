@@ -13,8 +13,8 @@
 #     fine for the user session + systemd --user units (unconfined), but system daemons are
 #     DENIED — udev can't read 60-punktfunk.rules and systemd-sysctl can't read the sysctl
 #     drop-in,
-#   * pins compatibility via ID=fedora + VERSION_ID: merges on Bazzite/Silverblue/Aurora of the
-#     SAME Fedora major (ID_LIKE matching, systemd >= 256) and is REFUSED after a major rebase
+#   * pins compatibility via ID=fedora + VERSION_ID: merges on Silverblue, and with systemd >= 258
+#     (ID_LIKE matching) on Bazzite/Aurora, of the SAME Fedora major; REFUSED after a major rebase
 #     instead of running soname-broken binaries (`punktfunk-sysext update` then re-resolves),
 #   * embeds the punktfunk-sysext helper so an installed box can update itself.
 #
@@ -138,8 +138,8 @@ install -Dm0755 "$HERE/punktfunk-sysext.sh" "$STAGE/usr/bin/punktfunk-sysext"
 pf_stage_sysctl_unit "$STAGE"
 pf_stage_start_unit "$STAGE"
 
-# Compatibility marker. ID=fedora matches Bazzite & friends through os-release ID_LIKE;
-# VERSION_ID makes a major-rebased host refuse the old ABI instead of merging it.
+# Compatibility marker. ID=fedora matches Bazzite & friends through os-release ID_LIKE from
+# systemd 258 on; VERSION_ID makes a major-rebased host refuse the old ABI instead of merging it.
 install -d "$STAGE/usr/lib/extension-release.d"
 cat > "$STAGE/usr/lib/extension-release.d/extension-release.punktfunk" <<EOF
 ID=fedora

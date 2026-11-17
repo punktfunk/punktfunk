@@ -101,8 +101,8 @@ fn alloc(
     Ok(bo)
 }
 
-/// The row pitch every reader of a LINEAR buffer steps as given: iHD rounds an import up to 64
-/// bytes and NVIDIA's Vulkan to 32, and a rounded pitch shears the picture.
+/// The row pitch every reader of a LINEAR buffer steps as given: iHD and NVIDIA's Vulkan read
+/// an off-alignment LINEAR import at a rounded pitch, and a rounded pitch shears the picture.
 const LINEAR_PITCH: u32 = 64;
 
 /// `bo`, or a LINEAR buffer with rows on [`LINEAR_PITCH`] in its place. Mesa packs a

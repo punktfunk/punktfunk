@@ -80,7 +80,7 @@ pub struct AuPlan {
     ///
     /// DXVA binds them as `RefPicList`, VA-API as `ReferenceFrames`, Vulkan in
     /// `pReferenceSlots` after the current sets. A driver may treat absence as
-    /// "no longer a reference": AMD's Vulkan driver then decodes an RFI anchor on
+    /// "no longer a reference": AMD's Windows Vulkan driver then decodes an RFI anchor on
     /// a *Foll* picture wrong.
     ///
     /// Captured after 8.3.2 marking and C.5.2.2's pre-decode update, before the
@@ -313,7 +313,7 @@ impl From<&Sps> for NegotiationInfo {
 /// Reading A-2 as a requirement over-allocates: A-2 branches on picture size
 /// vs the LEVEL's `MaxLumaPs`, so a six-picture L5.1 stream reads 16 at 1080p
 /// (branch 1) and 6 at 4K. A backend adds the current picture and would ask
-/// for 17 slots; Vulkan Video caps `maxDpbSlots` at 16.
+/// for 17 slots; ANV offers 16 `maxDpbSlots` for H.265.
 ///
 /// `Dpb::needs_bumping` already keys on signalled buffering, not `max_num_pics`,
 /// so a wider limit only over-allocates hardware surfaces.

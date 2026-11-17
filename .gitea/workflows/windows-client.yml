@@ -87,7 +87,7 @@ name: windows-client
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
 # cancel each other). Keeps a busy push cadence from piling ~10 queued runs per commit onto the
-# runner fleet. Gitea honors this for push triggers (PR triggers: see gitea#35933).
+# runner fleet. Gitea applies it to push and pull_request runs alike.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

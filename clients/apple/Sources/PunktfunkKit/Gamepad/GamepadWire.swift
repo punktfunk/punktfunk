@@ -39,9 +39,9 @@ public enum GamepadWire {
     }
 
     /// Back-grip paddles (Xbox Elite P1–P4 / DualSense Edge / Steam-Deck L4-L5-R4-R5, as
-    /// R4/L4/R5/L5). `GamepadCapture.buttonMask` does not read them: which GameController
-    /// `paddleButton1..4` is which BTN_PADDLE is unconfirmed on a real Elite pad, so they are
-    /// absent from `allButtons` until that forwarding lands.
+    /// R4/L4/R5/L5). `GamepadCapture.buttonMask` does not read them yet: GameController's
+    /// `paddleButton1..4` (Elite P1..P4) map to paddle1, paddle3, paddle2, paddle4. They stay
+    /// out of `allButtons` until that forwarding lands.
     public static let paddle1 = UInt32(PUNKTFUNK_BTN_PADDLE1)
     public static let paddle2 = UInt32(PUNKTFUNK_BTN_PADDLE2)
     public static let paddle3 = UInt32(PUNKTFUNK_BTN_PADDLE3)

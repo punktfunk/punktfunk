@@ -238,7 +238,8 @@ object Gamepad {
      * generic key layout grants a remote the A/B keys too, so face buttons prove nothing. One
      * such device pins the console UI on and lists itself as a controller.
      *
-     * A stick or HAT is hardware a remote does not report. `isVirtual` only means "device id < 0".
+     * A stick or HAT is hardware a remote does not report. `isVirtual` only means "device id < 0"
+     * (API 37).
      */
     // ponytail: a pad with no stick and no HAT is not listed; the router still forwards it on its
     // first button. Track first presses here if such a pad turns up.
@@ -457,10 +458,10 @@ object Gamepad {
     // ORDER — so every keycode after the first divergence is somebody else's button.
     //
     // Example: a DualSense or an Xbox Elite Series 2 over Bluetooth on a Fire TV box has no
-    // layout there — AOSP ships none for the Elite Series 2 over Bluetooth (`045e:0b05`), and the
-    // DualSense's (`054c:0ce6`) carries `requires_kernel_config CONFIG_HID_PLAYSTATION`, which a
-    // Fire TV kernel does not have. A DualSense reporting straight through puts L2 on `0x136`,
-    // which `Generic.kl` calls BUTTON_L1.
+    // layout there — AOSP ships none for the Elite Series 2 over Bluetooth (`045e:0b05`), and
+    // none for the DualSense (`054c:0ce6`) before Android 12, which Fire OS 7 and 8 (Android 9
+    // and 11) predate. A DualSense reporting straight through puts L2 on `0x136`, which
+    // `Generic.kl` calls BUTTON_L1.
     //
     // So buttons are resolved from the SCANCODE, which is the pad's own report position and
     // is immune to the layout file — the same reason [Keymap.toVk] reads `scanCode` for keyboards.

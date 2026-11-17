@@ -1007,9 +1007,9 @@ fn running_autologin_gamescope_unit() -> Option<String> {
 }
 
 /// Steam first, asked to quit: a SIGKILL mid-write loses `config.vdf` or `registry.vdf`. Then
-/// SIGKILL, not SIGTERM: gamescope's SIGTERM handler leaks the NVIDIA GPU context, after which
-/// every later `vkCreateDevice` fails until reboot. Then `stop` + `reset-failed` so relaunch is clean.
-/// The run it ends is the host's, so Game Mode's crash counters forget it.
+/// SIGKILL, not SIGTERM: on NVIDIA, gamescope's SIGTERM shutdown can leave every later
+/// `vkCreateDevice` failing until reboot, and SIGKILL does not. Then `stop` + `reset-failed` so
+/// relaunch is clean. The run it ends is the host's, so Game Mode's crash counters forget it.
 fn kill_unit(unit: &str) {
     if let Some(pid) = steam_pid_in_unit(unit) {
         if !shut_steam_down(pid, STEAM_STOP_WAIT) {
@@ -1268,8 +1268,9 @@ fn launch_session(client: &str, unit_name: &str, mode: Mode, hdr: bool) -> Resul
                  (Steam failed to start? — `journalctl --user -u {unit_name}`)"
             );
         }
-        // Wrapper SIGKILLs a gamescope that missed its 5 s handshake; no Restart=. Don't wait on a corpse.
-        // Unknown and `deactivating` count as alive, so a hiccup cannot start a relaunch storm.
+        // gamescope-session-plus SIGKILLs a gamescope that misses its 5 s ready read; the unit
+        // has no Restart=, so don't wait on a corpse. Unknown and `deactivating` count as alive,
+        // so a hiccup cannot start a relaunch storm.
         let alive = unit_state(unit_name).is_none_or(|s| {
             matches!(
                 s.as_str(),
@@ -1282,7 +1283,7 @@ fn launch_session(client: &str, unit_name: &str, mode: Mode, hdr: bool) -> Resul
                 "gamescope session: transient unit died (missed the wrapper's 5 s gamescope \
                  readiness window?) — relaunching"
             );
-            // NVIDIA reclaims GPU context asynchronously; instant relaunch misses the 5 s window again.
+            // Cool down first: an instant relaunch misses the 5 s window again.
             std::thread::sleep(Duration::from_millis(1500));
             let _ = crate::proc::status_within(
                 Command::new("systemctl").args(["--user", "reset-failed", unit_name]),

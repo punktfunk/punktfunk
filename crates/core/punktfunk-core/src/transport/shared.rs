@@ -211,8 +211,8 @@ impl ClientMedia {
 
     /// Accept media from `host` only, and mark what goes up to it (input, acks, the mic) as
     /// audio-class QoS, the same rule as the host's own marks: private peers, unless forced.
-    /// On Apple the socket also connects to it: XNU sheds an unconnected UDP socket's datagrams
-    /// past ~150k a second (1.7 Gbit/s of video), uncounted.
+    /// On Apple the socket also connects to it: an unconnected one measured a ceiling near
+    /// 150k datagrams a second (1.7 Gbit/s of video), with no drop counted.
     pub fn set_host(&self, host: SocketAddr) {
         let host = canonical(host);
         self.stats.set_host(host);
@@ -254,8 +254,8 @@ pub fn client_socket(bind: SocketAddr) -> std::io::Result<(Arc<ClientSocket>, Cl
     }));
     let stats = Arc::new(SharedStats::default());
     let (tx, rx) = sync_channel(MEDIA_QUEUE);
-    // Without GRO a read is one datagram, so the buffer is one datagram's worth. Windows
-    // reports 64 segments whether or not URO is on, and nothing turns URO on.
+    // Without GRO a read is one datagram, so the buffer is one datagram's worth. quinn-udp
+    // reports 64 segments on Windows whether or not URO is on, and nothing turns URO on.
     let coalesced = !cfg!(windows) && state.gro_segments() > 1;
     let size = if coalesced {
         READ_BUF

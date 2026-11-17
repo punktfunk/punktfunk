@@ -133,10 +133,10 @@ internal class StreamWindow(
      * effective lock, Wi-Fi power save batches downlink delivery into beacon-interval clumps:
      * latency mush, sawtoothing bitrate, and whole-frame loss when the AP's power-save buffer
      * overflows.
-     *  - FULL_LOW_LATENCY (API 29+) is the only lock that actually disables power save on modern
-     *    Android; it needs the app foreground + screen on, which a stream always is.
-     *  - FULL_HIGH_PERF covers older releases. Alone it leaves power save on (Android 13), so it
-     *    can't be the only lock; API 34 deprecates it and serves FULL_LOW_LATENCY in its place.
+     *  - FULL_LOW_LATENCY (API 29+) turns power save off and, where supported, the radio's
+     *    low-latency mode on. It needs the app foreground + screen on, which a stream always is.
+     *  - FULL_HIGH_PERF covers API 28 and, through API 33, keeps power save off when the
+     *    low-latency lock lapses (background, screen off). API 34 serves it as FULL_LOW_LATENCY.
      * Non-reference-counted: one explicit acquire/release each.
      */
     private val wifiLocks: List<WifiManager.WifiLock> = run {

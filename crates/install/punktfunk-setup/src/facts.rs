@@ -474,7 +474,8 @@ fn graphical_seat(env: &Env) -> bool {
 
 /// Same split as `punktfunk-host detect-conflicts`: exit 1 is the only "yes", 0 the only "no".
 /// Any other code is a half-install or a crash — fall through to the unit probe rather than
-/// opening the GameStream surface on a guess.
+/// opening the GameStream surface on a guess. A host older than v0.13.0 lacks the command; it
+/// exits 1 too and reads as "yes".
 fn sunshine_active(run: &dyn CommandRunner) -> bool {
     if run.which("punktfunk-host")
         && let Some(out) = run.probe("punktfunk-host", &["detect-conflicts"])
@@ -679,8 +680,8 @@ mod tests {
         assert_eq!(family, Family::Steamos);
     }
 
-    // Game Mode / HTPC images only. rpm-ostree, bootc, and ujust are not tells: Silverblue
-    // and Bluefin ship all three and are workstations.
+    // Game Mode / HTPC images only. rpm-ostree, bootc and ujust are not tells: Silverblue
+    // ships the first two, Bluefin all three, and both are workstations.
     #[test]
     fn couch_box_is_bazzite_and_nobara_only() {
         assert!(os("bazzite", "fedora", "43").like("bazzite"));

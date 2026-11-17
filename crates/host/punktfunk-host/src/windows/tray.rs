@@ -71,7 +71,7 @@ pub fn tray_exe() -> Option<PathBuf> {
         .filter(|p| p.exists())
 }
 
-/// THIS session: the tray holds a `Local\` mutex, which resolves per logon session — a process
+/// THIS session: the tray holds a `Local\` mutex, which resolves per WTS session — a process
 /// scan would see another user's tray and suppress the console one. Best-effort: a failed open
 /// reads as not running — a hint, never proof for a kill.
 pub fn is_running() -> bool {

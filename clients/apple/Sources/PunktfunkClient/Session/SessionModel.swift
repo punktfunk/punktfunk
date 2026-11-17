@@ -1229,7 +1229,7 @@ final class SessionModel: ObservableObject {
             echoCancel: settings.echoCancel,
             spatialAudio: settings.spatialAudio,
             // The A/V sync reference: the presenter's own capture→on-glass meter. The stage-1
-            // fallback stamps nothing, so the loop then declines to correct.
+            // pump stamps capture→enqueue into it instead.
             videoLatency: endToEnd)
         resources.add(audio, join: { audio.stop() })
         #if os(tvOS)

@@ -9,7 +9,7 @@ import { seatDetail } from "@/lib/host-messages";
 import { personBrowser } from "@/lib/person";
 import { m } from "@/paraglide/messages";
 
-/** A cold desktop takes about 20 s; past this it counts as not starting. */
+/** Past this a desktop counts as not starting. */
 const LIMIT_MS = 180_000;
 /** A desktop still stopped this long after its start never began starting. */
 const STUCK_MS = 20_000;

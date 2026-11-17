@@ -6,8 +6,8 @@
 use crate::*;
 
 /// Compositor the host resolved (`PUNKTFUNK_COMPOSITOR_*`; Welcome echo of
-/// [`punktfunk_connect_ex`]). `AUTO` = a host that didn't say. Gamescope PipeWire
-/// capture carries no cursor — default to a client-side cursor there.
+/// [`punktfunk_connect_ex`]). `AUTO` = a host that didn't say. Stock gamescope's
+/// PipeWire node carries no cursor, so the host composites one in.
 ///
 /// # Safety
 /// `c` is a valid connection handle; `compositor` is writable (NULL is skipped).
@@ -733,9 +733,9 @@ pub struct PunktfunkHealthReport {
 }
 
 /// Run the network check over this connection and write its report into `*out`. Blocking
-/// for ten to twenty seconds — call it off the main thread. The connection should have been
-/// dialled for probes only (`delivery_flags` `2`). Errors: `Unsupported` when the host
-/// declined, `Timeout` when a round never reported.
+/// for several seconds, longer on a lossy link — call it off the main thread. The connection
+/// should have been dialled for probes only (`delivery_flags` `2`). Errors: `Unsupported`
+/// when the host declined, `Timeout` when a round never reported.
 ///
 /// # Safety
 /// `c` is a valid connection handle; `out` is writable for one `PunktfunkHealthReport`

@@ -105,9 +105,10 @@ for _ in $(seq 1 40); do
     if [[ -n "$d" ]]; then DISPLAY_NUM="$d"; break; fi
     d=$(pgrep -a Xwayland 2>/dev/null | grep -oE ' :[0-9]+' | tr -d ' :' | head -1 || true)
     if [[ -n "$d" && -S "/tmp/.X11-unix/X$d" ]]; then DISPLAY_NUM="$d"; break; fi
-    # Most reliable here: KWin --xwayland reserves the /tmp/.X11-unix/X<N> socket up front (Xwayland
-    # starts on demand on first connect) and on this KWin neither logs the display nor runs a process
-    # until then. The socket IS the signal — take it. (Fresh boot has a tmpfs /tmp, so no stale one.)
+    # Most reliable here: KWin --xwayland reserves the /tmp/.X11-unix/X<N> socket up front
+    # (Xwayland starts on demand on first connect) and KWin 6.6–6.7 neither logs the display nor
+    # runs a process until then. The socket IS the signal — take it. (Fresh boot has a tmpfs /tmp,
+    # so no stale one.)
     s=$(ls /tmp/.X11-unix/X[0-9]* 2>/dev/null | head -1 || true)
     if [[ -n "$s" && -S "$s" ]]; then DISPLAY_NUM="${s##*/X}"; break; fi
     sleep 0.25

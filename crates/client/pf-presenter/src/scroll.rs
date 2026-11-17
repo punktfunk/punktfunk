@@ -26,9 +26,9 @@ pub enum NativeAxisSource {
     Continuous,
 }
 
-/// Axis units per wheel detent on a pre-value120 protocol — the libinput
-/// convention compositors followed. The wire documents this as an
-/// approximation; real counts win whenever the frame supplies them.
+/// Axis units per wheel detent on a frame with no detent count: libinput's 15 degrees a click,
+/// which wlroots forwards. Mutter's 10 a click comes with a count. Real counts win whenever
+/// the frame supplies them.
 const AXIS_UNITS_PER_DETENT: f64 = 15.0;
 
 /// One in-flight scroll frame plus the gesture state that outlives it.

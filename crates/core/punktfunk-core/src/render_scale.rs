@@ -56,7 +56,7 @@ pub fn preset_index(scale: f64) -> Option<usize> {
 }
 
 /// Scale a base size: keep aspect, even-floor, uniform-clamp so neither axis
-/// exceeds `max_dim`. Each axis floors at 320×200 (host rejects smaller).
+/// exceeds `max_dim`. Each axis floors at 320×200, the clients' own minimum mode.
 pub fn apply(base_w: u32, base_h: u32, scale: f64, max_dim: u32) -> (u32, u32) {
     let scale = sanitize(scale);
     let mut w = base_w.max(1) as f64 * scale;

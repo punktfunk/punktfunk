@@ -8,7 +8,7 @@
 //! so another session's user can neither fake it nor keep it present. The ring section carries a
 //! [`RingHeader`] and a ring of 4-channel S16 frames; the endpoint object inside audiodg writes
 //! what the engine renders, and the seat host reads it for the `0xD1` plane. The seat host
-//! creates both before the pad's HID device, and zeroes the magic when the pad goes.
+//! creates both on the pad's arrival and zeroes the magic when the pad goes.
 
 use bytemuck::{Pod, Zeroable};
 use core::mem::{offset_of, size_of};

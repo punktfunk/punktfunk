@@ -1,12 +1,12 @@
 // HTTPS transport for the host's management REST API, built on Network.framework rather than
 // URLSession.
 //
-// WHY NOT URLSession. App Transport Security governs the URL loading system and exempts only
-// "local" destinations — `.local` names, unqualified names, RFC1918 / link-local IP literals.
-// A Punktfunk host is self-signed by construction, so ATS refuses it at every other address: a
-// Tailscale peer (100.64/10 is CGNAT, not RFC1918), a WireGuard peer, a public IP. No ATS key
-// can say "any address the user typed", and turning ATS off app-wide would also drop its TLS
-// floor and cleartext block for the third-party cover-art fetches.
+// WHY NOT URLSession. App Transport Security governs the URL loading system and, from iOS 17 /
+// macOS 14, exempts only "local" destinations — `.local` names, unqualified names, RFC1918 /
+// link-local IP literals. A Punktfunk host is self-signed by construction, so ATS refuses it at
+// every other address: a Tailscale peer (100.64/10 is CGNAT, not RFC1918), a WireGuard peer, a
+// public IP. No ATS key can say "any address the user typed", and turning ATS off app-wide would
+// also drop its TLS floor and cleartext block for the third-party cover-art fetches.
 //
 // Network.framework is not subject to ATS, and `sec_protocol_options_set_verify_block` states
 // the trust rule we mean: the leaf certificate must hash to the fingerprint pinned at pairing,
@@ -134,8 +134,8 @@ extension MgmtTransport {
         uncheckedState: [String: OperationQueue]())
 
     /// Tunnel calls one host runs at once. The tunnel carries each on a stream of its own, so a
-    /// screenful of posters loads together: 32 covers one, and is half the threads libdispatch
-    /// gives a process.
+    /// screenful of posters loads together: 32 covers one, and is half the 64 threads GCD gives a
+    /// process at minimum (xnu `WORKQUEUE_MAXTHREADS / 8`; more cores raise it).
     static let tunnelWidth = 32
 
     /// Runs `work`, which blocks, on one of `host`'s tunnel threads: at most `tunnelWidth` at

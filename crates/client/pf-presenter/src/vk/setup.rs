@@ -379,8 +379,8 @@ struct DeviceCaps {
     /// The win32 external-memory and keyed-mutex extensions, and a BGRA8 import.
     #[cfg(windows)]
     win_capable: bool,
-    /// `vkSetHdrMetadataEXT`, which compositors key "this app is HDR" on. The HDR10
-    /// colorspace alone still looks SDR to the shell.
+    /// `vkSetHdrMetadataEXT`: mastering and light-level metadata for an HDR10 swapchain.
+    /// The colorspace alone already marks the app HDR (gamescope, Mesa's Wayland WSI).
     has_hdr_metadata: bool,
     /// Core features, enabled as found.
     sampler_ycbcr: bool,
@@ -441,8 +441,8 @@ impl DeviceCaps {
         }
         // D3D11 shared-texture import, optional like dmabuf. Extensions are not
         // enough: the driver must report the ring's BGRA8 (and, for PQ pass-through,
-        // RGB10A2) as IMPORTABLE. Creating an unsupported external image is UB
-        // (`VK_ERROR_DEVICE_LOST` on first submit).
+        // RGB10A2) as IMPORTABLE. Creating an unsupported external image is UB (NVIDIA:
+        // `VK_ERROR_DEVICE_LOST` on first submit).
         #[cfg(windows)]
         let import = crate::d3d11::import_supported(instance, pdev);
         #[cfg(windows)]
@@ -595,7 +595,7 @@ impl DeviceCaps {
 /// The present-wait generation to enable, as (present-wait, present-wait2). The successors
 /// win when asked for, or wherever the engine stamps its presents, since those stamps need
 /// present-id2; the original pair then stays off. AMD's Windows driver completes the
-/// original wait late enough that the glass gate drops frames; without the successors the
+/// successor wait late enough that the glass gate drops frames; without the successors the
 /// vblank waiter runs.
 fn present_wait_generation(wait: bool, wait2: bool, wait2_wanted: bool) -> (bool, bool) {
     let use_wait2 = wait2 && wait2_wanted;

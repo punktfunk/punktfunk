@@ -32,10 +32,10 @@ use slot::PlaneSlot;
 /// Run a JNI body, catching any panic at the FFI boundary and returning `default` instead.
 ///
 /// A panic unwinding out of an `extern "system"` function aborts the whole process on Rust ≥ 1.81 —
-/// a hard crash of the embedding Android app with no logcat trace. A `NativeBridge` entry point
-/// that does more than read a constant or an atomic outside `EnvUnowned::with_env` (which carries
-/// its own catch) wraps its body in this; the workspace `Cargo.toml` leaves `panic = "abort"` off
-/// so it works.
+/// a hard crash of the embedding Android app that only the panic hook's `pf.crash` line names. A
+/// `NativeBridge` entry point that does more than read a constant or an atomic outside
+/// `EnvUnowned::with_env` (which carries its own catch) wraps its body in this; the workspace
+/// `Cargo.toml` leaves `panic = "abort"` off so it works.
 pub(crate) fn jni_guard<T>(default: T, f: impl FnOnce() -> T) -> T {
     std::panic::catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| {
         log::error!("punktfunk JNI: caught a panic at the FFI boundary (returning default)");

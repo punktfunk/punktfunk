@@ -19,8 +19,9 @@ public typealias ConsolePlatformView = NSView
 #endif
 
 /// The console layer's format: 10-bit like the video's SDR drawable, since the backdrop's
-/// gradients band in 8. Skia rates every Mac as GPU family 1, where it renders into RGB10A2
-/// but not BGR10A2. `PUNKTFUNK_SDR10_DRAWABLE=8` keeps BGRA8 everywhere.
+/// gradients band in 8. Skia m153 (as rust-skia builds it) rates every Mac as GPU family 1,
+/// where it renders into RGB10A2 but not BGR10A2. `PUNKTFUNK_SDR10_DRAWABLE=8` keeps BGRA8
+/// everywhere.
 let consoleDrawable: MTLPixelFormat = {
     #if os(macOS)
     return sdr10Drawable == .bgr10a2Unorm ? .rgb10a2Unorm : sdr10Drawable
@@ -192,7 +193,7 @@ public final class ConsoleMetalView: ConsolePlatformView {
 
     #if canImport(UIKit)
     // On iOS touches are a finger on the glass. A Siri Remote's clickpad sends indirect touches
-    // that start at the screen's centre, so on tvOS they are only a swipe's travel.
+    // that start at the focused view's centre, so on tvOS they are only a swipe's travel.
     #if os(iOS) || os(visionOS)
     public override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard tracked == nil, scrollFrom == nil, let touch = touches.first else { return }
@@ -457,8 +458,9 @@ public final class ConsoleMetalView: ConsolePlatformView {
     public override func mouseMoved(with event: NSEvent) { send(.move, event) }
     public override func rightMouseDown(with event: NSEvent) { send(.back, event) }
 
-    /// AppKit delivers `mouseMoved` only to a tracking area's owner: without one, hover never
-    /// reaches the console.
+    /// Without a tracking area, AppKit sends `mouseMoved` only while the window's
+    /// `acceptsMouseMovedEvents` is on, and it is off by default: hover would never reach the
+    /// console.
     public override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)

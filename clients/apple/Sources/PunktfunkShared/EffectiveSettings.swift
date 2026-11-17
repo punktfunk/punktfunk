@@ -173,7 +173,8 @@ public struct EffectiveSettings: Equatable, Sendable {
     }
 
     /// This device's shortcuts: the stored blob, or the platform's defaults. Hold Select for
-    /// Guide is a default off macOS: iOS keeps the physical Home press and tvOS never delivers it.
+    /// Guide is a default off macOS: iOS keeps the Home press by default, and tvOS never
+    /// delivers it.
     public var resolvedShortcuts: Shortcuts {
         #if os(macOS)
         Shortcuts.resolve(shortcuts, client: .mac, legacyGuideGesture: guideGesture)

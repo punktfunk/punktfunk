@@ -303,10 +303,10 @@ impl CscPass {
 }
 
 /// CSC straight into a swapchain image, taken when the whole picture lands on the surface at
-/// an exact scale. Skips the video image and its blit: at 4K that is two writes and a read of
-/// 33 MB per frame, most of an iGPU's present cost. Pipelines reuse the two CSC layouts, so
-/// their descriptor sets and push constants bind unchanged; the passes fit the overlay's
-/// per-image framebuffers. `clear` paints the letterbox first, `keep` skips that fill.
+/// an exact scale. Skips the video image and its blit: at 4K that saves a 33 MB write and a
+/// 33 MB read per frame. Pipelines reuse the two CSC layouts, so their descriptor sets and
+/// push constants bind unchanged; the passes fit the overlay's per-image framebuffers.
+/// `clear` paints the letterbox first, `keep` skips that fill.
 #[derive(Default)]
 pub struct DirectPass {
     pub clear: vk::RenderPass,

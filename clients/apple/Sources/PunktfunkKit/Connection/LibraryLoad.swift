@@ -22,7 +22,8 @@ public enum LibraryLoadEvent: Sendable {
 
 /// The load's sequence over its host. `run` builds one for a real host; a test fakes the calls.
 public struct LibraryLoad {
-    /// A woken box takes 20–60 s to answer: this many fetches, `retryEvery` apart.
+    /// The fetch retries for a minute while a woken box boots: this many fetches, `retryEvery`
+    /// apart.
     static let wakeAttempts = 12
 
     var hostID: String

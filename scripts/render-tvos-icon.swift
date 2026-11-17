@@ -1,7 +1,7 @@
 // Usage: swift scripts/render-tvos-icon.swift clients/apple/App/punktfunk_Logo.icon
 //        "clients/apple/App/Assets.xcassets/App Icon & Top Shelf Image.brandassets"
-// Icon Composer has no tvOS target, so this bakes its Liquid Glass render into the tvOS
-// parallax layers. ICTOOL overrides the renderer; Icon Composer 2 gives the tvOS 27 look.
+// Icon Composer 2.0 has no tvOS platform, so this bakes its Liquid Glass render into the tvOS
+// parallax layers. ICTOOL overrides the renderer.
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -66,7 +66,7 @@ func render(_ groups: [Int], grey: Int) -> [UInt8] {
     p.standardOutput = FileHandle.nullDevice
     try! p.run()
     p.waitUntilExit()
-    // ictool exits 0 on bad input, so the missing PNG is the error signal.
+    // A missing PNG is the error signal: ictool 2.0 writes none for a document it cannot read.
     guard let src = CGImageSourceCreateWithURL(out as CFURL, nil),
           let img = CGImageSourceCreateImageAtIndex(src, 0, nil)
     else { fatalError("ictool render of groups \(groups)") }

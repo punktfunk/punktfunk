@@ -16,7 +16,8 @@ pub struct PlaneFormat {
     /// [`AUDIO_CODEC_PCM`](crate::quic::AUDIO_CODEC_PCM) selects the PCM plane,
     /// [`bitstream::is_bitstream`] the passthrough plane; anything else decodes as Opus.
     pub codec: u8,
-    /// Never 0. 48 000 on Opus and bitstream; any [`pcm::rate_is_supported`] rate on PCM.
+    /// Never 0. 48 000 on bitstream (forced) and on Opus (from a conforming host); any
+    /// [`pcm::rate_is_supported`] rate on PCM.
     pub rate_hz: u32,
     /// PCM unpack stride, 16 or 24. Unused on Opus and bitstream.
     pub bits: u8,

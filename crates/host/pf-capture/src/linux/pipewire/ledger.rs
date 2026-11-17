@@ -252,11 +252,10 @@ impl UserData {
             return None;
         }
         let buf = pw_buf as usize;
-        // PipeWire below 1.6 (no `node.reliable`) lets the producer reclaim a buffer before this
-        // side marked it busy, then send it again. Its frame is fresh; the earlier hold's read may
-        // be torn. The arrival ends the stale hold before the drain below, so its release cannot
-        // hand back the buffer this callback publishes; the pool stays whole, and the loop
-        // answers with one IDR.
+        // A producer without `node.reliable` (PipeWire 1.6+, off by default) can reclaim a
+        // buffer before this side marked it busy and send it again: its frame is fresh, the
+        // earlier hold's read may be torn. The arrival ends the stale hold before the drain below,
+        // so its release cannot hand back the buffer this callback publishes; one IDR covers it.
         let resent = self.ledger.book().arrive(buf);
         if resent && self.shared.resent.fetch_add(1, Ordering::Relaxed) == 0 {
             tracing::warn!(

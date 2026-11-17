@@ -16,7 +16,8 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * A DualSense, a DualShock 4, a Switch Pro or an 8BitDo paired over BLUETOOTH is not a capture
  * link ([DsCapture] claims a Sony pad over USB, [Sc2Capture] a Steam Controller 2): it arrives as
- * an ordinary [InputDevice], and its motion is reachable only through the platform sensor API.
+ * an ordinary [InputDevice], and its motion is reachable only through the platform sensor API
+ * (checked on API 37).
  *
  * Android 12 (API 31) exposes those sensors: [InputDevice.getSensorManager] hands back a
  * [android.hardware.SensorManager] scoped to that one controller, carrying the usual
@@ -204,9 +205,9 @@ class PadSensors(private val router: GamepadRouter) {
          *
          * The wire is a unit passthrough into a virtual DualSense report: slot 0 = Right (pitch),
          * slot 1 = Up (yaw), slot 2 = Backward toward the player (roll), right-handed. Android
-         * hands a controller's own sensors over in that same frame. Measured with a DualSense on
-         * Bluetooth: the first-sample log read `accel 0, 10000, 0` (1 g on slot 1) and each
-         * rotation drove its correctly-named axis on the host.
+         * (12+) hands a controller's own sensors over in that same frame. Measured with a
+         * DualSense on Bluetooth: the first-sample log read `accel 0, 10000, 0` (1 g on slot 1)
+         * and each rotation drove its correctly-named axis on the host.
          *
          * So: no remap. If a device disagrees, the remap belongs HERE with its own expectations
          * in `PadSensorsTest` — not spread across callers.

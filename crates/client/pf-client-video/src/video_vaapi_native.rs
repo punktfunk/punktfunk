@@ -210,8 +210,7 @@ impl Session {
         };
         d.require_entrypoint(profile.value)?;
 
-        // Named rather than default: on Main 10 the driver default is 8-bit, and
-        // writing 10-bit samples into an 8-bit surface is silent narrowing.
+        // Named so a driver that cannot decode into this format refuses the config here.
         let rt = VaConfigAttrib {
             kind: VA_CONFIG_ATTRIB_RT_FORMAT,
             value: rt_format,
@@ -3587,7 +3586,8 @@ mod parity {
         );
     }
 
-    /// P010 is two bytes per sample; HEVC pads 240 to 256, so chroma is not at display height.
+    /// P010 is two bytes per sample; a driver that pads the 240-line surface puts chroma
+    /// below display height.
     #[test]
     #[ignore = "needs a machine with a libva runtime and an HEVC Main 10 VLD entry point"]
     fn main10_every_frame_hashes_bit_identical_to_libavcodec() {

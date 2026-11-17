@@ -1343,9 +1343,10 @@ impl Presenter {
 
 /// `VK_EXT_full_screen_exclusive`, application-controlled: the swapchain takes the
 /// monitor's flips, so a variable-refresh panel follows our presents where the desktop
-/// compositor would hold the window. Opt-in (`knobs.fullscreen_exclusive`); the
-/// PresentMon leg of the pacing plan decides the default. Every query the exclusive
-/// swapchain is built from carries the same pNext chain, as the spec requires.
+/// compositor would hold the window. Opt-in (`knobs.fullscreen_exclusive`): on an AMD
+/// FreeSync panel a borderless window already flips independently, and exclusive adds
+/// nothing (design/desktop-pacing-and-vrr.md §12.2). Every query the exclusive swapchain
+/// is built from carries the same pNext chain, as the spec requires.
 #[cfg(windows)]
 pub(crate) struct FullScreenExclusive {
     pub(crate) device: ash::ext::full_screen_exclusive::Device,

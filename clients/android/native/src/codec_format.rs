@@ -221,8 +221,8 @@ pub(crate) fn widens_poc(codec: u8, codec_name: &str, forced: Option<bool>) -> b
 
 /// Whether each fed AU goes through the concealer first. HEVC on a Realtek decoder, which keeps
 /// showing garbage past the host's anchor after a picture naming a lost reference. AV1 on a
-/// `strict` decoder (Tensor G5, Realtek), which refuses a stale wave start: the concealer makes
-/// an error-resilient one conformant, so the wave heals it. `forced` is the debug override.
+/// `strict` decoder (Google's Tensor, Realtek), which refuses a stale wave start: the concealer
+/// makes an error-resilient one conformant, so the wave heals it. `forced` is the debug override.
 pub(crate) fn conceals(codec: u8, codec_name: &str, strict: bool, forced: Option<bool>) -> bool {
     use punktfunk_core::quic::{CODEC_AV1, CODEC_HEVC};
     let pick = match codec {
@@ -260,8 +260,8 @@ pub(crate) fn take_by_pts<V: Copy>(q: &mut VecDeque<(u64, V)>, pts_us: u64) -> O
 /// The AU `user_flags` for a decoded output, keyed by the echoed `presentationTimeUs`. Recovery
 /// signalling (the IDR marker, RECOVERY_ANCHOR, RECOVERY_POINT) rides the AU's flags, which are
 /// only in scope at feed time: the feed side parks `(pts_us, flags)` and the present side reads
-/// them back for core's freeze (`NativeClient::recovery_on_decoded`). A miss (probe filler, or an
-/// entry aged past the cap) reads `0`: no recovery flags, decoded normally.
+/// them back for core's freeze (`NativeClient::recovery_on_decoded`). A miss (an abandoned partial
+/// AU's empty close, or an entry aged past the cap) reads `0`: no recovery flags.
 pub(crate) fn take_flags(map: &mut VecDeque<(u64, u32)>, pts_us: u64) -> u32 {
     take_by_pts(map, pts_us).unwrap_or(0)
 }

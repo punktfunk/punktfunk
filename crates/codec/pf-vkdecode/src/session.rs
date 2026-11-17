@@ -129,7 +129,7 @@ impl ParamsLedger {
     /// Decide without mutating. Apply via [`Self::commit`].
     pub(crate) fn plan(&self, sps: &Rc<Sps>, pps: &Rc<Pps>) -> ParamsAction {
         // The first pair creates the object. One created with no set at all
-        // faults Intel's Windows driver; FFmpeg never creates one either.
+        // faults Intel's Windows driver.
         if self.sps.is_empty() && self.pps.is_empty() {
             return ParamsAction::Recreate;
         }

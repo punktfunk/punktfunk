@@ -65,8 +65,8 @@ pub(crate) fn frame_interval_ns(source_mhz: u32) -> i64 {
 
 /// The 1 Hz line's cadence-loop tail: `late‰` of all frames folded (a due time already past
 /// when the frame became presentable — the direct signal the cushion is too small), the loop
-/// residual's jitter, the cushion, and re-anchors. Counters are cumulative since the last
-/// re-anchor, so `late` reads as a rate.
+/// residual's jitter, the cushion, and re-anchors. Counters accumulate from the clock's creation
+/// and survive re-anchors, so `late` reads as a rate.
 pub(crate) fn cadence_suffix(h: CadenceHealth) -> String {
     format!(
         " late={}‰ jitterMs={:.2} cushionMs={:.2} reanchors={}",

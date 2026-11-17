@@ -147,7 +147,7 @@ pub const HOST_CAP2_REPEAT_MARK: u8 = 0x01;
 pub const HOST_CAP2_TOUCH: u8 = 0x02;
 
 /// [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2): the host reads the
-/// `ClientHello` entries. Every host sets it; a 0.43 client sends them only toward it.
+/// `ClientHello` entries. Every host sets it.
 pub const HOST_CAP2_EXT: u8 = 0x04;
 
 /// [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2): the injector consumes

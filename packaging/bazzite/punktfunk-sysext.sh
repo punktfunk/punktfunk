@@ -228,8 +228,8 @@ post_merge() {
   if [ -f /usr/lib/sysctl.d/99-punktfunk-client-net.conf ]; then
     sysctl -q -p /usr/lib/sysctl.d/99-punktfunk-client-net.conf 2>/dev/null || :
   fi
-  # polkitd keeps the rules it read at boot and misses a merge swapping /usr under it, so a rule
-  # an update adds (the door switch's) refuses until reboot. Restarting it rereads them.
+  # polkitd reloads rules on inotify events in its rules dirs, and a merge mounting a new /usr
+  # raises none, so a rule an update adds (the door switch's) refuses until polkitd restarts.
   systemctl try-restart polkit.service 2>/dev/null || :
   # A firewalld that started while the image was refused found no punktfunk service and dropped
   # the user's whole zone config for stock; it then reports its state as failed. Reloading once

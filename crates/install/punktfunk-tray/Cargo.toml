@@ -15,9 +15,9 @@ name = "punktfunk-tray"
 path = "src/main.rs"
 
 # Deliberately does NOT depend on punktfunk-host: the tray needs only the service name, the mgmt
-# port, and the summary JSON shape — a dependency would drag the whole host (FFmpeg, PipeWire, …)
-# into a 2 MB helper and make it un-buildable standalone. Non-Windows/non-Linux targets build a
-# stub main (same pattern as the platform-gated clients).
+# port, and the summary JSON shape — a dependency would drag the whole host (PipeWire, the
+# encoders, …) into a small helper and make it un-buildable standalone. Non-Windows/non-Linux
+# targets build a stub main (same pattern as the platform-gated clients).
 [dependencies]
 anyhow = "1"
 # `config_dir()` + `published_mgmt_port()`: the tray follows the mgmt port the host actually bound

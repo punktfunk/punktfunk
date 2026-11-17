@@ -1,7 +1,7 @@
 //! The silent path: the D5 contract under `/VERYSILENT` and `/SILENT`. No window,
 //! the plain transcript into `/LOG=` (and the launching console when there is one), and
-//! exit 0 only when every step ran — a silent no-op exiting 0 would read as success to the
-//! updater, which is why the caller refuses a real run without a payload.
+//! exit 0 only when every step ran — winget reads a silent no-op's exit 0 as success, which
+//! is why the caller refuses a real run without a payload.
 //!
 //! Pure glue over pieces that already exist: `InnoArgs` → `WinChoices::apply` → `WinPlan` →
 //! `WinExecutor { silent: true }`, reported through `Plain` so the log reads like the Linux

@@ -89,7 +89,8 @@ export const pluginStateDir = (name?: string): string => {
  * JSON under your `%APPDATA%`). `punktfunk-host plugins enable` grants `BUILTIN\Users` **write** on
  * exactly `ingest` — so your app drops `ingest/<plugin>/…` and the runner reads it there. On Linux
  * the runner is a `systemd --user` unit owning the config dir, so a same-user producer writes here
- * with no special step.
+ * with no special step; a sandboxed plugin (the default) sees `/run/punktfunk` as its config dir,
+ * with no `ingest` in it.
  *
  * The dir is NOT created here (a producer running as the interactive user creates its own
  * `ingest/<name>` subdir under the host-granted `ingest`). Treat anything read from it as

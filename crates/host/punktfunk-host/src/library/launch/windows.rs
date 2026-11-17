@@ -4,7 +4,8 @@
 
 use super::*;
 
-/// Each activation below was checked on a real install; an unverified one ships a dead tile.
+/// Add a store here only once its activation works on a real install; an unverified one ships a
+/// dead tile.
 pub(super) const LAUNCHER_UI_STORES: &[&str] = &[
     "playnite",
     "epic",

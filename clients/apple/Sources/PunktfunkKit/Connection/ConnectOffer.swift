@@ -63,7 +63,7 @@ public struct ConnectOffer: Equatable, Sendable {
         // 4:4:4 needs a real-time decoder: PyroWave's Metal one, or hardware HEVC 4:4:4 at both
         // depths when 10-bit is asked for, since the host may still send 8-bit.
         let decode444 = pyroWave || (hw444EightBit() && (!tenBit || hw444TenBit()))
-        // VideoToolbox has no software AV1 decoder, so AV1 is offered only on hardware.
+        // VideoToolbox has no software AV1 decoder (macOS 27), so AV1 is offered only on hardware.
         var videoCodecs = PunktfunkConnection.codecH264 | PunktfunkConnection.codecHEVC
         if av1() { videoCodecs |= PunktfunkConnection.codecAV1 }
         if pyroWave { videoCodecs |= PunktfunkConnection.codecPyroWave }

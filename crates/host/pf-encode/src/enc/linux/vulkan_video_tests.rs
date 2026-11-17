@@ -200,7 +200,8 @@ fn imported_release_returns_ownership_in_general() {
     assert_eq!(b.new_layout, vk::ImageLayout::GENERAL);
 }
 
-/// The latch needs every gate at once; the 780M's measured caps pass, each missing one fails.
+/// The latch needs every gate at once: RADV's reported caps (Mesa 26.3) pass, and dropping the
+/// extension, the feature, ROW mode, partition independence or the cycle length fails.
 #[test]
 fn intra_refresh_latch_needs_every_gate() {
     use crate::vk_intra_refresh as vir;
@@ -739,7 +740,7 @@ fn vulkan_smoke_10bit_sdr() {
     }
 }
 
-/// AV1 10-bit SDR — the AMD/Intel path VAAPI cannot serve.
+/// AV1 10-bit SDR. On AMD/Intel only Vulkan Video encodes AV1; the native VAAPI encoder does not.
 #[test]
 #[ignore = "needs a real VK_KHR_video_encode_av1 device with a 10-bit profile"]
 fn vulkan_smoke_10bit_sdr_av1() {

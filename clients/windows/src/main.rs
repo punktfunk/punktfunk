@@ -12,7 +12,7 @@
 //!   punktfunk-client                          (open the WinUI 3 window: host list, settings, pairing)
 //!   punktfunk-client --discover               (list punktfunk hosts on the LAN)
 //!   punktfunk-client --headless --speed-test --connect host[:port]
-//!                    (measure the path: probe burst → goodput / loss / recommended bitrate)
+//!                    (measure the path: ceiling, clean-round loss and jitter, recommended bitrate)
 
 // Link as a GUI (windows) subsystem binary so the default windowed launch (MSIX / double-click)
 // does NOT pop a console window. The CLI paths (--headless/--discover) reattach to the launching

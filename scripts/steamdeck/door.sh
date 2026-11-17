@@ -6,8 +6,8 @@
 #
 # Root runs only what door_install puts in $PF_OPT/libexec, root-owned. The door and the seats run
 # the host and console in $PF_COPY, which is the owner's: a rebuild after an OS update refreshes it
-# without sudo, and the door picks it up on its next restart. The supervisor links only glibc, so an
-# OS update never needs it rebuilt.
+# without sudo, and the door picks it up on its next restart. The supervisor links only glibc and
+# libgcc_s, so an OS update never needs it rebuilt.
 
 PF_OPT=/opt/punktfunk
 PF_COPY=$PF_OPT/host

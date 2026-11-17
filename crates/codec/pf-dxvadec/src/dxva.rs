@@ -15,8 +15,8 @@
 //! Record 0 lands either way; from record 1 every field is two bytes off.
 //! Slice types therefore use `#[repr(C, packed)]` and `align_of == 1`.
 //!
-//! Specs: H.264 DXVA §4.2/4.4/4.6, HEVC DXVA §4.1/4.2/4.3, mingw-w64 `dxva.h`.
-//! Runtime `sizeof` in `tests/libav_picparams_parity.rs`.
+//! Specs: H.264 DXVA §4-6, HEVC DXVA §3-5 (picture parameters, Q-matrix, slice control),
+//! mingw-w64 `dxva.h`. Runtime `sizeof` in `tests/libav_picparams_parity.rs`.
 
 // Spec names, character for character. snake_case would make every conversion
 // line a translation against dxva.h / libavcodec `dxva2_*.c`.

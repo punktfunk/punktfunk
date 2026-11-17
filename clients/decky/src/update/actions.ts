@@ -19,7 +19,7 @@ declare global {
   }
 }
 
-// PluginInstallType.UPDATE in decky-loader's browser.py (INSTALL=0/REINSTALL=1/UPDATE=2/…).
+// PluginInstallType.UPDATE in decky-loader 3.3.1's browser.py (INSTALL=0/REINSTALL=1/UPDATE=2/…).
 const INSTALL_TYPE_UPDATE = 2;
 
 /** The update state, checked on mount. The backend caches the check (`_UPDATE_TTL_S`) and

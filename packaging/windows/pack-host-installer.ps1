@@ -206,8 +206,9 @@ else { Write-Host "no -ScriptingBundle/-BunExe -> installer built WITHOUT the pl
 # --- build + stage the HDR Vulkan layer (pf-vkhdr-layer) --------------------------------------
 # A tiny always-on Vulkan implicit layer (cdylib) that advertises HDR10/scRGB surface formats on the
 # virtual display so Vulkan games (Doom: The Dark Ages, etc.) can enable HDR while streaming - the
-# NVIDIA/AMD ICDs hide HDR formats on an indirect display even though they accept+present a forced HDR
-# swapchain there. Self-gated on the display's actual advanced-color state, so it's a no-op on SDR.
+# NVIDIA ICD hides HDR formats on an indirect display even though it accepts+presents a forced HDR
+# swapchain there (AMD unmeasured). Self-gated on the display's actual advanced-color state, so
+# it's a no-op on SDR.
 # Standalone crate (own [workspace]); built here and registered by the installer. A failed build
 # produces the installer WITHOUT the layer (non-fatal).
 $layerSrc = Join-Path $here 'pf-vkhdr-layer'
@@ -270,9 +271,9 @@ Write-Host "==> building punktfunk-setup-win (self-contained wizard + packer) ->
 $prevTarget = $env:CARGO_TARGET_DIR
 $env:CARGO_TARGET_DIR = $wizTarget
 Push-Location $repoRoot
-# windows-reactor-setup extracts the WinAppSDK runtime into ONE cache under LOCALAPPDATA,
-# keyed by package version only: whichever arch fills it first is what every later wizard
-# build stages. A cross-built wizard therefore gets a cache of its own.
+# windows-reactor-setup caches the WinAppSDK runtime under LOCALAPPDATA with one extract per
+# arch (`.msix_extract-<arch>`), so a cross-built wizard stages its own arch's runtime even
+# without the separate cache below.
 $prevLocal = $env:LOCALAPPDATA
 if ($Arch -ne 'x64') { $env:LOCALAPPDATA = Join-Path $OutDir "reactor-cache-$Arch" }
 & cargo build --release -p punktfunk-setup-win --target $triple

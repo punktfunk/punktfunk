@@ -1,6 +1,5 @@
-// `clients/shared/video-fit-vectors.json` against `VideoFit.place` — the same cases the Rust,
-// Kotlin and TypeScript placements run, so a letterbox here cannot land a pixel off another
-// client's.
+// `clients/shared/video-fit-vectors.json` against `VideoFit.place` — the same cases the Rust and
+// Kotlin placements run, so a letterbox here cannot land a pixel off another client's.
 
 import CoreGraphics
 import XCTest

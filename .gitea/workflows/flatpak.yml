@@ -22,7 +22,7 @@ name: flatpak
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
 # cancel each other). Keeps a busy push cadence from piling ~10 queued runs per commit onto the
-# runner fleet. Gitea honors this for push triggers (PR triggers: see gitea#35933).
+# runner fleet. Gitea applies it to push and pull_request runs alike.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -114,23 +114,15 @@ jobs:
       #
       # --privileged is required for bubblewrap inside the Docker executor (see header).
       #
-      # --network host: ostree's own resolver fails through Docker's embedded 127.0.0.11
-      # resolver (flatpak reports "Could not resolve hostname" while getent and curl succeed in
-      # the same container). The host netns has no embedded resolver in the path at all.
+      # --network host: in a bridge network flatpak reports "Could not resolve hostname" while
+      # getent and curl resolve in the same container. In the host netns flatpak resolves.
       image: ${{ matrix.image }}
       options: --privileged --network host
     steps:
-      # DNS fix — MUST run before any network step. fedora:43's nsswitch.conf is
-      # `hosts: files myhostname resolve [!UNAVAIL=return] dns`: the `resolve`
-      # module is nss-resolve (systemd-resolved), which isn't running in a CI
-      # container. glibc getaddrinfo (git, curl, dnf) mostly falls through to the
-      # `dns` module -> Docker's embedded 127.0.0.11 -> works. flatpak/ostree's
-      # resolver does NOT fall through: the absent-daemon socket connect trips
-      # `[!UNAVAIL=return]` and it reports "[6] Could not resolve hostname".
-      # Drop the `resolve` entry so host lookups use plain `dns`. The image already
-      # ships it fixed, after its last dnf (a systemd upgrade's authselect trigger
-      # regenerates the file); this stays as a cheap idempotent guard for a :latest
-      # that lags a ci/ change.
+      # DNS guard. fedora:43's nsswitch.conf lists nss-resolve (`resolve [!UNAVAIL=return]`)
+      # ahead of `dns`, and no systemd-resolved runs in a CI container, so drop it. The image
+      # bakes the same edit after its last dnf (a systemd upgrade's authselect trigger regenerates
+      # the file); this guards a :latest that lags a ci/ change.
       - name: Fix container DNS (drop nss-resolve — baked, this is a guard)
         run: |
           sed -i 's/resolve \[!UNAVAIL=return\] //' /etc/nsswitch.conf
@@ -336,9 +328,10 @@ jobs:
           #
           # --disable-updates is LOAD-BEARING, not tidiness: without it this step is not
           # offline. flatpak-builder runs the DOWNLOAD PHASE again as part of every build
-          # (builder-main.c calls builder_manifest_download() unconditionally — only
-          # --disable-download skips it), and it passes `update_vcs = !--disable-updates`. With
-          # updates on (the default) builder_git_mirror_repo() ALWAYS does a live `git ls-remote`
+          # (builder-main.c in flatpak-builder 1.4.12 runs builder_manifest_download() unless
+          # --disable-download, --finish-only or --export-only is set), and it passes
+          # `update_vcs = !--disable-updates`. With updates on (the default)
+          # builder_git_mirror_repo() ALWAYS does a live `git ls-remote`
           # + `git fetch` for every git source, even ones pinned to an immutable commit sha,
           # outside retry.sh. With the flag, builder_git_mirror_repo() short-circuits on
           # `git cat-file -e <commit>` against the warm mirror and returns BEFORE any network

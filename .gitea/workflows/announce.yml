@@ -101,9 +101,10 @@ jobs:
             echo "ERROR: set AUTHENTICODE_SUBJECT to the stable signing certificate CN" >&2
             exit 1
           fi
-          # Azure Trusted Signing chains to the Microsoft Identity Verification Root CA 2020, which
-          # the Mozilla bundle does not carry, so the root is vendored and pinned; the timestamp
-          # chain roots there too. The pin is what keeps a verified signature past the 3-day leaf.
+          # Azure Artifact Signing chains to the Microsoft Identity Verification Root CA 2020,
+          # which the Mozilla bundle does not carry, so the root is vendored and pinned; the
+          # timestamp chain roots there too. The pin keeps a verified signature past the 3-day
+          # leaf.
           ROOT=ci/certs/microsoft-identity-verification-root-2020.pem
           VERIFY="$(osslsigncode verify \
             -CAfile "$ROOT" -TSA-CAfile "$ROOT" \

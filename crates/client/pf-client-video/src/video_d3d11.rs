@@ -1221,7 +1221,7 @@ pub(crate) struct HandoffRing {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
     video_device: ID3D11VideoDevice,
-    /// `1` for the DXGI colour-space setters (Win10 1703+). Init fails to software without it.
+    /// `1` for the DXGI colour-space setters (Windows 10+). Init fails to software without it.
     video_context1: ID3D11VideoContext1,
     ring: Option<SharedRing>,
     /// Presenter can import RGB10A2 and has an HDR10 swapchain.

@@ -14,9 +14,10 @@ import kotlin.math.abs
  * Protocol ground truth: the Linux kernel's `hid-playstation` / `hid-sony` structs, SDL's
  * `SDL_hidapi_ps5.c` / `SDL_hidapi_ps4.c`, mirrored host-side in `pf-inject`'s
  * `dualsense_proto.rs` / `dualshock4_proto.rs` — this file is the byte-exact inverse of those
- * serializers (offsets cross-referenced below). USB only: over Bluetooth the reports shift
- * (`0x31` + CRC32) AND Android exposes no raw path to a Classic pad anyway, so the BT case never
- * reaches this code — an uncaptured pad stays on the ordinary InputDevice path.
+ * serializers (offsets cross-referenced below). USB only: over Bluetooth the reports change
+ * (DualSense `0x31`, DS4 `0x11`, each with a CRC32) AND Android's public SDK (API 37) exposes no
+ * raw path to a Classic pad anyway, so the BT case never reaches this code — an uncaptured pad
+ * stays on the ordinary InputDevice path.
  */
 object DsDevice {
     const val VID_SONY = 0x054C
@@ -116,9 +117,8 @@ object DsDevice {
              * The wire's gyro scale, taken from [Gamepad] rather than restated: a second copy of
              * a unit constant in this module can drift from the wire's.
              *
-             * `val`, not `const val`, only because the widening to Long is not a compile-time
-             * constant expression. Long here on purpose: the arithmetic below multiplies raw counts
-             * by the calibration's speed term before dividing, which overflows an Int.
+             * Long on purpose: the arithmetic below multiplies raw counts by the calibration's
+             * speed term before dividing, which overflows an Int.
              */
             private val WIRE_GYRO_LSB_PER_DEG_S = Gamepad.MOTION_GYRO_LSB_PER_DEG_S.toLong()
             /** `MOTION_ACCEL_LSB_PER_G`, doubled — the declared accel range spans 2 g, not 1. */

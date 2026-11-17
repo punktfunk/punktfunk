@@ -363,7 +363,7 @@ impl<C: VkCodec> VkDecoder<C> {
     }
 
     /// The bitstream ring's dma-buf, while its backing lives; every decode writes fences
-    /// onto it. `None` before the first session or without an export.
+    /// onto it (ANV on i915, Linux 6.12). `None` before the first session or without an export.
     #[cfg(unix)]
     pub fn bitstream_dmabuf(&self) -> Option<std::os::fd::RawFd> {
         self.state.as_ref().and_then(|s| s.ring.dmabuf_fd())

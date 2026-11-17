@@ -65,8 +65,8 @@ const PAM_DELETE_CRED: c_int = 0x4;
 const PAM_SILENT: c_int = 0x8000;
 
 /// `PAM_RHOST` while the password is checked: the typist is on a device, not at the machine, so
-/// a module that waits for a finger or a face there (`pam_fprintd`) steps aside. Not `localhost`,
-/// which such a module reads as local; `.invalid` never resolves to an address.
+/// a module that waits for a finger (`pam_fprintd`) steps aside. Not `localhost`, which it reads
+/// as local; `.invalid` never resolves to an address.
 const REMOTE_HOST: &CStr = c"punktfunk.invalid";
 
 #[repr(C)]

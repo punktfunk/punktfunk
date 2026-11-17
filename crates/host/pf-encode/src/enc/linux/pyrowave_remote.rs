@@ -609,8 +609,8 @@ impl Encoder for RemotePyroWave {
                     return Err(e.context("pyrowave encode worker"));
                 }
                 Err(Fail::Encode(message)) => {
-                    // Worker alive but refused this frame. Re-run in-process: the recovery
-                    // machinery (raw-dmabuf degrade latch is a host-process static) lives here.
+                    // Worker alive but refused this frame. Re-run it in-process; an import
+                    // refusal already fed the capture's latch through `capture_rebuild`.
                     self.pin_inline(&format!("the worker failed a frame: {message}"));
                 }
             }

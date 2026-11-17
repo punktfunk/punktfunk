@@ -83,8 +83,8 @@ $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 $bytes = [byte[]]::new(24); $rng.GetBytes($bytes)
 $pw = [Convert]::ToBase64String($bytes)
 
-# .NET's own PKCS#12 writer - avoids the OpenSSL 3 trap where the default AES-256/PBKDF2 encryption
-# produces a .pfx that Windows CryptoAPI cannot read.
+# .NET's own PKCS#12 writer: OpenSSL 3's default AES-256/PBKDF2 .pfx does not import on Windows
+# before 10 1709 / Server 2019, where PBES2 PKCS#12 support begins.
 $pfxBytes = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $pw)
 $pfxPath = Join-Path $OutDir 'driver.pfx'
 [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
@@ -107,8 +107,8 @@ if ($signtool) {
         # NTE_PERM. Not a bad certificate - a network logon (SSH) has no key container, so signtool
         # cannot import the .pfx to sign with it. The KEY ABOVE IS STILL VALID: generating it needs
         # no container, only consuming it does. Re-run at an interactive logon (console/RDP) to
-        # exercise this, or just let the canary CI build be the proof - the runner signs under a
-        # real logon, which is how the MSIX cert already works.
+        # exercise this, or just let the canary CI build be the proof - the runner signs as SYSTEM,
+        # a service logon, which is how the MSIX cert already works.
         $selftest = 'SKIPPED (NTE_PERM 0x80090010 - no key container on this logon; run at a console/RDP session, or verify via a canary build)'
     }
     else {

@@ -1,11 +1,10 @@
 // "The audio output moved under us" — the one signal `SessionAudio` needs to survive a device
 // change, and the one piece of it that can be tested without a stream.
 //
-// Split out of SessionAudio deliberately. An end-to-end test of the recovery needs a live session,
-// which needs a host, and macOS has no host backend — so the wiring that matters most
-// (is the observer actually installed? does the identity check let the notification through?) would
-// otherwise ship unverified, and a silent failure in it costs the session ALL of its audio. On its
-// own this can be pointed at the real hardware from a unit test: see AudioDeviceWatcherTests.
+// Split out of SessionAudio so its wiring (is the observer installed? does the identity check let
+// the notification through?) can be pointed at the real hardware from a unit test, with no
+// session: see AudioDeviceWatcherTests. A silent failure here costs the session ALL of its audio.
+// AudioDeviceSwitchTests runs the full recovery against the loopback host.
 //
 // What it does NOT own: anything with session semantics. The iOS route-change steer and the
 // media-services-reset re-activation stay in SessionAudio, next to the AVAudioSession they act on.

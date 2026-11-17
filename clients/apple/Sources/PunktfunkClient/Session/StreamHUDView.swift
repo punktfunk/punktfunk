@@ -107,11 +107,9 @@ struct StreamHUDView: View {
                     .foregroundStyle(.secondary)
             }
             #endif
-            // Mic mute — the in-stream toggle, on the same card as the other in-overlay action.
-            // Absent (not greyed) when the session sends no microphone: the HUD is a status card,
-            // and a dead control on it would read as "there is a mic, and it is on". The muted
-            // STATE is not this button's job — the badge over the stream says that at every tier
-            // and with the overlay off entirely. tvOS gets no control: no microphone, and a
+            // Mic mute: absent (not greyed) when the session sends no microphone, since a dead
+            // control on a status card reads as "there is a mic, and it is on". The badge over the
+            // stream shows the muted state. tvOS gets no control: its app opens no mic, and a
             // focusable one would steal the controller's A press from the host.
             #if !os(tvOS)
             if model.micAvailable {
@@ -549,7 +547,7 @@ enum DeviceMetrics {
     /// the binary; it is private API all the same.
     static var displayCornerRadius: CGFloat {
         #if os(visionOS)
-        return 46 // every visionOS window's corner radius
+        return 46 // an assumed visionOS window corner radius
         #else
         let key = ["_display", "Corner", "Radius"].joined()
         guard

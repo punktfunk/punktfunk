@@ -184,7 +184,8 @@ pub(super) fn decrypt_control(
         return attempt(s).map(|pt| (s, pt));
     }
 
-    // Candidate nonce constructions, most-likely first.
+    // Candidate nonce constructions, tried in order; the first to authenticate is locked. Below
+    // seq 256 `LegacyLowByte` and little-endian `Legacy16Seq` are one nonce, so the former locks.
     const MARKERS: [[u8; 2]; 3] = [*b"CC", *b"HC", *b"CH"];
     let mut kinds: Vec<NonceKind> = vec![NonceKind::LegacyLowByte];
     for seq_be in [false, true] {

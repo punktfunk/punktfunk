@@ -256,7 +256,8 @@
 // Codec bit: AV1.
 #define PUNKTFUNK_CODEC_AV1 4
 
-// PyroWave. Never auto-selected; pass it as `preferred_codec` (`design/pyrowave-codec-plan.md`).
+// PyroWave. Off the codec ladder: chosen only as `preferred_codec`, or by the host's Encoder
+// pin for a client that names none (`design/pyrowave-codec-plan.md`).
 #define PUNKTFUNK_CODEC_PYROWAVE 8
 
 // Host-capability bit: the host applies gamepad-state snapshots (a capable client
@@ -554,9 +555,10 @@
 #define SCROLL_FLAG_PRECISE 1
 
 // Pixels one detent of a [`SCROLL_FLAG_PRECISE`] delta is worth — the inverse of the
-// 0.1-units-per-point factor SDL uses, and [`scroll::ScrollOutput`] applies toward an older
-// host, to put measured pixels INTO 120-space. Undoing it exactly is what makes the content
-// travel as far as the finger; any other value re-introduces a scale factor.
+// 0.1-units-per-point factor SDL 3.4 uses on macOS and Wayland, and [`scroll::ScrollOutput`]
+// applies toward an older host, to put measured pixels INTO 120-space. Undoing it exactly is
+// what makes the content travel as far as the finger; any other value re-introduces a scale
+// factor.
 #define PRECISE_PX_PER_DETENT 10.0
 
 // [`InputKind::GamepadArrival`] `flags` bit 8: this pad renders haptics
@@ -929,7 +931,7 @@
 #define PUNKTFUNK_HOST_CAP2_TOUCH 2
 
 // [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2): the host reads the
-// `ClientHello` entries. Every host sets it; a 0.43 client sends them only toward it.
+// `ClientHello` entries. Every host sets it.
 #define PUNKTFUNK_HOST_CAP2_EXT 4
 
 // [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2): the host serves
@@ -4033,8 +4035,8 @@ PunktfunkStatus punktfunk_connection_next_clipboard(PunktfunkConnection *c,
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
 // Compositor the host resolved (`PUNKTFUNK_COMPOSITOR_*`; Welcome echo of
-// [`punktfunk_connect_ex`]). `AUTO` = a host that didn't say. Gamescope PipeWire
-// capture carries no cursor — default to a client-side cursor there.
+// [`punktfunk_connect_ex`]). `AUTO` = a host that didn't say. Stock gamescope's
+// PipeWire node carries no cursor, so the host composites one in.
 //
 // # Safety
 // `c` is a valid connection handle; `compositor` is writable (NULL is skipped).
@@ -4330,9 +4332,9 @@ PunktfunkStatus punktfunk_connection_probe_result(const PunktfunkConnection *c,
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
 // Run the network check over this connection and write its report into `*out`. Blocking
-// for ten to twenty seconds — call it off the main thread. The connection should have been
-// dialled for probes only (`delivery_flags` `2`). Errors: `Unsupported` when the host
-// declined, `Timeout` when a round never reported.
+// for several seconds, longer on a lossy link — call it off the main thread. The connection
+// should have been dialled for probes only (`delivery_flags` `2`). Errors: `Unsupported`
+// when the host declined, `Timeout` when a round never reported.
 //
 // # Safety
 // `c` is a valid connection handle; `out` is writable for one `PunktfunkHealthReport`

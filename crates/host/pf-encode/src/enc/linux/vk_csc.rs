@@ -3,8 +3,9 @@
 //! shader.
 //!
 //! A source is sampled as an image, except a LINEAR dmabuf on NVIDIA ([`WordsCache`]): that
-//! driver reads a LINEAR image at a row pitch rounded up to 32 bytes, so a 1690-wide frame at
-//! 6760 bytes shears. The shaders read such a source as words at the producer's own stride.
+//! driver reads a LINEAR image at a rounded-up row pitch, not the one the import names, so a
+//! 1690-wide frame at 6760 bytes shears. The shaders read such a source as words at the
+//! producer's own stride.
 // `unsafe_op_in_unsafe_fn` off, as in `vk_util.rs`: every call is a plain ash call.
 #![allow(unsafe_op_in_unsafe_fn)]
 

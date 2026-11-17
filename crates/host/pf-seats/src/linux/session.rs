@@ -26,8 +26,8 @@ pub(super) const DROPIN_ROOT: &str = "/run/systemd/system";
 pub(super) const PRIVATE_DIRS: [&str; 3] = ["compatdata", "shadercache", "downloading"];
 
 /// What a seat's Steam runs in place of [`UPDATE_HELPERS`]. They escalate through pkexec, which
-/// a seat's session is refused, and Steam's first-run setup stops on that failure. A seat never
-/// updates the box, so each answers "nothing to do": 7 from `steamos-update`, else 0.
+/// fails (exit 127) in a seat's session, and Steam's first-run setup stops on that failure. A seat
+/// never updates the box, so each answers "nothing to do": 7 from `steamos-update`, else 0.
 pub(super) const NO_UPDATE: &str = "/run/punktfunk/seat-no-update";
 const NO_UPDATE_SCRIPT: &str = "#!/bin/sh\n\
 # A punktfunk seat never updates the box's OS or firmware.\n\
@@ -254,8 +254,9 @@ pub(super) fn render_manager(dropins: &[&str]) -> String {
 }
 
 /// The drop-in of the owner's row: a `background` session, so the owner's login at the monitor
-/// stays the one logind and polkit treat as the owner's display. Another person's row keeps the
-/// unit's `user` class: a shutdown at the machine counts it as another user's session.
+/// stays the one logind and polkit treat as the owner's display (systemd 259). Another person's
+/// row keeps the unit's `user` class: a shutdown at the machine counts it as another user's
+/// session.
 pub(super) fn render_class() -> &'static str {
     "[Service]\nEnvironment=XDG_SESSION_CLASS=background\n"
 }

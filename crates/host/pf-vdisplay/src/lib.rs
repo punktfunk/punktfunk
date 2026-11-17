@@ -113,7 +113,7 @@ pub enum Compositor {
     /// gamescope — spawned headless at the client's size/refresh; capture its PipeWire node.
     Gamescope,
     /// Hyprland — `hyprctl output create` + xdph ScreenCast. Distinct from
-    /// [`Wlroots`]: it kept the wlr client protocols after dropping wlroots, so
+    /// [`Wlroots`]: it serves the wlr client protocols without wlroots (0.42+), so
     /// virtual-input is shared but IPC and portal are not.
     Hyprland,
     /// niri — `CreateVirtualOutput` over its JSON IPC socket. Only a niri that serves that
@@ -176,8 +176,8 @@ impl Compositor {
         )
     }
 
-    /// Starts a device's screen at its own scale. Mutter and niri: KWin and Windows remember
-    /// each device's scale themselves.
+    /// Starts a device's screen at its own scale: Mutter and niri. Windows remembers each
+    /// device's scale itself; KWin gives every virtual output streamed alone one shared scale.
     pub fn applies_device_scale(self) -> bool {
         matches!(self, Compositor::Mutter | Compositor::Niri)
     }

@@ -55,7 +55,7 @@ pub struct LinkMinute {
     pub rfi: u32,
     pub rfi_declined: u32,
     /// What the encoder answered an RFI with: a clean P against a surviving reference, or a
-    /// wave that recodes the picture over ~0.5 s.
+    /// wave that recodes the picture over at most a quarter second.
     pub anchor_p: u32,
     pub intra_refresh: u32,
     /// Frames encoded against one the client confirmed, while the link showed loss.

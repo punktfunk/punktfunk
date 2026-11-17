@@ -1,10 +1,11 @@
 //! Conceal a missing HEVC reference for a decoder that binds references from the bitstream
-//! alone. A stateless backend takes the stand-in [`H265Planner`] chose; VideoToolbox reads
-//! the RPS itself, and one current entry it does not hold puts its session into an error
-//! state that refuses every later non-IDR picture, the recovery anchor included. So the
-//! slice header is rewritten before submit: `used_by_curr_pic` cleared on the absent entries
-//! and set on the nearest present one. Same header length; a retained (Foll) entry the
-//! decoder lacks is tolerated; an intra-refresh wave then sweeps the garbage base clean.
+//! alone. A stateless backend takes the stand-in [`H265Planner`] chose; VideoToolbox
+//! (macOS 27) reads the RPS itself, and one current entry it does not hold puts its session
+//! into an error state that refuses every later non-IDR picture, the recovery anchor
+//! included. So the slice header is rewritten before submit: `used_by_curr_pic` cleared on
+//! the absent entries and set on the nearest present one. Same header length; a retained
+//! (Foll) entry the decoder lacks is tolerated; an intra-refresh wave then sweeps the
+//! garbage base clean.
 
 use std::ops::Range;
 
@@ -414,7 +415,8 @@ mod tests {
 
     /// The Vulkan encoder's intra-refresh smoke (IDR, P1, P2, wave 3–6, P7, anchor 8) with
     /// frames 1–2 removed. Only the wave start names a missing picture; measured on
-    /// VideoToolbox, the rewritten stream decodes end to end with the close bit-exact.
+    /// VideoToolbox (macOS 27), the rewritten stream decodes end to end with the close
+    /// bit-exact.
     #[test]
     fn the_vulkan_wave_dump_conceals_only_its_first_post_loss_picture() {
         let dropped = include_bytes!("../../tests/vectors/vkenc-wave-smoke-dropped.h265");

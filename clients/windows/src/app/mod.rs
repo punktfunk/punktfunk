@@ -191,7 +191,7 @@ pub struct AppCtx {
     /// The settings snapshot the UI renders from. Loaded once at startup, and RE-BASED on
     /// the file when the settings page is (re)entered (`settings::refresh_snapshot`) and
     /// inside every `commit` — this process is not the file's only writer (session resize,
-    /// console UI, Decky), so a plain process-lifetime snapshot goes stale on screen.
+    /// console UI, CLI), so a plain process-lifetime snapshot goes stale on screen.
     pub(crate) settings: Mutex<Settings>,
     pub(crate) gamepad: GamepadService,
     pub(crate) shared: Arc<Shared>,
@@ -813,8 +813,8 @@ impl Component for Shell {
         let searching = self.screen == Screen::Home
             && self.dest == Dest::Library
             && !self.library.shelf.is_empty();
-        // Always a content: the bar stands 48 px with one and 32 px without, and everything
-        // under it would jump 16 px between the Library and the other pages.
+        // Always a content: the WinUI TitleBar (WinAppSDK 2.6) stands 48 px with one and 32 px
+        // without, and everything under it would jump 16 px between the Library and other pages.
         let caption = caption.content(match searching {
             true => library::search_box(self),
             false => Border::new().into(),

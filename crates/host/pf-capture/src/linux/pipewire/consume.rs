@@ -368,8 +368,9 @@ impl Path for Portal<'_, '_> {
         self.ud.publish(frame, fence);
     }
 
-    /// RGB→NV12 backends blend cursor-as-metadata. Gamescope sends no `SPA_META_Cursor`
-    /// (its pointer comes through XFixes); native NV12/P010 has none.
+    /// RGB→NV12 backends blend cursor-as-metadata. Gamescope sends no `SPA_META_Cursor`: its
+    /// pointer comes through XFixes, or our patched gamescope paints it into the frame. Native
+    /// NV12/P010 has none.
     fn cursor(&self) -> Option<pf_frame::CursorOverlay> {
         self.ud.cursor.overlay()
     }
@@ -518,8 +519,9 @@ fn stamp_frame(ud: &mut UserData, hdr_pts_ns: Option<i64>) -> u64 {
 /// nothing fences them, and a read may see the frame before.
 ///
 /// The render is fenced at `sync`'s acquire point when the stream negotiated explicit sync,
-/// on the timeline the ledger imported for `buf`, else by the dmabuf's implicit fence (none
-/// on NVIDIA). Not waited here: this is the loop thread, the only one that hands buffers back.
+/// on the timeline the ledger imported for `buf`, else by the dmabuf's implicit fence, where
+/// the producer's driver attaches one. Not waited here: this is the loop thread, the only one
+/// that hands buffers back.
 fn render_fence(
     ud: &UserData,
     buf: usize,

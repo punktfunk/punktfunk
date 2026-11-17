@@ -81,11 +81,10 @@ private val SYSTEM_KEYS = intArrayOf(
  *
  * A session that ends while the app is BACKGROUNDED (leaving the app ends it unless the keep-alive
  * holds it — see the ON_STOP observer in StreamEffects) restores the window — `show(systemBars())`,
- * releasing the landscape lock — on a stopped activity, and the corrected insets arrive while
- * Compose has no listener attached. When the menus recompose, `incrementAccessors` re-attaches and
- * asks for a fresh pass, but a stopped window produces no dispatch, and on resume nothing has
- * *changed*, so none ever comes. Compose keeps serving what it last saw: the landscape,
- * bars-hidden values.
+ * releasing the landscape lock — on a stopped activity, while Compose has no listener attached.
+ * When the menus recompose, `incrementAccessors` re-attaches and calls `requestApplyInsets`, but
+ * no fresh dispatch reaches it after resume, so Compose keeps serving what it last saw: the
+ * landscape, bars-hidden values.
  *
  * Reading an inset here holds the count above zero for the activity's whole life, so the listeners
  * survive the stream and every dispatch lands. It subscribes to no inset VALUE (only the holder
@@ -703,10 +702,10 @@ class MainActivity : FragmentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display else windowManager.defaultDisplay
 
     /**
-     * Opt the CONSOLE UI into the panel's highest refresh mode. Some OEMs (Nothing OS among them) pin
-     * third-party apps to 60Hz unless they explicitly ask for more, which halves the smoothness of the
-     * UI's scrolling/animation on a 120/144Hz panel. [StreamScreen] replaces this with
-     * [setStreamDisplayMode] while streaming (matched to the video, not to the panel maximum).
+     * Opt the CONSOLE UI into the panel's highest refresh mode. Left alone, a panel may run a
+     * third-party app at 60 Hz, which halves the smoothness of the UI's scrolling/animation on a
+     * 120/144Hz panel. [StreamScreen] replaces this with [setStreamDisplayMode] while streaming
+     * (matched to the video, not to the panel maximum).
      */
     fun setConsoleHighRefreshRate(high: Boolean) {
         if (highRefreshModeId == 0) return
@@ -733,12 +732,12 @@ class MainActivity : FragmentActivity() {
     /**
      * Pin the panel to a display mode matching the STREAM's refresh for the session's duration
      * ([streamModeFor]). The window-level mode pin is the belt to the decoder's
-     * `ANativeWindow_setFrameRate` braces: the surface hint alone is advisory, and several OEM
-     * refresh governors (Nothing OS's LTPO logic among them) ignore it entirely for third-party
-     * apps — leaving a 120 Hz session presenting on a 60/90 Hz panel, which reads as judder + a
-     * refresh of extra latency. The preferredDisplayModeId is the one signal they all honor. A
-     * stream of the panel's own [size] also takes the panel to that size; [setConsoleHighRefreshRate]
-     * puts the user's resolution back. [hz] ≤ 0 falls back to releasing the pin.
+     * `ANativeWindow_setFrameRate` braces: the surface hint alone is advisory, and refresh
+     * governors may ignore it — leaving a 120 Hz session presenting on a 60/90 Hz panel, which
+     * reads as judder + a refresh of extra latency. The preferredDisplayModeId is the one signal
+     * they all honor. A stream of the panel's own [size] also takes the panel to that size;
+     * [setConsoleHighRefreshRate] puts the user's resolution back. [hz] ≤ 0 falls back to
+     * releasing the pin.
      */
     fun setStreamDisplayMode(hz: Float, size: Pair<Int, Int>? = null) {
         if (hz <= 0) {

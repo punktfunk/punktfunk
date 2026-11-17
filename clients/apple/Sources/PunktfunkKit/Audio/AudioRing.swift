@@ -532,10 +532,11 @@ struct DroughtConceal {
 
 /// CoreAudio channel layout for the canonical wire order FL FR FC LFE RL RR [SL SR]. nil for
 /// stereo (the standard layout is correct). For 5.1/7.1 we list explicit channel labels via
-/// `kAudioChannelLayoutTag_UseChannelDescriptions` — preset tags (DTS_5_1 etc.) don't reliably
-/// match Moonlight's order. 7.1 follows `kAudioChannelLayoutTag_WAVE_7_1` (WASAPI 0x63F):
-/// wire 4-5, the WAVE *back* pair, are RearSurround*; 6-7, the *side* pair, are Left/RightSurround.
-/// 5.1 keeps Left/RightSurround for its back pair: that is where a 5.1 device has speakers.
+/// `kAudioChannelLayoutTag_UseChannelDescriptions`, in the orders of the `MPEG_5_1_A` and
+/// `WAVE_7_1` presets; other presets (AAC, DTS) order them differently. 7.1 follows `WAVE_7_1`
+/// (WASAPI 0x63F): wire 4-5, the WAVE *back* pair, are RearSurround*; 6-7, the *side* pair, are
+/// Left/RightSurround. 5.1 keeps Left/RightSurround for its back pair: that is where a 5.1 device
+/// has speakers.
 func wireChannelLayout(channels: Int) -> AVAudioChannelLayout? {
     let labels: [AudioChannelLabel]
     switch channels {

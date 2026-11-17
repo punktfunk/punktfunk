@@ -221,7 +221,7 @@ pub struct DecodeDevice {
     decode_qf: u32,
     graphics_qf: u32,
     /// Decode family advertises `queryResultStatusSupport`. FALSE means skip
-    /// RESULT_STATUS queries entirely — recording one hangs the VCN ring (RADV);
+    /// RESULT_STATUS queries entirely — recording one hangs the VCN ring (RADV 26.0);
     /// fall back to timeline-completion verdicts.
     result_status_queries: bool,
     /// Decode family's `VkQueueFamilyVideoPropertiesKHR::videoCodecOperations`.

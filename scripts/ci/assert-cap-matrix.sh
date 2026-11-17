@@ -83,7 +83,7 @@ assert_matrix() {
 }
 
 # Canonicalize a capability string. getcap has printed two forms over its life
-# ("path cap_sys_nice=ep" since libcap ~2.36, "path = cap_sys_nice+ep" before) and rpm renders
+# ("path cap_sys_nice=ep" since libcap 2.41, "path = cap_sys_nice+ep" before) and rpm renders
 # "(none)" for a file with no capability. Everything downstream compares canonical strings.
 caps_norm() {
   local s="${1:-}"
@@ -126,8 +126,8 @@ scriptlet_worker_grant() {
 
 # payload_listing <artifact>: the payload's paths, one per line, relative to / ("usr/bin/…"), for
 # every format above. Empty when it cannot be read. assert-payload-parity.sh reads through it too.
-# A .deb without dpkg-deb is an `ar` of two tarballs that libarchive reads; Apple's `ar` rewrites
-# the archive and loses members, so it is never used.
+# A .deb without dpkg-deb is an `ar` of two tarballs that libarchive reads; Apple's `ar x`
+# extracts no GNU-style `name/` member yet exits 0 (Xcode 27.1), so it is never used.
 payload_listing() {
   case "$1" in
     *.pkg.tar.zst|*.pkg.tar.xz) bsdtar -tf "$1" 2>/dev/null || tar -tf "$1" 2>/dev/null ;;
@@ -308,7 +308,7 @@ self_test() {
     if [ "$got" = "$2" ]; then printf '  ok    %-42s -> %s\n' "${1:-<empty>}" "${got:-<empty>}"
     else printf '  FAIL  %-42s -> %s (wanted %s)\n' "${1:-<empty>}" "${got:-<empty>}" "$2"; failures=$((failures + 1)); fi
   }
-  _norm 'cap_sys_nice=ep'   'cap_sys_nice=ep'    # libcap >= ~2.36
+  _norm 'cap_sys_nice=ep'   'cap_sys_nice=ep'    # libcap >= 2.41
   _norm '= cap_sys_nice+ep' 'cap_sys_nice=ep'    # older libcap
   _norm '(none)'            ''                   # rpm, no %caps
   _norm ''                  ''

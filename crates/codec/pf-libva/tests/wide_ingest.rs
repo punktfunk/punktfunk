@@ -1,7 +1,8 @@
 //! The session at a client's real size: a striped picture through the CPU upload
-//! and through a linear GBM dmabuf (what Mutter hands the host), written out for
-//! a decoder to look at. Ignored: needs a VAAPI encode device. `PF_W`/`PF_H` size
-//! it (5120×1440), `PF_CODEC=h264` picks H.264, `PF_ENC_OUT` takes the stream.
+//! and through a linear GBM dmabuf (what Mutter allocates when the host offers LINEAR
+//! alone), written out for a decoder to look at. Ignored: needs a VAAPI encode device.
+//! `PF_W`/`PF_H` size it (5120×1440), `PF_CODEC=h264` picks H.264, `PF_ENC_OUT` takes
+//! the stream.
 #![cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 

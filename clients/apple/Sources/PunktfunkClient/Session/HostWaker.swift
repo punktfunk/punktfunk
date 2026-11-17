@@ -105,8 +105,7 @@ final class HostWaker: ObservableObject {
                     return
                 }
                 // Checked before sent, so a host that is already up never gets a packet. Re-sent
-                // on a cadence because a single one can be missed, and some NICs only wake on a
-                // fresh packet after dropping into a deeper sleep state.
+                // on a cadence because a single one can be missed.
                 if sentAt.map({ elapsed - $0 >= resend }) ?? true {
                     sentAt = elapsed
                     Self.sendPacket(macs: macs, lastIP: lastIP)

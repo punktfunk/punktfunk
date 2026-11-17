@@ -11,11 +11,10 @@ package io.unom.punktfunk.kit
  * be bounded — a stalled or unplugged device would otherwise grow it without limit — and the
  * question is what to discard when it fills.
  *
- * Rumble is *level-styled* — the host re-sends it continuously, so a dropped frame is replaced
- * milliseconds later and nothing is permanently lost. Everything else is a **one-shot**: a
- * lightbar colour, a player-LED mask and an adaptive-trigger effect are sent on change and never
- * repeated. Dropping one leaves the pad wrong until the next time that value happens to change,
- * which may be never.
+ * Rumble is *level-styled* — the host renews it about every 120 ms, so a dropped frame is soon
+ * replaced. Everything else is a **one-shot**: a lightbar colour, a player-LED mask and an
+ * adaptive-trigger effect are sent on change and renewed only about once a second. Dropping one
+ * leaves the pad wrong until that renewal.
  *
  * So eviction is driven by an explicit [key] supplied by the caller, not by inspecting the bytes.
  * That distinction cannot be recovered from the report itself: every DualSense output report

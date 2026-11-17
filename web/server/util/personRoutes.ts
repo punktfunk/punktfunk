@@ -37,8 +37,8 @@ export const PERSON_ROUTES: readonly PersonRoute[] = [
 	seat("GET", "library/custom/{id}"),
 	seat("PUT", "library/custom/{id}"),
 	seat("DELETE", "library/custom/{id}"),
-	// Their own emulators and plugins, on their seat host. A person's own account refuses all but
-	// an adopt there, in the host's words.
+	// Their own emulators and plugins, on their seat host. On a Linux own account the host
+	// refuses an emulator install or remove, in its own words; adopt and the reads pass.
 	seat("GET", "emulators"),
 	seat("POST", "emulators/{id}/adopt"),
 	seat("POST", "emulators/{id}/install"),

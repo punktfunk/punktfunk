@@ -1695,7 +1695,7 @@ pub(crate) mod tests {
     }
 
     /// A client whose `ClientHello` set no `abr_features` gets an ack without a reason,
-    /// whatever the host knows about the refusal: a 0.43 client rejects any other ack.
+    /// whatever the host knows about the refusal.
     #[test]
     fn a_client_that_did_not_ask_gets_no_reason() {
         use punktfunk_core::quic::v2::msg::{decode, V2Message};

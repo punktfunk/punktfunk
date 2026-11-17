@@ -6,8 +6,8 @@
 //! A host card's menu is six rows at most, a pinned card's three, a discovered one's two,
 //! a poster's four, plus Hide, its files and End game; a poster's Details is its card, cover
 //! and facts beside its verbs. Every
-//! row carries an icon; Back leaves any of them. Tests in this module pin each menu's rows,
-//! the arm-then-fire rule and the host-key NUL split (`console-ui-redesign.md` §2).
+//! row carries an icon; Back leaves any of them. Tests in this module pin each menu's rows
+//! and the arm-then-fire rule (`console-ui-redesign.md` §2), and the host-key NUL split.
 
 use crate::glyphs::{Hint, HintKey};
 use crate::library::LibraryGame;

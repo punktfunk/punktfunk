@@ -207,8 +207,8 @@ profile() {
       MODE=1920x1080x60; ACHIEVABLE_KBPS=60000
       REBIND_AT=15; REBIND_MTU=1280
       ;;
-    # A fixed rate over a 100 Mbit/s hop with a switch's queue. Nothing measures the session,
-    # so it starts at the floor's pace and only its dead frames bring that down.
+    # A fixed rate over a 100 Mbit/s hop with a switch's queue. The bring-up ramp measures the
+    # hop before the first frame; the rate stays the player's, and only `L` is learned.
     fixed_100m)
       RATE_KBIT=93000; DELAY_MS=1; BUFFER_MS=10
       MODE=1920x1080x60; ACHIEVABLE_KBPS=80000

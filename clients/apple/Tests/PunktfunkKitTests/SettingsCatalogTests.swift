@@ -162,7 +162,8 @@ final class SettingsCatalogTests: XCTestCase {
         if scope.contains("OverlayField.resolution") { presettable.insert("resolution") }
         for e in try Self.catalogue() where Self.on(e, "apple") {
             let key = e["key"] as! String
-            // The overlay also carries the Mac's three-way fullscreen and the quick-action ring.
+            // The overlay also carries the Mac's fullscreen-while-streaming and the quick-action
+            // ring.
             let preset = presettable.contains(key)
             XCTAssertEqual(preset, e["preset"] as? Bool, "\(key): preset")
         }

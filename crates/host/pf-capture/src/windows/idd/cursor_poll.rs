@@ -6,8 +6,8 @@
 //! whatever the display's scale; the section holds the one Windows draws, and
 //! `cursor_model.rs` prefers it for a cursor of the same class. The driver declares XOR
 //! FULL so DWM excludes every cursor type from the IDD frame. DXGI `GetFramePointerShape`
-//! is not used: `PointerPosition.Visible` goes stale under injected input, and it burns
-//! one of four duplication slots.
+//! is not used: `PointerPosition.Visible` is reported to go stale under injected input, and
+//! it burns one of four duplication slots.
 //!
 //! The host runs as SYSTEM inside the interactive session on `winsta0\default`
 //! (`windows/service/runtime.rs` `spawn_host`), so this thread reads the session cursor

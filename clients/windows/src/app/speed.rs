@@ -1,7 +1,7 @@
 //! Per-host network speed test (the GTK/Swift clients' "Test network speed…"): connect over the
-//! real data plane, measure the ceiling the bring-up ramp proves and a clean round under it,
-//! and report that rate · loss · jitter and a recommended bitrate (`recommended_kbps`), applied
-//! in one tap.
+//! real data plane, measure the ceiling (the bring-up ramp's, or one blast's when no ramp
+//! proved one) and, under a ramp's ceiling, a clean round's loss and jitter, then report them
+//! and a recommended bitrate (`recommended_kbps`), applied in one tap.
 
 use super::style::*;
 use super::{saved, Screen, Svc};

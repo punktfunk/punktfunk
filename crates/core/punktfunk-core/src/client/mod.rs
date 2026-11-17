@@ -320,8 +320,8 @@ pub struct NativeClient {
     worker: Option<std::thread::JoinHandle<()>>,
     /// SHA-256 of the cert the host presented. A TOFU caller (`pin = None`) persists this.
     pub host_fingerprint: [u8; 32],
-    /// Host-resolved compositor. `Auto` = older host. Gamescope capture has no cursor, so
-    /// clients draw one locally by default.
+    /// Host-resolved compositor. `Auto` = older host. Clients pin the capture mouse mode on a
+    /// Gamescope host.
     pub resolved_compositor: CompositorPref,
     /// Host-resolved virtual pad. `Auto` = older host (assume Xbox 360, no DualSense feedback).
     pub resolved_gamepad: GamepadPref,
@@ -477,9 +477,9 @@ fn register_hot_tid(reg: &Mutex<Vec<i32>>) {
     }
 }
 
-/// Send an RFI and log it at info, the most Android keeps. `missing_shards` is what
-/// `first_frame` lacked past its parity when its tail arrived or a later frame overtook
-/// it; absent when none of it arrived.
+/// Send an RFI and log it at info, the lowest level the Android client's logger keeps.
+/// `missing_shards` is what `first_frame` lacked past its parity when its tail arrived or a
+/// later frame overtook it; absent when none of it arrived.
 fn send_rfi(shared: &ClientShared, first_frame: u32, last_frame: u32) -> Result<()> {
     shared.ask_rfi(first_frame, last_frame);
     let short = shared.short_frames.lock().unwrap().get(first_frame);

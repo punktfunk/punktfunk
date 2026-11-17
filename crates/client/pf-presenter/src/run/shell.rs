@@ -92,7 +92,7 @@ impl Shell {
                 Some((x, y)) => b.position(x, y),
                 None => b.position_centered(),
             };
-            // HIGH_PIXEL_DENSITY: backbuffer in the panel's real pixels. Without it SDL
+            // HIGH_PIXEL_DENSITY: backbuffer in the panel's real pixels. Without it SDL 3.4
             // leaves a Wayland surface at buffer scale 1, so a fractionally scaled output
             // builds the swapchain in points. The flag only widens `size_in_pixels()`;
             // `size()` stays logical (persisted size and SDL mouse coords).
@@ -457,7 +457,7 @@ pub(super) fn native_mode_of(window: &sdl3::video::Window) -> Option<Mode> {
 }
 
 /// `mode` at the rate Windows states for the window's monitor, where that is within a hertz
-/// of SDL's: SDL reads whole hertz there and guesses the fraction.
+/// of SDL's: SDL reads whole hertz there and snaps it to the nearest DXGI mode.
 #[cfg(windows)]
 fn at_stated_rate(window: &sdl3::video::Window, mode: Mode) -> Mode {
     match crate::win32::window_refresh_mhz(window) {

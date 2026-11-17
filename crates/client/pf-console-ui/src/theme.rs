@@ -139,7 +139,7 @@ pub fn art_sampling() -> skia_safe::SamplingOptions {
     skia_safe::SamplingOptions::new(skia_safe::FilterMode::Linear, skia_safe::MipmapMode::Linear)
 }
 
-/// Status red (GTK `#ff938a`). A warning must not follow the wallpaper.
+/// Status red. A warning must not follow the wallpaper.
 pub const ERROR: Color4f = Color4f::new(1.0, 0.576, 0.541, 1.0);
 pub const ONLINE_GREEN: Color4f = Color4f::new(0.20, 0.84, 0.29, 1.0);
 
@@ -502,7 +502,7 @@ pub fn focus_ring(canvas: &Canvas, ui: &Frame, rect: Rect, corner: f32, k: f32) 
 /// [`focus_halo`] growth past the card, design units. Applied to both rect and corner radius.
 const HALO_OUTSET: f32 = 4.0;
 
-/// Accent glow under the focused card. Drawn behind [`drop_shadow`].
+/// Accent glow under the focused card. Draw it before [`drop_shadow`] so the shadow lies over it.
 pub fn focus_halo(canvas: &Canvas, ui: &Frame, rect: Rect, corner: f32, k: f32, f: f32) {
     if f <= 0.01 {
         return;
@@ -630,8 +630,8 @@ struct Fallback {
     pages: HashMap<(u32, W), Typeface>,
 }
 
-/// The language hint a font manager reads. Android's fallback list tags Chinese by script,
-/// fontconfig by region; each spelling picks the other's wrong Han face.
+/// The language hint a font manager reads. Android's fallback list (Android 15) tags Chinese by
+/// script, fontconfig (2.18) by region; each spelling picks the other's wrong Han face.
 fn font_lang(lang: &'static str) -> &'static str {
     const CHINESE: [(&str, &str); 3] = [
         ("zh-Hans", "zh-CN"),

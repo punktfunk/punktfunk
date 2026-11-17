@@ -394,8 +394,9 @@ pub fn hdr_presentable(vk: Option<&VulkanDecodeDevice>) -> bool {
 }
 
 /// First AMD Windows driver seen rendering a PQ stream from the Vulkan rung correctly
-/// (Adrenalin 25.9.1, driver store 32.0.21025). An older driver can paint it green;
-/// D3D11VA on the same driver is unaffected. Fields as
+/// (Adrenalin 25.9.1, driver store 32.0.21025.10016). The floor admits every 32.0.21025
+/// build, 25.8.1's .1024 included. An older driver can paint it green; D3D11VA on the
+/// same driver is unaffected. Fields as
 /// [`umd_version_parts`](crate::video_types::umd_version_parts) splits them.
 pub const AMD_VULKAN_HDR_DRIVER_FLOOR: [u16; 4] = [32, 0, 21025, 0];
 

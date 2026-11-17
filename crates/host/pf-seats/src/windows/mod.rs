@@ -6,8 +6,8 @@
 //! host executable from its caller, and delegates each portable command. The
 //! `HKLM\SOFTWARE\Punktfunk\Seats` key is the switch, which `enable` writes
 //! and removes: without it no seat starts, and a turn-on that did not finish leaves
-//! it marked `Enabling`, which reads as off. Doctor reports prerequisite and ownership evidence
-//! but never infers HDR or IDD health from static configuration.
+//! it marked `Enabling`, which reads as off. Doctor reports prerequisite, ownership and
+//! driver-package evidence; it never reads HDR or live display state.
 
 mod accounts;
 mod credentials;

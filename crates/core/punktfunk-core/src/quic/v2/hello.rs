@@ -1089,8 +1089,8 @@ mod tests {
         }
     }
 
-    /// A tag this build does not know is skipped, so an older host reads past tag 32 and an
-    /// older client past tag 30, as this one reads past 33.
+    /// A tag this build does not know is skipped, as an older peer skips the tags added after
+    /// it.
     #[test]
     fn an_unknown_tag_is_skipped() {
         let ch = Fields::new().u8(10, 6).bytes(33, &[9, 9]).into_body();

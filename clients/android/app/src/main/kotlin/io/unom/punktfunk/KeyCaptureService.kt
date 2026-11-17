@@ -21,8 +21,8 @@ import io.unom.punktfunk.kit.R
  *
  * It hands every key to the focused stream ([stream], set by [MainActivity]) and consumes what the
  * stream owns. It asks for keys only while a stream holds the window: every filtered key, in any
- * app, waits up to 500 ms for this process to answer, and a late one lands as a long press. It
- * never reads window content.
+ * app, waits up to 500 ms (AOSP 10 through main) for this process to answer, and a late one lands
+ * as a long press. It never reads window content.
  */
 class KeyCaptureService : AccessibilityService() {
     override fun onServiceConnected() {

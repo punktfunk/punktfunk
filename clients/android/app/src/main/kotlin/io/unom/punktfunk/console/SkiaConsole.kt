@@ -1336,7 +1336,7 @@ object SkiaConsole {
 
     /** How long a host's advertised actions stay fresh before we ask again — the desktop's
      *  `pf_client_core::host_actions::TTL`. Long on purpose: what it governs changes when an
-     *  operator edits access, not minute to minute, and each refresh is a TLS handshake. */
+     *  operator edits access, not minute to minute. */
     private const val HOST_ACTIONS_TTL_MS = 300_000L
 
     /** The presence cadence; the desktop runs its own (`probe_due` in `ServiceState::run`). */

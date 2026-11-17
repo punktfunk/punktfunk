@@ -42,7 +42,7 @@ name: audit
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
 # cancel each other). Keeps a busy push cadence from piling ~10 queued runs per commit onto the
-# runner fleet. Gitea honors this for push triggers (PR triggers: see gitea#35933).
+# runner fleet. Gitea applies it to push and pull_request runs alike.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -298,9 +298,9 @@ jobs:
   #   * pf-bitstream    — its compile did not finish in 27 min at 2.1 GB RSS, and it is
   #                       `forbid(unsafe_code)`, so there is nothing to find. Do not re-add it.
   #   * pf-update-check — ring; every FFI crate — dies on the first foreign call. Structural.
-  #   * punktfunk-core in bulk — `-- fec packet crypto` selects 63 tests and does not finish
-  #                       within a 25-minute cap. Only the narrow `fec::gf8` selection below is
-  #                       affordable. Do not widen this filter without timing the result.
+  #   * punktfunk-core in bulk — `-- fec packet crypto` selects dozens of tests and does not
+  #                       finish within a 25-minute cap. Only the narrow `fec::gf8` selection
+  #                       below is affordable. Do not widen this filter without timing the result.
   #
   # COST: cold, the three steps take a couple of minutes, including the one-time Miri sysroot
   # builds (host + MSVC) that the cache below carries; warm, seconds. `timeout-minutes: 30` is
@@ -433,9 +433,9 @@ jobs:
   # included), the harness with clang -fsanitize — so ASAN sees the seam a Rust-only tool cannot,
   # and LSAN (detect_leaks=1, the script's default) becomes the one automated check on the ABI's
   # Box::into_raw/from_raw leak contract.
-  # What it does NOT see: the invalid-InputKind-discriminant UB in the ABI (that needs the
-  # validator, tracked in §5 of the programme doc), and nothing GPU/Windows — this is the
-  # default-feature (quic-less, opus-less) ABI only.
+  # What it does NOT see: the `quic` ABI (connection, input) and anything GPU/Windows — this is
+  # the default-feature (quic-less, opus-less) ABI only. An invalid `InputKind` tag from C is
+  # rejected by `read_input_event`, not by a sanitizer.
   c-abi-asan:
     runs-on: ubuntu-24.04
     container:
@@ -515,8 +515,8 @@ jobs:
   # NOT BLOCKING until it has a green history: a failure is a warning on the step.
   #
   # COST: cold, the crates in the step below take a few minutes after a one-time sysroot build,
-  # and about 5 GB of target dir. A crate that alone approached ten minutes would be dropped. If
-  # you add a crate, measure it first.
+  # and about 5 GB of target dir. A crate whose careful run alone passes ten minutes is dropped
+  # from the list. If you add a crate, measure it first.
   careful:
     runs-on: ubuntu-24.04
     container:

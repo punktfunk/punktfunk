@@ -179,8 +179,9 @@ impl SetEncodeRequest {
 }
 
 /// [`SetEncodeRequest::flags`]: the display composes FP16 scRGB under SDR wide colour, and the
-/// stream is BT.709 SDR. Sent only to a driver that declared wide colour, so an older one, which
-/// would read BGRA from an FP16 surface, never sees it.
+/// stream is BT.709 SDR. Set only while the display composes that, which needs a driver
+/// reporting `IDDCX_TARGET_CAPS_WIDE_COLOR_SPACE`; an older driver, which would read BGRA from
+/// an FP16 surface, never sees it.
 pub const SET_ENCODE_FLAG_SDR_FP16: u32 = 1;
 
 /// [`SetEncodeRequest::flags`]: encode and signal studio range, because the host advertised

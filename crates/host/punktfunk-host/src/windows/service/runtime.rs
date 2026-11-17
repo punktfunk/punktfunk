@@ -532,8 +532,9 @@ pub(super) fn open_log_handle(path: &std::path::Path) -> Result<HANDLE> {
         lpSecurityDescriptor: std::ptr::null_mut(),
         bInheritHandle: true.into(),
     };
-    // Append mask: `FILE_GENERIC_WRITE` minus `FILE_WRITE_DATA`, plus `FILE_APPEND_DATA`. Bare
-    // `FILE_APPEND_DATA` alone produced a child handle that silently dropped writes.
+    // Append mask, as Rust's `OpenOptions::append` builds it: `FILE_GENERIC_WRITE` minus
+    // `FILE_WRITE_DATA`. A child given bare `FILE_APPEND_DATA` loses its writes (observed,
+    // cause unknown).
     let access = (FILE_GENERIC_WRITE.0 & !FILE_WRITE_DATA.0) | FILE_APPEND_DATA.0;
     // SAFETY: `wpath` is the locally built NUL-terminated UTF-16 path and `sa` a correctly sized
     // local `SECURITY_ATTRIBUTES`; both outlive the call, and the result is checked by `?`.

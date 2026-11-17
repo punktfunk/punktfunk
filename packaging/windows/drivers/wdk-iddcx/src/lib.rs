@@ -170,9 +170,9 @@ iddcx_ddi!(
 );
 iddcx_ddi!(
     /// The v3 hardware-cursor drain — same input, richer output (adds `PositionValid` /
-    /// `PositionId` / `SdrWhiteLevel`). The base [`IddCxMonitorQueryHardwareCursor`] slot is
-    /// stubbed to `STATUS_NOT_SUPPORTED` on current IddCx (WDK 26100), so this is the live query
-    /// DDI.
+    /// `PositionId` / `SdrWhiteLevel`). The base [`IddCxMonitorQueryHardwareCursor`] slot answers
+    /// `STATUS_NOT_SUPPORTED` to this FP16 driver; IddCx 1.10 has FP16 drivers query only through
+    /// `3`, so this is the live query DDI.
     IddCxMonitorQueryHardwareCursor3(
         monitor: iddcx::IDDCX_MONITOR,
         in_args: *const iddcx::IDARG_IN_QUERY_HWCURSOR,
@@ -223,7 +223,7 @@ iddcx_ddi!(
     /// than any regular application can set" (IddCx 1.9) — so buffer processing outruns ordinary
     /// GPU contention. It does NOT help against adapter-wide display servicing (modeset-class DDIs
     /// idle the hardware outright); it defends the contention case only. Best-effort at the call
-    /// site: the DDI itself may decline (e.g. E_NOTIMPL on WDDM < 3.0 hardware).
+    /// site: the DDI itself may decline (E_NOTIMPL on a WDDM 1.x device).
     ///
     /// Table-slot availability rests on the driver's `IddMinimumVersionRequired = 10` export
     /// (pf-vdisplay lib.rs): the loader refuses to bind a framework older than IddCx 1.10, so

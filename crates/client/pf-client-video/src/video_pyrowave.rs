@@ -7,7 +7,8 @@
 //! Output is three planes (Y full-res; Cb/Cr half-res, or full-res on 4:4:4; R8, or R16
 //! UNORM at 10-bit), drawn by fragment passes where pyrowave prefers them, else by compute.
 //! Encoder RG packing is invalid here (`pyrowave.h`). Colour is the negotiated `ColorInfo`;
-//! the bitstream has no VUI. A plane-set ring keeps decode off a set the presenter samples.
+//! the sequence header's colour bits go unread. A plane-set ring keeps decode off a set the
+//! presenter samples.
 //!
 //! pyrowave needs the instance/device create-infos alive for the shared device.
 //! The presenter does not pin its originals, so [`Hold`] reconstructs content-equivalent
@@ -244,7 +245,7 @@ pub struct PyroWavePlanarFrame {
     pub height: u32,
     pub color: ColorDesc,
     /// R16 planes of MSB-packed 10-bit codes, else R8. Follows the session's depth, not its
-    /// transfer: a Linux host sends 10-bit SDR.
+    /// transfer: a host can send 10-bit SDR.
     pub ten_bit: bool,
     /// Independently decodable — always a clean re-anchor.
     pub keyframe: bool,
@@ -680,7 +681,7 @@ pub struct PyroWaveDecoder {
     /// Session-fixed ([`Welcome::chroma_format`]). A seq-header mismatch fails upstream,
     /// never silently.
     chroma444: bool,
-    /// Negotiated [`Welcome::color`]. The wavelet bitstream has no VUI.
+    /// Negotiated [`Welcome::color`]. The sequence header's colour bits go unread.
     color: ColorDesc,
     /// Depth ≥10: `R16_UNORM` planes carry P010-style studio codes; the presenter
     /// samples them as depth-10 MSB-packed rows.
@@ -1566,8 +1567,8 @@ impl PyroWaveDecoder {
         self.split.record_us = record_started.elapsed().as_micros() as u32;
         // The frame before this one goes to the screen first.
         self.queue_lock.yield_to_present();
-        // pyrowave keeps one payload buffer and one coefficient set per decoder and opens with
-        // copies into them: wait for the decode before, and only that, not the present after it.
+        // pyrowave keeps one payload buffer and one coefficient set per decoder: wait for the
+        // decode before, and only that, not the present after it.
         let sync = self.timeline.arm(slot, turn)?;
         let wait: Vec<vk::Semaphore> = sync.wait.into_iter().collect();
         let signal = [sync.signal];

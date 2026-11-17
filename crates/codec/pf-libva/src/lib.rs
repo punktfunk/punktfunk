@@ -183,7 +183,8 @@ pub struct Libva {
         unsafe extern "C" fn(VaDisplay, VaContextId, *mut VaBufferId, c_int) -> VaStatus,
     pub end_picture: unsafe extern "C" fn(VaDisplay, VaContextId) -> VaStatus,
     pub sync_surface: unsafe extern "C" fn(VaDisplay, VaSurfaceId) -> VaStatus,
-    /// Buffer-specific encode completion (libva >= 1.9); `None` keeps the surface fallback.
+    /// Buffer-specific encode completion (VA-API 1.9, libva 2.9+); `None` keeps the
+    /// surface fallback.
     pub sync_buffer: Option<unsafe extern "C" fn(VaDisplay, VaBufferId, u64) -> VaStatus>,
     /// Non-blocking half of `sync_surface`: the surface's `VASurfaceStatus` out.
     pub query_surface_status: unsafe extern "C" fn(VaDisplay, VaSurfaceId, *mut c_int) -> VaStatus,

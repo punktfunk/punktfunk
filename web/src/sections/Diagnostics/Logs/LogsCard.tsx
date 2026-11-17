@@ -146,9 +146,9 @@ export const LogsCard: FC<{
 	const shareLabel = shareMode === "share" ? m.logs_share() : m.logs_copy();
 	const nothingSelected = selected.size === 0;
 	// "No plugin output" has a specific, actionable cause that the generic "adjust the filter" line
-	// actively misdirects from: the runner is a separate service and is opt-in on Linux, so the
-	// usual reason for an empty Plugins view is that it simply isn't running. Only worth saying
-	// when plugins are the ONLY thing being looked at — otherwise the emptiness is not about them.
+	// actively misdirects from: the runner is a separate service, so the usual reason for an empty
+	// Plugins view is that it isn't installed or isn't running. Only worth saying when plugins are
+	// the ONLY thing being looked at — otherwise the emptiness is not about them.
 	const onlyPlugins = selected.size === 1 && selected.has(PLUGINS_SOURCE);
 
 	// Keep the tail in view while following.

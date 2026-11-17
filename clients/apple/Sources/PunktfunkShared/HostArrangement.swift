@@ -117,9 +117,8 @@ public enum HostArrangement {
         hosts: [StoredHost], catalog: PresetCatalog, online: Set<UUID>,
         sort: HostSort, grouping: HostGrouping
     ) -> [HostGroup] {
-        // The original index is the tie-break for every sort below. `Array.sorted` is NOT stable
-        // in Swift, so without it two hosts that compare equal — same name, both never connected —
-        // could swap places between redraws.
+        // The original index breaks every tie below, so hosts that compare equal — same name,
+        // both never connected — keep their stored order between redraws.
         let ranked = hosts.enumerated().map { (index: $0.offset, host: $0.element) }
 
         func ordered(_ slice: [(index: Int, host: StoredHost)]) -> [StoredHost] {

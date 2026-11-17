@@ -317,7 +317,7 @@ pub enum MidWave {
     /// state itself (Vulkan Video).
     Restart,
     /// The sweep runs out and a fresh one queues behind it: the driver ignores a re-force
-    /// mid-sweep (NVENC) or tracks each reference's refreshed rows itself (iHD).
+    /// mid-sweep (NVENC) or tracks each reference's refreshed rows itself (iHD HEVC).
     Queue,
 }
 

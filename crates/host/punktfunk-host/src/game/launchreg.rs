@@ -1,7 +1,6 @@
 //! What this host launched, for whom, and when.
 //!
-//! A reconnecting client re-sends `Hello::launch` verbatim. Linux gamescope
-//! reuse keys on that command, so dropping it orphans the game. The host
+//! A reconnecting client re-sends `Hello::launch` verbatim. The host
 //! must notice: `gog:`/`custom:` would spawn a second copy, and a fresh
 //! [`crate::gamelease::launch_clock`] would put the original process outside
 //! [`crate::procscan::START_SLACK_SECS`], so the session never sees the exit.

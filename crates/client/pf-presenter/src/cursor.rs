@@ -144,7 +144,8 @@ impl CursorChannel {
                         "cursor shape rejected by SDL — keeping the previous cursor"),
                 }
             }
-            // Serial miss: keep the previous cursor for one RTT rather than flashing default.
+            // Serial miss: keep the previous cursor until that serial's shape lands, rather
+            // than flashing default.
         }
         // Query, do not shadow: apply_capture's own show/hide must not desync us.
         if mouse.is_cursor_showing() != st.visible() {

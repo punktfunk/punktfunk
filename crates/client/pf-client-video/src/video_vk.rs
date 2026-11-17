@@ -11,8 +11,9 @@
 /// on the queue the presenter shares with the decode lane.
 ///
 /// The presenter has one graphics-family queue; the pump submits decode/CSC
-/// to it from another thread. Unsynchronized `vkQueueSubmit` is intermittent
-/// `VK_ERROR_DEVICE_LOST`. Lock/unlock stay for callbacks; [`QueueLock::guard`] is RAII.
+/// to it from another thread. `vkQueueSubmit` needs the queue externally synchronized; a
+/// race is undefined and can lose the device. Lock/unlock stay for callbacks;
+/// [`QueueLock::guard`] is RAII.
 pub struct QueueLock {
     locked: std::sync::Mutex<bool>,
     cv: std::sync::Condvar,
@@ -255,7 +256,8 @@ pub(crate) const VENDOR_AMD: u32 = 0x1002;
 impl VulkanDecodeDevice {
     /// Should `auto` try Vulkan Video before VAAPI / D3D11VA on this device?
     ///
-    /// NVIDIA and AMD: yes. NVIDIA has no usable VAAPI; VanGogh VAAPI chroma-fringes.
+    /// NVIDIA and AMD: yes. NVIDIA ships no VAAPI driver of its own; AMD decodes faster on
+    /// Vulkan Video, and VanGogh's VAAPI import fringes chroma.
     /// Elsewhere the platform rung gets the first turn. D3D11VA keeps it. VAAPI is
     /// `verified: false`, so it never precedes a usable Vulkan rung, and on Linux this
     /// decides only whether that yield is logged.

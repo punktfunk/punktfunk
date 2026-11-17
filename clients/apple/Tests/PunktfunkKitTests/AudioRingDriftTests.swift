@@ -870,11 +870,9 @@ final class AudioRingDriftTests: XCTestCase {
         XCTAssertEqual(played.count, written + frame - ring.bufferedSamples, "not exactly +1 frame")
     }
 
-    /// The DROP's seam, checked the same way — against the sample the device played just before
-    /// it. A fade-out sourced from the tail of the dropped span would step by `drop − fade`
-    /// samples. The 80 ms depth below is over the headroom line but under `hardCapMS`, with the
-    /// average near target, so `JitterPolicy` drops nothing here; core's
-    /// `crossfade_drop_is_continuous_with_what_was_just_played` pins the seam itself.
+    /// An 80 ms depth over the headroom line but under `hardCapMS`, with the average near
+    /// target: `JitterPolicy` drops nothing, so the seam check passes without a drop. Core's
+    /// `crossfade_drop_is_continuous_with_what_was_just_played` pins the drop seam.
     func testTheDropSeamIsContinuousWithWhatWasJustPlayed() {
         let ring = AudioRing(seconds: 1, channels: channels, rateHz: 48_000)
         let want = 5 * perMS

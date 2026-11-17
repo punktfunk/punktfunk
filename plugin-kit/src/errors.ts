@@ -7,9 +7,9 @@ import { Data } from "effect";
  * A management-API call through the pf facade failed.
  *
  * The `message` getter is load-bearing, not decoration. `Data.TaggedError`'s default string form is
- * the bare tag, so without it a host that refused a reconcile with a clear 400 shows in the plugin
- * log as `HostRequestError` alone, with the method, the path and the host's own explanation
- * discarded, and a validation refusal looks the same as the host being down.
+ * the bare tag and `Cause.pretty` heads the line `HostRequestError: ` with nothing after, so
+ * without it a refused reconcile logs no method or path; the host's explanation survives only as
+ * the nested `[cause]`.
  */
 export class HostRequestError extends Data.TaggedError("HostRequestError")<{
 	readonly method: string;

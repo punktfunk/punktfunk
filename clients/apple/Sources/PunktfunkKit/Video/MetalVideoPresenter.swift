@@ -98,8 +98,8 @@ let hdrDrawable = hdrDrawableFormat(
 
 /// Linear EDR values exceed 1, so `linear` takes half-float, as `CurveTarget`'s HDR queue does.
 /// PQ fits 10 bits, the pairing Apple documents for HDR10, except where `halfFloatPQ`: Apple TVs
-/// older than the A15 show the 10-bit PQ layer at half rate. `PUNKTFUNK_HDR_DRAWABLE=16|10` picks
-/// the PQ drawable for an A/B.
+/// before the A15 (an A12 shows 20–40 of 60 fps on the 10-bit PQ layer; A10X is unmeasured).
+/// `PUNKTFUNK_HDR_DRAWABLE=16|10` picks the PQ drawable for an A/B.
 func hdrDrawableFormat(linear: Bool, env: String?, halfFloatPQ: Bool) -> MTLPixelFormat {
     if linear { return .rgba16Float }
     switch env {

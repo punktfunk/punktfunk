@@ -29,9 +29,9 @@ pub(crate) struct Knobs {
     /// load, the whole 120 → 111 fps gap. `PUNKTFUNK_EXPLICIT_SYNC=0` keeps the implicit path.
     #[cfg(target_os = "linux")]
     pub explicit_sync: bool,
-    /// `PUNKTFUNK_KWIN_PACED=1` asks every KWin for the stream rate. KWin schedules each
-    /// screencast frame on a QTimer whose wait it rounds *up* to a whole millisecond, so an
-    /// 8.333 ms frame is scheduled at 9 and the cadence jitters against the real refresh.
+    /// `PUNKTFUNK_KWIN_PACED=1` sends KWin no ceiling, so it fixates its own: the output's
+    /// refresh. KWin up to 6.7 throttles that on a QTimer counted in whole milliseconds
+    /// (8.333 ms → 8), so the cadence jitters against the real refresh.
     /// Unpaced, KWin up to 6.7 gets no ceiling and delivers on its damage signal; KWin 6.8
     /// (millihertz offer) gets the stream rate as its ceiling and paces the cast at it.
     #[cfg(target_os = "linux")]
@@ -155,8 +155,8 @@ fn idd_diag() -> Option<std::path::PathBuf> {
 /// Whether to capture a compositor's output directly with `ext-image-copy-capture-v1`
 /// instead of going through the xdg ScreenCast portal.
 ///
-/// The portal is a second clock in the path: xdg-desktop-portal-hyprland re-requests each
-/// frame on a millisecond timer with a 6 ms floor, which halves the rate at 165 Hz and
+/// The portal is a second clock in the path: xdg-desktop-portal-hyprland (1.3–1.5) re-requests
+/// each frame on a millisecond timer with a 6 ms floor, which halves the rate at 165 Hz and
 /// adds ~3 ms to every frame's age. Capturing the protocol ourselves removes both.
 /// `PUNKTFUNK_DIRECT_CAPTURE=0` keeps the portal.
 #[cfg(target_os = "linux")]

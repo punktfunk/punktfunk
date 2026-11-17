@@ -244,8 +244,8 @@ export default defineConfig({
 			scanDirs: [serverDir],
 			// Silence rollup's MODULE_LEVEL_DIRECTIVE noise. Because `noExternals` re-bundles the
 			// whole dep tree into the server output, every React package that ships a `"use client"`
-			// banner — @tanstack/react-router, radix-ui, framer-motion under @unom/ui — earns one
-			// "directive was ignored" line, ~800 of them per build, which buries the warnings worth
+			// banner — @tanstack/react-router, radix-ui, framer-motion under @unom/ui — earns a
+			// "directive was ignored" line per bannered module, which buries the warnings worth
 			// reading. Ignoring is the CORRECT outcome here and not a papered-over bug: this bundle is
 			// the Bun/Nitro server, not an RSC module graph, and Start splits client/server with its
 			// own transform, so nothing downstream ever consults the banner.

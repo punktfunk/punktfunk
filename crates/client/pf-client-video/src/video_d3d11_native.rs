@@ -303,7 +303,7 @@ impl NativeD3d11Decoder {
             planner,
             codec,
             status_id: 0,
-            // D3D11VA has no per-picture status read (`ID3D11VideoContext` exposes none),
+            // This decoder sends no DXVA status request (`DecoderExtension`, function 7),
             // so `failed` stays 0 and `status_queries` is false. Claiming query support
             // we do not have would report "clean" for unmeasured.
             health: DecodeHealth {

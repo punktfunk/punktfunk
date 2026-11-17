@@ -179,7 +179,7 @@ fn primary_mode() -> Option<punktfunk_core::Mode> {
     } else {
         60
     };
-    // DEVMODEW cuts 59.94 Hz to 59: the display path states the rate it cut.
+    // DEVMODEW cuts 59.94 Hz to 59 (Windows 7 and later): the display path states the rate it cut.
     let mhz = primary_refresh_mhz()
         .filter(|m| m.abs_diff(whole.saturating_mul(1000)) < 1000)
         .unwrap_or(whole.saturating_mul(1000));
@@ -346,9 +346,9 @@ fn committer<T: 'static>(
 
 /// One field a preset can override: [`described_labeled`] plus, while the preset in scope
 /// overrides the row's key, the Overridden marker whose Reset is the only way back to
-/// inheriting. Captions sit below their control, as on every Windows Settings page and the
-/// Apple client. A control's edit pins the key ([`commit`]); WinUI raises no change event on
-/// a no-op re-selection, so "not overridden" needs the Reset.
+/// inheriting. Captions sit below their control, as in the Apple client. A control's edit pins
+/// the key ([`commit`]); WinUI raises no change event on a no-op re-selection, so "not
+/// overridden" needs the Reset.
 fn described_overridable(
     cx: &Cx,
     row: &rows::Row,
@@ -642,7 +642,7 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
     let scope_bar = preset_sheet::scope_bar(&cx, active.as_ref(), &set_scope, &set_edit);
 
     // The content column carries the section entrance and the category title, so the title
-    // shares the cards' left edge; no max-width, as the pane already takes a third.
+    // shares the cards' left edge; no max-width: the 320 px pane already narrows it.
     let titled: Vec<View> = std::iter::once(
         text(title)
             .font_size(28.0)

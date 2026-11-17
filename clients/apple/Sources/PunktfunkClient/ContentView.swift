@@ -573,8 +573,7 @@ struct ContentView: View {
         }
         #endif
         // On the outer Group so the sheet survives the trust-prompt → home transition
-        // (the trust card's "Pair with PIN…" disconnects first — the host's accept loop
-        // is sequential, a pairing connection would queue behind the live session).
+        // (the trust card's "Pair with PIN…" disconnects first).
         #if !os(tvOS)
         // The touch UI's pairing sheet. The console pairs on its own screen, so the sheet hides
         // while the console owns the screen (see `touchPairingTarget`).
@@ -1047,8 +1046,8 @@ struct ContentView: View {
                 }
                 // The resize spinner rides over the blurred stream, never under the trust prompt,
                 // and never hit-tests, so window-drag resizes keep steering. Mounted ONLY while a
-                // resize is live: a resident view above the CAMetalLayer makes presents composited,
-                // a full refresh later. Its fade rides the call-site transition, not `if active`.
+                // resize is live, so no view stays above the CAMetalLayer. Its fade rides the
+                // call-site transition, not `if active`.
                 .overlay {
                     if pendingFingerprint == nil, model.resizing {
                         ResizeIndicatorView(active: true)

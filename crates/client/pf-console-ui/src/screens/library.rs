@@ -80,7 +80,7 @@ const ROW_STEPS: usize = 3;
 const PLATE_AIR: f64 = 32.0;
 /// Air under the sort/view row before the next line.
 const BAR_AIR: f64 = 4.0;
-/// The shelf's group heading, and the air round its covers (the Apple strip's 44).
+/// The shelf's group heading, and the vertical air round its covers.
 const SHELF_HEAD: f64 = 26.0;
 const SHELF_AIR: f64 = 44.0;
 /// The state card's height among the tab's rows.
@@ -170,7 +170,7 @@ pub(crate) struct LibraryScreen {
     bump: Spring,
     view_mode: LibraryView,
     /// The sort/view pills' sliding capsules. Boxed: `Screen` moves by value and this
-    /// variant is already the largest.
+    /// variant is among its larger ones.
     bar: Box<bar::Bar>,
     /// Seat scroll and capsules next frame: a new arrangement does not glide from the old.
     snap_scroll: bool,
