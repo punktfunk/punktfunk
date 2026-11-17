@@ -280,6 +280,10 @@ fn launch_compositor(
 #[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub type VideoHdr = std::sync::Arc<std::sync::Mutex<Option<pf_frame::HdrMeta>>>;
 
+/// See [`GsState::video_poke`].
+#[cfg(feature = "gamestream")]
+pub type VideoPoke = std::sync::Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
+
 /// Cumulative client-loss telemetry from the control stream's periodic `0x0201` loss-stats.
 /// Control thread adds; video thread's 1 Hz step reads deltas — no lock, no reset.
 #[derive(Default)]
@@ -339,6 +343,9 @@ pub struct GsState {
     /// Mastering metadata of the frames the video thread encodes, `None` while they are SDR.
     /// [`control`] tells the client each change (`0x010e`).
     pub video_hdr: VideoHdr,
+    /// The running video source's poke, which ends the stream loop's tick wait. [`control`]
+    /// fires it on a recovery ask, so the ask goes out at once. `None` without a stream.
+    pub video_poke: VideoPoke,
     /// Persistent screen capturer, reused across streams. The slot's `bool` is whether it was
     /// opened with the HDR offer; a stream whose negotiated `hdr` differs drops it and opens
     /// a fresh session at the right depth.
@@ -363,6 +370,7 @@ impl GsState {
             audio_params: std::sync::Mutex::new(audio::AudioParams::default()),
             preempted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             video_hdr: VideoHdr::default(),
+            video_poke: VideoPoke::default(),
             video_cap: std::sync::Arc::new(std::sync::Mutex::new(None)),
             joined: std::sync::Mutex::new(None),
         }

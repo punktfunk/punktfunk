@@ -345,6 +345,7 @@ fn handle_request(req: &Request, state: &Arc<AppState>, peer: Option<SocketAddr>
                         state.rfi_range.clone(),
                         state.loss_stats.clone(),
                         state.gs.video_hdr.clone(),
+                        state.gs.video_poke.clone(),
                         video_key,
                         state.gs.video_cap.clone(),
                         state.stats.clone(),

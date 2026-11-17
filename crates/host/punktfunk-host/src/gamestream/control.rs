@@ -949,7 +949,8 @@ fn on_receive(
 }
 
 /// Apply a loss-recovery request to what the video thread drains: `rfi_range`,
-/// `force_idr`, the loss counters.
+/// `force_idr`, the loss counters. An RFI or keyframe ask also pokes the video thread's
+/// wait, so the ask goes out this tick instead of at the next frame.
 fn note_loss_recovery(state: &AppState, msg: ControlMsg) {
     match msg {
         ControlMsg::InvalidateFrames(first, last) => {
@@ -961,12 +962,14 @@ fn note_loss_recovery(state: &AppState, msg: ControlMsg) {
                 None => (first, last),
             });
             drop(slot);
+            poke_video(state);
             tracing::debug!(first, last, "control: RFI request → invalidate ref frames");
         }
         ControlMsg::Keyframe(ty) => {
             state
                 .force_idr
                 .store(true, std::sync::atomic::Ordering::SeqCst);
+            poke_video(state);
             tracing::debug!(ty = %format_args!("{ty:#06x}"), "control: keyframe request");
         }
         ControlMsg::LossStats {
@@ -1000,6 +1003,19 @@ fn note_loss_recovery(state: &AppState, msg: ControlMsg) {
             }
         }
         ControlMsg::Ignored | ControlMsg::Input => {}
+    }
+}
+
+/// Fire the running source's poke ([`super::GsState::video_poke`]), after the ask is stored.
+fn poke_video(state: &AppState) {
+    let poke = state
+        .gs
+        .video_poke
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if let Some(poke) = poke {
+        poke();
     }
 }
 
@@ -1545,10 +1561,16 @@ mod tests {
     }
 
     /// RFI with a range merges into what the video thread has not drained; without a usable
-    /// range, and on 0x0302 / 0x0305, it is a keyframe. Loss reports add up per report.
+    /// range, and on 0x0302 / 0x0305, it is a keyframe. Each of those pokes the video thread;
+    /// loss reports only add up per report.
     #[test]
     fn loss_recovery_requests_land_in_the_shared_state() {
         let state = launched_state();
+        let pokes = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let counted = pokes.clone();
+        *state.gs.video_poke.lock().unwrap() = Some(std::sync::Arc::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
         let mut peer = super::ControlPeer::new();
         let (tx, _rx) = channel();
         let mut seq = 0u32;
@@ -1575,6 +1597,7 @@ mod tests {
             send(&msg(ty, &[]));
             assert!(state.force_idr.load(Ordering::SeqCst), "{ty:#06x}");
         }
+        assert_eq!(pokes.load(Ordering::SeqCst), 5, "every ask pokes");
         send(&loss(3));
         send(&loss(0));
         send(&loss(-4)); // a negative count is none
@@ -1589,6 +1612,120 @@ mod tests {
         send(&msg(0x5502, &[0; 10]));
         assert_eq!(state.loss_stats.reports.load(Ordering::Relaxed), 5);
         assert_eq!(state.counters.input_events.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            pokes.load(Ordering::SeqCst),
+            5,
+            "a loss report pokes nothing"
+        );
+    }
+
+    /// A source whose paced wait runs to its deadline unless its poke fires.
+    #[derive(Default)]
+    struct Waiting(std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>);
+
+    impl pf_capture::Feed for Waiting {
+        fn wait_arrival(&mut self, _deadline: std::time::Instant) {}
+
+        fn wait_paced(
+            &mut self,
+            _not_before: std::time::Instant,
+            deadline: std::time::Instant,
+        ) -> pf_capture::Paced {
+            let (poked, wake) = &*self.0;
+            let mut poked = poked.lock().unwrap();
+            while !*poked {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
+                    return pf_capture::Paced::Due;
+                }
+                poked = wake.wait_timeout(poked, left).unwrap().0;
+            }
+            *poked = false;
+            pf_capture::Paced::Poked
+        }
+
+        fn arrival_poke(&self) -> Option<std::sync::Arc<dyn Fn() + Send + Sync>> {
+            let shared = self.0.clone();
+            Some(std::sync::Arc::new(move || {
+                *shared.0.lock().unwrap() = true;
+                shared.1.notify_all();
+            }))
+        }
+    }
+
+    impl crate::capture::Capturer for Waiting {
+        fn next_frame(
+            &mut self,
+            _budget: pf_capture::FirstFrame,
+        ) -> anyhow::Result<crate::capture::CapturedFrame> {
+            anyhow::bail!("a wait-only source")
+        }
+
+        fn feed(&mut self) -> Option<&mut dyn pf_capture::Feed> {
+            Some(self)
+        }
+    }
+
+    /// Encodes nothing.
+    struct NoEncoder;
+
+    impl crate::encode::Encoder for NoEncoder {
+        fn submit(&mut self, _frame: &crate::capture::CapturedFrame) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn poll(&mut self) -> anyhow::Result<Option<crate::encode::EncodedFrame>> {
+            Ok(None)
+        }
+        fn flush(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// An RFI ends the video thread's tick wait through the poke its source published, rather
+    /// than at the keep-alive three seconds out.
+    #[test]
+    fn an_rfi_ends_the_video_tick_wait() {
+        use std::time::{Duration, Instant};
+        let state = launched_state();
+        let mut source = Waiting::default();
+        super::super::stream::publish_poke(&mut source, &state.gs.video_poke);
+        let interval = Duration::from_secs(2);
+        let waiter = std::thread::spawn(move || {
+            let frame = crate::capture::CapturedFrame {
+                width: 4,
+                height: 4,
+                pts_ns: 0,
+                format: crate::capture::PixelFormat::Bgrx,
+                payload: pf_frame::FramePayload::Cpu(vec![0; 64]),
+                cursor: None,
+                provenance: Default::default(),
+            };
+            let start = Instant::now();
+            let mut credit = crate::send_pacing::CaptureCredit::new(start - interval * 4);
+            let mut next = start + interval;
+            crate::send_pacing::wait_next_tick(
+                &mut source,
+                &mut NoEncoder,
+                &frame,
+                &mut credit,
+                &mut next,
+                None,
+                interval,
+                None,
+            );
+            start.elapsed()
+        });
+        let mut peer = super::ControlPeer::new();
+        let (tx, _rx) = channel();
+        super::on_receive(
+            &state,
+            &client_seal(0, &rfi(40, 47)),
+            &mut peer,
+            &tx,
+            GRANT_ALL,
+        );
+        let waited = waiter.join().unwrap();
+        assert!(waited < interval, "the ask ended the wait after {waited:?}");
     }
 
     /// Every decodable input is one mask test: granted → injected and counted, otherwise
