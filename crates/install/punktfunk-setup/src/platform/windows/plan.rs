@@ -25,7 +25,7 @@ pub const DEFAULT_HOST_DIR: &str = r"C:\Program Files\punktfunk";
 /// Rendered, not resolved: the executor expands the per-user profile path.
 pub const DEFAULT_CLIENT_DIR: &str = r"%LocalAppData%\Programs\Punktfunk";
 
-/// Client ARP key. Keep Inno's `_is1`: winget ProductCode tracks this exact name.
+/// Client ARP key: Inno's `<AppId>_is1`, the key an Inno-installed client already holds.
 pub const CLIENT_ARP_KEY: &str = r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{52464E61-68A1-4621-B6B3-5B8BBB823D1A}_is1";
 
 /// The host's OS floor. pf-vdisplay is built against IddCx 1.10, which first shipped in
@@ -710,8 +710,9 @@ fn client_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
         t::setup_win_phase_files(&app),
         vec![
             WinAction::DeployFiles { dest: app.clone() },
-            // The firewall service (LOCAL SERVICE) reads the exe to name it in its prompt; a
-            // profile dir denies it that. Lenient: a refused grant costs only the name.
+            // The firewall service runs as LOCAL SERVICE, which a profile dir locks out; this
+            // grant is meant to let it read the exe it names in its prompt. Lenient: a refused
+            // grant costs only the name.
             run_lenient(&["icacls", &app, "/grant", "*S-1-5-19:(OI)(CI)RX", "/Q"]),
         ],
     );

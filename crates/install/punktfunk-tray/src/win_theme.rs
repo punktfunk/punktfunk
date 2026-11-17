@@ -1,8 +1,9 @@
 //! Dark mode, DPI-scaled glyphs, and themed popup menus for the Windows tray.
 //!
 //! Win32 popup menus have no documented dark-mode opt-in. This module calls the
-//! undocumented uxtheme ordinals `SetPreferredAppMode` (135) and `FlushMenuThemes`
-//! (136), stable since Windows 10 1809. A missing ordinal leaves the classic light menu.
+//! undocumented uxtheme ordinals `SetPreferredAppMode` (135; `AllowDarkModeForApp` on 1809)
+//! and `FlushMenuThemes` (136), exported from Windows 10 1809 (checked on Windows 11 26200).
+//! A missing ordinal leaves the classic light menu.
 //!
 //! Glyphs come from Segoe Fluent Icons (Segoe MDL2 Assets on Windows 10; same
 //! codepoints), drawn into premultiplied ARGB bitmaps so the themed menu composites

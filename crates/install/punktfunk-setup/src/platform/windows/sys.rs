@@ -67,9 +67,9 @@ fn utf16_of(pending: &mut Vec<u8>, buf: &[u8]) -> Vec<u16> {
 
 /// A GUI-subsystem exe launched from a terminal: bind the parent's console and open its
 /// output end. `None` when no parent console exists (a double-click), which simply means
-/// no console output. The updater's spawn does attach: the service host owns a hidden
-/// console, and that one dies when the upgrade stops the service. `CONOUT$` rather than
-/// `stdout()`: the std handles were fixed at startup, before the attach.
+/// no console output. The updater's spawn does attach, to the service host's hidden console,
+/// which can be gone once the upgrade stops the service. `CONOUT$` rather than `stdout()`:
+/// the std handles were fixed at startup, before the attach.
 #[cfg(windows)]
 pub fn attach_parent_console() -> Option<ConsoleOut> {
     use ::windows::Win32::Foundation::HANDLE;
@@ -328,7 +328,7 @@ pub fn create_shortcut(_link: &str, _target: &str, _args: &str) -> Result<(), St
 }
 
 /// The visible desktop, this user's and every user's Start menu Programs folder, from the
-/// shell: OneDrive can move the first two away from `%USERPROFILE%`. `None` where the shell
+/// shell: OneDrive can move the desktop away from `%USERPROFILE%`. `None` where the shell
 /// has no answer.
 #[cfg(windows)]
 pub fn shell_folders() -> (Option<String>, Option<String>, Option<String>) {

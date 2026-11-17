@@ -59,9 +59,8 @@ pf-l10n = { path = "../../../l10n", features = ["tools", "os"] }
 windows = { workspace = true, features = [
     # Done's Copy button: the password onto the clipboard.
     "ApplicationModel_DataTransfer",
-    # The admin-only extract dir is made by `pf_paths_win::create_dir_with` (an SDDL-built
-    # descriptor handed to CreateDirectoryW), so it passes the host's
-    # `ensure_admin_only_source` by construction.
+    # Nothing in this crate uses these three: `pf_paths_win::create_dir_with` calls
+    # CreateDirectoryW through pf-paths-win's own `windows` 0.62, which they do not reach.
     "fileapi",
     "sddl",
     "winbase",

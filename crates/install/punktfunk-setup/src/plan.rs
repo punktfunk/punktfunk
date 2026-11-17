@@ -427,7 +427,8 @@ fn group_steps(facts: &Facts, choices: &Choices) -> Vec<Step> {
     } else if facts.has_ujust {
         // Bazzite's input group is recipe-managed; usermod is the wrong tool. With no action
         // the recipe opens a gum menu, which the captured progress line hides while the step
-        // waits on stdin. A recipe older than that action takes none, and usermod is its body.
+        // waits on stdin. A recipe older than that action takes none; its body seeds `input`
+        // into /etc/group, then runs usermod.
         steps.push(Step::run(
             r#"ujust add-user-to-input-group add || sudo usermod -aG input "$USER""#,
         ));
@@ -524,8 +525,8 @@ fn start_steps(facts: &Facts, choices: &Choices, console_installed: bool) -> Vec
             t::setup_start_no_console(&facts.docs_page),
         ));
     }
-    // Pacman only, and only on the run that installs the runner: a re-run must not turn back
-    // on a runner the operator switched off.
+    // Only on the run that installs the runner: a re-run must not turn back on a runner the
+    // operator switched off.
     if console_installed
         && facts.family == Family::Pacman
         && facts.missing.iter().any(|m| m == "plugin-runner")
