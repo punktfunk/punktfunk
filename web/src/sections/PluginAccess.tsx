@@ -304,9 +304,15 @@ export const PendingAccess: FC<{
 									</>
 								) : (
 									<>
+										{/* The folder the grant opens; a link the plugin asked through only below it. */}
 										<div className="break-all font-mono text-xs">
-											{row.spelled ?? row.path}
+											{row.path}
 										</div>
+										{row.spelled && (
+											<div className="break-all text-xs text-muted-foreground">
+												{m.plugin_access_via_link({ path: row.spelled })}
+											</div>
+										)}
 										<Mode write={row.write} files={row.files} />
 									</>
 								)}

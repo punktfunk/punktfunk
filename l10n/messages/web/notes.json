@@ -421,6 +421,7 @@
 	"plugin_access_install": "Button on a request to install an emulator or core; grants the folder and installs.",
 	"plugin_access_installing": "Label of that install button while the install runs.",
 	"plugin_access_not_now": "Button on an emulator or core install request that declines it. Pairs with 'Install'.",
+	"plugin_access_via_link": "Line under the folder a plugin asks for, when it asked through a link to that folder. path: the link's path, as the plugin wrote it.",
 	"emulators_title": "Card title on the Library page, above the emulators the host can install.",
 	"emulators_description": "Under 'Emulators' on the Library page. A source is a game source; it can ask for an emulator in its access settings.",
 	"emulators_managed": "Status line of an emulator the host installed itself; a version may follow after a middle dot.",

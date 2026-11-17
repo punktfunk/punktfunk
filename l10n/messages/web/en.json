@@ -508,6 +508,7 @@
 	"plugin_access_install": "Install",
 	"plugin_access_installing": "Installing…",
 	"plugin_access_not_now": "Not now",
+	"plugin_access_via_link": "Asked for through the link {path}",
 	"emulators_title": "Emulators",
 	"emulators_description": "Emulators the host can install for its game sources. A source asks for one under its Access rows; installing here is yours to start.",
 	"emulators_managed": "Installed by Punktfunk",
