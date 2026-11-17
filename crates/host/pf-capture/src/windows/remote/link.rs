@@ -1,11 +1,11 @@
 //! The host's end of one capture worker's control channel: the two pipes of
 //! [`pf_driver_proto::worker`] and, as a [`Peer`], the process behind them.
 //!
-//! [`Link`] keeps one request in flight and waits a bound for its reply. The worker is less
-//! privileged than this process: every reply is checked before use, a worker that answers
-//! late or with the wrong bytes is ended, and nothing it sends is waited on without a bound.
-//! A stream that stops being messages ends the channel, and a request that finds it ended
-//! ends a worker that still runs.
+//! [`Link`] keeps one request in flight and waits a bound for it to be written and answered.
+//! The worker is less privileged than this process: every reply is checked before use, a worker
+//! that takes a request late, answers late or with the wrong bytes is ended, and nothing waits
+//! on the worker without a bound. A stream that stops being messages ends the channel, and a
+//! request that finds it ended ends a worker that still runs.
 //!
 //! Generic over the pipes and the process, so the tests stand in for a worker on every
 //! target; `wgc.rs` hands over the real ones. Evidence: `design/windows-wgc-capture.md`
@@ -35,13 +35,52 @@ pub(crate) trait Peer {
 }
 
 /// One worker's process and pipes. Closing the request pipe is how a worker is told to exit.
-pub(crate) struct Link<P, W> {
+pub(crate) struct Link<P> {
     peer: P,
     /// The request pipe and the last sequence sent; `None` once closed. Held across a whole
     /// round trip, so one request is in flight at a time.
-    requests: Mutex<Option<(W, u32)>>,
+    requests: Mutex<Option<(Requests, u32)>>,
     replies: Mutex<Receiver<Message>>,
     events: Mutex<Receiver<Message>>,
+}
+
+/// The request pipe, written on a thread of its own. A worker that stops reading blocks that
+/// thread, never the caller; a duplicate of the read end keeps it blocked past the worker's end.
+struct Requests {
+    inbox: SyncSender<Vec<u8>>,
+    written: Receiver<std::io::Result<()>>,
+}
+
+impl Requests {
+    /// Hand `bytes` to the writer and wait until `deadline` for them to be written.
+    fn send(&self, bytes: Vec<u8>, deadline: Instant) -> Result<()> {
+        self.inbox
+            .try_send(bytes)
+            .map_err(|_| anyhow!("the request writer stopped"))?;
+        match self
+            .written
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            Ok(written) => Ok(written?),
+            Err(RecvTimeoutError::Timeout) => bail!("not taken before the bound"),
+            Err(RecvTimeoutError::Disconnected) => bail!("the request writer stopped"),
+        }
+    }
+}
+
+/// Write each message to the worker's pipe and say so, until the link lets go or a write fails.
+fn write_out(
+    mut pipe: impl Write,
+    inbox: Receiver<Vec<u8>>,
+    written: SyncSender<std::io::Result<()>>,
+) {
+    for bytes in inbox {
+        let result = pipe.write_all(&bytes);
+        let failed = result.is_err();
+        if written.send(result).is_err() || failed {
+            return;
+        }
+    }
 }
 
 /// Read whole messages off the worker's pipe until it closes or sends something that is not
@@ -69,18 +108,29 @@ fn pump(mut pipe: impl Read, replies: SyncSender<Message>, events: SyncSender<Me
     }
 }
 
-impl<P: Peer, W: Write> Link<P, W> {
-    /// Take a started worker's pipes over and pump its replies on a thread of their own.
-    pub(crate) fn open(peer: P, requests: W, replies: impl Read + Send + 'static) -> Result<Self> {
+impl<P: Peer> Link<P> {
+    /// Take a started worker's pipes over: its requests written and its replies pumped, each
+    /// on a thread of its own.
+    pub(crate) fn open(
+        peer: P,
+        requests: impl Write + Send + 'static,
+        replies: impl Read + Send + 'static,
+    ) -> Result<Self> {
         let (reply_tx, reply_rx) = sync_channel(8);
         let (event_tx, event_rx) = sync_channel(64);
         std::thread::Builder::new()
             .name("pf-cw-replies".into())
             .spawn(move || pump(replies, reply_tx, event_tx))
             .context("spawn the capture worker reply thread")?;
+        let (inbox, inbox_rx) = sync_channel(1);
+        let (written_tx, written) = sync_channel(1);
+        std::thread::Builder::new()
+            .name("pf-cw-requests".into())
+            .spawn(move || write_out(requests, inbox_rx, written_tx))
+            .context("spawn the capture worker request thread")?;
         Ok(Self {
             peer,
-            requests: Mutex::new(Some((requests, 0))),
+            requests: Mutex::new(Some((Requests { inbox, written }, 0))),
             replies: Mutex::new(reply_rx),
             events: Mutex::new(event_rx),
         })
@@ -104,9 +154,11 @@ impl<P: Peer, W: Write> Link<P, W> {
         &self.peer
     }
 
-    /// Send one request and wait `bound` for its reply. A hello is answered by a hello and is
-    /// unnumbered on both sides. A worker that does not answer, answers with the wrong bytes,
-    /// or still runs once its reply channel ended, is ended.
+    /// Send one request and wait `bound` for it to be written and answered. A hello is
+    /// answered by a hello and is unnumbered on both sides. A worker that does not take the
+    /// request, does not answer, answers with the wrong bytes, or still runs once its reply
+    /// channel ended, is ended. One that does not take it also closes the link: the write may
+    /// still be under way.
     pub(crate) fn request<Q: Pod, R: Pod>(&self, op: u32, body: &Q, bound: Duration) -> Result<R> {
         let mut requests = lock(&self.requests);
         let Some((pipe, last)) = requests.as_mut() else {
@@ -119,12 +171,13 @@ impl<P: Peer, W: Write> Link<P, W> {
             *last = last.wrapping_add(1).max(1);
             (op | proto::REPLY, *last)
         };
-        if let Err(e) = pipe.write_all(&proto::encode(op, seq, body)) {
+        let deadline = Instant::now() + bound;
+        if let Err(e) = pipe.send(proto::encode(op, seq, body), deadline) {
+            *requests = None;
             self.peer.kill();
             return Err(e).context("write to the capture worker");
         }
         let replies = lock(&self.replies);
-        let deadline = Instant::now() + bound;
         loop {
             match replies.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
                 Ok((frame, bytes)) if frame.kind == answer && frame.seq == seq => {
@@ -170,6 +223,7 @@ mod tests {
     use std::io;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::mpsc::{channel, Sender};
+    use std::sync::Arc;
 
     /// A bound a silent worker runs out.
     const SOON: Duration = Duration::from_millis(30);
@@ -195,6 +249,35 @@ mod tests {
         }
     }
 
+    /// The request pipe as the worker reads it, kept for the test to look at.
+    #[derive(Clone, Default)]
+    struct Sent(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Sent {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            lock(&self.0).extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A request pipe the worker stopped draining: a write blocks until the test lets go.
+    struct Stuck(Receiver<()>);
+
+    impl Write for Stuck {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            let _ = self.0.recv();
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     /// A worker process that counts how often it was ended. It still runs unless `exited`
     /// holds its code.
     #[derive(Default)]
@@ -215,7 +298,10 @@ mod tests {
 
     /// A link to `process` over `requests` as its request pipe, and the worker's end of its
     /// reply pipe.
-    fn link_to<W: Write>(process: Worker, requests: W) -> (Link<Worker, W>, Sender<Vec<u8>>) {
+    fn link_to(
+        process: Worker,
+        requests: impl Write + Send + 'static,
+    ) -> (Link<Worker>, Sender<Vec<u8>>) {
         let (worker, rx) = channel();
         let buf = VecDeque::new();
         let link = Link::open(process, requests, Pipe { rx, buf }).unwrap();
@@ -223,7 +309,7 @@ mod tests {
     }
 
     /// A link to a worker that runs.
-    fn link<W: Write>(requests: W) -> (Link<Worker, W>, Sender<Vec<u8>>) {
+    fn link(requests: impl Write + Send + 'static) -> (Link<Worker>, Sender<Vec<u8>>) {
         link_to(Worker::default(), requests)
     }
 
@@ -240,10 +326,7 @@ mod tests {
         proto::encode(kind::OPEN_SOURCE | proto::REPLY, seq, &reply)
     }
 
-    fn open_source<W: Write>(
-        link: &Link<Worker, W>,
-        bound: Duration,
-    ) -> Result<proto::SourceReply> {
+    fn open_source(link: &Link<Worker>, bound: Duration) -> Result<proto::SourceReply> {
         link.request(kind::OPEN_SOURCE, &proto::OpenSource::zeroed(), bound)
     }
 
@@ -251,14 +334,14 @@ mod tests {
         format!("{:#}", r.err().expect("a refusal"))
     }
 
-    fn kills<W: Write>(link: &Link<Worker, W>) -> u32 {
+    fn kills(link: &Link<Worker>) -> u32 {
         link.peer().kills.load(Ordering::Relaxed)
     }
 
     #[test]
     fn a_matching_hello_opens_the_link_and_requests_count_from_one() {
-        let mut sent = Vec::new();
-        let (link, worker) = link(&mut sent);
+        let sent = Sent::default();
+        let (link, worker) = link(sent.clone());
         worker
             .send(proto::encode(kind::HELLO, 0, &hello()))
             .unwrap();
@@ -271,6 +354,7 @@ mod tests {
         drop(link);
         // What the worker was sent: each message's kind and number.
         let mut heads = Vec::new();
+        let sent = lock(&sent.0);
         let mut rest = &sent[..];
         while let Some((head, tail)) = rest.split_first_chunk::<16>() {
             let frame = proto::header(head).unwrap();
@@ -413,24 +497,38 @@ mod tests {
         assert_eq!(std::iter::from_fn(|| link.event()).count(), 64);
     }
 
-    /// A request pipe that takes no byte, as an empty slice does.
+    /// A request pipe that takes no byte, as an empty buffer does.
     #[test]
     fn a_request_the_worker_cannot_take_ends_it() {
-        let mut full = [0u8; 0];
-        let (link, _worker) = link(&mut full[..]);
+        let (link, _worker) = link(io::Cursor::new([0u8; 0]));
         let said = refusal(open_source(&link, AMPLE));
         assert!(said.contains("write to the capture worker"), "{said}");
         assert_eq!(kills(&link), 1);
     }
 
+    /// A worker that never drains its request pipe is ended at the bound, and the link sends
+    /// nothing behind the write still under way.
+    #[test]
+    fn a_worker_that_stops_taking_requests_is_ended_at_the_bound() {
+        let (unstick, stuck) = channel();
+        let (link, _worker) = link(Stuck(stuck));
+        let said = refusal(open_source(&link, SOON));
+        assert!(said.contains("write to the capture worker"), "{said}");
+        assert!(said.contains("not taken before the bound"), "{said}");
+        assert_eq!(kills(&link), 1);
+        let said = refusal(open_source(&link, AMPLE));
+        assert!(said.contains("capture worker is closed"), "{said}");
+        drop(unstick);
+    }
+
     #[test]
     fn a_closed_link_sends_nothing() {
-        let mut sent = Vec::new();
-        let (link, _worker) = link(&mut sent);
+        let sent = Sent::default();
+        let (link, _worker) = link(sent.clone());
         link.close();
         let said = refusal(open_source(&link, AMPLE));
         assert!(said.contains("capture worker is closed"), "{said}");
         drop(link);
-        assert!(sent.is_empty());
+        assert!(lock(&sent.0).is_empty());
     }
 }
