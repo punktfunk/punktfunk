@@ -321,10 +321,9 @@ jobs:
       #
       # Decided against a bucket on storage.unom.io even though sccache already uses it and the
       # credentials already exist: it is local RustFS on the home uplink with no CDN in front, so
-      # every NixOS user's download would come off the same pipe every CI runner uses — and S3
-      # answers 403, not 404, for a missing key, which nix treats as a hard error rather than a
-      # cache miss (see packaging/nix/server/Caddyfile). unom-1 already serves the flatpak repo
-      # this way from a cloud IP; a Nix cache is the same static-files-behind-caddy shape.
+      # every NixOS user's download would come off the same pipe every CI runner uses. unom-1
+      # already serves the flatpak repo this way from a cloud IP; a Nix cache is the same
+      # static-files-behind-caddy shape.
       #
       # Gitea itself cannot host this at all: none of its package registry types is Nix, and
       # the binary cache protocol wants fixed anonymous paths at a URL root (/nix-cache-info,

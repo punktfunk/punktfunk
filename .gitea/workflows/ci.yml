@@ -9,7 +9,7 @@ name: ci
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
 # cancel each other). Keeps a busy push cadence from piling ~10 queued runs per commit onto the
-# runner fleet. Gitea honors this for push triggers (PR triggers: see gitea#35933).
+# runner fleet. Gitea applies it to push and pull_request runs alike.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -20,9 +20,9 @@ on:
     branches: [main]
   pull_request:
     # Setting `types` at all replaces the default set, so the three defaults are listed again.
-    # `ready_for_review` and `labeled` are listed for the day they work: measured on 1.27.1,
-    # neither starts a run. A Gitea draft is a `WIP:` title prefix, so undrafting is an edit,
-    # not its own event. Until then the gate is re-read on the next push or a manual re-run.
+    # `labeled` starts a run, so adding `ci:all` re-reads the gate. Gitea 1.27.1 sends no
+    # `ready_for_review`; a Gitea draft is a `WIP:` title prefix, so undrafting is an edit and
+    # starts no run until the next push or a manual re-run.
     types: [opened, reopened, synchronize, ready_for_review, labeled]
 
 # Shared compile cache: sccache -> RustFS S3 (storage.unom.io, LAN-pinned via ci-core's
@@ -53,8 +53,8 @@ env:
 jobs:
   # Which suites this diff can break (scripts/ci/changed.sh), as job outputs. Every gated job
   # below waits on this one, so it stays a bare runner with no builder image: seconds of a fleet
-  # slot, not minutes. A merge-base diff is the PR's own change — Gitea path filters also see
-  # rebase noise (gitea#34710). No base sha (push, dispatch) runs every bucket.
+  # slot, not minutes. A merge-base diff is the PR's own change, whatever a rebase touched. No
+  # base sha (push, dispatch) runs every bucket.
   changes:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -123,11 +123,6 @@ jobs:
     env:
       # cc-rs recognises `sccache` as a compiler wrapper when it leads CC/CXX, and cmake-rs then
       # forwards it as -DCMAKE_C_COMPILER_LAUNCHER, so this covers both build-script styles.
-      #
-      # ⚠ JOB-scoped, NOT workflow-scoped, and it must stay that way: the `rust-arm64` job below
-      # runs in the cross image, whose own compiler env (ci/rust-ci-arm64cross.Dockerfile) a
-      # workflow-level value would silently overwrite — breaking the cross build in a way that
-      # looks like a header mismatch, not a CI config error.
       CC_x86_64_unknown_linux_gnu: sccache cc
       CXX_x86_64_unknown_linux_gnu: sccache c++
       # Line tables keep file:line in panics and shrink target/ and every link. The value is

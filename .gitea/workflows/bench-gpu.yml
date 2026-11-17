@@ -61,7 +61,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: pf-vkdecode pixel parity + smoke (the ignored GPU legs)
         continue-on-error: true
-        # RADV gates video decode behind a perf flag; harmless on NVIDIA.
+        # Forces RADV video decode on where the driver leaves it off by default; Mesa 26.3+ reads
+        # RADV_EXPERIMENTAL=video_decode instead. NVIDIA ignores it.
         env:
           RADV_PERFTEST: video_decode
         run: >-

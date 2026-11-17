@@ -5,9 +5,10 @@
 # under $HOME survives it, so apple.yml's distribute and screenshots jobs reuse the swift job's
 # xcframework build, and every job recompiles only what changed.
 #
-# The dir name carries the Xcode and rustc versions: cargo fingerprints neither the linker (a
-# newer ld breaks host proc-macros) nor MACOSX_DEPLOYMENT_TARGET, so a toolchain change starts
-# clean. Older dirs of the same name are removed, and one past 30 GB is emptied.
+# The dir name carries the Xcode and rustc versions: cargo fingerprints the linker's path but not
+# the ld behind it (a newer ld breaks host proc-macros), nor MACOSX_DEPLOYMENT_TARGET, so a
+# toolchain change starts clean. Older dirs of the same name are removed, and one past 30 GB is
+# emptied.
 #
 # Usage: CARGO_TARGET_DIR="$(sh scripts/ci/mac-cargo-target.sh <name>)"
 set -eu

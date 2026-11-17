@@ -16,9 +16,9 @@
 # printed what you meant.
 name: android-promote
 
-# Two concurrent promotions would race on the same Play edit; the loser fails with a stale-edit
-# error. One at a time, and never cancel one mid-flight — a half-applied track change is worse
-# than a queued one.
+# Two concurrent promotions each open a Play edit, and opening or committing one invalidates the
+# other, so the loser fails. One at a time, and never cancel one mid-flight — a half-applied track
+# change is worse than a queued one.
 concurrency:
   group: android-promote
   cancel-in-progress: false

@@ -5,12 +5,12 @@
 #   bash scripts/ci/flatpak-deps-present.sh --self-test      -> run the asserts below
 #
 # WHY THIS EXISTS: `flatpak-builder --install-deps-only` does NOT mean "install what is missing".
-# builder_manifest_install_dep() branches on `flatpak info --show-commit <ref>` succeeding and
-# runs `flatpak update` for every dep that IS installed (a failed update is fatal there — it never
-# falls back to install) — and ci/flatpak-ci.Dockerfile bakes the whole runtime set, so that flag
-# would do nothing except make the build depend on Flathub being up at that minute. Nothing about
-# the build wants a newer commit: the manifest pins a runtime VERSION, not a commit, and the baked
-# one satisfies it.
+# builder_manifest_install_dep() (flatpak-builder 1.4.12) branches on `flatpak info --show-commit
+# <ref>` succeeding and runs `flatpak update` for every dep that IS installed (a failed update is
+# fatal there — it never falls back to install) — and ci/flatpak-ci.Dockerfile bakes the whole
+# runtime set, so that flag would do nothing except make the build depend on Flathub being up at
+# that minute. Nothing about the build wants a newer commit: the manifest pins a runtime VERSION,
+# not a commit, and the baked one satisfies it.
 #
 # So the workflow asks this first and only reaches for Flathub on a real miss.
 #

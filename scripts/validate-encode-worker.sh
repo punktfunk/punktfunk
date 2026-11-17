@@ -530,11 +530,9 @@ run_spike() {
   # plain log is also the one a human greps by hand when a leg goes red, and `p99_us\e[0m\e[2m=…`
   # defeats the obvious grep.
   #
-  # PUNKTFUNK_ENCODER=pyrowave is not redundant with `--codec pyrowave`: the host's usage text
-  # (SPIKE OPTIONS) asks for both "so capture takes the passthrough". Without it an NVIDIA host can
-  # resolve `cuda-import -> nvenc`, import the dmabuf to CUDA as NV12, and hand the wavelet encoder
-  # a payload it rejects: "unsupported FramePayload (need Dmabuf or Cpu RGB)". AMD boxes have no
-  # CUDA arm to pick.
+  # PUNKTFUNK_ENCODER=pyrowave changes no capture route. `--codec pyrowave` makes the virtual
+  # source pass its dmabuf to PyroWave; the portal source is never a PyroWave session, so on
+  # NVIDIA it can resolve `cuda-import`, whose payload PyroWave rejects.
   local -a envs=(PUNKTFUNK_PERF=1 NO_COLOR=1 PUNKTFUNK_ENCODER=pyrowave)
   for kv in "$@"; do envs+=("$kv"); done
   local -a cmd=("$HOST_BIN" spike --codec pyrowave --source "$SPIKE_SOURCE"

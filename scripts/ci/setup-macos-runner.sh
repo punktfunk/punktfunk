@@ -50,8 +50,8 @@ fi
 "$BIN_DIR/node" --version
 
 # --- act_runner binary -------------------------------------------------------------------
-# Renamed upstream to "gitea-runner" as of 1.0 (dl.gitea.com/act_runner/ stops at 0.6.x);
-# we keep the local name act_runner — the CLI surface is unchanged.
+# Renamed upstream to "gitea-runner" as of 1.0 (dl.gitea.com/act_runner/ redirects to
+# gitea-runner/); we keep the local name act_runner — the CLI surface is unchanged.
 mkdir -p "$BIN_DIR" "$RUNNER_HOME"
 if ! "$BIN_DIR/act_runner" --version 2>/dev/null | grep -q "$VERSION"; then
     echo "==> installing act_runner (gitea-runner) $VERSION"
@@ -91,10 +91,10 @@ fi
 # runner ships as a system-domain LaunchDaemon run as $USER; installing it needs sudo once.
 # Without sudo this script still leaves a working (but reboot-volatile) nohup daemon behind.
 # PATH must carry the CLT tools, cargo, node and act_runner itself; jobs inherit it.
-# Deliberately NO DEVELOPER_DIR here: cargo (rust ld) must stay on the system default —
-# a newer-than-OS Xcode's ld emits dylibs the running dyld rejects ("mis-aligned
-# LINKEDIT string pool"), breaking every proc-macro build. Steps that need a full Xcode
-# (xcodebuild) resolve it themselves (build-xcframework.sh, apple.yml's `distribute` job).
+# Deliberately NO DEVELOPER_DIR here: cargo stays on the system default toolchain. Host
+# proc-macros link without chained fixups (build-xcframework.sh), which dyld otherwise rejects
+# ("mis-aligned LINKEDIT string pool"). Steps that need a full Xcode (xcodebuild) resolve it
+# themselves (build-xcframework.sh, apple.yml's `distribute` job).
 
 PLIST_STAGE="$RUNNER_HOME/io.gitea.act_runner.plist"
 PLIST_SYSTEM="/Library/LaunchDaemons/io.gitea.act_runner.plist"

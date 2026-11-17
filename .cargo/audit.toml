@@ -28,8 +28,8 @@ ignore = [
     #     trusted-LAN GameStream/Moonlight pairing handshake. Moonlight mandates RSA-2048, so the
     #     GameStream identity cannot move to Ed25519/ECDSA (only the native identity could, and it
     #     already avoids the rsa crate).
-    # There is NO fixed rsa release (the constant-time rewrite is still unreleased upstream). Revisit if:
-    # a constant-time rsa ships (then drop this), the host ever signs an attacker-chosen message with
+    # rsa 0.10.0 carries the constant-time fix; the host still pins 0.9. Revisit if: the host
+    # moves to rsa 0.10 (then drop this), the host ever signs an attacker-chosen message with
     # this key, or any RSA decryption / key-transport using the private key is added.
     "RUSTSEC-2023-0071",
 ]

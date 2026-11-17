@@ -14,8 +14,8 @@
 #                         (A 26.04-built host .deb is uninstallable on 24.04 — the reason this job
 #                         exists; see packaging/debian/README.md.)
 #   build-publish-gamescope
-#                       — the patched `punktfunk-gamescope`, on DEBIAN 13, the oldest apt distro the
-#                         tree builds on (24.04 lacks build deps: ci/gamescope-trixie.Dockerfile).
+#                       — the patched `punktfunk-gamescope`, on DEBIAN 13; one .deb serves
+#                         Debian 13 and Ubuntu 26.04 (ci/gamescope-trixie.Dockerfile).
 #   smoke-install       — installs what was just published, from the registry, in pristine
 #                         ubuntu:24.04 / ubuntu:26.04 / debian:trixie images.
 #
@@ -32,7 +32,7 @@ name: deb
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
 # cancel each other). Keeps a busy push cadence from piling ~10 queued runs per commit onto the
-# runner fleet. Gitea honors this for push triggers (PR triggers: see gitea#35933).
+# runner fleet. Gitea applies it to push and pull_request runs alike.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -219,9 +219,9 @@ jobs:
       - name: Prebuilt Skia (no-op once the image bakes it)
         run: sh ci/skia-binaries.sh x86_64-unknown-linux-gnu
 
-      # cargo-home (registry/git) is the release builds' pool, `cargo-home-`; ci.yml keeps its own
-      # `cargo-home-ci-`. Those are pure downloads, profile-independent. The target cache is
-      # per profile; see below.
+      # cargo-home (registry/git) keys start `cargo-home-`. That restore-keys prefix also matches
+      # ci.yml's `cargo-home-ci-` entries, so an exact miss can restore one. Those are pure
+      # downloads, profile-independent. The target cache is per profile; see below.
       - name: Cache keys
         run: echo "rustc=$(rustc --version | cut -d' ' -f2)" >> "$GITHUB_ENV"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -559,10 +559,10 @@ jobs:
   # and the client's real refresh rate instead of a hardcoded 60 Hz. Same reasoning as the RPM leg
   # in rpm.yml: without a package, a Debian/Ubuntu box has no route to it except compiling by hand.
   #
-  # Its own job, on Debian 13: the oldest apt distro the tree builds on, so one .deb serves Debian 13
-  # and Ubuntu 26.04. Debian 13 is below wlroots 0.20's floors, so the build script links pinned
-  # wayland, libdrm, xkbcommon and pixman into the compositor; the WSI layer keeps the system
-  # libwayland-client. A failure here fails the job, never a `::warning::`.
+  # Its own job, on Debian 13; one .deb serves Debian 13 and Ubuntu 26.04. Debian 13 is below
+  # wlroots 0.20's floors, so the build script links pinned wayland, libdrm, xkbcommon and pixman
+  # into the compositor; the WSI layer keeps the system libwayland-client. A failure here fails
+  # the job, never a `::warning::`.
   build-publish-gamescope:
     runs-on: ubuntu-24.04
     container:

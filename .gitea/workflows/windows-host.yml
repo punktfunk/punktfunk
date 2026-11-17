@@ -57,7 +57,7 @@ name: windows-host
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
 # cancel each other). Keeps a busy push cadence from piling ~10 queued runs per commit onto the
-# runner fleet. Gitea honors this for push triggers (PR triggers: see gitea#35933).
+# runner fleet. Gitea applies it to push and pull_request runs alike.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -322,10 +322,10 @@ jobs:
 
       - name: Locale-safety gate (installer-run scripts must be ASCII)
         shell: pwsh
-        # Scripts that run on the END USER's box (scripting-run.cmd through cmd.exe; any .ps1
-        # through Windows PowerShell 5.1) must be pure ASCII. PS 5.1 reads a BOM-less script in
-        # the active ANSI codepage, so on a non-UTF-8 locale (e.g. German Windows-1252) a stray
-        # em-dash mis-decodes into a curly quote and the script aborts with "unterminated string".
+        # Scripts an installer or operator runs on Windows (scripting-run.cmd through cmd.exe; any
+        # .ps1 through Windows PowerShell 5.1) stay pure ASCII. PS 5.1 reads a script without a
+        # UTF-8 BOM in the active ANSI codepage, so on a non-UTF-8 locale (e.g. German
+        # Windows-1252) a stray em-dash mis-decodes into a curly quote and the script aborts.
         run: |
           $bad = Get-ChildItem packaging/windows/*.ps1, scripts/windows/*.ps1, scripts/windows/*.cmd -ErrorAction SilentlyContinue |
             Where-Object { [IO.File]::ReadAllText($_.FullName) -match '[^\x00-\x7F]' }
@@ -503,9 +503,10 @@ jobs:
         run: |
           # ONE pinned bun version. The x64 binary BUILDS the console on this runner (BUN_EXE); the
           # one the installer ships to RUN it (BUN_SHIP_EXE) is the matrix asset of the same release:
-          # x64 ships `-baseline`, which starts on CPUs without AVX2 (the plain build exits 255). The .output is self-contained (Nitro
-          # noExternals — deps bundled + tree-shaken, no node_modules), so the installer ships just
-          # bun + a ~75-file .output instead of node + a node_modules forest.
+          # x64 ships `-baseline`, bun's nehalem build, which starts on CPUs without AVX. The
+          # .output is self-contained (Nitro noExternals — deps bundled + tree-shaken, no
+          # node_modules), so the installer ships just bun + a ~75-file .output instead of node +
+          # a node_modules forest.
           $ver = 'bun-v1.4.4'
           # SHA-256 of each exact asset, pinned. GitHub release assets are MUTABLE at a fixed URL, so
           # the tag alone vouches for nothing — this binary is Authenticode-signed into our installer

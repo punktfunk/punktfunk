@@ -10,9 +10,10 @@ OUT=${1:-$(cd "$(dirname "$0")" && pwd)/out}
 
 # One run, out of its trajectory: what the burst cost in the window the driver
 # discards, what reached the first three judged windows, whether anything cut,
-# and whether slow start survived. Slow start's steps are 1.2-1.5x here (the
-# climb is bounded by what the window proved, not a literal doubling); the crawl
-# that replaces it is +6 %, so 1.12 separates them.
+# and whether slow start survived. Below its other ceilings a slow-start step is
+# at least 1.125x here (a window must deliver 3/4 of the rate, and the step may
+# reach 1.5x what it proved); the crawl that replaces it is +6 %, so 1.12
+# separates them.
 read_run() {
   tr -d '{}"' < "$2" | awk -F'[:,]' -v tag="$1" '
     !/summary/ {

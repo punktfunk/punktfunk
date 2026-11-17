@@ -16,10 +16,10 @@ TARGET_DIR="${CARGO_TARGET_DIR:-target}"
 # The macOS library is universal: Apple silicon and Intel. Simulators stay arm64-only.
 TARGETS_MAC=(aarch64-apple-darwin x86_64-apple-darwin)
 BUILD_IOS="${BUILD_IOS:-0}" # BUILD_IOS=1 adds iOS device + simulator slices (rustup targets aarch64-apple-ios{,-sim})
-BUILD_TVOS="${BUILD_TVOS:-0}" # BUILD_TVOS=1 adds tvOS slices — TIER-3 Rust targets, built with $NIGHTLY
-BUILD_VISIONOS="${BUILD_VISIONOS:-0}" # BUILD_VISIONOS=1 adds visionOS slices — TIER-3 too, same $NIGHTLY
+BUILD_TVOS="${BUILD_TVOS:-0}" # BUILD_TVOS=1 adds tvOS slices, std built from rust-src with $NIGHTLY
+BUILD_VISIONOS="${BUILD_VISIONOS:-0}" # BUILD_VISIONOS=1 adds visionOS slices, same $NIGHTLY
 
-# The one place the tier-3 toolchain is named — .gitea/workflows/apple.yml reads this line, so keep
+# The one place the nightly toolchain is named — .gitea/workflows/apple.yml reads this line, so keep
 # the shape. Pinned: a floating `nightly` swaps the compiler under a TestFlight build with no
 # commit. Install with: rustup toolchain install $NIGHTLY --profile minimal --component rust-src
 NIGHTLY=nightly-2026-08-11
@@ -62,7 +62,8 @@ fi
 # Proc-macros are dylibs the running OS loads. With chained fixups — on at any deployment
 # target >= 12, which the mac slices set — Xcode 27's ld writes one macOS 27 refuses
 # ("mis-aligned LINKEDIT string pool", reported by cargo as E0463), so host links go without.
-# The linker file lives in the target dir and changes only on edit: cargo rebuilds when it does.
+# The linker file lives in the target dir. Cargo fingerprints its path, not its contents, so an
+# edit to HOST_LINKER_SH needs a fresh target dir.
 HOST_LINKER="$(mkdir -p "$TARGET_DIR" && cd "$TARGET_DIR" && pwd)/proc-macro-linker"
 HOST_LINKER_SH='#!/bin/sh
 exec cc -Wl,-no_fixup_chains "$@"'
@@ -135,7 +136,6 @@ if [[ "$BUILD_IOS" == "1" ]]; then
 fi
 if [[ "$BUILD_TVOS" == "1" ]]; then
     skia_fetch aarch64-apple-tvos aarch64-apple-tvos-sim
-    # Tier-3 targets: no prebuilt std — $NIGHTLY + -Zbuild-std compiles it from rust-src.
     TVOS_DEPLOYMENT_TARGET=17.0 cargo "+$NIGHTLY" build --release -p punktfunk-client-apple \
         -Z build-std=std,panic_abort --target aarch64-apple-tvos
     TVOS_DEPLOYMENT_TARGET=17.0 cargo "+$NIGHTLY" build --release -p punktfunk-client-apple \
