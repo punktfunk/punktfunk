@@ -4,8 +4,8 @@
 //! the dmabuf image is cached per fd.
 //!
 //! A tiled dmabuf is sampled as an image. A LINEAR one is read as words at its own offset and
-//! stride ([`linear_words`]): NVIDIA reads a LINEAR image at a row pitch rounded up to 32
-//! bytes, so a 1690-wide frame at 6760 bytes shears as an image.
+//! stride ([`linear_words`]): NVIDIA reads a LINEAR image at a row pitch of its own, so a
+//! 1690-wide frame at 6760 bytes shears as an image.
 //!
 //! ```text
 //!   dmabuf fd ──DRM-modifier image──▶ texelFetch ─┐   (LINEAR: imported buffer ──▶ words)
@@ -32,8 +32,8 @@ const CONVERT_SPV: &[u8] = include_bytes!("../convert_img.spv");
 const PUSH_BYTES: u32 = 48;
 /// Cursor bitmaps larger than this (in bytes) are refused; 256² RGBA8 is the capture cap.
 const CURSOR_MAX_BYTES: u64 = 256 * 256 * 4;
-/// Passes in flight before a command buffer's reuse waits. The host holds at most two
-/// frames ahead of the encoder.
+/// Passes in flight before a command buffer's reuse waits. Each pass lands before the encoder
+/// submits the next, so that wait returns at once.
 const FRAMES: usize = 4;
 
 /// How `convert_img.comp` reads a LINEAR packed-RGB dmabuf as words: its `lin_fmt`, the first

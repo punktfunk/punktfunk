@@ -204,8 +204,9 @@ pub(super) fn software_stream(
 /// past the rate a session will actually use.
 const MAX_PROBE_KBPS: u32 = 10_000_000;
 const MAX_PROBE_MS: u32 = 5_000;
-/// One pump's send ceiling: a whole catch-up backlog in one batch overruns a ~400 KiB send
-/// buffer. The rest follows on the next pump, which video shares.
+/// One pump's send ceiling: a whole catch-up backlog in one batch overruns the ~416 KiB send
+/// buffer Linux grants without the packaged sysctl. The rest follows on the next pump, which
+/// video shares.
 const PROBE_PUMP_BYTES: u64 = 64 * 1024;
 
 /// A speed-test burst in flight: zero-filled [`FLAG_PROBE`] AUs at `target_kbps` for
@@ -254,7 +255,8 @@ impl ProbeBurst {
             return None;
         }
         let bytes_per_sec = u64::from(target_kbps) * 125;
-        // ≤16 KiB ≈ a dozen MTU shards; a 256 KiB submit can overflow a ~400 KiB send buffer.
+        // ≤16 KiB ≈ a dozen MTU shards; a 256 KiB submit can overflow the ~416 KiB send
+        // buffer Linux grants without the packaged sysctl.
         let chunk = (bytes_per_sec / 240).clamp(1200, 16 * 1024) as usize;
         let start = std::time::Instant::now();
         Some(ProbeBurst {

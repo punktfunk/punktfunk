@@ -186,7 +186,7 @@ impl NativeVaapiEncoder {
     }
 }
 
-/// Probe picture size. iHD binds an import compressed only above 64×64, so a smaller probe
+/// Probe picture size. iHD binds a Tile4 import compressed only above 64×64, so a smaller probe
 /// never reads a compressed candidate the way a capture frame is read.
 const PROBE_DIM: u32 = 128;
 /// Edge of one probe cell, and the gray level each cell is painted at.

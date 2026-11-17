@@ -18,9 +18,9 @@ use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE, REG_MULTI_SZ};
 use winreg::types::FromRegValue;
 use winreg::RegKey;
 
-/// Redist 3.x: a subkey per exe name holding `BackgroundInput` = 1. Microsoft ships entries here.
+/// Per-exe form: a subkey per exe name holding `BackgroundInput` = 1.
 const PER_EXE: &str = r"SOFTWARE\Microsoft\GameInputRedist\Exe";
-/// Redist 4.x: `BackgroundInput` is a list of exe names.
+/// List form: `BackgroundInput` lists exe names. The 4.x redist references both forms.
 const LIST: &str = r"SOFTWARE\Microsoft\GameInput";
 const QUIRK: &str = "BackgroundInput";
 /// A value per exe name a seat added, holding which forms it added: removal touches only those.

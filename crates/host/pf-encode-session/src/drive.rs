@@ -63,8 +63,8 @@ pub trait FrameSource: Sync {
     fn drop_one(&self) -> u64;
 }
 
-/// Submits allowed ahead of the oldest AU — the host's pipeline depth. Also what the pool
-/// guarantees a backend that encodes an input texture where it lies: a slot handed to the
+/// Frames submitted and not yet published: the encode session's pipeline depth. Also what the
+/// pool guarantees a backend that encodes an input texture where it lies: a slot handed to the
 /// encoder sits in `encoding` and no drain pass can take it back until the AU is published.
 pub const MAX_INFLIGHT: usize = 2;
 /// How long an owed AU may produce nothing before the state word says WEDGED.
@@ -596,8 +596,8 @@ impl Drive<'_> {
 
     /// The loop's idle wait: stop, a filled pool slot, the backend's completion event, and the
     /// high-resolution timer for the two things that need a deadline instead of a signal. A
-    /// `WaitForMultipleObjects` timeout would quantise to WUDFHost's 15.6 ms tick, which caps
-    /// pointer re-encodes near 64 Hz.
+    /// `WaitForMultipleObjects` timeout would quantise to the timer tick, 15.6 ms by default,
+    /// which caps pointer re-encodes near 64 Hz.
     ///
     /// The timeout is [`WEDGE_AFTER`] while an AU is owed — expiry there is the wedge the host's
     /// classifier reads — and infinite otherwise: every wake source signals a handle in this set.

@@ -26,8 +26,8 @@ pub(super) fn serialize_pod(obj: pw::spa::pod::Object) -> Result<Vec<u8>> {
 /// What the offer's `maxFramerate` tells the producer.
 ///
 /// `Unpaced` is `0/1`: no ceiling, so KWin delivers on its own damage signal. Up to 6.7
-/// the only ceiling KWin takes is its refresh (`Range(refresh, 0/1, refresh)`), and it
-/// throttles that with a whole-millisecond timer stamped after each render: at the
+/// KWin offers its refresh in whole hertz (`Range(refresh, 0/1, refresh)`) and throttles
+/// any nonzero ceiling with a whole-millisecond timer stamped after each render: at the
 /// stream rate every record slips a millisecond until one coalesces, ~9.3 ms apart.
 /// KWin 6.8 offers millihertz and paces the cast at the ceiling that fixates, so there
 /// the stream rate goes on as `Cap`.

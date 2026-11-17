@@ -476,8 +476,8 @@ const LICENSING: &str = "$ErrorActionPreference='SilentlyContinue'; \
     '{0}|{1}' -f $days, $servers";
 
 /// How long Remote Desktop still runs without a licence server, for the doctor, until `deadline`.
-/// Windows Server signs seats in for 120 days without one. `None` when Windows doesn't say; a
-/// query that fails or runs out of time is a warning.
+/// Windows Server (2016-2025) signs seats in for 120 days without one. `None` when Windows
+/// doesn't say; a query that fails or runs out of time is a warning.
 pub(super) fn licensing_row(deadline: Instant) -> Option<Diagnostic> {
     let lines = time_left(deadline)
         .ok_or_else(|| "the doctor's time is up".to_owned())

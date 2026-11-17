@@ -90,7 +90,8 @@ const CSC10_SPV: &[u8] = include_bytes!("rgb2yuv10.spv");
 const CSC10_709_SPV: &[u8] = include_bytes!("rgb2yuv10_709.spv");
 /// The CSC shaders' `FULL_RANGE` specialization constant: studio range when clear.
 const CSC_FULL_RANGE_SPEC_ID: u32 = 0;
-/// DPB ring depth (under RADV `maxDpbSlots=17`); also the RFI recovery window.
+/// DPB ring depth; the session's `DPB_SLOTS + 1` fits RADV's `maxDpbSlots` (Mesa 26.3: HEVC 17,
+/// AV1 9). Also the RFI recovery window.
 const DPB_SLOTS: u32 = 8;
 /// In-flight captures with GPU work outstanding. 2 overlaps CSC+encode with the next capture;
 /// backpressure at the 2nd unread frame. Distinct from `DPB_SLOTS` (reference pool).
@@ -110,7 +111,7 @@ const PHASE_SUBMIT: usize = 1;
 const PHASE_WAIT: usize = 2;
 const PHASE_READ: usize = 3;
 const PHASE_NAMES: [&str; 4] = ["import", "submit", "wait", "read"];
-/// 100 ms is six frames at 60 Hz; a healthy phase ends under 10 ms.
+/// 100 ms is six frames at 60 Hz, far past any healthy phase.
 const PHASE_SPIKE: std::time::Duration = std::time::Duration::from_millis(100);
 /// One warning per second at most: a run of short stalls would otherwise log every frame.
 const PHASE_SPIKE_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
@@ -245,8 +246,8 @@ struct RgbDirect {
     padded: bool,
     /// Unaligned-mode default (`PUNKTFUNK_VULKAN_RGB_TRUE_EXTENT=0` falls back to `padded`):
     /// import the visible-size buffer and pass TRUE-SIZE source `codedExtent`. RADV programs
-    /// nonzero firmware padding from it (Mesa ≥ 24.2 `session_init` from
-    /// `srcPictureResource.codedExtent`; see [`OpenSpec::native_nv12`]).
+    /// nonzero firmware padding from it (`session_init` reads `srcPictureResource.codedExtent`,
+    /// Mesa 24.1 on; see [`OpenSpec::native_nv12`]).
     /// Session/SPS/DPB stay app-aligned.
     true_extent: bool,
 }
@@ -1293,8 +1294,9 @@ pub struct VulkanVideoEncoder {
 /// or hides for a moment must not cost an IDR each way.
 const EFC_AFTER_CURSORLESS: std::time::Duration = std::time::Duration::from_secs(2);
 
-// SAFETY: the encoder is used only from the single encode thread; all Vulkan handles are owned and
-// never shared. Matches `NvencCudaEncoder`'s `unsafe impl Send`.
+// SAFETY: the encoder moves to the encode thread once and is used only there. The fence waiter
+// shares the device and slot fences but only waits; `Drop` joins it first. Every other Vulkan
+// handle is owned and never shared. Matches `NvencCudaEncoder`'s `unsafe impl Send`.
 unsafe impl Send for VulkanVideoEncoder {}
 
 impl VulkanVideoEncoder {

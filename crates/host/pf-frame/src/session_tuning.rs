@@ -1,4 +1,5 @@
-//! Windows host-process session tuning, matching Apollo/Sunshine `streaming_will_start`.
+//! Windows host-process session tuning: the HIGH class, DWM MMCSS and finer timer of
+//! Apollo/Sunshine `streaming_will_start`, with the timer at 1 ms where theirs tries 0.5 ms first.
 //!
 //! Default Windows process: NORMAL class, ~15.6 ms timer, GPU/display may idle.
 //! A GPU-saturating game then starves capture/encode/send, and the coarse timer

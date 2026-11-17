@@ -51,7 +51,8 @@ mod tests {
             head[4..8].copy_from_slice(&number.to_le_bytes());
             head
         };
-        // The export's own head on Windows 11 build 26200, where its syscall is 0x11EF.
+        // An export head from one Windows 11 build 26200 revision. The syscall number changes
+        // between updates.
         let real = [
             0x4C, 0x8B, 0xD1, 0xB8, 0xEF, 0x11, 0x00, 0x00, 0xF6, 0x04, 0x25, 0x08,
         ];

@@ -1,8 +1,9 @@
 //! A profile on a person's own Linux account opens only on the root supervisor's word: the door
-//! relays the device's proof and decides nothing (CONTRACT §5). The proof is the one
-//! `ProfileUnlock` the hello announced, else none; the device is the certificate the QUIC
-//! handshake authenticated. The client hears `Pending` while the supervisor checks the password
-//! and starts the session, and the supervisor hears `Left` once the device is off the seat.
+//! relays the device's proof and decides nothing (`multi-seat-contract.md`, "Who opens a
+//! person's seat"). The proof is the one `ProfileUnlock` the hello announced, else none; the
+//! device is the certificate the QUIC handshake authenticated. The client hears `Pending` while
+//! the supervisor checks the password and starts the session, and the supervisor hears `Left`
+//! once the device is off the seat.
 //!
 //! No log line, trace field or error carries anything of an unlock but its proof kind and the
 //! supervisor's answer code. A browser never opens such a profile.

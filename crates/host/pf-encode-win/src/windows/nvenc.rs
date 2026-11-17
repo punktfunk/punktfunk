@@ -97,8 +97,8 @@ fn load_api() -> std::result::Result<EncodeApi, String> {
 /// sessions are not counted.
 static LIVE_SESSION_UNITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-/// Concurrent-session budget (GeForce 8; pro cards unlimited).
-/// `PUNKTFUNK_NVENC_MAX_SESSIONS` overrides.
+/// Concurrent-session budget: 8, under the GeForce limit of 12 in NVIDIA's encode support
+/// matrix; pro cards have none. `PUNKTFUNK_NVENC_MAX_SESSIONS` overrides.
 fn session_cap() -> u32 {
     match crate::knobs::get().nvenc_max_sessions {
         0 => 8,
@@ -274,8 +274,8 @@ pub struct NvencD3d11Encoder {
     /// caps in-flight encodes at its `UNCONFIGURED_RING_DEPTH`.
     input_ring_depth: Option<usize>,
     async_supported: bool,
-    /// D3D11 device this session opened against. Capturer recreates it on a desktop switch; a new
-    /// device pointer tears down and re-inits.
+    /// D3D11 device this session opened against. A frame on another device tears down and
+    /// re-inits.
     init_device: *mut c_void,
     /// COM ref pinning that device. `init_device` alone pins nothing, and `teardown` releases
     /// texture regs before destroy — a parked retry must not outlive the device. Moved into
@@ -553,9 +553,9 @@ impl NvencD3d11Encoder {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        // Capturer recreates its D3D11 device on a desktop switch and may return a different
-        // resolution. Re-init on a different device or size. HDR (BT.2020 PQ) when the capturer
-        // hands a 10-bit frame (Rgb10a2 or P010); 8-bit NV12/ARGB is SDR. Can flip mid-session.
+        // A frame can arrive on another device or at another size: re-init on either. HDR
+        // (BT.2020 PQ) when the capturer hands a 10-bit frame (Rgb10a2 or P010); 8-bit NV12/ARGB
+        // is SDR. Can flip mid-session.
         let hdr = matches!(format, PixelFormat::Rgb10a2 | PixelFormat::P010);
         let dev_raw = device.as_raw();
         let inited = self.s.inited();

@@ -25,9 +25,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// Quiet window before the host vetoes suspend. Under Steam's 5 min and KDE's
-/// 10 min idle timers, and long enough that a Sleep confirmation cannot re-arm
-/// mid-click.
+/// Quiet window before the host vetoes suspend. Under Steam's shortest sleep preset (1 min)
+/// and KDE's default suspend (5–15 min), and long enough that a Sleep confirmation cannot
+/// re-arm mid-click.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
 const QUIET_BEFORE_VETO: Duration = Duration::from_secs(30);
 

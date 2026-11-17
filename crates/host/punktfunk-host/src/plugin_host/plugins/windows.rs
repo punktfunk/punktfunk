@@ -80,10 +80,10 @@ const USERS_SID: &str = "*S-1-5-32-545";
 /// Present once [`strip_users_read_once`] has run on this install.
 const USERS_STRIP_MARKER: &str = "users-read-stripped";
 
-/// Installs before 0.44 made every config subdirectory with an explicit, inheritable
-/// `Users:(RX)`; the root's own re-ACL at start does not reach a protected child. Walk the
-/// children once. `ingest` keeps its `Users:(M)`, and `emulators\<id>` keeps the Modify the
-/// player's session runs on, so that one is not walked.
+/// Installs before 0.44 gave each config subdirectory made by `create_private_dir` an explicit,
+/// inheritable `Users:(RX)`; the root's own re-ACL at start does not reach a protected child.
+/// Walk the children once. `ingest` keeps its `Users:(M)`, and `emulators\<id>` keeps the Modify
+/// the player's session runs on, so that one is not walked.
 pub(super) fn strip_users_read_once() {
     let cfg = pf_paths::config_dir();
     let marker = cfg.join(USERS_STRIP_MARKER);
@@ -1507,7 +1507,8 @@ fn package_dirs(id: &str) -> std::collections::BTreeMap<String, Ace> {
 }
 
 /// `%SystemDrive%\Users`, list only: a per-account source finds each profile's folder there
-/// and asks for the one it reads, as the runner's account could before the container.
+/// and asks for the one it reads, as the runner's account can outside the container
+/// (Windows 11 26200).
 fn profiles_root() -> Option<(String, Ace)> {
     let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
     let users = std::path::PathBuf::from(format!(r"{drive}\Users"));
@@ -1564,7 +1565,8 @@ fn user_sids() -> Vec<String> {
         .collect()
 }
 
-/// Stop then start: there is no `Restart-ScheduledTask`, and Start on a running task is a no-op.
+/// Stop then start: there is no `Restart-ScheduledTask` (Windows 11 26200), and Start on a
+/// running task is a no-op.
 /// A seat's runner restarts as [`seat::restart`] does.
 pub(super) fn restart_runtime() -> Result<()> {
     if seat_runner() {

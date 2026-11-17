@@ -346,8 +346,8 @@ pub(crate) fn find_mem_preferring(
 }
 
 /// Memory type for a buffer the CPU reads back every frame (the encode bitstream), and whether
-/// it is coherent. Cached first: RADV lists write-combined GTT before cached GTT, and plain
-/// loads from write-combined memory run at a few hundred MB/s. A cached type without
+/// it is coherent. Cached first: RADV lists write-combined GTT before cached GTT, and CPU loads
+/// from write-combined memory bypass the cache and run slowly. A cached type without
 /// coherence needs `vkInvalidateMappedMemoryRanges` before each read.
 #[cfg_attr(not(feature = "vulkan-encode"), allow(dead_code))]
 pub(crate) fn find_readback_mem(

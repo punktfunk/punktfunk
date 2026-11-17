@@ -709,7 +709,7 @@ pub(crate) struct ApiMonitorInfo {
 pub(crate) struct MonitorsResponse {
     /// Enumeration source (`kwin`, `mutter`, `windows`), when resolved.
     compositor: Option<String>,
-    /// Heads, ordered left-to-right by desktop position.
+    /// Heads sorted by `(x, y, connector)`; Windows keeps CCD path priority order.
     monitors: Vec<ApiMonitorInfo>,
     /// Configured pin, even when it matches no head (console can show a dangling pin).
     pinned: Option<String>,

@@ -668,7 +668,7 @@ fn probe_sync() -> Probe {
             continue; // sizing failed — never stamp a cbSize through an under-sized buffer
         }
         // `u64`, not `u8`: the buffer is written as `SP_DEVICE_INTERFACE_DETAIL_DATA_W` (4-byte
-        // align); `Vec<u8>` only promises 1.
+        // align on 64-bit, SDK 10.0.26100); `Vec<u8>` only promises 1.
         let mut buf = vec![0u64; (required as usize).div_ceil(size_of::<u64>())];
         let detail = buf.as_mut_ptr() as *mut SP_DEVICE_INTERFACE_DETAIL_DATA_W;
         // SAFETY: `buf` is ≥ `required` bytes and 8-aligned (so also 4). `detail` aliases `buf`

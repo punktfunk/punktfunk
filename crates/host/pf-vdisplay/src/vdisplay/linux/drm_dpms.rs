@@ -4,11 +4,12 @@
 //! [`crate::panel_dpms`] is the dispatcher; this is the "none at all" arm. Open `/dev/dri/cardN`
 //! (logind uaccess, session user), `SET_MASTER` (decline if another client is master), modeset
 //! each lit CRTC off (`SETCRTC` `fb_id=0, mode_valid=0, count_connectors=0`), `DROP_MASTER`,
-//! keep the fd. Darkness survives dropping master; the open fd is the hold. Relight is
-//! `close(fd)`: kernel last-close restores the console, so no saved mode and no journal — but
-//! any other fd on the GPU, a render node included, defers that close, and [`release`] reads
-//! the heads back from sysfs to name the ones still dark. Best-effort: missing `/dev/dri`, a
-//! foreign master, or nothing lit contributes nothing and the stream proceeds.
+//! keep the fd. Darkness survives dropping master until a hotplug, which the kernel's fbdev
+//! client (Linux 7.0) answers with a modeset; the open fd is the hold. Relight is `close(fd)`:
+//! last close restores the fbdev console, so no saved mode and no journal — but any other fd on
+//! the GPU, a render node included, defers that close, and [`release`] reads the heads back
+//! from sysfs to name the ones still dark. Best-effort: missing `/dev/dri`, a foreign master,
+//! or nothing lit contributes nothing and the stream proceeds.
 //!
 //! [`lit_mode`] reads a lit CRTC's mode over the same ioctls; that needs no master.
 //!

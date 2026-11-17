@@ -15,7 +15,7 @@ use anyhow::Result;
 /// Least zero-copy pool depth asked of a compositor. 2 is what every producer already
 /// serves; the negotiated depth minus the hold reserve is the deferred-requeue budget.
 pub const POOL_MIN: i32 = 2;
-/// KWin ≥ 6.2 offers `Range(3, 2, 4)` as a driver stream, so its default 3 wins any
+/// KWin ≥ 6.0.3 offers `Range(3, 2, 4)` as a driver stream, so its default 3 wins any
 /// intersection that contains it, and a pool of 3 spares one hold while the encoder keeps
 /// two frames in flight. A minimum of 4 is the only ask that moves it.
 pub const KWIN_POOL_MIN: i32 = 4;

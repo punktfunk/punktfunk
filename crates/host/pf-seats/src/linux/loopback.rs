@@ -1,12 +1,12 @@
 //! `punktfunk-seats loopback <account>`: a made seat's own loopback address for Steam's UI
 //! link. The seat unit runs it as root on every start (`ExecStartPost=`).
 //!
-//! Steam's client serves its UI on `127.0.0.1:57343`, an address fixed in `steamclient.so`, and
-//! every user on a box shares one loopback. The first Steam to start takes the port; every
-//! other user's Steam UI then connects to that one, gets none of its own controller input and
-//! goes down with it. Two cgroup socket-address programs on the seat user's slice send a bind
-//! or a connect to that address to one of the seat's own ([`address`]). Nothing outside the
-//! slice changes, the owner's Steam included.
+//! Steam's client serves its UI on `127.0.0.1:57343` whichever user runs it, and every user on a
+//! box shares one loopback. The first Steam to start takes the port; every other user's Steam
+//! UI then connects to that one, gets none of its own controller input and goes down with it.
+//! Two cgroup socket-address programs on the seat user's slice send a bind or a connect to that
+//! address to one of the seat's own ([`address`]). Nothing outside the slice changes, the
+//! owner's Steam included.
 //!
 //! The programs belong to the slice's cgroup and go with it, so every start attaches them, once
 //! the session it opened exists: that session's slice is the one that stays. A row on a

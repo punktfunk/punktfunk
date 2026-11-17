@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 const SESSION_TIMEOUT: Duration = Duration::from_secs(45);
 const QUALITY_TIMEOUT: Duration = Duration::from_secs(60);
 /// Fresh sessions a failing gate gets. A session whose display misses its path never
-/// gets one; a fresh logon passes about 40% of the time on 9300.
+/// gets one; a fresh logon passes about 40% of the time on Windows Server 2025.
 const QUALITY_SESSIONS: u32 = 5;
 const HOST_READY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Room for a slow first logon plus two gate sessions, the usual worst healthy start.

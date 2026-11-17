@@ -4,12 +4,13 @@
 //! a PipeWire node on the user's default daemon — [`VirtualOutput::remote_fd`] is therefore
 //! `None`. The host must run inside the KWin session (`$WAYLAND_DISPLAY`).
 //!
-//! The global is restricted: KWin advertises it only to a client whose `.desktop` lists it
-//! under `X-KDE-Wayland-Interfaces` (matched by `/proc/<pid>/exe` → `Exec=`). Packages ship
+//! Before KWin 6.8 the global is restricted: KWin advertises it only to a client whose
+//! `.desktop` lists it under `X-KDE-Wayland-Interfaces` (matched by `/proc/<pid>/exe` →
+//! `Exec=`); 6.8 refuses it only to sandboxed clients. Packages ship
 //! `io.unom.punktfunk.host.desktop` for that. The host binary must carry no file capability and
 //! must still be the file at its path ([`screencast_withheld`] names which one broke).
 //! Headless tests use `KWIN_WAYLAND_NO_PERMISSION_CHECKS=1`. `createVirtualOutput` needs the
-//! DRM backend, or VirtualBackend since KWin 6.5.6.
+//! DRM or nested Wayland backend, or VirtualBackend from KWin 6.5.4.
 
 use super::{Mode, VirtualDisplay, VirtualOutput};
 use crate::proc::StopFlag;
@@ -914,7 +915,7 @@ pub(crate) fn stream_existing_output(
 /// The refusal for a registry without `zkde_screencast`, naming the path KWin read and
 /// why it missed.
 ///
-/// KWin (through 6.6) re-checks every new connection: it reads `/proc/<pid>/exe` and
+/// KWin before 6.8 re-checks every new connection: it reads `/proc/<pid>/exe` and
 /// matches that path against an installed `.desktop`'s `Exec=`. Two host-side states
 /// defeat it: a file capability (the kernel refuses KWin the readlink, see
 /// [`capability_denial_hint_for`]) and a binary replaced since start (the link then
@@ -957,9 +958,9 @@ fn identity_hint(replaced: bool, permitted: Option<u64>) -> String {
 /// is testable against a given mask. Calling the real reader in CI sees the runner's
 /// root permitted set (`CapPrm=0x000001ffffffffff`) and the hint fires on a clean host.
 ///
-/// KWin has no capabilities, and the kernel refuses a `/proc/<pid>/exe` readlink unless
-/// the reader's effective set covers the target's permitted set. `PR_SET_DUMPABLE` and
-/// systemd `AmbientCapabilities=` leave that check failing.
+/// KWin has no capabilities, and Linux (6.1 through 7.4) refuses a `/proc/<pid>/exe`
+/// readlink unless the reader's effective set covers the target's permitted set.
+/// `PR_SET_DUMPABLE` and systemd `AmbientCapabilities=` leave that check failing.
 fn capability_denial_hint_for(permitted: Option<u64>) -> String {
     match permitted {
         Some(caps) if caps != 0 => format!(

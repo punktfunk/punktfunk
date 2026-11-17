@@ -105,8 +105,9 @@ pub struct PyroWaveEncoder {
     pw_enc: pw::pyrowave_encoder,
     // Vulkan timeline alias of the capturer's D3D11 fence; null until first-frame import.
     sync: pw::pyrowave_sync_object,
-    /// Capturer ring generation the cached plane imports belong to; a change flushes
-    /// them. COM addresses recycle, so identity cannot rest on the pointer.
+    /// Ring generation the cached plane imports belong to; a change flushes them. COM
+    /// addresses recycle, so identity cannot rest on the pointer. `Targets` stamps `1`: an
+    /// encoder drains one ring for its whole life.
     ring_gen: Option<u32>,
     y_images: Vec<(PlaneKey, pw::pyrowave_image)>,
     cbcr_images: Vec<(PlaneKey, pw::pyrowave_image)>,

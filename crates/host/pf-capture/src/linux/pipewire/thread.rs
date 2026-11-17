@@ -2033,8 +2033,9 @@ mod callbacks {
         assert_eq!(rig.back(), [c]);
     }
 
-    /// PipeWire below 1.6: the producer sends a buffer again while its hold is out. The
-    /// new frame re-holds it, the stale hold releases nothing, and it rejoins once.
+    /// A producer without `node.reliable` (PipeWire 1.6+, off by default) can send a buffer
+    /// again while its hold is out. The new frame re-holds it, the stale hold releases
+    /// nothing, and it rejoins once.
     #[test]
     fn a_resent_buffer_is_reheld_under_the_new_frame() {
         let pool = dmabufs::<4>();

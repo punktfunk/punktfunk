@@ -127,8 +127,8 @@ pub struct HyprlandDisplay {
     /// Out-of-band cursor request. On: prefer portal `CursorMode::Metadata`.
     /// Off: prefer `Embedded` (compositor paints the pointer). Both are only a
     /// preference — [`crate::portal_cursor`] settles against what xdph advertises;
-    /// an unadvertised mode fails the portal call. Current xdph advertises
-    /// `Hidden|Embedded` only, so every session here resolves to `Embedded`.
+    /// an unadvertised mode fails the portal call. xdph (1.3–1.5) advertises
+    /// `Hidden|Embedded` only, so every unpinned session here resolves to `Embedded`.
     hw_cursor: bool,
     /// What the portal actually gave the last successful `create`. How the host
     /// learns a cursor overlay is never coming.
@@ -750,15 +750,12 @@ pub(crate) fn monitor_dpms(name: &str) -> Option<bool> {
 
 /// Put one monitor into `want_on`, reporting whether this call changed it.
 ///
-/// The dispatcher is a toggle, not a set — it ignores the state word. A blind
-/// "off" lights an already-dark head; a blind "on" at teardown darkens a lit
-/// one. Read → act only if it differs → verify. That shape is also correct
-/// where the call really is a set.
+/// Classic `dispatch dpms on|off <name>` is a set; the Lua form ([`lua_dpms_expr`])
+/// toggles every enabled head. Read → act only if it differs → verify.
 ///
 /// Classic `hyprctl dispatch dpms off <name>` dies under Lua (`dispatch` is
 /// `hl.dispatch(...)`). No stable probe for which manager is loaded, so try
-/// classic, then Lua. Never omit the monitor name: `hl.dsp.dpms("on")` answers
-/// `ok` and toggles *something*.
+/// classic, then Lua.
 pub(crate) fn dpms_one(name: &str, want_on: bool) -> Result<bool> {
     if monitor_dpms(name) == Some(want_on) {
         return Ok(false); // toggling would break it
@@ -789,8 +786,9 @@ pub(crate) fn dpms_one(name: &str, want_on: bool) -> Result<bool> {
     }
 }
 
-/// Lua-config-manager spelling of per-monitor DPMS. Pure so a test pins the
-/// shape — quoting is the whole trick.
+/// Lua-config-manager DPMS expression. Pure so a test pins the shape. Not Hyprland's
+/// per-monitor form: `hl.dsp.dpms` reads only a table `{ action = "off", monitor = "<name>" }`
+/// (0.55–0.57), so these positional strings toggle every enabled head.
 fn lua_dpms_expr(name: &str, on: bool) -> String {
     format!(
         "hl.dsp.dpms(\"{}\", \"{name}\")",
@@ -907,7 +905,7 @@ pub(crate) fn window_action(verb: crate::toplevels::WindowVerb, address: &str) -
     match verb {
         WindowVerb::Focus => hyprctl_dispatch(&["dispatch", "focuswindow", &target]),
         // No per-window fullscreen dispatcher: focus it, then act on the focused
-        // window. `1` is maximize-free full-screen.
+        // window. `1` toggles maximize (gaps and bars stay); full-screen is `0`.
         WindowVerb::Fullscreen => {
             hyprctl_dispatch(&["dispatch", "focuswindow", &target])?;
             hyprctl_dispatch(&["dispatch", "fullscreen", "1"])

@@ -60,7 +60,8 @@ pub mod btn1 {
     pub const R3: u8 = 0x80;
 }
 /// `buttons[2]`: PS, touchpad click, mute. Edge Fn/back occupy bits 4–7 (`DS_EDGE_BUTTONS_*` /
-/// SDL `SDL_GAMEPAD_BUTTON_PS5_*`); plain DS5 leaves those reserved. Kernel: `BTN_TRIGGER_HAPPY1..4`.
+/// SDL `SDL_GAMEPAD_BUTTON_PS5_*`); plain DS5 leaves those reserved. Kernel (7.2+):
+/// `BTN_TRIGGER_HAPPY1..4`.
 pub mod btn2 {
     pub const PS: u8 = 0x01;
     pub const TOUCHPAD: u8 = 0x02;
@@ -571,9 +572,8 @@ pub mod out_report {
 /// lightbar, player LEDs and the mic-mute LED are typed; trigger blocks and audio-control are
 /// forwarded raw.
 ///
-/// Bluetooth `0x31` is accepted too: libScePad writes it to any pad whose output report
-/// exceeds 48 bytes, as the Edge's does. Its sequence and tag bytes are skipped; the CRC is
-/// not checked.
+/// Bluetooth `0x31` is accepted too: libScePad writes it to the Edge, whose output report is
+/// 64 bytes. Its sequence and tag bytes are skipped; the CRC is not checked.
 ///
 /// Gated on valid-flags: writers set only the bits they mean to change and zero the rest, so
 /// an ungated parse would turn a rumble write into lightbar-off + triggers-off.

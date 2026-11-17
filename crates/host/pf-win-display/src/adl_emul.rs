@@ -47,7 +47,7 @@ const ADL_EMUL_STATUS_EMULATED_DEVICE_USED: i32 = 0x4;
 
 const AMD_VENDOR_ID: i32 = 1002;
 
-/// Named ADL rcs from adl_defines.h. `-8` vs `-1` is consumer vs Pro.
+/// Named ADL rcs from adl_defines.h.
 pub fn rc_str(rc: i32) -> &'static str {
     match rc {
         0 => "ADL_OK",

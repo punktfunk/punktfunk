@@ -11,8 +11,9 @@
 //! grants nothing it could not already have.
 //!
 //! **Unless the credential is the network itself.** [`POSITION_AUTHENTICATED`] names the routes
-//! `mgmt::auth` admits from loopback on a token every local account may read. A page on this
-//! machine reaches loopback too, so this never stamps them — an exemption, not a setting.
+//! `mgmt::auth` admits from loopback on the tray token, which on Windows any local account but a
+//! seat's may read. A page on this machine reaches loopback too, so this never stamps them — an
+//! exemption, not a setting.
 //!
 //! No `Access-Control-Allow-Private-Network` either, and not by oversight: that header is what
 //! lets a public page reach a private host, so it may only be added once every route below

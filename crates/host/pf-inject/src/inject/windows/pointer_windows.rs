@@ -4,8 +4,9 @@
 //! (`PEN_FLAG_INVERTED`/`ERASER`), hover — plus a `PT_TOUCH` device for wire touches
 //! (`SendInput` touch is a no-op).
 //!
-//! Synthetic pointer state goes stale in ~100 ms (`design/pen-tablet-input.md`), so
-//! each device re-asserts the last frame every [`REFRESH_MS`] while in range / held.
+//! Windows cancels a synthetic pointer interaction that is not refreshed (Apollo sees that
+//! within about a second), so each device re-asserts the last frame every [`REFRESH_MS`]
+//! while in range / held.
 //! `CreateSyntheticPointerDevice` needs Win10 1809+; [`crate::pen_supported`] probes it.
 //!
 //! Frame grouping matches Linux uinput: proximity-enter lands with its position, tip
@@ -40,7 +41,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 /// Re-inject cadence while state is held (in-range pen / touching contacts). Apollo uses
-/// 50 ms against the ~100 ms staleness window; 40 ms keeps two refreshes inside it.
+/// 50 ms; 40 ms stays under it.
 const REFRESH_MS: u64 = 40;
 
 /// `GENERIC_ALL` for the desktop open — the `windows` crate models desktop rights as their own
@@ -460,7 +461,7 @@ struct TouchShared {
 
 /// `PT_TOUCH` for wire `TouchDown/Move/Up` — `SendInput` touch is a no-op. Contacts
 /// keyed by wire finger id; every frame re-injects the FULL active set, and a refresh
-/// thread re-asserts held contacts against the ~100 ms staleness auto-lift.
+/// thread re-asserts held contacts before Windows cancels them.
 pub struct SyntheticTouch {
     shared: Arc<Mutex<TouchShared>>,
     stop: Arc<AtomicBool>,

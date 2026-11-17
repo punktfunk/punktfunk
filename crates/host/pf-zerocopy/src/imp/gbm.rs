@@ -48,7 +48,8 @@ unsafe extern "C" {
 /// `gbm_bo_map` flag: the mapping is written.
 const GBM_BO_TRANSFER_WRITE: u32 = 1 << 1;
 
-/// Mesa pads a LINEAR buffer's rows only for a buffer a plane can show.
+/// Intel's Mesa pads a LINEAR buffer's rows only for a buffer a plane can show; AMD's pads
+/// every LINEAR buffer to 256 B.
 pub const GBM_BO_USE_SCANOUT: u32 = 1 << 0;
 /// The buffer is rendered into by a GPU.
 pub const GBM_BO_USE_RENDERING: u32 = 1 << 2;

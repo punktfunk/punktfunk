@@ -1,7 +1,7 @@
 //! A PipeWire cast of one niri output through niri's in-process `org.gnome.Mutter.ScreenCast`.
 //!
-//! niri serves the ScreenCast half of Mutter's API (the `xdp-gnome-screencast` feature, on by
-//! default) but not RemoteDesktop, so the session stands alone: `CreateSession({})` →
+//! niri 26.04 serves the ScreenCast half of Mutter's API (the `xdp-gnome-screencast` feature,
+//! on by default) but not RemoteDesktop, so the session stands alone: `CreateSession({})` →
 //! `RecordMonitor(output)` → `Start` → `PipeWireStreamAdded`. The node lives on the user's
 //! PipeWire daemon, so there is no remote fd to carry. `hw_cursor` asks for the pointer as
 //! metadata; otherwise niri paints it into the frames.

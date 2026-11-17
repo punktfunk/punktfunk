@@ -141,8 +141,9 @@ fn plan_bind(
 /// A user-unit mount namespace is also a user namespace (`uid_map` maps one id). Root-owned
 /// `/tmp/.X11-unix` then reads as `nobody`; wlroots refuses every display and the short-session
 /// tracker rewrites Game Mode to plasma. Bind a 0700 `$XDG_RUNTIME_DIR` dir read-write over it.
-/// The XFixes reader is never spawned on this bind (patch paints the pointer); attach never arms
-/// it. x11rb 0.14 connects only through the filesystem socket path, never the abstract one.
+/// The managed route runs no XFixes reader (the patch paints the pointer). Attach `auto` arms
+/// this bind and runs one, but x11rb 0.14 connects only through the filesystem socket path, never
+/// the abstract one, so that reader cannot reach a socket dir bound over `/tmp/.X11-unix`.
 ///
 /// The same namespace drops pkexec's setuid, so Steam's Switch to Desktop could not point the
 /// display manager at the desktop. [`PKEXEC_PATH`] is bound to a shim that runs pkexec through
@@ -256,7 +257,8 @@ fn ensure_session_x11_dir() -> Result<std::path::PathBuf> {
     Ok(dir)
 }
 
-/// SIGKILL never unlinks Xwayland sockets. wlroots walks 0..32 and then gives up.
+/// SIGKILL never unlinks Xwayland sockets. wlroots unlinks a stale one before bind and walks
+/// displays 0..=32.
 fn prune_stale_x11_sockets(dir: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;

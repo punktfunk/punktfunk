@@ -962,7 +962,7 @@ fn wire_request(ctx: &SessionContext) -> (bool, bool) {
 
 /// The intent and total wire budget (kbps) bring-up builds at, and whether it adopted a mode ask
 /// the control task accepted meanwhile. Adopting builds once: two RecordVirtual monitors
-/// ~400 ms apart segfault mutter inside `meta_monitor_manager_rebuild`. A prepared pipeline
+/// ~400 ms apart segfault Mutter 50.4 inside `meta_monitor_manager_rebuild`. A prepared pipeline
 /// stays as built. PyroWave's pin follows an adopted ask's picture.
 fn settle_mode(
     ctx: &SessionContext,

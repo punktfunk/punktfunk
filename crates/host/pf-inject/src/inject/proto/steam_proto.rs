@@ -124,7 +124,8 @@ pub mod btn {
     pub const RJOY_TOUCH: u64 = 1 << 47;
     // byte 14
     pub const QAM: u64 = 1 << 50; // BTN_BASE
-    /// Held ~450 ms with no hidraw client toggles `gamepad_mode` (byte 9 bit 6).
+    /// Held ~450 ms with no hidraw client toggles `gamepad_mode` (byte 9 bit 6; hid-steam
+    /// 6.12 to 7.4).
     pub const STEAM_MENU_RIGHT: u64 = MENU;
 }
 
@@ -668,8 +669,9 @@ fn trigger_u16(v: u8) -> u16 {
 
 /// `steam_get_serial` GET_REPORT. Feature reports are report-id 0 with a
 /// leading byte the kernel strips (`steam_recv_report` copies `buf+1`), so
-/// the wire is `[0x00, 0xAE, len, 0x01, ascii…]`. Kernel checks
-/// `reply[0]==0xAE`, `1<=reply[1]<=21`, `reply[2]==0x01`; else `"XXXXXXXXXX"`.
+/// the wire is `[0x00, 0xAE, len, 0x01, ascii…]`. Kernel 6.12–7.2 checks
+/// `reply[0]==0xAE`, `1<=reply[1]<=22`, `reply[2]==0x01` (else `"XXXXXXXXXX"`)
+/// and keeps `len-1` characters.
 pub fn serial_reply(serial: &str) -> [u8; STEAM_REPORT_LEN] {
     let mut buf = [0u8; STEAM_REPORT_LEN];
     let bytes = serial.as_bytes();

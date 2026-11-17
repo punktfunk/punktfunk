@@ -59,7 +59,8 @@ const MAX_HEAD: usize = 16 * 1024;
 /// A log upload is the largest body the paired lane takes; its endpoint caps it at this same
 /// size (`client_logs::MAX_BUNDLE_BYTES`).
 const MAX_BODY: usize = 1024 * 1024;
-/// Requests in flight on one tunnel. HTTP/2 gives a page 32; a library's covers queue behind it.
+/// Requests in flight on one tunnel. The HTTPS lane gives a page 32 (`https::MAX_H2_STREAMS`);
+/// a library's covers queue behind it.
 const MAX_STREAMS: usize = 16;
 /// Tunnels one address may hold open. A page needs one.
 const MAX_SESSIONS_PER_IP: usize = 4;

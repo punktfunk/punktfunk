@@ -74,7 +74,8 @@ pub fn no_formats(_: &Endpoint) -> Option<MixFormat> {
 /// plan matches those. Empty fields fall through to the name ladder.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct MintedIds {
-    /// Reserved client-only loopback sink. Steam Remote Play never contends it.
+    /// Reserved client-only loopback sink: its own devnode, not Steam's primary Streaming
+    /// Speakers.
     pub speakers_render: Option<String>,
     pub mic_render: Option<String>,
     pub mic_capture: Option<String>,

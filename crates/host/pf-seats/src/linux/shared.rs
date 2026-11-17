@@ -1548,8 +1548,8 @@ fn clone_names(src: &SteamSource) -> std::io::Result<Vec<String>> {
     Ok(out)
 }
 
-/// Lists the seat's own Steam, then the shared games folder as the seat sees it. Steam reads
-/// entry `0` as its own install whatever path stands there, so a folder listed there is lost.
+/// Lists the seat's own Steam, then the shared games folder as the seat sees it. Steam keeps
+/// entry `0` for its own install and drops a folder listed there at sign-in.
 /// Written once; Steam owns the file afterwards, and [`super::libraries::register`] adds the
 /// games folder if it goes.
 fn write_library_folders(steam: &Path) -> std::io::Result<()> {

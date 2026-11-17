@@ -38,8 +38,8 @@ const POLL: Duration = Duration::from_secs(1);
 /// 3 s unseen before exit. A launcher re-exec or mid-game restart is shorter.
 #[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
 pub(crate) const EXIT_CONFIRM: Duration = Duration::from_secs(3);
-/// 5 s successful child exit = launcher hand-off, never the game. Matches
-/// Apollo's `auto_detach`.
+/// 5 s successful child exit = launcher hand-off, never the game. Apollo's `auto_detach` uses
+/// the same 5 s for any exit code.
 #[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
 pub(crate) const SHIM_WINDOW: Duration = Duration::from_secs(5);
 /// 10 s after SIGTERM / WM_CLOSE before SIGKILL. Enough to save.
@@ -1388,7 +1388,7 @@ fn reported_proc(shared: &LeaseShared) -> Option<crate::procscan::ProcRef> {
             return None; // predates this launch (rule 1)
         }
     }
-    // The report comes from a LocalService plugin; the kill runs as SYSTEM.
+    // The report comes from a plugin (LocalService, or a seat's account); the kill runs as SYSTEM.
     #[cfg(windows)]
     if !crate::game_term::in_our_session(pid) {
         return None;

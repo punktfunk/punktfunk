@@ -832,8 +832,8 @@ pub fn settle_desktop_portal(chosen: Compositor) {
     let _ = crate::proc::status_within(&mut activation, SYSTEMD_BUDGET);
     // On KWin, libei input rides the xdg RemoteDesktop portal (fake_input does not), which keys
     // the backend off its *startup* `XDG_CURRENT_DESKTOP`. Restart, then wait 600 ms for it to
-    // re-read before the injector reopens. Plasma 6 names the KDE backend
-    // `plasma-xdg-desktop-portal-kde`; older builds drop the prefix.
+    // re-read before the injector reopens. Plasma 5.24 and later name the KDE backend's unit
+    // `plasma-xdg-desktop-portal-kde`.
     if chosen == Compositor::Kwin {
         let _ = crate::proc::status_within(
             std::process::Command::new("systemctl").args([

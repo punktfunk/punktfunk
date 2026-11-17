@@ -3,7 +3,7 @@
 #
 # A SEPARATE BINARY on purpose. Windows Graphics Capture does not activate for SYSTEM, so the
 # process that captures must be the signed-in user's, and the encoder runs beside the capture so
-# no pixels cross a process boundary. `punktfunk-host` links neither.
+# no pixels cross a process boundary. `punktfunk-host` does not link Windows Graphics Capture.
 [package]
 name = "punktfunk-capture-worker"
 version.workspace = true

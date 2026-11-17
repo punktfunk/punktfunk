@@ -47,7 +47,8 @@ fn is_on(s: &str) -> bool {
 /// Which render endpoint the loopback captures (registry row `audio_output_mode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AudioOutputMode {
-    /// Silent render endpoint; streamed audio does not also play on the host.
+    /// Prefers a silent render endpoint, so streamed audio does not also play on the host.
+    /// Windows falls back to hardware when no silent sink keeps the stream's format.
     #[default]
     ClientOnly,
     /// Host hardware plays as well as the client. `PUNKTFUNK_HOST_AUDIO=1`.
@@ -316,7 +317,7 @@ pub struct HostConfig {
     /// that path (`pf-vdisplay`'s `gamescope/bind.rs`).
     ///
     /// Three-valued. A user-unit mount namespace maps only this uid, so
-    /// root-owned `/tmp/.X11-unix` reads as `nobody` and Xwayland refuses to start.
+    /// root-owned `/tmp/.X11-unix` reads as `nobody` and wlroots opens no X display for Xwayland.
     /// `None` = AUTO (arm only when the script cannot reach gamescope another way).
     /// `Some(false)` = never. `Some(true)` = force; a failed redirect still disarms.
     pub gamescope_bind: Option<bool>,

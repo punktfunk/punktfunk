@@ -1256,7 +1256,7 @@ fn instant_of(pts_ns: u64) -> Option<Instant> {
 }
 
 /// At most one IDR per this window. Floor is 100 ms: `frame_interval * 2` is 16.7 ms at
-/// 120 fps, while a client under loss re-asks every ~30 ms — every request would pass and the
+/// 120 fps, while a client under loss re-asks after each loss — every request would pass and the
 /// IDR storm would feed the loss that prompts the next request.
 fn keyframe_coalesce_window(frame_interval: Duration) -> Duration {
     (frame_interval * 2).max(Duration::from_millis(100))

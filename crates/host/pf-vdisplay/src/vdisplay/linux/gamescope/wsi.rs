@@ -67,8 +67,9 @@ impl WsiPlan {
     fn layer_env(self) -> Vec<(&'static str, String)> {
         match self {
             // `VK_ADD_IMPLICIT_LAYER_PATH` ADDS to the loader's implicit-layer search (loader
-            // 1.3.234+), so the box's own layer directories keep working; the distro's gamescope
-            // layer is then switched off by name, leaving exactly one gamescope WSI layer live — ours.
+            // 1.3.296+), so the box's own layer directories keep working; the distro's
+            // gamescope layer is then switched off by name, leaving exactly one gamescope WSI
+            // layer live — ours.
             Self::Ours => vec![
                 ("VK_ADD_IMPLICIT_LAYER_PATH", our_wsi_layer_dir()),
                 ("PUNKTFUNK_GAMESCOPE_WSI", "1".to_string()),

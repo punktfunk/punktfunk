@@ -251,8 +251,8 @@ pub fn self_exe() -> Option<&'static PinnedExe> {
 }
 
 /// Installed name. The only file that may carry `cap_sys_nice=ep`. Never a hardlink of
-/// `punktfunk-host`: a shared inode shares the file capability, KWin cannot identify the host,
-/// and the desktop session dies.
+/// `punktfunk-host`: a shared inode shares the file capability, KWin can no longer read the
+/// host's exe, and KWin before 6.8 then refuses it the globals desktop streaming needs.
 pub const ENCODE_WORKER_BIN: &str = "punktfunk-encode-worker";
 
 #[derive(Debug, PartialEq, Eq)]

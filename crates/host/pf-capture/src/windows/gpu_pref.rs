@@ -6,7 +6,7 @@
 use std::ffi::c_void;
 
 // Declared here so we skip the Win32_System_Diagnostics_Debug feature for one call.
-// DXGI runs the hooked export on the encode worker, possibly another core;
+// DXGI runs the hooked export on other threads, possibly on another core;
 // FlushInstructionCache after the patch so that core does not keep the old bytes.
 #[cfg(target_arch = "x86_64")]
 #[link(name = "kernel32")]
@@ -165,8 +165,8 @@ unsafe fn patch_hybrid_query() {
         );
         return;
     };
-    // Patch is on the main thread; DXGI calls the export from the encode worker,
-    // possibly another core with a stale i-cache that would still run the original.
+    // Patch is on the main thread; DXGI calls the export from other threads, possibly on
+    // another core with a stale i-cache that would still run the original.
     // SAFETY: this process's pseudo-handle, and the 12 bytes just written, still mapped.
     let _ = unsafe { FlushInstructionCache(GetCurrentProcess(), stub as *const c_void, PATCH_LEN) };
     if readback == patch {

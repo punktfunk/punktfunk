@@ -632,8 +632,9 @@ impl CapUd {
                 "the audio graph re-planned our quantum mid-stream"
             );
         } else if frames > want {
-            // Asked vs granted. Stock `pipewire.conf` raises `default.clock.min-quantum` to
-            // 1024 in a VM (`cpu.vm.name` set), so a 5 ms ask becomes 21.3 ms.
+            // Asked vs granted. Stock `pipewire.conf` (1.4, 1.6) raises
+            // `default.clock.min-quantum` to 1024 in a VM (`cpu.vm.name` set), so a 5 ms ask
+            // becomes 21.3 ms.
             tracing::warn!(
                 requested_frames = want,
                 negotiated_frames = frames,

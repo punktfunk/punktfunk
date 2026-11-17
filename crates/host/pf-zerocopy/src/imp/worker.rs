@@ -40,7 +40,7 @@ pub fn run_from_args(args: &[String]) -> Result<()> {
         libc::prctl(libc::PR_SET_NAME, c"pf-zerocopy".as_ptr());
     }
     // Exec of the capped encode worker clears dumpable; a driver fault here should leave a core.
-    // Dumpable is not KWin's identifiability gate, and this process never speaks Wayland.
+    // This process never speaks Wayland, so KWin never identifies it.
     // SAFETY: `prctl(PR_SET_DUMPABLE, 1)` takes integers by value and affects only this process.
     unsafe {
         libc::prctl(libc::PR_SET_DUMPABLE, 1);

@@ -197,7 +197,7 @@ pub(crate) fn verify_fence(instance_id: Option<&str>, at: FenceAt) -> Result<()>
     Ok(())
 }
 
-/// `id`'s HID children. hidclass makes them ~40 ms after the driver starts; the caller has
+/// `id`'s HID children, which hidclass makes shortly after the driver starts; the caller has
 /// already waited for that, so 500 ms more is the margin.
 fn hid_children(id: &str, pad: bool) -> Result<Vec<String>> {
     let deadline = Instant::now() + Duration::from_millis(500);

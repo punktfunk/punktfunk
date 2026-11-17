@@ -32,9 +32,9 @@ pub const MAX_OPENS: usize = 16;
 const MAX_WAITING_READS: usize = 4;
 /// Events one read moves at most.
 const READ_EVENTS: usize = 64;
-/// Bytes one kernel read or write request carries; the kernel never takes less than 4096.
+/// Bytes one kernel read or write request carries; Linux 7.4 never takes less than 4096.
 const MAX_IO: u32 = 4096;
-/// One request, whole: the kernel refuses a `/dev/cuse` read buffer under 8192 bytes.
+/// One request, whole: Linux 7.4 refuses a `/dev/cuse` read buffer under 8192 bytes.
 const CHANNEL_BUF: usize = 16 * 1024;
 /// `O_NONBLOCK` in a read's flags, asm-generic and x86 alike.
 const O_NONBLOCK: u32 = 0o4000;

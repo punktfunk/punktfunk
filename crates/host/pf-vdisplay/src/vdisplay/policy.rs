@@ -173,8 +173,8 @@ pub enum GameSession {
     /// or the live desktop on KWin/Mutter/wlroots).
     Auto,
     /// Own headless gamescope at the client's mode, game only. Degrades to
-    /// `auto` when gamescope is missing. The default: KWin and Mutter virtual
-    /// outputs carry no HDR, and gamescope does.
+    /// `auto` when gamescope is missing. The default: KWin 6.8 and Mutter 51 virtual
+    /// outputs carry no HDR; the patched gamescope does.
     #[default]
     Dedicated,
 }

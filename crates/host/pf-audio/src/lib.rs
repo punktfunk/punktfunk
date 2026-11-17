@@ -145,9 +145,10 @@ pub fn probe_capture_rate() -> CaptureRate {
     plat::probe_capture_rate()
 }
 
-/// Open a live capturer for system output. Linux: a host-owned stream sink (or the default
-/// sink's monitor under `PUNKTFUNK_STREAM_SINK=0`). Windows: WASAPI loopback of the wiring
-/// plan's sink. `rate_hz` is a request; the grant is [`AudioCapturer::sample_rate`].
+/// Open a live capturer for system output. Linux: a host-owned null sink's monitor, or the
+/// default sink's monitor when `capture_mode` follows the host's output. Windows: WASAPI
+/// loopback of the wiring plan's sink. `rate_hz` is a request; the grant is
+/// [`AudioCapturer::sample_rate`].
 pub fn open_audio_capture(channels: u32, rate_hz: u32) -> Result<Box<dyn AudioCapturer>> {
     plat::open_audio_capture(channels, rate_hz)
 }

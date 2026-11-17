@@ -5,7 +5,8 @@
 //! `EGLImage` over every plane instead: an `AR24` view `row_bytes / 4` wide and `rows` tall at
 //! the buffer's stride, which `cuGraphicsEGLRegisterImage` maps as one pitched allocation.
 //! Either way NVENC registers one allocation as NV12, P010 or packed RGB at that pitch; a
-//! planar import maps each plane on its own, and NVENC refuses chroma outside the luma's.
+//! planar import maps each plane on its own, and NVENC takes chroma only at an offset from the
+//! luma's pointer.
 //!
 //! In-process: CUDA cannot share an EGL mapping with another process (`cuIpcGetMemHandle`
 //! refuses it). The driver sees each pool buffer once; a frame only touches NVENC.

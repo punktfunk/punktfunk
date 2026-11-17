@@ -86,9 +86,9 @@ struct Monitor {
     /// ADD-time hardware-cursor flag. Survives re-arrival so the new
     /// monitor keeps the cursor channel.
     hw_cursor: bool,
-    /// OS target carries an irrevocable hardware-cursor declare: DWM drops
-    /// the pointer from frames forever (survives REMOVE→ADD via the stable
-    /// target id). A session without the cursor channel must self-composite.
+    /// The adapter carries an irrevocable hardware-cursor declare (any target, this WUDFHost's
+    /// life), so DWM drops the pointer from frames. A session without the cursor channel must
+    /// self-composite.
     cursor_excluded: bool,
     /// WUDFHost pid from the ADD reply. One process hosts every slot's
     /// publisher, so its death is all-slot shared fate.
@@ -1915,11 +1915,9 @@ impl VirtualDisplayManager {
     /// topology change: bare `SDC_TOPOLOGY_EXTEND` is ACCESS_DENIED from Session 0 on a headless
     /// box and breaks the auto-activate. force-EXTEND is the integrated-screen FALLBACK: a fresh
     /// IDD there is CLONED onto the panel (shared source, no committed path of its own), and the
-    /// EXTEND de-clones it. LAST RESORT is explicit path activation: a closed lid defeats both
-    /// (the clamshell policy suppresses auto-activation and the EXTEND preset "succeeds"
-    /// committing nothing), and `activate_target_path` commits the path directly, which ignores
-    /// the lid policy. A seat has no panel to clone and no lid, so it polls briefly and commits
-    /// the path.
+    /// EXTEND de-clones it. LAST RESORT is explicit path activation: a closed lid can leave both
+    /// earlier stages without a path, and `activate_target_path` commits it directly. A seat has
+    /// no panel to clone and no lid, so it polls briefly and commits the path.
     ///
     /// CAVEAT (unobserved): textbook CCD also allows a clone with a *shared-source ACTIVE* path
     /// (resolve → `Some`), which the `is_none()` gate would miss; widening needs a

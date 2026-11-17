@@ -123,7 +123,7 @@ impl GamescopeClipboard {
     }
 
     /// Takes `CLIPBOARD` when the offer has text, which is all gamescope keeps. A rich-only offer
-    /// counts: the client derives its plain text.
+    /// counts; a paste then asks the client for plain text, which it may not have.
     pub fn set_offer(&self, wire_mimes: &[String]) -> Result<()> {
         let text = wire_mimes
             .iter()

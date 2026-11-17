@@ -64,7 +64,8 @@ pf-vdisplay = { path = "../pf-vdisplay" }
 # backends + coordinator. Portable dep — the crate's facade (policy / ClipCoordCmd / start)
 # compiles everywhere; the backends are cfg-gated inside it.
 pf-clipboard = { path = "../pf-clipboard" }
-# M3 native control plane (the `punktfunk/1` QUIC handshake; data plane stays native-thread UDP).
+# The `punktfunk/2` QUIC connection: handshake, control streams and small datagrams. Video leaves
+# on a native thread through the same socket.
 quinn = { workspace = true }
 anyhow = "1"
 tracing = "0.1"
@@ -100,9 +101,8 @@ tokio = { version = "1", features = ["full"] }
 # `digest 0.10`, and the rest of this crate is on the `digest 0.11` wave (sha2 0.11 / hmac 0.13) —
 # so the digest types that appear as `rsa` TYPE PARAMETERS (`SigningKey<Sha256>` in cert.rs,
 # `VerifyingKey<_>` in pairing.rs and https.rs) must come from `rsa::sha2`, not from the `sha2`
-# below. Everything else (plain hashing, HMAC) uses the 0.11 one. Collapsing the two needs `rsa`
-# 0.10, which is still release-candidate only — not something the Moonlight pairing ceremony
-# should ride.
+# below. Everything else (plain hashing, HMAC) uses the 0.11 one. Collapsing the two means moving
+# to `rsa` 0.10, which is on digest 0.11 and rand_core 0.10.
 #
 # `getrandom` is NOT one of rsa's defaults; we ask for it because `RsaPrivateKey::new` wants an
 # rng implementing rand_core **0.6**'s traits, and our own `rand` is 0.10, so no rng we hold
@@ -226,8 +226,9 @@ opus = "0.4"
 libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# `screencast` gates the ScreenCast portal module; `remote_desktop` adds the RemoteDesktop
-# portal we use for libei input on KWin/GNOME; `tokio` is the default runtime.
+# `screencast` gates the ScreenCast portal module; `remote_desktop` adds the RemoteDesktop one
+# (it anchors portal capture on KWin/GNOME and is libei's source where Mutter's and KWin's
+# direct EIS do not apply); `tokio` is the default runtime.
 # `open_pipe_wire_remote` is unconditional, so ashpd's own `pipewire` feature is not
 # needed — pf-capture and pf-audio drive PipeWire with the `pipewire` crate.
 # `inhibit` vetoes the desktop's idle suspend during a stream.

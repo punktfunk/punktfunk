@@ -3,8 +3,10 @@
 //!
 //! [`AuSection`] writes through a [`SectionView`] the caller mapped, and owns the ready event
 //! from then on. Every field past the host-stamped layout is written through atomic views over
-//! the mapping — the encode thread is the only writer, the host reads under the `latest`
-//! token's generation check.
+//! the mapping. The encode thread publishes the access units; the frame source and the control
+//! path write the counters and the state word, and [`EncodeSession::rebase`] frees unread
+//! slots. The host reads under the `latest` token's generation check and frees the slots it
+//! takes.
 
 use std::collections::VecDeque;
 use std::mem::offset_of;

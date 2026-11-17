@@ -33,8 +33,8 @@ use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, IPropertyStore
 
 /// How often a watcher looks for pads arriving or leaving.
 const POLL_MS: u32 = 250;
-/// The endpoint class id `ACTIVATOR_KEY` reports. Unregistered: the engine activates through
-/// `IMMDevice::Activate`, never by class.
+/// The endpoint class id `ACTIVATOR_KEY` reports. Unregistered (Windows 11 26200): the engine
+/// activates through `IMMDevice::Activate`, never by class.
 const ACTIVATOR: GUID = GUID::from_u128(0xbd646d45_d823_459a_98f2_4e64e627a21c);
 
 const fn pkey(fmtid: u128, pid: u32) -> PROPERTYKEY {

@@ -101,8 +101,8 @@ fn cadence(src: u32, fps: u32, tick: u64) -> bool {
 
 /// How the source answers a keyframe request.
 ///
-/// A host answers some asks with an intra-refresh wave, which does not re-anchor a client that
-/// lost its reference, and only some with a real IDR.
+/// A host forces one IDR per cooldown and folds other asks into a recovery in flight; a wave
+/// without recovery marks leaves a frozen client frozen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyframeAnswer {
     /// Every ask gets an IDR.

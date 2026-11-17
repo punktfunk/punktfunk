@@ -12,9 +12,9 @@ fn headless_shim_dir() -> std::path::PathBuf {
 /// PATH shim: rewrite SteamOS's hardcoded panel args to headless at `PF_W`/`PF_H`/`PF_HZ`.
 /// `PF_HZ` is [`game_hz`] on `-r` only — it must not change the negotiated resolution.
 ///
-/// The session reads gamescope's ready line (`-R`) for 3 s, and its unit fails at 5 s without
-/// it. A headless start can take longer, so the shim takes the line on its own pipe for up to
-/// [`HEADLESS_READY_SECS`] and does what the session would: hand the line on, write
+/// SteamOS 3.8's session reads gamescope's ready line (`-R`) for 3 s, and its unit fails at 5 s
+/// without it. A headless start can take longer, so the shim takes the line on its own pipe for
+/// up to [`HEADLESS_READY_SECS`] and does what the session would: hand the line on, write
 /// `gamescope-environment`, notify systemd. It reads a second at a time and stops once gamescope
 /// is gone, so a start that dies fails the unit at once.
 fn headless_shim_body(bin: &str) -> String {

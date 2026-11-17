@@ -93,8 +93,8 @@ pub fn make_way(path: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Makes the door's group when no package has yet. A package restarts this daemon before the one
-/// that creates the group, and a socket bound without it stays closed to the door.
+/// Makes the door's group when it is missing: the packages' `systemd-sysusers` step is
+/// best-effort, and a socket bound without the group stays closed to the door.
 pub fn ensure_door_group() {
     if let Err(error) = accounts::ensure_group(DOOR_GROUP) {
         tracing::warn!(%error, "door group not created");
