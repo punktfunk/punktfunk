@@ -419,16 +419,21 @@ fn handle(service: &SeatService<LinuxBackend>, stream: UnixStream, uid: u32, pen
         }
     };
     match request {
-        Request::Create { kind, index } => {
+        Request::Create {
+            kind,
+            index,
+            gamepad_only,
+        } => {
             drop(pending);
             let seat = ps_seat(&service.ledger(), &account);
-            create(stream, &account, kind, index, seat);
+            create(stream, &account, kind, index, seat, gamepad_only);
         }
         Request::Serve {
             kind,
             index,
             slot,
             identity_len,
+            gamepad_only,
         } => {
             let identity = pad_broker::read_identity(&stream, identity_len);
             drop(pending);
@@ -440,6 +445,7 @@ fn handle(service: &SeatService<LinuxBackend>, stream: UnixStream, uid: u32, pen
                         slot,
                         seat: ps_seat(&service.ledger(), &account),
                         identity,
+                        gamepad_only,
                     };
                     serve_usb(stream, &account, &hello);
                 }
@@ -468,8 +474,15 @@ fn answer(stream: &UnixStream, account: &str, status: Status) {
 }
 
 /// A uinput or uhid pad, recorded for the fence and relayed until the seat hangs up. A
-/// PlayStation pad's MAC carries `seat`.
-fn create(stream: UnixStream, account: &str, kind: PadKind, index: u8, seat: u16) {
+/// PlayStation pad's MAC carries `seat`, and its name the seat's `gamepad_only`.
+fn create(
+    stream: UnixStream,
+    account: &str,
+    kind: PadKind,
+    index: u8,
+    seat: u16,
+    gamepad_only: bool,
+) {
     let Some(_slot) = Slot::take(&HELD, account, MAX_PER_SEAT) else {
         tracing::warn!(
             account,
@@ -479,7 +492,7 @@ fn create(stream: UnixStream, account: &str, kind: PadKind, index: u8, seat: u16
         answer(&stream, account, Status::Capacity);
         return;
     };
-    let (pad, _vouch) = match build_vouched(kind, index, account, seat) {
+    let (pad, _vouch) = match build_vouched(kind, index, account, seat, gamepad_only) {
         Ok(built) => built,
         Err(error) => {
             tracing::warn!(error = %format!("{error:#}"), account, pad = kind.label(),
@@ -510,16 +523,18 @@ fn create(stream: UnixStream, account: &str, kind: PadKind, index: u8, seat: u16
 
 /// `kind` built for `account`, with the record that vouches for it to the udev fence: a uhid
 /// pad's written under its stamp's token before the pad exists, a uinput pad's once the kernel
-/// names it. Drop the record after the pad. A PlayStation pad's MAC carries `seat`.
+/// names it. Drop the record after the pad. A PlayStation pad's MAC carries `seat`, and its
+/// name `gamepad_only`.
 fn build_vouched(
     kind: PadKind,
     index: u8,
     account: &str,
     seat: u16,
+    gamepad_only: bool,
 ) -> anyhow::Result<(BrokeredPad, Vouch)> {
     let mut vouch =
         Vouch::new(Path::new(vouch::DIR), account, !kind.is_uinput()).context("record the pad")?;
-    let pad = pad_broker::build(kind, index, vouch.mark(), seat)?;
+    let pad = pad_broker::build(kind, index, vouch.mark(), seat, gamepad_only)?;
     if let Some(name) = pad.sysname() {
         vouch.made(&name?).context("record the pad")?;
     }

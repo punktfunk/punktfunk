@@ -365,12 +365,17 @@ fn feedback(pad: u8, outputs: Vec<Output>) -> DsFeedback {
     merged
 }
 
+/// The HID interface's string on a pad whose client may not move the pointer. Udev keeps
+/// libinput off that pad's touchpad (`60-punktfunk.rules`); no game reads the string.
+pub const GAMEPAD_ONLY_INTERFACE: &str = "Punktfunk gamepad only";
+
 /// Assemble the 4-interface composite. `index` is the wire pad and `seat` its MAC's seat; neither
 /// appears in descriptors (no `iSerialNumber`; `hid-playstation` takes identity from feature
-/// `0x09`).
+/// `0x09`). A `gamepad_only` pad's HID interface is named [`GAMEPAD_ONLY_INTERFACE`].
 fn build_device(
     index: u8,
     seat: u16,
+    gamepad_only: bool,
     report: &Arc<Mutex<[u8; DS_INPUT_REPORT_LEN]>>,
     out: Outputs,
 ) -> UsbDevice {
@@ -449,7 +454,7 @@ fn build_device(
             0x03,
             0x00,
             0x00,
-            None,
+            gamepad_only.then_some(GAMEPAD_ONLY_INTERFACE),
             vec![
                 ep(EP_HID_IN, 0x03, 64, HID_INTERVAL),
                 ep(EP_HID_OUT, 0x03, 64, HID_INTERVAL),
@@ -465,10 +470,10 @@ fn build_device(
 }
 
 /// The server's half: the device, and the pad's report `0x01` into interface 3 only.
-pub(crate) fn served(index: u8, seat: u16, out: Outputs) -> Served {
+pub(crate) fn served(index: u8, seat: u16, gamepad_only: bool, out: Outputs) -> Served {
     let report = Arc::new(Mutex::new([0u8; DS_INPUT_REPORT_LEN]));
     Served {
-        device: build_device(index, seat, &report, out),
+        device: build_device(index, seat, gamepad_only, &report, out),
         input: one_report(report, HID, Some(INPUT_REPORT_ID)),
     }
 }
@@ -486,8 +491,8 @@ pub struct DualSenseUsbip {
 impl DualSenseUsbip {
     /// Bind wire pad `index` and attach via `vhci_hcd`. Fails (caller degrades to uhid)
     /// when `vhci_hcd` is missing or sysfs `attach` is not writable — see
-    /// [`super::usbip::attach_device`].
-    pub fn open(index: u8) -> Result<DualSenseUsbip> {
+    /// [`super::usbip::attach_device`]. A `gamepad_only` pad's touchpad moves no pointer.
+    pub fn open(index: u8, gamepad_only: bool) -> Result<DualSenseUsbip> {
         let (tx, rx) = sync_channel::<Vec<f32>>(AUDIO_QUEUE_DEPTH);
         // Pads already up, so the bind wait below judges this pad's own device.
         let before: Vec<_> = vhci_dualsenses().map(|t| t.sysfs_path).collect();
@@ -498,6 +503,7 @@ impl DualSenseUsbip {
             slot: 0,
             seat: crate::pad_broker::own_ps_seat(),
             identity: Vec::new(),
+            gamepad_only,
         };
         let attach = attach_device(hello, Some(tx), &format!("virtual DualSense {index}"))?;
 
@@ -945,8 +951,21 @@ mod tests {
     /// A seat's vhci port binds only listed devices.
     #[test]
     fn the_dualsense_is_a_listed_device() {
-        let dev = served(0, 0, test_relay().0).device;
+        let dev = served(0, 0, false, test_relay().0).device;
         assert!(crate::usbip::EMULATED.contains(&(dev.vendor_id, dev.product_id)));
+    }
+
+    /// Only a gamepad-only pad names its HID interface, the string udev keys on; the product
+    /// string stays a real pad's, which pad audio matches.
+    #[test]
+    fn only_a_gamepad_only_pad_names_its_hid_interface() {
+        let hid = |gamepad_only| {
+            let dev = served(0, 0, gamepad_only, test_relay().0).device;
+            let iface = dev.interfaces.iter().find(|i| i.interface_class == 0x03);
+            iface.expect("a HID interface").string_interface
+        };
+        assert_eq!(hid(false), 0);
+        assert_ne!(hid(true), 0);
     }
 
     #[test]

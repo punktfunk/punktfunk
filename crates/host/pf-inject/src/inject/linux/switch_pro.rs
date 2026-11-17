@@ -83,7 +83,7 @@ impl SwitchPad {
             Some(Half::Left) => crate::pad_broker::PadKind::JoyConLeft,
             Some(Half::Right) => crate::pad_broker::PadKind::JoyConRight,
         };
-        let dev = UhidDevice::open_kind(kind, index, &identity(index, half))?;
+        let dev = UhidDevice::open_kind(kind, index, false, &identity(index, half))?;
         Ok(SwitchPad {
             dev,
             device_type,

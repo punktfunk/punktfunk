@@ -847,6 +847,7 @@ impl TritonUsbip {
             slot: 0,
             seat: 0,
             identity: identity_for(index).map(|i| i.blob()).unwrap_or_default(),
+            gamepad_only: false,
         };
         let attach = attach_device(hello, None, &format!("virtual Steam Controller 2 {index}"))?;
         Ok(TritonUsbip {
@@ -875,6 +876,7 @@ impl TritonUsbip {
             slot: slot as u8,
             seat: 0,
             identity: identity.map(|i| i.blob()).unwrap_or_default(),
+            gamepad_only: false,
         };
         let attach = attach_device(
             hello,

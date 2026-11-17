@@ -29,7 +29,7 @@ impl EightBitDoPad {
             Model::Pro2 => crate::pad_broker::PadKind::EightBitDoPro2,
             Model::Pro3 => crate::pad_broker::PadKind::EightBitDoPro3,
         };
-        let dev = UhidDevice::open_kind(kind, index, &identity(model, index))?;
+        let dev = UhidDevice::open_kind(kind, index, false, &identity(model, index))?;
         Ok(EightBitDoPad {
             dev,
             clock: SensorClock::micros(),

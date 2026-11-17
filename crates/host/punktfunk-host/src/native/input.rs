@@ -1294,7 +1294,8 @@ struct InputLoop {
 impl InputLoop {
     /// A grant withdrawn mid-session filters that class's releases from here on: let go of
     /// what it holds now, or a key, button or stick stays down for the session. A regained
-    /// gamepad grant opens the seq gate. The held set first follows a moved route.
+    /// gamepad grant opens the seq gate. The held set first follows a moved route. Runs
+    /// before the first input, so a session without the pointer grant builds marked pads.
     fn on_grants(&mut self) {
         use punktfunk_core::quic::{GRANT_GAMEPAD, GRANT_KEYBOARD, GRANT_POINTER};
         let now_granted = self.grants.load(Ordering::Relaxed);
@@ -1305,21 +1306,24 @@ impl InputLoop {
             self.wire.forget_seqs();
         }
         self.held.follow_route();
-        if lost == 0 {
-            return;
-        }
-        let ups = self
-            .held
-            .held
-            .release_classes(lost & GRANT_KEYBOARD != 0, lost & GRANT_POINTER != 0);
-        for ev in ups {
-            let _ = self.held.route.send(ev);
-        }
-        if lost & GRANT_GAMEPAD != 0 {
-            for idx in self.wire.rest_all() {
-                self.pads.apply_wire(&self.wire, idx, &self.pad_feed);
+        if lost != 0 {
+            let ups = self
+                .held
+                .held
+                .release_classes(lost & GRANT_KEYBOARD != 0, lost & GRANT_POINTER != 0);
+            for ev in ups {
+                let _ = self.held.route.send(ev);
+            }
+            if lost & GRANT_GAMEPAD != 0 {
+                for idx in self.wire.rest_all() {
+                    self.pads.apply_wire(&self.wire, idx, &self.pad_feed);
+                }
             }
         }
+        // After the rest above: a pad that rest reaches is not rebuilt only to be rested.
+        self.pads
+            .backends
+            .set_gamepad_only(now_granted & GRANT_POINTER == 0);
     }
 
     /// A console just opened the Controllers page. A held button sends no further frames, so

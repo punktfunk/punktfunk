@@ -84,3 +84,13 @@ KERNEL=="hidraw*", KERNELS=="*28DE:1302*", GROUP="input", MODE="0660", TAG+="uac
 KERNEL=="hidraw*", KERNELS=="*28DE:1304*", GROUP="input", MODE="0660", TAG+="uaccess"
 KERNEL=="hidraw*", ATTRS{idVendor}=="28de", ATTRS{idProduct}=="1302", GROUP="input", MODE="0660", TAG+="uaccess"
 KERNEL=="hidraw*", ATTRS{idVendor}=="28de", ATTRS{idProduct}=="1304", GROUP="input", MODE="0660", TAG+="uaccess"
+
+# The touchpad of a pad whose client may not move the pointer: libinput ignores it, and games
+# still read it. The host marks such a pad, a uhid one by its name and a usbip DualSense by its
+# HID interface's string. Every other pad's touchpad works as a real pad's does.
+ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHPAD}=="1", \
+    DEVPATH=="/devices/virtual/misc/uhid/*", ATTRS{name}=="Punktfunk * (gamepad only) Touchpad", \
+    ENV{LIBINPUT_IGNORE_DEVICE}="1"
+ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHPAD}=="1", \
+    DEVPATH=="/devices/platform/vhci_hcd*/usb*/*", ATTRS{interface}=="Punktfunk gamepad only", \
+    ENV{LIBINPUT_IGNORE_DEVICE}="1"

@@ -91,19 +91,23 @@ impl PadKind {
         self.uinput().is_some()
     }
 
-    /// The uhid identity of a uhid kind at `index`, as the backend itself builds it.
-    fn uhid(self, index: u8) -> Option<Identity> {
+    /// The uhid identity of a uhid kind at `index`, as the backend itself builds it; a
+    /// PlayStation pad's is marked when `gamepad_only`.
+    fn uhid(self, index: u8, gamepad_only: bool) -> Option<Identity> {
         use crate::eightbitdo_proto::Model;
         use crate::steam_proto::SteamModel;
         Some(match self {
-            PadKind::DualSense => {
-                crate::dualsense::identity(index, &crate::dualsense::DsUhidIdentity::dualsense())
-            }
+            PadKind::DualSense => crate::dualsense::identity(
+                index,
+                &crate::dualsense::DsUhidIdentity::dualsense(),
+                gamepad_only,
+            ),
             PadKind::DualSenseEdge => crate::dualsense::identity(
                 index,
                 &crate::dualsense::DsUhidIdentity::dualsense_edge(),
+                gamepad_only,
             ),
-            PadKind::DualShock4 => crate::dualshock4::identity(index),
+            PadKind::DualShock4 => crate::dualshock4::identity(index, gamepad_only),
             PadKind::SteamDeck => crate::steam_controller::identity(index, SteamModel::Deck),
             PadKind::SteamController => {
                 crate::steam_controller::identity(index, SteamModel::Controller)
@@ -214,20 +218,27 @@ const REPLY_LEN: usize = 4;
 /// The supervisor answers within this; a seat that waits longer has no supervisor. A served
 /// pad's answer waits for its pad server to start.
 const TIMEOUT: Duration = Duration::from_secs(10);
+/// A request's flags byte. Its one flag marks a pad whose client may not move the pointer;
+/// an older seat sends 0 there, and an older supervisor reads nothing there.
+const FLAGS: usize = 12;
+const GAMEPAD_ONLY: u8 = 1;
 
 /// What a seat may ask. `Create`'s `index` is the seat's pad slot, part of the pad's marker.
-/// `Serve`'s identity blob follows the request on the stream.
+/// `Serve`'s identity blob follows the request on the stream. A `gamepad_only` pad's touchpad
+/// moves no pointer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     Create {
         kind: PadKind,
         index: u8,
+        gamepad_only: bool,
     },
     Serve {
         kind: UsbKind,
         index: u8,
         slot: u8,
         identity_len: u16,
+        gamepad_only: bool,
     },
 }
 
@@ -237,22 +248,29 @@ impl Request {
         out[..4].copy_from_slice(&MAGIC);
         out[4] = VERSION;
         match self {
-            Request::Create { kind, index } => {
+            Request::Create {
+                kind,
+                index,
+                gamepad_only,
+            } => {
                 out[5] = OP_CREATE;
                 out[6] = kind as u8;
                 out[7] = index;
+                out[FLAGS] = u8::from(gamepad_only) * GAMEPAD_ONLY;
             }
             Request::Serve {
                 kind,
                 index,
                 slot,
                 identity_len,
+                gamepad_only,
             } => {
                 out[5] = OP_SERVE;
                 out[6] = kind as u8;
                 out[7] = index;
                 out[8] = slot;
                 out[9..11].copy_from_slice(&identity_len.to_le_bytes());
+                out[FLAGS] = u8::from(gamepad_only) * GAMEPAD_ONLY;
             }
         }
         out
@@ -263,10 +281,15 @@ impl Request {
         if bytes.len() != REQUEST_LEN || b[..4] != MAGIC || b[4] != VERSION {
             return None;
         }
+        if b[FLAGS] & !GAMEPAD_ONLY != 0 {
+            return None;
+        }
+        let gamepad_only = b[FLAGS] & GAMEPAD_ONLY != 0;
         Some(match b[5] {
             OP_CREATE => Request::Create {
                 kind: PadKind::from_wire(b[6])?,
                 index: b[7],
+                gamepad_only,
             },
             OP_SERVE => {
                 let identity_len = u16::from_le_bytes([b[9], b[10]]);
@@ -278,6 +301,7 @@ impl Request {
                     index: b[7],
                     slot: b[8],
                     identity_len,
+                    gamepad_only,
                 }
             }
             _ => return None,
@@ -380,9 +404,15 @@ pub fn writable(node: &Path) -> bool {
     rustix::fs::access(node, rustix::fs::Access::WRITE_OK).is_ok()
 }
 
-/// Ask the supervisor for `kind` at `index`: the seat's end of its relay.
-pub fn request(kind: PadKind, index: u8) -> Result<OwnedFd> {
-    let (status, _, relay) = ask(&Request::Create { kind, index }.encode())?;
+/// Ask the supervisor for `kind` at `index`, marked when `gamepad_only`: the seat's end of its
+/// relay.
+pub fn request(kind: PadKind, index: u8, gamepad_only: bool) -> Result<OwnedFd> {
+    let create = Request::Create {
+        kind,
+        index,
+        gamepad_only,
+    };
+    let (status, _, relay) = ask(&create.encode())?;
     match status {
         Status::Created => relay.ok_or_else(|| anyhow!("the pad broker answered without a relay")),
         Status::Failed => bail!(
@@ -405,6 +435,7 @@ pub fn serve(hello: &Hello) -> Result<(OwnedFd, u16)> {
         index: hello.index,
         slot: hello.slot.min(3),
         identity_len,
+        gamepad_only: hello.gamepad_only,
     };
     let (status, port, relay) = ask(&[&request.encode()[..], &hello.identity].concat())?;
     let label = hello.kind.label();
@@ -500,8 +531,15 @@ enum Brokered {
 }
 
 /// Build `kind` as the supervisor, pad `index` stamped with `mark` ([`seat_phys`]). A
-/// PlayStation pad's MAC carries `seat` ([`ps_seat`]), which the supervisor took from its ledger.
-pub fn build(kind: PadKind, index: u8, mark: &str, seat: u16) -> Result<BrokeredPad> {
+/// PlayStation pad's MAC carries `seat` ([`ps_seat`]), which the supervisor took from its ledger,
+/// and its name the seat's `gamepad_only`.
+pub fn build(
+    kind: PadKind,
+    index: u8,
+    mark: &str,
+    seat: u16,
+    gamepad_only: bool,
+) -> Result<BrokeredPad> {
     let dev = if let Some(identity) = kind.uinput() {
         Brokered::Uinput(build_pad(
             identity,
@@ -509,7 +547,7 @@ pub fn build(kind: PadKind, index: u8, mark: &str, seat: u16) -> Result<Brokered
         )?)
     } else {
         let mut id = kind
-            .uhid(index)
+            .uhid(index, gamepad_only)
             .ok_or_else(|| anyhow!("no table for the {} pad", kind.label()))?;
         // The backend's own `punktfunk/<tag>/<index>`, under the seat's mark.
         let own = id.phys.trim_start_matches("punktfunk/").to_owned();
@@ -841,15 +879,26 @@ mod tests {
         let r = Request::Create {
             kind: PadKind::XboxElite2,
             index: 3,
+            gamepad_only: false,
         };
         assert_eq!(Request::decode(&r.encode()), Some(r));
+        let marked = Request::Create {
+            kind: PadKind::DualSense,
+            index: 1,
+            gamepad_only: true,
+        };
+        assert_eq!(Request::decode(&marked.encode()), Some(marked));
         let puck = Request::Serve {
             kind: UsbKind::SteamController2Puck,
             index: 4,
             slot: 3,
             identity_len: MAX_IDENTITY as u16,
+            gamepad_only: true,
         };
         assert_eq!(Request::decode(&puck.encode()), Some(puck));
+        let mut flags = r.encode();
+        flags[FLAGS] = 2;
+        assert_eq!(Request::decode(&flags), None, "an unknown flag");
         for retired in [2, 3] {
             let mut op = r.encode();
             op[5] = retired;
@@ -860,6 +909,7 @@ mod tests {
             index: 0,
             slot: 0,
             identity_len: 0,
+            gamepad_only: false,
         }
         .encode();
         let mut unknown = serve;
@@ -896,12 +946,12 @@ mod tests {
             assert_eq!(kind as u8, value);
             assert_ne!(
                 kind.uinput().is_some(),
-                kind.uhid(0).is_some(),
+                kind.uhid(0, false).is_some(),
                 "{}",
                 kind.label()
             );
         }
-        let ds = PadKind::DualSense.uhid(2).unwrap();
+        let ds = PadKind::DualSense.uhid(2, false).unwrap();
         assert_eq!(ds.phys, "punktfunk/dualsense/2");
         assert_eq!(
             seat_phys("pf-seat-1", ds.phys.trim_start_matches("punktfunk/")),
@@ -1002,7 +1052,9 @@ mod tests {
     #[test]
     fn no_uhid_kind_takes_a_report_its_table_makes_a_keyboard_or_pointer() {
         for kind in (0..=255).filter_map(PadKind::from_wire) {
-            let Some(id) = kind.uhid(0) else { continue };
+            let Some(id) = kind.uhid(0, false) else {
+                continue;
+            };
             for risky in crate::usbip_relay::risky_input_reports(id.rdesc) {
                 let risky =
                     risky.unwrap_or_else(|| panic!("{} is risky without ids", kind.label()));

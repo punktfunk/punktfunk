@@ -7,63 +7,65 @@ use crate::inject::switch2_proto::Model as Switch2;
 
 /// In pump and heartbeat order.
 pub(super) const MANAGERS: &[ManagerRow] = &[
-    (GamepadPref::XboxOne, || {
+    (GamepadPref::XboxOne, |_| {
         boxed(crate::inject::gamepad::GamepadManager::with_identity(
             crate::inject::gamepad::PadIdentity::xbox_one(),
         ))
     }),
-    (GamepadPref::XboxElite, || {
+    (GamepadPref::XboxElite, |_| {
         boxed(crate::inject::gamepad::GamepadManager::with_identity(
             crate::inject::gamepad::PadIdentity::elite2(),
         ))
     }),
-    (GamepadPref::DualSense, || {
-        boxed(crate::inject::dualsense::DualSenseManager::new())
+    (GamepadPref::DualSense, |gamepad_only| {
+        boxed(crate::inject::dualsense::dualsense_manager(gamepad_only))
     }),
-    (GamepadPref::DualSenseEdge, || {
-        boxed(crate::inject::dualsense::DualSenseEdgeManager::new())
+    (GamepadPref::DualSenseEdge, |gamepad_only| {
+        boxed(crate::inject::dualsense::dualsense_edge_manager(
+            gamepad_only,
+        ))
     }),
-    (GamepadPref::DualShock4, || {
-        boxed(crate::inject::dualshock4::DualShock4Manager::new())
+    (GamepadPref::DualShock4, |gamepad_only| {
+        boxed(crate::inject::dualshock4::dualshock4_manager(gamepad_only))
     }),
-    (GamepadPref::SteamDeck, || {
+    (GamepadPref::SteamDeck, |_| {
         boxed(crate::inject::steam_controller::SteamControllerManager::new())
     }),
-    (GamepadPref::SwitchPro, || {
+    (GamepadPref::SwitchPro, |_| {
         boxed(crate::inject::switch_pro::SwitchProManager::new())
     }),
-    (GamepadPref::SteamController, || {
+    (GamepadPref::SteamController, |_| {
         boxed(crate::inject::steam_controller::SteamCtrlManager::new())
     }),
-    (GamepadPref::SteamController2, || {
+    (GamepadPref::SteamController2, |_| {
         boxed(pf_inject::steam_controller2::Triton2Manager::new())
     }),
-    (GamepadPref::SteamController2Puck, || {
+    (GamepadPref::SteamController2Puck, |_| {
         boxed(
             crate::inject::steam_controller2::Triton2Manager::with_backend(
                 crate::inject::steam_controller2::TritonProto::puck(),
             ),
         )
     }),
-    (GamepadPref::EightBitDoUltimate2, || {
+    (GamepadPref::EightBitDoUltimate2, |_| {
         boxed(crate::inject::eightbitdo::manager(EightBitDo::Ultimate2))
     }),
-    (GamepadPref::EightBitDoPro2, || {
+    (GamepadPref::EightBitDoPro2, |_| {
         boxed(crate::inject::eightbitdo::manager(EightBitDo::Pro2))
     }),
-    (GamepadPref::EightBitDoPro3, || {
+    (GamepadPref::EightBitDoPro3, |_| {
         boxed(crate::inject::eightbitdo::manager(EightBitDo::Pro3))
     }),
-    (GamepadPref::HoripadSteam, || {
+    (GamepadPref::HoripadSteam, |_| {
         boxed(crate::inject::hori_steam::HoriManager::new())
     }),
-    (GamepadPref::JoyConPair, || {
+    (GamepadPref::JoyConPair, |_| {
         boxed(crate::inject::switch_pro::JoyConPairManager::new())
     }),
-    (GamepadPref::Switch2Pro, || {
+    (GamepadPref::Switch2Pro, |_| {
         boxed(crate::inject::switch2_usbip::manager(Switch2::Pro))
     }),
-    (GamepadPref::Switch2GameCube, || {
+    (GamepadPref::Switch2GameCube, |_| {
         boxed(crate::inject::switch2_usbip::manager(Switch2::GameCube))
     }),
 ];

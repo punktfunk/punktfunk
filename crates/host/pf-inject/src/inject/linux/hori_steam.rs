@@ -39,6 +39,7 @@ impl HoriPad {
         let dev = UhidDevice::open_kind(
             crate::pad_broker::PadKind::HoripadSteam,
             index,
+            false,
             &identity(index),
         )?;
         Ok(HoriPad {

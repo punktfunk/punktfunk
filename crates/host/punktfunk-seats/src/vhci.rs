@@ -321,6 +321,7 @@ mod tests {
                 slot: 0,
                 seat: 0,
                 identity: Vec::new(),
+                gamepad_only: false,
             };
             let dev = served(&hello, Outputs::new(&relay).unwrap())
                 .unwrap()

@@ -21,11 +21,12 @@ use pf_driver_proto::gamepad::mark_ps_seat;
 use punktfunk_core::quic::{HidOutput, RichInput};
 
 /// The `CREATE2` identity of pad `index`: what this host opens, and what the seat broker
-/// builds for a seat.
-pub(crate) fn identity(index: u8) -> crate::uhid_abi::Identity {
+/// builds for a seat. A `gamepad_only` pad's name is marked, so its touchpad moves no pointer
+/// ([`crate::uhid_abi::GAMEPAD_ONLY_NAME`]).
+pub(crate) fn identity(index: u8, gamepad_only: bool) -> crate::uhid_abi::Identity {
     crate::uhid_abi::Identity {
         bus: crate::uhid_abi::BUS_USB,
-        name: format!("Punktfunk DualShock 4 {index}"),
+        name: crate::uhid_abi::pad_name(format!("Punktfunk DualShock 4 {index}"), gamepad_only),
         phys: format!("punktfunk/dualshock4/{index}"),
         uniq: format!("punktfunk-ds4-{index}"),
         rdesc: DS4_RDESC,
@@ -43,12 +44,14 @@ pub struct DualShock4Pad {
 
 impl DualShock4Pad {
     /// `index` is only the name/uniq suffix, not a HID slot. The uniq is cosmetic;
-    /// `hid-playstation` keys uniqueness off the pairing-report MAC.
-    pub fn open(index: u8) -> Result<DualShock4Pad> {
+    /// `hid-playstation` keys uniqueness off the pairing-report MAC. A `gamepad_only` pad's
+    /// touchpad moves no pointer ([`identity`]).
+    pub fn open(index: u8, gamepad_only: bool) -> Result<DualShock4Pad> {
         let dev = UhidDevice::open_kind(
             crate::pad_broker::PadKind::DualShock4,
             index,
-            &identity(index),
+            gamepad_only,
+            &identity(index, gamepad_only),
         )?;
         Ok(DualShock4Pad {
             dev,
@@ -91,14 +94,25 @@ impl DualShock4Pad {
 pub struct Ds4LinuxProto {
     /// Steam back-grip fold. DS4 has no paddle HID slot; `PUNKTFUNK_STEAM_REMAP=paddles=…`, default drop.
     remap: crate::steam_remap::RemapConfig,
+    /// The session may not move the pointer: its pads' touchpads move none.
+    gamepad_only: bool,
 }
 
 impl Default for Ds4LinuxProto {
     fn default() -> Ds4LinuxProto {
         Ds4LinuxProto {
             remap: crate::steam_remap::RemapConfig::from_env(),
+            gamepad_only: false,
         }
     }
+}
+
+/// A session's DualShock 4 manager; `gamepad_only` when its client may not move the pointer.
+pub fn dualshock4_manager(gamepad_only: bool) -> DualShock4Manager {
+    UhidManager::with_backend(Ds4LinuxProto {
+        gamepad_only,
+        ..Ds4LinuxProto::default()
+    })
 }
 
 impl PadProto for Ds4LinuxProto {
@@ -113,7 +127,7 @@ impl PadProto for Ds4LinuxProto {
     const CREATE_HINT: &'static str = "";
 
     fn open(&mut self, idx: u8) -> Result<DualShock4Pad> {
-        let p = DualShock4Pad::open(idx)?;
+        let p = DualShock4Pad::open(idx, self.gamepad_only)?;
         tracing::info!(
             index = idx,
             "virtual DualShock 4 created (UHID hid-playstation)"

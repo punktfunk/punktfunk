@@ -91,6 +91,19 @@ pub fn input2_data(ev: &[u8]) -> &[u8] {
     &ev[6.min(end)..end]
 }
 
+/// What a PlayStation pad's name ends in when its client may not move the pointer. Udev keeps
+/// libinput off that pad's touchpad (`60-punktfunk.rules`); games still read it.
+pub const GAMEPAD_ONLY_NAME: &str = " (gamepad only)";
+
+/// `name`, marked [`GAMEPAD_ONLY_NAME`] when `gamepad_only`.
+pub fn pad_name(name: String, gamepad_only: bool) -> String {
+    if gamepad_only {
+        name + GAMEPAD_ONLY_NAME
+    } else {
+        name
+    }
+}
+
 /// A [`Create2`] that owns its strings: what a backend builds for its pad, and what the broker
 /// builds for a seat's, with the seat's marker in `phys`.
 pub struct Identity {
@@ -157,14 +170,16 @@ pub struct UhidDevice {
 
 impl UhidDevice {
     /// `id` opened here, or `kind` as a seat that can't write `/dev/uhid` gets it: the supervisor
-    /// builds it from its own table, stamped ([`crate::pad_broker::brokered`]).
+    /// builds it from its own table, stamped ([`crate::pad_broker::brokered`]), and marked
+    /// [`GAMEPAD_ONLY_NAME`] when `gamepad_only`, as `id` is.
     pub fn open_kind(
         kind: crate::pad_broker::PadKind,
         index: u8,
+        gamepad_only: bool,
         id: &Identity,
     ) -> Result<UhidDevice> {
         if crate::pad_broker::brokered(std::path::Path::new(UHID_PATH)) {
-            return UhidDevice::relayed(crate::pad_broker::request(kind, index)?);
+            return UhidDevice::relayed(crate::pad_broker::request(kind, index, gamepad_only)?);
         }
         UhidDevice::open(&id.as_create2())
     }

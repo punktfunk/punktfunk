@@ -390,7 +390,7 @@ pub fn dualsense_test(args: &[String]) -> Result<()> {
         (DsUhidIdentity::dualsense(), "DualSense")
     };
     use std::time::{Duration, Instant};
-    let mut pad = DualSensePad::open(0, &identity)
+    let mut pad = DualSensePad::open(0, &identity, false)
         .with_context(|| format!("create virtual {label} via /dev/uhid"))?;
     // 800 ms: hid-playstation GET_REPORT init; input nodes appear after that.
     let init = Instant::now() + Duration::from_millis(800);
@@ -488,7 +488,7 @@ pub fn pad_usbip_test(args: &[String]) -> Result<()> {
     let secs: u64 = flag_or(args, "--seconds", 30);
     let pad: u8 = flag_or(args, "--pad", 0);
 
-    let _pad = pf_inject::dualsense_usbip::DualSenseUsbip::open(pad).context(
+    let _pad = pf_inject::dualsense_usbip::DualSenseUsbip::open(pad, false).context(
         "attach the usbip DualSense (is vhci_hcd loaded, and is \
          /sys/devices/platform/vhci_hcd.0/attach writable by the `punktfunk` group?)",
     )?;
