@@ -178,6 +178,25 @@ pub(crate) fn contains(hay: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty() && hay.windows(needle.len()).any(|w| w == needle)
 }
 
+/// The printable strings of 6 to 80 bytes in `bytes` that hold one of `marks`, each once, at
+/// most `cap`: what a library names, read from its file.
+pub(crate) fn marked_strings(bytes: &[u8], marks: &[&str], cap: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for run in bytes.split(|b| !(0x20..0x7F).contains(b)) {
+        let Ok(s) = std::str::from_utf8(run) else {
+            continue;
+        };
+        if out.len() < cap
+            && (6..=80).contains(&s.len())
+            && marks.iter().any(|m| s.contains(m))
+            && !out.iter().any(|o| o == s)
+        {
+            out.push(s.to_owned());
+        }
+    }
+    out
+}
+
 /// Whether the fed stream is recoded with a 16-bit POC: HEVC on an Amlogic decoder, whose
 /// long-term references fail behind a POC lsb wrap. `forced` is the debug override.
 pub(crate) fn widens_poc(codec: u8, codec_name: &str, forced: Option<bool>) -> bool {
@@ -275,6 +294,22 @@ mod tests {
         ));
         assert!(!super::contains(b"video-lowdelay", b"video-lowdelay-mode"));
         assert!(!super::contains(b"abc", b""));
+    }
+
+    /// A library's marked strings are whole printable runs, each once: not the unmarked, the
+    /// too short, or one past the cap.
+    #[test]
+    fn marked_strings_are_whole_runs_listed_once() {
+        let lib = b"\x7fELF\0video-lowdelay-mode\0low-latency\x01OMX.realtek.index.x\0rtk\0video-lowdelay-mode\0";
+        let marks = ["rtk", "ealtek", "owdelay"];
+        assert_eq!(
+            super::marked_strings(lib, &marks, 8),
+            ["video-lowdelay-mode", "OMX.realtek.index.x"]
+        );
+        assert_eq!(
+            super::marked_strings(lib, &marks, 1),
+            ["video-lowdelay-mode"]
+        );
     }
 
     #[test]

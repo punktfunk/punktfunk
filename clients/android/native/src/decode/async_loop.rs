@@ -935,6 +935,13 @@ fn bring_up(
             mode.height,
             keys_label(keys)
         );
+        // A configured format lists the vendor keys the decoder declares, with their values.
+        log::info!("decode: input format: {}", codec.input_format());
+        if is_realtek(&codec_name) {
+            for line in realtek::census() {
+                log::info!("decode: Realtek census — {line}");
+            }
+        }
         let backends: Vec<Option<bool>> = rungs.iter().map(|r| r.0).collect();
         let lower_rung = rung_after_failure(&backends, rung, asc.is_some());
         return Some(Started {
@@ -1436,6 +1443,7 @@ impl State {
             self.sink.on_vsync(ctx);
         }
         if pass.fmt_dirty {
+            log::info!("decode: output format: {}", ctx.codec.output_format());
             // Only the ASurfaceControl sink crops; the SurfaceView shows what the codec hands it.
             let picture =
                 super::display::picture_size(&ctx.codec).map(|(w, h)| match self.av1_render {
