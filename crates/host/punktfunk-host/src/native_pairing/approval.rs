@@ -119,6 +119,15 @@ impl Via {
         unfamiliar_origin: false,
     };
 
+    /// Characters of a page's `Origin` a session keeps; a longer one is cut to this.
+    pub const ORIGIN_CAP: usize = 128;
+
+    /// An origin a pairing record may keep and vouch for: never `null`, which any sandboxed
+    /// frame sends, and shorter than [`Self::ORIGIN_CAP`], so never one cut to fit.
+    pub fn of_record(origin: &str) -> bool {
+        origin != "null" && origin.chars().count() < Self::ORIGIN_CAP
+    }
+
     /// The class a knock or pairing attempt over this path takes: strict when a page server
     /// relayed it or an unfamiliar public page opened it, else `peer`'s own.
     pub fn classify(&self, peer: Option<IpAddr>) -> KnockSource {

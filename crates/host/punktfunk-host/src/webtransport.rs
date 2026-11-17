@@ -372,7 +372,7 @@ const UNADMITTED_PER_ADDR: usize = 8;
 const UNADMITTED_TOTAL: usize = 64;
 
 /// Sessions accepted and not admitted yet, by peer address. A slot is held from accept until the
-/// session is admitted, parks a knock (the pending caps bound those) or ends.
+/// session is admitted, the console decides its knock, or it ends.
 #[derive(Default)]
 struct Unadmitted(std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, usize>>);
 
@@ -441,17 +441,21 @@ async fn accept_loop(
 }
 
 /// The page server and page a session came through. A page that is public and that nothing on
-/// this host knows makes the session's knocks strict.
+/// this host knows makes the session's knocks strict. Only an origin a record may keep
+/// ([`crate::native_pairing::Via::of_record`]) can be familiar, so `null` and an origin cut to
+/// fit are strict whatever their text reads as.
 fn via(
     relay: crate::native_pairing::Relay,
     origin: Option<String>,
     serving: &Serving,
 ) -> crate::native_pairing::Via {
-    let unfamiliar_origin = origin.as_deref().is_some_and(|o| {
-        !local_origin(o)
-            && !serving.plane.origins.iter().any(|listed| listed == o)
-            && !serving.plane.pairing.knows_origin(o)
-    });
+    let familiar = |o: &str| {
+        crate::native_pairing::Via::of_record(o)
+            && (local_origin(o)
+                || serving.plane.origins.iter().any(|listed| listed == o)
+                || serving.plane.pairing.knows_origin(o))
+    };
+    let unfamiliar_origin = origin.as_deref().is_some_and(|o| !familiar(o));
     crate::native_pairing::Via {
         relay,
         origin,
@@ -538,7 +542,7 @@ async fn session(
     let origin: Option<String> = request.origin().map(|o| {
         o.chars()
             .filter(|c| !c.is_control())
-            .take(128)
+            .take(crate::native_pairing::Via::ORIGIN_CAP)
             .collect::<String>()
     });
     // A page server marks what it relays. Present at all, the session is strict.

@@ -595,7 +595,9 @@ mod tests {
     }
 
     /// A page is familiar on a private address, under a local name, as a local file, in the
-    /// plane's origin list or on a pairing record. Anything else, `null` included, is strict.
+    /// plane's origin list or on a pairing record. Anything else, `null` included, is strict. A
+    /// record never keeps `null` or an origin cut to fit, and a cut origin is strict even when
+    /// its kept part reads as a local name.
     #[test]
     fn only_an_unfamiliar_public_page_is_strict() {
         let np = store("familiar");
@@ -603,6 +605,19 @@ mod tests {
         s.plane.origins = vec!["https://play.example.com".into()];
         np.add("Enrico's browser", "aa11").unwrap();
         np.remember_origin("aa11", "https://web.punktfunk.io");
+        let cap = |o: String| o.chars().take(Via::ORIGIN_CAP).collect::<String>();
+        let cut = cap(format!("https://play.{}.example", "a".repeat(200)));
+        let cut_local = cap(format!(
+            "https://{}.{}.local.evil.example",
+            "a".repeat(63),
+            "b".repeat(50)
+        ));
+        assert!(cut_local.ends_with(".local") && crate::webtransport::local_origin(&cut_local));
+        for (fp, page) in [("bb22", "null"), ("cc33", cut.as_str())] {
+            np.add("Sandboxed page", fp).unwrap();
+            np.remember_origin(fp, page);
+            assert!(!np.knows_origin(page), "{page}");
+        }
         let strict = |origin: Option<&str>| {
             crate::webtransport::via(Relay::Direct, origin.map(Into::into), &s).unfamiliar_origin
         };
@@ -622,6 +637,8 @@ mod tests {
             "https://8.8.8.8",
             "https://desk.local.evil.example",
             "null",
+            cut.as_str(),
+            cut_local.as_str(),
         ] {
             assert!(strict(Some(unfamiliar)), "{unfamiliar}");
         }

@@ -689,10 +689,14 @@ impl NativePairing {
         })
     }
 
-    /// Keep the page `fp_hex` came from on its record, unless the record names one already. A
-    /// page on a record is familiar ([`Self::knows_origin`]). A failed save is logged: the pairing
-    /// stands, and the next session tries again.
+    /// Keep the page `fp_hex` came from on its record, unless the record names one already or
+    /// the page is not one to keep ([`Via::of_record`]). A page on a record is familiar
+    /// ([`Self::knows_origin`]). A failed save is logged: the pairing stands, and the next
+    /// session tries again.
     pub fn remember_origin(&self, fp_hex: &str, origin: &str) {
+        if !Via::of_record(origin) {
+            return;
+        }
         if let Err(e) = self.store.remember_origin(fp_hex, origin) {
             tracing::warn!(error = %format!("{e:#}"), "paired device's page not saved");
         }
