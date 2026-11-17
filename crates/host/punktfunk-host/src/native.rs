@@ -2005,17 +2005,25 @@ async fn stream_session(
     );
     // Client address: what the registry groups sessions of one NAT or tunnel by.
     let (plane, peer) = (conn.plane(), conn.remote_address().ip());
-    // Native thread: no async on the hot path.
-    let stream_thread = tokio::task::spawn_blocking(move || {
-        run_source(
-            common, source, frames, probe_only, fit_pin, plane, peer, display, prep,
-        )
-    });
+    // Its own thread, not a pool thread: no async on the hot path, and what it spawns (the
+    // encoder's and the driver's threads) inherits its raise, which a pool thread's children
+    // never do. It keeps the runtime's context for the calls that need one.
+    let rt = tokio::runtime::Handle::current();
+    let (done_tx, done) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("punktfunk1-stream".into())
+        .spawn(move || {
+            let _rt = rt.enter();
+            let _ = done_tx.send(run_source(
+                common, source, frames, probe_only, fit_pin, plane, peer, display, prep,
+            ));
+        })
+        .context("spawn stream thread")?;
     // `stop` is advisory: a stuck syscall inside an iteration never sees it, and teardown
     // waits on this join. Bound the wait: after `STREAM_STOP_GRACE`, abandon the thread
     // (cannot cancel a blocking thread) so the slot and admission entry come back.
     tokio::select! {
-        joined = stream_thread => joined.context("stream thread")??,
+        joined = done => joined.context("stream thread")??,
         () = stop_overdue(scope.life().stop_flag()) => {
             tracing::error!(
                 grace_s = STREAM_STOP_GRACE.as_secs(),
