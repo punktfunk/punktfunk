@@ -19,12 +19,12 @@
 //! compositor rules. Design: `design/touchpad-passthrough.md`.
 
 use crate::uinput_abi::{
-    AbsInfo, InputId, UinputDevice, EV_ABS, EV_KEY, EV_SYN, SYN_REPORT, UI_SET_EVBIT,
+    AbsInfo, InputId, ReportClock, UinputDevice, EV_ABS, EV_KEY, EV_SYN, SYN_REPORT, UI_SET_EVBIT,
     UI_SET_KEYBIT, UI_SET_PROPBIT,
 };
 use anyhow::Result;
 use punktfunk_core::quic::{
-    PadContact, PadState, ScanClock, TOUCHPAD_MAX_CONTACTS, TOUCHPAD_PAD_MAX_X, TOUCHPAD_PAD_MAX_Y,
+    PadContact, PadState, TOUCHPAD_MAX_CONTACTS, TOUCHPAD_PAD_MAX_X, TOUCHPAD_PAD_MAX_Y,
     TOUCHPAD_UNITS_PER_MM,
 };
 use std::time::Instant;
@@ -210,32 +210,6 @@ impl Encoder {
         if out.len() > start {
             out.push((EV_SYN, SYN_REPORT, 0));
         }
-    }
-}
-
-/// The least step between two frames' report times: a doubt and its lift share a capture time.
-/// libinput drops the tap at 0, 1 or 100 µs alike.
-const REPORT_STEP_US: u64 = 1;
-
-/// Report times in µs on `CLOCK_MONOTONIC`: each state at its capture time on the host's clock,
-/// so libinput measures the finger's own speed however the frames arrived. Strictly increasing.
-#[derive(Default)]
-struct ReportClock {
-    scan: ScanClock,
-    last_us: u64,
-}
-
-impl ReportClock {
-    /// A state captured at `scan_time` and applied at `now`. `now_us` is read after `now`, so
-    /// the result is never in the kernel's future.
-    fn stamp(&mut self, scan_time: u16, now: Instant, now_us: u64) -> u64 {
-        let at = self.scan.host_time(scan_time, now);
-        self.next(now_us.saturating_sub(now.duration_since(at).as_micros() as u64))
-    }
-
-    fn next(&mut self, us: u64) -> u64 {
-        self.last_us = us.max(self.last_us + REPORT_STEP_US);
-        self.last_us
     }
 }
 
@@ -482,22 +456,6 @@ mod tests {
         run(&mut e, false, &[]);
         let next = finger(2, 10.0, 10.0);
         assert!(run(&mut e, false, &[next]).contains(&(EV_ABS, ABS_MT_TOOL_TYPE, MT_TOOL_FINGER)));
-    }
-
-    #[test]
-    fn report_times_follow_capture_and_only_increase() {
-        let (t0, mut c) = (Instant::now(), ReportClock::default());
-        let ms = Duration::from_millis;
-        assert_eq!(c.stamp(0, t0, 1_000_000), 1_000_000, "at arrival");
-        // Captured 8 ms apart, both arriving 16 ms in: spaced as captured. The scan clock drifts
-        // toward arrival by a few microseconds over that time, never past it.
-        let first = c.stamp(80, t0 + ms(16), 1_016_000);
-        assert!((1_008_000..1_008_050).contains(&first), "{first}");
-        assert_eq!(c.stamp(160, t0 + ms(16), 1_016_000), 1_016_000);
-        // A doubt and its lift share a capture time; the lift still comes later.
-        let lift = c.stamp(160, t0 + ms(17), 1_017_000);
-        assert_eq!(lift, 1_016_000 + REPORT_STEP_US);
-        assert_eq!(c.next(5), lift + REPORT_STEP_US, "never backwards");
     }
 
     /// The kernel keeps the written times (Linux 6.5+): states that arrive together read back

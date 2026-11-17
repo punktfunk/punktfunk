@@ -52,6 +52,9 @@ fn tool_key(tool: PenTool) -> u16 {
     }
 }
 
+/// The tablet's name, as a compositor announces it.
+pub(crate) const PEN_NAME: &str = "Punktfunk Pen";
+
 /// Per-session uinput tablet.
 pub struct VirtualPen {
     dev: UinputDevice,
@@ -135,7 +138,7 @@ impl VirtualPen {
             product: 0x5046, // "PF"
             version: 1,
         };
-        dev.create(id, b"Punktfunk Pen", 0)?;
+        dev.create(id, PEN_NAME.as_bytes(), 0)?;
         tracing::info!("virtual tablet created (Punktfunk Pen, uinput)");
 
         Ok(VirtualPen {
@@ -144,6 +147,11 @@ impl VirtualPen {
             frame_has_motion: false,
             frame_dirty: false,
         })
+    }
+
+    /// The tablet's `/dev/input/eventN`.
+    pub(crate) fn event_node(&self) -> Option<std::path::PathBuf> {
+        self.dev.event_node()
     }
 
     fn flush(&mut self) {

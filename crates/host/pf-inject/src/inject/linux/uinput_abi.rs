@@ -16,11 +16,13 @@
 
 use crate::uapi::{self, Pod};
 use anyhow::{anyhow, bail, Context, Result};
+use punktfunk_core::quic::ScanClock;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::mem::size_of;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::net::UnixDatagram;
+use std::time::Instant;
 
 pub(crate) const UI_DEV_CREATE: libc::c_ulong = 0x5501;
 pub(crate) const UI_DEV_DESTROY: libc::c_ulong = 0x5502;
@@ -28,6 +30,7 @@ pub(crate) const UI_DEV_SETUP: libc::c_ulong = 0x405c_5503;
 pub(crate) const UI_ABS_SETUP: libc::c_ulong = 0x401c_5504;
 pub(crate) const UI_SET_EVBIT: libc::c_ulong = 0x4004_5564;
 pub(crate) const UI_SET_KEYBIT: libc::c_ulong = 0x4004_5565;
+pub(crate) const UI_SET_RELBIT: libc::c_ulong = 0x4004_5566;
 pub(crate) const UI_SET_FFBIT: libc::c_ulong = 0x4004_556b;
 /// `_IOW('U', 108, char*)`: the device's `phys`, read as a C string.
 const UI_SET_PHYS: libc::c_ulong = 0x4008_556c;
@@ -45,6 +48,7 @@ const IOCSIZE_MASK: libc::c_ulong = 0x3fff << 16;
 
 pub(crate) const EV_SYN: u16 = 0x00;
 pub(crate) const EV_KEY: u16 = 0x01;
+pub(crate) const EV_REL: u16 = 0x02;
 pub(crate) const EV_ABS: u16 = 0x03;
 pub(crate) const EV_FF: u16 = 0x15;
 const EV_UINPUT: u16 = 0x0101;
@@ -366,6 +370,16 @@ impl UinputDevice {
         Ok(String::from_utf8_lossy(&buf[..len]).into_owned())
     }
 
+    /// The created device's `/dev/input/eventN`, by its sysfs entry.
+    pub(crate) fn event_node(&self) -> Option<std::path::PathBuf> {
+        let sys = format!("/sys/class/input/{}", self.sysname().ok()?);
+        let event = std::fs::read_dir(sys)
+            .ok()?
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .find(|name| name.starts_with("event"))?;
+        Some(std::path::Path::new("/dev/input").join(event))
+    }
+
     /// `UI_DEV_SETUP` then `UI_DEV_CREATE`. `name` is truncated to the 79 bytes the setup holds.
     pub(crate) fn create(&self, id: InputId, name: &[u8], ff_effects_max: u32) -> Result<()> {
         let fd = self.kernel("UI_DEV_SETUP")?;
@@ -611,9 +625,53 @@ impl Drop for ReplayUinput {
     }
 }
 
+/// The least step between two reports' times: a touchpad's doubt and its lift share a capture
+/// time. libinput drops the tap at 0, 1 or 100 µs alike.
+pub(crate) const REPORT_STEP_US: u64 = 1;
+
+/// Report times in µs on `CLOCK_MONOTONIC`: each report at its capture time on the host's
+/// clock, so libinput measures the device's own speed however the reports arrived. Strictly
+/// increasing.
+#[derive(Default)]
+pub(crate) struct ReportClock {
+    scan: ScanClock,
+    last_us: u64,
+}
+
+impl ReportClock {
+    /// A report captured at `scan_time` and applied at `now`. `now_us` is read after `now`, so
+    /// the result is never in the kernel's future.
+    pub(crate) fn stamp(&mut self, scan_time: u16, now: Instant, now_us: u64) -> u64 {
+        let at = self.scan.host_time(scan_time, now);
+        self.next(now_us.saturating_sub(now.duration_since(at).as_micros() as u64))
+    }
+
+    pub(crate) fn next(&mut self, us: u64) -> u64 {
+        self.last_us = us.max(self.last_us + REPORT_STEP_US);
+        self.last_us
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn report_times_follow_capture_and_only_increase() {
+        use std::time::Duration;
+        let (t0, mut c) = (Instant::now(), ReportClock::default());
+        let ms = Duration::from_millis;
+        assert_eq!(c.stamp(0, t0, 1_000_000), 1_000_000, "at arrival");
+        // Captured 8 ms apart, both arriving 16 ms in: spaced as captured. The scan clock drifts
+        // toward arrival by a few microseconds over that time, never past it.
+        let first = c.stamp(80, t0 + ms(16), 1_016_000);
+        assert!((1_008_000..1_008_050).contains(&first), "{first}");
+        assert_eq!(c.stamp(160, t0 + ms(16), 1_016_000), 1_016_000);
+        // A doubt and its lift share a capture time; the lift still comes later.
+        let lift = c.stamp(160, t0 + ms(17), 1_017_000);
+        assert_eq!(lift, 1_016_000 + REPORT_STEP_US);
+        assert_eq!(c.next(5), lift + REPORT_STEP_US, "never backwards");
+    }
 
     /// A request that takes a pointer, or a size other than its own, never reaches the kernel.
     #[test]
