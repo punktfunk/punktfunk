@@ -14,10 +14,24 @@ pub(crate) struct PenSink {
     create_failed: bool,
     /// Reused transition buffer (a batch yields a few).
     out: Vec<PenTransition>,
+    /// A native session whose Welcome left out `HOST_CAP_PEN`: batches drop, no tablet is built.
+    withheld: bool,
 }
 
 impl PenSink {
+    /// A native session's sink; `offered` is its Welcome's `HOST_CAP_PEN`.
+    pub(crate) fn new(offered: bool) -> PenSink {
+        PenSink {
+            withheld: !offered,
+            ..PenSink::default()
+        }
+    }
+
+    /// Builds the tablet on the first batch, unless withheld, then presents its transitions.
     pub(crate) fn apply(&mut self, batch: &PenBatch) {
+        if self.withheld {
+            return;
+        }
         if self.dev.is_none() && !self.create_failed {
             match VirtualPen::create() {
                 Ok(d) => self.dev = Some(d),
@@ -52,5 +66,23 @@ impl PenSink {
         if let Some(dev) = self.dev.as_mut() {
             dev.apply_batch(&self.out);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use punktfunk_core::quic::{PenSample, PEN_IN_RANGE, PEN_TOUCHING};
+
+    #[test]
+    fn a_session_that_offered_no_pen_builds_no_tablet() {
+        let mut s = PenSink::new(false);
+        let tip = PenSample {
+            state: PEN_IN_RANGE | PEN_TOUCHING,
+            ..Default::default()
+        };
+        s.apply(&PenBatch::new(0, &[tip]));
+        assert!(s.dev.is_none() && !s.create_failed, "no create was tried");
+        assert!(!s.active(), "the batch drops");
     }
 }

@@ -743,9 +743,10 @@ struct PenSession {
 }
 
 impl PenSession {
-    fn new() -> PenSession {
+    /// `offered` is the Welcome's `HOST_CAP_PEN`; without it batches build no tablet.
+    fn new(offered: bool) -> PenSession {
         PenSession {
-            sink: Default::default(),
+            sink: crate::pen_sink::PenSink::new(offered),
             last_rx: std::time::Instant::now(),
         }
     }
@@ -1592,7 +1593,8 @@ impl InputLoop {
 ///
 /// Ends on `stop` or when `rx` disconnects ([`InputLoop::finish`]). `pad_id` names the device
 /// its pads belong to and the player slot the operator picked for it; `pad_slots` and `pad_tx`
-/// publish the slots it ends up with, to `/status` and to the client's overlay.
+/// publish the slots it ends up with, to `/status` and to the client's overlay. `touchpad_on`
+/// and `pen_on` are what the Welcome offered: frames for a device it left out build nothing.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn input_thread(
     rx: std::sync::mpsc::Receiver<ClientInput>,
@@ -1605,6 +1607,8 @@ pub(super) fn input_thread(
     pad_tx: Option<tokio::sync::mpsc::UnboundedSender<PadToClient>>,
     // The client reads feature reports off the control stream (`FEATURE_PAD_WRITES`).
     pad_writes: bool,
+    touchpad_on: bool,
+    pen_on: bool,
     // Live grant mask. Dispatch already drops non-granted traffic; `InputLoop::on_input`
     // tests it again, deny-at-setup: without `GRANT_GAMEPAD` no arm that could create a
     // virtual pad or pad-audio streamer runs. One relaxed load per item.
@@ -1630,8 +1634,8 @@ pub(super) fn input_thread(
             held: crate::inject::held::HeldInput::default(),
             route: inj_tx,
         },
-        pen: PenSession::new(),
-        touchpad: crate::touchpad_sink::TouchpadSink::new(),
+        pen: PenSession::new(pen_on),
+        touchpad: crate::touchpad_sink::TouchpadSink::new(touchpad_on),
         granted: grants.load(Ordering::Relaxed),
         conn,
         pad_audio_on,
@@ -1977,6 +1981,8 @@ mod tests {
                     PadIdentity::anonymous(),
                     Arc::new(std::sync::atomic::AtomicU16::new(0)),
                     None,
+                    false,
+                    false,
                     false,
                     Arc::new(AtomicU32::new(0)),
                     Arc::new(std::sync::Mutex::new(

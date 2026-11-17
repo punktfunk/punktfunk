@@ -1,7 +1,8 @@
 //! One session's touchpad: [`TouchpadTracker`] gates frames by `seq` and turns each into the
 //! states to present, a tombstone's doubt before its lift. Each lands on a [`VirtualTouchpad`]
 //! in pad units ([`TouchpadFrame::to_pad`]), touching contacts only. The device appears on the
-//! first frame, an empty one included, and dies with the session.
+//! first frame, an empty one included, and dies with the session. A session whose Welcome left
+//! out `FEATURE_TOUCHPAD` drops every frame and builds none.
 //!
 //! Clients repeat their frame while anything is down, so [`TOUCHPAD_TIMEOUT_MS`] without one
 //! lifts everything. A repeat keeps its `seq`: the gate drops it, the clock still counts it.
@@ -29,16 +30,20 @@ impl PadDevice for VirtualTouchpad {
 pub(crate) struct TouchpadSink<D = VirtualTouchpad> {
     tracker: TouchpadTracker,
     dev: Option<D>,
+    /// The session did not offer the touchpad: frames drop and no device is built.
+    withheld: bool,
     /// Create failed once: never retry at frame rate. The tracker still follows the frames.
     create_failed: bool,
     last_rx: Instant,
 }
 
 impl<D: PadDevice> TouchpadSink<D> {
-    pub(crate) fn new() -> Self {
+    /// `offered` is the session's negotiated `FEATURE_TOUCHPAD`.
+    pub(crate) fn new(offered: bool) -> Self {
         TouchpadSink {
             tracker: TouchpadTracker::default(),
             dev: None,
+            withheld: !offered,
             create_failed: false,
             last_rx: Instant::now(),
         }
@@ -48,7 +53,11 @@ impl<D: PadDevice> TouchpadSink<D> {
         self.apply_at(frame, Instant::now());
     }
 
+    /// Builds the device on the first frame of a session that offered it, then presents.
     fn apply_at(&mut self, frame: &TouchpadFrame, now: Instant) {
+        if self.withheld {
+            return;
+        }
         self.last_rx = now;
         if self.dev.is_none() && !self.create_failed {
             match D::create() {
@@ -129,7 +138,7 @@ mod tests {
     fn sink(fail: bool) -> TouchpadSink<Recorder> {
         CREATES.with(|c| *c.borrow_mut() = 0);
         FAIL.with(|f| *f.borrow_mut() = fail);
-        TouchpadSink::new()
+        TouchpadSink::new(true)
     }
 
     fn creates() -> u32 {
@@ -167,6 +176,16 @@ mod tests {
         assert_eq!(applied(&s).len(), 2, "the repeat and the stale frame drop");
         assert_eq!(applied(&s)[1].contacts()[0].x, 12500, "in pad units");
         assert!(s.active());
+    }
+
+    #[test]
+    fn a_session_that_offered_no_touchpad_builds_no_device() {
+        CREATES.with(|c| *c.borrow_mut() = 0);
+        let mut s = TouchpadSink::<Recorder>::new(false);
+        s.apply(&frame(0, &[]));
+        s.apply(&frame(1, &[finger(0)]));
+        assert_eq!(creates(), 0);
+        assert!(s.dev.is_none() && !s.active(), "the frames drop");
     }
 
     #[test]
