@@ -252,6 +252,9 @@ pub fn adopt_launch_workspace(
 /// * **gamescope (bare spawn)** — only after a keep-alive reuse, which spawned
 ///   nothing. A fresh spawn nests via `set_launch_command`
 ///   ([`crate::vdisplay::launch_is_nested`]).
+///
+/// Every route starts the program unraised ([`pf_frame::thread_qos::unraised`]): the caller
+/// is a boosted stream thread, and a game must not run level with capture and encode.
 #[cfg(target_os = "linux")]
 pub fn launch_session_command(
     compositor: crate::vdisplay::Compositor,
@@ -315,6 +318,7 @@ pub fn launch_session_command(
                     "no X display for the launch — an X11 app (Steam, Lutris) will refuse to start"
                 ),
             }
+            pf_frame::thread_qos::unraised(&mut c);
             // A Steam forwarder's group can hold the Steam client; never signal it as a group.
             (c.spawn().context("spawn launch command")?, !steam_forwarder)
         }

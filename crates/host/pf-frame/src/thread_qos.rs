@@ -126,6 +126,29 @@ fn renice(nice: i32, ask_rtkit: impl FnOnce() -> bool) -> bool {
     false
 }
 
+/// The kernel's default timer slack, which a program the host launches starts with.
+#[cfg(target_os = "linux")]
+const DEFAULT_TIMER_SLACK_NS: libc::c_ulong = 50_000;
+
+/// Start `cmd`'s program at nice 0 and the default timer slack, whatever the spawning thread was
+/// raised to (Linux). For a program launched into the session: it runs beside the game, never
+/// level with capture and encode. The host's own workers are not spawned through this.
+#[cfg(target_os = "linux")]
+pub fn unraised(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: the closure runs in the child between fork and exec, where only async-signal-safe
+    // calls are sound. `setpriority` and `prctl` are bare syscalls on by-value integers: no
+    // allocation, no lock, no pointer. It captures nothing and returns `Ok` whatever they answer,
+    // so a refusal never fails the spawn.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setpriority(libc::PRIO_PROCESS, 0, 0);
+            libc::prctl(libc::PR_SET_TIMERSLACK, DEFAULT_TIMER_SLACK_NS);
+            Ok(())
+        })
+    }
+}
+
 /// The default 50 µs slack lets `sleep`, `poll` and `recv_timeout` end late. 1 ns is the floor.
 #[cfg(target_os = "linux")]
 fn tighten_timer_slack() {
@@ -256,6 +279,39 @@ mod tests {
         .join()
         .expect("thread");
         assert_eq!(policy, libc::SCHED_OTHER | libc::SCHED_RESET_ON_FORK);
+    }
+
+    /// A launched program starts at nice 0 and the default slack, not the spawner's raise.
+    /// Slack needs no privilege; the nice half runs only where a negative nice is allowed.
+    #[test]
+    fn an_unraised_program_drops_the_spawners_raise() {
+        let (raised, plain, unraised) = std::thread::spawn(|| {
+            super::tighten_timer_slack();
+            // SAFETY: `setpriority` takes by-value integers and touches no memory; `who == 0` is
+            // this test thread, and a refusal leaves it as it was.
+            let raised = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, -5) } == 0;
+            let report = |cmd: &mut std::process::Command| {
+                let out = cmd
+                    .args(["-c", "nice; cat /proc/self/timerslack_ns"])
+                    .output()
+                    .expect("run sh");
+                String::from_utf8(out.stdout).expect("utf-8")
+            };
+            let plain = report(&mut std::process::Command::new("sh"));
+            let unraised = report(super::unraised(&mut std::process::Command::new("sh")));
+            (raised, plain, unraised)
+        })
+        .join()
+        .expect("spawner thread");
+        let lines = |s: &str| s.lines().map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(lines(&plain)[1], "1", "a plain child inherits the slack");
+        assert_eq!(lines(&unraised)[1], "50000");
+        if raised {
+            assert_eq!(lines(&plain)[0], "-5", "a plain child inherits the nice");
+            assert_eq!(lines(&unraised)[0], "0");
+        } else {
+            eprintln!("nice -5 refused here: only the slack half ran");
+        }
     }
 
     #[test]

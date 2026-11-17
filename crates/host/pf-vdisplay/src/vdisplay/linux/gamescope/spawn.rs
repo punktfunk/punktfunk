@@ -257,7 +257,8 @@ pub(super) fn resolved_spawn_app(cmd: Option<&str>) -> Option<String> {
 /// gamescope's Wayland socket ([`shape_flatpak_command`]); a nested Steam sees no Wayland at all
 /// ([`steam_runtime_dir_script`]), and everything else gets [`GDK_X11`]. An installed mangoapp
 /// runs hidden ([`mangoapp_config`]). Gamescope and the game write to [`spawn_log_path`] of
-/// `inst`, kept under [`LOG_CAP`].
+/// `inst`, kept under [`LOG_CAP`]. Gamescope starts unraised ([`pf_frame::thread_qos::unraised`]):
+/// the nested game is its child and takes its nice.
 pub(super) fn spawn(
     mode: Mode,
     app: Option<String>,
@@ -389,7 +390,7 @@ pub(super) fn spawn(
         log = %log.display(),
         "spawning gamescope (headless)"
     );
-    let child = cmd
+    let child = pf_frame::thread_qos::unraised(&mut cmd)
         .spawn()
         .context("spawn gamescope (is it installed? `apt install gamescope`)")?;
     cap_log_while_it_exists(log);
