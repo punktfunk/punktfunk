@@ -78,12 +78,16 @@ public final class GamepadCapture {
         var physical: UInt32 = 0
         /// System buttons a held shortcut keeps down on the host, outside `buttons`.
         var synthetic: UInt32 = 0
+        /// The element behind each wire grip on this pad (`GamepadCapture.grips`). A pad's
+        /// elements never change while it is connected.
+        let grips: [UInt32: String]
         init(controller: GCController, pad: UInt32, pref: PunktfunkConnection.GamepadType,
              engine: Shortcuts.Engine) {
             self.controller = controller
             self.pad = pad
             self.pref = pref
             self.engine = engine
+            self.grips = GamepadCapture.grips(on: controller.physicalInputProfile)
         }
     }
 
@@ -112,12 +116,38 @@ public final class GamepadCapture {
         Array(Set(bits.compactMap { elements[$0] })).sorted()
     }
 
+    /// The element behind each wire grip, from the extra buttons a pad has. GameController names
+    /// them by place: bumpers (a Kishi's L4/R4), the back pair nearest the fingers (its M2/M1,
+    /// an Elite's P3/P1), then the far back pair (P4/P2). The first pair present is L4/R4, the
+    /// next L5/R5: SDL's Elite order, and a Kishi's printed labels.
+    static func grips(has: (String) -> Bool) -> [UInt32: String] {
+        guard #available(macOS 14.4, iOS 17.4, tvOS 17.4, *) else { return [:] }
+        typealias Name = GCButtonElementName
+        let pairs = [
+            (Name.leftBumper.rawValue, Name.rightBumper.rawValue),
+            (Name.backLeftButton(position: 0).rawValue, Name.backRightButton(position: 0).rawValue),
+            (Name.backLeftButton(position: 1).rawValue, Name.backRightButton(position: 1).rawValue),
+        ].filter { has($0.0) || has($0.1) }
+        let wire = [(GamepadWire.paddle2, GamepadWire.paddle1), (GamepadWire.paddle4, GamepadWire.paddle3)]
+        var out: [UInt32: String] = [:]
+        for ((left, right), (l, r)) in zip(pairs, wire) {
+            out[l] = left
+            out[r] = right
+        }
+        return out
+    }
+
+    static func grips(on profile: GCPhysicalInputProfile) -> [UInt32: String] {
+        grips { profile.buttons[$0] != nil }
+    }
+
     /// The wire buttons a profile holds, the guide aside: what the Shortcuts page records.
-    public static func heldButtons(_ g: GCExtendedGamepad) -> UInt32 { buttonMask(g) }
+    public static func heldButtons(_ g: GCExtendedGamepad) -> UInt32 { buttonMask(g, grips: grips(on: g)) }
 
     /// The SF Symbol `controller` prints on the button for wire bit `bit`, or nil.
     public static func symbol(for bit: UInt32, on controller: GCController?) -> String? {
-        guard let profile = controller?.physicalInputProfile, let alias = elements[bit] else { return nil }
+        guard let profile = controller?.physicalInputProfile,
+              let alias = elements[bit] ?? grips(on: profile)[bit] else { return nil }
         if let dpad = profile.dpads[alias] {
             let arrows: [UInt32: GCControllerButtonInput] = [
                 GamepadWire.dpadUp: dpad.up, GamepadWire.dpadDown: dpad.down,
@@ -458,7 +488,8 @@ public final class GamepadCapture {
         // only what the shortcuts read: on tvOS the exit hold is the only way out.
         let claimed = forwarding
             ? Array(c.physicalInputProfile.elements.values)
-            : Self.elements(for: slot.engine.buttons).compactMap { c.physicalInputProfile.elements[$0] }
+            : (Self.elements(for: slot.engine.buttons) + slot.engine.buttons.compactMap { slot.grips[$0] })
+                .compactMap { c.physicalInputProfile.elements[$0] }
         for element in claimed {
             element.preferredSystemGestureState = .disabled
         }
@@ -544,7 +575,7 @@ public final class GamepadCapture {
     private func sync(_ slot: Slot, _ g: GCExtendedGamepad) {
         guard live else { return }
         // The guide (Home/PS) comes from its own handler (`homeChanged`); it stays held here.
-        feed(slot, Self.buttonMask(g) | (slot.physical & GamepadWire.guide))
+        feed(slot, Self.buttonMask(g, grips: slot.grips) | (slot.physical & GamepadWire.guide))
         let newAxes = Self.axesOf(g)
         if ringOpen {
             // Adopt, don't send: the flush at open released everything.
@@ -721,7 +752,7 @@ public final class GamepadCapture {
         ]
     }
 
-    private static func buttonMask(_ g: GCExtendedGamepad) -> UInt32 {
+    private static func buttonMask(_ g: GCExtendedGamepad, grips: [UInt32: String]) -> UInt32 {
         var b: UInt32 = 0
         if g.dpad.up.isPressed { b |= GamepadWire.dpadUp }
         if g.dpad.down.isPressed { b |= GamepadWire.dpadDown }
@@ -746,6 +777,7 @@ public final class GamepadCapture {
         if Self.touchpad(g)?.button.isPressed == true {
             b |= GamepadWire.touchpadClick
         }
+        for (bit, name) in grips where g.buttons[name]?.isPressed == true { b |= bit }
         return b
     }
 
