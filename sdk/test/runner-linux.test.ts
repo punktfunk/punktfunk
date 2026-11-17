@@ -18,12 +18,19 @@ const until = async (done: () => boolean, ms = 5000): Promise<void> => {
 		await Bun.sleep(20);
 	}
 };
+/** Still running. A killed orphan stays a zombie where pid 1 never reaps, as in a container. */
 const alive = (pid: number): boolean => {
 	try {
 		process.kill(pid, 0);
-		return true;
 	} catch {
 		return false;
+	}
+	try {
+		const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+		return stat[stat.lastIndexOf(")") + 2] !== "Z";
+	} catch {
+		// No /proc here: the signal's answer stands.
+		return true;
 	}
 };
 
