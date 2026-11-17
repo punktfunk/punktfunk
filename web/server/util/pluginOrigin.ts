@@ -79,9 +79,8 @@ export function consoleOriginPort(): number | null {
  * is harmless for a relative redirect, and NOT harmless for `frame-ancestors`: naming
  * `http://host:47992` as the permitted ancestor of an `https://host:47992` console makes the
  * browser refuse to frame the plugin (`ERR_BLOCKED_BY_RESPONSE`) — an empty panel with the
- * explanation only in the devtools console. The scheme-part upgrade in CSP3 (an `http` source
- * also matching an `https` URL) does NOT rescue this: Chromium enforces `frame-ancestors` against
- * the ancestor's origin strictly.
+ * explanation only in the devtools console. The CSP3 http→https upgrade does NOT rescue this:
+ * Chromium allows it only for a wildcard or default port, never an explicit one like 47992.
  *
  * Stamped by the entry from the same `tls` option both listeners are built with, so the two can
  * never disagree, and never read from the environment we inherited.

@@ -205,8 +205,9 @@ export function runningJob(jobs: Job[] | undefined): Job | undefined {
  * undefined while the first poll has not landed and after the first poll failed, and neither may
  * stop polling.
  *
- * The failure count is what the interval checks to give up on a job the host no longer has: jobs
- * live in host memory, so a host restart makes the id 404 for good.
+ * `fetchFailureCount` restarts at 0 on every fetch and peaks at 4 with `retry: 3`, so
+ * `JOB_MAX_FAILURES` never trips: a job the host forgot (jobs live in host memory; a host restart
+ * makes the id 404 for good) keeps polling.
  */
 export function useStoreJob(id: string | null) {
 	return useGetPluginJob(id ?? "", {
@@ -219,7 +220,7 @@ export function useStoreJob(id: string | null) {
 				return JOB_POLL_MS;
 			},
 			// A job that vanished with its host is gone for good; a transient blip is not. Retry a
-			// few times per poll so a runner restart doesn't surface as an error card.
+			// few times per poll before the card shows an error.
 			retry: 3,
 		},
 	});

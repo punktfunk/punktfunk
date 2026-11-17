@@ -103,9 +103,9 @@ export const Live: Story = {
 
 /**
  * What a client CONNECTING looks like: five events inside the same instant — connected, session,
- * stream, game, display — every two seconds. Each one evicts a row, so a burst evicts five at
- * once, and five rows mid-exit is the one situation that can make the card taller than its cap.
- * The one-per-900-ms story above never produces it.
+ * stream, game, display — every two seconds. Each one evicts a row, and an exiting row keeps its
+ * place until its exit ends, so a burst holds five rows past the cap at once where the story
+ * above holds one.
  */
 export const Burst: Story = {
 	render: function BurstFeed() {

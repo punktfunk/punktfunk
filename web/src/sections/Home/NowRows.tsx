@@ -163,7 +163,7 @@ export interface SessionActions {
  * frame is paced at, the wake shape while it is on, and where the last minute's lost shards
  * fell in their frames (`link`, absent in the first minute).
  *
- * Mute and the player slot ride native-only lanes; access is ungoverned on the compat plane, so
+ * Mute, access and the player slot ride native-only lanes: GameStream has no message for them, so
  * none of the three is offered there.
  */
 export const SessionRowView: FC<

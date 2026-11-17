@@ -51,8 +51,8 @@ function themePath(): string {
  *
  * This is the security-relevant line in the file: the value reaches the DOM, so anything that could
  * close the declaration and start another one is refused. Hex and the common functional notations
- * cover every theme Omarchy ships; anything else falls back to the console's own brand rather than
- * being sanitised into something half-right. */
+ * cover every theme Omarchy 4.5 ships; anything else falls back to the console's own brand rather
+ * than being sanitised into something half-right. */
 function isSafeColor(v: unknown): v is string {
 	return (
 		typeof v === "string" &&

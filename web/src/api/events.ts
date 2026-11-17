@@ -219,9 +219,9 @@ export function useActivityReady(): boolean {
 // ---------------------------------------------------------------------------------------------
 // The connection is a module-level singleton, refcounted, NOT a per-component resource.
 //
-// The subscription is app-lifetime, but the component that asks for it is not: during hydration
-// the app shell can mount and be discarded, running an effect cleanup with no matching re-mount.
-// Tied to that effect, the stream would close and not come back.
+// The subscription is app-lifetime, but the component that asks for it is not: its effect can be
+// cleaned up and run again (StrictMode does so in development). Tied to that effect, each cycle
+// would reconnect and replay the ring.
 //
 // So: `useHostEvents` takes a reference and only the LAST `release` closes the socket, after a
 // short grace period, so a remount inside that window re-attaches to the live stream instead of

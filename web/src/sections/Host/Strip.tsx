@@ -64,7 +64,7 @@ export const HostStrip: FC<{
 								{update.checkBusy ? m.update_checking() : m.host_check_update()}
 							</Button>
 						)}
-						{/* Rare, and three of them end every stream: a menu, not a row of buttons. */}
+						{/* Rare, and four end this host's streams: a menu, not a row of buttons. */}
 						{list.length > 0 && (
 							<RowMenu label={m.host_power_menu()}>
 								{list.map((a, i) => (

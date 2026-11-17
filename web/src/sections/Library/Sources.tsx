@@ -155,10 +155,10 @@ export const SourcesSection: FC<{
 			.map((p) => p.id),
 	);
 
-	// The bridge-release nudge (design D9): a built-in scanner still doing the work, with its
-	// replacement plugin uninstalled in the catalog. One click per scanner, never a silent
-	// auto-install: installing code is an explicit operator act. A host from v0.28.0 on reports
-	// no `builtin` source, so the banner never renders there.
+	// The bridge-release nudge (design/library-scanner-plugins.md D9): a built-in scanner still
+	// doing the work, with its replacement plugin uninstalled in the catalog. One click per
+	// scanner, never a silent auto-install: installing code is an explicit operator act. A host
+	// from v0.28.0 on reports no `builtin` source, so the banner never renders there.
 	const migratable = sources
 		.filter((s) => s.origin === "builtin" && s.enabled)
 		.map((s) => ({
@@ -232,8 +232,8 @@ export const SourcesSection: FC<{
  *
  * One button per scanner rather than a single "migrate everything": installing a plugin is an
  * explicit operator act under the store's consent model, and per-scanner is also what makes it safe
- * to repeat — the claim suppresses the built-in idempotently (design D2), so a half-finished
- * migration is a valid state rather than a mess.
+ * to repeat — the claim suppresses the built-in idempotently (design/library-scanner-plugins.md
+ * D2), so a half-finished migration is a valid state rather than a mess.
  */
 export const MigrationBanner: FC<{
 	rows: ReadonlyArray<{ source: ScannerInfo; entry: CatalogEntry }>;

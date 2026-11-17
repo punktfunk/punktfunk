@@ -121,8 +121,8 @@ export default defineEventHandler(async (event) => {
 	if (person !== undefined) return person === PASS ? undefined : person;
 
 	// A signed-in visitor on the login page is sent on to `next`. This is also what makes a login
-	// land when the browser lost the client's redirect: Firefox aborts in-flight chunk imports on
-	// navigation, and the stale-chunk recovery then reloads /login over the target.
+	// land when the browser lost the client's redirect: in Firefox a navigation can abort in-flight
+	// chunk imports, and the stale-chunk recovery then reloads /login over the target.
 	//
 	// Gated on the cookie EXISTING, not just on the path: `useSession` issues a sealed one when it
 	// finds none, and the login page is the one place a visitor with no session is expected.

@@ -1,8 +1,7 @@
 // In-memory brute-force throttle for the login gate. The password compare is constant-time (no
 // timing leak) but does not bound the *volume* of guesses — a LAN peer could hammer
 // PUNKTFUNK_UI_PASSWORD at network speed against a console that is, by design, LAN-exposed. This is
-// the console analogue of the host's PAIRING_COOLDOWN / single-use pairing PIN: every other secret
-// gate in the project is rate-limited, so this one is too.
+// the console analogue of the host's PAIRING_COOLDOWN, which caps the rate of online PIN guessing.
 //
 // State is a module-level Map — it lives for the lifetime of the single Bun/Nitro server process,
 // which is exactly the scope we want (a restart clearing it is fine; lockouts are short). Keyed on

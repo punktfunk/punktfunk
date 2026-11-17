@@ -69,7 +69,7 @@ let warnedUnpinned = false;
  * `native-cert.pem` sibling of the `cert.pem` the launcher names when it exists (a host that
  * took the identity split serves it), then the legacy cert. The sibling is found by the entry's
  * own `dirPrefix` (nitro-entry/tls-paths.mjs), so a cert under any other name has none.
- * Bun's fetch honours only the first `ca` entry, so the order is the pin. Re-read every few
+ * Bun's fetch trusts every `ca` entry (bun 1.4.4), so either cert passes the pin. Re-read every few
  * seconds so a re-minted identity is picked up without a restart. */
 function hostIdentityCerts(): string[] {
 	const now = Date.now();

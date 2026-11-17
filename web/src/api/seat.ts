@@ -8,9 +8,9 @@ import { apiErrorCode } from "@/lib/errors";
 import { m } from "@/paraglide/messages";
 import { inSeat } from "./fetcher";
 
-/** A seat that runs on a person's own account, by the host's platform. Its host refuses hooks; a
- * Linux one also every plugin and emulator change, a Windows one unreviewed plugins and emulator
- * copies added by hand. */
+/** A seat that runs on a person's own account, by the host's platform. Its host refuses the
+ * console's hooks and plugin changes. A Linux one also refuses every emulator change, a Windows
+ * one an emulator copy added by hand. */
 export type OwnAccount = "linux" | "windows";
 
 /** A profile whose seat has a host of its own, so it has a library of its own. */

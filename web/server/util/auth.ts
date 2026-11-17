@@ -1,3 +1,6 @@
+const configDir = (): string =>
+	process.env.PUNKTFUNK_CONFIG_DIR ?? join(homedir(), ".config", "punktfunk");
+
 /**
  * A revocation marker for issued sessions, PERSISTED across restarts.
  *
@@ -15,9 +18,6 @@
  * falls back to in-memory revocation for this process. Refusing to log anyone out because a state
  * file is unwritable would be the wrong trade for a LAN console.
  */
-const configDir = (): string =>
-	process.env.PUNKTFUNK_CONFIG_DIR ?? join(homedir(), ".config", "punktfunk");
-
 const EPOCH_FILE = (): string =>
 	process.env.PUNKTFUNK_UI_EPOCH_FILE ?? join(configDir(), "web-session-epoch");
 
