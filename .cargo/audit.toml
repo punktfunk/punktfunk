@@ -4,32 +4,13 @@
 # or an accepted, documented risk. Keep this list TIGHT and justify every entry — an ignore here
 # means the audit job stops flagging it, so the reasoning must hold up.
 #
+# An entry here covers every lockfile the workflow scans. An exception that belongs to one
+# lockfile goes on that lockfile's line in the workflow as `--ignore`, as the seat keeper's does.
+#
 # The workflow's `--deny unsound` fails vulnerabilities and unsound advisories. Unmaintained
 # advisories stay visible without failing CI, so we keep the maintenance signal. paste is the
 # root one: transitive with no successor, through utoipa-axum (host), rav1d (every client) and
 # metal, so dropping utoipa-axum alone would not clear it.
 
 [advisories]
-ignore = [
-    # rsa "Marvin Attack" (RUSTSEC-2023-0071): a timing side-channel in the rsa crate's variable-time
-    # modular exponentiation of the SECRET exponent. IMPORTANT — this affects the RSA private-key op in
-    # general, INCLUDING signing (m^d mod n), which the host DOES perform (gamestream/pairing.rs
-    # `signing_key.sign(&serversecret)`). It is not limited to decryption, so signing exercises the
-    # vulnerable path.
-    # We accept it because the attack is not practically reachable here, NOT because the path is unused:
-    #   * No RSA decryption / PKCS#1v1.5 padding oracle exists anywhere (every `decrypt` in the tree is
-    #     AES/AES-GCM), so the classic Bleichenbacher/Marvin chosen-ciphertext oracle is absent.
-    #   * The only signed message (`serversecret`) is HOST-generated random, never attacker-chosen — so
-    #     there's no adaptive chosen-input probing (the lever remote RSA-timing key recovery needs); and
-    #     signing is gated behind the operator-entered pairing PIN, ONE signature per ceremony (a
-    #     repeated phase-3 is rejected — gamestream/pairing.rs — to deny a passive timing-sample harvester).
-    #   * GameStream is OFF by default (bare `serve` is native-only); the secure native QUIC plane uses
-    #     rustls' constant-time backend, NOT the rsa crate. RSA is touched only on the opt-in,
-    #     trusted-LAN GameStream/Moonlight pairing handshake. Moonlight mandates RSA-2048, so the
-    #     GameStream identity cannot move to Ed25519/ECDSA (only the native identity could, and it
-    #     already avoids the rsa crate).
-    # rsa 0.10.0 carries the constant-time fix; the host still pins 0.9. Revisit if: the host
-    # moves to rsa 0.10 (then drop this), the host ever signs an attacker-chosen message with
-    # this key, or any RSA decryption / key-transport using the private key is added.
-    "RUSTSEC-2023-0071",
-]
+ignore = []

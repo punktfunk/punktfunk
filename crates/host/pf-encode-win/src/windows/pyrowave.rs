@@ -35,11 +35,10 @@ use windows::Win32::System::Threading::GetCurrentProcess;
 
 /// Headroom over the per-frame rate budget for block headers + meta.
 const BS_SLACK: usize = 256 * 1024;
-/// Import-cache cap, above the driver's target ring (`SLOTS` in pf-vdisplay `encode/pool.rs`);
-/// growth past that is a mid-life ring recreate, after which stale imports must be evicted.
+/// Import-cache cap, above the driver's target ring (`SLOTS` in pf-vdisplay `encode/pool.rs`).
 const IMPORT_CACHE_CAP: usize = 8;
 
-/// Texture COM address plus the extent it was imported at (COM pointers recycle).
+/// Texture COM address plus the extent it was imported at.
 type PlaneKey = (isize, u32, u32);
 
 // Vulkan #define / flags not emitted by pyrowave-sys bindgen (only C-API-reachable
@@ -105,10 +104,8 @@ pub struct PyroWaveEncoder {
     pw_enc: pw::pyrowave_encoder,
     // Vulkan timeline alias of the capturer's D3D11 fence; null until first-frame import.
     sync: pw::pyrowave_sync_object,
-    /// Ring generation the cached plane imports belong to; a change flushes them. COM
-    /// addresses recycle, so identity cannot rest on the pointer. `Targets` stamps `1`: an
-    /// encoder drains one ring for its whole life.
-    ring_gen: Option<u32>,
+    // Plane imports and the fence above belong to one ring: the one this encoder drains
+    // for its whole life. A second ring needs a new encoder.
     y_images: Vec<(PlaneKey, pw::pyrowave_image)>,
     cbcr_images: Vec<(PlaneKey, pw::pyrowave_image)>,
 
@@ -234,7 +231,6 @@ impl PyroWaveEncoder {
                 pw_dev,
                 pw_enc,
                 sync: std::ptr::null_mut(),
-                ring_gen: None,
                 y_images: Vec::new(),
                 cbcr_images: Vec::new(),
                 width,
@@ -309,9 +305,9 @@ impl PyroWaveEncoder {
     }
 
     /// Cache a plane import by `(texture address, width, height)`. Evict oldest
-    /// past [`IMPORT_CACHE_CAP`]. A COM pointer here carries no reference, so a
-    /// recycled address at a different size must not alias; same-size recycle is
-    /// the ring-generation flush in `encode_frame`.
+    /// past [`IMPORT_CACHE_CAP`]. The key holds no reference: an address names one
+    /// texture only while the ring outlives this encoder. The session loop owns the
+    /// encoder and borrows the ring, so it does.
     ///
     /// # Safety
     /// Same contract as [`import_plane`].
@@ -401,23 +397,6 @@ impl PyroWaveEncoder {
             "pyrowave (Windows): the frame carries no PyroWave payload — the capturer was not opened \
              in pyrowave mode (session_plan::output_format must set OutputFormat::pyrowave)",
         )?;
-
-        // Ring recreate: cached imports belong to freed textures whose COM
-        // addresses can be reused. Flush on generation, not pointer identity.
-        if self.ring_gen != Some(share.ring_gen) {
-            if self.ring_gen.is_some() {
-                tracing::info!(
-                    from = ?self.ring_gen,
-                    to = share.ring_gen,
-                    cached = self.y_images.len() + self.cbcr_images.len(),
-                    "pyrowave: capturer recreated its ring — flushing stale plane imports"
-                );
-            }
-            for (_, img) in self.y_images.drain(..).chain(self.cbcr_images.drain(..)) {
-                pw::pyrowave_image_destroy(img);
-            }
-            self.ring_gen = Some(share.ring_gen);
-        }
 
         // First frame, or a rebuilt encoder: the capturer repeats the persistent
         // handle every frame so a fresh encoder can re-import it.
@@ -854,8 +833,6 @@ mod tests {
                     cbcr: cbcr_tex,
                     fence_handle: Some(fence_handle.0 as isize),
                     fence_value: 1,
-                    // Constant generation: the cache-hit path. A changing one would flush every frame.
-                    ring_gen: 1,
                 }),
             }),
             cursor: None,

@@ -9,10 +9,8 @@ use anyhow::{anyhow, Context, Result};
 use pf_paths::config_dir;
 use rsa::pkcs1v15::SigningKey;
 use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, LineEnding};
-use rsa::RsaPrivateKey;
-// `rsa 0.9` re-export: `SigningKey`'s type param must be this `digest 0.10`
-// `Sha256`, not crate-wide `sha2 0.11`. See Cargo.toml.
-use rsa::sha2::Sha256;
+use rsa::PrivateKey as RsaPrivateKey;
+use sha2::Sha256;
 use std::fs;
 
 pub struct ServerIdentity {
@@ -79,10 +77,8 @@ impl ServerIdentity {
 fn generate() -> Result<(String, String)> {
     // rcgen cannot generate RSA (`KeyGenerationUnavailable`); Moonlight needs RSA-2048.
     // Mint with `rsa`, self-sign via rcgen, return the same PKCS#8 PEM `from_pems` re-parses.
-    // `RsaPrivateKey::new` wants rand_core 0.6's `CryptoRngCore`. Our `rand` sits on a later
-    // rand_core, so none of its rngs qualify — use `rsa::rand_core::OsRng`.
-    let priv_key = RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)
-        .context("generate RSA-2048 host key")?;
+    let priv_key =
+        RsaPrivateKey::new(&mut rand::rng(), 2048).context("generate RSA-2048 host key")?;
     let key_pem = priv_key
         .to_pkcs8_pem(LineEnding::LF)
         .context("encode host key as PKCS#8 PEM")?

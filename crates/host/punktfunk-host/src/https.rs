@@ -1110,10 +1110,8 @@ fn accept_legacy_moonlight_cert(
 ) -> Result<HandshakeSignatureValid, rustls::Error> {
     use rsa::pkcs8::DecodePublicKey;
     use rsa::signature::Verifier;
-    use rsa::{pkcs1v15, pss, RsaPublicKey};
-    // `rsa`'s own re-export — these are `pkcs1v15`/`pss` type parameters on `rsa 0.9`
-    // (`digest 0.10`), not the crate-wide `sha2 0.11`. See Cargo.toml.
-    use rsa::sha2::{Sha256, Sha384, Sha512};
+    use rsa::{pkcs1v15, pss, PublicKey as RsaPublicKey};
+    use sha2::{Sha256, Sha384, Sha512};
 
     let Ok((_, x509)) = x509_parser::parse_x509_certificate(cert.as_ref()) else {
         return Err(webpki_err);

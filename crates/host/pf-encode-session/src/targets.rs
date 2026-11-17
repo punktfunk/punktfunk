@@ -764,7 +764,6 @@ impl Targets {
                     cbcr: cbcr[i].0.clone(),
                     fence_handle: Some(fence.handle.as_raw_handle() as isize),
                     fence_value: *fence_value,
-                    ring_gen: 1,
                 };
                 (y[i].0.clone(), Some(share))
             }

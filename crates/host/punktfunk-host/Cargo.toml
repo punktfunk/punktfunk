@@ -92,32 +92,19 @@ socket2 = "0.6"
 tokio = { version = "1", features = ["full"] }
 # GameStream-only (behind the `gamestream` feature): the Moonlight RSA-2048 identity generator +
 # pairing signer (cert.rs, pairing.rs) and the legacy-client-cert leniency verifier (https.rs).
-# The native planes use the P-256 identity (src/hostsys/identity.rs) and never touch this crate — so a
-# native-only build also sheds the accepted Marvin advisory (RUSTSEC-2023-0071, .cargo/audit.toml).
+# The native planes use the P-256 identity (src/hostsys/identity.rs) and never touch this crate.
 #
-# Both `rsa` features are load-bearing; dropping either breaks the build:
-#
-# `sha2` re-exports the `sha2` that `rsa`'s OWN trait generation speaks. `rsa` 0.9 is built on
-# `digest 0.10`, and the rest of this crate is on the `digest 0.11` wave (sha2 0.11 / hmac 0.13) —
-# so the digest types that appear as `rsa` TYPE PARAMETERS (`SigningKey<Sha256>` in cert.rs,
-# `VerifyingKey<_>` in pairing.rs and https.rs) must come from `rsa::sha2`, not from the `sha2`
-# below. Everything else (plain hashing, HMAC) uses the 0.11 one. Collapsing the two means moving
-# to `rsa` 0.10, which is on digest 0.11 and rand_core 0.10.
-#
-# `getrandom` is NOT one of rsa's defaults; we ask for it because `RsaPrivateKey::new` wants an
-# rng implementing rand_core **0.6**'s traits, and our own `rand` is 0.10, so no rng we hold
-# satisfies that bound. The feature exposes `rsa::rand_core::OsRng`, which does —
-# see the keygen in gamestream/cert.rs. Getting it from rsa's own re-export is what keeps the two
-# rand_core majors from being something this crate has to name.
-rsa = { version = "0.9", optional = true, features = ["sha2", "getrandom"] }
-# `oid` is default-on in sha2 0.11. The RSA signer takes its digest from `rsa::sha2` (above).
+# 0.10 is the floor: its constant-time private-key operations are the fix for the Marvin
+# advisory (RUSTSEC-2023-0071). PKCS#1 v1.5 is opt-in there, and Moonlight pairing signs and
+# verifies with it. `rsa` shares this crate's `sha2` and `rand`, so its digest type parameters
+# and its keygen rng are the ones below.
+rsa = { version = "0.10", optional = true, features = ["pkcs1v15"] }
+# `oid` is default-on in sha2 0.11, and the RSA signer needs it.
 sha2 = "0.11"
 aes = "0.9"
 aes-gcm = "0.11"
 cbc = { version = "0.2", features = ["alloc"] }
-# The same major as pf-client-core. The gamestream build still links rand 0.8: `rsa` pulls it
-# through `num-bigint-dig`, so 0.8 only disappears from the native-only host
-# (`--no-default-features`, where `rsa` is absent).
+# The same major as pf-client-core.
 rand = "0.10"
 hex = "0.4"
 # `data:` cover art (library/art.rs), certificate DER (webtransport.rs), device keys and

@@ -723,8 +723,8 @@ fn focus_argv(name: &str) -> [&str; 3] {
 
 /// DPMS off every head but a sibling's for a **gamescope** `exclusive` stream
 /// ([`crate::monitors::dpms_others`]), with `record(plan)` run before the first goes dark.
-/// Returns only heads [`dpms_one`] moved: the dispatcher toggles, so a re-light of an
-/// untouched head would darken it.
+/// Returns only heads [`dpms_one`] moved, so the re-light leaves a head that was already
+/// dark as the operator had it.
 ///
 /// Not [`disable_other_heads`]: a disabled Hyprland head's only undo is re-reading the
 /// whole config ([`restore_heads`]). `dispatch dpms on` does not re-enable a disabled head.
@@ -750,48 +750,39 @@ pub(crate) fn monitor_dpms(name: &str) -> Option<bool> {
 
 /// Put one monitor into `want_on`, reporting whether this call changed it.
 ///
-/// Classic `dispatch dpms on|off <name>` is a set; the Lua form ([`lua_dpms_expr`])
-/// toggles every enabled head. Read → act only if it differs → verify.
+/// Read → act only if it differs → verify. Both forms set the named head. From 0.55
+/// a name Hyprland can't resolve sets every head instead, so an unlisted head is
+/// refused before the dispatch.
 ///
 /// Classic `hyprctl dispatch dpms off <name>` dies under Lua (`dispatch` is
 /// `hl.dispatch(...)`). No stable probe for which manager is loaded, so try
 /// classic, then Lua.
 pub(crate) fn dpms_one(name: &str, want_on: bool) -> Result<bool> {
-    if monitor_dpms(name) == Some(want_on) {
-        return Ok(false); // toggling would break it
+    match monitor_dpms(name) {
+        Some(now) if now == want_on => return Ok(false),
+        Some(_) => {}
+        None => bail!("hyprland reports no dpms state for {name}, left alone"),
     }
-    let classic =
-        match hyprctl_dispatch(&["dispatch", "dpms", if want_on { "on" } else { "off" }, name]) {
-            Ok(()) => None,
-            Err(e) => {
-                let lua = lua_dpms_expr(name, want_on);
-                match hyprctl_dispatch(&["dispatch", &lua]) {
-                    Ok(()) => None,
-                    Err(lua_err) => Some(format!("hyprlang: {e:#}; lua: {lua_err:#}")),
-                }
-            }
-        };
-    if let Some(why) = classic {
-        bail!("neither dispatch form was accepted for {name} — {why}");
-    }
-    // Verify: a toggle that fired against a state we misread is worse than one
-    // that did not fire at all.
+    hyprctl_dispatch_both(
+        &["dispatch", "dpms", if want_on { "on" } else { "off" }, name],
+        &lua_dpms_expr(name, want_on),
+    )
+    .with_context(|| format!("dpms dispatch for {name}"))?;
     match monitor_dpms(name) {
         Some(now) if now == want_on => Ok(true),
         Some(now) => bail!(
             "hyprland accepted the dpms dispatch for {name} but it is now dpmsStatus={now}, \
-             wanted {want_on} (the dispatcher toggles — the readback disagreed with reality)"
+             wanted {want_on}"
         ),
         None => bail!("hyprland stopped listing {name} after its dpms dispatch"),
     }
 }
 
-/// Lua-config-manager DPMS expression. Pure so a test pins the shape. Not Hyprland's
-/// per-monitor form: `hl.dsp.dpms` reads only a table `{ action = "off", monitor = "<name>" }`
-/// (0.55–0.57), so these positional strings toggle every enabled head.
+/// Lua-config-manager DPMS expression. Pure so a test pins the shape. `hl.dsp.dpms`
+/// reads only a table (0.55–0.57): any other argument toggles every enabled head.
 fn lua_dpms_expr(name: &str, on: bool) -> String {
     format!(
-        "hl.dsp.dpms(\"{}\", \"{name}\")",
+        "hl.dsp.dpms({{ action = \"{}\", monitor = \"{name}\" }})",
         if on { "on" } else { "off" }
     )
 }
@@ -883,44 +874,95 @@ fn string_field(v: &serde_json::Value, key: &str) -> String {
         .to_string()
 }
 
-/// `fullscreen` is a bool on older Hyprland and a mode int on newer (0 = none).
-/// Anything unreadable is "not full-screen" — the honest answer for a field
-/// this host cannot parse.
+/// `fullscreen` is a bool on older Hyprland and a mode int on newer: 0 none,
+/// 1 maximized, 2 and up full-screen. Anything unreadable is "not full-screen" —
+/// the honest answer for a field this host cannot parse.
 fn is_fullscreen(v: Option<&serde_json::Value>) -> bool {
     match v {
         Some(v) if v.is_boolean() => v.as_bool().unwrap_or(false),
-        Some(v) => v.as_i64().is_some_and(|m| m != 0),
+        Some(v) => v.as_i64().is_some_and(|m| m >= 2),
         None => false,
     }
 }
 
-/// Run one window verb on `address`.
+/// Hyprland's selector for window `address`. Only its own `0x…` form passes: under
+/// the Lua config the selector sits inside an expression Hyprland evaluates.
+fn window_selector(address: &str) -> Result<String> {
+    let hex = address.strip_prefix("0x").unwrap_or_default();
+    if hex.is_empty() || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        bail!("{address:?} is not a hyprland window address");
+    }
+    Ok(format!("address:{address}"))
+}
+
+/// Run one window verb on `address`. A full-screen window is left alone for
+/// `Fullscreen`, which the classic dispatcher toggles.
 ///
-/// Classic dispatchers only. The Lua config era spells these `hl.dsp.*` and
-/// this host has no instance to pin the spelling against, so that era gets a
-/// refusal and one log line rather than a guessed expression.
+/// Classic first, Lua on rejection — same two-era probe as [`focus_output`].
 pub(crate) fn window_action(verb: crate::toplevels::WindowVerb, address: &str) -> Result<()> {
     use crate::toplevels::WindowVerb;
-    let target = format!("address:{address}");
+    let target = window_selector(address)?;
     match verb {
-        WindowVerb::Focus => hyprctl_dispatch(&["dispatch", "focuswindow", &target]),
-        // No per-window fullscreen dispatcher: focus it, then act on the focused
-        // window. `1` toggles maximize (gaps and bars stay); full-screen is `0`.
+        WindowVerb::Focus => focus_window(&target),
+        // The classic dispatcher acts on the focused window, so focus it first.
         WindowVerb::Fullscreen => {
-            hyprctl_dispatch(&["dispatch", "focuswindow", &target])?;
-            hyprctl_dispatch(&["dispatch", "fullscreen", "1"])
+            if toplevels(None)
+                .iter()
+                .any(|w| w.id == address && w.fullscreen)
+            {
+                return Ok(());
+            }
+            focus_window(&target)?;
+            hyprctl_dispatch_both(&fullscreen_argv(), &lua_fullscreen_expr(&target))
         }
     }
 }
 
+/// Focus window `target`, a [`window_selector`].
+fn focus_window(target: &str) -> Result<()> {
+    hyprctl_dispatch_both(
+        &["dispatch", "focuswindow", target],
+        &lua_focus_window_expr(target),
+    )
+}
+
+/// `hyprctl` argv that toggles full-screen on the focused window, split so a test
+/// pins the mode: `0` is full-screen, `1` is maximize (gaps and bars stay).
+fn fullscreen_argv() -> [&'static str; 3] {
+    ["dispatch", "fullscreen", "0"]
+}
+
+/// Lua spelling of "focus this window" (0.55–0.57). Pure so a test pins the shape,
+/// as for the two below. Each names its window, so none acts on the focused one.
+fn lua_focus_window_expr(target: &str) -> String {
+    format!("hl.dsp.focus({{ window = \"{target}\" }})")
+}
+
+/// Lua spelling of "make this window full-screen". `set`, not the default toggle.
+fn lua_fullscreen_expr(target: &str) -> String {
+    format!(
+        "hl.dsp.window.fullscreen({{ mode = \"fullscreen\", action = \"set\", \
+         window = \"{target}\" }})"
+    )
+}
+
+/// Lua spelling of "move this window to that monitor". Focus follows the window, as
+/// with classic `movewindow`.
+fn lua_window_move_expr(target: &str, dest: &str) -> String {
+    format!("hl.dsp.window.move({{ monitor = \"{dest}\", window = \"{target}\" }})")
+}
+
 /// Carry window `address` onto head `dest`, then follow it there.
 ///
-/// `movewindow` acts on the focused window, so focus it first. Best-effort:
+/// Classic `movewindow` acts on the focused window, so focus it first. Best-effort:
 /// the game stays where it opened on a refusal.
 pub(crate) fn move_to_output(address: &str, dest: &str) -> Result<()> {
-    let target = format!("address:{address}");
-    hyprctl_dispatch(&["dispatch", "focuswindow", &target])?;
-    hyprctl_dispatch(&["dispatch", "movewindow", &format!("mon:{dest}")])
+    let target = window_selector(address)?;
+    focus_window(&target)?;
+    hyprctl_dispatch_both(
+        &["dispatch", "movewindow", &format!("mon:{dest}")],
+        &lua_window_move_expr(&target, dest),
+    )
 }
 
 /// Workspace this launch gets on head `name`, as `(claimed, restore)`.
@@ -1901,19 +1943,57 @@ mod tests {
         assert!(!is_config_reload("workspace>>configreloaded"));
     }
 
-    /// Lua config manager parses a `dispatch` argument as a Lua expression,
-    /// so both arguments must be quoted. Pinning the shape because quoting is
-    /// the entire difference between working and silently doing nothing.
+    /// `hl.dsp.dpms` reads a table and nothing else. Positional strings answer `ok`
+    /// and toggle every head, so the shape is the whole difference between darkening
+    /// one screen and flipping all of them.
     #[test]
-    fn the_lua_dpms_expression_quotes_both_arguments() {
+    fn the_lua_dpms_expression_is_a_table_naming_one_monitor() {
         assert_eq!(
             lua_dpms_expr("HDMI-A-1", false),
-            r#"hl.dsp.dpms("off", "HDMI-A-1")"#
+            r#"hl.dsp.dpms({ action = "off", monitor = "HDMI-A-1" })"#
         );
-        assert_eq!(lua_dpms_expr("DP-2", true), r#"hl.dsp.dpms("on", "DP-2")"#);
-        // Never omit the monitor name: the no-name form answers `ok` and
-        // toggles, which would flip a just-restored head back off.
-        assert!(lua_dpms_expr("DP-2", true).contains("\"DP-2\""));
+        assert_eq!(
+            lua_dpms_expr("DP-2", true),
+            r#"hl.dsp.dpms({ action = "on", monitor = "DP-2" })"#
+        );
+    }
+
+    /// Mode `1` is maximize, which keeps gaps and bars around the game.
+    #[test]
+    fn the_fullscreen_verb_asks_for_full_screen_not_maximize() {
+        assert_eq!(fullscreen_argv(), ["dispatch", "fullscreen", "0"]);
+    }
+
+    /// Lua spellings of the window verbs. Each is a table that names its window:
+    /// without `window` Hyprland acts on whatever is focused, and without
+    /// `action = "set"` it toggles a full-screen game back out.
+    #[test]
+    fn the_lua_window_expressions_name_their_window() {
+        let target = window_selector("0x55a1").expect("a hyprland address");
+        assert_eq!(target, "address:0x55a1");
+        assert_eq!(
+            lua_focus_window_expr(&target),
+            r#"hl.dsp.focus({ window = "address:0x55a1" })"#
+        );
+        assert_eq!(
+            lua_fullscreen_expr(&target),
+            r#"hl.dsp.window.fullscreen({ mode = "fullscreen", action = "set", window = "address:0x55a1" })"#
+        );
+        assert_eq!(
+            lua_window_move_expr(&target, "PF-1234-1"),
+            r#"hl.dsp.window.move({ monitor = "PF-1234-1", window = "address:0x55a1" })"#
+        );
+    }
+
+    /// The selector lands inside a Lua expression, so anything but Hyprland's own
+    /// address is refused before a dispatch is built.
+    #[test]
+    fn a_window_id_that_is_not_an_address_is_refused() {
+        for bad in ["", "0x", "55a1", "0x55 a1", "0x55a1\" }) os.exit() --"] {
+            assert!(window_selector(bad).is_err(), "{bad:?}");
+            assert!(window_action(crate::toplevels::WindowVerb::Focus, bad).is_err());
+            assert!(move_to_output(bad, "PF-1234-1").is_err());
+        }
     }
 
     /// Lua spellings of the resize workspace hand-off. Both dispatchers answer
@@ -2282,15 +2362,17 @@ mod tests {
         assert!(parse_clients(&clients, &spaces, Some("PF-1234-1")).is_empty());
     }
 
-    /// Both spellings of `fullscreen`, and the field missing entirely.
+    /// Both spellings of `fullscreen`, and the field missing entirely. Mode 1 is
+    /// maximize: the full-screen verb must still act on such a window.
     #[test]
     fn fullscreen_reads_the_bool_era_and_the_mode_era() {
         assert!(!is_fullscreen(None));
         assert!(!is_fullscreen(Some(&serde_json::json!(false))));
         assert!(is_fullscreen(Some(&serde_json::json!(true))));
         assert!(!is_fullscreen(Some(&serde_json::json!(0))));
-        assert!(is_fullscreen(Some(&serde_json::json!(1))));
+        assert!(!is_fullscreen(Some(&serde_json::json!(1))));
         assert!(is_fullscreen(Some(&serde_json::json!(2))));
+        assert!(is_fullscreen(Some(&serde_json::json!(3))));
     }
 
     /// The window token must see window events and ignore the reload the same
