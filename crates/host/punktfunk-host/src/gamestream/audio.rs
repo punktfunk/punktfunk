@@ -332,6 +332,52 @@ const STOP_POLL: Duration = Duration::from_millis(100);
 /// How far behind the pacer may fall before it re-anchors instead of catching up.
 const PACE_REANCHOR: Duration = Duration::from_millis(100);
 
+/// When each frame leaves: one per `frame` of the wall clock from the loop's start. Behind by
+/// more than [`PACE_REANCHOR`], the schedule restarts at now: chasing a quiet stretch would send
+/// every later chunk as a burst. A send that leaves one capture chunk plus one frame queued
+/// earns a second frame in the same slot, never twice in a row, so a capture clock faster than
+/// the host's drains instead of growing the delay.
+struct SendClock {
+    due: Instant,
+    frame: Duration,
+    /// Recent capture chunk in samples: the bonus threshold with one frame on top.
+    max_chunk: audio::capture_policy::RecentMax<usize>,
+    bonus_taken: bool,
+}
+
+impl SendClock {
+    fn new(frame: Duration, now: Instant) -> SendClock {
+        SendClock {
+            due: now,
+            frame,
+            max_chunk: Default::default(),
+            bonus_taken: false,
+        }
+    }
+
+    fn chunk(&mut self, len: usize, now: Instant) {
+        self.max_chunk.note(len, now);
+    }
+
+    /// A frame of `frame_len` samples left at `now` with `left` still queued: how long to sleep
+    /// before the next. Zero sends it now.
+    fn sent(&mut self, now: Instant, left: usize, frame_len: usize) -> Duration {
+        let bonus = !self.bonus_taken && left >= self.max_chunk.get() + frame_len;
+        self.bonus_taken = bonus;
+        if bonus {
+            return Duration::ZERO;
+        }
+        self.due += self.frame;
+        if self.due > now {
+            return (self.due - now).min(Duration::from_millis(20));
+        }
+        if now.duration_since(self.due) > PACE_REANCHOR {
+            self.due = now;
+        }
+        Duration::ZERO
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn audio_body(
     lease: &mut audio::CaptureLease,
@@ -377,8 +423,7 @@ fn audio_body(
     let mut fec_skipped = false;
     // Pace to packet duration. PipeWire hands ~1024-frame chunks; bursting them
     // glitches the client's low-latency jitter buffer.
-    let frame_dur = Duration::from_millis(frame_ms as u64);
-    let mut due = Instant::now();
+    let mut clock = SendClock::new(Duration::from_millis(frame_ms as u64), Instant::now());
     // Soft-limited capture gain (`PUNKTFUNK_AUDIO_GAIN`); do not clamp — see
     // `crate::audio::capture_gain`.
     let gain = crate::audio::capture_gain();
@@ -413,8 +458,10 @@ fn audio_body(
         // Fewer capture channels than the layout (7.1.4) are padded with silence per frame.
         let cap_ch = lease.live().channels() as usize;
         let frame_in = samples_per_channel * cap_ch;
+        clock.chunk(chunk.len(), Instant::now());
         acc.extend_from_slice(&chunk);
-        while acc.len() >= frame_in {
+        // The stop is read per frame: with a standing backlog this loop need never empty `acc`.
+        while acc.len() >= frame_in && !stopped() {
             let mut frame = pad_channels(acc.drain(..frame_in), cap_ch, layout.channels.into());
             if gain != 1.0 {
                 punktfunk_core::audio::apply_gain(&mut frame, gain);
@@ -475,15 +522,22 @@ fn audio_body(
                 tracing::debug!(sent, "audio: streaming");
             }
 
-            // Sleep only when ahead; a capture burst must not queue sleeps. Past
-            // `PACE_REANCHOR` behind, a quiet stretch is forgiven: chasing it would send
-            // every later chunk as a burst.
-            due += frame_dur;
+            // What the capture already holds joins `acc`, so the clock judges the whole backlog.
             let now = Instant::now();
-            if due > now {
-                std::thread::sleep((due - now).min(Duration::from_millis(20)));
-            } else if now.duration_since(due) > PACE_REANCHOR {
-                due = now;
+            while let Some(c) = lease
+                .next_chunk(Some(Duration::ZERO))
+                .filter(|c| !c.is_empty())
+            {
+                clock.chunk(c.len(), now);
+                acc.extend_from_slice(&c);
+            }
+            if !lease.is_live() {
+                break;
+            }
+            // Sleep only when ahead; a capture burst must not queue sleeps.
+            let wait = clock.sent(now, acc.len(), frame_in);
+            if !wait.is_zero() {
+                std::thread::sleep(wait);
             }
         }
     }
@@ -538,6 +592,62 @@ mod tests {
     fn frame_sizing() {
         assert_eq!(SAMPLE_RATE as usize * 5 / 1000, 240);
         assert_eq!(SAMPLE_RATE as usize * 10 / 1000, 480);
+    }
+
+    /// The audio loop on simulated time: 48 kHz stereo in `chunk`-sample chunks from a capture
+    /// clock `ppm` off the host's, sent as 5 ms frames for `secs`. Each send's time from the
+    /// start, and the most audio queued after one. `bonus: false` never sends a second frame in
+    /// a slot.
+    fn pace_replay(chunk: usize, ppm: i64, secs: u64, bonus: bool) -> (Vec<Duration>, usize) {
+        let frame = 480;
+        let t0 = Instant::now();
+        let arrival = |k: u64| {
+            let ns = k as u128 * chunk as u128 * 1_000_000_000_000_000
+                / (96_000 * (1_000_000 + ppm) as u128);
+            t0 + Duration::from_nanos(ns as u64)
+        };
+        let mut clock = SendClock::new(Duration::from_millis(5), t0);
+        let (mut now, mut next, mut acc) = (t0, 0u64, 0usize);
+        let (mut sends, mut most) = (Vec::new(), 0usize);
+        let end = t0 + Duration::from_secs(secs);
+        while now < end {
+            now = now.max(arrival(next));
+            next += 1;
+            clock.chunk(chunk, now);
+            acc += chunk;
+            // The loop's stop check: a standing backlog never empties `acc`.
+            while acc >= frame && now < end {
+                sends.push(now - t0);
+                acc -= frame;
+                while arrival(next) <= now {
+                    clock.chunk(chunk, now);
+                    acc += chunk;
+                    next += 1;
+                }
+                most = most.max(acc);
+                clock.bonus_taken |= !bonus;
+                now += clock.sent(now, acc, frame);
+            }
+        }
+        (sends, most)
+    }
+
+    /// A capture clock 50 ppm fast, at a 5 ms and a 21 ms chunk: the backlog stays bounded,
+    /// where one frame a slot grows it by 50 µs every second. On time no slot sends twice, so
+    /// every frame leaves when one frame a slot sends it.
+    #[test]
+    fn a_fast_capture_clock_cannot_grow_the_backlog() {
+        for chunk in [480, 2048] {
+            let (_, most) = pace_replay(chunk, 50, 1200, true);
+            let (_, grown) = pace_replay(chunk, 50, 1200, false);
+            assert!(most < 2 * chunk + 480, "{chunk}: {most} samples queued");
+            // 1200 s at 50 ppm is 60 ms: 5 760 samples of 48 kHz stereo.
+            assert!(grown > most + 3_000, "{chunk}: {grown} against {most}");
+            assert!(
+                pace_replay(chunk, 0, 1200, true) == pace_replay(chunk, 0, 1200, false),
+                "{chunk}: on time, a frame left off one frame a slot's schedule"
+            );
+        }
     }
 
     #[test]
