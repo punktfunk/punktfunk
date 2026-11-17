@@ -74,6 +74,11 @@ impl<F> Store<F> {
     /// became presentable. They fold into the due time, fed and read in `CLOCK_MONOTONIC` only:
     /// the loop's offset estimator absorbs the constant between the host's clock and ours, and
     /// smooths the offset, never the timestamps.
+    ///
+    /// An overflow while frames arrive more than a source interval ahead of the loop's estimate
+    /// is no burst: the path got shorter than the offset still says, as when a decoder backlog
+    /// clears. Every held frame is then due now and the loop re-anchors on the next one, where
+    /// slewing would evict a frame a refresh for a second.
     pub(crate) fn push(
         &mut self,
         frame: F,
@@ -87,11 +92,20 @@ impl<F> Store<F> {
             ready_mono_ns,
             self.frame_interval_ns,
         );
+        // How far ahead of the estimate this frame became presentable. A burst is late frames.
+        let ahead_ns = due_ns - ready_mono_ns - self.cadence.cushion_ns();
         self.frames.push_back(Held {
             frame,
             due_ns: Some(due_ns),
         });
         let mut evicted = 0u64;
+        let stale = self.frames.len() > self.capacity && ahead_ns > self.frame_interval_ns;
+        if stale {
+            self.cadence.reset();
+            for held in &mut self.frames {
+                held.due_ns = None;
+            }
+        }
         while self.frames.len() > self.capacity {
             if let Some(old) = self.frames.pop_front() {
                 evict(old.frame);
@@ -267,6 +281,43 @@ mod tests {
         assert_eq!(s.push(3, pts_us, ready, &mut c, drop), 1);
         assert_eq!(s.drain().collect::<Vec<_>>(), [2, 3]);
         assert!(s.is_empty());
+    }
+
+    #[test]
+    fn frames_ahead_of_their_due_times_reanchor_and_cost_one_frame() {
+        // The loop settles on a path 60 ms long, as a backed-up decoder makes it.
+        let mut s = store(PresentPriority::Smooth { buffer: 2 }, true);
+        let mut c = Counters::default();
+        for k in 0..120 {
+            due_of(&mut s, &mut c, k, 60_000_000);
+        }
+        // The backlog clears: every frame is now 60 ms ahead of its due time.
+        let mut evicted = 0;
+        for k in 120..240 {
+            let (pts_us, ready) = frame(k, 0);
+            evicted += s.push(k, pts_us, ready, &mut c, drop);
+            while s.head_is_releasable(ready + P) {
+                s.take();
+            }
+        }
+        assert_eq!(evicted, 1, "the overflow that showed it");
+        assert_eq!(s.cadence_health().reanchors, 2);
+        // A burst is late frames: three land together, the first two behind their cadence. The
+        // oldest goes and the anchor stays.
+        let mut s = store(PresentPriority::Latency, true);
+        for k in 0..120 {
+            due_of(&mut s, &mut c, k, 0);
+        }
+        let (_, together) = frame(122, 0);
+        let mut evicted = 0;
+        for k in 120..123 {
+            let (pts_us, _) = frame(k, 0);
+            evicted += s.push(k, pts_us, together, &mut c, drop);
+        }
+        assert_eq!(
+            (evicted, s.fifo_len(), s.cadence_health().reanchors),
+            (1, 2, 1)
+        );
     }
 
     #[test]
