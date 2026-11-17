@@ -79,6 +79,7 @@ internal class StreamPlanes(
             choice?.name ?: "",
             lowLatencyMode,
             choice?.lowLatencyFeature ?: false,
+            choice?.pixelRate ?: 0,
             isTv,
             isChromeOs,
             settings.presentPriorityWire(),

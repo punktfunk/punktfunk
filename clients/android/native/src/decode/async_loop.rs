@@ -30,7 +30,7 @@ use super::vsync::{VsyncClock, VsyncShared};
 use super::{Backstops, DecodeOptions, IN_FLIGHT_CAP};
 use crate::au_intake::{Delivery, Intake};
 use crate::bring_up::{bring_up_rungs, ladder_label, Rung};
-use crate::codec_format::{codec_mime, is_realtek, take_by_pts, take_flags};
+use crate::codec_format::{codec_mime, has_spare_capacity, is_realtek, take_by_pts, take_flags};
 use crate::feed_rules::{colour_after, render_after, Cause, Piece, Spoiled};
 use crate::feed_step::{Feed, Handoff, Step, OVERSIZE_RUN};
 use crate::hold::{Tail, Trial};
@@ -478,6 +478,7 @@ fn run_codec(
         client.video_format().codec,
         &ctx.codec.name().unwrap_or_default(),
     );
+    state.pixel_rate = opts.pixel_rate;
     if await_keyframe {
         client.recovery_lost();
     }
@@ -1060,6 +1061,8 @@ struct State {
     conceal: Option<Concealer>,
     /// The tail each whole AU is fed with, and the trial that picks it ([`hold_trial`]).
     trial: Trial,
+    /// The most pixels a second the decoder declares ([`DecodeOptions::pixel_rate`]).
+    pixel_rate: u64,
     /// When the last output's AU entered the codec: the gap between AUs, for the trial.
     last_queued: Option<i128>,
     /// The codec's input side: the slots it offered, the parked deliveries, the open AU.
@@ -1309,6 +1312,7 @@ impl State {
             widen: None,
             conceal: None,
             trial: Trial::fixed(Tail::None),
+            pixel_rate: 0,
             last_queued: None,
             inputs: Feed::default(),
             ready: Vec::new(),
@@ -1453,6 +1457,18 @@ impl State {
             if let Some((w, h)) = picture {
                 ctx.decoded_size
                     .store(crate::session::pack_surface_size(w, h), Ordering::Relaxed);
+                // The picture is the size the host encodes, which a mirror's asked mode is not.
+                let spare = has_spare_capacity(
+                    &ctx.codec.name().unwrap_or_default(),
+                    self.pixel_rate,
+                    (w.max(0) as u32, h.max(0) as u32),
+                    ctx.client.mode().refresh_hz,
+                );
+                log::info!(
+                    "decode: {w}x{h} against {} declared pixels a second — spare capacity: {spare}",
+                    self.pixel_rate
+                );
+                ctx.client.report_decoder_spare(spare);
             }
             self.sink
                 .on_format_changed(ctx, picture, self.stream_colour);

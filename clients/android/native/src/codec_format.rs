@@ -173,6 +173,20 @@ pub(crate) fn is_realtek(codec_name: &str) -> bool {
     name.starts_with("omx.realtek") || name.starts_with("c2.realtek")
 }
 
+/// Whether a decoder works several pictures at once with room to spare, for automatic
+/// bitrate: a Realtek one, which keeps up from over its frame period, that declares half
+/// again the pixel rate of the `width` x `height` stream at `hz`. `pixel_rate` is the most
+/// it declares, 0 for none.
+pub(crate) fn has_spare_capacity(
+    codec_name: &str,
+    pixel_rate: u64,
+    (width, height): (u32, u32),
+    hz: u32,
+) -> bool {
+    let stream = u64::from(width) * u64::from(height) * u64::from(hz);
+    is_realtek(codec_name) && stream > 0 && pixel_rate.saturating_mul(2) >= stream * 3
+}
+
 /// Whether `hay` holds `needle`. An empty needle is in nothing.
 pub(crate) fn contains(hay: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty() && hay.windows(needle.len()).any(|w| w == needle)
@@ -294,6 +308,27 @@ mod tests {
         ));
         assert!(!super::contains(b"video-lowdelay", b"video-lowdelay-mode"));
         assert!(!super::contains(b"abc", b""));
+    }
+
+    /// A Realtek decoder that declares 4K at 60 has room for an ultrawide 1440p stream, none
+    /// for 4K at 60 itself. No other decoder is taken at its word, and no word is no room.
+    #[test]
+    fn spare_capacity_is_a_realtek_decoder_with_half_again_the_streams_pixels() {
+        const UHD_60: u64 = 3840 * 2160 * 60;
+        // (decoder, declared pixels a second, stream, spare)
+        for (name, declared, size, spare) in [
+            ("OMX.realtek.video.dec.hevc", UHD_60, (3440, 1440), true),
+            ("OMX.realtek.video.dec.hevc", UHD_60, (3840, 2160), false),
+            ("OMX.realtek.video.dec.hevc", 0, (3440, 1440), false),
+            ("c2.qti.hevc.decoder", UHD_60, (3440, 1440), false),
+            ("OMX.realtek.video.dec.hevc", UHD_60, (0, 0), false),
+        ] {
+            assert_eq!(
+                super::has_spare_capacity(name, declared, size, 60),
+                spare,
+                "{name} {declared} {size:?}"
+            );
+        }
     }
 
     /// A library's marked strings are whole printable runs, each once: not the unmarked, the
