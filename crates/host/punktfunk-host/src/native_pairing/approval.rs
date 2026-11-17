@@ -52,6 +52,9 @@ struct PendingState {
     /// waiter that polls after the entry is gone uses this to resolve `Superseded`
     /// instead of a second `Approved`. Pruned on the pending TTL.
     admitted: Vec<(String, u32, Instant)>,
+    /// Fingerprint and knock generation of each entry a newer knock evicted: its waiter times
+    /// out rather than reading a refusal. The newest [`PENDING_CAP`].
+    evicted: Vec<(String, u32)>,
 }
 
 /// Classify a knock's source, asking this host's routing table about a 100.64/10 peer. `None` is
@@ -265,7 +268,8 @@ impl ApprovalQueue {
 
     /// Record an unpaired knock. Same fingerprint refreshes in place and bumps
     /// generation so older parked waiters resolve `Superseded`. Bounded by
-    /// [`MAX_PENDING_PER_IP`] of `src_ip` then [`PENDING_CAP`]; the name is untrusted.
+    /// [`MAX_PENDING_PER_IP`] of `src_ip` then [`PENDING_CAP`]; an evicted entry's waiter
+    /// resolves `TimedOut` at once, so parked knocks stay within the caps. The name is untrusted.
     /// A relayed knock and one from an unfamiliar public page are strict ([`Via::classify`]).
     pub(super) fn note_pending(
         &self,
@@ -304,6 +308,16 @@ impl ApprovalQueue {
         pending
             .admitted
             .retain(|(fp, _, _)| !fp.eq_ignore_ascii_case(fp_hex));
+        pending
+            .evicted
+            .retain(|(fp, _)| !fp.eq_ignore_ascii_case(fp_hex));
+        let before = pending.items.len();
+        let evict = |pending: &mut PendingState, i: usize| {
+            let gone = pending.items.remove(i);
+            pending.evicted.push((gone.fp_hex, gone.knock_seq));
+            let excess = pending.evicted.len().saturating_sub(PENDING_CAP);
+            pending.evicted.drain(..excess);
+        };
         if let Some(ip) = src_ip {
             if pending
                 .items
@@ -313,16 +327,17 @@ impl ApprovalQueue {
                 >= MAX_PENDING_PER_IP
             {
                 if let Some(i) = Self::evict_index(&pending.items, Some(ip)) {
-                    pending.items.remove(i);
+                    evict(&mut pending, i);
                 }
             }
         }
         // Vec order is not recency after in-place refreshes; pick explicitly.
         if pending.items.len() >= PENDING_CAP {
             if let Some(i) = Self::evict_index(&pending.items, None) {
-                pending.items.remove(i);
+                evict(&mut pending, i);
             }
         }
+        let evicted = pending.items.len() != before;
         let id = pending.next_id;
         pending.next_id = pending.next_id.wrapping_add(1);
         pending.items.push(Pending {
@@ -337,6 +352,11 @@ impl ApprovalQueue {
             knock_seq: 0,
             profile: profile.map(str::to_string),
         });
+        drop(pending);
+        if evicted {
+            // Wake the evicted entry's parked waiter so it ends as timed out now, not later.
+            self.changed.notify_waiters();
+        }
         0
     }
 
@@ -398,6 +418,14 @@ impl ApprovalQueue {
             .items
             .iter()
             .any(|p| p.fp_hex.eq_ignore_ascii_case(fp_hex))
+    }
+
+    /// Whether a newer knock evicted `fp_hex`'s entry of generation `seq`; the record goes.
+    fn take_evicted(&self, fp_hex: &str, seq: u32) -> bool {
+        let mut pending = self.pending.lock().unwrap();
+        let found = (pending.evicted.iter())
+            .position(|(fp, s)| *s == seq && fp.eq_ignore_ascii_case(fp_hex));
+        found.map(|i| pending.evicted.remove(i)).is_some()
     }
 
     /// Where pending `id` knocked from and the path it took, or `None` if the entry is gone. Read
@@ -532,6 +560,9 @@ impl ApprovalQueue {
                         _ => return PairingDecision::Approved,
                     }
                 }
+                if self.take_evicted(fp_hex, knock_seq) {
+                    return PairingDecision::TimedOut;
+                }
                 return PairingDecision::Denied;
             }
 
@@ -540,5 +571,38 @@ impl ApprovalQueue {
                 _ = tokio::time::sleep_until(deadline) => return PairingDecision::TimedOut,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// A parked knock that a newer one evicts ends at once, as timed out and not refused, so
+    /// parked knocks never outnumber the entries the caps allow. The others stay parked.
+    #[tokio::test]
+    async fn an_evicted_parked_knock_ends_at_once() {
+        let q = Arc::new(ApprovalQueue::new());
+        let ip = Some(IpAddr::from([192, 168, 1, 44]));
+        let mut parked = Vec::new();
+        for i in 0..MAX_PENDING_PER_IP {
+            let fp = format!("aa{i:02}");
+            let seq = q.note_pending("knock", &fp, ip, &Via::DIRECT, None);
+            let ready = q.waiter_ready_generation();
+            let waiter = q.clone();
+            parked.push(tokio::spawn(async move {
+                waiter
+                    .wait_for_decision(&fp, seq, Duration::from_secs(60), |_| false)
+                    .await
+            }));
+            q.wait_for_waiter_ready(ready).await;
+        }
+        q.note_pending("knock", "bb00", ip, &Via::DIRECT, None);
+        let oldest = tokio::time::timeout(Duration::from_secs(5), parked.remove(0))
+            .await
+            .expect("an evicted knock ends at once");
+        assert_eq!(oldest.unwrap(), PairingDecision::TimedOut);
+        assert!(parked.iter().all(|w| !w.is_finished()));
     }
 }
