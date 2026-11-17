@@ -10,7 +10,7 @@ use punktfunk_core::error::PunktfunkError;
 use punktfunk_core::reanchor::{self, AnchorEvidence, DecoderClass, LocalRecovery};
 use punktfunk_core::session::Frame;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{fs, io};
@@ -33,7 +33,7 @@ use crate::bring_up::{bring_up_rungs, ladder_label, Rung};
 use crate::codec_format::{codec_mime, is_realtek, take_by_pts, take_flags};
 use crate::feed_rules::{colour_after, render_after, Cause, Piece, Spoiled};
 use crate::feed_step::{Feed, Handoff, Step, OVERSIZE_RUN};
-use crate::hold::{Tail, Trial};
+use crate::hold::{Learnt, Tail, Trial};
 use crate::input_stall::{
     rung_after_failure, InputStall, OutputSilence, RungFloor, INPUT_STALL_PATIENCE, SETTLED_FRAMES,
 };
@@ -555,7 +555,7 @@ fn run_codec(
             "decode: the run ended under a {} tail — not fed again",
             tail.label()
         );
-        TAILS_BLOCKED.fetch_or(tail.bit(), Ordering::Relaxed);
+        learnt().block(tail);
     }
     let end = teardown(state, ctx, aux, render_cb, feeder, shutdown, stale);
     // The codec and its feeder are gone, so nothing reports: with the freeze left up, core
@@ -1182,13 +1182,20 @@ fn admission(codec: u8, decoder: &str) -> Option<DecoderClass> {
     Some(class)
 }
 
-/// Tails a decoder hung or failed under in this process ([`Tail::bit`]).
-static TAILS_BLOCKED: AtomicU8 = AtomicU8::new(0);
+/// The tails this process's runs hung under, and the one a trial kept.
+static TAILS: Mutex<Learnt> = Mutex::new(Learnt::new());
+
+fn learnt() -> std::sync::MutexGuard<'static, Learnt> {
+    TAILS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// The tail trial for this run. `debug.punktfunk.au_tail` = `off` / `fill` / `aud` names the
 /// tail; `trial` runs the trial on any decoder. Unset, a Realtek decoder runs it on H.264 and
 /// HEVC: it returns each picture when the next AU is fed, and the trial reads whether a tail
-/// ends that. The `pf.decode` line's `held` counts the outputs that waited either way.
+/// ends that. A tail an earlier trial kept for this decoder and codec runs with no trial. The
+/// `pf.decode` line's `held` counts the outputs that waited either way.
 fn hold_trial(codec: u8, decoder: &str) -> Trial {
     let prop = sysprop(c"debug.punktfunk.au_tail");
     if let Some(tail) = prop.as_deref().and_then(Tail::named) {
@@ -1197,8 +1204,15 @@ fn hold_trial(codec: u8, decoder: &str) -> Trial {
     }
     let tails = !Tail::Fill.bytes(codec).is_empty();
     if tails && (prop.as_deref() == Some("trial") || is_realtek(decoder)) {
-        log::info!("decode: hold trial on {decoder}");
-        return Trial::new(TAILS_BLOCKED.load(Ordering::Relaxed));
+        let learnt = learnt();
+        match learnt.kept(codec, decoder) {
+            Some(tail) => log::info!(
+                "decode: each AU is fed with tail {}, which a trial kept",
+                tail.label()
+            ),
+            None => log::info!("decode: hold trial on {decoder}"),
+        }
+        return learnt.trial(codec, decoder);
     }
     Trial::fixed(Tail::None)
 }
@@ -1711,6 +1725,10 @@ impl State {
                     r.next.label(),
                     if r.done { "from here" } else { "next" }
                 );
+                if r.done && r.next != Tail::None {
+                    let decoder = ctx.codec.name().unwrap_or_default();
+                    learnt().keep(ctx.client.video_format().codec, &decoder, r.next);
+                }
             }
             let feed_us = match (queued, received_ns) {
                 (Some(q), Some(r)) => Some(((q - r).max(0) / 1000) as u64),

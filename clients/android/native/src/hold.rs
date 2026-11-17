@@ -186,6 +186,49 @@ impl Trial {
     }
 }
 
+/// What this process's runs learnt of tails: the ones a decoder hung or failed under, and the
+/// one a trial kept, with the codec and decoder it was kept on.
+pub(crate) struct Learnt {
+    blocked: u8,
+    kept: Option<(u8, String, Tail)>,
+}
+
+impl Learnt {
+    pub(crate) const fn new() -> Learnt {
+        Learnt {
+            blocked: 0,
+            kept: None,
+        }
+    }
+
+    /// The tail a trial kept for `decoder` on `codec`.
+    pub(crate) fn kept(&self, codec: u8, decoder: &str) -> Option<Tail> {
+        match &self.kept {
+            Some((c, d, tail)) if *c == codec && d == decoder => Some(*tail),
+            _ => None,
+        }
+    }
+
+    /// A run of `decoder` on `codec`: fixed on its kept tail, else a trial over the unblocked.
+    pub(crate) fn trial(&self, codec: u8, decoder: &str) -> Trial {
+        self.kept(codec, decoder)
+            .map_or_else(|| Trial::new(self.blocked), Trial::fixed)
+    }
+
+    /// A trial on `decoder` and `codec` ended on `tail`.
+    pub(crate) fn keep(&mut self, codec: u8, decoder: &str, tail: Tail) {
+        self.kept = Some((codec, decoder.to_owned(), tail));
+    }
+
+    /// A run hung or failed under `tail`: no later run is fed it.
+    pub(crate) fn block(&mut self, tail: Tail) {
+        self.blocked |= tail.bit();
+        if self.kept.as_ref().is_some_and(|k| k.2 == tail) {
+            self.kept = None;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,5 +353,33 @@ mod tests {
     fn a_fixed_tail_runs_no_trial() {
         let mut trial = Trial::fixed(Tail::Fill);
         assert!((0..1000).all(|_| trial.note(30_000, GAP).is_none() && trial.tail() == Tail::Fill));
+    }
+
+    /// A kept tail starts the next run of its decoder and codec, with no trial, until a run
+    /// hangs under it. The run after that reads the tails left.
+    #[test]
+    fn a_kept_tail_starts_later_runs_until_one_hangs_under_it() {
+        const HEVC: &str = "OMX.realtek.video.dec.hevc";
+        let mut learnt = Learnt::new();
+        let mut trial = learnt.trial(CODEC_HEVC, HEVC);
+        let r = (0..3)
+            .map(|_| read(&mut trial, 30_000, 14_000, Tail::Aud))
+            .find(|r| r.done)
+            .expect("a verdict");
+        assert_eq!(r.next, Tail::Aud);
+        learnt.keep(CODEC_HEVC, HEVC, r.next);
+
+        let mut again = learnt.trial(CODEC_HEVC, HEVC);
+        assert!((0..BLOCK * BLOCKS * 3)
+            .all(|_| again.note(30_000, GAP).is_none() && again.tail() == Tail::Aud));
+        assert_eq!(learnt.kept(CODEC_H264, HEVC), None, "another codec");
+        assert_eq!(learnt.kept(CODEC_HEVC, "c2.realtek.hevc.decoder"), None);
+
+        learnt.block(Tail::Aud);
+        assert_eq!(learnt.kept(CODEC_HEVC, HEVC), None);
+        let mut trial = learnt.trial(CODEC_HEVC, HEVC);
+        assert_eq!(read(&mut trial, 30_000, 14_000, Tail::Aud).next, Tail::Fill);
+        let r = read(&mut trial, 30_000, 14_000, Tail::Aud);
+        assert_eq!((r.tail, r.next, r.done), (Tail::Fill, Tail::None, true));
     }
 }
