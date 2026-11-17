@@ -1,7 +1,7 @@
 //! `wgc-probe` — what Windows Graphics Capture does on this box.
 //!
 //! The spikes of punktfunk-planning `design/windows-wgc-capture.md` §7 as one command, run the
-//! way the capture worker will run: a user process a SYSTEM parent started (`as-user`), on
+//! way the capture worker runs: a user process a SYSTEM parent started (`as-user`), on
 //! `winsta0\default`, with the console user's unelevated token.
 //!
 //! * `list` — every DXGI output with the host inventory's view of it, and which optional WGC
@@ -10,7 +10,8 @@
 //!   and each frame's age. `--cursor-ab` asks whether WGC draws the pointer, `--shot` writes
 //!   one frame as a BMP, `--touch` copies every frame so the GPU sees a pass's worth of work.
 //! * `animate` — only the repainting square, as steady content for another measurement.
-//! * `opens` — open and close N times. A stage that takes over 5 s ends the process with 3.
+//! * `opens` — open and close N times. A stage that outlives `HANG` (capture.rs) ends the process
+//!   with 3.
 //! * `as-user` — SYSTEM only: run the rest of the command line as the console user.
 //! * `as-system` — SYSTEM only: run it as SYSTEM in the console session, as the host runs.
 //!
@@ -71,7 +72,7 @@ mod win {
         pub cursor_ab: bool,
         /// Move the pointer one pixel and back before the cursor leg, so it is showing.
         pub nudge: bool,
-        /// Dirty one pixel of the monitor every 2 ms, so DWM composes at the refresh rate.
+        /// Repaint a small square on the monitor every 2 ms, so DWM composes at the refresh rate.
         pub animate: bool,
         pub count: u32,
     }

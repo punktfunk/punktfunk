@@ -55,7 +55,8 @@ mod linux {
         let compositor = pf_vdisplay::detect()?;
         println!("cursor-probe: compositor = {compositor:?}");
         let mut vd = pf_vdisplay::open(compositor)?;
-        // The cursor-channel session's request: out-of-band cursor (Mutter/KWin metadata mode).
+        // The cursor-channel session's request: out-of-band cursor (the compositor stops
+        // embedding the pointer).
         vd.set_hw_cursor(!embedded);
         println!(
             "cursor-probe: virtual output with {} cursor",
@@ -101,9 +102,8 @@ mod linux {
         if let Some(feed) = cap.feed() {
             feed.set_active(true);
         }
-        // A cursor-channel session in capture mode: the HOST composites, so the capturer must
-        // keep surfacing the overlay (this is a no-op on the Linux portal capturer, but state it
-        // the way the encode loop does).
+        // A cursor-channel session in capture mode: the HOST composites. On the Linux capturer
+        // either `set_forward` value makes the host place the pointer from `overlay()`.
         if let Some(cursor) = cap.cursor() {
             cursor.set_forward(false);
         }
