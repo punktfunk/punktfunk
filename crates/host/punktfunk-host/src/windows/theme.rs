@@ -1,12 +1,15 @@
-//! The Win32 half of `mgmt::theme`: the SID of the user signed in to this host's session, and a
-//! DWORD or string out of their hive. It lives here because `mgmt` forbids `unsafe`, and each of
-//! these reads is a Win32 call. The person pipe reads its callers' SIDs through here too.
+//! The Win32 half of `mgmt::theme`: the SID of the user signed in to this host's session, their
+//! profile folder, and a DWORD or string out of their hive. It lives here because `mgmt` forbids
+//! `unsafe`, and each of these reads is a Win32 call. The person pipe reads its callers' SIDs
+//! through here too.
 
 use windows::core::{Owned, HSTRING, PWSTR};
 use windows::Win32::Foundation::{ERROR_SUCCESS, HANDLE, HLOCAL};
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::{GetTokenInformation, TokenUser, PSID, TOKEN_USER};
-use windows::Win32::System::Registry::{RegGetValueW, HKEY_USERS, RRF_RT_REG_DWORD, RRF_RT_REG_SZ};
+use windows::Win32::System::Registry::{
+    RegGetValueW, HKEY, HKEY_LOCAL_MACHINE, HKEY_USERS, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
+};
 use windows::Win32::System::RemoteDesktop::WTSQueryUserToken;
 
 /// The SID of the user signed in to this host's own session, as the string `HKEY_USERS` is keyed
@@ -23,6 +26,16 @@ pub(crate) fn session_sid() -> Option<String> {
     // SAFETY: the query succeeded, so `token` is a handle this frame alone owns.
     let token = unsafe { Owned::new(token) };
     token_sid(*token)
+}
+
+/// The profile folder of the user signed in to this host's session, from the machine's
+/// `ProfileList`, which only an administrator writes. Never `Volatile Environment\USERPROFILE`:
+/// the user writes that. `None` with nobody signed in, or for a folder off the local disks.
+pub(crate) fn session_profile() -> Option<std::path::PathBuf> {
+    let sid = session_sid()?;
+    let key = format!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}");
+    let profile = std::path::PathBuf::from(read_sz(HKEY_LOCAL_MACHINE, &key, "ProfileImagePath")?);
+    crate::library::on_local_disk(&profile).then_some(profile)
 }
 
 /// The user SID of `token`, which must grant `TOKEN_QUERY`, as `S-1-…`.
@@ -89,12 +102,18 @@ pub(crate) fn read_dword(subkey: &str, name: &str) -> Option<u32> {
 
 /// A string under `HKEY_USERS\<subkey>`, or `None` when the value is absent or not a string.
 pub(crate) fn read_string(subkey: &str, name: &str) -> Option<String> {
+    read_sz(HKEY_USERS, subkey, name)
+}
+
+/// A string under `root\<subkey>`, a `REG_EXPAND_SZ` with its variables expanded, or `None`
+/// when the value is absent or not a string.
+fn read_sz(root: HKEY, subkey: &str, name: &str) -> Option<String> {
     let (subkey, name) = (HSTRING::from(subkey), HSTRING::from(name));
     let mut size = 0u32;
     // SAFETY: a size probe — null buffer; `size` is a live out-param filled in bytes.
     let rc = unsafe {
         RegGetValueW(
-            HKEY_USERS,
+            root,
             &subkey,
             &name,
             RRF_RT_REG_SZ,
@@ -110,7 +129,7 @@ pub(crate) fn read_string(subkey: &str, name: &str) -> Option<String> {
     // SAFETY: `buf` is `size` bytes, what the probe asked for; `size` is updated in place.
     let rc = unsafe {
         RegGetValueW(
-            HKEY_USERS,
+            root,
             &subkey,
             &name,
             RRF_RT_REG_SZ,

@@ -265,6 +265,16 @@ pub(crate) fn valid_gamebar_exe(value: &str) -> bool {
         && !value.chars().any(|c| c == '"' || c.is_control())
 }
 
+/// A path on a local drive letter: `X:\` or `X:/`. UNC, device, verbatim and relative paths
+/// are not, so the SYSTEM host never opens one: opening a remote path authenticates this
+/// machine's account to whoever serves it.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn on_local_disk(path: &std::path::Path) -> bool {
+    let lossy = path.to_string_lossy();
+    let b = lossy.as_bytes();
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/')
+}
+
 /// `launcher_ui` values this OS can open (design D4). One kind; a value names
 /// a UI (`heroic` vs `heroic-console`; Windows `playnite` is Fullscreen).
 ///
@@ -366,6 +376,29 @@ mod tests {
         assert!(!valid_gamebar_exe("C:\\Games\\a\nb.exe"));
         assert!(!valid_gamebar_exe(r"C:\.exe"));
         assert!(!valid_gamebar_exe("game.exe"));
+    }
+
+    #[test]
+    fn only_a_drive_letter_path_is_on_local_disk() {
+        use std::path::Path;
+        for local in [r"C:\Program Files\Playnite", "d:/Games", r"C:\"] {
+            assert!(on_local_disk(Path::new(local)), "{local}");
+        }
+        for elsewhere in [
+            r"\\server\share\Playnite",
+            "//server/share",
+            r"\/server\share",
+            r"\\server@80\x",
+            r"\\?\UNC\server\share",
+            r"\\?\C:\Games",
+            r"\\.\pipe\x",
+            r"\??\UNC\server\share",
+            "C:Games",
+            r"Games\Playnite",
+            "",
+        ] {
+            assert!(!on_local_disk(Path::new(elsewhere)), "{elsewhere}");
+        }
     }
 
     #[test]

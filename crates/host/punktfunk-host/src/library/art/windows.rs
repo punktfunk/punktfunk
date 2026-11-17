@@ -40,14 +40,15 @@ fn scan_extra_roots() -> Vec<PathBuf> {
 }
 
 /// Windows: Steam install roots. Steam art lives under the install, not the users base
-/// (`appcache\librarycache\…` and `userdata\<id>\config\grid\`). POSIX needs no equivalent —
-/// native and Flatpak layouts are already under `$HOME`.
+/// (`appcache\librarycache\…` and `userdata\<id>\config\grid\`). Each root is on a local disk.
+/// POSIX needs no equivalent — native and Flatpak layouts are already under `$HOME`.
 fn steam_art_roots() -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     let mut push = |p: PathBuf| {
-        // `is_dir` before dedup: `%ProgramFiles%` and `%ProgramW6432%` are the same directory
-        // on a 64-bit host, and the registry often repeats whichever Steam sits in.
-        if p.is_dir() && !out.contains(&p) {
+        // Users can write Steam's HKLM key, so a root off a local disk is dropped before any
+        // filesystem call. `is_dir` before dedup: `%ProgramFiles%` and `%ProgramW6432%` are the
+        // same directory on a 64-bit host, and the registry often repeats either.
+        if crate::library::on_local_disk(&p) && p.is_dir() && !out.contains(&p) {
             out.push(p);
         }
     };

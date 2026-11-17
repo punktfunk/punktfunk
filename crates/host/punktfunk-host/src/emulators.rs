@@ -73,13 +73,12 @@ fn state_dir() -> Option<PathBuf> {
     cfg!(windows).then(|| pf_paths::config_dir().join("emulator-state"))
 }
 
-/// The profile folder of the player signed in to this host's session; `None` with nobody signed
-/// in, or on a host that isn't SYSTEM.
+/// The profile folder of the player signed in to this host's session, as the machine records it
+/// ([`crate::windows::theme::session_profile`]); `None` with nobody signed in, or on a host that
+/// isn't SYSTEM.
 #[cfg(windows)]
 fn session_home() -> Option<PathBuf> {
-    let sid = crate::windows::theme::session_sid()?;
-    let env = format!(r"{sid}\Volatile Environment");
-    crate::windows::theme::read_string(&env, "USERPROFILE").map(PathBuf::from)
+    crate::windows::theme::session_profile()
 }
 
 /// Runs an emulator's own installer (RPCS3's firmware, a `.pkg`) as the player signed in to the
