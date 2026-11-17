@@ -111,6 +111,8 @@ struct Record {
     /// How [`detached`] names this launch once no session holds it. Set by
     /// [`Claim::describe`]; the game id stands in until then.
     about: Option<(crate::gamelease::GameRef, crate::events::Plane)>,
+    /// The emulator bindings this launch's prepare wrote ([`Claim::bind`]).
+    bindings: Option<u64>,
 }
 
 impl Record {
@@ -128,6 +130,7 @@ impl Record {
             ending: false,
             workspace: None,
             about: None,
+            bindings: None,
         }
     }
 }
@@ -317,6 +320,8 @@ pub struct Detached {
     pub plane: crate::events::Plane,
     /// The record's slot, for [`ended`] once the game is gone.
     pub procs: LiveProcs,
+    /// The emulator bindings this launch's prepare wrote, the only ones its end reverts.
+    pub bindings: Option<u64>,
 }
 
 impl Detached {
@@ -352,6 +357,7 @@ fn detached_view(rec: &Record) -> Detached {
         game,
         plane,
         procs: rec.procs.clone(),
+        bindings: rec.bindings,
     }
 }
 
@@ -402,6 +408,7 @@ pub fn claim(
             stamp: fresh_stamp,
             procs: None,
             adopted: None,
+            bindings: None,
         };
     };
     let reg = reg();
@@ -420,7 +427,7 @@ pub fn claim(
             rec.holders += 1;
             rec.released_at = None;
             rec.claim = id;
-            let (stamp, procs) = (rec.stamp, rec.procs.clone());
+            let (stamp, procs, bindings) = (rec.stamp, rec.procs.clone(), rec.bindings);
             drop(recs);
             tracing::info!(
                 app = %key.game_id,
@@ -436,6 +443,7 @@ pub fn claim(
                 stamp,
                 procs: Some(procs),
                 adopted: Some(live),
+                bindings,
             };
         }
         // Reset in place so `holders` survives: an older session may
@@ -445,8 +453,9 @@ pub fn claim(
         rec.procs = Arc::new(Mutex::new(Vec::new()));
         rec.launched = false;
         rec.ending = false;
-        // New launch, new placement: the old workspace is the dead copy's.
+        // New launch, new placement and bindings: the old ones are the dead copy's.
         rec.workspace = None;
+        rec.bindings = None;
         rec.holders += 1;
         rec.released_at = None;
         rec.claim = id;
@@ -470,6 +479,7 @@ pub fn claim(
         stamp: fresh_stamp,
         procs: Some(procs),
         adopted: None,
+        bindings: None,
     }
 }
 
@@ -484,6 +494,8 @@ pub struct Claim {
     /// What liveness said when this claim chose [`Plan::Adopt`]. `None` for a
     /// spawn — the session is about to find out for itself.
     adopted: Option<Liveness>,
+    /// [`Claim::bindings`].
+    bindings: Option<u64>,
 }
 
 impl Claim {
@@ -528,6 +540,23 @@ impl Claim {
         self.with_record(|r| {
             if r.claim == self.id {
                 r.launched = true;
+            }
+        });
+    }
+
+    /// The emulator bindings this launch's prepare wrote, the only ones its exit reverts
+    /// ([`crate::emulators::revert_players`]). An adoption has the original launch's.
+    pub fn bindings(&self) -> Option<u64> {
+        self.bindings
+    }
+
+    /// Record what this launch's prepare wrote ([`crate::emulators::prepare_launch`]). Same
+    /// claim check as [`Claim::launched`].
+    pub fn bind(&mut self, held: Option<u64>) {
+        self.bindings = held;
+        self.with_record(|r| {
+            if r.claim == self.id {
+                r.bindings = held;
             }
         });
     }
@@ -628,6 +657,7 @@ mod tests {
             ending: false,
             workspace: None,
             about: None,
+            bindings: None,
         }
     }
 

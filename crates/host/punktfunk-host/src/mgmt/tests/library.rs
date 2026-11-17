@@ -646,6 +646,7 @@ fn a_recorded_launch_credits_its_run_to_the_library_stats() {
             workspace: None,
             window: None,
             outcome: None,
+            bindings: None,
         },
         Box::new(|| {}),
     );

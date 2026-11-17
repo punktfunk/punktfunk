@@ -62,7 +62,7 @@ pub(crate) fn prepare(
     // Before prep and spawn: a later stamp would reject the process it is meant to find.
     let fresh_stamp = crate::gamelease::launch_clock();
     let fp = owner.fingerprint.as_deref();
-    let claim = target.map(|t| {
+    let mut claim = target.map(|t| {
         crate::gamelease::readopt(fp, t.game.id.as_deref());
         let claim = crate::launchreg::claim(fp, t.game.id.as_deref(), t.launcher, fresh_stamp);
         claim.describe(&t.game, owner.plane);
@@ -105,7 +105,10 @@ pub(crate) fn prepare(
         crate::emulators::exchange::after_hold(t.game.id.as_deref());
         // After the holds: they stage the firmware this places.
         if let Some(id) = t.game.id.as_deref() {
-            crate::emulators::prepare_launch(id, owner.pad, owner.pad_slots.as_deref());
+            let held = crate::emulators::prepare_launch(id, owner.pad, owner.pad_slots.as_deref());
+            if let Some(c) = claim.as_mut() {
+                c.bind(held);
+            }
         }
     }
     Prepared {
@@ -359,6 +362,7 @@ pub(crate) fn lease(
             launch_stamp: stamp,
             // An adoption keeps the original launch's slot across the handover.
             procs: claim.and_then(|c| c.procs()),
+            bindings: claim.and_then(|c| c.bindings()),
             #[cfg(target_os = "linux")]
             workspace: spawned.workspace,
             window: extras.window,

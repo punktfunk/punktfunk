@@ -188,7 +188,7 @@ pub struct LeaseShared {
     /// not found the game's yet. A launch hold waits on it past `running`.
     awaiting_window: AtomicBool,
     /// The emulator bindings this launch's prepare wrote, the only ones its exit reverts
-    /// ([`crate::emulators::bindings_of`] at open, just after that prepare).
+    /// ([`LeaseRequest::bindings`]).
     bindings: Option<u64>,
 }
 
@@ -367,6 +367,10 @@ pub struct LeaseRequest {
     /// Where to say this launch died on the spot. `None` leaves the finding in
     /// the log, as it was before the client could be told.
     pub outcome: Option<OutcomeTx>,
+    /// The emulator bindings this launch's own prepare wrote
+    /// ([`crate::launchreg::Claim::bindings`]): its exit reverts those, never another launch's
+    /// of the same title. `None` reverts only bindings no launch owns.
+    pub bindings: Option<u64>,
 }
 
 /// Where the window stage looks, and what it does with the first window it
@@ -478,6 +482,7 @@ pub fn open(req: LeaseRequest, on_exit: OnExit) -> GameLease {
         workspace,
         window,
         outcome,
+        bindings,
     } = req;
 
     // Pin pid to start time before recycle. Unresolvable is dropped: a bare
@@ -516,7 +521,6 @@ pub fn open(req: LeaseRequest, on_exit: OnExit) -> GameLease {
         group_leader: *leader,
     });
     let child = child.map(|(c, _)| c);
-    let bindings = crate::emulators::bindings_of(game.id.as_deref());
     let shared = Arc::new(LeaseShared {
         game,
         client,
@@ -1554,8 +1558,8 @@ pub fn launched_by(launcher: Option<&str>, owner: Option<&str>) -> bool {
 }
 
 /// End a launch no session holds ([`crate::launchreg::take_detached`]) on a
-/// detached thread, then free its record and report the exit as `terminated`, a seat's
-/// saves exported first.
+/// detached thread, then put its own emulator bindings back, free its record and report the
+/// exit as `terminated`, a seat's saves exported first.
 pub fn end_detached(d: crate::launchreg::Detached, why: &'static str) {
     let _ = std::thread::Builder::new()
         .name("pf1-gameterm".into())
@@ -1563,9 +1567,8 @@ pub fn end_detached(d: crate::launchreg::Detached, why: &'static str) {
             let procs: Vec<crate::procscan::ProcRef> =
                 d.procs.lock().unwrap_or_else(|e| e.into_inner()).clone();
             end_previous_launch(&d.game.title, &procs, why);
-            // Its bindings go back here, unless a later launch has replaced them.
-            let held = crate::emulators::bindings_of(d.game.id.as_deref());
-            crate::emulators::revert_players(held);
+            // Its own bindings go back here, unless a later launch has replaced them.
+            crate::emulators::revert_players(d.bindings);
             crate::launchreg::ended(&d.procs);
             crate::emulators::exchange::after_exit(d.game.id.as_deref());
             crate::events::emit(crate::events::EventKind::GameExited {
@@ -1750,6 +1753,7 @@ mod tests {
             workspace: None,
             window: None,
             outcome: None,
+            bindings: None,
         }
     }
 
@@ -2201,6 +2205,33 @@ mod tests {
         assert_eq!(readopt(Some("fp-151"), Some(b)).len(), 1);
     }
 
+    /// Two devices launch one emulator title, and the first lease opens only after the second
+    /// launch's prepare. Each launch still ends holding its own prepare's bindings, so the
+    /// first one's end leaves the second's; a reconnect keeps the launch's own.
+    #[test]
+    fn a_launch_ends_with_its_own_bindings_not_its_titles_latest() {
+        const APP: &str = "emu:two-devices";
+        let mut first = crate::launchreg::claim(Some("fp-bind-first"), Some(APP), false, None);
+        first.bind(Some(1));
+        let mut second = crate::launchreg::claim(Some("fp-bind-second"), Some(APP), false, None);
+        second.bind(Some(2));
+        let lease = open(
+            LeaseRequest {
+                bindings: first.bindings(),
+                ..req(APP, DetectSpec::default(), false)
+            },
+            Box::new(|| {}),
+        );
+        assert_eq!(lease.shared().bindings, Some(1));
+        first.launched();
+        drop(first);
+        let back = crate::launchreg::claim(Some("fp-bind-first"), Some(APP), false, None);
+        assert!(!back.must_spawn(), "the reconnect adopts the first launch");
+        assert_eq!(back.bindings(), Some(1));
+        back.abandon();
+        second.abandon();
+    }
+
     /// No owner reaches every launch; a device reaches its own, never an anonymous one.
     #[test]
     fn launched_by_is_the_launching_device() {
@@ -2249,6 +2280,7 @@ mod tests {
                 workspace: None,
                 window: None,
                 outcome: None,
+                bindings: None,
             },
             Box::new(|| {
                 EXITS.fetch_add(1, Ordering::SeqCst);
@@ -2497,6 +2529,7 @@ mod tests {
                 workspace: None,
                 window: None,
                 outcome: None,
+                bindings: None,
             },
             Box::new(|| {
                 EXITS.fetch_add(1, Ordering::SeqCst);

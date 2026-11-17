@@ -547,20 +547,17 @@ struct Bindings {
 }
 
 impl Bindings {
-    /// What a launch of `library_id` holds: the last prepare, when it was that launch's.
-    fn of(&self, library_id: Option<&str>) -> Option<u64> {
-        (self.owner.is_some() && self.owner.as_deref() == library_id).then_some(self.prepared)
-    }
-
-    /// Whether an exit holding `held` ([`Self::of`]) puts the bindings back: its own, or ones
-    /// no launch owns.
+    /// Whether an exit holding `held` (its launch's [`Self::prepared_for`]) puts the bindings
+    /// back: its own, or ones no launch owns.
     fn reverts_for(&self, held: Option<u64>) -> bool {
         self.owner.is_none() || held == Some(self.prepared)
     }
 
-    fn prepared_for(&mut self, owner: Option<&str>) {
+    /// Counts a prepare for `owner`; the count names the bindings it writes.
+    fn prepared_for(&mut self, owner: Option<&str>) -> u64 {
         self.prepared += 1;
         self.owner = owner.map(str::to_string);
+        self.prepared
     }
 }
 
@@ -573,16 +570,10 @@ fn bindings() -> std::sync::MutexGuard<'static, Bindings> {
     BINDINGS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The bindings a launch of `library_id` holds, for [`revert_players`]: `Some` while the last
-/// [`prepare`] was that launch's.
-pub fn bindings_of(library_id: Option<&str>) -> Option<u64> {
-    bindings().of(library_id)
-}
-
 /// Puts the emulators' own bindings back after a game, file by file, when they are the exiting
-/// launch's (`held`, from [`bindings_of`]) or no launch's: a later launch's prepare already put
-/// this one's back and wrote its own. Forced: an emulator rewrites its config on exit, and that
-/// is no edit of the player's. Nothing outstanding is a quiet no-op.
+/// launch's (`held`, from its [`prepare_launch`]) or no launch's: a later launch's prepare
+/// already put this one's back and wrote its own. Forced: an emulator rewrites its config on
+/// exit, and that is no edit of the player's. Nothing outstanding is a quiet no-op.
 pub fn revert_players(held: Option<u64>) {
     let Ok(h) = open() else { return };
     let mut out = bindings();
@@ -622,12 +613,14 @@ pub fn prepare(
     pad: GamepadPref,
     slots: Option<&AtomicU16>,
 ) -> hermir::Result<Vec<(String, hermir::Prepared)>> {
-    prepare_as(None, id, platform, firmware_dir, pad, slots)
+    prepare_as(None, &mut None, id, platform, firmware_dir, pad, slots)
 }
 
-/// [`prepare`], its bindings `owner`'s: the library id of the launch they are for.
+/// [`prepare`], its bindings `owner`'s: the library id of the launch they are for. `held` gets
+/// the count that names them before anything is written.
 fn prepare_as(
     owner: Option<&str>,
+    held: &mut Option<u64>,
     id: &str,
     platform: Option<&str>,
     firmware_dir: Option<&Path>,
@@ -640,7 +633,7 @@ fn prepare_as(
     {
         let mut out = bindings();
         revert_with(&h);
-        out.prepared_for(owner);
+        *held = Some(out.prepared_for(owner));
     }
     let emulator = h.emulator(id)?;
     let platform = platform.map(|p| {
@@ -939,15 +932,16 @@ pub fn in_catalog(id: &str) -> bool {
 /// Before an `emulator` entry starts: the RetroArch core it names when this host's RetroArch
 /// lacks it, and on Windows readable by the player, every copy past its first-run questions, the
 /// platform's firmware from the plugin's `firmware/<platform>` when it staged some, the session's
-/// pads, which only this launch's exit reverts ([`bindings_of`]). What it did goes to the log. A
-/// launch waits for the client's pads, at most [`SETTLE_ALL`], and never on the rest to succeed.
-pub fn prepare_launch(library_id: &str, pad: GamepadPref, slots: Option<&AtomicU16>) {
-    let Some(entry) = crate::library::entry_for_library_id(library_id) else {
-        return;
-    };
-    let Some(spec) = entry.launch.as_ref().filter(|s| s.kind == "emulator") else {
-        return;
-    };
+/// pads, which only this launch's exit reverts: their count comes back, for [`revert_players`].
+/// What it did goes to the log. A launch waits for the client's pads, at most [`SETTLE_ALL`], and
+/// never on the rest to succeed.
+pub fn prepare_launch(
+    library_id: &str,
+    pad: GamepadPref,
+    slots: Option<&AtomicU16>,
+) -> Option<u64> {
+    let entry = crate::library::entry_for_library_id(library_id)?;
+    let spec = entry.launch.as_ref().filter(|s| s.kind == "emulator")?;
     let arg = |name: &str| {
         spec.args
             .iter()
@@ -975,8 +969,10 @@ pub fn prepare_launch(library_id: &str, pad: GamepadPref, slots: Option<&AtomicU
         .as_deref()
         .zip(platform)
         .and_then(|(provider, platform)| staged_firmware(provider, platform));
+    let mut held = None;
     match prepare_as(
         Some(library_id),
+        &mut held,
         &spec.value,
         platform,
         staged.as_ref().map(handover::Scratch::path),
@@ -994,6 +990,7 @@ pub fn prepare_launch(library_id: &str, pad: GamepadPref, slots: Option<&AtomicU
             tracing::warn!(emulator = %spec.value, error = %e, "emulator not prepared for the launch")
         }
     }
+    held
 }
 
 /// The plain files of `<plugin-state>/<provider>/firmware/<platform>` in the library this host
@@ -1892,20 +1889,18 @@ I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2
             prepared: 0,
             owner: None,
         };
-        out.prepared_for(Some("emu-a"));
-        let a = out.of(Some("emu-a"));
-        let native = out.of(Some("native-game"));
-        out.prepared_for(Some("emu-b"));
-        let b = out.of(Some("emu-b"));
+        let a = Some(out.prepared_for(Some("emu-a")));
+        let b = Some(out.prepared_for(Some("emu-b")));
         assert!(!out.reverts_for(a), "A's exit leaves B's bindings");
         assert!(
-            !out.reverts_for(native),
+            !out.reverts_for(None),
             "a launch that prepared nothing leaves them"
         );
         assert!(out.reverts_for(b));
         // The same title launched again: the first launch's exit leaves the second's.
-        out.prepared_for(Some("emu-b"));
+        let again = Some(out.prepared_for(Some("emu-b")));
         assert!(!out.reverts_for(b));
+        assert!(out.reverts_for(again));
         // A prepare outside a launch is any exit's to revert.
         out.prepared_for(None);
         assert!(out.reverts_for(None) && out.reverts_for(a));
