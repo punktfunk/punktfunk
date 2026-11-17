@@ -1445,6 +1445,14 @@ impl NativeClient {
         acc.count += 1;
     }
 
+    /// Whether the decoder declares at least half again the pixel rate it is being fed: its
+    /// own capability figures over the stream's size and rate. Automatic ABR then reads a
+    /// decode latency near the frame period as the decoder's pipeline, not its load. Say it
+    /// again when the stream's size changes; never saying it is `false`.
+    pub fn report_decoder_spare(&self, spare: bool) {
+        self.shared.decoder_spare.store(spare, Ordering::Relaxed);
+    }
+
     /// Assemble video AUs in `memory` from the next frame on: a decoder that reads the AU where
     /// it lies lends its own ([`crate::au`]). Frames already assembled keep their memory.
     pub fn set_au_memory(&self, memory: Arc<dyn crate::au::AuMemory>) {

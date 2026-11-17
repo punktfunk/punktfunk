@@ -34,6 +34,7 @@ decoder_overrun	0	3	2	0	8	0	0	1000	1e55db9c
 decoder_slope	0	1	45	0	1	0	0	1000	18707851
 decoder_pipeline	0	3	15	0	6	0	0	1000	d4aeecd6
 decoder_pipeline_slow_source	0	5	30	0	7	0	0	1000	97545afd
+decoder_declared_spare	0	3	17	0	7	0	0	1000	cc397f37
 encoder_stalled	0	3	0	0	5	0	0	1000	ea6b71af
 unknown_refresh_knee	0	99999	35	0	1	0	0	1000	2a478f15
 host_rebuild_stall	0	1	0	0	4	0	0	1000	9c97699d

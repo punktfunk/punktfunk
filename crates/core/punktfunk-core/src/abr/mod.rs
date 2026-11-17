@@ -428,6 +428,13 @@ impl Driver {
         self.window.on_decode_latency(sum_us, count);
     }
 
+    /// Whether the client's decoder declares room for half again this stream's pixel rate.
+    /// Its latency near the period is then read as a pipeline's, not its load. Level, not
+    /// edge: say it every tick, and a mode switch needs nothing more.
+    pub fn on_decoder_spare(&mut self, spare: bool) {
+        self.abr.decode.declare_spare(spare);
+    }
+
     /// The window's host encode-stage total and its sample count. PyroWave's is
     /// dropped: its encode time is per pixel, not per bit, so a rise is never the
     /// rate's and a notch that seems to follow only follows the content.

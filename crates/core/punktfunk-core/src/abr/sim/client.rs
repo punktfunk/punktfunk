@@ -123,6 +123,11 @@ pub(super) struct ClientCfg {
     /// The decoder returns a picture when the next one is fed and holds no queue: its
     /// latency is that wait plus the decode time, at any rate it keeps up with.
     pub decode_holds: bool,
+    /// The decoder works several pictures at once: its latency is the decode time at any
+    /// rate, and it holds no queue.
+    pub decode_stages: bool,
+    /// The decoder declares room for half again the stream's pixel rate.
+    pub decoder_spare: bool,
 }
 
 impl Default for ClientCfg {
@@ -155,6 +160,8 @@ impl Default for ClientCfg {
             decode_swing_ms: 0,
             decode_warmup: (0, 0),
             decode_holds: false,
+            decode_stages: false,
+            decoder_spare: false,
         }
     }
 }
@@ -637,6 +644,7 @@ impl Client {
         // A starved or rebuilding decoder takes the frame and shows nothing: no time, no queue.
         if !self.starved(now_ms) && !self.in_rebuild(now_ms) {
             let decode_us = self.decode_us(now_ms);
+            self.abr.on_decoder_spare(self.cfg.decoder_spare);
             if self.cfg.decode_holds {
                 // This AU pushes the picture before it out.
                 if let Some((fed_ms, us)) = self.held.replace((now_ms, decode_us)) {
@@ -645,8 +653,10 @@ impl Client {
                 }
             } else {
                 self.abr.on_decode_latency(u64::from(decode_us), 1);
-                self.decode_free_at_ms =
-                    self.decode_free_at_ms.max(now_ms) + u64::from(decode_us).div_ceil(1_000);
+                if !self.cfg.decode_stages {
+                    self.decode_free_at_ms =
+                        self.decode_free_at_ms.max(now_ms) + u64::from(decode_us).div_ceil(1_000);
+                }
             }
         }
         self.note_latency(owd_ms, now_ms);
