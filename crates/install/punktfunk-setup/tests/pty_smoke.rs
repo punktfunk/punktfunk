@@ -215,8 +215,8 @@ fn quitting_the_settings_screen_changes_nothing() {
     );
 }
 
-/// The default run shows progress, not a transcript: luxus counted the lines on Omarchy and
-/// the wall of them is what hid the one warning that mattered.
+/// The default run shows progress, not a transcript: a wall of echoed commands hides the one
+/// warning that matters.
 #[test]
 fn the_default_run_collapses_to_a_progress_line() {
     let text = plain(&run(&["--demo", "debian-fresh"], b"\r\r\r", "Done. Next"));

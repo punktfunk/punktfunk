@@ -1,4 +1,4 @@
-//! The wizard's state, as pure data (WP2.1): which steps this run walks, which rows
+//! The wizard's state, as pure data: which steps this run walks, which rows
 //! Configure shows, and what each edit does to the plan.
 //!
 //! Sibling of `ui/summary.rs`'s `Screen`, same bargain, Windows types: the reactor wizard is
@@ -62,8 +62,8 @@ impl Section {
     }
 }
 
-/// One editable Configure row. The task set is today's `[Tasks]` table (D5's names are the
-/// silent contract; these are their wizard faces) plus the fresh-only password row.
+/// One editable Configure row. The task set mirrors the `/MERGETASKS` names (D5's names are
+/// the silent contract; these are their wizard faces) plus the bind and fresh-only password rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
     Driver,
@@ -128,7 +128,7 @@ impl WinScreen {
         steps
     }
 
-    /// The Configure rows, in the `[Tasks]` order. The password row is fresh-only and only
+    /// The Configure rows, in task order. The password row is fresh-only and only
     /// when no web install already left one — an upgrade keeps the password the box has.
     pub fn rows(&self) -> Vec<Field> {
         match self.artifact {
@@ -153,7 +153,7 @@ impl WinScreen {
     }
 
     /// The rows grouped for the wizard's Configure page; the transcript keeps the flat
-    /// `[Tasks]` order. Every row lands in exactly one section (tested).
+    /// task order. Every row lands in exactly one section (tested).
     pub fn sections(&self) -> Vec<(Section, Vec<Field>)> {
         let rows = self.rows();
         let group = |section: Section, fields: &[Field]| {
@@ -309,7 +309,7 @@ impl WinScreen {
         self.choices.network = answer;
     }
 
-    /// The choices the plan actually runs on. Answer (b) of the D12 step *is* today's
+    /// The choices the plan actually runs on. Answer (b) of the D12 step *is* the
     /// `allowpublicfw` task — derived at plan time rather than stored, so switching answers
     /// can never leave a stale firewall opt-in behind.
     pub fn effective_choices(&self) -> WinChoices {
@@ -485,8 +485,7 @@ mod tests {
         assert!(s.steps().contains(&WizStep::Network));
     }
 
-    /// WP2.1c's acceptance, stated early: answer (b) is provably the same plan step as
-    /// `/MERGETASKS=allowpublicfw`.
+    /// Answer (b) is provably the same plan step as `/MERGETASKS=allowpublicfw`.
     #[test]
     fn open_public_rules_flips_the_same_plan_step_as_the_task_flag() {
         let mut s = screen_of(public_facts(), Artifact::Host);
@@ -511,9 +510,9 @@ mod tests {
             .contains("--allow-public-network=on"));
     }
 
-    /// WP2.2's D12 leftover: the step is reachable from Reconfigure. An upgrade derives the
-    /// public-rules row to "keep the box's setting", which leaves the trigger armed, and the
-    /// answer reaches the plan even though nothing else about the box is rewritten.
+    /// The D12 step is reachable from Reconfigure. An upgrade derives the public-rules row
+    /// to "keep the box's setting", which leaves the trigger armed, and the answer reaches
+    /// the plan even though nothing else about the box is rewritten.
     #[test]
     fn reconfigure_on_a_public_network_reaches_the_network_step() {
         let facts = WinFacts {

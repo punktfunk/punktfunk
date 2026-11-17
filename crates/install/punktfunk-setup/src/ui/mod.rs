@@ -2,7 +2,7 @@
 //!
 //! `exec` and `report` speak only `Reporter`, so the same `Plan` drives the
 //! `==>` transcript and the TUI checklist. `plain` is the D5 compatibility
-//! contract — byte-for-byte the sh installer's output. `tui` is the clack
+//! contract — a transcript the plan goldens pin byte for byte. `tui` is the clack
 //! screens, hand-rolled over `term` (see `term`'s header for why).
 //!
 //! `summary` is the settings screen as pure state, `theme` the brand colour and
@@ -21,8 +21,8 @@ pub use plain::Plain;
 
 /// The surface a running plan reports itself through.
 ///
-/// Vocabulary matches the sh installer: a step heading, an ok, a warning, an
-/// echoed command. A checklist renderer builds from `say` and `plus`.
+/// Vocabulary: a step heading, an ok, a warning, an echoed command. A checklist
+/// renderer builds from `say` and `plus`.
 pub trait Reporter {
     fn say(&self, msg: &str);
     fn ok(&self, msg: &str);

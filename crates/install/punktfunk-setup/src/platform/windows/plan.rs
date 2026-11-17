@@ -5,10 +5,9 @@
 //! harness (`design/installer-v2-windows.md`).
 //!
 //! Every path in a step is a literal string, never a `PathBuf::join` — goldens
-//! must render byte-identically on every OS. Phase order is load-bearing:
-//! stop → files → registry → network → coexistence → drivers →
-//! service → web → plugin runner → restore → shortcut → tray. `<staging>` and `<temp>`
-//! are placeholders the executor substitutes; dry-run renders them verbatim.
+//! must render byte-identically on every OS. Phase order is load-bearing: see
+//! `host_install`. `<staging>` and `<temp>` are placeholders the executor substitutes;
+//! dry-run renders them verbatim.
 
 use pf_l10n::tools as t;
 use serde::{Deserialize, Serialize};
@@ -80,7 +79,7 @@ pub enum WinAction {
     RemoveFiles {
         dir: String,
     },
-    /// Delete specific files; absent is fine (the client's shortcuts, the WP3.2 Inno leftovers).
+    /// Delete specific files; absent is fine (the client's shortcuts, Inno's leftover data).
     /// Paths may carry the `<start menu>` placeholders — the executor substitutes them.
     DeleteFiles {
         paths: Vec<String>,
@@ -131,7 +130,7 @@ pub enum WinAction {
         app_dir: String,
         fresh_password: bool,
     },
-    /// Restart backoff needs task XML (inexpressible in flags); the executor writes it.
+    /// Restart-on-failure needs task XML (inexpressible in flags); the executor writes it.
     /// `start_now` only on a fresh registration.
     RegisterScriptingTask {
         app_dir: String,
@@ -142,7 +141,7 @@ pub enum WinAction {
         exe: String,
     },
     /// Best-effort: a missing runtime downloads `windowsappruntimeinstall --quiet`.
-    /// Failure warns and points at the docs; it never aborts.
+    /// Failure warns and names the installer URL; it never aborts.
     EnsureAppRuntime {
         arch: String,
     },
@@ -280,7 +279,7 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
         vec![WinAction::DeployFiles { dest: app.clone() }],
     );
 
-    // WP3.2: the first upgrade over an Inno install. Our unins000.exe already replaced
+    // The first upgrade over an Inno install. Our unins000.exe already replaced
     // Inno's in the files phase; its data files go, and the ARP entry below is rewritten in
     // place under the same key — never Inno's uninstaller (D6).
     if upgrade && facts.inno_uninstaller {
@@ -318,7 +317,7 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
     plan.push(t::setup_phase_conflicts(), coexist_steps(facts, choices));
 
     // Lenient, as the title promises: a driver leg that fails must not strand the box between
-    // the stopped old host and the service/uninstaller legs below.
+    // the stopped old host and the service legs below.
     let mut drivers = vec![];
     if choices.install_driver {
         drivers.push(run_lenient(&[
@@ -573,7 +572,7 @@ fn coexist_steps(facts: &WinFacts, choices: &WinChoices) -> Vec<WinAction> {
     ]
 }
 
-/// `[UninstallRun]` order, verbatim. Each position is load-bearing.
+/// Each position in this order is load-bearing.
 fn host_uninstall(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
     let app = facts
         .installed
@@ -823,9 +822,8 @@ fn client_uninstall(choices: &WinChoices) -> WinPlan {
             .map(|exe| run_lenient(&["taskkill", "/F", "/IM", exe]))
             .chain([
                 run_lenient(&["reg", "delete", r"HKCU\Software\Classes\punktfunk", "/f"]),
-                // Inno tracked its `[Icons]` and swept them for free; the engine lays them
-                // down itself, so it owes the same sweep — a link left behind points at a
-                // deleted exe.
+                // The engine lays the links down itself, so it owes the sweep: a link left
+                // behind points at a deleted exe.
                 WinAction::DeleteFiles {
                     paths: CLIENT_LINKS.iter().map(|l| (*l).to_string()).collect(),
                 },

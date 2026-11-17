@@ -154,7 +154,7 @@ fn done_installed(w: &Wizard, cx: &ViewContext<'_, Wizard>) -> Vec<View> {
 
 /// The fresh host's console password, masked until Show: a finish page can sit on a screen
 /// for a while. Copy works either way. Changing it later is a file edit and a service
-/// restart (docs: web-console.md), not a console feature.
+/// restart (docs: forgot-password.md), not a console feature.
 fn password_card(w: &Wizard, cx: &ViewContext<'_, Wizard>, pw: &str) -> View {
     let reveal = w.reveal_done;
     card(

@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 /// Every filesystem root a probe may read.
 ///
-/// `etc_root` is a prefix, not `/etc` itself: the sh script joins `"$ETC/etc/apt/..."`,
-/// so an empty override is the real `/etc`.
+/// `etc_root` is a prefix, not `/etc` itself: `etc()` joins `etc/` onto it, and the default
+/// is `/`.
 #[derive(Debug, Clone)]
 pub struct BasePaths {
     pub os_release: PathBuf,
@@ -126,7 +126,7 @@ impl Output {
     }
 }
 
-/// Spawn failed. No message: the caller owns the die line, matching the sh installer.
+/// The command did not spawn or exited non-zero. No message: the caller owns the die line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunFailed;
 
@@ -295,8 +295,8 @@ impl CommandRunner for SystemRunner {
 }
 
 /// Scripted answers, no spawn. Keyed by the whole command line
-/// (`"systemctl is-active sunshine.service"`). An unscripted probe returns `None`,
-/// the same as a missing binary.
+/// (`"systemctl is-active sunshine.service"`). An unscripted probe of a program that is not
+/// on the path returns `None`, the same as a missing binary; on the path it exits 1.
 #[derive(Debug, Default, Clone)]
 pub struct FakeRunner {
     pub answers: HashMap<String, Output>,

@@ -1,4 +1,4 @@
-//! Network: the bind and exposure answer.
+//! Network: the Public-network answer (D12).
 
 use super::*;
 

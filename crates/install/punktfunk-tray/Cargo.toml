@@ -3,7 +3,7 @@ name = "punktfunk-tray"
 description = "System-tray status icon for the punktfunk streaming host (Windows notification area / Linux StatusNotifierItem)"
 version.workspace = true
 edition.workspace = true
-# Not workspace-inherited (1.85): the instance lock is `File::try_lock`, stable in 1.89.
+# Not workspace-inherited (1.85): the Linux instance lock is `File::try_lock`, stable in 1.89.
 # rust-toolchain.toml pins 1.96, so this records reality rather than raising it.
 rust-version = "1.89"
 license.workspace = true
@@ -21,7 +21,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 # `config_dir()` + `published_mgmt_port()`: the tray follows the mgmt port the host actually bound
-# (`<config_dir>/mgmt-endpoint`) instead of assuming 47990. Std-only leaf, no I/O stack.
+# (`<config_dir>/mgmt-endpoint`) instead of assuming 47990. A small leaf (`tracing`, plus
+# `pf-paths-win` on Windows), no I/O stack.
 pf-paths = { path = "../../host/pf-paths" }
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
@@ -36,8 +37,9 @@ ureq = { workspace = true }
 rustls = { workspace = true, features = ["logging", "tls12"] }
 # The one shared cert-fingerprint pin verifier (`punktfunk_core::tls::PinVerify`) + fingerprint
 # hash, instead of the tray hand-rolling its own copy on a trust boundary. The light `tls` feature
-# is rustls + sha2 only (no QUIC runtime / tokio), so this stays a lean helper — much smaller than
-# the host dependency ruled out above, though rustls's aws-lc-rs backend does mean a C compiler.
+# is rustls, webpki and sha2 only (no QUIC runtime / tokio), so this stays a lean helper — much
+# smaller than the host dependency ruled out above, though rustls's aws-lc-rs backend does mean a
+# C compiler.
 punktfunk-core = { path = "../../core/punktfunk-core", default-features = false, features = ["tls", "ureq-tls"] }
 
 [target.'cfg(windows)'.dependencies]

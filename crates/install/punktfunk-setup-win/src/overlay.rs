@@ -1,4 +1,4 @@
-//! The `[exe][compressed payload][footer]` sandwich (design D3), productionized from S2.
+//! The `[exe][compressed payload][footer]` sandwich (design D3).
 //!
 //! Assemble BEFORE signing — Authenticode hashes the whole file including the overlay, so a
 //! tampered payload breaks the signature. Reading afterwards must not assume the footer sits

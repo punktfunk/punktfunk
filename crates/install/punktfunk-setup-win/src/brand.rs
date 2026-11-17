@@ -1,9 +1,9 @@
 //! The wizard's brand: the mark's two circles, its lens highlight and the four "funk" letters,
-//! from the website's path data (pfweb `BrandMark.tsx` / `Wordmark.tsx`), painted in shades of
-//! the Windows accent so the logo and the accent controls beside it read as one palette. The
-//! circles are drawn live as ellipses (`wizard::welcome::lockup`) so they can orbit; the lens and
-//! letters are SVG. `punktfunk.ico` stays brand and is staged to disk: the window icon takes a
-//! file path.
+//! from the website's path data (punktfunk-website `BrandMark.tsx` / `Wordmark.tsx`), painted
+//! in shades of the Windows accent so the logo and the accent controls beside it read as one
+//! palette. The circles are drawn live as ellipses (`wizard::welcome::lockup`) so they can
+//! orbit; the lens and letters are SVG. `punktfunk.ico` stays brand and is staged to disk: the
+//! window icon takes a file path.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
