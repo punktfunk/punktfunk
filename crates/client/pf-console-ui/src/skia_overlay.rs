@@ -464,6 +464,8 @@ impl Overlay for SkiaOverlay {
                 ctx.pads,
             );
             slot.rects = None; // opaque, window-wide
+            let budget = crate::shell::gpu_cache_budget(shell.gpu_cache_bytes, shell.last_k);
+            set_cache_limit(&mut gpu.context, budget);
             {
                 // Queue external sync vs FFmpeg's pump-thread submits (same queue).
                 let _q = gpu.queue_lock.guard();
@@ -498,6 +500,10 @@ impl Overlay for SkiaOverlay {
         // A cost window never spans a stream: it would report minutes for a few frames.
         self.console_at = None;
         self.console_cost = FrameCost::default();
+        // The console's covers stay cached through a stream only up to the unscaled budget.
+        let base = (self.shell.as_ref())
+            .map_or(crate::shell::DEFAULT_GPU_CACHE_BYTES, |s| s.gpu_cache_bytes);
+        set_cache_limit(&mut self.gpu.as_mut().expect("init ran").context, base);
 
         let banner_alpha = self.banner_alpha(ctx);
         let banner_step = (banner_alpha * 32.0).round() as u8;
@@ -675,6 +681,8 @@ impl SkiaOverlay {
 
     /// `ten_bit` follows the swapchain: a deep slot under an 8-bit blit gains nothing. F16,
     /// not 10/10/10/2: the overlay blends over video, and two bits of alpha step its fades.
+    /// Unbudgeted: the slot lives as long as the surface, and in the budget it would only
+    /// crowd out the covers (two 4K F16 slots are 133 MB).
     fn ensure_slot(&mut self, i: usize, width: u32, height: u32, ten_bit: bool) -> Result<()> {
         if self.slots[i]
             .as_ref()
@@ -701,7 +709,7 @@ impl SkiaOverlay {
         );
         let mut surface = gpu::surfaces::render_target(
             &mut gpu.context,
-            gpu::Budgeted::Yes,
+            gpu::Budgeted::No,
             &info,
             None,
             SurfaceOrigin::TopLeft,
@@ -749,6 +757,13 @@ impl SkiaOverlay {
             rects: None,
         });
         Ok(())
+    }
+}
+
+/// Skia's cache ceiling to `bytes`; a lower one purges down to it at once.
+fn set_cache_limit(context: &mut DirectContext, bytes: usize) {
+    if context.resource_cache_limit() != bytes {
+        context.set_resource_cache_limit(bytes);
     }
 }
 
