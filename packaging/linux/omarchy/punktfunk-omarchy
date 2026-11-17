@@ -257,10 +257,10 @@ setup_units() {
 # The console serves the host's NATIVE identity (ECDSA P-256 with real SANs — localhost, loopback,
 # the hostname; identity.rs, chosen in web/nitro-entry/tls-paths.mjs), so the one thing a browser
 # still objects to is that nobody vouches for it. Chromium on Linux reads per-user NSS
-# (~/.pki/nssdb): adding the cert there with "C,," makes https://localhost:47992 load with no
-# interstitial at all. Measured on Omarchy 4.0.1 / Chromium 151 with a fresh profile — the flag
-# matters, and `--ignore-certificate-errors` is not an alternative: current omarchy-webapp-install
-# swallows it as its custom-exec argument, so it never reached the browser anyway.
+# (~/.pki/nssdb), and a trusted-peer entry ("P,,") there makes https://localhost:47992 load with
+# no interstitial. Never "C,,": that makes the host key a CA for every site. And
+# `--ignore-certificate-errors` is not an alternative: current omarchy-webapp-install swallows it
+# as its custom-exec argument, so it never reached the browser anyway.
 #
 # The legacy cert.pem can never be fixed this way: CN-only with NO subjectAltName, and every
 # browser since Chrome 58 requires a SAN. A host still serving it (upgraded, with native pairings
@@ -286,7 +286,7 @@ setup_cert_trust() {
   # Delete-then-add: a host that re-minted its identity gets the CURRENT cert trusted, not the one
   # from last time. The delete failing (first run) is the normal case.
   certutil -D -d "sql:$NSSDB" -n "$CERT_NICK" 2>/dev/null || true
-  if certutil -A -d "sql:$NSSDB" -n "$CERT_NICK" -t "C,," -i "$cert" 2>/dev/null; then
+  if certutil -A -d "sql:$NSSDB" -n "$CERT_NICK" -t "P,," -i "$cert" 2>/dev/null; then
     ok "console certificate trusted — a Chromium that is already running picks it up on restart"
   else
     bad "certutil refused the cert — the warning stays; click through once in the browser instead"
