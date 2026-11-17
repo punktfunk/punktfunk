@@ -257,6 +257,22 @@ let
       name = "the encode-worker wrapper carries exactly cap_sys_nice=ep";
       ok = desktop.security.wrappers.punktfunk-encode-worker.capabilities == "cap_sys_nice=ep";
     }
+    {
+      name = "only the host's users run the encode-worker wrapper";
+      ok =
+        let
+          w = desktop.security.wrappers.punktfunk-encode-worker;
+        in
+        w.permissions == "u+rx,g+rx"
+        && w.group == "punktfunk"
+        && seats.security.wrappers.punktfunk-encode-worker.group == "punktfunk-games"
+        && lib.elem "punktfunk-games" seats.users.users.alice.extraGroups;
+    }
+    {
+      # A seat on a person's own account joins no group of ours; its unit carries the wrapper's.
+      name = "every seat's unit carries the encode-worker wrapper's group";
+      ok = hasSys seats "punktfunk-seat@.service" "SupplementaryGroups=punktfunk-games";
+    }
 
     # --- the desktop-login route (scripts/punktfunk-host-desktop-session.conf) -----------------
     # Asserted on the evaluated LISTS, not the rendered text: systemd renders `After=` as one
