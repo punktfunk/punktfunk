@@ -355,6 +355,7 @@ class MainActivity : FragmentActivity() {
             return
         }
         StreamKeepAliveService.renameChannel(this)
+        readVendorKeysAtStart()
         pendingDeepLink = link
         resolveHighRefreshMode()
         setConsoleHighRefreshRate(true) // the console UI wants max refresh; streaming manages its own
