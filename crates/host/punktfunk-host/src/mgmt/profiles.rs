@@ -938,8 +938,9 @@ fn may_start(seat: &pf_seats::Seat) -> bool {
     needs_start(&seat.runtime.state) && !seat.kind.starts_on_proof()
 }
 
-/// Starts a stopped seat in the background when [`may_start`] lets it: a first logon takes tens
-/// of seconds, and the caller answers with the seat as it is now, `starting`.
+/// Starts a stopped seat in the background when [`may_start`] lets it, as the ledger has its row
+/// now: a first logon takes tens of seconds, and the caller answers with the seat as it is now,
+/// `starting`. No seat host is asked who plays there.
 pub(crate) fn start_seat(id: &str) {
     let Ok(id) = pf_seats::SeatId::parse(id) else {
         return;
@@ -951,7 +952,7 @@ pub(crate) fn start_seat(id: &str) {
         .name("seat-wake".into())
         .spawn(move || {
             let _waking = waking;
-            let seats = crate::seats::snapshot();
+            let seats = crate::seats::ledger();
             let idle = seats.seat(id.as_str()).is_some_and(|(s, _)| may_start(s));
             if !idle || !seats.on {
                 return;
