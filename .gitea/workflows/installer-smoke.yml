@@ -7,7 +7,7 @@
 # It drives the SHIPPED path end to end: scripts/install.sh, the stub, with
 # PUNKTFUNK_SETUP_BIN pointed at a punktfunk-setup built FROM THIS TREE. So the stub's argument
 # passing is under test alongside the installer, and the published binary is never involved —
-# only the probe job touches that (design/installer-v2.md WP4.3).
+# only the probe job touches that (design/installer-v2.md §6 and M4).
 #
 # Path-filtered on purpose: it pulls ~100 MB of packages per family, so it runs when the
 # installer or its fact source changes, not on every push. The cheap halves run in ci.yml on
@@ -47,7 +47,7 @@ on:
 jobs:
   # One static binary the family containers can all run, built from the PR's tree. musl needs no
   # C cross-toolchain here: the crate is pure Rust, so rust-lld plus the target's self-contained
-  # crt objects link it (measured: 984 KB static-pie, seconds to build).
+  # crt objects link it.
   setup-binary:
     name: build punktfunk-setup (musl)
     runs-on: ubuntu-24.04
@@ -154,8 +154,8 @@ jobs:
             oncanary: grep -q ' canary main' /etc/apt/sources.list.d/punktfunk.list
             onstable: grep -q ' stable main' /etc/apt/sources.list.d/punktfunk.list
           # openh264 lives in fedora-cisco-openh264, hosted by Cisco rather than on the Fedora
-          # mirrors, and the runners cannot reach it — one unreachable package failed the whole
-          # transaction while the other 251 pulled at 15 MiB/s. It arrives as a weak dep of
+          # mirrors, and the runners cannot reach it — one unreachable package fails the whole
+          # transaction. It arrives as a weak dep of
           # other packages, and punktfunk vendors its own openh264, so dropping the repo costs the
           # smoke nothing. This is the debian row's --no-install-recommends, aimed at one repo.
           - family: fedora-44
@@ -202,17 +202,17 @@ jobs:
           punktfunk-host detect-conflicts
       # The console is the whole management surface — pairing, approving a device, every setting.
       # A host without it can be installed and still be useless, so assert it by name: the binary
-      # the package puts on PATH and the user unit step 6 enables.
+      # the package puts on PATH and the user unit the installer's start step
+      # (`start_steps` in plan.rs) enables.
       - name: The web console is installed too
         run: |
           command -v punktfunk-web-server
           test -f /usr/lib/systemd/user/punktfunk-web.service
       - name: Re-running is a no-op install
         run: $PF --yes --no-start | grep -q 'already installed'
-      # The reported Fedora failure, as a test: a box that has the host but lost (or never got)
-      # the console must get one back from a re-run. Before the per-package check, the installer
-      # saw punktfunk-host on PATH, declared itself done, and left the box without a console
-      # while still printing the console's URL.
+      # A box that has the host but lost (or never got) the console must get one back from a
+      # re-run: the installer checks each package (`Facts::fully_installed`), not just
+      # punktfunk-host on PATH.
       - name: A host without a console gets one back on re-run
         run: |
           ${{ matrix.rmweb }}
@@ -252,7 +252,7 @@ jobs:
           test "$(punktfunk-host --version | head -1)" = "$canary_v" \
             || { echo "a bare re-run moved a canary box off $canary_v"; exit 1; }
           $PF --yes --no-start --channel stable
-      # M3: the client comes from the same family repo, so this is one more package from a
+      # The client comes from the same family repo, so this is one more package from a
       # repo the steps above already proved works. The flatpak fallback — the sysext boxes and
       # any distro without a repo — is deliberately NOT installed here: flatpak in a container
       # needs a session bus and buys nothing, so the crate's goldens assert its line instead.

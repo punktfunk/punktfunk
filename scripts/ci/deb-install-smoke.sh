@@ -2,13 +2,9 @@
 # Install the published .debs on every supported apt distro, in a pristine image, the way a user
 # would — repo key, sources.list line, `apt-get install`.
 #
-# WHY THIS EXISTS: nothing in deb.yml ever installed a package it built. Two facts survived a long
-# time in that blind spot, in opposite directions:
-#   * `punktfunk-host` installed cleanly on Debian 13 for months while docs-site said Debian was
-#     unsupported and unverified.
-#   * `punktfunk-gamescope` was missing from the apt registry across two releases, while the docs
-#     told Debian/Ubuntu users to `apt install` it.
-# Both are what a five-minute install check catches.
+# WHY THIS EXISTS: building a .deb says nothing about whether the apt registry serves it or apt
+# can install it. A package missing from the registry, or one that installs where the docs say it
+# does not, only shows in a real install.
 #
 # Usage:  bash scripts/ci/deb-install-smoke.sh
 #   PF_APT_DISTRIBUTION   stable | canary   (default: stable)

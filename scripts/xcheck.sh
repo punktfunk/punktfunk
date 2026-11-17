@@ -11,11 +11,12 @@
 # argument is still accepted.)
 #
 # CI compiles `#[cfg(target_os = "windows")]` code only on Windows, so a Windows-side edit made on a
-# Mac is otherwise unverifiable until that job runs. pf-frame, pf-win-display, pf-capture and
-# pf-vdisplay take punktfunk-core without its `quic` feature, so their Windows closure has no ring
-# or opus build script that needs the MSVC toolchain, and cargo checks them in the real workspace.
+# Mac is otherwise unverifiable until that job runs. None of pf-frame, pf-win-display, pf-capture
+# and pf-vdisplay takes punktfunk-core with its `quic` feature (pf-win-display and pf-vdisplay take
+# it with default features off), so their Windows closure has no ring or opus build script that
+# needs the MSVC toolchain, and cargo checks them in the real workspace.
 #
-# There is no Linux leg: pf-vdisplay's Linux half reaches pipewire through pf-capture, whose build
+# There is no Linux leg: pf-capture's Linux half depends on the pipewire crate, whose build
 # script needs a Linux libpipewire. Check it on Linux.
 #
 # Note: `cargo fmt` needs none of this — rustfmt follows `mod`/`#[path]` without evaluating cfg, so

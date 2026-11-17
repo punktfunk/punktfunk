@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the two rig binaries inside the container. Runs as the container's entry
-# for `run.sh --build-only`, and again at the head of every run.
+# Build the two rig binaries inside the container: the same two cargo builds rig.sh runs at its
+# head.
 set -euo pipefail
 
 export CARGO_TARGET_DIR=/target

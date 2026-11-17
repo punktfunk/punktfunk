@@ -2,7 +2,7 @@
 #
 # Dot-source it, then call Ensure-GiteaRelease / Upsert-GiteaAsset:
 #   . scripts/ci/gitea-release.ps1
-# Mirrors scripts/ci/gitea-release.sh; parses JSON with ConvertFrom-Json (the Windows runner
+# Mirrors scripts/ci/gitea-release.sh; parses JSON with Invoke-RestMethod (the Windows runner
 # has no python). Same idempotent semantics: Upsert-GiteaAsset deletes an existing asset of
 # the same name before uploading, so re-runs / rolling canary uploads don't 409 — and attaches
 # a `<asset>.sha256` sidecar alongside every asset, exactly like the bash twin.

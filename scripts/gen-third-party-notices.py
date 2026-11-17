@@ -9,18 +9,18 @@ notices file: a per-crate manifest followed by the verbatim license texts.
 
 This satisfies the binary-distribution attribution duty for the permissive (MIT/BSD/ISC/Zlib/
 Apache/Unicode/etc.) crates linked into shipped punktfunk artifacts. `cargo about` (see
-about.toml) produces an equivalent, network-augmented result in CI; this is the dependency-free
-fallback that also runs locally and is committed as a baseline.
+about.toml) is only the CI licence gate: it sees Cargo dependencies and omits VENDORED_TREES, so
+this generator writes the committed files (scripts/gen-third-party-notices.sh).
 
-By default it covers the WHOLE workspace, which is what the root file must be (the host and
-the desktop clients ship out of it). A repeated `--manifest` adds another workspace's crates:
+By default it covers the WHOLE workspace, which is what the root file must be (the host ships
+out of it). A repeated `--manifest` adds another workspace's crates:
 the root file also names the seat keeper's, a separate workspace the Windows host installer
 ships. `--packages <name>[,<name>…]` restricts one workspace to the transitive
 dependency closure of the named workspace members instead — the Apple and Android clients link
-exactly one Rust crate each (`punktfunk-ffi`, and the JNI bridge over the core), so a workspace-wide
-copy attributed them things they do not contain: FFmpeg, the NVENC SDK, GTK, windows-rs. Listing a
-dependency that is not there is not a licence violation, but it is a false statement in a file
-whose entire job is to be true.
+exactly one Rust crate each (`punktfunk-client-apple`, and the JNI bridge over the core), so a
+workspace-wide copy attributed them things they do not contain: the NVENC SDK, GTK, windows-rs.
+Listing a dependency that is not there is not a licence violation, but it is a false statement in
+a file whose entire job is to be true.
 
 Usage:  python3 scripts/gen-third-party-notices.py [--out THIRD-PARTY-NOTICES.txt]
                                                    [--manifest Cargo.toml …]
@@ -60,8 +60,9 @@ def find_license_files(pkg_dir):
     return out
 
 
-# Crates that ship license-mit/license-apache-2.0 files but omit the `license` field in
-# their Cargo.toml (publish = false upstream), so `cargo metadata` reports no SPDX for them.
+# SPDX for a crate that ships license-mit/license-apache-2.0 files but has no `license` field in
+# its Cargo.toml, so `cargo metadata` reports none. windows-reactor-setup at the pinned rev
+# declares one, so this entry is currently unused.
 LICENSE_OVERRIDES = {
     "windows-reactor-setup": "MIT OR Apache-2.0",
 }

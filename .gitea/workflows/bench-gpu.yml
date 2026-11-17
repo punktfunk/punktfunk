@@ -1,6 +1,6 @@
 # Tier-3 real-world GPU benchmark — the actual capture → zero-copy → NVENC → punktfunk/1 → reassemble
 # pipeline, measuring encode time / throughput / end-to-end latency. The GPU-less CI containers
-# (ci.yml `bench` job) can only run the Tier-1/2 GPU-free benchmarks; this runs on a SELF-HOSTED GPU
+# (bench.yml) can only run the Tier-1/2 GPU-free benchmarks; this runs on a SELF-HOSTED GPU
 # runner — a dev box with an NVIDIA GPU + a KWin session.
 #
 # Runner setup (one-time, on the GPU box): register a Gitea act_runner with the labels below, e.g.
@@ -9,8 +9,9 @@
 # It runs jobs directly on the host (no container) so it can reach the GPU, PipeWire and the
 # compositor. A persistent KWin session helps (else the script brings up a headless one).
 #
-# Report-only: the script flags regressions vs scripts/bench/gpu-baseline.json but never fails the
-# job. Refresh the baseline on the runner with `scripts/bench/gpu-stream.sh <mode> <secs> --update`.
+# Report-only: the script flags regressions vs scripts/bench/gpu-baseline.json (not in the repo;
+# without it the run is reported alone) but never fails the job. Write or refresh the baseline on
+# the runner with `scripts/bench/gpu-stream.sh <mode> <secs> --update`.
 #
 # The second job is not a benchmark. It shares this file because this is the only workflow with a
 # GPU runner and a nightly schedule, and duplicating both to run one `cargo test` is not worth a
@@ -40,19 +41,19 @@ jobs:
           BENCH_MODE: ${{ inputs.mode || '1920x1080x120' }}
         run: bash scripts/bench/gpu-stream.sh "$BENCH_MODE" 12
 
-  # The decode stack's pixel-parity suite. 159 `#[ignore]`d tests exist across 15 crates and no job
-  # ran a single one — the only `--ignored` anywhere in this directory was a comment in
-  # windows-host.yml saying it stays a manual run on the validation boxes. These 16 are the set one
-  # existing runner can execute unattended: SHA-256 per display-order frame against checked-in
-  # libavcodec goldens, all inputs vendored under tests/data.
+  # The decode stack's pixel-parity suite: the `#[ignore]`d GPU legs of pf-vkdecode's gpu_parity
+  # and gpu_smoke tests, which no other workflow runs. They are the set one existing runner can
+  # execute unattended: SHA-256 per display-order frame against checked-in libavcodec goldens,
+  # all inputs vendored under tests/data.
   #
   # REPORT-ONLY, deliberately. The legs assert rather than skip, and each needs a Vulkan Video
-  # device for its own codec, so a box without AV1 decode fails those three legs for a reason that
+  # device for its own codec, so a box without AV1 decode fails the AV1 legs for a reason that
   # is not a regression. Read one scheduled run, then narrow the filter to the codecs this box
   # actually has and drop continue-on-error — a gate is the point, this is the step that earns it.
   #
   # The H.265 field-triage leg is skipped by name: it is an operator tool that requires
-  # PF_VKD_FIELD_STREAM to point at a hand-made capture, so it can never pass unattended.
+  # PF_VKD_FIELD_STREAM to point at a hand-made capture, so it can never pass unattended. The AV1
+  # one is not skipped and fails here without that variable.
   vkdecode-parity:
     runs-on: [self-hosted, gpu]
     timeout-minutes: 30

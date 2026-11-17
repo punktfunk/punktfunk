@@ -8,15 +8,14 @@
 # it, spawned by the shell), plus punktfunk-cli, whose `punktfunk.exe` alias the MSIX manifest
 # references.
 #
-# ⚠ ONE FILE, ONE RELEASE BUILD PER ARCH. Build, clippy and fmt share it. Tests build under the
+# ⚠ ONE FILE, ONE RELEASE BUILD PER ARCH. Build and clippy share it. Tests build under the
 # `ci-test` profile (release without LTO), the only second tree. Every extra tree costs disk, and
 # `cabac_decoder.cpp: fatal error C1069` in openh264-sys2's vendored C++ means the disk ran out,
 # not a source error. Do not add a debug leg.
 #
-# Renamed from windows-msix.yml deliberately, and safely: `github.run_number` is REPO-WIDE in Gitea
-# (consecutive runs of DIFFERENT workflows get consecutive numbers), so the canary MSIX version
-# `<minor>.<run>.0` keeps climbing across the rename — on GitHub, where run_number is per-workflow,
-# this same rename would have reset it to 1 and made every canary sort below the published ones.
+# `github.run_number` is REPO-WIDE in Gitea (consecutive runs of DIFFERENT workflows get
+# consecutive numbers), so the canary MSIX version `<major>.<minor>.<run>.0` keeps climbing
+# across a workflow rename.
 #
 # Two architectures from ONE x64 runner: x86_64-pc-windows-msvc natively and aarch64-pc-windows-msvc
 # by cross-compiling. The x64 MSVC toolset ships an ARM64 cross compiler
@@ -29,10 +28,10 @@
 # unaffected). rust-skia 0.153.3 publishes aarch64-pc-windows-msvc archives, so the
 # flag can go once the console is wanted on ARM64.
 #
-# NO FFmpeg here since M10 (design/client-native-decode.md §6): the client decodes with
+# NO FFmpeg here (design/client-native-decode.md §6): the client decodes with
 # pf-vkdecode / pf-dxvadec / openh264+rav1d and links no libav* at all, so this workflow sets
-# no FFMPEG_DIR, no PF_FFVK_VULKAN_INCLUDE and prepends nothing to PATH. Nor does the host
-# any more, so nothing provisions an FFmpeg tree.
+# no FFMPEG_DIR and prepends nothing to PATH. Nor does the host, so nothing provisions an
+# FFmpeg tree.
 #
 # The MSVC/WinUI toolchain (cargo/rustup on ASCII paths, NASM, CMake, LLVM, CARGO_HOME,
 # CMAKE_POLICY_VERSION_MINIMUM, …) is baked into the runner's daemon env. Per-checkout / per-arch
@@ -66,8 +65,8 @@
 #   vX.Y.Z tag -> X.Y.Z.0  (THE release; any -rc/+meta pre-release suffix is dropped for MSIX).
 #                Published to the generic registry + the stable `latest/` alias + attached to the
 #                unified Gitea Release alongside every other platform's artifact.
-#   main push / dispatch -> <next-minor>.<run_number>.0  (canary; base is one minor ahead of the
-#                latest stable tag via scripts/ci/pf-version.ps1, run number climbs monotonically).
+#   main push / dispatch -> <major>.<next-minor>.<run_number>.0  (canary; base is one minor ahead
+#                of the latest stable tag via scripts/ci/pf-version.ps1, run number climbs).
 # Both arches share the version; artifacts are arch-suffixed (..._x64.msix / ..._arm64.msix).
 #
 # Signing (clients/windows/packaging/pack-msix.ps1), first match wins:
@@ -152,7 +151,7 @@ on:
 # NOTE the C/C++ launcher wiring the Linux workflows carry (CMAKE_*_COMPILER_LAUNCHER, CC_*) is
 # deliberately NOT set here. This runner's failure mode under extra compiler processes is the
 # C1069 disk/temp exhaustion documented in windows-host.yml, so sccache-for-MSVC is its own
-# change, to be made with a measurement rather than folded into a reorganisation.
+# change, to be made with a measurement.
 env:
   REGISTRY: git.unom.io
   OWNER: unom
@@ -244,8 +243,8 @@ jobs:
         shell: pwsh
         run: |
           # CARGO_TARGET_DIR (per-arch, short) dodges the MAX_PATH wall in the CMake-from-source
-          # crates (see this file's header). No FFMPEG_DIR: nothing in this package links libav*
-          # (M10), and pack-msix.ps1 no longer copies runtime DLLs from one.
+          # crates (see this file's header). No FFMPEG_DIR: nothing in this package links libav*,
+          # and pack-msix.ps1 copies no FFmpeg DLLs.
           "CARGO_TARGET_DIR=${{ matrix.td }}" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           rustup target add ${{ matrix.target }}
           rustc --version
@@ -276,14 +275,12 @@ jobs:
         shell: pwsh
         # A daemon that cannot reach S3 fails cargo at `rustc -vV`, before a line compiles — and
         # cargo PINS that failed probe in <target-dir>/.rustc_info.json, so one transient 401
-        # wedges this leg on every later run until the file is deleted. A 2026-09-04 blip cost the
-        # arm64 leg 11 runs that way. Probe once here and drop the wrapper when it fails, so the
-        # cached probe records a success.
+        # wedges this leg on every later run until the file is deleted. Probe once here and drop
+        # the wrapper when it fails, so the cached probe records a success.
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           # Capture before truncating: piping a native command into `Select-Object -First`
-          # stops it early, so $LASTEXITCODE stays unset and $null -ne 0 reads as a failure -
-          # which dropped the cache on a daemon that had just answered.
+          # stops it early, so $LASTEXITCODE stays unset and $null -ne 0 reads as a failure.
           $stats = & sccache --show-stats 2>&1
           $code = $LASTEXITCODE
           $stats | Select-Object -First 12 | Write-Output
@@ -299,10 +296,9 @@ jobs:
             Write-Warning "dropped a failed compiler probe cached in $info"
           }
 
-      # All three client binaries, ONCE, in release. The shell spawns punktfunk-session.exe (a
+      # All three client packages, ONCE, in release. The shell spawns punktfunk-session.exe (a
       # package sibling) for every stream, and punktfunk-cli builds the `punktfunk.exe` the manifest
-      # aliases and pack-msix.ps1 requires (bf981027 added the requirement without the build — the
-      # same gap 90c84ef4 closed for deb). --no-default-features on ARM64 is a no-op for the shell.
+      # aliases and pack-msix.ps1 requires. --no-default-features on ARM64 is a no-op for the shell.
       #
       # Release, not debug, for the lint legs below too; tests build under `ci-test` (see the header).
       - name: Build (release)
@@ -312,9 +308,9 @@ jobs:
       - name: Clippy (-D warnings)
         shell: pwsh
         run: |
-          # Every crate in the `paths:` trigger above but punktfunk-core is named here: `cargo
-          # clippy -p X` BUILDS a dependency but only LINTS the packages it is given. The arm64
-          # build has no Skia console and no PyroWave, so those two are x64 only.
+          # `cargo clippy -p X` BUILDS a dependency but only LINTS the packages it is given. Of
+          # the `paths:` crates above, punktfunk-core, pf-fluent and pf-l10n are not named here.
+          # The arm64 build has no Skia console and no PyroWave, so those two are x64 only.
           $pkgs = @('-p','punktfunk-client-windows','-p','punktfunk-client-session','-p','punktfunk-cli','-p','pf-client-core','-p','pf-client-video','-p','pf-presenter','-p','pf-bitstream','-p','pf-vkdecode','-p','pf-dxvadec','-p','pf-update-check')
           $sf = @()
           if ('${{ matrix.target }}' -eq 'aarch64-pc-windows-msvc') { $sf = @('--no-default-features') } else { $pkgs += @('-p','pf-console-ui','-p','pyrowave-sys') }
@@ -437,11 +433,9 @@ jobs:
           # stable release -> `latest/` alias; canary main build -> `canary/` alias.
           $alias = if ($env:GITHUB_REF -like 'refs/tags/v*') { 'latest' } else { 'canary' }
           # version-less, arch-suffixed alias names so each channel keeps one predictable URL.
-          # Under Azure signing there is no .cer, so MSIX_CER_PATH is unset. The quotes below are
-          # load-bearing: "$($env:UNSET)" interpolates to an empty string (a legal key), whereas a
-          # BARE $env:UNSET is $null and a null key is a hard error in a hash literal — which is
-          # exactly how windows-host.yml's publish step broke. Added explicitly rather than relying
-          # on that accident, so removing the quotes can't silently reintroduce it.
+          # Under Azure signing there is no .cer, so MSIX_CER_PATH is unset. An unset $env: var is
+          # $null, and a null key is a hard error in a hash literal, so the .cer entry is added
+          # below only when the path is set.
           $aliasNames = @{ "$($env:MSIX_PATH)" = "$($env:PKG)_${{ matrix.arch }}.msix" }
           if ($env:MSIX_CER_PATH) { $aliasNames[$env:MSIX_CER_PATH] = "$($env:PKG)_${{ matrix.arch }}.cer" }
           # The installer + portable zip (the default download; docs point at these alias URLs).

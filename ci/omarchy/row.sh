@@ -48,11 +48,9 @@ grep -q 'Woah partner' /tmp/canary || {
     echo "::error::-Syu failed, but not with the guard's message:"; tail -20 /tmp/canary; exit 1
 }
 
-# --channel canary, not the default. Omarchy's install line takes the host AND the client, and
-# on stable those two packages each ship /usr/share/icons/.../io.unom.punktfunk.svg — pacman
-# refuses the transaction with "conflicting files". Canary splits the file into punktfunk-icons,
-# which both depend on, so the line commits. Drop this pin when stable splits it too; until
-# then a stable Omarchy install is broken for reasons no installer can fix.
+# --channel canary, not the default. Omarchy's install line takes the host AND the client, which
+# both depend on punktfunk-icons, the one owner of the shared io.unom.punktfunk.svg, so pacman
+# sees no conflicting files. Stable splits the svg the same way since 0.35.0.
 echo "==> The installer succeeds anyway, under the armed guard"
 $PF --yes --no-start --no-omarchy-setup --channel canary
 test -x /usr/bin/punktfunk-host

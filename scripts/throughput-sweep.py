@@ -50,7 +50,7 @@ def _field(line: str, key: str) -> str | None:
 def parse_speed_line(text: str) -> dict | None:
     """Find the 'SPEED TEST complete' line in probe output and pull its fields.
 
-    Field names mirror clients/probe/src/main.rs:698-708 exactly."""
+    Field names mirror the `SPEED TEST complete` event in clients/probe/src/main.rs exactly."""
     text = strip_ansi(text)
     line = next((ln for ln in text.splitlines() if SPEED_LINE in ln), None)
     if line is None:

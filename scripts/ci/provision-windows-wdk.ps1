@@ -7,8 +7,8 @@
 # Idempotent: skips the WDK install if the km/wdf headers are already present, and cargo-wdk if already
 # installed. Safe to run repeatedly. Runs non-interactively (/q /norestart) — never auto-reboots.
 #
-# Invoked by scripts/ci/ensure-windows-toolchain.ps1, the shared self-provision step every Windows
-# CI workflow runs at job start (windows-drivers.yml, windows-client.yml,
+# Invoked by scripts/ci/ensure-windows-toolchain.ps1, the shared self-provision step the Windows
+# CI workflows that need a toolchain run at job start (windows-drivers.yml, windows-client.yml,
 # windows-host.yml), on top of the generic runner unom/infra provisions (windows-runner/) and
 # provision-windows-punktfunk-extras.ps1's ARM64-target layer. Run as the
 # runner's account (SYSTEM) with admin rights.
@@ -57,9 +57,8 @@ if ($haveCargoWdk) {
 }
 
 # ---- 2b. (LLVM is NOT pinned) ----
-# The runner's default clang (C:\Program Files\LLVM) builds the driver workspace clean now that the
-# vendored bindgen is 0.72 (the shipping pack proves it). LLVM 21.1.2 was briefly installed here to dodge
-# a bindgen-0.71 layout-test overflow on clang 22; the 0.72 bump retired that pin. No LLVM install needed.
+# The runner's default clang (C:\Program Files\LLVM) builds the driver workspace with the vendored
+# bindgen 0.72 (packaging/windows/drivers/vendor/wdk-build, wdk-sys). No LLVM install needed.
 
 # ---- 3. Verify (enumerate the REAL layout; fail only on build-essential absences) ----
 Write-Host ""

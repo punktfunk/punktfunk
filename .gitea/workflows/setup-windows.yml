@@ -1,9 +1,7 @@
 # Engine tests on real Windows. The Linux/macOS lanes run this suite too, but they cannot see
-# Windows-only failure modes — the first real run caught three (backslash joins leaking into
-# transcripts, autocrlf corrupting the golden fixtures, console's Windows-only encode_unicode
-# dep breaking type inference). This lane is cheap on purpose: pure Rust, no WDK, no packaging —
-# everything it needs is baked into the runner image, so there is deliberately no
-# ensure-windows-toolchain step.
+# Windows-only failure modes, such as autocrlf on the golden fixtures (see .gitattributes). This
+# lane is cheap on purpose: pure Rust, no WDK, no packaging — everything it needs is baked into
+# the runner image, so there is deliberately no ensure-windows-toolchain step.
 name: setup-windows
 
 on:

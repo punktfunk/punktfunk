@@ -1,5 +1,5 @@
 #!/bin/sh
-# Internal-link checker (docs-and-onboarding-overhaul WP1). Two classes, both cheap and exact:
+# Internal-link checker. Three classes, all cheap and exact:
 #
 #   1. Docs-site pages linking other docs-site pages: every `](/docs/<slug>…)` markdown link and
 #      `href="/docs/<slug>…"` attribute in docs-site/content must resolve to a content page.

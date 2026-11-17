@@ -7,7 +7,8 @@
 
   WHY the layout matters: the plugins CLI forwards package ops (add/remove/list) to the runner, and
   on Windows it resolves the runner RELATIVE TO THE RUNNING EXE - <exe-dir>\bun\bun.exe and
-  <exe-dir>\scripting\runner-cli.js (crates\punktfunk-host\src\plugin_host\plugins.rs). deploy-host.ps1 runs the
+  <exe-dir>\scripting\runner-cli.js (runner_command in
+  crates\host\punktfunk-host\src\plugin_host\plugins\windows.rs). deploy-host.ps1 runs the
   service out of target\release, so a bundle sitting only in the installed {app} leaves the freshly
   built exe reporting "the plugin runner isn't installed". We therefore deploy next to EVERY host exe
   we can find: the built one, and whatever the PunktfunkHost service actually runs.
@@ -34,7 +35,8 @@ Write-Host "bun    : $bun"
 
 # --- 1. build the self-contained bundle ------------------------------------------------------
 # --target=bun inlines effect + the SDK into ONE js; the operator's plugin import stays a runtime
-# import. --ignore-scripts skips the `prepare` codegen (it wants ../api/openapi.json, not needed).
+# import. --ignore-scripts skips sdk's `prepare` script (bun2nix, which rewrites the committed
+# bun.nix).
 $stage = Join-Path $repo 'target\scripting'
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 $bundle = Join-Path $stage 'runner-cli.js'
@@ -112,8 +114,9 @@ foreach ($dir in $targets) {
 # --- 3.5 de-privilege: LocalService principal + secret read grants ----------------------------
 # The runner task runs as NT AUTHORITY\LocalService (NOT SYSTEM - a plugin defect must cost a
 # throwaway account). Converge a task registered as SYSTEM by an older installer or by hand, and
-# grant LocalService read on the two files the runner's connect() needs: the scoped plugin-token
-# and the TLS-pin cert.pem. NEVER mgmt-token (full admin). Mirrors `punktfunk-host plugins enable`.
+# grant LocalService read on the scoped plugin-token and the TLS-pin cert.pem. NEVER mgmt-token
+# (full admin). A subset of what `punktfunk-host plugins enable` grants
+# (plugin_host/plugins/windows.rs).
 if ($existing) {
     $principal = New-ScheduledTaskPrincipal -UserId 'LocalService' -LogonType ServiceAccount
     Set-ScheduledTask -TaskName $task -Principal $principal | Out-Null
@@ -131,8 +134,8 @@ if ($existing) {
         }
     }
     # Unit dirs get inheritable (RX,WA): bun's module loader opens unit files requesting
-    # FILE_WRITE_ATTRIBUTES on top of read - plain (RX) makes every import EPERM (found
-    # on-glass). WA can only touch timestamps/attribute bits, never content.
+    # FILE_WRITE_ATTRIBUTES on top of read - plain (RX) makes every import EPERM. WA can only
+    # touch timestamps/attribute bits, never content.
     foreach ($unitDir in @('plugins', 'scripts')) {
         $dirPath = Join-Path $cfg $unitDir
         New-Item -ItemType Directory -Force -Path $dirPath | Out-Null

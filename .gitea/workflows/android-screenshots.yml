@@ -1,8 +1,8 @@
 # Android client screenshots for the Play listing / marketing. Roborazzi renders the real Compose
 # UI with mock state on the host JVM via Robolectric — NO emulator, GPU, KVM, host, or JNI core
 # (`-PskipRustBuild` skips the cargo-ndk native build). The Android analogue of apple.yml's
-# `screenshots` job, gated to STABLE RELEASE tags only. Standalone + best-effort: a failure here
-# reds nothing else. PNGs land as a 30-day artifact; not committed or published.
+# `screenshots` job, gated to STABLE RELEASE tags and manual dispatch. Standalone + best-effort: a
+# failure here reds nothing else. PNGs land as a 30-day artifact; not committed or published.
 name: android-screenshots
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
@@ -22,7 +22,7 @@ jobs:
   screenshots:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
-    # JDK 21 + SDK baked (AGP 9.3 + Robolectric's SDK-36 android-all jar both want 17–21).
+    # JDK 21 + SDK baked (the app compiles for JVM 21; Robolectric's android-all jar is SDK 36).
     # The tests are pure JVM (no NDK), but sharing android.yml's image means one image to
     # keep warm instead of a per-run setup-java + sdkmanager download pair.
     container:

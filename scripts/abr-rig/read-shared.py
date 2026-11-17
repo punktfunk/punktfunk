@@ -4,7 +4,7 @@
     read-shared.py <tag> [link_kbps] [--lone KBPS] [--bucket S]
 
 Reads <tag>-1.jsonl / <tag>-2.jsonl and their probe logs out of this script's
-out/, or $PF_RIG_OUT (the `-p1` spelling an older driver wrote is read too).
+out/, or $PF_RIG_OUT (the `-p1` spelling post-ship-rounds.sh writes is read too).
 
 CLOCK ALIGNMENT.  Each probe's `t_ms` counts from its own session open, so the
 two files do not share a zero.  The client log's `trajectory session open` line

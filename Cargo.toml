@@ -93,10 +93,11 @@ exclude = [
     "fuzz",
 ]
 
-# ndk 0.9.0 with a small maintained patch set: public `MediaCodec::as_ptr` for the missing
-# frame-rendered binding, two warning fixes, and panic-free destructors for fallible NDK cleanup.
-# The pointer patch can disappear when upstream exposes the callback; destructor failures remain
-# non-actionable in `Drop` and must never unwind through a JNI or codec callback boundary.
+# ndk 0.9.0 with a small maintained patch set: public `MediaCodec::as_ptr` (frame-rendered
+# callback) and `AudioStreamBuilder::as_ptr` (channel mask), two warning fixes, and panic-free
+# destructors for fallible NDK cleanup. The pointer patches can disappear when upstream exposes
+# those bindings; destructor failures remain non-actionable in `Drop` and must never unwind
+# through a JNI or codec callback boundary.
 [patch.crates-io]
 ndk = { path = "clients/android/native/vendor/ndk" }
 
@@ -146,30 +147,24 @@ ash = "0.38"
 # The vendored parser snapshot the decode crates share.
 cros-codecs = { path = "crates/codec/pf-bitstream/vendor/cros-codecs" }
 
-# The `unsafe` discipline the `packaging/windows/drivers/*` crates already run, extended to the
+# The `unsafe` discipline the `packaging/windows/drivers/*` crates also run, extended to the
 # workspace. `unsafe fn` marks a CONTRACT the caller must uphold; it is not a licence for the whole
 # body to skip checking. Without this lint an `unsafe fn` body is unchecked end to end, so a 600-line
-# function hides which handful of lines are actually the unsafe ones — exactly the reviewer-hostile
-# shape we are working down. (This is the Rust 2024 default; adopting it early also pays off the
-# edition migration.)
+# function hides which handful of lines are actually the unsafe ones. (It is the Rust 2024 default;
+# `deny` pins it explicitly.)
 #
-# `deny`, not `warn`. `warn` was never actually a softer setting: CI runs `cargo clippy … -D
-# warnings`, which promotes it to a hard error anyway — that is how adopting this lint turned main
-# red on every platform for a day without the level in this file ever saying `deny`. A level that
-# lies about its own severity is worse than a strict one, so this now states what CI already does,
-# and the exemptions are written down per file instead of hiding in a 689-warning wall nobody reads.
+# `deny`, not `warn`: CI runs `cargo clippy … -D warnings`, which promotes a warning to a hard
+# error anyway, so the level states what CI does.
 #
-# THE EXEMPTIONS. Eight GPU/FFI backend files carry `#![allow(unsafe_op_in_unsafe_fn)]` with a
-# one-line reason each. They are not "not done yet" — they are where this lint stops paying:
-# their bodies are ash/CUDA/AMF/libav calls almost line for line (measured: 64% of the sites are a
-# single third-party FFI call, and of the 44 `unsafe fn`s in them only 4 have a body containing no
-# unsafe operation at all). Narrowing them means one `unsafe {}` per line plus, since pf-encode also
-# denies `clippy::undocumented_unsafe_blocks`, one hand-written SAFETY comment per line that could
-# only ever restate "an ash call on a live device" — the precise noise that made `unsafe` stop
-# meaning anything here before (see the header of `pf-win-display/src/win_display.rs`).
+# THE EXEMPTIONS. Ten GPU/FFI backend files (eight under `pf-encode/src/enc/linux`, two under
+# `pf-encode-win/src/windows`) carry `#![allow(unsafe_op_in_unsafe_fn)]` with a short reason
+# each. They are where this lint stops paying: their bodies are ash/CUDA/NVENC/D3D11/pyrowave-sys
+# calls almost line for line. Narrowing them means one `unsafe {}` per line plus, since the lint
+# below is denied, one hand-written SAFETY comment per line that could only ever restate "an ash
+# call on a live device".
 #
 # Everything else in the workspace is at zero and enforced. Removing one of those allows, file by
-# file, is real work with a real payoff; blanket-narrowing all eight is not. Prefer DELETING an
+# file, is real work with a real payoff; blanket-narrowing all of them is not. Prefer DELETING an
 # `unsafe fn` marker over wrapping its body: keep the marker only where a caller can actually break
 # something (a raw pointer, a borrowed HANDLE, a GPU object that must not be in flight).
 [workspace.lints.rust]
@@ -178,14 +173,13 @@ unsafe_op_in_unsafe_fn = "deny"
 # not list: `all(target_os = "freebsd", target_vendor = "sie")` gates it.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_vendor, values("sie"))'] }
 
-# The companion lint: every `unsafe {}` / `unsafe impl` carries a `// SAFETY:` proof. Hoisted here
-# from ~85 per-file `#![deny(...)]` attributes so a NEW crate (or a new module in an old one) is
-# covered on creation rather than on remembering — the per-file form left pf-vkhdr-layer,
-# wdk-probe, and half of pf-clipboard uncovered for months. NOTE: this table reaches only crates
-# with `[lints] workspace = true`; `packaging/windows/drivers` and `packaging/windows/pf-vkhdr-layer`
-# are SEPARATE workspaces and restate it (any "workspace-wide" claim must be made three times or it
-# is false). Of the members, only the two vendored snapshots (pf-bitstream/vendor/cros-codecs,
-# pf-inject/vendor/usbip-sim) stay out, deliberately — upstream code stays pristine.
+# The companion lint: every `unsafe {}` / `unsafe impl` carries a `// SAFETY:` proof. It lives here
+# so a NEW crate (or a new module in an old one) is covered on creation rather than on
+# remembering. NOTE: this table reaches only crates with `[lints] workspace = true`;
+# `packaging/windows/drivers` and `packaging/windows/pf-vkhdr-layer` are SEPARATE workspaces and
+# restate it (any "workspace-wide" claim must be made three times or it is false). Of the members,
+# only the two vendored snapshots (pf-bitstream/vendor/cros-codecs, pf-inject/vendor/usbip-sim)
+# stay out, deliberately — upstream code stays pristine.
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"
 # `*const T as *mut T` reads like any other cast. `cast_mut()` names the one that can turn a

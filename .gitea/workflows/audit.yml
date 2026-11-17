@@ -3,8 +3,7 @@
 # it lands).
 #   * cargo-audit → the (network-facing, crypto-heavy) Rust tree, against the RustSec advisory DB.
 #                   ⚠ ALL SEVEN Rust lockfiles, each named with its own `--file`: a bare `cargo audit`
-#                   reads only the root one, which is how the drivers lock went unscanned for so
-#                   long despite already being in this job's `paths:` filter.
+#                   reads only the root one.
 #   * cargo-deny  → where each crate comes from, over the same seven Rust workspaces (deny.toml): a
 #                   registry or git repository outside the allowlist fails. Duplicate versions
 #                   print as warnings.
@@ -24,8 +23,8 @@
 #                   cross-compiled to MSVC layout. Not a supply-chain scan; it lives here because
 #                   audit.yml already has exactly the shape it needs (weekly cron,
 #                   workflow_dispatch, the rust-ci container, the same cache pattern) and because
-#                   ci.yml runs on every push against a fleet where 37 of 46 jobs contend for
-#                   ubuntu-24.04. See the `miri:` job below for what it does and does not buy.
+#                   ci.yml runs on every push, onto the shared ubuntu-24.04 runners. See the
+#                   `miri:` job below for what it does and does not buy.
 #   * c-abi-asan  → ASAN+LSAN run of the C ABI harness (tests/c/run.sh under
 #                   PF_SAN=address): both sides of the C ABI boundary instrumented at once, and
 #                   the only automated check on its Box::into_raw/from_raw leak contract. Same
@@ -34,8 +33,8 @@
 #   * careful     → the leaf and host crates' own tests against a std rebuilt with its debug
 #                   assertions. See the `careful:` job.
 #   * tsan        → the core, zerocopy and host tests under ThreadSanitizer. See the `tsan:` job.
-#   * fuzz        → libFuzzer over the wire, bitstream and RTSP decoders (fuzz/), five minutes
-#                   a target. Here for the same reasons as miri. See the `fuzz:` job.
+#   * fuzz        → libFuzzer over the decoders a peer's bytes reach (fuzz/), five minutes a
+#                   target. Here for the same reasons as miri. See the `fuzz:` job.
 # Triggers: weekly (catch newly-disclosed CVEs in pinned deps), on every lockfile/allowlist
 # change, and on demand.
 # To silence a known-unfixable Rust advisory, add it to `.cargo/audit.toml` ([advisories] ignore=[…]).
@@ -75,11 +74,10 @@ on:
   workflow_dispatch:
 # NOTE on the `paths:` list above and the `miri:` job: `crates/host/pf-driver-proto/**` is deliberately
 # NOT listed, even though that crate is what the Miri job exists to watch. `paths:` is a
-# WORKFLOW-level filter — adding it would fire all six jobs (three bun trees, pnpm, cargo-audit,
-# the license gate) on every driver-proto edit, onto a fleet where 37 of 46 jobs contend for
-# ubuntu-24.04, to run one 2-minute job. Weekly cron + workflow_dispatch is the day-one cadence;
-# revisit once the job has a green history, and if you do, prefer moving miri to its own workflow
-# file over widening this filter.
+# WORKFLOW-level filter — adding it would fire every job in this file (the audits, the license
+# gate and the sanitizer jobs) on each driver-proto edit, onto the shared ubuntu-24.04 runners,
+# to run one short job. Miri runs on the weekly cron and workflow_dispatch; if it needs a push
+# trigger, prefer moving miri to its own workflow file over widening this filter.
 
 jobs:
   cargo-audit:
@@ -281,13 +279,12 @@ jobs:
   #   Windows section owner reads through. It is path-dep'd by BOTH workspaces, so it is the layout
   #   oracle for every frame and IOCTL crossing that boundary — and drift there is silent
   #   corruption, not a compile error. Nothing else in CI checks it at MSVC layout.
-  #   On the first run ever performed against this repo it found a real defect: a layout test
-  #   reading an align-8 struct out of an align-1 stack buffer, which had passed on every machine
-  #   and every CI leg since it was written because a stack `[u8; 40]` usually lands 8-aligned.
+  #   -Zmiri-symbolic-alignment-check also refuses to let a stack `[u8; N]` that happens to land
+  #   8-aligned stand in for an alignment guarantee, which a plain test run cannot see.
   #
   # WHAT IT DOES NOT BUY — do not let anyone report this as unsafe coverage, and do not publish a
-  #   "Miri coverage" percentage; it would be noise. Miri can execute on the order of 2% of the
-  #   host's unsafe. It cannot run ash, windows-rs, libva, CUDA or the WDK, and in those crates
+  #   "Miri coverage" percentage; it would be noise. Miri can execute only a small fraction of
+  #   the host's unsafe. It cannot run ash, windows-rs, libva, CUDA or the WDK, and in those crates
   #   the unsafe *is* the foreign call, so there is nothing for an interpreter to execute. This
   #   job is a targeted instrument for three leaf surfaces, not a safety net.
   #
@@ -301,26 +298,14 @@ jobs:
   #   * pf-bitstream    — its compile did not finish in 27 min at 2.1 GB RSS, and it is
   #                       `forbid(unsafe_code)`, so there is nothing to find. Do not re-add it.
   #   * pf-update-check — ring; every FFI crate — dies on the first foreign call. Structural.
-  #   * punktfunk-core in bulk — `-- fec packet crypto` selects 63 tests and was killed at a
-  #                       25-minute cap with not one test reported complete. Only the narrow
-  #                       `fec::gf8` selection below is affordable, and it was timed before it
-  #                       was committed. Do not widen this filter without timing the result.
+  #   * punktfunk-core in bulk — `-- fec packet crypto` selects 63 tests and does not finish
+  #                       within a 25-minute cap. Only the narrow `fec::gf8` selection below is
+  #                       affordable. Do not widen this filter without timing the result.
   #
-  # MEASURED, not estimated — 192.168.1.25 (Ubuntu, 8 cores), on the DATED toolchain this job
-  # actually installs, with a COLD target dir and a COLD sysroot cache (so each step's figure
-  # includes building the Miri sysroot it needs) and a warm cargo registry. Every step below has
-  # been run start to finish; nothing here is extrapolated:
-  #   step A   21 + 12 + 4 pass    43 s
-  #   step B          21 pass      26 s
-  #   step C           2 pass      63 s
-  #   TOTAL 132 s cold. Interpretation itself is ~10 s of that; the rest is compiling, plus ~38 s
-  #   of one-time sysroot builds (21 s host + 17 s MSVC) that the cache below then carries.
-  #   Warm, the three steps are ~6 s / ~3 s / ~10 s. `timeout-minutes: 30` is therefore vast
-  #   headroom, kept deliberately so a first fully-uncached run — which additionally downloads a
-  #   ~400 MB toolchain and the registry — cannot trip it.
-  # If you add a step, MEASURE IT FIRST. The estimate this job replaced said "under 15 s across
-  # all four steps" and was extrapolated from a partial run; the real punktfunk-core figure was
-  # >25 min. Extrapolation is exactly how that happened.
+  # COST: cold, the three steps take a couple of minutes, including the one-time Miri sysroot
+  # builds (host + MSVC) that the cache below carries; warm, seconds. `timeout-minutes: 30` is
+  # deliberate headroom so a first fully-uncached run — which also downloads a ~400 MB toolchain
+  # and the registry — cannot trip it. If you add a step, MEASURE IT FIRST; do not extrapolate.
   miri:
     runs-on: ubuntu-24.04
     container:
@@ -330,22 +315,17 @@ jobs:
       # A DATED nightly, bumped deliberately — exactly like rust-toolchain.toml, and for the same
       # reason. The cache keys below carry this value, so bumping it self-invalidates them.
       # ⚠ `nightly-<date>` names the day rustup PUBLISHED the build, and that build is compiled
-      # from the PREVIOUS day's commit. This pin therefore resolves to
-      # `rustc 1.99.0-nightly (969b803cb 2026-08-09)` [verified by installing it], NOT the
-      # `12c36e253 2026-08-10` that the rust-safety programme doc's §7 table cites — that figure
-      # came from the ROLLING `nightly` channel and was mislabelled as the dated one. Harmless,
-      # but do not "fix" the date to chase that hash: all three steps below were re-run and are
-      # green on the dated toolchain this job actually installs.
+      # from the PREVIOUS day's commit. Do not change the date to chase a commit hash quoted
+      # elsewhere.
       MIRI_TOOLCHAIN: nightly-2026-08-10
       # A GUARD, not a fix for a present problem: audit.yml sets no sccache — only ci.yml does, at
-      # workflow level (ci.yml:27). `cargo-miri` REPLACES rustc and cannot be wrapped; it prints
+      # workflow level. `cargo-miri` REPLACES rustc and cannot be wrapped; it prints
       # "Ignoring `RUSTC_WRAPPER` environment variable, Miri does not support wrapping" and
       # carries on [verified]. This keeps a future workflow-level sccache from becoming a puzzle.
       RUSTC_WRAPPER: ""
       # -Zmiri-disable-isolation: pf-gpu's tests mkdir, and Miri aborts them without it [verified].
       # -Zmiri-symbolic-alignment-check: the whole point — it refuses to let an accidentally
-      #   favourable stack slot stand in for an alignment guarantee. This is the flag that caught
-      #   the pf-driver-proto defect.
+      #   favourable stack slot stand in for an alignment guarantee.
       # NOTE the absence of -Zmiri-ignore-leaks. Miri leak-checks by DEFAULT, and that is the one
       #   leak-detection capability it offers here. None of the crates below leaks, so the job is
       #   green. The tree does contain DELIBERATE leaks (pf-umdf-util/src/section.rs `ViewCell`,
@@ -373,16 +353,16 @@ jobs:
           key: miri-registry-v1-${{ hashFiles('Cargo.lock') }}
           restore-keys: miri-registry-v1-
 
-      # The image needs no change for this: ci/rust-ci.Dockerfile:51-54 installs via rustup and
+      # The image needs no change for this: ci/rust-ci.Dockerfile installs via rustup and
       # `chmod -R a+w`s both RUSTUP_HOME and CARGO_HOME, so a job can add a toolchain at runtime.
       # `rust-src` is required — cargo-miri builds its sysroot from source, per target.
       #
-      # This does NOT disturb the 1.96.0 pin: `cargo +<toolchain>` overrides rust-toolchain.toml
-      # for that single invocation only, so `cargo fmt` / `clippy` keep resolving 1.96.0 and the
+      # This does NOT disturb the rust-toolchain.toml pin: `cargo +<toolchain>` overrides it
+      # for that single invocation only, so `cargo fmt` / `clippy` keep resolving the pin and the
       # fmt-parity contract is untouched. The two echo lines below keep that claim
       # honest in the log. They are deliberately NOT `rustup show active-toolchain`: that command
-      # RESOLVES the toolchain file and would install the whole 1.96.0 toolchain just to print a
-      # line, in a job where every cargo call is `+$MIRI_TOOLCHAIN` and 1.96.0 is never needed.
+      # RESOLVES the toolchain file and would install the whole pinned toolchain just to print a
+      # line, in a job where every cargo call is `+$MIRI_TOOLCHAIN` and the pin is never needed.
       # Deliberately NOT `rustup override set` — that writes persistent per-directory state into
       # the runner's rustup config, which leaks into unrelated later jobs on a self-hosted fleet.
       # Deliberately NOT a second rust-toolchain.toml in a subdirectory — that would apply to
@@ -398,12 +378,11 @@ jobs:
           echo "root pin, untouched by this job: $(grep -E '^channel' rust-toolchain.toml)"
           cargo +"$MIRI_TOOLCHAIN" --version
 
-      # A run that reports `0 passed` is a selection that matched nothing, not a success — that
-      # exact mistake has already cost one round-trip here. So each step below checks a zero exit
-      # AND that at least one target reported a non-zero pass count, which is what catches a
-      # crate rename or a `--` filter that stops matching. (Each step legitimately prints several
-      # `0 passed` lines too — the empty bin/doctest targets — so the check is "at least one
-      # non-zero", not "no zeroes".) Expected counts at the time of writing: 21 + 12 + 4.
+      # A run that reports `0 passed` is a selection that matched nothing, not a success. So each
+      # step below checks a zero exit AND that at least one target reported a non-zero pass count,
+      # which is what catches a crate rename or a `--` filter that stops matching. (Each step
+      # legitimately prints several `0 passed` lines too — the empty bin/doctest targets — so the
+      # check is "at least one non-zero", not "no zeroes".)
       - name: miri — FFI-free leaf crates (native)
         run: |
           set -o pipefail
@@ -414,8 +393,8 @@ jobs:
           [ "$ok" = 1 ] || { echo "::error::miri (FFI-free leaf crates, native) did not pass; see punktfunk-planning design/rust-safety-programme.md §7"; exit 1; }
 
       # THE step that justifies the job: pf-driver-proto at MSVC layout, on Linux, no Windows box.
-      # Expected: 21 passed. If this one ever goes red, treat it as a layout-contract break
-      # between the host and driver workspaces until proven otherwise.
+      # If this one ever goes red, treat it as a layout-contract break between the host and
+      # driver workspaces until proven otherwise.
       - name: miri — pf-driver-proto at x86_64-pc-windows-msvc layout
         run: |
           set -o pipefail
@@ -427,16 +406,14 @@ jobs:
 
       # fec-rs dispatches its GF(2^8) multiply through RUNTIME `is_x86_feature_detected!`. Under
       # Miri that detection reports the COMPILE-TIME target features, so WITHOUT these RUSTFLAGS
-      # the step silently interprets the scalar fallback and is worthless. Verified both ways on
-      # 192.168.1.25: bare, `avx2=false ssse3=false`; with the flags, `avx2=true ssse3=true` and
-      # `_mm256_shuffle_epi8` genuinely executes under the interpreter. GFNI stays false either
-      # way — Miri does not implement it — so the gfni branch is simply not covered here.
+      # the step silently interprets the scalar fallback and is worthless. With the flags,
+      # `avx2=true ssse3=true` and `_mm256_shuffle_epi8` genuinely executes under the
+      # interpreter. GFNI stays false either way — Miri does not implement it — so the gfni
+      # branch is simply not covered here.
       #
-      # ⚠ x86_64 ONLY, and it must stay that way. A RUSTFLAGS env var OVERRIDES config rustflags
-      # ENTIRELY — it does not merge. That used to cost the aarch64 `--cfg aes_armv8` /
-      # `--cfg polyval_armv8` decrypt flags; the aes 0.9 / polyval 0.7 bump retired those cfgs
-      # (see the tombstone in .cargo/config.toml), so there is nothing left for an override to
-      # drop here. Keep the pin anyway: these target-features are meaningless off x86_64.
+      # ⚠ x86_64 ONLY, and it must stay that way: these target-features are meaningless off
+      # x86_64. A RUSTFLAGS env var also OVERRIDES config rustflags ENTIRELY — it does not merge
+      # (.cargo/config.toml holds none today and says why).
       # Narrow selection is mandatory, not an optimisation: see the punktfunk-core note above.
       - name: miri — punktfunk-core fec::gf8, taking the real AVX2/SSSE3 branches
         env:
@@ -456,8 +433,6 @@ jobs:
   # included), the harness with clang -fsanitize — so ASAN sees the seam a Rust-only tool cannot,
   # and LSAN (detect_leaks=1, the script's default) becomes the one automated check on the ABI's
   # Box::into_raw/from_raw leak contract.
-  # Proven to fail on 192.168.1.25: deleting a single punktfunk_session_free() from harness.c
-  # makes LSAN report the ~308 Rust-side allocations behind the handle and run.sh exit 1.
   # What it does NOT see: the invalid-InputKind-discriminant UB in the ABI (that needs the
   # validator, tracked in §5 of the programme doc), and nothing GPU/Windows — this is the
   # default-feature (quic-less, opus-less) ABI only.
@@ -468,7 +443,7 @@ jobs:
     timeout-minutes: 30
     env:
       # The SAME dated pin as the miri job above, deliberately — one nightly date to bump for
-      # both jobs (they have no toolchain interaction; sharing the date just halves the chores).
+      # every sanitizer job (they have no toolchain interaction).
       SAN_TOOLCHAIN: nightly-2026-08-10
       # Same guard as the miri job: audit.yml sets no sccache today, and -Zbuild-std could not
       # use it anyway. Keeps a future workflow-level sccache from becoming a puzzle.
@@ -476,7 +451,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Own `san-` key prefixes — never shared with the miri caches, per the cache-poisoning
+      # Own `san-` key prefixes — never shared with the miri caches, per the key-prefix
       # note there (and so an incomplete save from one job can never starve the other).
       - name: cache the nightly toolchain
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -539,21 +514,16 @@ jobs:
   #
   # NOT BLOCKING until it has a green history: a failure is a warning on the step.
   #
-  # MEASURED on 192.168.1.21 (12 cores), on the dated toolchain this job installs, cold target
-  # dir and cold sysroot, warm registry:
-  #   careful sysroot   17 s
-  #   the nine crates  148 s: 2118 passed, 35 ignored. 5.2 GB of target dir.
-  # Each crate alone, cold and in this order: pf-driver-proto 49 s, pf-host-config 10,
-  # pf-frame 49, punktfunk-core 91, pf-zerocopy 7, pf-encode 28, pf-vdisplay 62, pf-inject 29,
-  # pf-capture 39. None is near the ten minutes that would drop it. If you add a crate, measure
-  # it first.
+  # COST: cold, the crates in the step below take a few minutes after a one-time sysroot build,
+  # and about 5 GB of target dir. A crate that alone approached ten minutes would be dropped. If
+  # you add a crate, measure it first.
   careful:
     runs-on: ubuntu-24.04
     container:
       image: 192.168.1.58:5010/punktfunk-rust-ci:latest
     timeout-minutes: 45
     env:
-      # The miri, c-abi-asan and fuzz pin: one nightly date to bump for all four.
+      # The same dated nightly as the miri, c-abi-asan, tsan and fuzz jobs: bump them together.
       CAREFUL_TOOLCHAIN: nightly-2026-08-10
       # Also in the cache key below, so a bump reinstalls instead of finding the old binary.
       CARGO_CAREFUL_VERSION: 0.4.10
@@ -605,9 +575,9 @@ jobs:
   # run. std is rebuilt instrumented too (`-Zbuild-std`); without that its mutexes and channels
   # read as races.
   #
-  # WHAT IT CANNOT SEE, which is most of what has actually gone wrong in this tree:
-  #   * a GPU-timeline race. The capture ring that rotated onto a slot NVENC was still reading
-  #     was ordered by a D3D11 keyed mutex, not by anything a CPU sanitizer models.
+  # WHAT IT CANNOT SEE:
+  #   * a GPU-timeline race. GPU work is ordered by GPU-side synchronisation, not by anything
+  #     a CPU sanitizer models.
   #   * a cross-process race: every shared section the host and a driver or worker both write.
   #   * anything on Windows. TSan has no MSVC target, which removes IDD push, the pad backends
   #     and the driver workspace.
@@ -620,19 +590,15 @@ jobs:
   #
   # NOT BLOCKING until it has a green history: a report or a failure is a warning on the step.
   #
-  # MEASURED on 192.168.1.21 (12 cores), on the dated toolchain this job installs, cold target
-  # dir, warm registry:
-  #   punktfunk-core + pf-zerocopy   138 s: 1005 passed, 8 ignored. std is rebuilt in this step.
-  #   punktfunk-host                 306 s: 1058 passed, 6 ignored
-  # 11 GB of target dir. Before ci/tsan.supp existed the same two runs printed 103 reports of
-  # three kinds; each kind is an entry there now. If you add a crate, measure it first.
+  # COST: cold, a few minutes per step (std is rebuilt in the first) and about 11 GB of target
+  # dir. If you add a crate, measure it first.
   tsan:
     runs-on: ubuntu-24.04
     container:
       image: 192.168.1.58:5010/punktfunk-rust-ci:latest
     timeout-minutes: 60
     env:
-      # The miri, c-abi-asan, careful and fuzz pin: one nightly date to bump for all five.
+      # The same dated nightly as the miri, c-abi-asan, careful and fuzz jobs: bump them together.
       TSAN_TOOLCHAIN: nightly-2026-08-10
       # -Zbuild-std could not use sccache; same guard as the jobs above.
       RUSTC_WRAPPER: ""
@@ -697,15 +663,19 @@ jobs:
           [ "$ok" = 1 ] || echo "::warning::tsan (punktfunk-host) reported a race or did not pass; see punktfunk-planning design/rust-safety-programme.md §6.3"
 
   # ── Fuzzing ──────────────────────────────────────────────────────────────────────────────────
-  # Three libFuzzer targets (fuzz/) on bytes a peer controls, five minutes each:
+  # libFuzzer targets (fuzz/) on bytes a peer controls, five minutes each:
   #   core_wire       every decoder punktfunk-core runs on the wire: frames, datagrams, the media
   #                   header, the pairing an older client speaks, mDNS text. A decoder with an
   #                   encoder must also settle: what decodes encodes to bytes that decode the same.
   #   bitstream_plan  the client's H.264, H.265 and AV1 planners on a host's stream, seeded with
   #                   the vendored vectors as they stand.
   #   rtsp            the GameStream RTSP text layer, which a LAN peer reaches before pairing.
-  # None of that code holds an unsafe block, so a finding is a panic: a peer stopping a host or
-  # a client's decode thread, not a memory bug.
+  #   control_wire    the GameStream control stream's codec on bytes a connected LAN peer sends.
+  #   cursor_shape    a host's cursor shape as the client reads it.
+  #   reassembler     media packets through the client's reassembler, as one burst per input.
+  #   audio_plane     the audio bytes a host sends, through the decoders every client runs.
+  # The code core_wire, bitstream_plan and rtsp reach holds no unsafe block, so a finding there
+  # is a panic: a peer stopping a host or a client's decode thread, not a memory bug.
   #
   # `--build-std` builds std under fuzz/Cargo.toml's profile, so it is sanitized and runs its
   # own debug assertions. That manifest also says why the vendored parser alone keeps overflow
@@ -714,30 +684,24 @@ jobs:
   # A crash input is uploaded with the run. `cargo fuzz run <target> <file>` replays it; the fix
   # carries the input as a `#[test]` in the crate it hit, where ci.yml replays it on stable.
   #
-  # NOT BLOCKING until it has a green history, as miri and c-abi-asan began: a crash or a build
-  # failure is a warning on the step.
+  # NOT BLOCKING until it has a green history (miri and c-abi-asan are blocking): a crash or a
+  # build failure is a warning on the step.
   #
-  # MEASURED on 192.168.1.21 (12 cores), on the dated toolchain this job installs, with a cold
-  # target dir and a warm registry:
-  #   build    43 s for the first target, which compiles std and every dependency, then 1 s
-  #            for each of the other two. 634 MB of target dir.
-  #   fuzzing  300 s a target. From an empty corpus core_wire ran 51 000 inputs a second,
-  #            rtsp 22 000 and bitstream_plan 2 200.
-  #   A `data[0]` planted on the empty input stopped core_wire in 2 s, build included.
-  # About 16 minutes in all. The timeout leaves room for a first run that also downloads the
-  # toolchain. If you add a target, measure it first.
+  # COST: one build that compiles std and every dependency for the first target, then five
+  # minutes of fuzzing per target. The timeout leaves room for a first run that also downloads
+  # the toolchain. If you add a target, measure it first.
   fuzz:
     runs-on: ubuntu-24.04
     container:
       image: 192.168.1.58:5010/punktfunk-rust-ci:latest
-    # Seven targets at five minutes each, after a build that now carries the QUIC stack.
+    # Seven targets at five minutes each, after a build that carries the QUIC stack.
     timeout-minutes: 60
     env:
-      # The miri and c-abi-asan pin: one nightly date to bump for all three.
+      # The same dated nightly as the miri, c-abi-asan, careful and tsan jobs: bump them together.
       FUZZ_TOOLCHAIN: nightly-2026-08-10
       # Also in the cache key below, so a bump reinstalls instead of finding the old binary.
       CARGO_FUZZ_VERSION: 0.13.2
-      # -Zbuild-std could not use sccache; same guard as the two jobs above.
+      # -Zbuild-std could not use sccache; same guard as the jobs above.
       RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -2,14 +2,13 @@
 #
 # Two very different image families now:
 #
-#   BUILDER images (punktfunk-rust-ci{,-noble,-arm64cross}, punktfunk-fedora{,44,45}-rpm)
+#   BUILDER images (every image in the `builders` matrix and `builders-arm64cross` below)
 #     live on the LAN registry (home-ci-core — unom/infra runners/ci-core/) and are
 #     CONTENT-KEYED: the tag is a hash of what they are built from (the ci/ tree, +
 #     rust-toolchain.toml for the cross image), and a build only happens when that key
 #     has no manifest yet. An app-only push costs one curl per builder image, pushes
-#     no builder bytes, and mints no per-SHA tag debris on the runners — the failure
-#     mode that filled the fleet's disks. `:latest` is re-pushed
-#     alongside every new key and is what the consuming workflows pin.
+#     no builder bytes, and mints no per-SHA tag debris on the runners. `:latest` is
+#     re-pushed alongside every new key and is what the consuming workflows pin.
 #
 #     READS come from :5010 and need no credential. WRITES go to :5011 and need
 #     CI_REGISTRY_PASSWORD. Same store behind both — a registry keys by repository name,
@@ -26,38 +25,24 @@
 # CI_REGISTRY_PASSWORD: repo Actions secret, the LAN registry's push credential for user
 # `ci`. Generated on ci-core into /srv/ci/stack/registry-secret; rotate in both places.
 #
-# --- security-review-2026-08-05 H-6, FIXED 2026-08-05 -------------------------------
-# The registry used to accept anonymous pushes from any LAN peer, and every
-# secret-bearing job in this repo runs INSIDE an image pulled from it. Attacker
-# position #1 of the project's own threat model did not need to break any signing
-# logic: push one tag, and the next android.yml run executes their code in the same job
-# that does `echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > release.jks`. Same shape for
-# rpm.yml (RPM_GPG_PRIVATE_KEY) and android-promote.yml (SERVICE_ACCOUNT_JSON).
+# Registry trust. Every secret-bearing job in this repo runs INSIDE an image pulled from the
+# LAN registry (android.yml's RELEASE_KEYSTORE_BASE64, rpm.yml's RPM_GPG_PRIVATE_KEY,
+# android-promote.yml's SERVICE_ACCOUNT_JSON), so whoever can write a tag there runs code beside
+# those secrets (security-review-2026-08-05 H-6). :5010 serves GET/HEAD only and refuses
+# everything else with 405, :5011 demands basic auth on every request (unom/infra
+# runners/ci-core/); the pushes and release-tag manifest PUTs below authenticate.
 #
-# The infra half is done (unom/infra runners/ci-core/): :5010 serves GET/HEAD only and
-# refuses everything else with 405, :5011 demands basic auth on every request. The half
-# in this file is done below: pushes and release-tag manifest PUTs authenticate.
+# Consumers pin :latest, not an @sha256: digest. The set of people who can overwrite a tag is the
+# set who can push to main and edit a pinned digest in this file, so a pin defends against nobody
+# not already trusted, and it costs a two-commit dance on every ci/ change. What closes the
+# residual gap, a tag overwritten out of band, is making :latest a CHECKED function of the tree:
+# the "Reconcile :latest" step asserts on every run that :latest and :ck-$KEY are the same digest
+# and repairs it, loudly, when they are not (.gitea/scripts/reconcile-latest.sh). Revisit inline
+# digest pins if the push credential ever leaves the maintainer trust set.
 #
-# ⚠ On the second half as the review originally worded it — "pin consumers by @sha256:
-# digest". We deliberately do something else, because after authentication the digest
-# pin no longer buys what it was meant to buy. The set of people who can overwrite a tag
-# is now exactly the set who can push to main and edit a pinned digest in this very
-# file: a pin defends against nobody it did not already trust, while costing a
-# two-commit dance on every ci/ change (~3x a month) during which consumers silently run
-# a builder image that predates the ci/ change they are testing.
-#
-# What actually closes the residual gap — a tag quietly overwritten out of band — is
-# making :latest a CHECKED function of the tree instead of a tag someone remembered to
-# move. The "Reconcile :latest" step below asserts on every run that :latest and
-# :ck-$KEY are the same digest, repairs it when they are not, and says so loudly. That
-# catches an out-of-band overwrite on the next push to main, needs no churn, and fixes
-# a real pre-existing bug on the side: reverting ci/ used to leave :latest pointing at
-# the newer build forever. Revisit inline digest pins if the push credential ever leaves
-# the maintainer trust set.
-#
-# Bootstrap note: consuming workflows pull <LAN>/punktfunk-rust-ci:latest, so the LAN
-# registry must hold a seeded :latest once (done 2026-07-29 from the last Gitea-registry
-# images); after that, this workflow keeps :latest current whenever ci/ changes.
+# Bootstrap note: consuming workflows pull <LAN>/punktfunk-rust-ci:latest, so the LAN registry
+# must hold a :latest for them to pull; after that, this workflow keeps :latest current whenever
+# ci/ changes.
 name: docker
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
@@ -102,15 +87,13 @@ jobs:
         include:
           - image: punktfunk-rust-ci
             dockerfile: ci/rust-ci.Dockerfile
-          # Ubuntu 24.04 LTS host builder: same purpose as rust-ci but lowers the host .deb's glibc
-          # floor to 2.39 and lowers the glibc floor, so the package installs on 24.04 LTS
-          # (rust-ci's 26.04 build is uninstallable there). Consumed by deb.yml's build-publish-host job.
+          # Ubuntu 24.04 LTS host builder: lowers the host .deb's glibc floor to 2.39, so the
+          # package installs on 24.04 LTS (a build in rust-ci's 26.04 image is uninstallable
+          # there). Consumed by deb.yml's build-publish-host job.
           - image: punktfunk-rust-ci-noble
             dockerfile: ci/rust-ci-noble.Dockerfile
-          # Debian 13 gamescope builder. The gamescope .deb used to be built in the noble image
-          # and NEVER once succeeded there — noble's wayland is 1.22.0 and the vendored wlroots
-          # 0.19.3 floors it at 1.23.1, so two releases shipped without the package. trixie is the
-          # oldest apt distro the tree configures on. Consumed by deb.yml's build-publish-gamescope.
+          # Debian 13 gamescope builder: trixie is the oldest apt distro the tree configures on.
+          # Consumed by deb.yml's build-publish-gamescope.
           - image: punktfunk-gamescope-trixie
             dockerfile: ci/gamescope-trixie.Dockerfile
           - image: punktfunk-fedora-rpm
@@ -126,19 +109,17 @@ jobs:
             buildargs: --build-arg FEDORA_VERSION=45
             keysuffix: -f45
           # Android builder (JDK + SDK/NDK + cargo-ndk + sccache) — android.yml and
-          # android-screenshots.yml run in it; ~3 GB of per-run Google downloads became
-          # image layers.
+          # android-screenshots.yml run in it.
           - image: punktfunk-android-ci
             dockerfile: ci/android-ci.Dockerfile
           # Arch builder (base-devel + both makepkg legs' deps + bun + sccache) —
-          # arch.yml runs in it; ~1 GB of per-run pacman traffic became image layers.
+          # arch.yml runs in it.
           - image: punktfunk-arch-ci
             dockerfile: ci/arch-ci.Dockerfile
           # Flatpak builder (flatpak + flatpak-builder + ostree + the GNOME 50 runtime/SDK
-          # and the rust-stable/llvm20 extensions) — flatpak.yml runs in it. ~5 min of
-          # per-run dnf plus a 168 s restore of a 1.5 GB runtime cache became image layers;
-          # the ci/ tree is also where the runtime pins now live, so a GNOME bump in the
-          # manifest means bumping this Dockerfile's ARGs in the same commit.
+          # and the rust-stable/llvm20 extensions) — flatpak.yml runs in it. The ci/ tree is
+          # also where the runtime pins live, so a GNOME bump in the manifest means bumping
+          # this Dockerfile's ARGs in the same commit.
           - image: punktfunk-flatpak-ci
             dockerfile: ci/flatpak-ci.Dockerfile
           # The same builder for flatpak.yml's aarch64 leg, built natively on the arm64 runner:
@@ -151,7 +132,7 @@ jobs:
 
       # The key is the git TREE HASH of ci/ — every byte any of these Dockerfiles can see
       # (they all use ci/ as build context). One key for the whole family on purpose: a
-      # change to any of them re-keys all four, and a spurious rebuild of a sibling is
+      # change to any of them re-keys all of them, and a spurious rebuild of a sibling is
       # cheap, rare, and infinitely better than a stale one.
       - name: Content key
         run: |
@@ -184,8 +165,7 @@ jobs:
 
       # Gated like Build/Push: only the docker CLI needs this login (Reconcile and Tag-for-release
       # authenticate via curl -u), so a cache-hit job with nothing to push must not be able to fail
-      # on a login it never uses — proven on run 16013, where a host with a misconfigured daemon
-      # failed exactly here on a hit=true leg.
+      # on a login it never uses.
       - name: Log in to the LAN registry
         if: steps.exists.outputs.hit == 'false'
         run: |
@@ -200,8 +180,8 @@ jobs:
           docker push "$CI_REGISTRY_PUSH/${{ matrix.image }}:latest"
 
       # :latest must be whatever ci/ says it is, on every run — not only on the runs that
-      # happened to build. Two things break that: an out-of-band overwrite (the H-6
-      # attack, now only reachable by someone holding the push credential), and a plain
+      # happened to build. Two things break that: an out-of-band overwrite (reachable only
+      # with the push credential), and a plain
       # revert of ci/, which leaves :latest on the newer build because the older key is
       # already a cache hit and nothing re-points it. Both look identical from here and
       # both are repaired the same way, so repair and shout rather than fail the build.
@@ -312,7 +292,7 @@ jobs:
         if: always()
         run: docker logout "$CI_REGISTRY_PUSH" || true
 
-  # Deployable app images — unchanged flow, Gitea registry, per-SHA + release tags.
+  # Deployable app images — Gitea registry, per-SHA + release tags.
   apps:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -394,8 +374,7 @@ jobs:
             # Log out on EVERY exit path: unlike the ephemeral LAN-registry runners, this is a
             # long-lived internet-facing VM, so a `write:package` PAT left base64-encoded in
             # ~/.docker/config.json is credential-at-rest on the most exposed host in the estate.
-            # The LAN jobs above already `docker logout`; this one omitted it. security-review
-            # 2026-08-15 finding 14.
+            # The LAN jobs above `docker logout` too.
             trap 'docker logout git.unom.io || true' EXIT
             printf '%s' "$REGISTRY_TOKEN" | docker login git.unom.io -u enricobuehler --password-stdin
             cd ~/punktfunk-docs

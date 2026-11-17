@@ -8,7 +8,7 @@ wrong. This walks both directions as PDUs and reports the first frame that does 
 per-URB ledger of declared vs. written bytes.
 
 Usage:  usbip-trace-analyse.py /tmp/pad.virtual-DualSense-0
-        (reads <prefix>.rx, <prefix>.tx, <prefix>.idx)
+        (reads <prefix>.rx and <prefix>.tx)
 """
 
 import struct
@@ -128,10 +128,8 @@ def main(prefix):
         # the quieter one that kills nothing and breaks everything: an OUT reply's `actual_length`
         # is copied into the URB verbatim and is what `write()` on the device node returns, so an
         # OUT reply claiming 0 against a non-empty request tells every writer it sent nothing.
-        # (An earlier version of this check flagged ANY nonzero OUT actual_length as a desync;
-        # that was wrong — the kernel reads no payload back on OUT whatever the field says, so the
-        # framing above never depends on it. Field-diagnosed 2026-08-18: winebus's DualSense
-        # haptics enable "failed" for months on exactly this.)
+        # The kernel reads no payload back on OUT whatever the field says, so the framing above
+        # never depends on it.
         if req and p["dir"] == 0 and not p["npkts"] and p["actual"] > req["xfer_len"]:
             bad.append((p, f"OUT reply claims actual_length={p['actual']} > the {req['xfer_len']} "
                            f"bytes the kernel sent — a device cannot accept more than it was given"))

@@ -6,11 +6,10 @@
 #   https://git.unom.io/api/packages/unom/generic/punktfunk-update/<channel>/manifest.json.sig
 #
 # The signature is a raw 64-byte Ed25519 over the EXACT manifest bytes, base64 in the .sig —
-# the same format the plugin index uses and `store::index::verify_signature` checks. The
+# the same format the plugin index uses and `pf_update_check::sig::verify_signature` checks. The
 # public half is pinned in the shared checker (OFFICIAL_UPDATE_KEYS in crates/core/pf-update-check);
 # before signing, this script cross-checks the signing key against that constant and refuses
-# on mismatch — the most likely deploy mistake is signing with a key no host trusts (the
-# sysext publisher's fingerprint-crosscheck drill).
+# on mismatch — the most likely deploy mistake is signing with a key no host trusts.
 #
 # Upload order is manifest THEN signature: a client caught in the replace window sees a
 # mismatched pair and refuses (fail-closed), never a stale-signed document.
@@ -27,7 +26,6 @@
 #   AUTHENTICODE_SHA256  comma-separated signing-leaf sha256s              (required for stable)
 #   AUTHENTICODE_SUBJECT expected signing-cert subject CN — the host then  (required for stable)
 #                        demands a trusted chain (S_OK) + this subject
-#                        (security-review 2026-08-31 H-3)
 #   NOTES_URL            release-notes link (git.unom.io only)             (optional)
 #   UPDATE_MANIFEST_KEY  PKCS#8 PEM, the Ed25519 private key               (required to sign)
 #   REQUIRE_KEY=1        missing key is a hard failure (announce/stable)   (optional)
@@ -87,13 +85,13 @@ fi
 
 # Cross-check: the key we are about to sign with must be one the host binary pins.
 PUB="ed25519:$(openssl pkey -in "$KEY" -pubout -outform DER | tail -c 32 | base64)"
-# The pin list moved to the shared checker when the Linux client started verifying the same
-# manifest (crates/core/pf-update-check/src/lib.rs, OFFICIAL_UPDATE_KEYS) — one list, so the host
-# and the client can never disagree about who may announce a release.
+# The pin list lives in the shared checker (crates/core/pf-update-check/src/lib.rs,
+# OFFICIAL_UPDATE_KEYS) — one list, so the host and the client can never disagree about who may
+# announce a release.
 KEYS_FILE="crates/core/pf-update-check/src/lib.rs"
 # A MISSING file is fatal, not a warning. This check is the guard against signing with a key
-# no build trusts; if its path ever goes stale the old `else` branch would have skipped it
-# silently and published an unverifiable manifest — the exact failure it exists to prevent.
+# no build trusts; a stale path that skipped it would publish an unverifiable manifest — the
+# exact failure it exists to prevent.
 if [ ! -f "$KEYS_FILE" ]; then
   echo "ERROR: $KEYS_FILE not in this checkout — refusing to sign without the pinned-key cross-check" >&2
   exit 1
@@ -109,8 +107,8 @@ PUBLISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 MANIFEST="$WORK/manifest.json"
 
 # `printf '%s\n'`, not '%s': an EMPTY value must still hand jq one (empty) input line —
-# with no line at all, `jq -R` emits nothing and `--argjson auth ""` is invalid JSON
-# (bit the first live canary publish). The fallback belts the suspenders.
+# with no line at all, `jq -R` emits nothing and `--argjson auth ""` is invalid JSON.
+# The fallback belts the suspenders.
 AUTH_JSON="$(printf '%s\n' "${AUTHENTICODE_SHA256:-}" | jq -R 'split(",") | map(select(length > 0))')"
 AUTH_JSON="${AUTH_JSON:-[]}"
 jq -n \

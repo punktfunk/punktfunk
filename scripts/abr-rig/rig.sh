@@ -288,9 +288,9 @@ fi
 
 # ---- the ramp guard ---------------------------------------------------------
 # A ramp step the HOST could not fill reads as a floor under the link, never a wall, and the
-# session then spends 600 s below a link it never measured. It is a rig fault whatever the
-# profile — `nowall_720p` ends `wall=false` with no such step and passes. Exit 3 so the
-# driver repeats the run instead of reporting it.
+# session then runs below a link it never measured. It is a rig fault whatever the
+# profile — `nowall_720p` ends `wall=false` with no such step and passes. Exit 3: the run
+# must not be scored.
 if grep -qs "ramp step limited by the sender" "$OUT/$PROFILE-1.log"; then
   echo "[rig] FAILED: the bring-up ramp hit a sender-limited step — the wall was never measured"
   grep -h "ramp step limited by the sender\|bring-up ramp done" "$OUT/$PROFILE-1.log" | tail -2
