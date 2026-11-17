@@ -344,7 +344,7 @@ impl VirtualPad {
     /// builds the device and this holds its relay ([`crate::pad_broker::brokered`]).
     pub fn create(index: usize, identity: PadIdentity) -> Result<VirtualPad> {
         let dev = if crate::pad_broker::brokered(std::path::Path::new("/dev/uinput")) {
-            let relay = crate::pad_broker::request(identity.kind, index as u8)?;
+            let relay = crate::pad_broker::request(identity.kind, index as u8, false)?;
             tracing::info!(
                 index,
                 pad = identity.log,

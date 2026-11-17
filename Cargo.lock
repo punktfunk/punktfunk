@@ -4301,6 +4301,7 @@ dependencies = [
  "rand 0.10.3",
  "rcgen",
  "rsa",
+ "rustix",
  "rustls",
  "rusty_enet",
  "semver",

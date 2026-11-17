@@ -77,6 +77,13 @@ pub fn read_capped(body: impl std::io::Read, limit: u64) -> std::io::Result<Vec<
     Ok(bytes)
 }
 
+/// A JSON or error answer, decoded, at most 10 MiB. Past that, or unreadable, it is empty.
+fn body_text(resp: &mut ureq::http::Response<ureq::Body>) -> String {
+    pf_update_check::feed::read_capped(resp, 10 << 20)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default()
+}
+
 pub struct Client {
     agent: ureq::Agent,
     base: String,
@@ -242,7 +249,7 @@ impl Client {
         let status = resp.status().as_u16();
         if !(200..300).contains(&status) {
             let mut resp = resp;
-            let body = resp.body_mut().read_to_string().unwrap_or_default();
+            let body = body_text(&mut resp);
             return Err(Failure::api(http_error(status, &body, path)));
         }
         Ok(Box::new(resp.into_body().into_reader()))
@@ -259,7 +266,7 @@ impl Client {
     ) -> Result<serde_json::Value> {
         let mut resp = sent.map_err(|e| self.transport_failure(e, path))?;
         let status = resp.status().as_u16();
-        let body = resp.body_mut().read_to_string().unwrap_or_default();
+        let body = body_text(&mut resp);
         if !(200..300).contains(&status) {
             return Err(Failure::api(http_error(status, &body, path)));
         }

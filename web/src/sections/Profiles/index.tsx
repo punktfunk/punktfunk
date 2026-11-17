@@ -91,6 +91,9 @@ export const SectionProfiles: FC = () => {
 	const linux = host.data?.os?.startsWith("linux") ?? false;
 	const windows = host.data?.os?.startsWith("windows") ?? false;
 	const door = host.data?.door === true;
+	// An off that didn't hand everything back leaves the switch on: the next off finishes it.
+	const doorUnfinished = host.data?.door_off_unfinished === true;
+	const doorOn = door || doorUnfinished;
 	// Seats are the box's own on Windows, and a Linux door's.
 	const seatHost = windows || door;
 	const seating = useGetSeating({ query: { enabled: seatHost } });
@@ -108,11 +111,11 @@ export const SectionProfiles: FC = () => {
 			setSwitching(null);
 			return;
 		}
-		if (host.data?.door !== switching) return;
+		if (doorOn !== switching) return;
 		setSwitching(null);
 		// Every list now answers from the other host.
 		void qc.invalidateQueries();
-	}, [host.data?.door, host.data?.door_switch_failed, switching, qc]);
+	}, [doorOn, host.data?.door_switch_failed, switching, qc]);
 	useEffect(() => {
 		if (switching === null) return;
 		const slow = setTimeout(() => {
@@ -285,10 +288,11 @@ export const SectionProfiles: FC = () => {
 				door={
 					linux
 						? {
-								on: door,
+								on: doorOn,
+								unfinished: doorUnfinished,
 								changing: switching !== null,
 								unavailable: host.data ? doorUnavailable(host.data) : undefined,
-								onChange: () => setDoorAsk(!door),
+								onChange: () => setDoorAsk(!doorOn),
 							}
 						: undefined
 				}

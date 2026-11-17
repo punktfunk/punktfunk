@@ -489,11 +489,7 @@ impl HostApi {
             .build();
         let mut resp = https.run(req).map_err(classify)?;
         let status = resp.status().as_u16();
-        let body = resp
-            .body_mut()
-            .with_config()
-            .limit(ART_MAX_BYTES)
-            .read_to_vec()
+        let body = pf_update_check::feed::read_capped(&mut resp, ART_MAX_BYTES)
             .map_err(|e| LibraryError::Unreachable(format!("read body: {e}")))?;
         Ok(Reply { status, body })
     }
@@ -1207,10 +1203,7 @@ pub fn fetch_art(api: &HostApi, pinned: &ureq::Agent, url: &str) -> Result<Vec<u
         .call()
         .map_err(classify)?;
     // ureq 3 reads at most 10 MiB by default; `ART_MAX_BYTES` is this call's ceiling.
-    resp.body_mut()
-        .with_config()
-        .limit(ART_MAX_BYTES)
-        .read_to_vec()
+    pf_update_check::feed::read_capped(&mut resp, ART_MAX_BYTES)
         .map_err(|e| LibraryError::Unreachable(format!("read image: {e}")))
 }
 

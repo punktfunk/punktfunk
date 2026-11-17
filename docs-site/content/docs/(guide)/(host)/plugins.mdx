@@ -116,8 +116,9 @@ A bare name installs the first-party package from Punktfunk's registry: `playnit
 
 Each plugin runs in a sandbox of its own: no network unless it declared one, and only the folders
 it declared plus the ones you allowed. It can change only its own library entries. On **Linux** the
-sandbox needs `bubblewrap`, which the packages install, and unprivileged user namespaces. On
-**Windows** it is an AppContainer under the `NT AUTHORITY\LocalService` account, which can read
+sandbox needs `bubblewrap`, which the packages install, and unprivileged user namespaces. A plugin
+that uses the network also needs `passt`, which the packages install too; it reaches the internet
+and your LAN, and of this computer's own `localhost` only the ports you allowed. On **Windows** it is an AppContainer under the `NT AUTHORITY\LocalService` account, which can read
 Program Files but not user profiles or other drives. Still, a plugin is code on your host: install
 only plugins you trust.
 
@@ -147,11 +148,29 @@ On Windows, allowing a whole folder updates every file in it, which can take min
 game folder. The console and the CLI show how long it has been running. Plugins that ask for
 less, like Steam, land at once.
 
+## Let a plugin reach a server on this computer
+
+On Linux a plugin that uses the network reaches other machines, but not this computer's own
+`localhost`, and this computer's address on your network doesn't lead back to it from inside a
+plugin. A plugin that needs a server you run beside the host, such as RomM in Docker, asks for
+that server's port. The console shows the request with the port number and the program that
+listens there now. Choose **Allow** or **Don't allow**; allowing restarts the plugin, which then
+reaches the server at `127.0.0.1:<port>`.
+
+A plugin that doesn't ask yet can be given the port by hand: under **Plugins** → **Installed**,
+type the port into **Allow a port on this computer** on the plugin's row and choose **Allow**, or
+run `punktfunk-host plugins grant <plugin> 127.0.0.1:<port>`. Then point the plugin at
+`http://127.0.0.1:<port>`.
+
+**Plugins** → **Installed** lists the ports a plugin was allowed or refused; remove one there, or
+choose **Ask again**. A plugin is never given a port of Punktfunk's own, 47980 to 48010.
+
 ## Update and remove
 
 - **Update:** **Update to &lt;version&gt;** or **Update all** on **Installed** installs the
   catalog's version and restarts the runner. `punktfunk-host plugins add <name>` installs the
-  newest version in the registry instead.
+  newest version in the registry instead. An update the host refuses, because the package isn't
+  the one the catalog checked, leaves the version you had installed and running.
 - **Remove:** **Uninstall**, or `punktfunk-host plugins remove <name>`. Both drop the plugin's
   titles from the library and restart the runner. Its settings stay in
   `plugin-state/<plugin>/` in the config directory, so a reinstall picks them up.

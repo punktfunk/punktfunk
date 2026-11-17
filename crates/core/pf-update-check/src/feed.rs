@@ -79,7 +79,8 @@ pub fn fetch_manifest_blocking(
 
     // Only the manifest GET may become [`FeedError::NotPublished`].
     let capped = |resp: &mut ureq::http::Response<ureq::Body>| {
-        read_capped(resp, MAX_MANIFEST_BYTES).map_err(FeedError::Failed)
+        read_capped(resp, MAX_MANIFEST_BYTES as u64)
+            .map_err(|e| FeedError::Failed(format!("read the response body: {e}")))
     };
     let body = capped(&mut agent.get(&url).call().map_err(manifest_err)?)?;
     let sig = capped(&mut agent.get(&sig_url).call().map_err(fetch_err)?)?;
@@ -105,22 +106,24 @@ fn fetch_err(e: ureq::Error) -> FeedError {
     })
 }
 
-/// The body of a signed document, at most `cap` bytes. Oversize is an error, never a truncated
-/// body that then fails its signature for the wrong reason. The plugin store reads through this.
+/// The decoded body, at most `cap` bytes. Past it the read is
+/// [`ureq::Error::BodyExceedsLimit`], never a truncated body. `cap` bounds both the bytes
+/// received and what gzip inflates them to.
 pub fn read_capped(
     resp: &mut ureq::http::Response<ureq::Body>,
-    cap: usize,
-) -> Result<Vec<u8>, String> {
-    // ureq refuses a body that reaches its cap+1 limit; the length check refuses anything past
-    // `cap` that still gets through.
-    let buf = resp
-        .body_mut()
+    cap: u64,
+) -> Result<Vec<u8>, ureq::Error> {
+    use std::io::Read as _;
+    // ureq's limit counts bytes before decoding; `take` counts what the decoder yields.
+    let mut buf = Vec::new();
+    resp.body_mut()
         .with_config()
-        .limit(cap as u64 + 1)
-        .read_to_vec()
-        .map_err(|e| format!("read the response body: {e}"))?;
-    if buf.len() > cap {
-        return Err(format!("response exceeds the {cap}-byte cap"));
+        .limit(cap + 1)
+        .reader()
+        .take(cap + 1)
+        .read_to_end(&mut buf)?;
+    if buf.len() as u64 > cap {
+        return Err(ureq::Error::BodyExceedsLimit(cap));
     }
     Ok(buf)
 }
@@ -161,9 +164,67 @@ mod tests {
     /// Oversize is refused whole, never truncated to the cap.
     #[test]
     fn read_capped_refuses_oversize() {
+        let over = |e| matches!(e, ureq::Error::BodyExceedsLimit(_));
         assert_eq!(read_capped(&mut response(8), 8).unwrap().len(), 8);
-        assert!(read_capped(&mut response(9), 8).is_err());
-        assert!(read_capped(&mut response(100), 8).is_err());
+        assert!(over(read_capped(&mut response(9), 8).unwrap_err()));
+        assert!(over(read_capped(&mut response(100), 8).unwrap_err()));
+    }
+
+    /// 38 bytes of gzip that inflate to 4096 zero bytes.
+    const GZIP_4096_ZEROS: [u8; 38] = [
+        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xed, 0xc1, 0x01, 0x0d, 0x00,
+        0x00, 0x00, 0xc2, 0xa0, 0xf7, 0x4f, 0x6d, 0x0f, 0x07, 0x14, 0x00, 0x00, 0x00, 0xf0, 0x6e,
+        0x11, 0x00, 0x1c, 0xc7, 0x00, 0x10, 0x00, 0x00,
+    ];
+
+    /// A loopback server that answers one GET with `body` as `Content-Encoding: gzip` under a
+    /// `Content-Length` of `declared`, then holds the socket until the client closes it.
+    fn gzip_response(body: &'static [u8], declared: usize) -> ureq::http::Response<ureq::Body> {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/manifest.json", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let Ok((mut sock, _)) = listener.accept() else {
+                return;
+            };
+            // Drain the request first: on Windows, closing with unread data resets the socket.
+            let mut head = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while let Ok(n) = sock.read(&mut chunk) {
+                head.extend_from_slice(&chunk[..n]);
+                if n == 0 || head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let _ = write!(
+                sock,
+                "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {declared}\r\n\r\n"
+            );
+            let _ = sock.write_all(body);
+            let _ = sock.read(&mut chunk);
+        });
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(5)))
+            .build()
+            .into();
+        agent.get(&url).call().unwrap()
+    }
+
+    /// The cap counts decoded bytes. A body far under it on the wire that inflates past it is
+    /// refused once the cap is passed, without waiting for the rest of the body; one under it
+    /// both ways reads whole.
+    #[test]
+    fn read_capped_counts_decoded_bytes() {
+        let small = 1024;
+        assert!((GZIP_4096_ZEROS.len() as u64) < small);
+        let mut stalled = gzip_response(&GZIP_4096_ZEROS, GZIP_4096_ZEROS.len() + 1);
+        let refused = read_capped(&mut stalled, small).unwrap_err();
+        assert!(
+            matches!(refused, ureq::Error::BodyExceedsLimit(_)),
+            "{refused}"
+        );
+        let mut whole = gzip_response(&GZIP_4096_ZEROS, GZIP_4096_ZEROS.len());
+        assert_eq!(read_capped(&mut whole, 4096).unwrap(), vec![0u8; 4096]);
     }
 
     #[test]

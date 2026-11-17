@@ -115,7 +115,9 @@ impl SessionPlanes {
 /// The input thread, and the datagram reader that feeds it client input, mic frames and the
 /// client's feedback. Grants, pad slots and the pad feed come from the session's `controls`;
 /// the pointer route, seat devices and mic from the scope's planes; the rumble lease and the
-/// Steam pad fold from its `knobs`. The scope joins the thread.
+/// Steam pad fold from its `knobs`. The touchpad and pen it builds are the ones offered:
+/// `touchpad_on` is the session's `FEATURE_TOUCHPAD`, the pen the Welcome's `HOST_CAP_PEN`.
+/// The scope joins the thread.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_input_plane(
     scope: &mut SessionScope,
@@ -130,6 +132,7 @@ pub(super) fn spawn_input_plane(
     pad_id: crate::inject::pad_pool::PadIdentity,
     pad_tx: tokio::sync::mpsc::UnboundedSender<input::PadToClient>,
     pad_writes: bool,
+    touchpad_on: bool,
     feedback_tx: tokio::sync::mpsc::Sender<punktfunk_core::quic::v2::dgram::Feedback>,
     knobs: SessionKnobs,
 ) -> Result<()> {
@@ -141,6 +144,7 @@ pub(super) fn spawn_input_plane(
         let gamepad = welcome.gamepad;
         // Read HOST_CAP_PAD_AUDIO back off Welcome so the input thread cannot disagree.
         let pad_audio_on = welcome.host_caps & punktfunk_core::quic::HOST_CAP_PAD_AUDIO != 0;
+        let pen_on = welcome.host_caps & punktfunk_core::quic::HOST_CAP_PEN != 0;
         let grants = controls.grants.clone();
         let pad_slots = controls.pad_slots.clone();
         let frame_map = frame_map.clone();
@@ -159,6 +163,8 @@ pub(super) fn spawn_input_plane(
                     pad_slots,
                     Some(pad_tx),
                     pad_writes,
+                    touchpad_on,
+                    pen_on,
                     grants,
                     frame_map,
                     pad_feed,
@@ -309,6 +315,8 @@ pub(super) fn spawn_planes(
         pad_id,
         pad_tx,
         pad_writes,
+        n.features
+            .has(punktfunk_core::quic::v2::registry::FEATURE_TOUCHPAD),
         feedback_tx,
         who.knobs,
     )?;

@@ -83,7 +83,7 @@ impl Peer for RemoteProcess {
 /// The host's end of one capture worker. Dropping the last reference closes the request pipe,
 /// which is how a worker is told to exit; one that does not is ended.
 pub struct WorkerLink {
-    link: Link<RemoteProcess, File>,
+    link: Link<RemoteProcess>,
     pid: u32,
 }
 

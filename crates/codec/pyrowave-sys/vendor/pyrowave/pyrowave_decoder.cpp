@@ -76,12 +76,17 @@ Decoder::~Decoder()
 {
 }
 
+// PUNKTFUNK (patch 0015): the dequant reads at most this far past a packet's start, whatever
+// its ballot, control words and q bits claim: 2360 bytes of header, codes and bit planes, then
+// sign words to byte 2492.
+static constexpr VkDeviceSize max_packet_read = 4096;
+
+// PUNKTFUNK (patch 0015): every packet start lies max_packet_read inside the buffer the dequant
+// reads, so the GPU stays in bounds without robustBufferAccess.
 bool Decoder::Impl::upload_payload(CommandBuffer &cmd)
 {
 	VkDeviceSize required_size = payload_data_cpu.size() * sizeof(uint32_t);
-
-	// Avoid edge case OOB access without robustness on the payload buffer during dequant.
-	VkDeviceSize required_size_padded = required_size + 16;
+	VkDeviceSize required_size_padded = required_size + max_packet_read;
 
 	// PUNKTFUNK (patch 0011): the caller's memory is never reallocated. In-place packets are
 	// already in it; copies land in its reserved head and must fit.
@@ -1044,7 +1049,8 @@ void Decoder::Impl::check_linear_texture_support()
 }
 
 // PUNKTFUNK (patch 0011): see Decoder::set_payload_memory. On failure the decoder keeps no
-// caller handle and rebuilds its own payload on the next decode.
+// caller handle and rebuilds its own payload on the next decode. Patch 0014: each handle
+// goes from uint64_t straight to its type, so a 32-bit target keeps all 64 bits.
 bool Decoder::Impl::set_payload_memory(uint64_t buffer, uint64_t size, uint64_t copy_reserve, void *host,
                                        const uint64_t linear[3], uint32_t rows)
 {
@@ -1069,7 +1075,7 @@ bool Decoder::Impl::set_payload_memory(uint64_t buffer, uint64_t size, uint64_t 
 	             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
 	             VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
 	info.domain = BufferDomain::Device;
-	payload_data = device->wrap_buffer(info, (VkBuffer)(uintptr_t)buffer, false);
+	payload_data = device->wrap_buffer(info, (VkBuffer)buffer, false);
 	if (!payload_data)
 		return false;
 
@@ -1092,7 +1098,7 @@ bool Decoder::Impl::set_payload_memory(uint64_t buffer, uint64_t size, uint64_t 
 			image_info.domain = ImageDomain::LinearHost;
 			image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
 			image_info.layout = ImageLayout::General;
-			*reqs[i].out = device->wrap_image(image_info, (VkImage)(uintptr_t)linear[i]);
+			*reqs[i].out = device->wrap_image(image_info, (VkImage)linear[i]);
 			if (!*reqs[i].out)
 				break;
 
@@ -1199,10 +1205,13 @@ bool Decoder::set_payload_memory(uint64_t buffer, uint64_t size, uint64_t copy_r
 
 bool Decoder::push_packet_in_place(const void *data, size_t size)
 {
+	// PUNKTFUNK (patch 0015): the packets, and max_packet_read past their end, lie inside the
+	// payload memory past the copy reserve, 4-byte aligned.
 	auto *p = static_cast<const uint8_t *>(data);
 	auto *base = impl->in_place_base;
-	if (!base || p < base + impl->in_place_reserve || size > impl->in_place_size ||
-	    VkDeviceSize(p - base) > impl->in_place_size - size || ((p - base) & 3) != 0)
+	if (!base || p < base + impl->in_place_reserve || impl->in_place_size < max_packet_read ||
+	    size > impl->in_place_size - max_packet_read ||
+	    VkDeviceSize(p - base) > impl->in_place_size - max_packet_read - size || ((p - base) & 3) != 0)
 	{
 		LOGE("In-place packet lies outside the payload memory.\n");
 		return false;

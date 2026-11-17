@@ -7,6 +7,7 @@
 //! pool: a download takes as long as it takes.
 use super::auth::{AuthLane, PluginIdentity};
 use super::shared::*;
+use crate::emulators::handover;
 use crate::events::{emit, EventKind};
 use axum::Extension;
 
@@ -271,16 +272,11 @@ pub(crate) async fn prepare_emulator(
     {
         return api_error(StatusCode::BAD_REQUEST, "That isn't a platform id");
     }
-    let dir = match req.firmware_dir.as_deref() {
+    let plugin = who.map(|Extension(w)| w.0);
+    let firmware = match req.firmware_dir.as_deref() {
         None => None,
-        Some(d) => match state_path(
-            lane,
-            who.map(|Extension(w)| w.0).as_deref(),
-            d,
-            &plugin_states(),
-            Want::Dir,
-        ) {
-            Ok(p) => Some(p),
+        Some(d) => match folder(lane, plugin.as_deref(), d, &plugin_states(), false) {
+            Ok(f) => Some(f),
             Err((status, why)) => return api_error(status, why),
         },
     };
@@ -288,7 +284,18 @@ pub(crate) async fn prepare_emulator(
     // No session here: pads not up yet are taken as the default Xbox 360.
     let pad = punktfunk_core::config::GamepadPref::Xbox360;
     let prepared = blocking("emulator_manager", move || {
-        crate::emulators::prepare(&id, platform.as_deref(), dir.as_deref(), pad, None)
+        // hermir reads a copy of a plugin's firmware, never its folder.
+        let staged = match &firmware {
+            Some(Folder::Held(dir)) => Some(
+                handover::staged(dir).map_err(|e| moved("copy", &handover::scratch_base(), e))?,
+            ),
+            _ => None,
+        };
+        let dir = match &firmware {
+            Some(Folder::Path(p)) => Some(p.as_path()),
+            _ => staged.as_ref().map(handover::Scratch::path),
+        };
+        crate::emulators::prepare(&id, platform.as_deref(), dir, pad, None)
     })
     .await;
     match prepared {
@@ -348,17 +355,38 @@ enum Want {
     File,
 }
 
+/// Why a handed path is refused.
+type Refusal = (StatusCode, &'static str);
+const MISSING: Refusal = (StatusCode::BAD_REQUEST, "That file or folder doesn't exist");
+const NO_OWN_TOKEN: Refusal = (
+    StatusCode::FORBIDDEN,
+    "Handing over files needs a plugin's own token",
+);
+const NOT_RELATIVE: Refusal = (
+    StatusCode::FORBIDDEN,
+    "A plugin names files relative to its own state folder",
+);
+const OUTSIDE_STATE: Refusal = (
+    StatusCode::FORBIDDEN,
+    "A plugin may hand over only files in its own state folder",
+);
+const NOT_COPIED: Refusal = (
+    StatusCode::INTERNAL_SERVER_ERROR,
+    "The host couldn't read or copy that file",
+);
+
 /// A path a caller hands the host, resolved. The operator's is absolute and may be anywhere. A
 /// plugin's is relative to its own state folder, which its sandbox mounts elsewhere, and must
-/// still resolve inside it: the host reads and writes only what that plugin already could.
+/// still resolve inside it: the host reads and writes only what that plugin already could. What
+/// the host itself opens of a plugin's goes through [`plugin_dir`] instead.
 fn state_path(
     lane: AuthLane,
     plugin: Option<&str>,
     rel: &str,
     plugin_states: &std::path::Path,
     want: Want,
-) -> Result<std::path::PathBuf, (StatusCode, &'static str)> {
-    let missing = (StatusCode::BAD_REQUEST, "That file or folder doesn't exist");
+) -> Result<std::path::PathBuf, Refusal> {
+    let missing = MISSING;
     let resolve = |p: &std::path::Path| {
         if want == Want::NewDir {
             // The deepest folder that is there decides where a new one would land.
@@ -388,21 +416,7 @@ fn state_path(
             Err(missing)
         };
     }
-    let own = plugin
-        .and_then(|id| plugin_states.join(id).canonicalize().ok())
-        .ok_or((
-            StatusCode::FORBIDDEN,
-            "Handing over files needs a plugin's own token",
-        ))?;
-    let inside = path
-        .components()
-        .all(|c| matches!(c, std::path::Component::Normal(_)));
-    if !inside {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "A plugin names files relative to its own state folder",
-        ));
-    }
+    let own = own_state(plugin, plugin_states, path)?;
     let mut base = own.join(path);
     while !base.exists() {
         base = match base.parent() {
@@ -412,19 +426,157 @@ fn state_path(
     }
     let escapes = |p: &std::path::Path| p.canonicalize().is_ok_and(|p| !p.starts_with(&own));
     if escapes(&base) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "A plugin may hand over only files in its own state folder",
-        ));
+        return Err(OUTSIDE_STATE);
     }
     let real = resolve(&own.join(path))?;
     if !real.starts_with(&own) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "A plugin may hand over only files in its own state folder",
-        ));
+        return Err(OUTSIDE_STATE);
     }
     Ok(real)
+}
+
+/// Plugin `plugin`'s own state folder, canonical, when `rel` is a plain path below it. Only the
+/// person can make that folder a link, since no sandbox binds the state root, so a state folder
+/// moved elsewhere by a link is followed.
+fn own_state(
+    plugin: Option<&str>,
+    plugin_states: &std::path::Path,
+    rel: &std::path::Path,
+) -> Result<std::path::PathBuf, Refusal> {
+    let own = plugin
+        .and_then(|id| plugin_states.join(id).canonicalize().ok())
+        .filter(|own| own.is_dir())
+        .ok_or(NO_OWN_TOKEN)?;
+    let inside = rel
+        .components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)));
+    if inside {
+        Ok(own)
+    } else {
+        Err(NOT_RELATIVE)
+    }
+}
+
+/// The folder `rel` below plugin `plugin`'s own state folder, held open ([`handover::Dir`]) and
+/// made when `make` and missing. The host reads and writes there only through it: a link the
+/// plugin swaps in after this check reaches nothing.
+fn plugin_dir(
+    plugin: Option<&str>,
+    rel: &std::path::Path,
+    plugin_states: &std::path::Path,
+    make: bool,
+) -> Result<handover::Dir, Refusal> {
+    let own = own_state(plugin, plugin_states, rel)?;
+    handover::Dir::open(&own, rel, make).map_err(refusal)
+}
+
+/// A game file or folder a plugin hands to an emulator's add-on install, as hermir may open it.
+/// In a root it may only read, its real path. In its state folder or a root it may write:
+/// with `copy`, a scratch folder, a [`handover::mirror`] of it there, so nothing the plugin
+/// swaps in later is read; without, for an emulator that keeps the path, the file itself,
+/// checked and held in `held` until the install ends ([`handover::hold`]).
+fn plugin_content(
+    plugin: Option<&str>,
+    manifest: Option<&crate::plugins::manifest::PluginManifest>,
+    path: &std::path::Path,
+    plugin_states: &std::path::Path,
+    copy: Option<&std::path::Path>,
+    held: &mut Vec<handover::Held>,
+) -> Result<std::path::PathBuf, Refusal> {
+    let id = plugin.ok_or(NO_OWN_TOKEN)?;
+    let mut place = |root: &std::path::Path, rel: &std::path::Path, part: std::path::PathBuf| {
+        let Some(copy) = copy else {
+            let file = handover::hold(root, rel).map_err(refusal)?;
+            let path = file.path().to_path_buf();
+            held.push(file);
+            return Ok(path);
+        };
+        handover::mirror(root, rel, &copy.join(id).join(part)).map_err(refusal)
+    };
+    if !path.is_absolute() {
+        let own = own_state(plugin, plugin_states, path)?;
+        return place(&own, path, "state".into());
+    }
+    let reach = |write| manifest.and_then(|m| m.reaches(path, write));
+    if let Some((root, real)) = reach(true) {
+        let rel = real.strip_prefix(&root).map_err(|_| OUTSIDE_STATE)?;
+        let digest = <sha2::Sha256 as sha2::Digest>::digest(root.as_os_str().as_encoded_bytes());
+        let part = std::path::Path::new("roots").join(hex::encode(&digest[..8]));
+        return place(&root, rel, part);
+    }
+    reach(false).map(|(_, real)| real).ok_or(NOT_RELATIVE)
+}
+
+/// A handover's failure as the caller reads it: a path that isn't there or isn't the kind
+/// asked for is missing, and a link leads out of the state folder. Anything else is the host
+/// failing to read or copy, a full disk or a locked file, and goes to the log with its cause.
+fn refusal(e: std::io::Error) -> Refusal {
+    use std::io::ErrorKind;
+    // A link met where none is followed.
+    #[cfg(unix)]
+    if e.raw_os_error() == Some(libc::ELOOP) {
+        return OUTSIDE_STATE;
+    }
+    match e.kind() {
+        ErrorKind::NotFound | ErrorKind::NotADirectory | ErrorKind::InvalidInput => MISSING,
+        // The handover's own refusal carries no OS code; the OS refusing a read does.
+        ErrorKind::PermissionDenied if e.raw_os_error().is_none() => OUTSIDE_STATE,
+        _ => {
+            tracing::warn!(error = %e, "plugin file not read or copied");
+            NOT_COPIED
+        }
+    }
+}
+
+/// A folder a caller names: the operator's path ([`state_path`]), or a plugin's held open below
+/// its state folder ([`plugin_dir`]).
+enum Folder {
+    Path(std::path::PathBuf),
+    Held(handover::Dir),
+}
+
+fn folder(
+    lane: AuthLane,
+    plugin: Option<&str>,
+    rel: &str,
+    plugin_states: &std::path::Path,
+    make: bool,
+) -> Result<Folder, Refusal> {
+    if lane.is_operator() {
+        let want = if make { Want::NewDir } else { Want::Dir };
+        return state_path(lane, plugin, rel, plugin_states, want).map(Folder::Path);
+    }
+    plugin_dir(plugin, std::path::Path::new(rel), plugin_states, make).map(Folder::Held)
+}
+
+/// A file a caller names: the operator's path, or a plugin's opened below its state folder.
+enum Handed {
+    Path(std::path::PathBuf),
+    Open(std::fs::File),
+}
+
+fn handed_file(
+    lane: AuthLane,
+    plugin: Option<&str>,
+    rel: &str,
+    plugin_states: &std::path::Path,
+) -> Result<Handed, Refusal> {
+    if lane.is_operator() {
+        return state_path(lane, plugin, rel, plugin_states, Want::File).map(Handed::Path);
+    }
+    let rel = std::path::Path::new(rel);
+    let dir = plugin_dir(plugin, rel.parent().unwrap_or(rel), plugin_states, false)?;
+    let name = rel.file_name().ok_or(MISSING)?;
+    dir.read(name).map(Handed::Open).map_err(refusal)
+}
+
+/// A handover's I/O failure, as hermir's own.
+fn moved(op: &'static str, path: &std::path::Path, source: std::io::Error) -> hermir::Error {
+    hermir::Error::Io {
+        op,
+        path: path.to_path_buf(),
+        source,
+    }
 }
 
 /// Remove a managed emulator
@@ -799,26 +951,149 @@ fn may_move_saves(
     }
 }
 
-/// A game folder the caller names. A plugin's must sit under a root it may reach.
+/// A game folder the caller names: the operator's as named; a plugin's in a root its runner
+/// binds (`PluginManifest::reaches`), noting whether a root it may write holds it.
 fn game_dir(
     lane: AuthLane,
     plugin: Option<&str>,
     game: Option<&str>,
-) -> Result<Option<std::path::PathBuf>, (StatusCode, &'static str)> {
+) -> Result<Option<Game>, Refusal> {
     let Some(game) = game else { return Ok(None) };
     let path = std::path::PathBuf::from(game);
-    let ok = path.is_absolute()
-        && (lane.is_operator()
-            || plugin
-                .and_then(crate::plugins::manifest::for_provider)
-                .is_some_and(|m| m.confines(&path)));
-    if ok {
-        Ok(Some(path))
-    } else {
-        Err((
+    if path.is_absolute() && lane.is_operator() {
+        return Ok(Some(Game::Path(path)));
+    }
+    let reached = (plugin.and_then(crate::plugins::manifest::for_provider))
+        .and_then(|m| Some((m.reaches(&path, false)?, m.reaches(&path, true).is_some())));
+    match reached {
+        Some(((root, real), writable)) => Ok(Some(Game::Held(HeldGame {
+            root,
+            real,
+            spelled: path,
+            writable,
+        }))),
+        None => Err((
             StatusCode::FORBIDDEN,
             "The game folder is outside the folders this plugin may reach",
-        ))
+        )),
+    }
+}
+
+/// A game folder a caller names.
+enum Game {
+    /// The operator's: hermir works on it as named.
+    Path(std::path::PathBuf),
+    /// A plugin's: hermir works on copies of its units ([`HeldGame`]).
+    Held(HeldGame),
+}
+
+impl Game {
+    /// The folder hermir lists.
+    fn listed(&self) -> &std::path::Path {
+        match self {
+            Game::Path(p) => p,
+            Game::Held(h) => &h.real,
+        }
+    }
+}
+
+/// A plugin's game folder: `real` below `root`, the outermost root that holds it, both
+/// canonical. The plugin may rewrite it while the host works, so hermir gets a
+/// [`handover::Scratch`] holding copies of its units, and each copy moves through a
+/// [`handover::Dir`] opened beneath `root`: a link the plugin plants there reaches nothing.
+struct HeldGame {
+    root: std::path::PathBuf,
+    real: std::path::PathBuf,
+    spelled: std::path::PathBuf,
+    /// A root the plugin may write holds it, so a save may land in it.
+    writable: bool,
+}
+
+impl HeldGame {
+    /// The folder `rel` below the game folder, held open beneath the root.
+    fn dir(&self, rel: &std::path::Path, make: bool) -> std::io::Result<handover::Dir> {
+        let below = (self.real.strip_prefix(&self.root))
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::PermissionDenied))?;
+        handover::Dir::open(&self.root, &below.join(rel), make)
+    }
+
+    /// A copy in `into` of each of `units` that lies in the game folder, at its place there.
+    fn copy_in<'a>(
+        &self,
+        units: impl IntoIterator<Item = &'a hermir::SaveUnit>,
+        into: &handover::Scratch,
+    ) -> std::io::Result<()> {
+        for unit in units {
+            let Ok(rel) = unit.path.strip_prefix(&self.real) else {
+                continue;
+            };
+            let (Some(parent), Some(name)) = (rel.parent(), rel.file_name()) else {
+                continue;
+            };
+            let to = into.path().join(rel);
+            if to.exists() {
+                continue; // one file listed under two kinds
+            }
+            let mut from = self.dir(parent, false)?.read(name)?;
+            std::fs::create_dir_all(into.path().join(parent))?;
+            std::io::copy(&mut from, &mut std::fs::File::create_new(&to)?)?;
+        }
+        Ok(())
+    }
+
+    /// The file hermir wrote at `written` in `scratch`, put at the same place in the game
+    /// folder: where it landed, as the plugin spells it. `None` for a file outside `scratch`,
+    /// one in the emulator's own folder. Refused in a game folder the plugin may only read.
+    fn put_back(
+        &self,
+        scratch: &handover::Scratch,
+        written: &std::path::Path,
+    ) -> std::io::Result<Option<std::path::PathBuf>> {
+        let Ok(rel) = written.strip_prefix(scratch.path()) else {
+            return Ok(None);
+        };
+        if !self.writable {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the plugin may only read this game folder",
+            ));
+        }
+        let parent = rel.parent().unwrap_or(std::path::Path::new(""));
+        handover::place(written, &self.dir(parent, true)?)?;
+        Ok(Some(self.spelled.join(rel)))
+    }
+}
+
+/// The game folder hermir exports from or imports into: the operator's as named; for a plugin's,
+/// a scratch folder holding a copy of each unit `listed` there that `asked` names.
+fn hermir_game(
+    game: Option<&Game>,
+    listed: impl FnOnce(&std::path::Path) -> hermir::Result<Vec<hermir::SaveUnit>>,
+    asked: impl Fn(&hermir::SaveUnit) -> bool,
+) -> hermir::Result<(Option<std::path::PathBuf>, Option<handover::Scratch>)> {
+    let held = match game {
+        None => return Ok((None, None)),
+        Some(Game::Path(p)) => return Ok((Some(p.clone()), None)),
+        Some(Game::Held(held)) => held,
+    };
+    let copy =
+        handover::Scratch::new().map_err(|e| moved("create", &handover::scratch_base(), e))?;
+    let units = listed(&held.real)?;
+    (held.copy_in(units.iter().filter(|u| asked(u)), &copy))
+        .map_err(|e| moved("copy", &held.spelled, e))?;
+    Ok((Some(copy.path().to_path_buf()), Some(copy)))
+}
+
+/// The units hermir lists on this host's best copy, or on `seat`'s.
+fn list_units(
+    seat: Option<&crate::emulators::exchange::Seat>,
+    id: &str,
+    platform: &str,
+    game: &std::path::Path,
+) -> hermir::Result<Vec<hermir::SaveUnit>> {
+    match seat {
+        None => crate::emulators::units(None, id, platform, Some(game)),
+        Some(seat) => crate::emulators::exchange::units(seat, id, platform, Some(game)),
     }
 }
 
@@ -877,6 +1152,10 @@ pub(crate) async fn get_emulator_saves(
         Ok(seat) => seat,
         Err(r) => return r,
     };
+    let game = game
+        .as_ref()
+        .map(Game::listed)
+        .map(std::path::Path::to_path_buf);
     match blocking("emulator_manager", move || match &seat {
         None => crate::emulators::units(None, &id, &q.platform, game.as_deref()),
         Some(seat) => crate::emulators::exchange::units(seat, &id, &q.platform, game.as_deref()),
@@ -956,27 +1235,44 @@ pub(crate) async fn export_emulator_saves(
         Ok(seat) => seat,
         Err(r) => return r,
     };
-    let out = match state_path(
-        lane,
-        plugin.as_deref(),
-        &req.dir,
-        &plugin_states(),
-        Want::NewDir,
-    ) {
-        Ok(p) => p,
+    let out = match folder(lane, plugin.as_deref(), &req.dir, &plugin_states(), true) {
+        Ok(f) => f,
         Err((status, why)) => return api_error(status, why),
     };
     let units: Vec<(hermir::SaveKind, String)> =
         req.units.into_iter().map(|u| (u.kind, u.name)).collect();
     let dir = req.dir;
     let exported = blocking("emulator_manager", move || {
-        let (platform, game) = (&req.platform, game.as_deref());
-        match &seat {
-            None => crate::emulators::export_units(None, &id, platform, game, &units, &out),
+        let platform = &req.platform;
+        // hermir exports a plugin's units from a copy of them.
+        let (game, _copy) = hermir_game(
+            game.as_ref(),
+            |game| list_units(seat.as_ref(), &id, platform, game),
+            |u| {
+                units
+                    .iter()
+                    .any(|(kind, name)| u.kind == *kind && u.name == *name)
+            },
+        )?;
+        let game = game.as_deref();
+        let export = |to: &std::path::Path| match &seat {
+            None => crate::emulators::export_units(None, &id, platform, game, &units, to),
             Some(seat) => {
-                crate::emulators::exchange::export_units(seat, &id, platform, game, &units, &out)
+                crate::emulators::exchange::export_units(seat, &id, platform, game, &units, to)
             }
+        };
+        let held = match &out {
+            Folder::Path(p) => return export(p),
+            Folder::Held(held) => held,
+        };
+        // hermir writes into the host's own folder; each file then lands in the plugin's.
+        let scratch =
+            handover::Scratch::new().map_err(|e| moved("create", &handover::scratch_base(), e))?;
+        let rows = export(scratch.path())?;
+        for (_, unit) in &rows {
+            handover::place(&unit.file, held).map_err(|e| moved("write", &unit.file, e))?;
         }
+        Ok(rows)
     })
     .await;
     match exported {
@@ -1064,19 +1360,13 @@ pub(crate) async fn import_emulator_saves(
         Err(r) => return r,
     };
     // One row per name, its kinds in the order given.
-    let mut rows: Vec<(String, std::path::PathBuf, Vec<hermir::SaveKind>)> = Vec::new();
+    let mut rows: Vec<(String, Handed, Vec<hermir::SaveKind>)> = Vec::new();
     for u in req.units {
         if let Some(row) = rows.iter_mut().find(|r| r.0 == u.name) {
             row.2.push(u.kind);
             continue;
         }
-        match state_path(
-            lane,
-            plugin.as_deref(),
-            &u.file,
-            &plugin_states(),
-            Want::File,
-        ) {
+        match handed_file(lane, plugin.as_deref(), &u.file, &plugin_states()) {
             Ok(file) => rows.push((u.name, file, vec![u.kind])),
             Err((status, why)) => return api_error(status, why),
         }
@@ -1084,17 +1374,49 @@ pub(crate) async fn import_emulator_saves(
     let others = req.others;
     let platform = req.platform;
     let imported = blocking("emulator_manager", move || {
+        // hermir reads a copy of a plugin's file in the host's own folder.
+        let scratch =
+            handover::Scratch::new().map_err(|e| moved("create", &handover::scratch_base(), e))?;
+        // The units there now, so hermir backs each up before it writes the new one.
+        let (dir, copy) = hermir_game(
+            game.as_ref(),
+            |game| list_units(seat.as_ref(), &id, &platform, game),
+            |u| rows.iter().any(|row| row.0 == u.name),
+        )?;
         rows.into_iter()
-            .map(|(name, file, kinds)| {
-                let game = game.as_deref();
-                let step = match &seat {
+            .enumerate()
+            .map(|(n, (name, handed, kinds))| {
+                let file = match handed {
+                    Handed::Path(p) => p,
+                    Handed::Open(mut from) => {
+                        let to = scratch.path().join(n.to_string());
+                        std::fs::File::create_new(&to)
+                            .and_then(|mut f| std::io::copy(&mut from, &mut f))
+                            .map_err(|e| moved("copy", &to, e))?;
+                        to
+                    }
+                };
+                let dir = dir.as_deref();
+                let mut step = match &seat {
                     None => crate::emulators::import_unit(
-                        None, &id, &platform, game, &kinds, &name, &file, &others,
+                        None, &id, &platform, dir, &kinds, &name, &file, &others,
                     ),
                     Some(seat) => crate::emulators::exchange::import_unit(
-                        seat, &id, &platform, game, &kinds, &name, &file, &others,
+                        seat, &id, &platform, dir, &kinds, &name, &file, &others,
                     ),
                 }?;
+                // What hermir wrote in the copy lands in the plugin's game folder.
+                if let (Some(Game::Held(held)), Some(copy)) = (&game, &copy) {
+                    match held.put_back(copy, &step.target) {
+                        Ok(placed) => step.target = placed.unwrap_or(step.target),
+                        // This save alone fails, and says why; the others still go back.
+                        Err(e) => {
+                            let folder = held.spelled.display();
+                            step.outcome = hermir::StepOutcome::Failed;
+                            step.note = Some(format!("not written into {folder}: {e}"));
+                        }
+                    }
+                }
                 Ok(EmulatorStep {
                     name: Some(name),
                     source: None,
@@ -1152,26 +1474,53 @@ pub(crate) async fn install_emulator_content(
         return api_error(StatusCode::BAD_REQUEST, "The kind is `update` or `dlc`");
     }
     let plugin = who.map(|Extension(w)| w.0);
-    let manifest = plugin
-        .as_deref()
-        .and_then(crate::plugins::manifest::for_provider);
-    let mut files = Vec::with_capacity(req.files.len());
-    for f in &req.files {
-        let path = std::path::Path::new(f);
-        let file = if path.is_absolute()
-            && (lane.is_operator() || manifest.as_ref().is_some_and(|m| m.confines(path)))
-        {
-            Ok(path.to_path_buf())
-        } else {
-            state_path(lane, plugin.as_deref(), f, &plugin_states(), Want::File)
+    let named = req.files.clone();
+    let (cid, cplatform, ckind) = (id.clone(), req.platform.clone(), req.kind.clone());
+    let resolved = blocking("emulator_manager", move || {
+        let manifest = plugin
+            .as_deref()
+            .and_then(crate::plugins::manifest::for_provider);
+        // An emulator that copies the add-on in reads a mirror that goes after the install.
+        // One that keeps the path it is given gets the file where it lies, and nothing is copied.
+        let keeps = crate::emulators::content_keeps_path(&cid, &cplatform, &ckind);
+        let scratch = match lane.is_operator() || keeps {
+            true => None,
+            false => Some(handover::Scratch::new().map_err(refusal)?),
         };
-        match file {
-            Ok(p) => files.push(p),
-            Err((status, why)) => return api_error(status, why),
-        }
-    }
+        let copy = scratch.as_ref().map(handover::Scratch::path);
+        let mut held = Vec::new();
+        let files = named
+            .iter()
+            .map(|f| {
+                let path = std::path::Path::new(f);
+                if !lane.is_operator() {
+                    let (id, states) = (plugin.as_deref(), plugin_states());
+                    plugin_content(id, manifest.as_ref(), path, &states, copy, &mut held)
+                } else if path.is_absolute() {
+                    Ok(path.to_path_buf())
+                } else {
+                    Err(MISSING)
+                }
+            })
+            .collect::<Result<Vec<_>, Refusal>>()?;
+        Ok((files, (scratch, held)))
+    })
+    .await;
+    let (files, scratch) = match resolved {
+        Ok(Ok(files)) => files,
+        Ok(Err((status, why))) => return api_error(status, why),
+        Err(r) => return r,
+    };
+    // A step names the file as the caller did, never the host's mirror of it.
+    let spelled: Vec<(std::path::PathBuf, String)> = files
+        .iter()
+        .cloned()
+        .zip(req.files.iter().cloned())
+        .collect();
     let installed = blocking("emulator_manager", move || {
-        crate::emulators::install_content(&id, &req.platform, &req.kind, &files)
+        let installed = crate::emulators::install_content(&id, &req.platform, &req.kind, &files);
+        drop(scratch);
+        installed
     })
     .await;
     match installed {
@@ -1180,7 +1529,7 @@ pub(crate) async fn install_emulator_content(
                 .into_iter()
                 .map(|s| EmulatorStep {
                     name: None,
-                    source: Some(s.source.to_string_lossy().into_owned()),
+                    source: Some(spelled_source(&spelled, &s.source)),
                     target: s.target.to_string_lossy().into_owned(),
                     outcome: wire(s.outcome),
                     note: s.note,
@@ -1197,6 +1546,17 @@ pub(crate) async fn install_emulator_content(
         ),
         Err(r) => r,
     }
+}
+
+/// `source`, a path hermir reports on, as the caller spelled it: a file it handed over, or a
+/// folder above one (a title folder), spelled as many levels above the caller's own file. A
+/// path of neither kind is given as it is.
+fn spelled_source(spelled: &[(std::path::PathBuf, String)], source: &std::path::Path) -> String {
+    let caller = spelled.iter().find_map(|(at, file)| {
+        let up = at.strip_prefix(source).ok()?.components().count();
+        std::path::Path::new(file).ancestors().nth(up)
+    });
+    caller.unwrap_or(source).to_string_lossy().into_owned()
 }
 
 /// Adopt a copy of an emulator
@@ -1347,5 +1707,148 @@ mod tests {
             assert_eq!(plugin("link/new", Want::NewDir), Err(StatusCode::FORBIDDEN));
             assert!(!elsewhere.path().join("new").exists());
         }
+    }
+
+    /// What the host opens for a plugin is held open below its state folder: a folder or file
+    /// through a link is refused, and nothing lands outside.
+    #[test]
+    fn a_plugin_s_files_open_only_below_its_own_state_folder() {
+        let states = tempfile::tempdir().unwrap();
+        let own = states.path().join("rom-manager");
+        std::fs::create_dir_all(own.join("firmware/ps2")).unwrap();
+        std::fs::write(own.join("save.srm"), b"x").unwrap();
+        let lane = AuthLane::Plugin;
+        let dir = |rel: &str, make| {
+            folder(lane, Some("rom-manager"), rel, states.path(), make).map_err(|(s, _)| s)
+        };
+        let file = |rel: &str| {
+            handed_file(lane, Some("rom-manager"), rel, states.path()).map_err(|(s, _)| s)
+        };
+        assert!(matches!(dir("firmware/ps2", false), Ok(Folder::Held(_))));
+        assert!(matches!(dir("saves/out", true), Ok(Folder::Held(_))));
+        assert!(own.join("saves/out").is_dir());
+        assert_eq!(
+            dir("firmware/none", false).err(),
+            Some(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(dir("../escape", true).err(), Some(StatusCode::FORBIDDEN));
+        assert!(matches!(file("save.srm"), Ok(Handed::Open(_))));
+        assert_eq!(file("firmware").err(), Some(StatusCode::BAD_REQUEST));
+        assert_eq!(file("/etc/passwd").err(), Some(StatusCode::FORBIDDEN));
+        #[cfg(unix)]
+        {
+            let elsewhere = tempfile::tempdir().unwrap();
+            std::fs::write(elsewhere.path().join("token"), b"secret").unwrap();
+            std::os::unix::fs::symlink(elsewhere.path(), own.join("link")).unwrap();
+            std::os::unix::fs::symlink(elsewhere.path().join("token"), own.join("t")).unwrap();
+            assert_eq!(dir("link/new", true).err(), Some(StatusCode::FORBIDDEN));
+            assert!(!elsewhere.path().join("new").exists());
+            assert_eq!(file("t").err(), Some(StatusCode::FORBIDDEN));
+            assert_eq!(file("link/token").err(), Some(StatusCode::FORBIDDEN));
+        }
+    }
+
+    /// A step names what the plugin handed over, never the host's copy of it: the file, or the
+    /// title folder as many levels above it.
+    #[test]
+    fn a_step_s_source_is_the_caller_s_spelling() {
+        use std::path::{Path, PathBuf};
+        let copy = PathBuf::from("/host/copy/roots/ab/wiiu/Title/code/app.rpx");
+        let spelled = [(copy.clone(), "/games/wiiu/Title/code/app.rpx".to_string())];
+        let named = |source: &str| spelled_source(&spelled, Path::new(source));
+        assert_eq!(
+            named(copy.to_str().unwrap()),
+            "/games/wiiu/Title/code/app.rpx"
+        );
+        assert_eq!(named("/host/copy/roots/ab/wiiu/Title"), "/games/wiiu/Title");
+        assert_eq!(named("/elsewhere/file"), "/elsewhere/file");
+    }
+
+    /// A state folder the person moved elsewhere by a link is followed to where it lies.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_state_folder_is_followed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let states = tmp.path().join("plugin-state");
+        std::fs::create_dir_all(states.join("real")).unwrap();
+        std::os::unix::fs::symlink(states.join("real"), states.join("linked")).unwrap();
+        let rel = std::path::Path::new("x");
+        let real = states.join("real").canonicalize().unwrap();
+        assert_eq!(own_state(Some("real"), &states, rel), Ok(real.clone()));
+        assert_eq!(own_state(Some("linked"), &states, rel), Ok(real));
+        assert_eq!(own_state(Some("gone"), &states, rel), Err(NO_OWN_TOKEN));
+    }
+
+    /// hermir works on copies of a plugin's game folder: a link planted there is neither read
+    /// nor written through, and a save hermir wrote lands beside the game, as the plugin spells
+    /// it.
+    #[cfg(unix)]
+    #[test]
+    fn a_plugin_s_game_folder_moves_only_beneath_its_root() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tmp.path().canonicalize().unwrap();
+        let (root, outside) = (tmp.join("roms"), tmp.join("outside"));
+        let game = root.join("gba");
+        std::fs::create_dir_all(&game).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("hooks.json"), b"theirs").unwrap();
+        std::fs::write(game.join("Emerald.sav"), b"old").unwrap();
+        symlink(outside.join("hooks.json"), game.join("Ruby.sav")).unwrap();
+        symlink(&outside, game.join("sub")).unwrap();
+        let held = HeldGame {
+            root: root.clone(),
+            real: game.clone(),
+            spelled: game.clone(),
+            writable: true,
+        };
+        let unit = |rel: &str| hermir::SaveUnit {
+            kind: hermir::SaveKind::Save,
+            name: rel.replace('/', "__"),
+            shared: false,
+            written_at_start: false,
+            size: 0,
+            files: 1,
+            modified: 0,
+            path: game.join(rel),
+        };
+        let copy = handover::Scratch::new_in(&tmp.join("scratch")).unwrap();
+        for linked in ["Ruby.sav", "sub/hooks.json"] {
+            assert!(held.copy_in([&unit(linked)], &copy).is_err(), "{linked}");
+        }
+        held.copy_in([&unit("Emerald.sav")], &copy).unwrap();
+        assert_eq!(
+            std::fs::read(copy.path().join("Emerald.sav")).unwrap(),
+            b"old"
+        );
+
+        let back = |rel: &str| {
+            let written = copy.path().join(rel);
+            std::fs::create_dir_all(written.parent().unwrap()).unwrap();
+            std::fs::write(&written, b"new").unwrap();
+            held.put_back(&copy, &written)
+        };
+        for rel in ["Emerald.sav", "Ruby.sav", "new/y.sav"] {
+            assert_eq!(back(rel).unwrap(), Some(game.join(rel)));
+            assert_eq!(std::fs::read(game.join(rel)).unwrap(), b"new", "{rel}");
+        }
+        assert!(back("sub/x.sav").is_err());
+        assert_eq!(
+            std::fs::read(outside.join("hooks.json")).unwrap(),
+            b"theirs"
+        );
+        assert!(!outside.join("x.sav").exists());
+        let skipped = held.put_back(&copy, std::path::Path::new("Emerald.sav"));
+        assert_eq!(skipped.unwrap(), None);
+        // A folder the plugin may only read takes no save; one in the emulator's folder goes.
+        let read_only = HeldGame {
+            writable: false,
+            ..held
+        };
+        assert!(read_only
+            .put_back(&copy, &copy.path().join("Emerald.sav"))
+            .is_err());
+        let elsewhere = read_only.put_back(&copy, std::path::Path::new("Emerald.sav"));
+        assert_eq!(elsewhere.unwrap(), None);
     }
 }

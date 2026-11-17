@@ -89,6 +89,8 @@ struct State {
     self_written_seq: Option<u32>,
     /// Newest-wins offer id.
     offer_seq: u32,
+    /// The wire mimes of that offer: the only ones a `FetchRequest` is served.
+    offered: Vec<String>,
     /// A change within [`OFFER_SPACING`] of this waits for a later pass.
     last_offer: Option<Instant>,
     remote_offer: Option<u32>,
@@ -122,6 +124,19 @@ impl State {
         }
         true
     }
+
+    /// Take `kinds` as the current offer, and return its id.
+    fn record_offer(&mut self, kinds: &[ClipKind]) -> u32 {
+        self.offer_seq = self.offer_seq.wrapping_add(1);
+        self.last_offer = Some(Instant::now());
+        self.offered = kinds.iter().map(|k| k.mime.clone()).collect();
+        self.offer_seq
+    }
+
+    /// Whether a host fetch of `mime` may be served: the current offer announced it.
+    fn serves(&self, mime: &str) -> bool {
+        self.offered.iter().any(|m| m == mime)
+    }
 }
 
 /// Announce the local format list; never the bytes.
@@ -143,9 +158,7 @@ fn poll_local(client: &NativeClient, state: &mut State) {
     if kinds.is_empty() {
         return;
     }
-    state.offer_seq = state.offer_seq.wrapping_add(1);
-    state.last_offer = Some(Instant::now());
-    let seq_id = state.offer_seq;
+    let seq_id = state.record_offer(&kinds);
     tracing::debug!(
         seq = seq_id,
         kinds = kinds.len(),
@@ -212,13 +225,19 @@ fn handle_event(client: &NativeClient, state: &mut State, ev: ClipEventCore) {
                 Err(e) => tracing::warn!(error = %e, mime = %mime, "clipboard: apply failed"),
             }
         }
-        // A failed read still cancels, or the host waits forever.
+        // Served only in a format the current offer announced. A refusal or a failed read
+        // still cancels, or the host waits forever.
         ClipEventCore::FetchRequest {
             req_id,
             seq: _,
             file_index: _,
             mime,
         } => {
+            if !state.serves(&mime) {
+                tracing::debug!(mime = %mime, "clipboard: fetch of a format not offered");
+                let _ = client.clip_cancel(req_id);
+                return;
+            }
             if os::is_concealed() {
                 let _ = client.clip_cancel(req_id);
                 return;
@@ -287,6 +306,28 @@ mod tests {
         assert!(!state.take_local_change(2, t0));
         assert_eq!(state.self_written_seq, None);
         assert!(state.take_local_change(3, t0));
+    }
+
+    /// A host fetch is served only in a format the newest offer announced.
+    #[test]
+    fn a_fetch_of_an_unannounced_format_is_refused() {
+        let kind = |mime: &str| ClipKind {
+            mime: mime.into(),
+            size_hint: 0,
+        };
+        let mut state = State::default();
+        assert!(!state.serves(MIME_TEXT), "nothing offered, nothing served");
+        assert_eq!(state.record_offer(&[kind(MIME_TEXT), kind("text/html")]), 1);
+        assert!(state.serves(MIME_TEXT));
+        assert!(state.serves("text/html"));
+        assert!(!state.serves("text/x-moz-url-priv"));
+        assert!(!state.serves("text/uri-list"));
+        assert_eq!(state.record_offer(&[kind(MIME_PNG)]), 2);
+        assert!(state.serves(MIME_PNG));
+        assert!(
+            !state.serves(MIME_TEXT),
+            "a newer offer replaces the older one"
+        );
     }
 }
 

@@ -61,7 +61,8 @@ fn rejected(reason: RejectReason) -> anyhow::Error {
 /// browser slot. The slot is taken once admission returns, so a peer that stalls before its
 /// device signature holds none. An unpaired device takes one only on approval. A full host
 /// waits here with the session accepted; the plane's keep-alive holds the path meanwhile.
-/// `via` can make its knock and pairing strict. `unadmitted` is given back once admission returns.
+/// `via` can make its knock and pairing strict. `unadmitted` is given back once admission
+/// returns, or for a knock once the console decides it.
 pub(crate) async fn run(
     conn: Connection,
     serving: Arc<Serving>,
@@ -70,7 +71,6 @@ pub(crate) async fn run(
     unadmitted: super::UnadmittedSlot,
 ) -> Result<Served> {
     let admitted = admit_session(&conn, &serving, &via).await?;
-    drop(unadmitted);
     let Some(Admitted {
         link,
         mut tx,
@@ -81,26 +81,24 @@ pub(crate) async fn run(
     else {
         return Ok(Served::Session);
     };
-    let permit = match knock {
-        None => crate::native::slot_while_connected(&link, &sem).await?,
-        Some(label) => {
-            let fp = link
-                .peer_fingerprint()
-                .context("a knock is keyed by its device")?;
-            let pairing = &serving.plane.pairing;
-            crate::native::park_knock(
-                &link,
-                Some(&mut tx),
-                pairing,
-                &label,
-                &hex::encode(fp),
-                first.profile.as_deref(),
-                &sem,
-            )
-            .await?
-            .map_err(rejected)?
-        }
-    };
+    if let Some(label) = &knock {
+        let fp = link
+            .peer_fingerprint()
+            .context("a knock is keyed by its device")?;
+        let pairing = &serving.plane.pairing;
+        crate::native::wait_for_approval(
+            &link,
+            Some(&mut tx),
+            pairing,
+            label,
+            &hex::encode(fp),
+            first.profile.as_deref(),
+        )
+        .await?
+        .map_err(rejected)?;
+    }
+    drop(unadmitted);
+    let permit = crate::native::slot_while_connected(&link, &sem).await?;
     let plane = WebTransportPlane::new(conn, link.v2_session().clone());
     crate::native::run_admitted(
         link,
@@ -597,7 +595,9 @@ mod tests {
     }
 
     /// A page is familiar on a private address, under a local name, as a local file, in the
-    /// plane's origin list or on a pairing record. Anything else, `null` included, is strict.
+    /// plane's origin list or on a pairing record. Anything else, `null` included, is strict. A
+    /// record never keeps `null` or an origin cut to fit, and a cut origin is strict even when
+    /// its kept part reads as a local name.
     #[test]
     fn only_an_unfamiliar_public_page_is_strict() {
         let np = store("familiar");
@@ -605,6 +605,19 @@ mod tests {
         s.plane.origins = vec!["https://play.example.com".into()];
         np.add("Enrico's browser", "aa11").unwrap();
         np.remember_origin("aa11", "https://web.punktfunk.io");
+        let cap = |o: String| o.chars().take(Via::ORIGIN_CAP).collect::<String>();
+        let cut = cap(format!("https://play.{}.example", "a".repeat(200)));
+        let cut_local = cap(format!(
+            "https://{}.{}.local.evil.example",
+            "a".repeat(63),
+            "b".repeat(50)
+        ));
+        assert!(cut_local.ends_with(".local") && crate::webtransport::local_origin(&cut_local));
+        for (fp, page) in [("bb22", "null"), ("cc33", cut.as_str())] {
+            np.add("Sandboxed page", fp).unwrap();
+            np.remember_origin(fp, page);
+            assert!(!np.knows_origin(page), "{page}");
+        }
         let strict = |origin: Option<&str>| {
             crate::webtransport::via(Relay::Direct, origin.map(Into::into), &s).unfamiliar_origin
         };
@@ -624,6 +637,8 @@ mod tests {
             "https://8.8.8.8",
             "https://desk.local.evil.example",
             "null",
+            cut.as_str(),
+            cut_local.as_str(),
         ] {
             assert!(strict(Some(unfamiliar)), "{unfamiliar}");
         }
@@ -783,6 +798,49 @@ mod tests {
             0,
             "the admitted session holds its slot again"
         );
+    }
+
+    /// A knock keeps its unadmitted slot while the console decides, so parked knocks count
+    /// against the plane's cap. A denial gives it back.
+    #[tokio::test]
+    async fn a_parked_knock_holds_its_unadmitted_slot() {
+        let np = store("parked-slot");
+        let s = Arc::new(serving(np.clone()));
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
+        let pool = Arc::new(super::super::Unadmitted::default());
+        let held = || pool.0.lock().unwrap().values().sum::<usize>();
+        let (server, dial) = loopback();
+        let browser = async {
+            let (conn, mut tx, mut rx) = dial.await;
+            use punktfunk_core::quic::v2::{io, msg};
+            tx.write_all(&hello("Safari on Mac", None)).await.unwrap();
+            let (ty, body) = rx.read_frame().await.unwrap();
+            let nonce = msg::decode::<AuthChallenge>(ty, &body).unwrap().nonce;
+            io::send(&mut tx, &respond(&key, &s.cert_hash, &nonce))
+                .await
+                .unwrap();
+            (conn, tx, rx)
+        };
+        let host = async {
+            let conn = server.accept().await.await.unwrap().accept().await.unwrap();
+            let slot = pool.take(conn.remote_address().ip()).unwrap();
+            let sem = Arc::new(tokio::sync::Semaphore::new(1));
+            run(conn, s.clone(), sem, Arc::new(Via::DIRECT), slot).await
+        };
+        let console = async {
+            let pending = loop {
+                if let Some(p) = np.pending().into_iter().find(|p| p.fingerprint == fp_hex) {
+                    break p;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            };
+            assert_eq!(held(), 1, "a parked knock holds its slot");
+            assert!(np.deny_pending(pending.id));
+        };
+        let (_browser, ran, ()) = tokio::join!(browser, host, console);
+        assert!(ran.is_err(), "denied");
+        assert_eq!(held(), 0);
     }
 
     /// A browser's close code reaches the session: `QUIT_CLOSE_CODE` is how a player ends the

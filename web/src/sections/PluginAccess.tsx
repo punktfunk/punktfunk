@@ -5,11 +5,12 @@ import {
 	ChevronRight,
 	Download,
 	FolderLock,
+	Network,
 	RotateCcw,
 	Save,
 	Trash2,
 } from "lucide-react";
-import { type FC, useState } from "react";
+import { type FC, useId, useState } from "react";
 import { useGetEmulators } from "@/api/gen/emulators/emulators";
 import type { AccessWalk } from "@/api/gen/model/accessWalk";
 import type { DecideRequest } from "@/api/gen/model/decideRequest";
@@ -30,6 +31,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { usePerson } from "@/lib/person";
 import { isStringArray, useLocalPref } from "@/lib/prefs";
@@ -91,7 +93,11 @@ export const usePluginAccess = () => {
 		try {
 			await run(plugin, paths, decision);
 		} catch {
-			toast.error(m.plugin_access_decision_failed());
+			toast.error(
+				paths.some(isPortPath)
+					? m.plugin_access_port_failed()
+					: m.plugin_access_decision_failed(),
+			);
 		}
 	};
 	const dialog = (
@@ -102,7 +108,11 @@ export const usePluginAccess = () => {
 			body={m.plugin_access_confirm_body()}
 			submitLabel={m.plugin_access_allow()}
 			busyLabel={m.plugin_access_allowing()}
-			failedText={m.plugin_access_decision_failed()}
+			failedText={
+				allowing?.paths.some(isPortPath)
+					? m.plugin_access_port_failed()
+					: m.plugin_access_decision_failed()
+			}
 			onSubmit={async (password) => {
 				if (allowing)
 					await run(allowing.plugin, allowing.paths, "allow", password);
@@ -118,6 +128,10 @@ export const usePluginAccess = () => {
 		dialog,
 	};
 };
+
+/** A port on this computer as the host spells it in a row and takes it in a decision. */
+const portPath = (port: number) => `127.0.0.1:${port}`;
+const isPortPath = (path: string) => path.startsWith("127.0.0.1:");
 
 /** Folders this browser put off with Later, as `plugin\npath`. */
 const NONE: string[] = [];
@@ -230,7 +244,8 @@ export const PendingAccess: FC<{
 	const allowAll =
 		access.pending.length > 1 &&
 		access.pending.every(
-			(row) => !row.write && !row.emulator && !row.core && !row.saves,
+			(row) =>
+				!row.write && !row.emulator && !row.core && !row.saves && !row.port,
 		);
 	// An emulator row names the catalog id; the list gives it its name.
 	const emulators = useGetEmulators({
@@ -267,6 +282,8 @@ export const PendingAccess: FC<{
 						<div className="flex items-start gap-2">
 							{install ? (
 								<Download className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+							) : row.port ? (
+								<Network className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 							) : row.saves ? (
 								<Save className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 							) : row.write ? (
@@ -290,6 +307,26 @@ export const PendingAccess: FC<{
 											{row.path}
 										</div>
 									</>
+								) : row.port ? (
+									<>
+										<div className="text-sm font-medium">
+											{m.plugin_access_port({ port: row.port })}
+										</div>
+										<p className="text-xs text-muted-foreground">
+											{m.plugin_access_port_note()}
+										</p>
+										{row.listening !== undefined && (
+											<p className="text-xs text-muted-foreground">
+												{!row.listening
+													? m.plugin_access_port_idle()
+													: row.listener
+														? m.plugin_access_port_listener({
+																name: row.listener,
+															})
+														: m.plugin_access_port_listener_other()}
+											</p>
+										)}
+									</>
 								) : row.saves ? (
 									<>
 										<div className="text-sm font-medium">
@@ -304,9 +341,15 @@ export const PendingAccess: FC<{
 									</>
 								) : (
 									<>
+										{/* The folder the grant opens; a link the plugin asked through only below it. */}
 										<div className="break-all font-mono text-xs">
-											{row.spelled ?? row.path}
+											{row.path}
 										</div>
+										{row.spelled && (
+											<div className="break-all text-xs text-muted-foreground">
+												{m.plugin_access_via_link({ path: row.spelled })}
+											</div>
+										)}
 										<Mode write={row.write} files={row.files} />
 									</>
 								)}
@@ -373,18 +416,64 @@ export const PendingAccess: FC<{
 	);
 };
 
+/** The operator's own way to let a plugin reach a server on this computer: a port and Allow,
+ * with no request from the plugin. The host refuses a port of its own. */
+export const AllowPort: FC<{ busy: boolean; onDecide: DecideAccess }> = ({
+	busy,
+	onDecide,
+}) => {
+	const id = useId();
+	const [value, setValue] = useState("");
+	const port = Number(value);
+	const valid = Number.isInteger(port) && port >= 1 && port <= 65535;
+	return (
+		<form
+			className="mt-1 flex flex-wrap items-center gap-2 text-xs"
+			onSubmit={(e) => {
+				e.preventDefault();
+				if (!valid) return;
+				onDecide([portPath(port)], "allow");
+				setValue("");
+			}}
+		>
+			<label htmlFor={id} className="text-muted-foreground">
+				{m.plugin_access_port_add()}
+			</label>
+			<Input
+				id={id}
+				inputMode="numeric"
+				className="h-7 w-24"
+				value={value}
+				onChange={(e) => setValue(e.target.value.replace(/\D/g, ""))}
+			/>
+			<Button
+				type="submit"
+				size="sm"
+				variant="outline"
+				disabled={busy || !valid}
+			>
+				{m.plugin_access_allow()}
+			</Button>
+		</form>
+	);
+};
+
 export const RecordedAccess: FC<{
 	access: PluginAccessSnapshot;
 	busy: boolean;
 	onDecide: DecideAccess;
 }> = ({ access, busy, onDecide }) => {
 	const [open, setOpen] = useState(false);
+	const [portsOpen, setPortsOpen] = useState(false);
+	const ports = access.ports ?? [];
+	const deniedPorts = access.denied_ports ?? [];
+	const portCount = ports.length + deniedPorts.length;
 	const count = access.grants.length + access.denied.length;
 	// A walk on a pending row shows on that row.
 	const walks = (access.walks ?? []).filter(
 		(walk) => !access.pending.some((row) => row.path === walk.path),
 	);
-	if (count === 0 && walks.length === 0) return null;
+	if (count === 0 && portCount === 0 && walks.length === 0) return null;
 	return (
 		<div className="mt-1 space-y-1">
 			{walks.map((walk) => (
@@ -434,6 +523,58 @@ export const RecordedAccess: FC<{
 								variant="ghost"
 								disabled={busy}
 								onClick={() => onDecide([path], "forget")}
+							>
+								<RotateCcw className="size-3.5" />
+								{m.plugin_access_ask_again()}
+							</Button>
+						</div>
+					))}
+				</div>
+			)}
+			{portCount > 0 && (
+				<button
+					type="button"
+					aria-expanded={portsOpen}
+					onClick={() => setPortsOpen((v) => !v)}
+					className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+				>
+					<ChevronRight
+						className={cn(
+							"size-3.5 transition-transform",
+							portsOpen && "rotate-90",
+						)}
+					/>
+					{m.plugin_access_ports({ count: portCount })}
+				</button>
+			)}
+			{portsOpen && (
+				<div className="mt-1 space-y-0.5 pl-5">
+					{ports.map((port) => (
+						<div key={port} className="flex items-center gap-2 text-xs">
+							<Network className="size-3.5 shrink-0 text-muted-foreground" />
+							<span className="min-w-0 flex-1 font-mono">{portPath(port)}</span>
+							<Button
+								variant="ghost"
+								size="icon"
+								aria-label={m.common_remove()}
+								title={m.common_remove()}
+								disabled={busy}
+								onClick={() => onDecide([portPath(port)], "forget")}
+							>
+								<Trash2 className="size-3.5 text-destructive" />
+							</Button>
+						</div>
+					))}
+					{deniedPorts.map((port) => (
+						<div key={port} className="flex items-center gap-2 text-xs">
+							<div className="min-w-0 flex-1 font-mono text-muted-foreground">
+								{portPath(port)}
+							</div>
+							<Button
+								size="sm"
+								variant="ghost"
+								disabled={busy}
+								onClick={() => onDecide([portPath(port)], "forget")}
 							>
 								<RotateCcw className="size-3.5" />
 								{m.plugin_access_ask_again()}

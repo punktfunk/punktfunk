@@ -100,6 +100,8 @@
 	"diag_pad_driver_protocol_summary": "{driver_protocol} and {host_protocol} are protocol numbers.",
 	"diag_pad_driver_stale_summary": "{driver_rev} and {host_rev} are revision numbers.",
 	"diag_plugin_sandbox_bwrap_refused_impact": "{error} is bubblewrap's own first stderr line, English, shown as is.",
+	"diag_plugin_sandbox_no_network_impact": "{plugins} lists the plugin ids that need the network, joined with commas. {program} is a program name, unshare or pasta, never translated.",
+	"diag_plugin_sandbox_no_network_remedy": "{package} is a package name, util-linux or passt, never translated.",
 	"diag_plugin_sandbox_stopped_error_impact": "{error} is the plugin runner's own refusal, English operator text, shown as is.",
 	"diag_restart_pending_summary": "Health check: settings that wait for a restart. {settings} is a comma-separated list of setting names the console localizes from setting_<id>.",
 	"diag_server_conflict_summary": "{servers} names the other servers (product names), joined with commas.",

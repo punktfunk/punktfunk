@@ -91,7 +91,7 @@ impl SteamDeckPad {
             SteamModel::Deck => crate::pad_broker::PadKind::SteamDeck,
             SteamModel::Controller => crate::pad_broker::PadKind::SteamController,
         };
-        let dev = UhidDevice::open_kind(kind, index, &identity(index, model))?;
+        let dev = UhidDevice::open_kind(kind, index, false, &identity(index, model))?;
         Ok(SteamDeckPad {
             dev,
             model,

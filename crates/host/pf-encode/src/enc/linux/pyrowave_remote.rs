@@ -444,9 +444,15 @@ pub(crate) fn open_preferring_worker(
     let hs = match spawn_link(&path, &params, bitrate_bps) {
         Ok(hs) => hs,
         Err(e) => {
+            // A group the account joined while logged in counts only from its next login.
+            let denied = e.chain().any(|c| {
+                c.downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied)
+            });
             tracing::warn!(
                 worker = %path.display(),
                 error = %format!("{e:#}"),
+                next_login_may_fix = denied,
                 "pyrowave: the encode worker did not come up — encoding in-process at default \
                  GPU priority"
             );

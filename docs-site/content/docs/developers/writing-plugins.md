@@ -30,7 +30,7 @@ Linux and `%ProgramData%\punktfunk` on Windows.
 |---|---|---|
 | Isolation | One bubblewrap sandbox per plugin, with its own PID namespace | One AppContainer per plugin, `punktfunk.plugin.<id>`, under the runner's `NT AUTHORITY\LocalService` account |
 | Files | `/usr`, its own code, its state dir, the manifest's paths and the operator's grants | Program Files, its own code, its state dir, the manifest's paths and the operator's grants; user profiles are closed |
-| Network | None unless the manifest sets `network` | None unless the manifest sets `network`; never loopback |
+| Network | None unless the manifest sets `network`; on this computer only the ports the operator allowed | None unless the manifest sets `network`; never loopback |
 | Host API | A socket the runner forwards; `connect()` finds it | A named pipe per plugin; `connect()` finds it |
 
 ## The manifest
@@ -89,6 +89,16 @@ first-run setup and the platform's firmware. It takes no flags: a title that nee
 through a template.
 `GET /api/v1/emulators/catalog` lists the platforms and emulators. A plugin that moves saves asks
 once with `saves: true` on `POST /api/v1/plugin-access/requests`.
+
+A Linux plugin with `network` reaches the internet and the LAN, but not the `localhost` of the
+computer the host runs on, and that computer's own LAN address leads nowhere from inside the
+plugin. To use a server there, ask for its TCP port with `ports: [8080]` on the same request.
+The answer for each is `granted`, `pending`, `denied` or `refused:<rule>`, under the path
+`127.0.0.1:8080`, which is where the plugin connects once the operator allows it. The host
+restarts the plugin on a yes. It refuses a port of its own (47980 to 48010), a plugin without
+`network`, and every port on Windows (`refused:unsupported`), where a plugin's network is as it
+was. `@punktfunk/plugin-kit` wraps this as `reachServer(url)`: it answers the address to dial
+for a server the person configured, wherever that server runs.
 
 ## A minimal library plugin
 

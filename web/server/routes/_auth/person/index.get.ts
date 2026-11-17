@@ -1,6 +1,7 @@
 // GET /_auth/person?ticket=… — the page `ctl console-url` writes inside a seat opens this. The
 // profile's seat host, found from the box and never from the ticket or the browser, redeems the
-// ticket; its session token stays here. Any refusal lands on one plain sentence and opens nothing.
+// ticket; its session token stays here. Any refusal lands on one plain sentence and opens
+// nothing.
 import { defineEventHandler, getQuery, sendRedirect } from "h3";
 import { peerAddress } from "../../../util/auth";
 import {

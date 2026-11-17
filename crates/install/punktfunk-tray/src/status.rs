@@ -315,8 +315,11 @@ fn fetch_summary(agent: &ureq::Agent, url: &str, token: Option<&str>) -> Option<
     if let Some(token) = token {
         req = req.header("Authorization", format!("Bearer {token}"));
     }
-    let body = req.call().ok()?.body_mut().read_to_string().ok()?;
-    serde_json::from_str(&body).ok()
+    const MAX: u64 = 10 << 20;
+    let mut resp = req.call().ok()?;
+    // `limit` counts bytes received, `take` what gzip inflates them to. A cut body fails to parse.
+    let body = resp.body_mut().with_config().limit(MAX).reader();
+    serde_json::from_reader(std::io::Read::take(body, MAX)).ok()
 }
 
 /// SHA-256 of the host identity cert when readable (Linux, same-user file).

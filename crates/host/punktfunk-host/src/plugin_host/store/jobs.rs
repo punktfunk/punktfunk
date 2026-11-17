@@ -322,6 +322,91 @@ pub(crate) fn spawn_uninstall(
     Ok(id)
 }
 
+/// The installed version of a package an update is about to replace: its own files, and
+/// `package.json` and `bun.lock` as bun left them, copied aside before `bun add` touches any.
+/// A refused update puts them back. The copy goes when this drops.
+struct Kept {
+    version: String,
+    manifest: Vec<u8>,
+    lock: Option<Vec<u8>>,
+    files: std::path::PathBuf,
+}
+
+impl Kept {
+    fn take(dir: &std::path::Path, pkg: &str, version: &str) -> std::io::Result<Kept> {
+        let files = dir.join(".kept-for-rollback");
+        let _ = std::fs::remove_dir_all(&files);
+        copy_tree(&dir.join("node_modules").join(pkg), &files)?;
+        Ok(Kept {
+            version: version.to_string(),
+            manifest: std::fs::read(dir.join("package.json"))?,
+            lock: std::fs::read(dir.join("bun.lock")).ok(),
+            files,
+        })
+    }
+
+    /// The package's files, `package.json` and `bun.lock` as they were when taken.
+    fn put_back(&self, dir: &std::path::Path, pkg: &str) -> std::io::Result<()> {
+        let at = dir.join("node_modules").join(pkg);
+        let _ = std::fs::remove_dir_all(&at);
+        copy_tree(&self.files, &at)?;
+        std::fs::write(dir.join("package.json"), &self.manifest)?;
+        match &self.lock {
+            Some(lock) => std::fs::write(dir.join("bun.lock"), lock),
+            None => {
+                let _ = std::fs::remove_file(dir.join("bun.lock"));
+                Ok(())
+            }
+        }
+    }
+}
+
+impl Drop for Kept {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.files);
+    }
+}
+
+/// `from`'s folders and plain files at `to`. A link is left out.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    let kind = std::fs::symlink_metadata(from)?.file_type();
+    if kind.is_dir() {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+        }
+    } else if kind.is_file() {
+        std::fs::copy(from, to)?;
+    }
+    Ok(())
+}
+
+/// A refused update of `pkg` undone: the kept version's files and bun's record of them are
+/// back, and bun has put the other packages back to that record where it could.
+fn restore(id: &str, dir: &std::path::Path, pkg: &str, kept: &Kept, public: bool) -> Result<()> {
+    kept.put_back(dir, pkg)
+        .context("put the kept version back")?;
+    let mut args = vec![
+        "add".to_string(),
+        format!("{pkg}@{}", kept.version),
+        "--exact".to_string(),
+    ];
+    if public {
+        args.push("--allow-public-registry".into());
+    }
+    args.push("--plugins".into());
+    args.push(dir.to_string_lossy().into_owned());
+    if let Err(e) = run_runner(id, &args) {
+        log_line(
+            id,
+            format!("packages not put back to the kept record: {e:#}"),
+        );
+    }
+    // Whatever bun fetched or rewrote for the package itself, the kept bytes win.
+    kept.put_back(dir, pkg).context("put the kept version back")
+}
+
 fn run_install(id: &str, plan: Plan, plugin_tokens: &PluginTokens) -> Result<()> {
     let dir = super::plugins_dir();
 
@@ -350,6 +435,13 @@ fn run_install(id: &str, plan: Plan, plugin_tokens: &PluginTokens) -> Result<()>
     // nearest ancestor that has one — exit 0, wrong tree (`ensure_plugin_root`).
     super::ensure_plugin_root(&dir).with_context(|| format!("prepare {}", dir.display()))?;
     let before = super::installed_packages(&dir);
+    // The version this replaces, kept so a refused update leaves it installed.
+    let kept = plan.pkg.as_deref().and_then(|pkg| {
+        let version = before.iter().find(|b| b.pkg == pkg)?.version.as_deref()?;
+        Kept::take(&dir, pkg, version)
+            .inspect_err(|e| log_line(id, format!("installed {pkg} not kept for a rollback: {e}")))
+            .ok()
+    });
     // Map the scope in bunfig ourselves. An older runner would treat an unknown
     // flag's value as a package name (`ensure_bunfig_scope`).
     if let Some((scope, url)) = &plan.registry {
@@ -405,31 +497,28 @@ fn run_install(id: &str, plan: Plan, plugin_tokens: &PluginTokens) -> Result<()>
     // Do not leave an unreviewed version under a verified badge. The pin is checked again on
     // what bun fetched: the check above asked the registry separately, which can answer bun
     // with other bytes.
-    let drift = match (plan.version.as_deref(), installed.version.as_deref()) {
-        (Some(want), Some(got)) if want != got => Some(format!(
-            "installed {pkg}@{got} but the catalog pinned {want}"
-        )),
-        (_, Some(got)) => plan.integrity.as_deref().and_then(|want| {
-            let lock = std::fs::read_to_string(dir.join("bun.lock")).ok();
-            match lock.as_deref().and_then(|l| locked_integrity(l, &pkg, got)) {
-                Some(locked) if locked != want => Some(format!(
-                    "bun installed {pkg}@{got} as {locked} but the catalog pins {want}"
-                )),
-                Some(_) => None,
-                None => {
-                    log_line(
-                        id,
-                        format!("integrity not re-checked: no bun.lock entry for {pkg}"),
-                    );
-                    None
-                }
-            }
-        }),
-        _ => None,
-    };
+    let lock = std::fs::read_to_string(dir.join("bun.lock")).ok();
+    let drift = pin_drift(
+        &pkg,
+        plan.version.as_deref(),
+        plan.integrity.as_deref(),
+        installed.version.as_deref(),
+        lock.as_deref(),
+    );
     if let Some(why) = drift {
         log_line(id, format!("rolling back: {why}"));
         set_phase(id, "rolling back");
+        // An update goes back to the version that was installed; only a first install is removed.
+        if let Some(kept) = &kept {
+            let public = !plan.spec.starts_with("@punktfunk/");
+            match restore(id, &dir, &pkg, kept, public) {
+                Ok(()) => {
+                    restart_runner(id);
+                    bail!("{why} — kept {pkg}@{}", kept.version);
+                }
+                Err(e) => log_line(id, format!("{pkg}@{} not restored: {e:#}", kept.version)),
+            }
+        }
         let _ = run_runner(
             id,
             &[
@@ -465,6 +554,40 @@ fn run_install(id: &str, plan: Plan, plugin_tokens: &PluginTokens) -> Result<()>
     refresh_plugin_tokens(id, plugin_tokens)?;
     start_runner(id);
     Ok(())
+}
+
+/// Why `pkg`, installed at `got`, is not the catalog's pin, or `None` when it is. An integrity
+/// pin holds only on the entry bun locked for that version: no lock, no entry or no installed
+/// version is a mismatch.
+fn pin_drift(
+    pkg: &str,
+    version: Option<&str>,
+    integrity: Option<&str>,
+    got: Option<&str>,
+    lock: Option<&str>,
+) -> Option<String> {
+    if let (Some(want), Some(got)) = (version, got)
+        && want != got
+    {
+        return Some(format!(
+            "installed {pkg}@{got} but the catalog pinned {want}"
+        ));
+    }
+    let want = integrity?;
+    let Some(got) = got else {
+        return Some(format!(
+            "{pkg} has no version to check against the catalog pin"
+        ));
+    };
+    match lock.and_then(|l| locked_integrity(l, pkg, got)) {
+        Some(locked) if locked == want => None,
+        Some(locked) => Some(format!(
+            "bun installed {pkg}@{got} as {locked} but the catalog pins {want}"
+        )),
+        None => Some(format!(
+            "no bun.lock entry for {pkg}@{got} to check against the catalog pin"
+        )),
+    }
 }
 
 /// [`restart_runner`], switching on a runner that is installed but off: an install asks for
@@ -648,11 +771,7 @@ fn registry_integrity(registry: &str, pkg: &str, version: &str) -> Result<String
             }
             other => anyhow::anyhow!("registry request failed: {other}"),
         })?;
-    let body = resp
-        .body_mut()
-        .with_config()
-        .limit(16 * 1024 * 1024)
-        .read_to_vec()
+    let body = pf_update_check::feed::read_capped(&mut resp, 16 * 1024 * 1024)
         .context("read the registry response")?;
     let doc: serde_json::Value =
         serde_json::from_slice(&body).context("registry returned invalid JSON")?;
@@ -698,6 +817,59 @@ mod tests {
         );
         assert_eq!(got("@p/plugin-x", "0.9.0"), None);
         assert_eq!(got("@p/plugin-q", "1.0.0"), None);
+    }
+
+    #[test]
+    fn pin_drift_refuses_what_the_lock_does_not_confirm() {
+        let lock = r#"    "@p/plugin-x": ["@p/plugin-x@1.2.0", "", {}, "sha512-pinned=="],"#;
+        let drift = |integrity: Option<&str>, got: Option<&str>, lock: Option<&str>| {
+            pin_drift("@p/plugin-x", Some("1.2.0"), integrity, got, lock)
+        };
+        let pin = Some("sha512-pinned==");
+        assert_eq!(drift(pin, Some("1.2.0"), Some(lock)), None);
+        assert!(drift(Some("sha512-other=="), Some("1.2.0"), Some(lock)).is_some());
+        assert!(drift(pin, Some("1.3.0"), Some(lock)).is_some());
+        // What the lock can't confirm is refused, never passed.
+        assert!(drift(pin, Some("1.2.0"), None).is_some());
+        assert!(drift(pin, Some("1.2.0"), Some("{}")).is_some());
+        assert!(drift(pin, None, Some(lock)).is_some());
+        // An unpinned install has nothing to check.
+        assert_eq!(drift(None, Some("1.2.0"), None), None);
+    }
+
+    /// What an update replaced comes back whole: the package's files, the manifest and the lock.
+    #[test]
+    fn a_kept_version_goes_back_as_it_was() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let pkg = "@p/plugin-x";
+        let at = dir.join("node_modules").join(pkg);
+        std::fs::create_dir_all(at.join("dist")).unwrap();
+        let old: [(std::path::PathBuf, &str); 4] = [
+            (at.join("package.json"), r#"{"version":"1.1.0"}"#),
+            (at.join("dist/index.js"), "old"),
+            (dir.join("package.json"), "old manifest"),
+            (dir.join("bun.lock"), "old lock"),
+        ];
+        for (path, text) in &old {
+            std::fs::write(path, text).unwrap();
+        }
+        let kept = Kept::take(dir, pkg, "1.1.0").unwrap();
+
+        // What a refused `bun add` leaves: other files, a file more, and its own records.
+        for (path, _) in &old {
+            std::fs::write(path, "new").unwrap();
+        }
+        std::fs::write(at.join("dist/extra.js"), "new").unwrap();
+        kept.put_back(dir, pkg).unwrap();
+        for (path, text) in &old {
+            assert_eq!(std::fs::read_to_string(path).unwrap(), *text, "{path:?}");
+        }
+        assert!(!at.join("dist/extra.js").exists());
+
+        let copy = kept.files.clone();
+        drop(kept);
+        assert!(!copy.exists());
     }
 
     #[test]

@@ -25,6 +25,91 @@ use utoipa::ToSchema;
 pub const MAX_PENDING: usize = 16;
 /// Granted roots kept per plugin.
 pub const MAX_GRANTS: usize = 64;
+/// Granted ports kept per plugin.
+pub const MAX_PORTS: usize = 16;
+/// Punktfunk's own TCP ports: the API, the console, each seat's API and GameStream. They trust
+/// a caller on loopback, so no plugin is ever let onto one.
+const OWN_PORTS: std::ops::RangeInclusive<u16> = 47980..=48010;
+
+/// How a port on this computer is spelled in a row and an answer: where the plugin connects.
+/// The address and never `localhost`, which a sandbox may not resolve and which may lead to
+/// `::1`, where the forward only answers if the server listens there too.
+pub fn port_path(port: u16) -> String {
+    format!("127.0.0.1:{port}")
+}
+
+/// The port [`port_path`] spelled as `path`. No folder is spelled so: its path is absolute.
+pub fn port_of(path: &str) -> Option<u16> {
+    path.strip_prefix("127.0.0.1:")?.parse().ok()
+}
+
+/// `snap` with each pending port row saying what listens there now, so the operator sees what
+/// a yes would open. Only the operator's lanes call this: told to the plugin, it would be a
+/// way to probe this computer's loopback, which its sandbox hides.
+pub fn with_listeners(mut snap: PluginAccessSnapshot) -> PluginAccessSnapshot {
+    for row in &mut snap.pending {
+        if let Some(port) = row.port {
+            let (listening, name) = listener(port);
+            row.listening = Some(listening);
+            row.listener = name;
+        }
+    }
+    snap
+}
+
+/// Whether a program listens on TCP `port` of this computer, and its name when this host's
+/// account may read it. Linux only: no other OS grants a port.
+fn listener(port: u16) -> (bool, Option<String>) {
+    #[cfg(target_os = "linux")]
+    {
+        let tables = ["/proc/net/tcp", "/proc/net/tcp6"];
+        let inode =
+            (tables.iter()).find_map(|t| listening_inode(&std::fs::read_to_string(t).ok()?, port));
+        let Some(inode) = inode else {
+            return (false, None);
+        };
+        let socket = format!("socket:[{inode}]");
+        let holder = std::fs::read_dir("/proc").ok().and_then(|procs| {
+            procs.flatten().find_map(|p| {
+                let mut fds = std::fs::read_dir(p.path().join("fd")).ok()?.flatten();
+                let held = |fd: std::fs::DirEntry| {
+                    std::fs::read_link(fd.path()).is_ok_and(|l| l.as_os_str() == socket.as_str())
+                };
+                fds.any(held)
+                    .then(|| std::fs::read_to_string(p.path().join("comm")).ok())?
+            })
+        });
+        let name = holder.map(|n| {
+            n.chars()
+                .filter(|c| !c.is_control())
+                .take(32)
+                .collect::<String>()
+        });
+        (true, name.filter(|n| !n.trim().is_empty()))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = port;
+        (false, None)
+    }
+}
+
+/// The inode of a socket listening on `port` in a `/proc/net/tcp` table: the line whose local
+/// port is `port` and whose state is `0A`, listening.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
+fn listening_inode(table: &str, port: u16) -> Option<String> {
+    table.lines().skip(1).find_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let local = u16::from_str_radix(fields.get(1)?.rsplit(':').next()?, 16).ok()?;
+        (local == port && fields.get(3) == Some(&"0A"))
+            .then(|| fields.get(9).map(|i| i.to_string()))?
+    })
+}
+
+/// Whether `port` is one no plugin may be granted: none at all, or one this host serves.
+fn own_port(port: u16, mgmt: u16) -> bool {
+    port == 0 || port == mgmt || OWN_PORTS.contains(&port)
+}
 
 /// One root the operator granted, as recorded on disk. `at`/`by` are audit fields:
 /// RFC3339 and `console`/`cli`/`legacy`/`form` (a v1 entry has neither).
@@ -71,6 +156,20 @@ pub struct PendingRequest {
     /// [`PluginAccess::links`]: on Windows the link itself needs the runner's ACE.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spelled: Option<String>,
+    /// The plugin asks to connect to this TCP port on this computer's loopback, not for a
+    /// folder; `path` then spells it ([`port_path`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = u16, required = false)]
+    pub port: Option<u16>,
+    /// For a port row the operator lists: whether a program listens on that port right now.
+    /// Read at listing ([`with_listeners`]), never stored, and never told to the plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = bool, required = false)]
+    pub listening: Option<bool>,
+    /// That program's name, when it runs as this host's account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = String, required = false)]
+    pub listener: Option<String>,
 }
 
 /// One plugin's entry in `plugin-grants.json`.
@@ -85,6 +184,14 @@ pub struct PluginAccess {
     /// link on the way gets its own ACE, since a DACL set by name lands on the target.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub links: BTreeMap<String, String>,
+    /// TCP ports on this computer's loopback the operator let the plugin connect to. A network
+    /// plugin reaches nothing else here: the Linux runner forwards exactly these into its
+    /// network namespace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<u16>,
+    /// Ports the operator said no to; a repeat of the request answers `denied`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_ports: Vec<u16>,
 }
 
 /// What an API read returns for one plugin: its entry plus its pending rows.
@@ -94,6 +201,14 @@ pub struct PluginAccessSnapshot {
     pub grants: Vec<Grant>,
     pub pending: Vec<PendingRequest>,
     pub denied: Vec<String>,
+    /// Granted ports on this computer. See [`PluginAccess::ports`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(required = false)]
+    pub ports: Vec<u16>,
+    /// Denied ports on this computer.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(required = false)]
+    pub denied_ports: Vec<u16>,
     /// Folders whose access is changing for this plugin right now.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub walks: Vec<AccessWalk>,
@@ -176,6 +291,7 @@ impl AccessEntry {
                     .collect(),
                 denied: Vec::new(),
                 links: BTreeMap::new(),
+                ..Default::default()
             },
             AccessEntry::V2(a) => a,
         }
@@ -992,8 +1108,14 @@ impl AccessStore {
         let Ok(text) = std::fs::read_to_string(&path) else {
             return BTreeMap::new();
         };
-        match serde_json::from_str(&text) {
-            Ok(map) => map,
+        match serde_json::from_str::<BTreeMap<String, Vec<PendingRequest>>>(&text) {
+            Ok(mut map) => {
+                // Read at listing only: nothing the file says about a listener counts.
+                for row in map.values_mut().flatten() {
+                    (row.listening, row.listener) = (None, None);
+                }
+                map
+            }
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = %e, "plugin access requests: unreadable");
                 BTreeMap::new()
@@ -1269,6 +1391,9 @@ impl AccessStore {
             return outcome(canon, "refused:pending_limit");
         }
         pending.push(PendingRequest {
+            listening: None,
+            listener: None,
+            port: None,
             spelled: match pattern {
                 Some(_) => None,
                 None => link_of(raw, &canon).map(|(spelled, _)| spelled),
@@ -1354,6 +1479,9 @@ impl AccessStore {
             outcome("refused:pending_limit")
         } else {
             pending.push(PendingRequest {
+                listening: None,
+                listener: None,
+                port: None,
                 path: canon.clone(),
                 write: false,
                 reason,
@@ -1374,6 +1502,124 @@ impl AccessStore {
         Ok(Mutation {
             value: answer,
             changed: false,
+        })
+    }
+
+    /// A plugin asks to connect to TCP `port` on this computer's loopback: one row, spelled as
+    /// [`port_path`]. `networked` is its manifest's `network`, without which it has no network
+    /// to forward a port into; `mgmt` is this host's API port, refused like every port of
+    /// Punktfunk's own.
+    pub fn request_port(
+        &self,
+        id: &str,
+        port: u16,
+        networked: bool,
+        mgmt: u16,
+        reason: Option<String>,
+    ) -> io::Result<Mutation<RequestOutcome>> {
+        let _guard = self.exclusive()?;
+        let access = self.load_access()?;
+        let mut pending_all = self.load_pending();
+        let entry = access.get(id).cloned().unwrap_or_default();
+        let mut pending = pending_all.remove(id).unwrap_or_default();
+        let outcome = |o: &str| RequestOutcome {
+            path: port_path(port),
+            outcome: o.into(),
+        };
+        let answer = if own_port(port, mgmt) {
+            outcome("refused:host_port")
+        } else if !networked {
+            outcome("refused:no_network")
+        } else if entry.ports.contains(&port) {
+            outcome("granted")
+        } else if entry.denied_ports.contains(&port) {
+            outcome("denied")
+        } else if pending.iter().any(|p| p.port == Some(port)) {
+            outcome("pending")
+        } else if entry.ports.len() >= MAX_PORTS {
+            outcome("refused:grant_limit")
+        } else if pending.len() >= MAX_PENDING {
+            outcome("refused:pending_limit")
+        } else {
+            pending.push(PendingRequest {
+                listening: None,
+                listener: None,
+                port: Some(port),
+                path: port_path(port),
+                write: false,
+                reason,
+                at: now_rfc3339(),
+                emulator: None,
+                core: None,
+                saves: false,
+                files: false,
+                spelled: None,
+            });
+            pending_all.insert(id.to_string(), pending);
+            self.write_pending(&pending_all)?;
+            return Ok(Mutation {
+                value: outcome("pending"),
+                changed: true,
+            });
+        };
+        Ok(Mutation {
+            value: answer,
+            changed: false,
+        })
+    }
+
+    /// The operator's answer for `port`: allow grants it, with or without a pending row, deny
+    /// remembers the no, forget drops either. The pending row goes in each case. The runner
+    /// reads the grants file and restarts the plugin onto the new set.
+    pub fn decide_port(
+        &self,
+        id: &str,
+        port: u16,
+        decision: Decision,
+        mgmt: u16,
+    ) -> io::Result<Mutation<PluginAccessSnapshot>> {
+        let invalid = |why: &str| io::Error::new(io::ErrorKind::InvalidInput, why.to_string());
+        let _guard = self.exclusive()?;
+        let mut access = self.load_access()?;
+        let mut pending_all = self.load_pending();
+        let mut entry = access.get(id).cloned().unwrap_or_default();
+        let was = entry.clone();
+        entry.ports.retain(|p| *p != port);
+        entry.denied_ports.retain(|p| *p != port);
+        match decision {
+            Decision::Allow if own_port(port, mgmt) => {
+                return Err(invalid("that port is one of this host's own"));
+            }
+            Decision::Allow if entry.ports.len() >= MAX_PORTS => {
+                return Err(invalid("the port limit is reached"));
+            }
+            Decision::Allow => entry.ports.push(port),
+            Decision::Deny => entry.denied_ports.push(port),
+            Decision::Forget => {}
+        }
+        entry.ports.sort_unstable();
+        entry.denied_ports.sort_unstable();
+        let answered = pending_all.get_mut(id).is_some_and(|rows| {
+            let before = rows.len();
+            rows.retain(|p| p.port != Some(port));
+            rows.len() != before
+        });
+        if answered {
+            pending_all.retain(|_, rows| !rows.is_empty());
+            self.write_pending(&pending_all)?;
+        }
+        let changed = entry != was;
+        if changed {
+            if entry == PluginAccess::default() {
+                access.remove(id);
+            } else {
+                access.insert(id.to_string(), entry);
+            }
+            self.write_access(&access)?;
+        }
+        Ok(Mutation {
+            value: snapshot_of(id, &access, &pending_all),
+            changed: changed || answered,
         })
     }
 
@@ -1654,7 +1900,13 @@ impl AccessStore {
 
     /// May the runner see `real`, asked for as `spelled`, by [`bind_refusal`]? A missing root is
     /// the drop-in's `-` prefix's business, and a root may be a file.
-    fn may_bind(&self, spelled: &Path, real: &Path, write: bool, operator: bool) -> bool {
+    pub(crate) fn may_bind(
+        &self,
+        spelled: &Path,
+        real: &Path,
+        write: bool,
+        operator: bool,
+    ) -> bool {
         let facts = PathFacts {
             is_dir: true,
             ..path_facts(real)
@@ -2018,6 +2270,8 @@ fn snapshot_of(
         grants: entry.grants,
         pending: pending.get(id).cloned().unwrap_or_default(),
         denied: entry.denied,
+        ports: entry.ports,
+        denied_ports: entry.denied_ports,
         walks: walks::of(id),
     }
 }
@@ -2476,6 +2730,7 @@ mod tests {
             ],
             denied: vec!["/mnt/private".into()],
             links: BTreeMap::from([("/home/u/Games".into(), "/mnt/roms/games".into())]),
+            ..Default::default()
         };
         let quiet = PluginAccess {
             denied: vec!["/mnt/private".into()],
@@ -2807,6 +3062,7 @@ mod tests {
                 }],
                 denied: Vec::new(),
                 links: BTreeMap::new(),
+                ..Default::default()
             },
         );
         s.write_access(&access).unwrap();
@@ -3138,6 +3394,7 @@ mod tests {
                 }],
                 denied: vec![gone.into()],
                 links: BTreeMap::new(),
+                ..Default::default()
             },
         );
         f.store().write_access(&access).unwrap();
@@ -3402,9 +3659,13 @@ mod tests {
             grants: (0..MAX_GRANTS).map(filler_grant).collect(),
             denied: vec![raw.clone()],
             links: BTreeMap::new(),
+            ..Default::default()
         };
         let pending: Vec<PendingRequest> = (0..MAX_PENDING)
             .map(|i| PendingRequest {
+                listening: None,
+                listener: None,
+                port: None,
                 path: format!("/cap-filler/p{i}"),
                 write: false,
                 reason: None,
@@ -3433,12 +3694,16 @@ mod tests {
             grants: (0..MAX_GRANTS).map(filler_grant).collect(),
             denied: Vec::new(),
             links: BTreeMap::new(),
+            ..Default::default()
         };
         // The pending row is written directly: requesting it now would hit the grant cap.
         let s = write_state(
             &f,
             entry,
             vec![PendingRequest {
+                listening: None,
+                listener: None,
+                port: None,
                 path: raw.clone(),
                 write: false,
                 reason: None,
@@ -3643,5 +3908,66 @@ mod tests {
         assert_eq!(rule, Some("write_not_owned"));
         #[cfg(windows)]
         assert_eq!(rule, Some("write_not_owned"));
+    }
+
+    /// A port on this computer is asked for, answered and forgotten as a folder is, never for
+    /// a plugin with no network, and never one of the host's own.
+    #[test]
+    fn a_port_on_this_computer_is_asked_for_and_answered() {
+        const MGMT: u16 = 47990;
+        let f = fixture();
+        let s = f.store();
+        let ask = |port, networked| {
+            let asked = s.request_port("demo", port, networked, MGMT, None);
+            asked.unwrap().value.outcome
+        };
+        assert_eq!(ask(8080, false), "refused:no_network");
+        for own in [0, MGMT, 47992, 47995, 47984, 48010] {
+            assert_eq!(ask(own, true), "refused:host_port", "{own}");
+        }
+        assert_eq!(ask(8080, true), "pending");
+        assert_eq!(ask(8080, true), "pending");
+        let snap = s.snapshot_for("demo").unwrap();
+        let rows: Vec<_> = (snap.pending.iter().map(|p| (p.port, p.path.as_str()))).collect();
+        assert_eq!(rows, [(Some(8080), "127.0.0.1:8080")]);
+        assert_eq!(port_of("127.0.0.1:8080"), Some(8080));
+        // A plugin's own listing never says what listens on a port; the operator's does.
+        assert_eq!(snap.pending[0].listening, None);
+        assert!(with_listeners(snap.clone()).pending[0].listening.is_some());
+        let table = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   \
+            0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 4242 1 0 100 0 0 10 0\n   \
+            1: 0100007F:1F91 0100007F:C350 01 00000000:00000000 00:00000000 00000000  1000        0 4343 1 0 20 4 30 10 -1";
+        assert_eq!(listening_inode(table, 8080).as_deref(), Some("4242"));
+        assert_eq!(
+            listening_inode(table, 8081),
+            None,
+            "connected, not listening"
+        );
+        assert_eq!(port_of("/srv/127.0.0.1:8080"), None);
+        assert_eq!(port_of("127.0.0.1:99999"), None);
+        // A folder decision takes no port row.
+        let as_folder = s.decide("demo", "127.0.0.1:8080", Decision::Allow, "console");
+        assert!(as_folder.is_err());
+
+        let allowed = s.decide_port("demo", 8080, Decision::Allow, MGMT).unwrap();
+        assert!(allowed.changed);
+        assert_eq!(allowed.value.ports, [8080]);
+        assert!(allowed.value.pending.is_empty());
+        assert_eq!(ask(8080, true), "granted");
+        assert!(s.decide_port("demo", 47992, Decision::Allow, MGMT).is_err());
+        // The runner reads the granted ports from the grants file.
+        let grants = std::fs::read_to_string(s.runner_dir.join(GRANTS_FILE)).unwrap();
+        assert!(grants.contains("\"ports\""), "{grants}");
+
+        s.decide_port("demo", 8080, Decision::Deny, MGMT).unwrap();
+        assert_eq!(ask(8080, true), "denied");
+        let forgotten = s.decide_port("demo", 8080, Decision::Forget, MGMT).unwrap();
+        assert!(forgotten.value.ports.is_empty() && forgotten.value.denied_ports.is_empty());
+        assert!(
+            !s.decide_port("demo", 8080, Decision::Forget, MGMT)
+                .unwrap()
+                .changed
+        );
+        assert_eq!(ask(8080, true), "pending");
     }
 }

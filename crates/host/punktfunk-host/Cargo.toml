@@ -224,6 +224,8 @@ opus = "0.4"
 # ladder in `game/gamelease`. Declared for every unix, not just Linux, or a macOS build fails on
 # code whose own cfg already says it is portable.
 libc = "0.2"
+# `openat` that returns an owned descriptor.
+rustix = { version = "1", features = ["fs"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # `screencast` gates the ScreenCast portal module; `remote_desktop` adds the RemoteDesktop one

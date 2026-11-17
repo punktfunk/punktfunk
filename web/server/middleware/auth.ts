@@ -27,7 +27,12 @@ import {
 	sessionEpoch,
 } from "../util/auth";
 import { isPublicPath, safeNextPath } from "../util/paths";
-import { forgetSession, isLoopbackPeer, personCookie } from "../util/person";
+import {
+	forgetSession,
+	isLoopbackPeer,
+	operatorSignedIn,
+	personCookie,
+} from "../util/person";
 import { ended, personApi } from "../util/personApi";
 import { personPluginPage } from "../util/personPlugins";
 import {
@@ -200,15 +205,6 @@ async function personGate(
 		status: 302,
 		headers: { location: "/closed?why=ended" },
 	});
-}
-
-/** A live operator session, read only when its cookie exists: `useSession` would mint one. */
-async function operatorSignedIn(event: H3Event): Promise<boolean> {
-	if (!authConfigured() || !getCookie(event, SESSION_NAME)) return false;
-	const session = await useSession<SessionData>(event, sessionConfig());
-	return (
-		session.data.authenticated === true && session.data.epoch === sessionEpoch()
-	);
 }
 
 /**

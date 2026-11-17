@@ -251,6 +251,37 @@ const refreshKey = (dir: string, have: string): string => {
 };
 
 /**
+ * `[version, integrity]` that `lock` records for top-level package `pkg`. bun writes one entry per
+ * line, `"pkg": ["pkg@version", …, "integrity"],`, which the host reads the same way.
+ */
+export const lockedEntry = (lock: string, pkg: string): [string, string] | undefined => {
+	const head = `"${pkg}": ["${pkg}@`;
+	const line = lock
+		.split("\n")
+		.map((l) => l.trim())
+		.find((l) => l.startsWith(head));
+	const m = line?.slice(head.length).match(/^([^"]+)".*"([^"]*)"\],?$/);
+	return m ? [m[1], m[2]] : undefined;
+};
+
+/**
+ * The root dependencies of `dir` whose pinned bytes moved from lock `before` to lock `after`:
+ * gone from the lock, or locked at the same version with another integrity.
+ */
+export const movedPins = (dir: string, before: string, after: string): string[] => {
+	let deps: string[] = [];
+	try {
+		const manifest = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+		deps = Object.keys(manifest.dependencies ?? {});
+	} catch {}
+	return deps.filter((pkg) => {
+		const was = lockedEntry(before, pkg);
+		const now = lockedEntry(after, pkg);
+		return was !== undefined && (now === undefined || (now[0] === was[0] && now[1] !== was[1]));
+	});
+};
+
+/**
  * Bring the plugins tree's `@punktfunk/host` up to the version THIS runner was built from.
  *
  * **Why this exists.** The SDK is the seam every plugin registers through, but each plugin resolves
@@ -259,22 +290,18 @@ const refreshKey = (dir: string, have: string): string => {
  * newer release all leave the SDK where it is, because the plugin's range is already satisfied.
  * Only deleting the lockfile moves it, and a fix that needs an ssh session is not shipped.
  *
- * The runner is the right owner: it is bundled from this same `sdk/` at the host's release commit
- * (`packaging/arch/PKGBUILD` builds `src/runner-cli.ts` into the punktfunk-scripting package), so
- * `SDK_VERSION` is by construction the SDK that matches the host now on disk. A host upgrade then
- * carries the SDK with it and nobody touches a runner.
- *
  * **Why the whole lockfile.** A targeted `bun add @punktfunk/host@<v>` at the root does NOT work
  * while a plugin declares the SDK in its own `dependencies`: bun honours that locked resolution
  * and gives the plugin a private nested copy, which then SHADOWS the root. A lockless resolve
  * hoists one copy for everyone.
  *
  * Safety: a plugin installed with `exact` (the store always sets it) is pinned in the root
- * `package.json`, so a re-resolve cannot move it; every other dependency floats within its
- * declared range. The lockfile is backed up first and restored if the install fails, and any
- * failure is logged and swallowed — a dependency refresh must never stop the plugins that are
- * already working from loading. One that failed is not retried until the SDK or the installed
- * plugin set changes.
+ * `package.json`, so a re-resolve cannot move its version, and its locked bytes must survive
+ * too: the same version under another integrity is not the package the store checked, and
+ * fails the refresh. Every other dependency floats within its declared range. A failed refresh
+ * puts the lockfile and `node_modules` back from copies taken first, is logged and swallowed,
+ * so working plugins still load, and is not retried until the SDK or the installed plugin set
+ * changes.
  */
 export const reconcileSharedSdk = (
 	dir = pluginsDirDefault(),
@@ -296,9 +323,18 @@ export const reconcileSharedSdk = (
 	log(
 		`[plugins] @punktfunk/host ${have} installed, this host ships ${SDK_VERSION} — refreshing`,
 	);
+	const modules = path.join(dir, "node_modules");
+	const kept = `${modules}.pf-bak`;
 	let restore = false;
+	let keptModules = false;
 	try {
+		// The packages as they run now: a refused refresh goes back to exactly these.
+		fs.rmSync(kept, { recursive: true, force: true });
+		fs.cpSync(modules, kept, { recursive: true, verbatimSymlinks: true });
+		keptModules = true;
+		let pinned = "";
 		if (fs.existsSync(lock)) {
+			pinned = fs.readFileSync(lock, "utf8");
 			fs.copyFileSync(lock, backup);
 			fs.rmSync(lock);
 			restore = true;
@@ -311,6 +347,10 @@ export const reconcileSharedSdk = (
 			throw new Error(`bun install exited ${res.exitCode ?? "?"}`);
 		}
 		stripGroupWrite(dir);
+		const moved = movedPins(dir, pinned, fs.readFileSync(lock, "utf8"));
+		if (moved.length > 0) {
+			throw new Error(`${moved.join(", ")} resolved to other bytes than the lock pinned`);
+		}
 		const now = installedSdkVersion(dir);
 		if (now !== SDK_VERSION) {
 			// The install "succeeded" and still did not deliver the version — better to sit on the
@@ -318,7 +358,9 @@ export const reconcileSharedSdk = (
 			throw new Error(`still ${now ?? "absent"} after install`);
 		}
 		restore = false;
+		keptModules = false;
 		if (fs.existsSync(backup)) fs.rmSync(backup);
+		fs.rmSync(kept, { recursive: true, force: true });
 		fs.rmSync(marker, { force: true });
 		log(`[plugins] @punktfunk/host is now ${SDK_VERSION}`);
 	} catch (e) {
@@ -338,6 +380,17 @@ export const reconcileSharedSdk = (
 				// The backup is still on disk under its own name; say so rather than pretend.
 				log(`[plugins] the previous lockfile is at ${backup}`);
 			}
+		}
+		if (keptModules) {
+			try {
+				fs.rmSync(modules, { recursive: true, force: true });
+				fs.renameSync(kept, modules);
+			} catch {
+				log(`[plugins] the previous packages are at ${kept}`);
+			}
+		} else {
+			// The copy itself failed: nothing was touched yet, and half a copy is no use.
+			fs.rmSync(kept, { recursive: true, force: true });
 		}
 	}
 };

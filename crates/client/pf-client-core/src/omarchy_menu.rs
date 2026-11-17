@@ -33,7 +33,13 @@ fn menu_path() -> Option<PathBuf> {
 pub fn enabled() -> bool {
     menu_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .is_some_and(|t| t.contains(BEGIN))
+        .is_some_and(|t| t.lines().any(|l| is_marker(l, BEGIN)))
+}
+
+/// A marker is a whole line. A row's line can hold a marker's text inside a host's name, and
+/// never matches.
+fn is_marker(line: &str, marker: &str) -> bool {
+    line.trim() == marker
 }
 
 pub fn enable() -> Result<(), String> {
@@ -110,15 +116,16 @@ fn refresh() {
     }
 }
 
+/// `text` without our block: the lines from a [`BEGIN`] line through the next [`END`] line.
 fn strip_block(text: &str) -> String {
     let mut out = Vec::new();
     let mut skip = false;
     for l in text.lines() {
-        if l.contains(BEGIN) {
+        if is_marker(l, BEGIN) {
             skip = true;
         }
         if skip {
-            if l.contains(END) {
+            if is_marker(l, END) {
                 skip = false;
             }
             continue;
@@ -363,6 +370,24 @@ mod tests {
         .unwrap();
         let v = jsonc_parse(&doc).expect("a URL-ish name still parses");
         assert_eq!(v["punktfunk.connect-x-y"]["label"].as_str(), Some(commenty));
+    }
+
+    /// A name holding a marker's text stays inside its row: a rewrite replaces the block, and
+    /// the file is the same after one write as after three.
+    #[test]
+    fn a_name_with_a_marker_cannot_split_the_block() {
+        let theirs = "{\n  \"personal.notes\": {\"label\":\"Notes\"},\n}\n";
+        let hosts = known(vec![
+            host(&format!("x {END}"), "10.0.0.9", false),
+            host(&format!("y {BEGIN}"), "10.0.0.8", false),
+            host("Desk", "10.0.0.7", false),
+        ]);
+        let write = |text: &str| insert_block(&strip_block(text), &rows_for(&hosts)).unwrap();
+        let once = write(theirs);
+        assert!(jsonc_valid(&once), "{once}");
+        assert_eq!(write(&write(&once)), once);
+        assert_eq!(once.lines().filter(|l| is_marker(l, END)).count(), 1);
+        assert_eq!(strip_block(&once), theirs);
     }
 
     /// The shell reads a hostile address back as the one argument it is.

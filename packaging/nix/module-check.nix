@@ -257,6 +257,22 @@ let
       name = "the encode-worker wrapper carries exactly cap_sys_nice=ep";
       ok = desktop.security.wrappers.punktfunk-encode-worker.capabilities == "cap_sys_nice=ep";
     }
+    {
+      name = "only the host's users run the encode-worker wrapper";
+      ok =
+        let
+          w = desktop.security.wrappers.punktfunk-encode-worker;
+        in
+        w.permissions == "u+rx,g+rx"
+        && w.group == "punktfunk"
+        && seats.security.wrappers.punktfunk-encode-worker.group == "punktfunk-games"
+        && lib.elem "punktfunk-games" seats.users.users.alice.extraGroups;
+    }
+    {
+      # A seat on a person's own account joins no group of ours; its unit carries the wrapper's.
+      name = "every seat's unit carries the encode-worker wrapper's group";
+      ok = hasSys seats "punktfunk-seat@.service" "SupplementaryGroups=punktfunk-games";
+    }
 
     # --- the desktop-login route (scripts/punktfunk-host-desktop-session.conf) -----------------
     # Asserted on the evaluated LISTS, not the rendered text: systemd renders `After=` as one
@@ -339,6 +355,24 @@ let
       ok = builtins.any (p: lib.hasInfix "bubblewrap" (toString p)) (
         appliance.systemd.user.services.punktfunk-scripting.path or [ ]
       );
+    }
+    {
+      # A network plugin's namespace comes from `unshare`, and pasta connects it. Without either
+      # on PATH that plugin does not start; a seat's runner runs network plugins too.
+      name = "the plugin runner can connect a network plugin";
+      ok =
+        lib.all
+          (
+            unit:
+            lib.all (pkg: builtins.any (p: lib.hasInfix pkg (toString p)) (unit.path or [ ])) [
+              "passt"
+              "util-linux"
+            ]
+          )
+          [
+            appliance.systemd.user.services.punktfunk-scripting
+            appliance.systemd.user.services."punktfunk-scripting-seat@"
+          ];
     }
     {
       # The library scanners are plugins, so a runner that is off means an EMPTY LIBRARY and
@@ -498,16 +532,19 @@ let
     }
     {
       # The helper's `systemctl enable` has nowhere to write on NixOS, so the units are wired
-      # here. They start at boot only while the owner record exists: the door is off without it.
-      name = "the door's units start at boot once the owner record exists";
+      # here. They start at boot only while the owner record exists and no off holds them: a
+      # failed off can't disable them.
+      name = "the door's units start at boot with the owner record and no hold";
       ok =
         let
           wired =
             name: unit:
+            let
+              text = builtins.readFile unit;
+            in
             seats.systemd.services.${name}.wantedBy == [ "multi-user.target" ]
-            && lib.hasInfix "\nConditionPathExists=/var/lib/punktfunk-seats/owner\n" (
-              builtins.readFile unit
-            );
+            && lib.hasInfix "\nConditionPathExists=/var/lib/punktfunk-seats/owner\n" text
+            && lib.hasInfix "\nConditionPathExists=!/var/lib/punktfunk-seats/door-hold\n" text;
         in
         wired "punktfunk-door" ../linux/punktfunk-door.service
         && wired "punktfunk-web-door" ../linux/punktfunk-web-door.service;

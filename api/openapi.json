@@ -11253,6 +11253,15 @@
               "$ref": "#/components/schemas/AccessPathRequest"
             }
           },
+          "ports": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "TCP ports on this computer the plugin wants to connect to, for a server that runs\nbeside the host. Each answers as `127.0.0.1:<port>`, where the plugin connects once the\noperator says yes: a network plugin reaches nothing else on this computer. Refused for\na plugin without `network`, for a port of the host's own, and off Linux."
+          },
           "reason": {
             "type": [
               "string",
@@ -13026,7 +13035,7 @@
           },
           "path": {
             "type": "string",
-            "description": "The path as it appears in the request or grant list."
+            "description": "The path as it appears in the request or grant list. A port on this computer is spelled\n`127.0.0.1:<port>`; `allow` grants one with or without a pending request."
           },
           "write": {
             "type": [
@@ -15616,6 +15625,10 @@
             "type": "boolean",
             "description": "This host is the door (Linux, **Reachable without logging in**): a system service that\nplaces every connect on a seat and streams nothing itself."
           },
+          "door_off_unfinished": {
+            "type": "boolean",
+            "description": "An off didn't hand everything back, and this is the owner's own host: the door counts as\non until an off here finishes it. Admin lane only."
+          },
           "door_switch_failed": {
             "type": "boolean",
             "description": "The switch this host last started ran and failed, so the console stops waiting for it.\nAdmin lane only."
@@ -15980,6 +15993,10 @@
               "string",
               "null"
             ]
+          },
+          "takes_ports": {
+            "type": "boolean",
+            "description": "The plugin uses the network on a host that can forward it a port of this computer\n(Linux): the console offers to allow one."
           },
           "tier": {
             "type": "string",
@@ -17582,8 +17599,22 @@
             "type": "boolean",
             "description": "The folder and the files directly in it, nothing below. See [`Grant::files`]."
           },
+          "listener": {
+            "type": "string",
+            "description": "That program's name, when it runs as this host's account."
+          },
+          "listening": {
+            "type": "boolean",
+            "description": "For a port row the operator lists: whether a program listens on that port right now.\nRead at listing ([`with_listeners`]), never stored, and never told to the plugin."
+          },
           "path": {
             "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The plugin asks to connect to this TCP port on this computer's loopback, not for a\nfolder; `path` then spells it ([`port_path`]).",
+            "minimum": 0
           },
           "reason": {
             "type": [
@@ -17789,6 +17820,15 @@
               "type": "string"
             }
           },
+          "denied_ports": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Denied ports on this computer."
+          },
           "grants": {
             "type": "array",
             "items": {
@@ -17803,6 +17843,15 @@
           },
           "plugin": {
             "type": "string"
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Granted ports on this computer. See [`PluginAccess::ports`]."
           },
           "walks": {
             "type": "array",

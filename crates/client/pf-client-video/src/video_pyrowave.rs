@@ -74,6 +74,16 @@ fn check_resize(width: u32, height: u32, device_max: u32, retired: usize) -> Res
     Ok(())
 }
 
+/// Whether the decoder may open at `width`×`height`: the bound [`check_resize`] keeps, and
+/// even axes for 4:2:0. The open size comes from the host's Welcome or mode switch.
+fn check_open(width: u32, height: u32, chroma444: bool, device_max: u32) -> Result<()> {
+    check_resize(width, height, device_max, 0)?;
+    if !chroma444 && (width % 2 != 0 || height % 2 != 0) {
+        bail!("pyrowave 4:2:0 needs even dimensions (got {width}x{height})");
+    }
+    Ok(())
+}
+
 fn pw_check(r: pw::pyrowave_result, what: &str) -> Result<()> {
     if r == pw::pyrowave_result_PYROWAVE_SUCCESS {
         Ok(())
@@ -725,6 +735,8 @@ pub struct DecodeSplit {
 unsafe impl Send for PyroWaveDecoder {}
 
 impl PyroWaveDecoder {
+    /// Open a decoder at the host's `width`×`height` on the presenter's device. A size
+    /// [`check_open`] refuses fails before anything is allocated.
     pub fn new(
         vkd: &VulkanDecodeDevice,
         width: u32,
@@ -736,9 +748,6 @@ impl PyroWaveDecoder {
     ) -> Result<PyroWaveDecoder> {
         if !vkd.pyrowave_decode {
             bail!("presenter device lacks the PyroWave compute feature set");
-        }
-        if !chroma444 && (width % 2 != 0 || height % 2 != 0) {
-            bail!("pyrowave 4:2:0 needs even dimensions (got {width}x{height})");
         }
         // SAFETY: `vkd` handles are the presenter's live instance/device (it outlives
         // the decoder). `Hold` pins reconstructed create-infos for the pyrowave device.
@@ -782,6 +791,7 @@ impl PyroWaveDecoder {
         let max_dim = unsafe { instance.get_physical_device_properties(pdev) }
             .limits
             .max_image_dimension2_d;
+        check_open(width, height, chroma444, max_dim)?;
         let plane_fmt = if hdr16 {
             vk::Format::R16_UNORM
         } else {
@@ -1675,7 +1685,7 @@ impl Drop for PyroWaveDecoder {
 
 #[cfg(test)]
 mod tests {
-    use super::{au_dims, check_resize, push_in_place, seq_header_dims, MAX_RETIRED};
+    use super::{au_dims, check_open, check_resize, push_in_place, seq_header_dims, MAX_RETIRED};
 
     /// LE encoding of `BitstreamSequenceHeader` (pyrowave_common.hpp): word 0 =
     /// width_minus_1:14 | height_minus_1:14 | sequence:3 | extended:1; word 1 =
@@ -1744,6 +1754,18 @@ mod tests {
         // Alternating sizes cannot stack rings.
         assert!(ok(1920, 1080, 16384, MAX_RETIRED - 1));
         assert!(!ok(1920, 1080, 16384, MAX_RETIRED));
+    }
+
+    /// An open takes the resize bound, so a Welcome mode past the codec wall or the device
+    /// is refused before anything is allocated.
+    #[test]
+    fn an_open_is_bounded_like_a_resize() {
+        assert!(check_open(1920, 1080, false, 16384).is_ok());
+        assert!(check_open(1921, 1080, true, 16384).is_ok());
+        assert!(check_open(32768, 32768, true, 32768).is_err());
+        assert!(check_open(8194, 1080, false, 16384).is_err());
+        assert!(check_open(4098, 2160, false, 4096).is_err());
+        assert!(check_open(1921, 1080, false, 16384).is_err());
     }
 
     #[test]

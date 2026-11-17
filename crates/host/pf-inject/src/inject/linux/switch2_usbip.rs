@@ -251,6 +251,7 @@ impl Switch2Usbip {
             slot: 0,
             seat: 0,
             identity: Vec::new(),
+            gamepad_only: false,
         };
         let attach = attach_device(hello, None, &format!("virtual {} {index}", model.name()))?;
         Ok(Switch2Usbip {

@@ -139,7 +139,8 @@ only root can change.
   nodes belong to that seat alone. A seat's input can't type or move a pointer on the box.
 - **Stopping.** When a seat stops, everything its user runs ends, and its controllers go with it.
 - **The owner.** Only the account that turned on **Reachable without logging in** is hosted as
-  the box's owner. To hand that to another account, turn it off, then on from that account. If the
+  the box's owner. To hand that to another account, turn it off, then on from that account. The
+  box keeps none of the first account's pairings, profiles or console password for the next. If the
   owner's account is deleted, a member of `punktfunk-update` can turn it on from their own account,
   and turning it off leaves the files in `/var/lib/punktfunk`. The box only takes that on when its
   accounts are all local. With a directory service such as LDAP, a missing account might be an
@@ -201,7 +202,9 @@ it:
   [bubblewrap](https://github.com/containers/bubblewrap) sandbox: an empty home, no network unless
   its manifest asks, read access to the paths it declared and you allowed, and its own PID namespace,
   so it can't reach the host process. Your `~/.ssh`, browser profile and the host's credentials
-  aren't in it. On Windows each plugin runs in its own AppContainer under the runner's
+  aren't in it. A plugin that asks for the network gets a network of its own through
+  [passt](https://passt.top), which the runner needs installed: it reaches the internet and your
+  LAN, but no service listening on the host's own loopback and no abstract socket. On Windows each plugin runs in its own AppContainer under the runner's
   `NT AUTHORITY\LocalService` account: it sees only the folders and registry keys its manifest
   declared and you allowed, its own state, no other plugin's, and no network unless its manifest
   asks. It reaches the host over a pipe of its own, not the management port. A box that can't

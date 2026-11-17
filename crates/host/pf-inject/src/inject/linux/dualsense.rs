@@ -58,11 +58,12 @@ impl DsUhidIdentity {
 }
 
 /// The `CREATE2` identity of pad `index` as `id`: what this host opens, and what the seat
-/// broker builds for a seat.
-pub(crate) fn identity(index: u8, id: &DsUhidIdentity) -> Identity {
+/// broker builds for a seat. A `gamepad_only` pad's name is marked, so its touchpad moves no
+/// pointer ([`crate::uhid_abi::GAMEPAD_ONLY_NAME`]).
+pub(crate) fn identity(index: u8, id: &DsUhidIdentity, gamepad_only: bool) -> Identity {
     Identity {
         bus: crate::uhid_abi::BUS_USB,
-        name: format!("Punktfunk {} {index}", id.name),
+        name: crate::uhid_abi::pad_name(format!("Punktfunk {} {index}", id.name), gamepad_only),
         phys: format!("punktfunk/{}/{index}", id.phys),
         uniq: format!("punktfunk-{}-{index}", id.slug),
         rdesc: id.rdesc,
@@ -81,14 +82,20 @@ pub struct DualSensePad {
 
 impl DualSensePad {
     /// `index` is only for unique name/uniq; identity is `id`. The uniq is cosmetic:
-    /// `hid-playstation` replaces it with the pairing-report MAC ([`ds_pairing_reply`]).
-    pub fn open(index: u8, id: &DsUhidIdentity) -> Result<DualSensePad> {
+    /// `hid-playstation` replaces it with the pairing-report MAC ([`ds_pairing_reply`]). A
+    /// `gamepad_only` pad's touchpad moves no pointer ([`identity`]).
+    pub fn open(index: u8, id: &DsUhidIdentity, gamepad_only: bool) -> Result<DualSensePad> {
         let kind = if id.device_type == DEVTYPE_DUALSENSE_EDGE {
             PadKind::DualSenseEdge
         } else {
             PadKind::DualSense
         };
-        let dev = UhidDevice::open_kind(kind, index, &identity(index, id))?;
+        let dev = UhidDevice::open_kind(
+            kind,
+            index,
+            gamepad_only,
+            &identity(index, id, gamepad_only),
+        )?;
         Ok(DualSensePad {
             dev,
             device_type: id.device_type,
@@ -139,17 +146,18 @@ pub enum DsTransport {
 }
 
 /// Try usbip (`vhci_hcd` + `punktfunk` write on sysfs `attach`); else UHID.
-/// Opt-in: [`crate::dualsense_usbip::usbip_preferred`].
-fn open_transport(idx: u8) -> Result<DsTransport> {
+/// Opt-in: [`crate::dualsense_usbip::usbip_preferred`]. Either way a `gamepad_only` pad's
+/// touchpad moves no pointer.
+fn open_transport(idx: u8, gamepad_only: bool) -> Result<DsTransport> {
     if crate::dualsense_usbip::usbip_preferred() {
-        match crate::dualsense_usbip::DualSenseUsbip::open(idx) {
+        match crate::dualsense_usbip::DualSenseUsbip::open(idx, gamepad_only) {
             Ok(u) => return Ok(DsTransport::Usbip(u)),
             Err(e) => {
                 tracing::warn!(error = %format!("{e:#}"), "usbip DualSense unavailable — falling back to UHID")
             }
         }
     }
-    let p = DualSensePad::open(idx, &DsUhidIdentity::dualsense())?;
+    let p = DualSensePad::open(idx, &DsUhidIdentity::dualsense(), gamepad_only)?;
     tracing::info!(
         index = idx,
         "virtual DualSense created (UHID hid-playstation)"
@@ -161,14 +169,30 @@ fn open_transport(idx: u8) -> Result<DsTransport> {
 pub struct DsLinuxProto {
     /// Steam back-grip fold. DualSense has no HID slot; `PUNKTFUNK_STEAM_REMAP=paddles=…`, default drop.
     remap: crate::steam_remap::RemapConfig,
+    /// The session may not move the pointer: its pads' touchpads move none.
+    gamepad_only: bool,
 }
 
 impl Default for DsLinuxProto {
     fn default() -> DsLinuxProto {
         DsLinuxProto {
             remap: crate::steam_remap::RemapConfig::from_env(),
+            gamepad_only: false,
         }
     }
+}
+
+/// A session's DualSense manager; `gamepad_only` when its client may not move the pointer.
+pub fn dualsense_manager(gamepad_only: bool) -> DualSenseManager {
+    UhidManager::with_backend(DsLinuxProto {
+        gamepad_only,
+        ..DsLinuxProto::default()
+    })
+}
+
+/// A session's DualSense Edge manager, as [`dualsense_manager`].
+pub fn dualsense_edge_manager(gamepad_only: bool) -> DualSenseEdgeManager {
+    UhidManager::with_backend(DsEdgeLinuxProto { gamepad_only })
 }
 
 impl DsTransport {
@@ -193,7 +217,7 @@ impl PadProto for DsLinuxProto {
     const CREATE_HINT: &'static str = "";
 
     fn open(&mut self, idx: u8) -> Result<DsTransport> {
-        open_transport(idx)
+        open_transport(idx, self.gamepad_only)
     }
 
     fn merge_frame(&self, prev: &DsState, f: &punktfunk_core::input::GamepadFrame) -> DsState {
@@ -245,7 +269,10 @@ pub type DualSenseManager = UhidManager<DsLinuxProto>;
 /// `hid-playstation` binds Edge since 6.1 (vibration-v2). Fn/back as evdev (`BTN_TRIGGER_HAPPY1..4`)
 /// needs ≥ 7.2; hidraw (SDL / Steam Input) sees them on any kernel.
 #[derive(Default)]
-pub struct DsEdgeLinuxProto;
+pub struct DsEdgeLinuxProto {
+    /// The session may not move the pointer: its pads' touchpads move none.
+    gamepad_only: bool,
+}
 
 impl PadProto for DsEdgeLinuxProto {
     type Pad = DualSensePad;
@@ -259,7 +286,7 @@ impl PadProto for DsEdgeLinuxProto {
     const CREATE_HINT: &'static str = "";
 
     fn open(&mut self, idx: u8) -> Result<DualSensePad> {
-        let p = DualSensePad::open(idx, &DsUhidIdentity::dualsense_edge())?;
+        let p = DualSensePad::open(idx, &DsUhidIdentity::dualsense_edge(), self.gamepad_only)?;
         tracing::info!(
             index = idx,
             "virtual DualSense Edge created (UHID hid-playstation)"
@@ -307,6 +334,21 @@ mod tests {
     use punktfunk_core::quic::HidOutput;
     use std::os::fd::AsFd;
     use std::time::{Duration, Instant};
+
+    /// Only a pad whose client may not move the pointer carries the mark udev keys on; the
+    /// touchpad's node is the name plus hid-playstation's " Touchpad".
+    #[test]
+    fn only_a_gamepad_only_pad_is_marked() {
+        let ds = DsUhidIdentity::dualsense();
+        assert_eq!(identity(0, &ds, false).name, "Punktfunk DualSense 0");
+        assert_eq!(
+            identity(0, &ds, true).name,
+            "Punktfunk DualSense 0 (gamepad only)"
+        );
+        let edge = identity(2, &DsUhidIdentity::dualsense_edge(), true).name;
+        assert_eq!(edge, "Punktfunk DualSense Edge 2 (gamepad only)");
+        assert_eq!(identity(1, &ds, true).phys, identity(1, &ds, false).phys);
+    }
 
     fn find_nodes(name: &str) -> Vec<(String, String)> {
         let s = std::fs::read_to_string("/proc/bus/input/devices").unwrap_or_default();
@@ -408,8 +450,10 @@ mod tests {
     #[test]
     #[ignore = "creates real /dev/uhid devices; needs hid-playstation, the input group, and the 60-punktfunk.rules hidraw rules"]
     fn feedback_flows_via_evdev_ff_and_hidraw() {
-        let mut pad0 = DualSensePad::open(0, &DsUhidIdentity::dualsense()).expect("open pad 0");
-        let mut pad1 = DualSensePad::open(1, &DsUhidIdentity::dualsense()).expect("open pad 1");
+        let mut pad0 =
+            DualSensePad::open(0, &DsUhidIdentity::dualsense(), false).expect("open pad 0");
+        let mut pad1 =
+            DualSensePad::open(1, &DsUhidIdentity::dualsense(), false).expect("open pad 1");
         let st = DsState::neutral();
         // GET_REPORT handshake; return as soon as hid-playstation registers both pads.
         let start = Instant::now();

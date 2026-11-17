@@ -199,7 +199,9 @@ in
           the host creates: `input` covers `/dev/uinput` and `/dev/uhid`, `punktfunk` covers the
           usbip/vhci nodes the virtual Steam Deck pad attaches through. The second is separate on
           purpose — it can emulate arbitrary USB hardware, so only list users you would trust with
-          that. The host runs as these users' `systemd --user` service.
+          that. The host runs as these users' `systemd --user` service. The `CAP_SYS_NICE` encode
+          worker runs only for them and seat users; any other account's host encodes at default
+          GPU priority.
 
           This list ALSO scopes the units themselves: they carry a `ConditionUser=` for these
           users, so no other user's `systemd --user` instance can start them. That matters because
@@ -574,8 +576,8 @@ in
       # PUNKTFUNK_ENCODE_WORKER at `config.security.wrapperDir` rather than the store path. The
       # host's own ExecStart stays on the store path and must never move.
       #
-      # Best-effort by construction: if the wrapper is absent or the operator overrides the env,
-      # the host falls back to its in-process encoder at default GPU priority — one warn, never a
+      # Best-effort by construction: if the wrapper is absent, not this user's to run, or the
+      # operator overrides the env, the host falls back to default GPU priority — one warn, never a
       # dead session. What the capability buys: PyroWave encodes on the GPU shader cores a game
       # saturates, and every driver tested (NVIDIA and RADV) refuses EVERY elevated
       # VK_KHR_global_priority class without CAP_SYS_NICE.
@@ -586,9 +588,12 @@ in
         source = "${cfg.host.package}/bin/punktfunk-encode-worker";
         capabilities = "cap_sys_nice=ep";
         owner = "root";
-        group = "root";
-        # Readable: the host opens the wrapper to pin its inode, then execs that fd.
-        permissions = "u+rx,g+rx,o+rx";
+        # The worker runs with AT_SECURE 0, so the GPU loaders read the caller's environment: only
+        # the host's users get it. `punktfunk` holds `host.users`; on a seats box `punktfunk-games`
+        # holds them and every seat user, and each seat's unit carries it for its own session.
+        # Readable: the host pins the wrapper's inode by fd.
+        group = if cfg.seats.enable then "punktfunk-games" else "punktfunk";
+        permissions = "u+rx,g+rx";
       };
 
       # CPU-side thread priority for the host's data-plane threads (capture/encode/send and the
@@ -635,8 +640,12 @@ in
         # covers an operator's interactive shell but NOT this unit, whose PATH is exactly this
         # list — without it the console reports a running, enabled runner as "not installed".
         ++ optional cfg.scripting.enable cfg.scripting.package
-        # Host diagnostics exec `bwrap` on THIS unit's PATH, not the runner's.
-        ++ optional cfg.scripting.enable pkgs.bubblewrap;
+        # Host diagnostics look for the sandbox's programs on THIS unit's PATH, not the runner's.
+        ++ optionals cfg.scripting.enable [
+          pkgs.bubblewrap
+          pkgs.passt
+          pkgs.util-linux
+        ];
         # Point the host at the WRAPPED encode worker (see `security.wrappers` above). The host's
         # own resolution order is PUNKTFUNK_ENCODE_WORKER -> alongside /proc/self/exe -> PATH, and
         # on NixOS the sibling of the store binary is the UNCAPPED store copy — it would run, and
@@ -754,6 +763,7 @@ in
       environment.systemPackages = [
         cfg.scripting.package
         pkgs.bubblewrap
+        pkgs.passt
       ];
 
       # The unit is the package's own (scripts/punktfunk-scripting.service); this is its drop-in.
@@ -762,11 +772,20 @@ in
         # Same scoping as the host: a root-side runner would talk to the wrong session's mgmt API.
         unitConfig.ConditionUser = userScope;
         wantedBy = optional cfg.scripting.autoStart "default.target";
-        # Each plugin runs inside its own `bwrap` sandbox, built by the runner.
-        path = [ pkgs.bubblewrap ];
+        # Each plugin runs inside its own `bwrap` sandbox, built by the runner. A network plugin's
+        # namespace comes from `unshare` and is connected by pasta.
+        path = [
+          pkgs.bubblewrap
+          pkgs.passt
+          pkgs.util-linux
+        ];
       };
       # A seat on a person's own account: its host starts this as that person.
-      systemd.user.services."punktfunk-scripting-seat@".path = [ pkgs.bubblewrap ];
+      systemd.user.services."punktfunk-scripting-seat@".path = [
+        pkgs.bubblewrap
+        pkgs.passt
+        pkgs.util-linux
+      ];
     })
 
     # --- seat supervisor -----------------------------------------------------------------------
@@ -819,6 +838,9 @@ in
         );
         # Every seat's host encodes: the capped worker and the WSI layer, as the user unit has them.
         environment.PUNKTFUNK_ENCODE_WORKER = "${config.security.wrapperDir}/punktfunk-encode-worker";
+        # The wrapper runs for `punktfunk-games` alone, and a seat on a person's own account is in
+        # no group of ours: the unit gives each seat's session that group, and no account changes.
+        serviceConfig.SupplementaryGroups = [ "punktfunk-games" ];
         environment.PUNKTFUNK_GAMESCOPE_WSI_LAYER_DIR = mkIf cfg.host.gamescopeHdr
           "${cfg.host.gamescopePackage}/lib/punktfunk/vulkan/implicit_layer.d";
         # A switch must not end a seat's session. Seats survive an update on every other package.
@@ -865,8 +887,14 @@ in
       # polkit rule is the package's own file, which other distros read from /usr/share. Turning
       # seats on is the opt-in the other distros ask for with `usermod`, so `host.users` join it.
       users.groups.punktfunk-update = { };
+      # Every seat user and the owner (the supervisor adds seat users at each start); it also
+      # gates the encode-worker wrapper.
+      users.groups.punktfunk-games = { };
       users.users = genAttrs cfg.host.users (_: {
-        extraGroups = [ "punktfunk-update" ];
+        extraGroups = [
+          "punktfunk-update"
+          "punktfunk-games"
+        ];
       });
       # The door user's own group, in place of `punktfunk`, which owns the usbip attach nodes.
       users.groups.punktfunk-door = { };

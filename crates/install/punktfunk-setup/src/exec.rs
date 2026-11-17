@@ -197,7 +197,8 @@ impl Executor<'_> {
     }
 
     /// Chromium reads the per-user NSS store, so one `certutil -A` there makes the console open
-    /// with no security warning. Firefox keeps its own store and still shows one. The host
+    /// with no security warning. Firefox keeps its own store and still shows one. The cert is a
+    /// trusted peer (`P,,`), never a CA: the host key must not vouch for any other site. The host
     /// mints `native-cert.pem` on its first start, after the unit enable returns, so this
     /// waits for the file. Delete-then-add so a re-minted identity replaces the old trust.
     fn trust_cert(&self, facts: &Facts, outcome: &Outcome) -> Result<bool, Failed> {
@@ -205,10 +206,11 @@ impl Executor<'_> {
         let db = self.paths.home.join(".pki/nssdb");
         let shown = |p: &std::path::Path| p.display().to_string().replace('\\', "/");
         let db_arg = format!("sql:{}", shown(&db));
-        let cmd = format!(
-            "certutil -A -d {db_arg} -n {CERT_NICK} -t C,, -i {}",
-            shown(&cert)
-        );
+        let cert_arg = shown(&cert);
+        let add = [
+            "-A", "-d", &db_arg, "-n", CERT_NICK, "-t", "P,,", "-i", &cert_arg,
+        ];
+        let cmd = format!("certutil {}", add.join(" "));
         if self.opts.dry {
             self.ui.plus(&cmd);
             return Ok(true);
@@ -249,23 +251,7 @@ impl Executor<'_> {
             .run
             .probe("certutil", &["-D", "-d", &db_arg, "-n", CERT_NICK]);
         self.ui.plus(&cmd);
-        let added = self
-            .run
-            .probe(
-                "certutil",
-                &[
-                    "-A",
-                    "-d",
-                    &db_arg,
-                    "-n",
-                    CERT_NICK,
-                    "-t",
-                    "C,,",
-                    "-i",
-                    &shown(&cert),
-                ],
-            )
-            .is_some_and(|o| o.ok());
+        let added = self.run.probe("certutil", &add).is_some_and(|o| o.ok());
         if added {
             self.ui.ok(t::setup_cert_trusted());
         } else {

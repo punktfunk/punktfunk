@@ -84,6 +84,9 @@ pub struct Hello {
     pub seat: u16,
     /// An identity blob (`pf_driver_proto::triton::identity_blob`), or empty.
     pub identity: Vec<u8>,
+    /// The pad's client may not move the pointer: a DualSense's touchpad moves none
+    /// ([`crate::dualsense_usbip::GAMEPAD_ONLY_INTERFACE`]).
+    pub gamepad_only: bool,
 }
 
 impl Hello {
@@ -96,14 +99,15 @@ impl Hello {
             self.slot,
             seat_lo,
             seat_hi,
+            u8::from(self.gamepad_only),
         ];
         m.extend_from_slice(&self.identity);
         m
     }
 
     pub fn decode(m: &[u8]) -> Option<Hello> {
-        let (&[HELLO, kind, index, slot, seat_lo, seat_hi], identity) =
-            m.split_first_chunk::<6>()?
+        let (&[HELLO, kind, index, slot, seat_lo, seat_hi, flags @ (0 | 1)], identity) =
+            m.split_first_chunk::<7>()?
         else {
             return None;
         };
@@ -116,6 +120,7 @@ impl Hello {
             slot: slot.min(3),
             seat: u16::from_le_bytes([seat_lo, seat_hi]),
             identity: identity.to_vec(),
+            gamepad_only: flags == 1,
         })
     }
 
@@ -318,7 +323,9 @@ pub fn served(hello: &Hello, out: Outputs) -> Result<Served> {
         UsbKind::SteamController2Puck => {
             crate::triton_usbip::served_puck(hello.index, hello.slot, identity, out)
         }
-        UsbKind::DualSense => crate::dualsense_usbip::served(hello.index, hello.seat, out),
+        UsbKind::DualSense => {
+            crate::dualsense_usbip::served(hello.index, hello.seat, hello.gamepad_only, out)
+        }
         UsbKind::Switch2Pro => crate::switch2_usbip::served(Model::Pro, hello.index, out),
         UsbKind::Switch2GameCube => crate::switch2_usbip::served(Model::GameCube, hello.index, out),
     })
@@ -394,6 +401,7 @@ mod tests {
                 slot: 0,
                 seat: 0,
                 identity: Vec::new(),
+                gamepad_only: false,
             };
             (kind, served(&hello, test_relay().0).unwrap())
         })
@@ -602,12 +610,16 @@ mod tests {
             slot: 2,
             seat: 0xBEEF,
             identity: vec![1, b'A'],
+            gamepad_only: true,
         };
         assert_eq!(Hello::decode(&hello.encode()), Some(hello.clone()));
         let mut unknown = hello.encode();
         unknown[1] = 200;
         assert_eq!(Hello::decode(&unknown), None, "unknown kind");
-        assert_eq!(Hello::decode(&[HELLO, 1, 0, 0, 0]), None, "short");
+        let mut flag = hello.encode();
+        flag[6] = 2;
+        assert_eq!(Hello::decode(&flag), None, "unknown flag");
+        assert_eq!(Hello::decode(&[HELLO, 1, 0, 0, 0, 0]), None, "short");
         let huge = Hello {
             identity: vec![0; MAX_IDENTITY + 1],
             ..hello

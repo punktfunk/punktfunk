@@ -17,7 +17,8 @@ use std::sync::{Arc, Mutex};
 
 /// Bytes pyrowave's copying push lands in. Unused here, but its upload must fit.
 pub(super) const HEAD: usize = 64 * 1024;
-/// Past the last slot: the dequant reads up to 16 bytes beyond a packet.
+/// Past the last slot: the dequant reads up to 4 KiB past a packet's start, and an in-place
+/// push refuses packets closer than that to the end (vendor patch 0015).
 const TAIL: usize = 64 * 1024;
 /// AUs in flight at once: a few reassembling, one queued, the decoder's unfinished ones.
 const SLOTS: usize = 8;

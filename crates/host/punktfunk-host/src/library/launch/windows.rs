@@ -323,8 +323,8 @@ fn steam_exe() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Exe of a machine-wide protocol handler, `<scheme>\shell\open\command` under HKCR. A
-/// per-user registration lives in HKCU, which LocalSystem does not see.
+/// Exe of a machine-wide protocol handler, `<scheme>\shell\open\command` under HKCR, when it
+/// is on a local disk. A per-user registration lives in HKCU, which LocalSystem does not see.
 fn handler_exe(scheme: &str) -> Option<std::path::PathBuf> {
     use winreg::enums::{HKEY_CLASSES_ROOT, KEY_READ};
     use winreg::RegKey;
@@ -334,7 +334,7 @@ fn handler_exe(scheme: &str) -> Option<std::path::PathBuf> {
         .and_then(|k| k.get_value::<String, _>(""))
         .ok()
         .and_then(|c| exe_from_shell_command(&c).map(std::path::PathBuf::from))
-        .filter(|p| p.is_file())
+        .filter(|p| on_local_disk(p) && p.is_file())
 }
 
 /// The Epic launcher registers `com.epicgames.launcher://` machine-wide.
@@ -342,7 +342,8 @@ fn epic_launcher_exe() -> Option<std::path::PathBuf> {
     handler_exe("com.epicgames.launcher")
 }
 
-/// GOG Galaxy's exe from its HKLM install paths. Its `goggalaxy://` handler is per-user.
+/// GOG Galaxy's exe from its HKLM install paths, on a local disk. Its `goggalaxy://` handler is
+/// per-user.
 fn galaxy_exe() -> Option<std::path::PathBuf> {
     use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
     use winreg::RegKey;
@@ -357,7 +358,7 @@ fn galaxy_exe() -> Option<std::path::PathBuf> {
     let exe: String = key
         .get_value("clientExecutable")
         .unwrap_or_else(|_| "GalaxyClient.exe".into());
-    Some(std::path::PathBuf::from(dir).join(exe)).filter(|p| p.is_file())
+    Some(std::path::PathBuf::from(dir).join(exe)).filter(|p| on_local_disk(p) && p.is_file())
 }
 
 /// The Battle.net client's exe: its `battlenet://` handler first (it follows a non-default
@@ -411,7 +412,8 @@ fn store_client_exe(value: &str) -> Option<std::path::PathBuf> {
     }
 }
 
-/// `InstallLocation` of the machine-wide uninstall entry named `display`, in either view.
+/// `InstallLocation` of the machine-wide uninstall entry named `display`, in either view, when
+/// it is on a local disk.
 fn uninstall_location(display: &str) -> Option<std::path::PathBuf> {
     use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
     use winreg::RegKey;
@@ -429,13 +431,15 @@ fn uninstall_location(display: &str) -> Option<std::path::PathBuf> {
             let shown: String = entry.get_value("DisplayName").ok()?;
             let location: String = entry.get_value("InstallLocation").ok()?;
             let location = location.trim().trim_matches('"');
-            (shown == display && !location.is_empty()).then(|| std::path::PathBuf::from(location))
+            let location = std::path::PathBuf::from(location);
+            (shown == display && on_local_disk(&location)).then_some(location)
         })
     })
 }
 
 /// The Rockstar Games Launcher's `Launcher.exe` and `title`'s install folder, from the
-/// machine-wide uninstall entries the launcher writes. Either missing refuses the launch.
+/// machine-wide uninstall entries the launcher writes, on a local disk. Either missing refuses
+/// the launch.
 fn rockstar_paths(title: &str) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
     use winreg::RegKey;
@@ -457,7 +461,7 @@ fn rockstar_paths(title: &str) -> Option<(std::path::PathBuf, std::path::PathBuf
                 .get_value::<String, _>("InstallLocation")
                 .map(|l| std::path::PathBuf::from(l.trim().trim_matches('"')))
                 .unwrap_or_default();
-            if location.as_os_str().is_empty() || location.to_string_lossy().contains('"') {
+            if !on_local_disk(&location) || location.to_string_lossy().contains('"') {
                 continue;
             }
             let display: String = entry.get_value("DisplayName").unwrap_or_default();
@@ -525,7 +529,8 @@ enum Whose {
     Anyone,
 }
 
-/// The `HKEY_USERS` hive names and profile folders `whose` covers.
+/// The `HKEY_USERS` hive names and profile folders `whose` covers. The player's profile is the
+/// machine's record of it ([`crate::windows::theme::session_profile`]).
 fn user_scope(whose: Whose) -> (Vec<String>, Vec<std::path::PathBuf>) {
     use winreg::enums::HKEY_USERS;
     use winreg::RegKey;
@@ -537,9 +542,7 @@ fn user_scope(whose: Whose) -> (Vec<String>, Vec<std::path::PathBuf>) {
     let Some(sid) = crate::windows::theme::session_sid() else {
         return (Vec::new(), Vec::new());
     };
-    let profile =
-        crate::windows::theme::read_string(&format!(r"{sid}\Volatile Environment"), "USERPROFILE")
-            .map(std::path::PathBuf::from);
+    let profile = crate::windows::theme::session_profile();
     (
         vec![format!("{sid}_Classes"), sid],
         profile.into_iter().collect(),
@@ -555,7 +558,7 @@ fn user_scope(whose: Whose) -> (Vec<String>, Vec<std::path::PathBuf>) {
 ///
 /// Portable installs leave only the `playnite://` handler
 /// ([`uri_handler_dir`]). Registry `InstallLocation` before
-/// conventional paths; each candidate is an `is_file` probe.
+/// conventional paths; each candidate is on a local disk and an `is_file` probe.
 fn playnite_install_dirs(whose: Whose) -> Vec<std::path::PathBuf> {
     use winreg::enums::{HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_READ};
     use winreg::RegKey;
@@ -635,7 +638,7 @@ fn hydra_exe() -> Option<std::path::PathBuf> {
         .find(|p| p.is_file())
 }
 
-/// `InstallLocation` from Playnite-looking uninstall entries under `root\path`.
+/// `InstallLocation` from Playnite-looking uninstall entries under `root\path`, on a local disk.
 /// Match `DisplayName` (`starts_with`) because the key is Inno's `<AppId>_is1`.
 fn playnite_dirs_from_uninstall(
     root: &winreg::RegKey,
@@ -656,16 +659,16 @@ fn playnite_dirs_from_uninstall(
             continue;
         }
         if let Ok(location) = entry.get_value::<String, _>("InstallLocation") {
-            let location = location.trim();
-            if !location.is_empty() {
-                push_unique(out, std::path::PathBuf::from(location));
+            let location = std::path::PathBuf::from(location.trim());
+            if on_local_disk(&location) {
+                push_unique(out, location);
             }
         }
     }
 }
 
-/// Directory of the shell-open command at `root\path`. Finds a portable install (no
-/// uninstall key, not under a profile). Same registration the launch path uses.
+/// Directory of the shell-open command at `root\path`, on a local disk. Finds a portable install
+/// (no uninstall key, not under a profile). Same registration the launch path uses.
 fn uri_handler_dir(root: &winreg::RegKey, path: &str, out: &mut Vec<std::path::PathBuf>) {
     use winreg::enums::KEY_READ;
 
@@ -678,7 +681,7 @@ fn uri_handler_dir(root: &winreg::RegKey, path: &str, out: &mut Vec<std::path::P
     if let Some(dir) = exe_from_shell_command(&command)
         .map(std::path::Path::new)
         .and_then(std::path::Path::parent)
-        .filter(|d| !d.as_os_str().is_empty())
+        .filter(|d| on_local_disk(d))
     {
         push_unique(out, dir.to_path_buf());
     }
@@ -698,11 +701,17 @@ fn exe_from_shell_command(command: &str) -> Option<&str> {
 /// Playnite install dirs as art roots. Portable keeps covers beside the exe
 /// (`<PlayniteDir>\library\files\…`); the users base cannot see that tree.
 /// Same shape as `steam_art_roots` in `art/windows.rs`. Candidates come from host
-/// registry/fs probes, not the plugin lane that supplies the art path.
+/// registry/fs probes, not the plugin lane that supplies the art path; any user's hive may
+/// name one, so each is on a local disk before any probe, and counts only with a Playnite
+/// program in it: a user can make a root only of a folder they could write into.
 pub(crate) fn playnite_art_roots() -> Vec<std::path::PathBuf> {
     playnite_install_dirs(Whose::Anyone)
         .into_iter()
-        .filter(|d| d.is_dir())
+        .filter(|d| {
+            ["Playnite.DesktopApp.exe", "Playnite.FullscreenApp.exe"]
+                .iter()
+                .any(|exe| d.join(exe).is_file())
+        })
         .collect()
 }
 

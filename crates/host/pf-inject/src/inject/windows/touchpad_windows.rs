@@ -278,7 +278,12 @@ impl State {
 
 impl VirtualTouchpad {
     /// Claims an index and starts the worker; the devnode follows within a second or two.
+    /// Refuses on a seat host, as [`supported`] does.
     pub fn create() -> Result<VirtualTouchpad> {
+        anyhow::ensure!(
+            !is_seat(std::env::var(SEAT_SLOT_ENV).ok().as_deref()),
+            "no virtual touchpad on a seat host"
+        );
         let index = Index::claim().context("claim a touchpad index: all are in use")?;
         let shared = Arc::new(Shared {
             state: Mutex::new(State::default()),

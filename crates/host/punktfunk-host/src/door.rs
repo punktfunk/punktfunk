@@ -60,12 +60,28 @@ pub(crate) fn unavailable() -> Option<ApiError> {
 }
 
 /// Whether the switch this host last started ran and failed: `door-helper` refused, or stopped
-/// halfway and put the box back. A door the failed off restarted reads that off from systemd.
-/// The helper's reason is in the host's log. Blocking: it runs `systemctl`.
+/// halfway and put the box back. A host that started none, as the owner's host that a failed off
+/// brings back, reads the owner's last off from systemd. The helper's reason is in the host's
+/// log. Blocking: it runs `systemctl`.
 pub(crate) fn switch_failed() -> bool {
     #[cfg(target_os = "linux")]
     {
         linux::switch_failed()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+/// Whether an off didn't hand everything back: this is the owner's own host, the helper's
+/// record still names its account, and the off's hold stands. The console shows the door on
+/// and says so, and the next off retries.
+/// Blocking: it runs `id`.
+pub(crate) fn off_unfinished() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        linux::off_unfinished()
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -168,8 +184,9 @@ mod linux {
         "/etc/systemd/system/punktfunk-door-on@.service",
     ];
 
+    /// An off from the owner's own host runs only after an off that didn't finish.
     pub(super) fn change(on: bool) -> Result<Outcome, Refusal> {
-        if on == pf_paths::seat::role().is_door() {
+        if on == pf_paths::seat::role().is_door() && (on || !off_unfinished()) {
             return Ok(Outcome::Already);
         }
         let user = if on { own_user() } else { owner_account() }?;
@@ -183,14 +200,24 @@ mod linux {
         Ok(Outcome::Started)
     }
 
+    pub(super) fn off_unfinished() -> bool {
+        // The hold tells an off that stopped halfway from an on under way: both leave the
+        // record naming this account while its own host still runs.
+        pf_paths::seat::role() == pf_paths::seat::HostRole::Plain
+            && pf_seats::linux::off_held()
+            && pf_seats::linux::recorded_owner()
+                .is_some_and(|owner| own_user().is_ok_and(|me| me == owner))
+    }
+
     /// The switch unit this host last started, and its invocation before then: a newer one is
-    /// that start's run. An off stops the door that holds this, so a restarted door has none.
+    /// that start's run. An off stops the door that holds this, and the host it brings back has
+    /// none.
     static STARTED: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
 
     pub(super) fn switch_failed() -> bool {
         let started = STARTED.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let Some((unit, before)) = started else {
-            return pf_paths::seat::role().is_door() && restarted_by_failed_off();
+            return owner_off_failed();
         };
         let Some(shown) = capture(Command::new("systemctl").args([
             "show",
@@ -205,9 +232,9 @@ mod linux {
         ran_and_failed(&shown, &before)
     }
 
-    /// The owner's off unit ran after their last on and failed: `door-helper` stopped the door,
-    /// couldn't hand the files home, and started this door again.
-    fn restarted_by_failed_off() -> bool {
+    /// The owner's off unit ran after their last on and failed: `door-helper` left the door off
+    /// and the owner's host back, and kept the box's files for the next off.
+    fn owner_off_failed() -> bool {
         let Ok(owner) = owner_account() else {
             return false;
         };
@@ -527,8 +554,8 @@ mod tests {
         assert!(ran_and_failed(&shown("b2", "exit-code"), ""), "a first run");
     }
 
-    /// A door the off restarted reads that off's run: failed after the owner's last on is a
-    /// failed switch; one before that on, a success, or no run at all is not.
+    /// The host a failed off brings back reads that off's run: failed after the owner's last on is
+    /// a failed switch; one before that on, a success, or no run at all is not.
     #[test]
     fn an_off_that_failed_after_the_last_on_is_a_failed_switch() {
         let shown = |off: (&str, u64), on: (&str, u64)| {

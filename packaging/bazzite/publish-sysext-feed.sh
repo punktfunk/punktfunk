@@ -16,10 +16,10 @@
 #        TOKEN=… bash publish-sysext-feed.sh --seal <feed>
 #   <feed>   e.g. f43, f43-canary, f44 (Fedora major x channel)
 #   KEEP     newest images to keep in the feed; 0/unset-for-stable = keep all
-#   --seal   re-sign a feed's EXISTING manifest without publishing an image. For feeds published
-#            before signing existed, and after a key rotation. Idempotent. Also re-publishes the
-#            manifest if normalizing it changed anything, because the signature has to cover the
-#            bytes a client downloads.
+#   --seal   re-sign a feed's EXISTING manifest under a new serial without publishing an image,
+#            when the current key didn't sign it. Both modes carry lines only from a live manifest
+#            that verifies against FEED_KEY in punktfunk-sysext.sh and names this feed. A publish
+#            over any other starts the feed over; a seal leaves it as it is.
 # Env: REGISTRY (git.unom.io), OWNER (unom), TOKEN (write:package PAT), CURL_USER (login name),
 #      RPM_GPG_PRIVATE_KEY (armored private key; absent => unsigned, fatal on a v* tag)
 set -euo pipefail
@@ -44,8 +44,28 @@ SUMS="$WORK/SHA256SUMS"
 SIG="$WORK/SHA256SUMS.asc"
 FETCHED="$WORK/SHA256SUMS.fetched"   # exactly what the registry served, before normalization
 
-# read_manifest -> the feed's current manifest, normalized into $SUMS and kept verbatim in
-# $FETCHED. Returns non-zero iff the feed has no manifest at all.
+# baked_key -> the armored public key block(s) of FEED_KEY in punktfunk-sysext.sh, the key boxes
+# verify the feed with. The block is a single-quoted shell literal there, so the first and last
+# lines lose the `FEED_KEY='` prefix and the closing quote.
+baked_key() {
+  sed -n '/BEGIN PGP PUBLIC KEY BLOCK/,/END PGP PUBLIC KEY BLOCK/p' "$HERE/punktfunk-sysext.sh" \
+    | sed "s/^FEED_KEY='//; s/'\$//"
+}
+
+# first_baked_fpr -> the fingerprint of FEED_KEY's first key, the one the feed is signed with.
+first_baked_fpr() {
+  local home
+  home="$(mktemp -d)"; chmod 700 "$home"
+  baked_key | GNUPGHOME="$home" gpg --batch --quiet --with-colons --import-options show-only \
+    --import 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}'
+  rm -rf "$home"
+}
+
+# read_manifest -> the feed's live manifest, normalized into $SUMS and kept verbatim in $FETCHED,
+# and the fingerprint of the key that signed it in $LIVE_SIGNER. Returns 1, with both empty, for
+# a new feed and for one whose pair doesn't verify against baked_key for this feed: a run
+# cancelled between its two uploads leaves one. Whoever holds a registry token without the key
+# never gets a line carried or signed. An answer that is neither 200 nor 404 stops the run.
 #
 # -L is not optional here. The registry answers a file GET with a 303 See Other pointing at
 # presigned object storage, and `curl -f` does NOT treat a 3xx as an error — so without -L the call
@@ -56,8 +76,30 @@ FETCHED="$WORK/SHA256SUMS.fetched"   # exactly what the registry served, before 
 # right: whatever the transport hands back, only well-formed "<sha256>  <filename>" lines are ever
 # signed or re-published. It also scrubs a feed that already carries an injected page.
 read_manifest() {
-  : > "$SUMS"; : > "$FETCHED"
-  curl -fsSL "${AUTH[@]}" -o "$FETCHED" "$BASE/SHA256SUMS" || return 1
+  local sums_code sig_code home status
+  : > "$SUMS"; : > "$FETCHED"; LIVE_SIGNER=
+  sums_code="$(curl -sSL "${AUTH[@]}" -o "$FETCHED" -w '%{http_code}' "$BASE/SHA256SUMS")" \
+    || { echo "fetch $BASE/SHA256SUMS" >&2; exit 1; }
+  sig_code="$(curl -sSL "${AUTH[@]}" -o "$WORK/live.asc" -w '%{http_code}' "$BASE/SHA256SUMS.asc")" \
+    || { echo "fetch $BASE/SHA256SUMS.asc" >&2; exit 1; }
+  case "$sums_code $sig_code" in
+    "404 404") : > "$FETCHED"; return 1 ;;
+    "200 200"|"200 404"|"404 200") ;;
+    *) echo "$BASE answers SHA256SUMS $sums_code, SHA256SUMS.asc $sig_code — refusing to publish over a feed it can't read" >&2
+       exit 1 ;;
+  esac
+  if [ "$sums_code $sig_code" = "200 200" ]; then
+    home="$(mktemp -d)"; chmod 700 "$home"
+    baked_key | GNUPGHOME="$home" gpg --batch --quiet --import 2>/dev/null || :
+    status="$(GNUPGHOME="$home" gpg --batch --quiet --status-fd 1 --verify "$WORK/live.asc" \
+      "$FETCHED" 2>/dev/null || :)"
+    rm -rf "$home"
+    LIVE_SIGNER="$(printf '%s\n' "$status" | awk '$2 == "VALIDSIG" {print $NF; exit}')"
+  fi
+  if [ -z "$LIVE_SIGNER" ] || [ "$(sed -n 's/^# FEED //p' "$FETCHED" | head -n1)" != "$FEED" ]; then
+    echo "::warning::$BASE holds no manifest FEED_KEY signed for $FEED (an upload cut short, or not ours); nothing of it is carried or signed"
+    : > "$FETCHED"; LIVE_SIGNER=; return 1
+  fi
   grep -E '^[0-9a-f]{64}  [^ ]+$' "$FETCHED" > "$SUMS" || :
 }
 
@@ -97,16 +139,9 @@ sign_manifest() {
   printf 'allow-loopback-pinentry\n' > "$home/gpg-agent.conf"
   printf '%s' "$RPM_GPG_PRIVATE_KEY" | GNUPGHOME="$home" gpg --batch --quiet --import
   keyid="$(GNUPGHOME="$home" gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/{print $10; exit}')"
-  # A feed signed by a key the client script doesn't carry is a feed nobody can install from, and
-  # the failure would only surface on someone's Bazzite box. Compare fingerprints here instead: the
-  # baked-in public key in punktfunk-sysext.sh must be the key we are about to sign with.
-  # The armor block is a shell single-quoted literal in that script, so the range's first and last
-  # lines carry the `FEED_KEY='` prefix and the closing quote — strip them or gpg sees no armor at
-  # all and hands back an empty fingerprint, which would look like a mismatch on every publish.
-  baked="$(sed -n '/BEGIN PGP PUBLIC KEY BLOCK/,/END PGP PUBLIC KEY BLOCK/p' "$HERE/punktfunk-sysext.sh" \
-           | sed "s/^FEED_KEY='//; s/'\$//" \
-           | GNUPGHOME="$home" gpg --batch --quiet --with-colons --import-options show-only --import 2>/dev/null \
-           | awk -F: '/^fpr:/{print $10; exit}')"
+  # The signing key must be the first key in FEED_KEY, the block boxes verify with: a feed signed
+  # by a key outside it is a feed nobody can install from.
+  baked="$(first_baked_fpr)"
   if [ -z "$baked" ] || [ "$keyid" != "$baked" ]; then
     echo "signing key $keyid does not match the key baked into punktfunk-sysext.sh ($baked)" >&2
     echo "-> rotate BOTH (packaging/rpm/README.md), or clients cannot verify this feed." >&2
@@ -131,9 +166,14 @@ require_signature() {
   echo "WARNING: $FEED left UNSIGNED (no usable RPM_GPG_PRIVATE_KEY); clients will refuse it." >&2
 }
 
-# --seal: re-sign whatever manifest the feed already has, no image, no pruning.
+# --seal: re-sign the feed's verified manifest, no image, no pruning. A manifest the current key
+# signed stays as it is, so a canary run never rewrites the stable feed it can't publish to.
 if [ "$SEAL" = 1 ]; then
-  read_manifest || { echo "no SHA256SUMS at $BASE — nothing to seal" >&2; exit 1; }
+  read_manifest || { echo "no manifest FEED_KEY signed at $BASE — nothing to seal" >&2; exit 1; }
+  if [ "$LIVE_SIGNER" = "$(first_baked_fpr)" ]; then
+    echo "$BASE is signed with the current key — nothing to seal"
+    exit 0
+  fi
   # An empty result means the manifest was ALL junk. Signing that would hand clients a feed that
   # verifies and offers no images, so `punktfunk-sysext update` stops at "no image in the feed".
   if [ ! -s "$SUMS" ]; then
@@ -169,7 +209,7 @@ if read_manifest; then
   # Said out loud on purpose: a manifest that silently shrinks loses the feed's rollback history.
   echo "carrying forward $(grep -c '' <"$SUMS") image(s) from the existing manifest"
 else
-  echo "no manifest at $BASE yet — starting a new feed"
+  echo "no signed manifest at $BASE — starting the feed with this image alone"
 fi
 printf '%s  %s\n' "$SHA" "$FNAME" >> "$SUMS"
 

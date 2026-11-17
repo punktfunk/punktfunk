@@ -56,6 +56,7 @@ impl TritonPad {
         let dev = UhidDevice::open_kind(
             crate::pad_broker::PadKind::SteamController2,
             index,
+            false,
             &identity(index),
         )?;
         Ok(TritonPad {

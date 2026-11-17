@@ -1,5 +1,6 @@
 // Launching a plugin out of process on Windows: a process of its own, or an AppContainer through
-// `punktfunk-host plugins spawn`. Both reach the host over the pipe it serves for the plugin's id.
+// `punktfunk-host plugins spawn`. A container reaches the host over the pipe it serves for the
+// plugin's id; a process of its own over the pinned TLS port.
 import { Effect } from "effect";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -21,17 +22,18 @@ export const runInOwnProcess = (
 	options: RunnerOptions,
 ): Effect.Effect<"plugin", unknown> =>
 	Effect.suspend(() =>
-		spawnUnitChild(
-			process.execPath,
-			unitArgv(unit),
-			{
-				...process.env,
-				...(options.configDir ? { PUNKTFUNK_CONFIG_DIR: options.configDir } : {}),
-				...pipeEnv(unit),
-			},
-			"plugin process",
-		),
+		spawnUnitChild(process.execPath, unitArgv(unit), ownProcessEnv(options), "plugin process"),
 	);
+
+/**
+ * The environment of a plugin in a process of its own. It sends the runner's bearer, so it never
+ * dials a pipe, whose server nothing checks: it dials the TLS port, and the host's pinned
+ * certificate proves the host before the bearer goes out.
+ */
+export const ownProcessEnv = (options: RunnerOptions): NodeJS.ProcessEnv => {
+	const { PUNKTFUNK_MGMT_UNIX: _, ...env } = process.env;
+	return { ...env, ...(options.configDir ? { PUNKTFUNK_CONFIG_DIR: options.configDir } : {}) };
+};
 
 /**
  * Run one plugin in its own AppContainer: `punktfunk-host plugins spawn` creates the profile for
@@ -48,17 +50,10 @@ export const runInContainer = (
 		const id = manifest.id ?? unit.name;
 		const config = options.configDir ?? configDir();
 		adoptNestedState(path.join(config, "plugin-state", id), id, log);
-		const pipe = pipeEnv(unit);
 		return spawnUnitChild(
 			hostExe(),
 			["plugins", "spawn", "--package", id, "--", process.execPath, ...unitArgv(unit)],
-			{
-				...process.env,
-				...(options.configDir ? { PUNKTFUNK_CONFIG_DIR: options.configDir } : {}),
-				...pipe,
-				// The container can bind nothing the console dials: its page goes over the pipe.
-				...(pipe.PUNKTFUNK_MGMT_UNIX ? { PUNKTFUNK_UI_CHANNEL: id } : {}),
-			},
+			containerEnv(unit, options),
 			"sandboxed plugin",
 		);
 	});
@@ -73,14 +68,28 @@ export const pipeName = (id: string, seat: string | undefined): string =>
 		: `\\\\.\\pipe\\punktfunk-plugin-${id}`;
 
 /**
- * Where a Windows plugin reaches the host: the pipe the host serves for its id, plain HTTP, no
- * port. A seat's runner has its seat's id from its host. A host without the pipe leaves this
- * empty and the child dials the port.
+ * The environment of a plugin in its AppContainer: the pipe the host serves for its id, plain
+ * HTTP, no port. The host knows the container by its package, so it sends no bearer. Its page
+ * goes over the pipe too, since the container binds nothing the console dials. A seat's runner
+ * has its seat's id from its host. A host without the pipe leaves it out and the child dials the
+ * port. `exists` is a test seam.
  */
-const pipeEnv = (unit: Unit): Record<string, string> => {
+export const containerEnv = (
+	unit: Unit,
+	options: RunnerOptions,
+	exists: (pipe: string) => boolean = fs.existsSync,
+): NodeJS.ProcessEnv => {
 	const id = unit.manifest?.id;
-	if (process.platform !== "win32" || !id) return {};
-	const pipe = pipeName(id, process.env.PUNKTFUNK_SEAT_ID);
-	if (!fs.existsSync(pipe)) return {};
-	return { PUNKTFUNK_MGMT_URL: "http://punktfunk.host", PUNKTFUNK_MGMT_UNIX: pipe };
+	const pipe = id ? pipeName(id, process.env.PUNKTFUNK_SEAT_ID) : undefined;
+	return {
+		...process.env,
+		...(options.configDir ? { PUNKTFUNK_CONFIG_DIR: options.configDir } : {}),
+		...(id && pipe && exists(pipe)
+			? {
+					PUNKTFUNK_MGMT_URL: "http://punktfunk.host",
+					PUNKTFUNK_MGMT_UNIX: pipe,
+					PUNKTFUNK_UI_CHANNEL: id,
+				}
+			: {}),
+	};
 };

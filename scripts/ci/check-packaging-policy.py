@@ -148,7 +148,8 @@ KEEP_LIST = "scripts/punktfunk-atomic-keep.conf"
 DECK_SCRIPTS = "scripts/steamdeck/*.sh"
 # The /etc trees SteamOS's own keep list holds, as KEEP_LIST's comments say.
 STOCK_KEPT = ("/etc/systemd/system/", "/etc/atomic-update.conf.d/")
-# Created on first use by door-helper and the seat supervisor, so no package ships them.
+# Created on first use by door-helper and the seat supervisor, so no package ships them. The
+# NixOS module may declare one: a wrapper's group must exist at activation, before either runs.
 RUNTIME_GROUPS = {"punktfunk-games"}
 # Groups the distribution provides.
 DISTRO_GROUPS = {"input", "root"}
@@ -299,7 +300,7 @@ def group_errors(sysusers, nix_groups, texts):
     """[(path, error)] for the groups the sysusers file declares against what the channels create
     and name. `texts` is {path: recipe, script or rule text}."""
     declared = set(SYSUSERS_GROUP.findall(sysusers))
-    nix = nix_groups - DISTRO_GROUPS
+    nix = nix_groups - DISTRO_GROUPS - RUNTIME_GROUPS
     errors = [(NIX_MODULE, f"{SYSUSERS} declares group {g}; the NixOS module does not")
               for g in sorted(declared - nix)]
     errors += [(NIX_MODULE, f"the NixOS module declares group {g}; {SYSUSERS} does not")

@@ -130,22 +130,25 @@ testers.runNixOSTest {
     assert after == supervisor, f"supervisor {supervisor} before, {after} after"
     machine.succeed(f"rm {control}/punktfunk-door.service && systemctl daemon-reload")
 
-    # An off whose hand-back fails starts the door again and keeps the record and the mark: bob
-    # can't write his own folder. With it writable again, the next off hands the files home.
+    # An off whose hand-back fails leaves the door off and held, drops bob's contract, and keeps
+    # the record and the mark: bob can't write his own folder. With it writable again, the next
+    # off hands the files home.
     conf = "/home/bob/.config/punktfunk"
+    hold = "/var/lib/punktfunk-seats/door-hold"
     machine.succeed(switch("bob", "on"))
     machine.wait_for_unit("punktfunk-door.service")
     machine.succeed(f"chmod 0500 {conf}")
     machine.fail(switch("bob", "off"))
     machine.wait_until_succeeds(
-        "journalctl -u punktfunk-door-off@bob.service | grep -q 'starting the door again'"
+        "journalctl -u punktfunk-door-off@bob.service | grep -q 'switch the door off again'"
     )
     assert machine.succeed(f"cat {record}").strip() == "bob"
-    machine.succeed("test -e /var/lib/punktfunk-seats/door-on")
-    machine.wait_for_unit("punktfunk-door.service")
+    machine.succeed(f"test -e /var/lib/punktfunk-seats/door-on && test -e {hold}")
+    machine.succeed("test ! -e /run/punktfunk/seats/bob.env")
+    machine.fail("systemctl is-active punktfunk-door.service")
     machine.succeed(f"chmod 0700 {conf}")
     machine.succeed(switch("bob", "off"))
-    machine.succeed(f"test ! -e {record}")
+    machine.succeed(f"test ! -e {record} && test ! -e {hold}")
 
     # The console's password only in web.env, as SteamOS keeps it: the on takes the password and
     # secret lines, the off splices the door's last password line back into web.env.

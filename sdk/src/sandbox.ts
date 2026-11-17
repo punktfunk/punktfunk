@@ -7,8 +7,10 @@
 // so there is nothing to reach through.
 //
 // Each plugin gets: an empty home, its own state dir, the paths its manifest declares, its own
-// token, and a unix socket to the host. No network unless it declared one; without one, its UI
-// reaches the console through a second socket (`ui-forward.ts`). Pin: `sandbox.test.ts`.
+// token, a unix socket to the host, and a network namespace of its own that pasta connects outward
+// only when it declared network (`sandboxCommand`). The host's loopback and abstract sockets are
+// never in it, so its UI reaches the console through a second socket (`ui-forward.ts`). Pin:
+// `sandbox.test.ts`.
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -75,8 +77,10 @@ export interface SandboxPaths {
 	home: string;
 	/** The host's config dir (`PUNKTFUNK_CONFIG_DIR`), which no plugin may bind. */
 	configDir: string;
-	/** A plugin without network: the runner's dir its UI socket goes in, and the forwarded port. */
+	/** The runner's dir its UI socket goes in, and the forwarded port. */
 	ui?: { dir: string; port: number };
+	/** A network plugin's resolver file, naming {@link DNS_FORWARD}, bound over `/etc/resolv.conf`. */
+	resolvConf?: string;
 	/** The host's `/home` when it is a link ({@link homeLink}), mirrored inside. */
 	homeLink?: HomeLink;
 }
@@ -162,6 +166,9 @@ const BASE_ARGV: readonly string[] = [
  * grant and a launcher's `$HOME` path both resolve, and `realpath` inside agrees with the host.
  * A link the plugin asked through into a grant (`~/Games/SteamLibrary` → `/mnt/ssd/games`) is
  * recreated the same way. A manifest path, grant or link with a `..` component is left out.
+ *
+ * Every network namespace is the sandbox's own. A network plugin's sandbox waits on fd 5 until
+ * pasta has connected it (`sandboxCommand`), once bwrap reports on fd 4.
  */
 export const bwrapArgv = (
 	manifest: PluginManifest,
@@ -176,7 +183,10 @@ export const bwrapArgv = (
 	for (const [k, v] of Object.entries(sandboxEnv(paths.home))) {
 		argv.push("--setenv", k, v);
 	}
-	if (manifest.network) argv.push("--share-net");
+	if (manifest.network) {
+		argv.push("--info-fd", "4", "--block-fd", "5");
+		if (paths.resolvConf) argv.push("--ro-bind", paths.resolvConf, "/etc/resolv.conf");
+	}
 	// Before any bind: a bind under the link's spelling would make it a directory.
 	const link = paths.homeLink;
 	if (link) argv.push("--symlink", link.target, link.path);
@@ -202,8 +212,8 @@ export const bwrapArgv = (
 	);
 	argv.push("--ro-bind", paths.tokenFile, "/run/punktfunk/plugin-token");
 	argv.push("--bind", paths.socket, "/run/punktfunk/host.sock");
-	// Its own loopback is unreachable, so its UI listens where the runner can forward to.
-	if (paths.ui && !manifest.network) {
+	// Its loopback is its own, so its UI listens where the runner can forward to.
+	if (paths.ui) {
 		argv.push("--bind", paths.ui.dir, UI_DIR);
 		argv.push("--setenv", "PUNKTFUNK_UI_PORT", String(paths.ui.port));
 	}
@@ -247,6 +257,8 @@ export const bwrapArgv = (
 const OPS: Record<string, [number, boolean]> = {
 	"--setenv": [2, false],
 	"--add-seccomp-fd": [1, false],
+	"--info-fd": [1, false],
+	"--block-fd": [1, false],
 	"--proc": [1, true],
 	"--dev": [1, true],
 	"--tmpfs": [1, true],
@@ -501,6 +513,83 @@ export const sandboxEnv = (
 	...extra,
 });
 
+/** The resolver a network plugin sees. pasta forwards it to the host's, a loopback stub too. */
+export const DNS_FORWARD = "169.254.1.1";
+
+/**
+ * A network plugin's `/etc/resolv.conf`: the host's `search`, `domain` and `options` lines, so a
+ * short name resolves as it does on the host, and {@link DNS_FORWARD} as the only nameserver.
+ */
+export const resolverFile = (host: string): string =>
+	[
+		...host.split("\n").filter((l) => /^(search|domain|options)\s/.test(l.trim())),
+		`nameserver ${DNS_FORWARD}`,
+		"",
+	].join("\n");
+
+/**
+ * The command that runs a sandbox with `argv` from {@link bwrapArgv}. A network plugin's bwrap
+ * runs in a user and network namespace `unshare` makes, and shares that one: pasta connects it
+ * outward, and the host's loopback and abstract sockets are never in it.
+ */
+export const sandboxCommand = (
+	manifest: PluginManifest,
+	argv: readonly string[],
+	unshare = "unshare",
+): [string, string[]] =>
+	manifest.network
+		? [unshare, ["--map-current-user", "--net", "--", "bwrap", ...argv, "--share-net"]]
+		: ["bwrap", [...argv]];
+
+/**
+ * pasta's argv to connect the network namespace `pid` holds. No port is forwarded inward and no
+ * address leads to the host's loopback. Outward, only DNS to {@link DNS_FORWARD} reaches the
+ * host's resolver, and each of `ports`, the TCP ports the operator granted, reaches that port
+ * on the host's loopback from the namespace's own. pasta exits once the namespace is up, its
+ * daemon's pid in `pidFile`. The daemon stays until that pid is signalled: SELinux's pasta
+ * domain can't watch another domain's namespace.
+ */
+export const pastaArgv = (pid: number, pidFile: string, ports: readonly number[] = []): string[] => [
+	"--config-net",
+	"--quiet",
+	"--no-map-gw",
+	"--no-netns-quit",
+	"-t",
+	"none",
+	"-u",
+	"none",
+	"-T",
+	ports.length > 0 ? ports.join(",") : "none",
+	"-U",
+	"none",
+	"--dns-forward",
+	DNS_FORWARD,
+	"--pid",
+	pidFile,
+	String(pid),
+];
+
+/**
+ * The TCP ports on this computer the operator granted `id`, from `plugin-run/plugin-grants.json`.
+ * Anything that is no port, and every port of Punktfunk's own (47980–48010, which trust a
+ * loopback caller), is dropped: the host refuses those too.
+ */
+export const grantedPorts = (configDir: string, id: string): number[] => {
+	try {
+		const map = JSON.parse(
+			fs.readFileSync(path.join(configDir, "plugin-run", "plugin-grants.json"), "utf8"),
+		) as Record<string, unknown>;
+		const ports = (map[id] as { ports?: unknown } | null)?.ports;
+		if (!Array.isArray(ports)) return [];
+		return ports.filter(
+			(p): p is number =>
+				Number.isInteger(p) && p >= 1 && p <= 65535 && !(p >= 47980 && p <= 48010),
+		);
+	} catch {
+		return [];
+	}
+};
+
 /**
  * The operator's extra roots for `id` from `plugin-run/plugin-grants.json`. Accepts a legacy array
  * (read-only grants) and a `{ grants: [{ path, write }], links: { link: target } }` record; each
@@ -570,22 +659,23 @@ export const hostExe = (): string =>
 		"punktfunk-host.exe",
 	);
 
-/** Host `true` as an absolute path. `/bin/true` is an FHS path NixOS does not have.
- *  Do not realpath: Nix `true` is a symlink onto the coreutils multicall binary. */
-const whichTrue = (): string => {
+/**
+ * `name` on PATH as an absolute path: a file with an exec bit, since a directory or unexecutable
+ * entry would fail to exec. Not resolved: Nix `true` is a symlink onto the coreutils multicall
+ * binary.
+ */
+export const onPath = (name: string): string | undefined => {
 	for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
 		if (!dir) continue;
-		const candidate = path.join(dir, "true");
+		const candidate = path.join(dir, name);
 		try {
-			// A file with an exec bit — a directory or unexecutable `true` on PATH
-			// would make a healthy sandbox read as an exec failure.
 			fs.accessSync(candidate, fs.constants.X_OK);
 			if (fs.statSync(candidate).isFile()) return candidate;
 		} catch {
 			/* absent, dangling, or not executable */
 		}
 	}
-	return "/bin/true";
+	return undefined;
 };
 
 /** Can this box sandbox at all? The reason, when it cannot, is what the operator needs. */
@@ -619,7 +709,8 @@ export const sandboxProbe = (
 	// sandbox-capable that then refuses every plugin.
 	// Exactly what a real sandbox asks for, plus a trivial exec. Probing a weaker set reports a
 	// box as capable that then refuses every plugin.
-	const trueBin = whichTrue();
+	// `/bin/true` is an FHS path NixOS does not have.
+	const trueBin = onPath("true") ?? "/bin/true";
 	// A `true` under a PATH dir the sandbox does not bind (a ~/bin on FHS) still execs:
 	// its parent comes along.
 	const dir = path.dirname(trueBin);

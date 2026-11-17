@@ -644,9 +644,9 @@ the installed unit.
   root's alone while parked; its keyboard and mouse nodes are root's alone always, so a Steam
   Controller's desktop mode reaches nobody, and so is the device's own node under
   `/dev/bus/usb`, through which raw USB could take a keyboard interface from the kernel. On
-  every change of hands the daemon writes `0` then `1` to the USB device's sysfs `authorized`:
-  its drivers unbind and every open handle ends. Between the two it sends the device a `change`
-  event: the device itself stays, so only that runs the rules on its own node, and each new
+  every change of hands the daemon unbinds the USB device from its driver and binds it back:
+  its interfaces go and every open handle ends, a raw USB one too. Between the two it sends the
+  device a `change` event: the device itself stays, so only that runs the rules on its own node, and each new
   node takes its seat from the device. A controller lent to the owner's row also opens for the
   owner's session at the desk, the same uid. The seat host never serves it as a pad, so it is in no session's pad list and its input
   is no presence.
@@ -808,7 +808,12 @@ browsers. A seat host without Seat defaults follows its `PUNKTFUNK_WEBTRANSPORT*
   any other `getent` status, or a `passwd` source such as `sss` or `ldap`, refuses both. The
   owner's host applies the same rules before it starts a switch, so the console names the account
   the door is on for instead of asking. A switch it refuses or abandons sets
-  `door_switch_failed` on the starting host's `GET /host`, and the console stops waiting.
+  `door_switch_failed` on the starting host's `GET /host`, and the console stops waiting. A first
+  switch-on other than a takeover removes each box file the member lacks, avatars included. An
+  off whose files don't all arrive home still turns the door off and brings the owner's host and
+  console back, whose `GET /host` reports the failed off. It keeps the record and the box's files,
+  and holds the door's units with `/var/lib/punktfunk-seats/door-hold`: the next on keeps those
+  files, and the off after it hands them back.
 - **The box's ports.** The door binds the ports the owner's `host.env` names
   (`PUNKTFUNK_MGMT_BIND`, `PUNKTFUNK_NATIVE_PORT`), and its console binds where the owner's
   console did (`PUNKTFUNK_UI_BIND`, from `web.env` on SteamOS). Before each door start,

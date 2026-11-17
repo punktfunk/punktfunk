@@ -375,6 +375,32 @@ describe("a person's calls", () => {
 		expect(seatCalls.filter((c) => c.path === "/api/v1/hooks")).toEqual([]);
 	});
 
+	test("a seat host's page arrives as sandboxed bytes; JSON and images keep their type", async () => {
+		const cookies = await signIn();
+		const answer = async (type?: string) => {
+			const q = type ? `?type=${encodeURIComponent(type)}` : "";
+			const res = await send(`/api/v1/host${q}`, { cookie: cookies });
+			expect(res.headers.get("content-security-policy"), type).toBe("sandbox");
+			expect(res.headers.get("x-content-type-options"), type).toBe("nosniff");
+			return res.headers.get("content-type");
+		};
+		for (const page of [
+			"text/html",
+			"text/html; charset=utf-8",
+			"image/svg+xml",
+			"IMAGE/SVG+XML",
+			"application/xhtml+xml",
+			"image/png, text/html",
+			"image/png;, text/html",
+		])
+			expect(await answer(page), page).toBe("application/octet-stream");
+		expect(await answer("image/png")).toBe("image/png");
+		expect(await answer("application/json; charset=utf-8")).toBe(
+			"application/json; charset=utf-8",
+		);
+		expect(await answer()).toStartWith("application/json");
+	});
+
 	test("me and the picture come from their seat host with their session, never the box", async () => {
 		const cookies = await signIn();
 		boxCalls.length = 0;
@@ -406,6 +432,16 @@ describe("a person's calls", () => {
 });
 
 describe("two kinds of session in one browser", () => {
+	/** A browser the owner signed in as operator, at a member's seat, still opens that member's
+	 * console; a seat host's answers stay inert bytes there. */
+	test("a browser signed in as the operator still opens a person's console", async () => {
+		const both = await signIn(await logIn());
+		expect(both).toContain("pf_person");
+		const res = await send("/api/v1/host?type=text%2Fhtml", { cookie: both });
+		expect(res.headers.get("content-type")).toBe("application/octet-stream");
+		expect(res.headers.get("content-security-policy")).toBe("sandbox");
+	});
+
 	test("a person's cookie decides its requests: the operator's is never read for them", async () => {
 		const both = await signIn(await logIn());
 		expect(both).toContain("pf_session=");

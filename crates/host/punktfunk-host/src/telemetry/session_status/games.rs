@@ -244,6 +244,7 @@ mod tests {
                 workspace: None,
                 window: None,
                 outcome: None,
+                bindings: None,
             },
             Box::new(|| {}),
         );

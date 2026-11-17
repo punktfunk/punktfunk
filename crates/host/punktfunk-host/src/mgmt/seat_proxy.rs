@@ -115,10 +115,13 @@ pub(crate) async fn proxy_profile_seat(
 }
 
 /// A seat host's answer, relayed on the console's origin. Only JSON and images keep their
-/// type, SVG excepted because it runs script; the rest is served as inert bytes, so a seat
-/// cannot run a page here.
+/// type, SVG excepted because it runs script, and never a list of types, of which a browser
+/// renders the last; the rest is served as inert bytes, so a seat can't run a page here.
 fn seat_answer(status: StatusCode, content_type: Option<&str>, bytes: Vec<u8>) -> Response {
     let passes = |c: &&str| {
+        if c.contains(',') {
+            return false;
+        }
         let media = c
             .split(';')
             .next()
@@ -314,6 +317,8 @@ mod tests {
             "text/html",
             "text/html; charset=utf-8",
             "application/xhtml+xml",
+            "image/png, text/html",
+            "image/png;, text/html",
             "image/svg+xml",
             "IMAGE/SVG+XML; charset=utf-8",
             "image",

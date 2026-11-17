@@ -85,7 +85,9 @@ authenticating. A rotation must update **all three**: the CI secret, this direct
 `RPM-GPG-KEY-punktfunk` (+ its registry upload), and `FEED_KEY`. `publish-sysext-feed.sh` compares
 its signing key's fingerprint against `FEED_KEY` and refuses to sign on a mismatch, so forgetting
 the third one fails the publish instead of stranding every Bazzite box in front of a feed it
-can't verify.
+can't verify. It also verifies each live feed manifest against `FEED_KEY` before it re-signs one, so
+during a rotation `FEED_KEY` holds both public keys, the new one first, until every feed is
+sealed with the new key.
 
 First-run setup and updates are on the docs pages
 ([Fedora](https://docs.punktfunk.unom.io/docs/fedora) /

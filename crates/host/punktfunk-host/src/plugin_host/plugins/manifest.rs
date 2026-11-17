@@ -8,6 +8,7 @@
 //!
 //! Pin: `manifest_tests` below, and `library::launch::exec` for the launch half.
 
+use super::access::AccessStore;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -43,7 +44,7 @@ pub enum ParamKind {
     Id,
     /// ASCII digits.
     Digits,
-    /// An absolute path, checked against the plugin's declared roots at launch.
+    /// An absolute path on a local disk, checked against the plugin's roots at launch.
     Path,
     /// Extra argv elements — the operator's own flags for this program, each its own element.
     /// The one kind that may start with `-`, because flags are what it is for, and the one that
@@ -94,75 +95,144 @@ impl PluginManifest {
             .iter()
             .chain(self.files.iter())
             .chain(self.writes.iter())
-            .any(|p| p == "~" || p.starts_with("~/") || p.starts_with("~\\"))
+            .any(|p| home_spelled(p))
             || self
                 .registry
                 .iter()
                 .any(|k| k.to_ascii_uppercase().starts_with("HKCU\\"))
     }
 
-    /// What the manifest itself declares: expanded `reads` + `writes`, without operator grants.
-    pub fn declared_roots(&self) -> Vec<PathBuf> {
-        self.reads
-            .iter()
-            .chain(self.writes.iter())
-            .flat_map(|p| expand_home(p))
-            .collect()
-    }
-
-    /// Every root this plugin may reach: what it declared, plus what the operator granted it.
+    /// Every root the runner binds for this plugin, and whether it binds it writable: its
+    /// declared `reads`, a declared write that binds with no grant (under `/tmp`), and the
+    /// operator's grants. Each passes the runner's own refusal ([`AccessStore::may_bind`]), so a
+    /// manifest that names `~/.config/punktfunk` reaches nothing there, and none is a share. A
+    /// `files` root is the runner's alone: a path below it is not the plugin's to hand a launch.
     ///
     /// A package cannot know where someone keeps their ROMs or installs their games, so the
     /// grants are how those paths become usable without the package asking for the whole disk.
-    pub fn roots(&self) -> Vec<PathBuf> {
-        self.declared_roots()
-            .into_iter()
-            .chain(granted_roots(&self.id))
+    pub fn roots(&self) -> Vec<(PathBuf, bool)> {
+        self.roots_in(home_of(&self.id), true)
+    }
+
+    /// [`Self::roots`] with the grants stored under `config_dir`. Without `homes`, a declared
+    /// root spelled under `~` counts for nothing: on Windows it names every profile, and the
+    /// runner binds none of them.
+    fn roots_in(&self, config_dir: PathBuf, homes: bool) -> Vec<(PathBuf, bool)> {
+        let store = AccessStore::open(config_dir);
+        let grants = store.grants_for(&self.id);
+        let declared = (self.reads.iter().map(|p| (p.as_str(), false, false)))
+            .chain(self.writes.iter().map(|p| (p.as_str(), true, false)))
+            .filter(|(p, _, _)| homes || !home_spelled(p));
+        let granted =
+            (grants.iter().filter(|g| !g.files)).map(|g| (g.path.as_str(), g.write, true));
+        declared
+            .chain(granted)
+            .flat_map(|(p, write, operator)| {
+                expand_home(p)
+                    .into_iter()
+                    .map(move |r| (r, write, operator))
+            })
+            .filter(|(root, _, _)| on_local_disk(root))
+            .filter(|(root, write, operator)| {
+                let real = root.canonicalize().unwrap_or_else(|_| root.clone());
+                store.may_bind(root, &real, *write, *operator)
+            })
+            .map(|(root, write, _)| (root, write))
             .collect()
     }
 
-    /// Is `candidate` inside one of the declared roots or grants? See [`Self::root_of`].
+    /// Is `candidate` inside one of the roots? See [`Self::root_of`].
     pub fn confines(&self, candidate: &Path) -> bool {
         self.root_of(candidate).is_some()
     }
 
-    /// The most specific declared root or grant that holds `candidate`, spelled as `candidate`
-    /// spells it. A `..` segment is refused outright. Lexical first; then through the canonical
-    /// form of its nearest existing ancestor, because `/home` may be a link (`/var/home` on
-    /// Fedora Atomic), grants are stored canonical, and a rom may not be downloaded yet. A
-    /// Flatpak `--filesystem=` recreates only the links in the spelling it is given.
-    /// Windows compares the way grants are stored (`\\?\`, either slash, any case).
+    /// The most specific root ([`Self::roots`]) that holds `candidate`, spelled as `candidate`
+    /// spells it. A path off a local disk (a Windows share or device) is refused before anything
+    /// opens it. See [`root_in`].
     pub fn root_of(&self, candidate: &Path) -> Option<PathBuf> {
-        if !candidate.is_absolute()
-            || candidate
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
+        if !on_local_disk(candidate) {
             return None;
         }
-        let longest = |hits: Vec<PathBuf>| hits.into_iter().max_by_key(|r| r.as_os_str().len());
-        let roots = self.roots();
-        let lexical: Vec<PathBuf> = roots
-            .iter()
-            .filter(|root| super::access::within(candidate, root))
-            .cloned()
-            .collect();
-        if !lexical.is_empty() {
-            return longest(lexical);
-        }
-        let real = canonical_prefix(candidate)?;
-        let root = longest(
-            roots
-                .iter()
-                .filter_map(|root| root.canonicalize().ok())
-                .filter(|root| super::access::within(&real, root))
-                .collect(),
-        )?;
-        let spelled = candidate
-            .ancestors()
-            .find(|a| canonical_prefix(a).as_deref() == Some(root.as_path()));
-        Some(spelled.map_or(root.clone(), Path::to_path_buf))
+        let roots: Vec<PathBuf> = self.roots().into_iter().map(|(r, _)| r).collect();
+        root_in(candidate, &roots)
     }
+
+    /// Where the host may open `candidate` itself for this plugin: the outermost root, bound
+    /// writable when `write`, that holds its real path, and that path, both canonical. The path
+    /// as spelled lies in such a root too. The host opens it beneath that root without following
+    /// a link ([`crate::emulators::handover`]): one the plugin plants reaches nothing. Only roots
+    /// the runner binds count, so on Windows a declared root under `~` is none.
+    pub fn reaches(&self, candidate: &Path, write: bool) -> Option<(PathBuf, PathBuf)> {
+        if !on_local_disk(candidate) {
+            return None;
+        }
+        let bound = self.roots_in(home_of(&self.id), !cfg!(windows));
+        let roots: Vec<PathBuf> = (bound.into_iter())
+            .filter(|(_, writable)| *writable || !write)
+            .map(|(r, _)| r)
+            .collect();
+        root_in(candidate, &roots)?;
+        let real = canonical_prefix(candidate)?;
+        let root = (roots.iter().filter_map(|r| r.canonicalize().ok()))
+            .filter(|r| super::access::within(&real, r))
+            .min_by_key(|r| r.as_os_str().len())?;
+        Some((root, real))
+    }
+}
+
+/// A manifest path spelled under the runner's home: `~`, `~/…` or `~\…`.
+fn home_spelled(p: &str) -> bool {
+    p == "~" || p.starts_with("~/") || p.starts_with("~\\")
+}
+
+/// A path on a local disk: on Windows a drive prefix (`C:`, `\\?\C:`), never a share or a
+/// device, which the host would reach over the network as itself; elsewhere any absolute path.
+fn on_local_disk(p: &Path) -> bool {
+    use std::path::{Component, Prefix};
+    match p.components().next() {
+        Some(Component::Prefix(prefix)) => {
+            matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+        }
+        Some(Component::RootDir) => cfg!(not(windows)),
+        _ => false,
+    }
+}
+
+/// The most specific of `roots` that holds `candidate`, spelled as `candidate` spells it. A `..`
+/// segment is refused outright. Lexical first; then through the canonical form of its nearest
+/// existing ancestor, because `/home` may be a link (`/var/home` on Fedora Atomic), grants are
+/// stored canonical, and a rom may not be downloaded yet. A Flatpak `--filesystem=` recreates
+/// only the links in the spelling it is given. Windows compares the way grants are stored
+/// (`\\?\`, either slash, any case).
+fn root_in(candidate: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
+    if !candidate.is_absolute()
+        || candidate
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    let longest = |hits: Vec<PathBuf>| hits.into_iter().max_by_key(|r| r.as_os_str().len());
+    let lexical: Vec<PathBuf> = roots
+        .iter()
+        .filter(|root| super::access::within(candidate, root))
+        .cloned()
+        .collect();
+    if !lexical.is_empty() {
+        return longest(lexical);
+    }
+    let real = canonical_prefix(candidate)?;
+    let root = longest(
+        roots
+            .iter()
+            .filter_map(|root| root.canonicalize().ok())
+            .filter(|root| super::access::within(&real, root))
+            .collect(),
+    )?;
+    let spelled = candidate
+        .ancestors()
+        .find(|a| canonical_prefix(a).as_deref() == Some(root.as_path()));
+    Some(spelled.map_or(root.clone(), Path::to_path_buf))
 }
 
 /// `p` with its nearest existing ancestor canonicalized and the rest appended as written.
@@ -264,6 +334,7 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
 }
 
 /// Does `value` match `kind`? Length is capped here too: every value ends up as one argv element.
+/// A path is absolute and on a local disk ([`on_local_disk`]), judged before anything opens it.
 pub fn param_ok(kind: ParamKind, value: &str) -> bool {
     if value.is_empty() || value.chars().any(char::is_control) {
         return false;
@@ -283,7 +354,9 @@ pub fn param_ok(kind: ParamKind, value: &str) -> bool {
                     .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
         }
         ParamKind::Digits => value.len() <= 32 && value.bytes().all(|b| b.is_ascii_digit()),
-        ParamKind::Path => value.len() <= 4096 && Path::new(value).is_absolute(),
+        ParamKind::Path => {
+            value.len() <= 4096 && Path::new(value).is_absolute() && on_local_disk(Path::new(value))
+        }
         // Handled above, before the leading-dash refusal.
         ParamKind::Args => true,
     }
@@ -292,6 +365,7 @@ pub fn param_ok(kind: ParamKind, value: &str) -> bool {
 /// [`granted_roots`] against a chosen store dir, so a test never opens the real config.
 /// `~/` spells in a v1 grant expand through [`expand_home`], the same rule declared roots
 /// follow.
+#[cfg(test)]
 pub(crate) fn granted_roots_in(id: &str, config_dir: PathBuf) -> Vec<PathBuf> {
     crate::plugins::access::AccessStore::open(config_dir)
         .grants_for(id)
@@ -306,7 +380,8 @@ pub(crate) fn granted_roots_in(id: &str, config_dir: PathBuf) -> Vec<PathBuf> {
 ///
 /// Written by `punktfunk-host plugins grant` or an `allow` decision, never by a plugin — the
 /// file is the answer to "this package may also reach here", so nothing in the plugin lane may
-/// edit it.
+/// edit it. [`PluginManifest::roots`] reads the same file.
+#[cfg(test)]
 pub fn granted_roots(id: &str) -> Vec<PathBuf> {
     granted_roots_in(id, home_of(id))
 }
@@ -648,6 +723,83 @@ mod manifest_tests {
         assert!(!m.confines(Path::new("/etc/shadow")));
         assert!(!m.confines(Path::new("/games/../etc/shadow")));
         assert!(!m.confines(Path::new("relative/path")));
+    }
+
+    /// A root the runner refuses to bind confines nothing, and a declared write is no root until
+    /// the operator grants it.
+    #[test]
+    fn confinement_counts_only_what_the_runner_binds() {
+        let Some(home) = home_dir() else { return };
+        let tmp = tempfile::tempdir().unwrap();
+        let games = tmp.path().canonicalize().unwrap();
+        let m = manifest(&["~/.config/punktfunk", "~/.ssh", games.to_str().unwrap()]);
+        assert!(!m.confines(&home.join(".config/punktfunk/mgmt-token")));
+        assert!(m
+            .reaches(&home.join(".config/punktfunk/mgmt-token"), false)
+            .is_none());
+        assert!(!m.confines(&home.join(".ssh/id_ed25519")));
+        assert!(m.reaches(&games.join("x.sav"), false).is_some());
+        assert!(
+            m.reaches(&games.join("x.sav"), true).is_none(),
+            "a read root takes no write"
+        );
+        let m = PluginManifest {
+            writes: vec!["/games/saves".into()],
+            ..manifest(&[])
+        };
+        assert!(!m.confines(Path::new("/games/saves/x.sav")));
+
+        let store = tempfile::tempdir().unwrap();
+        let saves = tempfile::tempdir().unwrap();
+        let saves = saves.path().canonicalize().unwrap();
+        AccessStore::open(store.path().to_path_buf())
+            .grant(&m.id, &saves, true, "cli")
+            .unwrap();
+        assert!(m
+            .roots_in(store.path().to_path_buf(), true)
+            .contains(&(saves, true)));
+    }
+
+    /// The host only ever opens a file it may reach as the plugin: a link in a root the plugin
+    /// writes counts at its real path.
+    #[cfg(unix)]
+    #[test]
+    fn the_host_opens_only_what_a_link_leaves_inside_the_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (root, outside) = (tmp.path().join("root"), tmp.path().join("outside"));
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        let m = manifest(&[root.join("game").to_str().unwrap(), root.to_str().unwrap()]);
+        let real = root.canonicalize().unwrap();
+        assert_eq!(
+            m.reaches(&root.join("game"), false),
+            Some((real.clone(), real.join("game"))),
+            "the outermost root holds it"
+        );
+        assert!(
+            m.confines(&root.join("link")),
+            "a launch only names the path"
+        );
+        assert!(m.reaches(&root.join("link"), false).is_none());
+    }
+
+    /// A share or a device is refused before anything opens it.
+    #[test]
+    fn a_share_is_no_path() {
+        let unc = r"\\attacker\share\g.sfc";
+        assert!(!param_ok(ParamKind::Path, unc));
+        assert!(!manifest(&[r"\\attacker\share"]).confines(Path::new(unc)));
+        #[cfg(windows)]
+        {
+            for p in [unc, r"\\?\UNC\attacker\share\g.sfc", r"\\.\pipe\g"] {
+                assert!(!on_local_disk(Path::new(p)), "{p}");
+                assert!(!param_ok(ParamKind::Path, p), "{p}");
+            }
+            assert!(on_local_disk(Path::new(r"C:\Games\g.sfc")));
+            assert!(on_local_disk(Path::new(r"\\?\C:\Games\g.sfc")));
+            assert!(param_ok(ParamKind::Path, r"C:\Games\g.sfc"));
+        }
     }
 
     /// Fedora Atomic: a root spelled under the `/home` link confines the canonical `/var/home`

@@ -225,6 +225,23 @@ fn grant(plugin: Option<&str>, dir: Option<&str>, flags: &[String]) -> Result<()
     ) else {
         bail!("usage: punktfunk-host plugins grant <plugin> <dir> [--write]");
     };
+    // A port on this computer, spelled as its request spells it. The operator's own hand: only
+    // Punktfunk's own range is refused, whatever port the API was moved to.
+    if let Some(port) = access::port_of(dir) {
+        if !cfg!(target_os = "linux") {
+            bail!("a port on this computer is granted on a Linux host only");
+        }
+        let store = access::AccessStore::open(pf_paths::config_dir());
+        let allowed = store
+            .decide_port(plugin, port, access::Decision::Allow, 0)
+            .with_context(|| format!("record the port for '{plugin}'"))?;
+        println!("{plugin} may now connect to these ports on this computer:");
+        for port in allowed.value.ports {
+            println!("  {}", access::port_path(port));
+        }
+        println!("The plugin restarts with it within a few seconds.");
+        return Ok(());
+    }
     let path = std::path::Path::new(dir);
     // A typo must not report success: the grant would name a directory nothing ever reads.
     if !path.is_dir() {
@@ -304,6 +321,7 @@ fn access_list(flags: &[String]) -> Result<()> {
     if snapshots
         .iter()
         .all(|s| s.grants.is_empty() && s.pending.is_empty() && s.denied.is_empty())
+        && (snapshots.iter()).all(|s| s.ports.is_empty() && s.denied_ports.is_empty())
     {
         println!("No plugin folder access is recorded.");
         return Ok(());
@@ -318,7 +336,17 @@ fn access_list(flags: &[String]) -> Result<()> {
                 g.by
             );
         }
+        for port in &s.ports {
+            println!(
+                "  granted  {} (port on this computer)",
+                access::port_path(*port)
+            );
+        }
         for p in &s.pending {
+            if p.port.is_some() {
+                println!("  pending  {} (port on this computer)", p.path);
+                continue;
+            }
             let via = p
                 .spelled
                 .as_deref()
@@ -328,6 +356,9 @@ fn access_list(flags: &[String]) -> Result<()> {
         }
         for d in &s.denied {
             println!("  denied   {d}");
+        }
+        for port in &s.denied_ports {
+            println!("  denied   {}", access::port_path(*port));
         }
     }
     Ok(())
@@ -376,6 +407,13 @@ fn revoke(plugin: Option<&str>, dir: Option<&str>, flags: &[String]) -> Result<(
         bail!("usage: punktfunk-host plugins revoke <plugin> <dir>");
     };
     let store = access::AccessStore::open(pf_paths::config_dir());
+    if let Some(port) = access::port_of(dir) {
+        store
+            .decide_port(plugin, port, access::Decision::Forget, 0)
+            .with_context(|| format!("take the port back from '{plugin}'"))?;
+        println!("{plugin} no longer reaches {dir}.");
+        return Ok(());
+    }
     let roots = show_walk(&format!("Taking {dir} back from {plugin}."), || {
         store.revoke(plugin, std::path::Path::new(dir))
     })
@@ -403,6 +441,8 @@ USAGE:
                                              let one plugin reach a directory of yours (a ROM
                                              library, a game install dir) — nothing else on
                                              this box changes; read-only unless --write
+    punktfunk-host plugins grant <plugin> 127.0.0.1:<port>
+                                             let one plugin connect to a server on this box
     punktfunk-host plugins access            list every plugin's granted, pending and denied folders
     punktfunk-host plugins revoke <plugin> <dir>
                                              take one granted directory back

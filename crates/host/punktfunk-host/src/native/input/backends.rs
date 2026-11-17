@@ -74,9 +74,17 @@ impl PadManager for crate::inject::gamepad::GamepadManager {
     fn heartbeat(&mut self, _max_gap: std::time::Duration) {}
 }
 
-/// A manager's constructor. `None` = this host builds no device of that kind, and the caller's
-/// Xbox360 default takes it.
-type Build = fn() -> Option<Box<dyn PadManager>>;
+/// A manager's constructor, given whether the session may not move the pointer. `None` = this
+/// host builds no device of that kind, and the caller's Xbox360 default takes it.
+type Build = fn(bool) -> Option<Box<dyn PadManager>>;
+
+/// Kinds whose Linux device has a touchpad libinput takes as a pointer unless the pad is marked
+/// gamepad-only.
+const POINTER_KINDS: [GamepadPref; 3] = [
+    GamepadPref::DualSense,
+    GamepadPref::DualSenseEdge,
+    GamepadPref::DualShock4,
+];
 
 /// One row of an OS's manager table: the kind, and its manager's constructor.
 type ManagerRow = (GamepadPref, Build);
@@ -90,17 +98,35 @@ fn boxed<M: PadManager + 'static>(m: M) -> Option<Box<dyn PadManager>> {
 /// The managers of [`os::MANAGERS`], in its order; `None` until the kind's first event.
 pub(super) struct PadBackends {
     built: Vec<Option<Box<dyn PadManager>>>,
+    /// The session may not move the pointer: managers built now mark their pads.
+    gamepad_only: bool,
 }
 
 impl Default for PadBackends {
     fn default() -> PadBackends {
         PadBackends {
             built: os::MANAGERS.iter().map(|_| None).collect(),
+            gamepad_only: false,
         }
     }
 }
 
 impl PadBackends {
+    /// Follows the session's pointer grant. On Linux, each [`POINTER_KINDS`] manager built under
+    /// the other answer is dropped, and its pads come back on their next frame: marked once the
+    /// grant goes, plain once it returns, so the touchpad moves the pointer again. No other OS
+    /// marks a pad, and none loses one here.
+    pub(super) fn set_gamepad_only(&mut self, gamepad_only: bool) {
+        if cfg!(target_os = "linux") && gamepad_only != self.gamepad_only {
+            for (built, (kind, _)) in self.built.iter_mut().zip(os::MANAGERS) {
+                if POINTER_KINDS.contains(kind) {
+                    *built = None;
+                }
+            }
+        }
+        self.gamepad_only = gamepad_only;
+    }
+
     /// The manager `kind` routes to, `None` until built, and its constructor. `None` = no
     /// backend of this kind here.
     fn manager_for(
@@ -111,14 +137,16 @@ impl PadBackends {
         Some((&mut self.built[i], os::MANAGERS[i].1))
     }
 
-    /// Route a pad event to the manager for `kind`, building it on first use. `false` = no
-    /// backend of this kind here; the caller's Xbox360 default takes it.
+    /// Route a pad event to the manager for `kind`, building it on first use, marked when the
+    /// session may not move the pointer. `false` = no backend of this kind here; the caller's
+    /// Xbox360 default takes it.
     pub(super) fn route_handle(&mut self, kind: GamepadPref, ev: &GamepadEvent) -> bool {
+        let gamepad_only = self.gamepad_only;
         let Some((slot, build)) = self.manager_for(kind) else {
             return false;
         };
         if slot.is_none() {
-            *slot = build();
+            *slot = build(gamepad_only);
         }
         let Some(m) = slot else {
             return false;

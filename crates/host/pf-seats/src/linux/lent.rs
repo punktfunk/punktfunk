@@ -3,8 +3,8 @@
 //! its seat runs, [`PARKED`] while it doesn't. The directory exists only while a lend does, and
 //! udev's rule line runs [`super::fence`] on USB nodes only while it exists.
 //!
-//! A change of holder rewrites the record, then cycles the device's `authorized`: its drivers
-//! unbind, every open handle dies, and its nodes come back under the new record. What may be
+//! A change of holder rewrites the record, then unbinds the device from its driver and binds
+//! it back: every open handle dies, raw USB too, and its nodes come back under the new record. What may be
 //! lent is read from sysfs and udev's database, never from the caller.
 
 use super::fence::vouch::put;
@@ -286,15 +286,21 @@ fn walk(dir: &Path, visit: &mut dyn FnMut(&Path)) {
     }
 }
 
-/// Ends every handle on the device at `dev` and makes its nodes again: `0`, then `1`, to
-/// `authorized`. Only its interfaces come and go, so udev hears nothing of the device itself:
-/// a `change` in between has the rules run on its own node. It comes before the `1` because a
-/// new node takes the seat udev last gave its device, and with it that seat's session's access.
+/// Ends every handle on the device at `dev` and makes its nodes again: unbinds it from its
+/// driver, then binds it back. The unbind ends usbfs handles too, which `authorized` keeps.
+/// A `change` in between has the rules run on its own node: a new node takes the seat udev
+/// last gave its device, and with it that seat's session's access. Once unbound, the bind runs
+/// whatever the `change` did, or the pad stays gone until it is plugged in again.
 fn cycle(dev: &Path) -> io::Result<()> {
-    let knob = dev.join("authorized");
-    std::fs::write(&knob, "0")?;
-    std::fs::write(dev.join("uevent"), "change")?;
-    std::fs::write(&knob, "1")
+    let driver = dev.join("driver").canonicalize()?;
+    let name = dev
+        .file_name()
+        .ok_or(ErrorKind::InvalidInput)?
+        .as_encoded_bytes();
+    std::fs::write(driver.join("unbind"), name)?;
+    let changed = std::fs::write(dev.join("uevent"), "change");
+    std::fs::write(driver.join("bind"), name)?;
+    changed
 }
 
 /// Has udev apply its rules again to the device at `dev` and everything under it.
@@ -600,8 +606,12 @@ pub(super) mod fake {
             write(&dir.join("idProduct"), &format!("{:04x}\n", ids.1));
             write(&dir.join("bDeviceClass"), "00\n");
             write(&dir.join("product"), "Wireless Controller\n");
-            write(&dir.join("authorized"), "");
             write(&dir.join("uevent"), "");
+            // One driver folder per device, so each device's bind is its own to check.
+            let driver = self.sys().join("bus/usb/drivers").join(&busid);
+            std::fs::create_dir_all(&driver).unwrap();
+            let _ = std::fs::remove_file(dir.join("driver"));
+            std::os::unix::fs::symlink(&driver, dir.join("driver")).unwrap();
             if let Some(serial) = serial {
                 write(&dir.join("serial"), &format!("{serial}\n"));
             }
@@ -648,12 +658,18 @@ pub(super) mod fake {
             std::fs::write(self.sys().join(&dev[1..]).join(name), text).unwrap();
         }
 
-        /// Whether the device at `dev` was cycled since the last ask.
+        /// Whether the device at `dev` was unbound from its driver and bound back since the
+        /// last ask.
         pub fn cycled(&self, dev: &str) -> bool {
-            let knob = self.sys().join(&dev[1..]).join("authorized");
-            let cycled = std::fs::read_to_string(&knob).unwrap() == "1";
-            std::fs::write(&knob, "").unwrap();
-            cycled
+            let dir = self.sys().join(&dev[1..]);
+            let busid = dir.file_name().unwrap().to_str().unwrap().to_owned();
+            let driver = dir.join("driver");
+            let took = |knob: &str| {
+                let text = std::fs::read_to_string(driver.join(knob)).unwrap_or_default();
+                std::fs::write(driver.join(knob), "").unwrap();
+                text == busid
+            };
+            took("unbind") & took("bind")
         }
 
         /// Whether udev's rules were asked to run again on the device at `dev` itself since the

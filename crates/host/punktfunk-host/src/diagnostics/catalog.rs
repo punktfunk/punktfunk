@@ -138,8 +138,9 @@ fn runner_stopped(id: &str, why: &str, start: &str) -> HostCheck {
     )
 }
 
-/// Plugins run in their own sandbox, or the runner stops: a box that cannot build one says so
-/// here rather than quietly running third-party code with the operator's whole account.
+/// Plugins run in their own sandbox, or the runner stops: a box that can't build one says so
+/// here rather than quietly running third-party code with the operator's whole account. A network
+/// plugin also needs `unshare` and pasta ([`network_plugins`]).
 #[cfg(target_os = "linux")]
 fn plugin_sandbox() -> HostCheck {
     let id = ids::PLUGIN_SANDBOX;
@@ -175,11 +176,14 @@ fn plugin_sandbox() -> HostCheck {
         Ok(()) => {
             return match runner_refusal(&status) {
                 Some(why) => runner_stopped(id, &why, start),
-                None => HostCheck::ok(id, "Each plugin runs in its own sandbox.").worded(
-                    "diag_plugin_sandbox_ok_summary",
-                    None,
-                    None,
-                ),
+                None => {
+                    let network: Vec<String> = crate::plugins::manifest::runner_plugins()
+                        .into_iter()
+                        .filter(|(_, m)| m.network)
+                        .map(|(id, _)| id)
+                        .collect();
+                    network_plugins(id, &network, |name| on_path(name).is_some(), start)
+                }
             }
         }
         Err(None) => (
@@ -285,32 +289,70 @@ const PROBE_BINDS: &[&str] = &[
     "/run/current-system",
 ];
 
-/// Host `true` as an absolute path. `/bin/true` is an FHS path NixOS does not have.
+/// A network plugin's sandbox also needs `unshare` and pasta. `network` names the installed
+/// network plugins; `found` says whether a program is on PATH.
 #[cfg(target_os = "linux")]
-fn which_true() -> std::path::PathBuf {
+fn network_plugins(
+    id: &str,
+    network: &[String],
+    found: impl Fn(&str) -> bool,
+    start: &str,
+) -> HostCheck {
+    let missing = [("unshare", "util-linux"), ("pasta", "passt")]
+        .into_iter()
+        .find(|(program, _)| !found(program));
+    let Some((program, package)) = missing.filter(|_| !network.is_empty()) else {
+        return HostCheck::ok(id, "Each plugin runs in its own sandbox.").worded(
+            "diag_plugin_sandbox_ok_summary",
+            None,
+            None,
+        );
+    };
+    let plugins = network.join(", ");
+    HostCheck::problem(
+        id,
+        CheckStatus::Fail,
+        Severity::Warning,
+        "Plugins that use the network can't start",
+        format!("{plugins} can't reach the network without {program}, so they don't start."),
+    )
+    .with_remedy(Remedy {
+        text: format!(
+            "Install {package} with your package manager, then start the plugin runner again."
+        ),
+        command: Some(start.into()),
+        relogin_required: false,
+    })
+    .with_param("plugins", plugins)
+    .with_param("program", program)
+    .with_param("package", package)
+    .worded(
+        "diag_plugin_sandbox_no_network_summary",
+        Some("diag_plugin_sandbox_no_network_impact"),
+        Some("diag_plugin_sandbox_no_network_remedy"),
+    )
+}
+
+/// `name` on PATH: a file with an exec bit, since a directory or unexecutable entry fails to
+/// exec. Not canonicalized: Nix `true` is a symlink onto the coreutils multicall binary.
+#[cfg(target_os = "linux")]
+fn on_path(name: &str) -> Option<std::path::PathBuf> {
     use std::os::unix::fs::PermissionsExt;
-    if let Some(path) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let candidate = dir.join("true");
-            // A file with an exec bit — a directory or unexecutable `true` on PATH makes a
-            // healthy sandbox read as an exec failure. Do not canonicalize: Nix `true` is a
-            // symlink onto the coreutils multicall binary.
-            if candidate
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(name))
+        .find(|candidate| {
+            candidate
                 .metadata()
                 .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-            {
-                return candidate;
-            }
-        }
-    }
-    "/bin/true".into()
+        })
 }
 
 /// Can bwrap build the sandbox a plugin gets? `Err(None)` when bwrap is missing, else bwrap's
 /// own first stderr line.
 #[cfg(target_os = "linux")]
 fn bwrap_probe() -> Result<(), Option<String>> {
-    let true_bin = which_true();
+    // `/bin/true` is an FHS path NixOS does not have.
+    let true_bin = on_path("true").unwrap_or_else(|| "/bin/true".into());
     let mut cmd = Command::new("bwrap");
     cmd.args(SANDBOX_BASE_ARGV).args(PROBE_BINDS);
     // A `true` under a PATH dir the sandbox does not bind (a ~/bin on FHS) still execs:
@@ -1471,6 +1513,34 @@ mod tests {
             .map(|l| l.trim_end_matches(',').trim_matches('"'))
             .collect();
         assert_eq!(runner, SANDBOX_BASE_ARGV);
+    }
+
+    /// A network plugin without unshare or pasta fails its own row and names the package; with
+    /// no network plugin installed, the missing programs matter to nothing.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn network_plugins_need_unshare_and_pasta() {
+        let id = ids::PLUGIN_SANDBOX;
+        let net = ["heroic".to_string()];
+        let start = "systemctl --user restart punktfunk-scripting";
+        let no_pasta = network_plugins(id, &net, |p| p != "pasta", start);
+        assert_eq!(no_pasta.status, CheckStatus::Fail);
+        assert_eq!(no_pasta.params["package"], "passt");
+        assert_eq!(no_pasta.params["plugins"], "heroic");
+        assert_eq!(
+            no_pasta.summary_id.as_deref(),
+            Some("diag_plugin_sandbox_no_network_summary")
+        );
+        let no_unshare = network_plugins(id, &net, |p| p == "pasta", start);
+        assert_eq!(no_unshare.params["package"], "util-linux");
+        assert_eq!(
+            network_plugins(id, &net, |_| true, start).status,
+            CheckStatus::Ok
+        );
+        assert_eq!(
+            network_plugins(id, &[], |_| false, start).status,
+            CheckStatus::Ok
+        );
     }
 
     /// Stock niri fails loudly, unless a pinned monitor keeps the host streaming. Either way the

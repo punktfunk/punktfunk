@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { installedSdkVersion, reconcileSharedSdk } from "../src/plugins.js";
+import { installedSdkVersion, movedPins, reconcileSharedSdk } from "../src/plugins.js";
 import { SDK_VERSION } from "../src/version.js";
 
 const dirs: string[] = [];
@@ -75,16 +75,49 @@ describe("reconcileSharedSdk", () => {
 	// tree it just took the lockfile away from is the one the operator's plugins load from. The
 	// install cannot succeed here (the fake package.json resolves nothing), so this exercises the
 	// real rollback.
-	test("restores the lockfile and keeps going when the refresh fails", () => {
+	test("restores the lockfile and the packages and keeps going when the refresh fails", () => {
 		const dir = tree("0.0.1-not-a-real-version");
+		// A plugin's own file, which the failed install must leave exactly as it was.
+		const plugin = path.join(dir, "node_modules", "punktfunk-plugin-x", "index.js");
+		fs.mkdirSync(path.dirname(plugin), { recursive: true });
+		fs.writeFileSync(plugin, "the bytes that ran before");
 		const lines: string[] = [];
 		expect(() => reconcileSharedSdk(dir, (l) => lines.push(l))).not.toThrow();
 		expect(fs.readFileSync(path.join(dir, "bun.lock"), "utf8")).toBe(
 			"ORIGINAL-LOCK\n",
 		);
+		expect(fs.readFileSync(plugin, "utf8")).toBe("the bytes that ran before");
+		expect(installedSdkVersion(dir)).toBe("0.0.1-not-a-real-version");
+		expect(fs.existsSync(path.join(dir, "node_modules.pf-bak"))).toBe(false);
 		expect(lines.join("\n")).toContain("WARNING");
 		// And it names both versions, so the log says what it was trying to do.
 		expect(lines.join("\n")).toContain("0.0.1-not-a-real-version");
 		expect(fs.existsSync(path.join(dir, "bun.lock.pf-bak"))).toBe(false);
+	});
+});
+
+describe("movedPins", () => {
+	// The shape bun 1.4.4 writes. A lockless re-resolve keeps the installed bytes of a plugin at
+	// the same version, but records whatever integrity the registry serves now.
+	const lock = (sdk: string, plugin: string) => `{
+  "packages": {
+    "@t/plugin-x": ["@t/plugin-x@1.0.0", "https://r.example/x.tgz", { "dependencies": { "@punktfunk/host": "^0.1.0" } }, "${plugin}"],
+
+    "@punktfunk/host": ["@punktfunk/host@${sdk}", "", {}, "sha512-sdk-${sdk}"],
+  }
+}`;
+
+	test("refuses a plugin republished under its pinned version, never the floating SDK", () => {
+		const dir = tree("0.1.0");
+		fs.writeFileSync(
+			path.join(dir, "package.json"),
+			JSON.stringify({ dependencies: { "@t/plugin-x": "1.0.0" } }),
+		);
+		const before = lock("0.1.0", "sha512-reviewed");
+		expect(movedPins(dir, before, lock("0.2.0", "sha512-reviewed"))).toEqual([]);
+		expect(movedPins(dir, before, lock("0.2.0", "sha512-republished"))).toEqual(["@t/plugin-x"]);
+		expect(movedPins(dir, before, "{}")).toEqual(["@t/plugin-x"]);
+		// A tree with no lock had no pin to hold.
+		expect(movedPins(dir, "", lock("0.2.0", "sha512-republished"))).toEqual([]);
 	});
 });
