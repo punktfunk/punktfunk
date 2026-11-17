@@ -29,13 +29,11 @@ pub(in crate::linux) enum RenderFence {
 }
 
 impl RenderFence {
-    /// Block until the render finished or `timeout` passed.
+    /// Block until the render finished or the whole `timeout` passed, never less: a wait cut
+    /// short turns [`wait_ready`]'s loop to its deadline into a spin.
     pub(in crate::linux) fn wait(&self, timeout: Duration) -> std::io::Result<WaitOutcome> {
         match self {
-            RenderFence::SyncFile(fd) => {
-                let ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
-                pf_dmabuf::fence::wait_sync_file(fd.as_fd(), ms)
-            }
+            RenderFence::SyncFile(fd) => pf_dmabuf::fence::wait_sync_file_for(fd.as_fd(), timeout),
             RenderFence::Acquire { timeline, point } => timeline.wait(*point, timeout),
         }
     }
@@ -352,6 +350,16 @@ mod tests {
         assert!(q.take_ready(now + RENDER_GUARD / 2).is_none());
         let t = q.take_ready(now + RENDER_GUARD).unwrap();
         assert_eq!(t.outcome, WaitOutcome::TimedOut);
+    }
+
+    /// A sub-millisecond remainder is waited out, not polled with zero.
+    #[test]
+    fn a_render_wait_lasts_its_whole_timeout() {
+        let (f, _w) = fence();
+        let timeout = Duration::from_micros(900);
+        let t0 = Instant::now();
+        assert_eq!(f.wait(timeout).unwrap(), WaitOutcome::TimedOut);
+        assert!(t0.elapsed() >= timeout, "returned after {:?}", t0.elapsed());
     }
 
     #[test]

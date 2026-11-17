@@ -1913,7 +1913,7 @@ fn watch_access(
 }
 
 /// The data plane bound, then the source on its stream thread until it returns, or until
-/// [`STREAM_STOP_GRACE`] after `stop`.
+/// [`STREAM_STOP_GRACE`] after `stop`, then the [`drain`].
 async fn stream_session(
     scope: &mut SessionScope,
     host: &SessionHost,
@@ -2009,17 +2009,25 @@ async fn stream_session(
     );
     // Client address: what the registry groups sessions of one NAT or tunnel by.
     let (plane, peer) = (conn.plane(), conn.remote_address().ip());
-    // Native thread: no async on the hot path.
-    let stream_thread = tokio::task::spawn_blocking(move || {
-        run_source(
-            common, source, frames, probe_only, fit_pin, plane, peer, display, prep,
-        )
-    });
+    // Its own thread, not a pool thread: no async on the hot path, and what it spawns (the
+    // encoder's and the driver's threads) inherits its raise, which a pool thread's children
+    // never do. It keeps the runtime's context for the calls that need one.
+    let rt = tokio::runtime::Handle::current();
+    let (done_tx, done) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("punktfunk1-stream".into())
+        .spawn(move || {
+            let _rt = rt.enter();
+            let _ = done_tx.send(run_source(
+                common, source, frames, probe_only, fit_pin, plane, peer, display, prep,
+            ));
+        })
+        .context("spawn stream thread")?;
     // `stop` is advisory: a stuck syscall inside an iteration never sees it, and teardown
     // waits on this join. Bound the wait: after `STREAM_STOP_GRACE`, abandon the thread
     // (cannot cancel a blocking thread) so the slot and admission entry come back.
     tokio::select! {
-        joined = stream_thread => joined.context("stream thread")??,
+        joined = done => joined.context("stream thread")??,
         () = stop_overdue(scope.life().stop_flag()) => {
             tracing::error!(
                 grace_s = STREAM_STOP_GRACE.as_secs(),
@@ -2030,9 +2038,25 @@ async fn stream_session(
             anyhow::bail!("stream thread wedged after stop");
         }
     }
-    // Drain window before close.
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    drain(scope.life().stop_flag(), || conn.close_reason().is_some()).await;
     Ok(())
+}
+
+/// Longest a session that ended keeps its connection open for its last control bytes to leave.
+const DRAIN: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Waits out [`DRAIN`] until nothing more can leave: `closed` says the connection is gone, or
+/// this client's own reconnect superseded the session
+/// ([`supersede`](crate::vdisplay::admission::supersede)). A stolen session drains in full: its
+/// client is still there.
+async fn drain(stop: &Arc<AtomicBool>, closed: impl Fn() -> bool) {
+    let deadline = tokio::time::Instant::now() + DRAIN;
+    while !closed()
+        && !crate::vdisplay::admission::superseded(stop)
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 }
 
 /// What the display half takes of the session's lanes.

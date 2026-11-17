@@ -1,8 +1,8 @@
 //! Per-thread OS scheduling QoS for the data plane.
 //!
-//! Capture/encode and send raise their own priority so a CPU-saturating game
-//! cannot deschedule them. Native, GameStream, and direct-NVENC send threads
-//! all call [`boost_thread_priority`].
+//! Capture/encode, send and the input path raise their own priority so a CPU-saturating
+//! game cannot deschedule them. Native, GameStream, and direct-NVENC send threads
+//! all call [`boost_thread_priority`]; the host's runtime threads take [`raise_pool_thread`].
 //!
 //! On Linux a thread's nice inherits to the threads it spawns, except when RealtimeKit
 //! raised it: rtkit sets `SCHED_RESET_ON_FORK`, so a child starts at nice 0. A helper
@@ -13,7 +13,7 @@
 /// GPU HIGH only favours commands already submitted; a descheduled
 /// normal-priority thread submits late and the GPU priority never bites.
 /// `critical` is highest non-realtime (capture+encode); otherwise above-normal
-/// (send/relay). On Linux the thread's timer slack also drops to 1 ns, so a timed
+/// (send/relay, input). On Linux the thread's timer slack also drops to 1 ns, so a timed
 /// wait ends on time rather than up to 50 µs late; its children inherit that.
 pub fn boost_thread_priority(critical: bool) {
     crate::session_tuning::on_hot_thread();
@@ -43,35 +43,109 @@ pub fn boost_thread_priority(critical: bool) {
     #[cfg(target_os = "linux")]
     {
         tighten_timer_slack();
-        // Best-effort nice of the calling thread. Linux `setpriority(PRIO_PROCESS, 0, …)`
-        // is the current task. Do not use SCHED_RR/FIFO: realtime can preempt the
-        // compositor and the game's render thread.
-        let nice = if critical { -10 } else { -5 };
-        // SAFETY: `setpriority` takes three by-value integers and no pointers, so there is nothing to
-        // alias or outlive. `PRIO_PROCESS` with `who == 0` targets the calling task on Linux and
-        // `nice` is in range; the call only adjusts this thread's scheduling nice value and returns an
-        // `int` we inspect. No memory is touched.
-        let rc = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, nice) };
-        if rc == 0 {
-            tracing::debug!(critical, nice, "thread nice raised");
-        } else {
-            // Direct call needs CAP_SYS_NICE or a raised RLIMIT_NICE. Do not file-cap the
-            // host binary: a capped process's /proc/<pid>/exe is unreadable to KWin.
-            // RealtimeKit is the unprivileged path; a LimitNICE drop-in only applies at next login.
-            match linux_rtkit::make_high_priority(nice) {
-                Ok(()) => tracing::debug!(critical, nice, "thread nice raised via rtkit"),
-                Err(e) => tracing::debug!(
-                    critical,
-                    reason = %e,
-                    "setpriority(nice) no-op (needs CAP_SYS_NICE / RLIMIT_NICE, and rtkit \
-                     was unavailable)"
-                ),
-            }
-        }
+        let _ = renice(if critical { -10 } else { -5 }, || true);
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         let _ = critical;
+    }
+}
+
+/// Raise a runtime's pool thread to nice -5, and only that thread (Linux; a no-op elsewhere).
+/// For `on_thread_start` of the runtime that carries QUIC datagrams and control messages.
+///
+/// What a pool thread spawns (hooks, helpers, plugins, threads) starts at nice 0: the thread
+/// resets on fork, as RealtimeKit's raise does. Its timer slack keeps the default: the runtime's
+/// timers tick in milliseconds, and slack, unlike nice, has no reset and would pass to children.
+/// Not a hot thread: Windows' session raises stay tied to the session's own threads. A refused
+/// `setpriority` asks RealtimeKit once per process, since its burst limit belongs to the hot
+/// threads. A thread that later calls [`boost_thread_priority`] still gets that boost.
+pub fn raise_pool_thread() {
+    #[cfg(target_os = "linux")]
+    {
+        static RTKIT_ASKED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if renice(-5, || {
+            !RTKIT_ASKED.swap(true, std::sync::atomic::Ordering::Relaxed)
+        }) {
+            reset_on_fork();
+        }
+    }
+}
+
+/// Children of the calling thread, threads and processes alike, start at nice 0 rather than its
+/// raised nice. Needs no privilege; once set, only CAP_SYS_NICE clears it.
+#[cfg(target_os = "linux")]
+fn reset_on_fork() {
+    let param = libc::sched_param { sched_priority: 0 };
+    // SAFETY: `sched_setscheduler` reads the live local `param` during the call and keeps no
+    // pointer to it. `0` is the calling thread. SCHED_OTHER is its policy already and the kernel
+    // keeps its nice, so the call only adds the flag; a refusal leaves the thread as it was.
+    let rc = unsafe {
+        libc::sched_setscheduler(0, libc::SCHED_OTHER | libc::SCHED_RESET_ON_FORK, &param)
+    };
+    if rc != 0 {
+        let error = std::io::Error::last_os_error();
+        tracing::debug!(%error, "reset-on-fork not set: children keep this thread's nice");
+    }
+}
+
+/// Best-effort nice of the calling thread; RealtimeKit after a refusal when `ask_rtkit` says
+/// so. `true` when the direct call took. Never SCHED_RR/FIFO: realtime can preempt the
+/// compositor and the game's render thread.
+#[cfg(target_os = "linux")]
+fn renice(nice: i32, ask_rtkit: impl FnOnce() -> bool) -> bool {
+    // SAFETY: `setpriority` takes three by-value integers and no pointers, so there is nothing to
+    // alias or outlive. `PRIO_PROCESS` with `who == 0` targets the calling task on Linux and
+    // `nice` is in range; the call only adjusts this thread's scheduling nice value and returns an
+    // `int` we inspect. No memory is touched.
+    let rc = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, nice) };
+    if rc == 0 {
+        tracing::debug!(nice, "thread nice raised");
+        return true;
+    }
+    // Direct call needs CAP_SYS_NICE or a raised RLIMIT_NICE. Do not file-cap the
+    // host binary: a capped process's /proc/<pid>/exe is unreadable to KWin.
+    // RealtimeKit is the unprivileged path; a LimitNICE drop-in only applies at next login.
+    if !ask_rtkit() {
+        tracing::debug!(
+            nice,
+            "setpriority(nice) refused, RealtimeKit not asked again"
+        );
+        return false;
+    }
+    match linux_rtkit::make_high_priority(nice) {
+        Ok(()) => tracing::debug!(nice, "thread nice raised via rtkit"),
+        Err(e) => tracing::debug!(
+            nice,
+            reason = %e,
+            "setpriority(nice) no-op (needs CAP_SYS_NICE / RLIMIT_NICE, and rtkit \
+             was unavailable)"
+        ),
+    }
+    false
+}
+
+/// The kernel's default timer slack, which a program the host launches starts with.
+#[cfg(target_os = "linux")]
+const DEFAULT_TIMER_SLACK_NS: libc::c_ulong = 50_000;
+
+/// Start `cmd`'s program at nice 0 and the default timer slack, whatever the spawning thread was
+/// raised to (Linux). For a program launched into the session: it runs beside the game, never
+/// level with capture and encode. The host's own workers are not spawned through this.
+#[cfg(target_os = "linux")]
+pub fn unraised(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: the closure runs in the child between fork and exec, where only async-signal-safe
+    // calls are sound. `setpriority` and `prctl` are bare syscalls on by-value integers: no
+    // allocation, no lock, no pointer. It captures nothing and returns `Ok` whatever they answer,
+    // so a refusal never fails the spawn.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setpriority(libc::PRIO_PROCESS, 0, 0);
+            libc::prctl(libc::PR_SET_TIMERSLACK, DEFAULT_TIMER_SLACK_NS);
+            Ok(())
+        })
     }
 }
 
@@ -133,10 +207,10 @@ pub fn current_thread_sched() -> (&'static str, i32, i32) {
 /// RLIMIT_RTTIME we do not set.
 #[cfg(target_os = "linux")]
 mod linux_rtkit {
-    /// One-shot blocking D-Bus call. Must run on a plain worker thread, never
-    /// from async — [`boost_thread_priority`] only runs inside dedicated
-    /// capture/encode/send threads. Connection is per-call: a cached system-bus
-    /// socket pinned for the session is a worse trade than a few µs at start.
+    /// One-shot blocking D-Bus call, never from inside a task: callers are dedicated threads
+    /// and a runtime's `on_thread_start`, which runs before its thread takes a task.
+    /// Connection is per-call: a cached system-bus socket pinned for the session is a worse
+    /// trade than a few µs at start.
     pub(super) fn make_high_priority(nice: i32) -> Result<(), zbus::Error> {
         // SAFETY: `gettid` takes no arguments, touches no memory, and returns the calling
         // thread's kernel tid — always valid on Linux.
@@ -171,6 +245,73 @@ mod tests {
         .join()
         .expect("slack thread");
         assert_eq!(slack, 1);
+    }
+
+    /// Nice -5 where the box allows it, never further, and a thread it spawns starts unraised.
+    /// A box that refuses a negative nice (the check container) shows only the refusal.
+    #[test]
+    fn a_pool_thread_raises_itself_alone() {
+        let (before, after, child) = std::thread::spawn(|| {
+            let before = super::current_thread_sched().2;
+            super::raise_pool_thread();
+            let child = std::thread::spawn(|| super::current_thread_sched().2)
+                .join()
+                .expect("child thread");
+            (before, super::current_thread_sched().2, child)
+        })
+        .join()
+        .expect("pool thread");
+        assert!(after == -5 || after == before, "nice {before} → {after}");
+        if after == -5 {
+            assert_eq!(child, 0, "the raise passed to a child");
+        }
+    }
+
+    /// The flag needs no privilege, so this runs where a negative nice is refused.
+    #[test]
+    fn reset_on_fork_takes_without_privilege() {
+        let policy = std::thread::spawn(|| {
+            super::reset_on_fork();
+            // SAFETY: `sched_getscheduler` takes a by-value pid (0, the calling thread), touches
+            // no memory, and returns its policy with the reset-on-fork bit.
+            unsafe { libc::sched_getscheduler(0) }
+        })
+        .join()
+        .expect("thread");
+        assert_eq!(policy, libc::SCHED_OTHER | libc::SCHED_RESET_ON_FORK);
+    }
+
+    /// A launched program starts at nice 0 and the default slack, not the spawner's raise.
+    /// Slack needs no privilege; the nice half runs only where a negative nice is allowed.
+    #[test]
+    fn an_unraised_program_drops_the_spawners_raise() {
+        let (raised, plain, unraised) = std::thread::spawn(|| {
+            super::tighten_timer_slack();
+            // SAFETY: `setpriority` takes by-value integers and touches no memory; `who == 0` is
+            // this test thread, and a refusal leaves it as it was.
+            let raised = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, -5) } == 0;
+            let report = |cmd: &mut std::process::Command| {
+                let out = cmd
+                    .args(["-c", "nice; cat /proc/self/timerslack_ns"])
+                    .output()
+                    .expect("run sh");
+                String::from_utf8(out.stdout).expect("utf-8")
+            };
+            let plain = report(&mut std::process::Command::new("sh"));
+            let unraised = report(super::unraised(&mut std::process::Command::new("sh")));
+            (raised, plain, unraised)
+        })
+        .join()
+        .expect("spawner thread");
+        let lines = |s: &str| s.lines().map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(lines(&plain)[1], "1", "a plain child inherits the slack");
+        assert_eq!(lines(&unraised)[1], "50000");
+        if raised {
+            assert_eq!(lines(&plain)[0], "-5", "a plain child inherits the nice");
+            assert_eq!(lines(&unraised)[0], "0");
+        } else {
+            eprintln!("nice -5 refused here: only the slack half ran");
+        }
     }
 
     #[test]

@@ -351,9 +351,37 @@ pub(crate) fn sync(state: &Arc<AppState>) -> Result<()> {
 ///
 /// The launch is read live: no `/launch` → drop every datagram (nothing on this port is
 /// legitimate yet; `accept_connect` agrees). With a launch, only the owner's IP passes.
+///
+/// ENet dispatches what a receive pass read only once `receive` reports none. So a pass's
+/// first read waits up to `idle`, the loop's tick, and every read after a datagram is
+/// non-blocking: the pass ends at the first empty read, not one `idle` later.
 struct OwnerFilteredSocket {
     inner: UdpSocket,
     state: Arc<AppState>,
+    /// The read timeout of a pass's first read: [`IDLE_TICK`] in service.
+    idle: Duration,
+    /// The socket is non-blocking: this pass read a datagram.
+    draining: bool,
+}
+
+impl OwnerFilteredSocket {
+    fn new(inner: UdpSocket, state: Arc<AppState>, idle: Duration) -> OwnerFilteredSocket {
+        OwnerFilteredSocket {
+            inner,
+            state,
+            idle,
+            draining: false,
+        }
+    }
+
+    /// Non-blocking while a pass drains what is queued; blocking under `idle` otherwise.
+    fn drain(&mut self, on: bool) -> std::io::Result<()> {
+        if self.draining != on {
+            self.inner.set_nonblocking(on)?;
+            self.draining = on;
+        }
+        Ok(())
+    }
 }
 
 impl rusty_enet::Socket for OwnerFilteredSocket {
@@ -362,11 +390,11 @@ impl rusty_enet::Socket for OwnerFilteredSocket {
 
     fn init(&mut self, opts: rusty_enet::SocketOptions) -> Result<(), std::io::Error> {
         rusty_enet::Socket::init(&mut self.inner, opts)?;
-        // Blocking socket, 2 ms read timeout, re-asserted after inner init (which may set
-        // nonblocking). Idle tick is the empty receive; an arriving datagram wakes immediately.
-        // `receive` maps the timeout back to the non-blocking contract rusty_enet expects.
+        // Blocking under the `idle` read timeout, re-asserted after the inner init sets
+        // non-blocking. `receive` maps the timeout to the none rusty_enet expects.
         self.inner.set_nonblocking(false)?;
-        self.inner.set_read_timeout(Some(Duration::from_millis(2)))
+        self.draining = false;
+        self.inner.set_read_timeout(Some(self.idle))
     }
 
     fn send(&mut self, address: Self::Address, buffer: &[u8]) -> Result<usize, std::io::Error> {
@@ -377,12 +405,14 @@ impl rusty_enet::Socket for OwnerFilteredSocket {
         &mut self,
         buffer: &mut [u8; rusty_enet::MTU_MAX],
     ) -> Result<Option<(Self::Address, rusty_enet::PacketReceived)>, std::io::Error> {
-        // Keep reading past a dropped non-owner datagram so it cannot starve an owner one, but
-        // yield after `MAX_DROPS_PER_RECEIVE` so ENet's ACK and timeout pass still runs.
-        // Timeout is `WouldBlock` on Unix and `TimedOut` on Windows; both map to `Ok(None)`.
+        // Any datagram, kept or dropped, turns the reads after it non-blocking; every return
+        // without one turns the socket back to the `idle` wait, so the loop never spins. Past
+        // `MAX_DROPS_PER_RECEIVE` drops it reports none, so ENet's ACK and timeout pass runs.
+        // Timeout is `WouldBlock` on Unix and `TimedOut` on Windows; both mean empty.
         for _ in 0..MAX_DROPS_PER_RECEIVE {
             match rusty_enet::Socket::receive(&mut self.inner, buffer) {
                 Ok(Some((addr, received))) => {
+                    self.drain(true)?;
                     // Decide before rusty_enet allocates per-peer reassembly. No live
                     // launch → drop; launch with a known owner IP → keep only that IP.
                     let launch = *self.state.launch.lock().unwrap_or_else(|e| e.into_inner());
@@ -392,39 +422,34 @@ impl rusty_enet::Socket for OwnerFilteredSocket {
                         _ => return Ok(Some((addr, received))),
                     }
                 }
-                Ok(None) => return Ok(None),
+                Ok(None) => break,
                 Err(e)
                     if matches!(
                         e.kind(),
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                     ) =>
                 {
-                    return Ok(None)
+                    break
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    self.drain(false)?;
+                    return Err(e);
+                }
             }
         }
+        self.drain(false)?;
         Ok(None)
     }
 }
 
 /// Datagrams one [`OwnerFilteredSocket::receive`] reads and drops before it reports none.
 /// ENet sends ACKs, checks timeouts and dispatches only once `receive` returns none, and a
-/// flood from another host never leaves the 2 ms read timeout to expire.
+/// flood from another host never leaves the read empty.
 const MAX_DROPS_PER_RECEIVE: usize = 64;
 
-/// ENet events one pass handles before the stop check, [`AppState::end_if_preempted`] and
-/// [`tick_access`] run again. A client that never lets the socket go quiet still meets them.
-const EVENTS_PER_PASS: usize = 64;
-
-/// Runs `step` until it reports nothing left or [`EVENTS_PER_PASS`] times, whichever is first.
-fn drain_pass(mut step: impl FnMut() -> bool) {
-    for _ in 0..EVENTS_PER_PASS {
-        if !step() {
-            return;
-        }
-    }
-}
+/// The control loop's tick: the longest a receive pass waits for a datagram, and about the
+/// longest the pumps (force-feedback answers, rumble, key repeat) wait between runs.
+const IDLE_TICK: Duration = Duration::from_millis(2);
 
 /// Admit a fresh ENet connect only behind a live `/launch` (Moonlight connects after
 /// RTSP, so there is no legitimate connect without one). When both sides captured the
@@ -441,13 +466,9 @@ fn accept_connect(launch: Option<LaunchSession>, from: Option<IpAddr>) -> bool {
 
 fn spawn(state: Arc<AppState>) -> Result<Running> {
     let socket = UdpSocket::bind(("0.0.0.0", CONTROL_PORT)).context("bind control UDP")?;
-    // Blocking-with-timeout, not nonblocking: `Host::new` calls `init`, which installs
-    // the 2 ms read timeout that wakes the service loop on packet arrival.
+    // `Host::new` calls `init`, which installs the idle read timeout that paces the loop.
     let mut host = Host::new(
-        OwnerFilteredSocket {
-            inner: socket,
-            state: state.clone(),
-        },
+        OwnerFilteredSocket::new(socket, state.clone(), IDLE_TICK),
         HostSettings {
             peer_limit: 4,
             // Moonlight uses CTRL_CHANNEL_COUNT (0x30) and sends gamepad on 0x10+n.
@@ -491,79 +512,80 @@ fn spawn(state: Arc<AppState>) -> Result<Running> {
                 // below then tells the client.
                 state.end_if_preempted();
                 tick_access(&mut access, &state, &mut peer, &inj_tx);
-                drain_pass(|| {
-                    let event = match host.service() {
-                        Ok(Some(event)) => event,
-                        Ok(None) => return false,
+                // Events as they come, but a steady stream still yields to the pumps below once
+                // a tick. What ENet holds back goes out first in the next pass.
+                let pump_by = std::time::Instant::now() + IDLE_TICK;
+                while std::time::Instant::now() < pump_by {
+                    match host.service() {
+                        Ok(Some(event)) => match event {
+                            Event::Connect { peer: p, .. } => {
+                                // Admit only the launch owner. The tracked peer's disconnect
+                                // ends the session, so a refused peer is `disconnect_now` (no
+                                // `Disconnect` event, slot freed this tick) — leaving it
+                                // untracked would pin 32 MiB and one of four slots forever.
+                                let launch = *state.launch.lock().unwrap_or_else(|e| e.into_inner());
+                                let from = p.address().map(|a| a.ip());
+                                if accept_connect(launch, from) {
+                                    tracing::info!("control: client connected");
+                                    // A reconnect that replaces a tracked peer: that peer's
+                                    // late Disconnect is ignored below, so release what it held.
+                                    if peer.id.is_some_and(|id| id != p.id()) {
+                                        peer.reset(&inj_tx);
+                                    }
+                                    peer.id = Some(p.id());
+                                } else {
+                                    tracing::warn!(
+                                        ?from,
+                                        "control: peer connected without a matching /launch — refusing"
+                                    );
+                                    p.disconnect_now(0);
+                                }
+                            }
+                            Event::Disconnect { peer: p, .. } => {
+                                // Only the tracked session peer. A probe, or the old peer's
+                                // late timeout after a reconnect replaced it, must not end
+                                // the live session or clobber its input state.
+                                if peer.id != Some(p.id()) {
+                                    tracing::debug!("control: non-session peer disconnected");
+                                    continue;
+                                }
+                                tracing::info!("control: client disconnected");
+                                peer.reset(&inj_tx);
+                                // This stream is the session's liveness. Moonlight holds it
+                                // for the whole stream; a quit or drop often sends no RTSP
+                                // TEARDOWN / `/cancel`. UDP send only errors on ICMP, so
+                                // without `end_session` media would stream at a dead peer.
+                                state.end_session("control stream disconnected");
+                            }
+                            Event::Receive {
+                                peer: p, packet, ..
+                            } => {
+                                // Honor only the tracked peer. The socket filter drops
+                                // non-owners once a launch is recorded; this covers the
+                                // window before the owner IP is captured.
+                                if peer.id != Some(p.id()) {
+                                    continue;
+                                }
+
+                                // Missing SessionAccess → GRANT_ALL. Input decrypts only
+                                // under the `/launch` key, so this is the ≤2 ms sliver
+                                // before the next tick's resolve (or an ungoverned session).
+                                on_receive(
+                                    &state,
+                                    packet.data(),
+                                    &mut peer,
+                                    &inj_tx,
+                                    access.as_ref().map(|a| a.mask).unwrap_or(GRANT_ALL),
+                                );
+                            }
+                        },
+                        Ok(None) => break,
                         Err(e) => {
                             tracing::warn!(error = ?e, "control: service error");
-                            return false;
-                        }
-                    };
-                    match event {
-                        Event::Connect { peer: p, .. } => {
-                            // Admit only the launch owner. The tracked peer's disconnect
-                            // ends the session, so a refused peer is `disconnect_now` (no
-                            // `Disconnect` event, slot freed this tick) — leaving it
-                            // untracked would pin 32 MiB and one of four slots forever.
-                            let launch = *state.launch.lock().unwrap_or_else(|e| e.into_inner());
-                            let from = p.address().map(|a| a.ip());
-                            if accept_connect(launch, from) {
-                                tracing::info!("control: client connected");
-                                // A reconnect that replaces a tracked peer: that peer's
-                                // late Disconnect is ignored below, so release what it held.
-                                if peer.id.is_some_and(|id| id != p.id()) {
-                                    peer.reset(&inj_tx);
-                                }
-                                peer.id = Some(p.id());
-                            } else {
-                                tracing::warn!(
-                                    ?from,
-                                    "control: peer connected without a matching /launch — refusing"
-                                );
-                                p.disconnect_now(0);
-                            }
-                        }
-                        Event::Disconnect { peer: p, .. } => {
-                            // Only the tracked session peer. A probe, or the old peer's
-                            // late timeout after a reconnect replaced it, must not end
-                            // the live session or clobber its input state.
-                            if peer.id != Some(p.id()) {
-                                tracing::debug!("control: non-session peer disconnected");
-                                return true;
-                            }
-                            tracing::info!("control: client disconnected");
-                            peer.reset(&inj_tx);
-                            // This stream is the session's liveness. Moonlight holds it
-                            // for the whole stream; a quit or drop often sends no RTSP
-                            // TEARDOWN / `/cancel`. UDP send only errors on ICMP, so
-                            // without `end_session` media would stream at a dead peer.
-                            state.end_session("control stream disconnected");
-                        }
-                        Event::Receive {
-                            peer: p, packet, ..
-                        } => {
-                            // Honor only the tracked peer. The socket filter drops
-                            // non-owners once a launch is recorded; this covers the
-                            // window before the owner IP is captured.
-                            if peer.id != Some(p.id()) {
-                                return true;
-                            }
-
-                            // Missing SessionAccess → GRANT_ALL. Input decrypts only
-                            // under the `/launch` key, so this is the ≤2 ms sliver
-                            // before the next tick's resolve (or an ungoverned session).
-                            on_receive(
-                                &state,
-                                packet.data(),
-                                &mut peer,
-                                &inj_tx,
-                                access.as_ref().map(|a| a.mask).unwrap_or(GRANT_ALL),
-                            );
+                            break;
                         }
                     }
-                    true
-                });
+                }
                 // Host-side end (`end_session` cleared `launch`): media going silent is not
                 // a signal. Clearing the peer makes this fire once; the real `Disconnect`
                 // then takes the non-session-peer branch.
@@ -577,12 +599,9 @@ fn spawn(state: Arc<AppState>) -> Result<Running> {
                     peer.reset(&inj_tx);
                 }
                 peer.pump_outbound(&mut host, &state);
-                peer.pump_repeat(
-                    &inj_tx,
-                    access.as_ref().map(|a| a.mask).unwrap_or(GRANT_ALL),
-                );
-                // ENet handshake/keepalive/retransmit pacing is the socket's 2 ms read
-                // timeout in the drain above. Do not sleep on top of it.
+                peer.pump_repeat(&inj_tx, access.as_ref().map(|a| a.mask).unwrap_or(GRANT_ALL));
+                // ENet handshake/keepalive/retransmit pacing is the receive pass's idle wait
+                // above. Do not sleep on top of it.
             }
         })
         .context("spawn control thread")?;
@@ -930,7 +949,8 @@ fn on_receive(
 }
 
 /// Apply a loss-recovery request to what the video thread drains: `rfi_range`,
-/// `force_idr`, the loss counters.
+/// `force_idr`, the loss counters. An RFI or keyframe ask also pokes the video thread's
+/// wait, so the ask goes out this tick instead of at the next frame.
 fn note_loss_recovery(state: &AppState, msg: ControlMsg) {
     match msg {
         ControlMsg::InvalidateFrames(first, last) => {
@@ -942,12 +962,14 @@ fn note_loss_recovery(state: &AppState, msg: ControlMsg) {
                 None => (first, last),
             });
             drop(slot);
+            poke_video(state);
             tracing::debug!(first, last, "control: RFI request → invalidate ref frames");
         }
         ControlMsg::Keyframe(ty) => {
             state
                 .force_idr
                 .store(true, std::sync::atomic::Ordering::SeqCst);
+            poke_video(state);
             tracing::debug!(ty = %format_args!("{ty:#06x}"), "control: keyframe request");
         }
         ControlMsg::LossStats {
@@ -981,6 +1003,19 @@ fn note_loss_recovery(state: &AppState, msg: ControlMsg) {
             }
         }
         ControlMsg::Ignored | ControlMsg::Input => {}
+    }
+}
+
+/// Fire the running source's poke ([`super::GsState::video_poke`]), after the ask is stored.
+fn poke_video(state: &AppState) {
+    let poke = state
+        .gs
+        .video_poke
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if let Some(poke) = poke {
+        poke();
     }
 }
 
@@ -1093,24 +1128,6 @@ mod tests {
         })
     }
 
-    /// A pass stops at its bound while events keep coming, and at once when they stop, so the
-    /// lock check between passes never waits on a busy client.
-    #[test]
-    fn a_drain_pass_yields_after_its_bound() {
-        let mut calls = 0;
-        super::drain_pass(|| {
-            calls += 1;
-            true
-        });
-        assert_eq!(calls, super::EVENTS_PER_PASS);
-        calls = 0;
-        super::drain_pass(|| {
-            calls += 1;
-            calls < 3
-        });
-        assert_eq!(calls, 3);
-    }
-
     /// 47999 is open the idle life of a paired host: refuse connects with no `/launch`
     /// (they would squat one of four slots), and admit only the owner's IP. Unknown
     /// address on either side → launch-present-only, like `rtsp::authorized_launch`.
@@ -1132,16 +1149,8 @@ mod tests {
     #[test]
     fn a_non_owner_flood_does_not_hold_receive() {
         use rusty_enet::Socket;
-        let inner = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        inner
-            .set_read_timeout(Some(std::time::Duration::from_millis(500)))
-            .unwrap();
-        let to = inner.local_addr().unwrap();
         let state = super::super::test_state();
-        let mut sock = super::OwnerFilteredSocket {
-            inner,
-            state: state.clone(),
-        };
+        let (mut sock, to) = filtered(&state, std::time::Duration::from_millis(500));
         let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let other: std::net::IpAddr = "10.9.9.9".parse().unwrap();
         *state.launch.lock().unwrap() = launched(Some(other));
@@ -1155,6 +1164,91 @@ mod tests {
             sock.receive(&mut buf).unwrap().is_some(),
             "the datagrams behind the cap stay queued for the owner"
         );
+    }
+
+    /// A filtered socket on loopback, initialised as `Host::new` does, whose first read of a
+    /// pass waits `idle`.
+    fn filtered(
+        state: &std::sync::Arc<crate::host::AppState>,
+        idle: std::time::Duration,
+    ) -> (super::OwnerFilteredSocket, std::net::SocketAddr) {
+        use rusty_enet::Socket;
+        let inner = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let to = inner.local_addr().unwrap();
+        let mut sock = super::OwnerFilteredSocket::new(inner, state.clone(), idle);
+        sock.init(rusty_enet::SocketOptions {
+            receive_buffer: 0,
+            send_buffer: 0,
+        })
+        .unwrap();
+        (sock, to)
+    }
+
+    /// The read after a datagram never waits, since ENet dispatches that datagram only once a
+    /// read comes back empty. The next pass's first read waits the idle timeout again.
+    #[test]
+    fn the_read_after_a_datagram_does_not_wait() {
+        use rusty_enet::Socket;
+        let idle = std::time::Duration::from_millis(500);
+        let state = launched_state();
+        let (mut sock, to) = filtered(&state, idle);
+        let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        sender.send_to(&[1], to).unwrap();
+        let mut buf = [0u8; rusty_enet::MTU_MAX];
+        assert!(sock.receive(&mut buf).unwrap().is_some());
+        let drained = std::time::Instant::now();
+        assert!(sock.receive(&mut buf).unwrap().is_none());
+        assert!(
+            drained.elapsed() < idle / 2,
+            "the pass ends at the first empty read"
+        );
+        let waited = std::time::Instant::now();
+        assert!(sock.receive(&mut buf).unwrap().is_none());
+        assert!(waited.elapsed() >= idle / 2, "an idle pass waits");
+    }
+
+    /// Through a real ENet pair: a packet's `Event::Receive` leaves the pass that read it, not
+    /// one idle timeout later.
+    #[test]
+    fn an_enet_packet_is_dispatched_without_the_idle_wait() {
+        use rusty_enet::{Event, Host, HostSettings, Packet};
+        use std::time::{Duration, Instant};
+        let idle = Duration::from_millis(500);
+        let (sock, to) = filtered(&launched_state(), idle);
+        let (tx, rx) = channel();
+        let server = std::thread::spawn(move || {
+            let mut host = Host::new(sock, HostSettings::default()).unwrap();
+            let end = Instant::now() + Duration::from_secs(20);
+            while Instant::now() < end {
+                if let Ok(Some(Event::Receive { .. })) = host.service() {
+                    let _ = tx.send(Instant::now());
+                    return;
+                }
+            }
+        });
+        let client_sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut client = Host::new(client_sock, HostSettings::default()).unwrap();
+        let id = client.connect(to, 1, 0).unwrap().id();
+        let end = Instant::now() + Duration::from_secs(20);
+        while !matches!(client.service(), Ok(Some(Event::Connect { .. }))) {
+            assert!(Instant::now() < end, "the client connects");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let sent = Instant::now();
+        client
+            .peer_mut(id)
+            .send(0, &Packet::reliable(&[1, 2, 3][..]))
+            .unwrap();
+        client.flush();
+        let got = rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the host receives the packet");
+        assert!(
+            got.duration_since(sent) < idle / 2,
+            "dispatched {:?} after the send",
+            got.duration_since(sent)
+        );
+        server.join().unwrap();
     }
 
     /// Wrong type table or reason endianness is ignored by the client (frozen stream or
@@ -1467,10 +1561,16 @@ mod tests {
     }
 
     /// RFI with a range merges into what the video thread has not drained; without a usable
-    /// range, and on 0x0302 / 0x0305, it is a keyframe. Loss reports add up per report.
+    /// range, and on 0x0302 / 0x0305, it is a keyframe. Each of those pokes the video thread;
+    /// loss reports only add up per report.
     #[test]
     fn loss_recovery_requests_land_in_the_shared_state() {
         let state = launched_state();
+        let pokes = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let counted = pokes.clone();
+        *state.gs.video_poke.lock().unwrap() = Some(std::sync::Arc::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
         let mut peer = super::ControlPeer::new();
         let (tx, _rx) = channel();
         let mut seq = 0u32;
@@ -1497,6 +1597,7 @@ mod tests {
             send(&msg(ty, &[]));
             assert!(state.force_idr.load(Ordering::SeqCst), "{ty:#06x}");
         }
+        assert_eq!(pokes.load(Ordering::SeqCst), 5, "every ask pokes");
         send(&loss(3));
         send(&loss(0));
         send(&loss(-4)); // a negative count is none
@@ -1511,6 +1612,120 @@ mod tests {
         send(&msg(0x5502, &[0; 10]));
         assert_eq!(state.loss_stats.reports.load(Ordering::Relaxed), 5);
         assert_eq!(state.counters.input_events.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            pokes.load(Ordering::SeqCst),
+            5,
+            "a loss report pokes nothing"
+        );
+    }
+
+    /// A source whose paced wait runs to its deadline unless its poke fires.
+    #[derive(Default)]
+    struct Waiting(std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>);
+
+    impl pf_capture::Feed for Waiting {
+        fn wait_arrival(&mut self, _deadline: std::time::Instant) {}
+
+        fn wait_paced(
+            &mut self,
+            _not_before: std::time::Instant,
+            deadline: std::time::Instant,
+        ) -> pf_capture::Paced {
+            let (poked, wake) = &*self.0;
+            let mut poked = poked.lock().unwrap();
+            while !*poked {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
+                    return pf_capture::Paced::Due;
+                }
+                poked = wake.wait_timeout(poked, left).unwrap().0;
+            }
+            *poked = false;
+            pf_capture::Paced::Poked
+        }
+
+        fn arrival_poke(&self) -> Option<std::sync::Arc<dyn Fn() + Send + Sync>> {
+            let shared = self.0.clone();
+            Some(std::sync::Arc::new(move || {
+                *shared.0.lock().unwrap() = true;
+                shared.1.notify_all();
+            }))
+        }
+    }
+
+    impl crate::capture::Capturer for Waiting {
+        fn next_frame(
+            &mut self,
+            _budget: pf_capture::FirstFrame,
+        ) -> anyhow::Result<crate::capture::CapturedFrame> {
+            anyhow::bail!("a wait-only source")
+        }
+
+        fn feed(&mut self) -> Option<&mut dyn pf_capture::Feed> {
+            Some(self)
+        }
+    }
+
+    /// Encodes nothing.
+    struct NoEncoder;
+
+    impl crate::encode::Encoder for NoEncoder {
+        fn submit(&mut self, _frame: &crate::capture::CapturedFrame) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn poll(&mut self) -> anyhow::Result<Option<crate::encode::EncodedFrame>> {
+            Ok(None)
+        }
+        fn flush(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// An RFI ends the video thread's tick wait through the poke its source published, rather
+    /// than at the keep-alive three seconds out.
+    #[test]
+    fn an_rfi_ends_the_video_tick_wait() {
+        use std::time::{Duration, Instant};
+        let state = launched_state();
+        let mut source = Waiting::default();
+        super::super::stream::publish_poke(&mut source, &state.gs.video_poke);
+        let interval = Duration::from_secs(2);
+        let waiter = std::thread::spawn(move || {
+            let frame = crate::capture::CapturedFrame {
+                width: 4,
+                height: 4,
+                pts_ns: 0,
+                format: crate::capture::PixelFormat::Bgrx,
+                payload: pf_frame::FramePayload::Cpu(vec![0; 64]),
+                cursor: None,
+                provenance: Default::default(),
+            };
+            let start = Instant::now();
+            let mut credit = crate::send_pacing::CaptureCredit::new(start - interval * 4);
+            let mut next = start + interval;
+            crate::send_pacing::wait_next_tick(
+                &mut source,
+                &mut NoEncoder,
+                &frame,
+                &mut credit,
+                &mut next,
+                None,
+                interval,
+                None,
+            );
+            start.elapsed()
+        });
+        let mut peer = super::ControlPeer::new();
+        let (tx, _rx) = channel();
+        super::on_receive(
+            &state,
+            &client_seal(0, &rfi(40, 47)),
+            &mut peer,
+            &tx,
+            GRANT_ALL,
+        );
+        let waited = waiter.join().unwrap();
+        assert!(waited < interval, "the ask ended the wait after {waited:?}");
     }
 
     /// Every decodable input is one mask test: granted → injected and counted, otherwise

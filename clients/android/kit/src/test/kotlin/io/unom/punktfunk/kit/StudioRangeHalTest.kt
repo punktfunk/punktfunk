@@ -5,7 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Pins [limitedOnlyBt709Hal], the rule behind [VideoDecoders.showsFullRangeAsStudio]: only a
+ * Pins [limitedOnlyBt709Hal], the rule behind [DecoderSnapshot.showsFullRangeAsStudio]: only a
  * Qualcomm decoder on a vendor older than Android 13 asks for studio range.
  * Run: `./gradlew :kit:testDebugUnitTest`.
  */

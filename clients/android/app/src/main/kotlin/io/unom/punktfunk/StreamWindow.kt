@@ -11,6 +11,7 @@ import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Log
 import android.view.Display
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import androidx.core.view.WindowCompat
@@ -22,6 +23,17 @@ internal const val STREAM_UNBUFFERED_SOURCES = android.view.InputDevice.SOURCE_C
     android.view.InputDevice.SOURCE_CLASS_JOYSTICK or
     android.view.InputDevice.SOURCE_CLASS_TRACKBALL or
     android.view.InputDevice.SOURCE_CLASS_POSITION
+
+/**
+ * Below API 30 there is no request for [STREAM_UNBUFFERED_SOURCES]: a touch gesture leaves the
+ * vsync batch only when its down asks, from the window's touch dispatch. That covers fingers and
+ * mouse-button drags; hover, sticks and the captured mouse stay batched there.
+ */
+internal fun View.unbufferGesture(ev: MotionEvent) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R && ev.actionMasked == MotionEvent.ACTION_DOWN) {
+        requestUnbufferedDispatch(ev)
+    }
+}
 
 /** The display's modes at its current resolution, which is the one the user picked. */
 internal fun Display.sameResolutionModes(): List<Display.Mode> {

@@ -35,6 +35,8 @@ internal data class DecoderFacts(
     val fits: Boolean = true,
     val lowLatency: Boolean = false,
     val secureRequired: Boolean = false,
+    /** `FEATURE_PartialFrame`; null when the codec couldn't say. */
+    val partialFrame: Boolean? = false,
 )
 
 /**
@@ -49,32 +51,36 @@ object VideoDecoders {
      * The codecs this device decodes in hardware and whether 10-bit stays asked ([codecCaps]),
      * plus PyroWave (8) when the GPU answers [NativeBridge.nativePyrowaveCapable]. [need] null
      * checks no size, rate or profile: the codec pickers' question. PyroWave is Vulkan compute,
-     * so the driver answers for it, not `MediaCodecList`. Enumerates both — call at connect time.
+     * so the driver answers for it, not `MediaCodecList`.
      */
-    fun probe(need: DecodeNeed? = null): DecodeCaps {
-        val infos = codecInfos()
-        val caps = if (infos == null) {
-            DecodeCaps(1, false)
-        } else {
-            val trust = need != null && pointsTrusted(infos)
-            val mimes = listOf("video/avc", "video/hevc", "video/av01")
-            val facts = mimes.flatMap { facts(infos, it, need, trust) }
-            codecCaps(facts, need?.tenBit == true, Build.VERSION.SDK_INT)
-        }
-        return if (pyrowaveCapable()) caps.copy(codecBits = caps.codecBits or 8) else caps
-    }
+    fun probe(need: DecodeNeed? = null): DecodeCaps = snapshot(need).decode
 
     /** [probe]'s codec bits with no mode in hand. */
     fun decodableCodecBits(): Int = probe().codecBits
 
-    /** The `MediaCodec` MIMEs [decodableCodecBits] advertises. */
-    private fun advertisedMimes(): List<String> {
-        val bits = decodableCodecBits()
-        return buildList {
-            add("video/avc")
-            if (bits and 2 != 0) add("video/hevc")
-            if (bits and 4 != 0) add("video/av01")
+    /**
+     * One walk of the codec list at [need] ([DecoderSnapshot]); null checks no size or rate. A
+     * decoder is asked only for the MIMEs it lists, so a missing one costs no exception.
+     */
+    fun snapshot(need: DecodeNeed? = null): DecoderSnapshot {
+        val api = Build.VERSION.SDK_INT
+        val infos = codecInfos()
+        val trust = need != null && infos != null && pointsTrusted(infos)
+        val read = MIMES.map { mime -> mime to infos?.let { decoders(it, mime) }.orEmpty() }
+        val facts = read.flatMap { (mime, rows) ->
+            rows.map { (info, caps) -> facts(info, caps, mime, need, trust) }
         }
+        val census = when {
+            infos == null -> "codec list unavailable"
+            need == null -> ""
+            else -> read.joinToString("  ") { (mime, rows) ->
+                val line = rows.joinToString("; ") { (info, caps) -> censusRow(info, caps, need, trust) }
+                "${mime.removePrefix("video/")}: ${line.ifEmpty { "none" }}"
+            }
+        }
+        return DecoderSnapshot(
+            facts, need?.tenBit == true, pyrowaveCapable(), api, vendorApiLevel(), infos != null, census,
+        )
     }
 
     /**
@@ -89,35 +95,6 @@ object VideoDecoders {
     fun pyrowaveCapable(): Boolean =
         runCatching { NativeBridge.nativePyrowaveCapable() }.getOrDefault(false)
 
-    /**
-     * Whether EVERY decoder this device would use tolerates multi-slice access units — the
-     * `VIDEO_CAP_MULTI_SLICE` advertisement (decoder truth: Amlogic HEVC decoders wedge the
-     * whole DEVICE on multi-slice frames — Chromecast with Google TV, onn 4K). We advertise
-     * per family: tolerant unless the pick for ANY advertised codec is an Amlogic decoder or can't
-     * be inspected (a null pick = the platform default — uninspectable, so conservatively
-     * single-slice). Probed once at connect time; the host defaults to >1 slice only toward
-     * clients that set the bit.
-     */
-    fun multiSliceTolerant(): Boolean {
-        val mimes = advertisedMimes()
-        return mimes.all { mime ->
-            val name = pickDecoder(mime)?.name?.lowercase() ?: return@all false
-            !name.startsWith("omx.amlogic") && !name.startsWith("c2.amlogic")
-        }
-    }
-
-    /**
-     * Whether this device's display shows full-range BT.709 video as studio range — the
-     * `FEATURE_STUDIO_RANGE` ask, so the host sends studio SDR. See [limitedOnlyBt709Hal].
-     */
-    fun showsFullRangeAsStudio(): Boolean {
-        val vendorApi = vendorApiLevel()
-        return advertisedMimes().any { mime ->
-            val name = pickDecoder(mime)?.name ?: return@any false
-            limitedOnlyBt709Hal(name, vendorApi)
-        }
-    }
-
     /** `ro.vendor.api_level`, 0 when unreadable. Android 15+ vendors report YYYYMM (202404). */
     private fun vendorApiLevel(): Int = runCatching {
         Class.forName("android.os.SystemProperties")
@@ -125,80 +102,31 @@ object VideoDecoders {
             .invoke(null, "ro.vendor.api_level", 0) as Int
     }.getOrDefault(0)
 
-    /**
-     * True when EVERY decoder this device would stream with supports partial-frame input
-     * (MediaCodec `FEATURE_PartialFrame`): the client may then opt into slice-progressive
-     * delivery and feed slices with `BUFFER_FLAG_PARTIAL_FRAME` ahead of the AU's tail.
-     * Codec selection happens after connect, so all advertised mimes must qualify — the same
-     * conservative shape as [multiSliceTolerant] (an unprobeable pick disqualifies).
-     */
-    fun partialFrameCapable(): Boolean {
-        val mimes = advertisedMimes()
-        val infos = runCatching { MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos }
-            .getOrNull() ?: return false
-        return mimes.all { mime ->
-            val pick = pickDecoder(mime)?.name ?: return@all false
-            val info = infos.firstOrNull { it.name == pick } ?: return@all false
-            runCatching {
-                info.getCapabilitiesForType(mime)
-                    .isFeatureSupported(CodecCapabilities.FEATURE_PartialFrame)
-            }.getOrDefault(false)
-        }
-    }
+    /** [DecoderSnapshot.partialFrameCapable] with no mode in hand. */
+    fun partialFrameCapable(): Boolean = snapshot().partialFrameCapable
 
     /**
-     * One-line per-mime probe readout for the connect log (`adb logcat -s pf.caps`): which
-     * decoder each advertised mime resolves to, whether it declares `FEATURE_PartialFrame` (the
-     * [partialFrameCapable] gate) and which latency-named vendor parameters it declares —
-     * whether a `low_latency_key` profile's keys exist on this device, otherwise invisible from
-     * a report.
+     * One decoder as the census line reads it: hardware or not, whether it takes [need], its
+     * declared top bitrate and its latency features.
      */
-    fun capsReport(): String {
-        val mimes = advertisedMimes()
-        val infos = runCatching { MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos }
-            .getOrNull() ?: return "codec list unavailable"
-        return mimes.joinToString("  ") { mime ->
-            val pick = pickDecoder(mime)?.name
-            val partial = pick?.let { p ->
-                infos.firstOrNull { it.name == p }?.let { info ->
-                    runCatching {
-                        info.getCapabilitiesForType(mime)
-                            .isFeatureSupported(CodecCapabilities.FEATURE_PartialFrame)
-                    }.getOrNull()
-                }
-            }
-            "${mime.removePrefix("video/")}=${pick ?: "platform-default"}" +
-                " partialFrame=${partial ?: "?"} vendor=[${vendorKeys(pick)}]"
+    private fun censusRow(
+        info: MediaCodecInfo,
+        caps: CodecCapabilities,
+        need: DecodeNeed,
+        trust: Boolean,
+    ): String {
+        val hw = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && info.isHardwareAccelerated
+        val has = { feature: String ->
+            runCatching { caps.isFeatureSupported(feature) }.getOrDefault(false)
         }
-    }
-
-    /**
-     * Every decoder for H.264, HEVC and AV1 as one line for the log bundle: hardware or not,
-     * whether it takes [need], its declared top bitrate and its latency features. It says why a
-     * codec was not advertised and what the pick's maker claims for it.
-     */
-    fun census(need: DecodeNeed): String {
-        val infos = codecInfos() ?: return "codec list unavailable"
-        val trust = pointsTrusted(infos)
-        return listOf("video/avc", "video/hevc", "video/av01").joinToString("  ") { mime ->
-            val rows = infos.filter { !it.isEncoder }.mapNotNull { info ->
-                val caps = runCatching { info.getCapabilitiesForType(mime) }.getOrNull()
-                    ?: return@mapNotNull null
-                val hw = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && info.isHardwareAccelerated
-                val has = { feature: String ->
-                    runCatching { caps.isFeatureSupported(feature) }.getOrDefault(false)
-                }
-                val features = listOfNotNull(
-                    "lowLatency".takeIf { has(CodecCapabilities.FEATURE_LowLatency) },
-                    "partialFrame".takeIf { has(CodecCapabilities.FEATURE_PartialFrame) },
-                    "tunneled".takeIf { has(CodecCapabilities.FEATURE_TunneledPlayback) },
-                ).joinToString("+")
-                val mbps = caps.videoCapabilities?.bitrateRange?.upper?.div(1_000_000)
-                "${info.name} ${if (hw) "hw" else "sw"} fits=${fits(caps, need, trust)}" +
-                    " maxMbps=${mbps ?: "?"} [$features]"
-            }
-            "${mime.removePrefix("video/")}: ${rows.joinToString("; ").ifEmpty { "none" }}"
-        }
+        val features = listOfNotNull(
+            "lowLatency".takeIf { has(CodecCapabilities.FEATURE_LowLatency) },
+            "partialFrame".takeIf { has(CodecCapabilities.FEATURE_PartialFrame) },
+            "tunneled".takeIf { has(CodecCapabilities.FEATURE_TunneledPlayback) },
+        ).joinToString("+")
+        val mbps = caps.videoCapabilities?.bitrateRange?.upper?.div(1_000_000)
+        return "${info.name} ${if (hw) "hw" else "sw"} fits=${fits(caps, need, trust)}" +
+            " maxMbps=${mbps ?: "?"} [$features]"
     }
 
     /** Substrings of the vendor parameter names worth a line in the connect log. */
@@ -209,10 +137,17 @@ object VideoDecoders {
     private val vendorKeyCache = HashMap<String, String>()
 
     /**
+     * Opens each advertised codec's pick once, for the vendor keys [DecoderSnapshot.capsReport]
+     * logs. Run it off the main thread before any session: a box with one hardware decoder can't
+     * open a second while a stream holds it.
+     */
+    fun readVendorKeys() = snapshot().picks.forEach { (_, pick) -> vendorKeys(pick?.name) }
+
+    /**
      * The vendor parameters of [name] that match [VENDOR_KEY_HINTS], comma-joined; `?` below
      * API 31 or when the codec can't be opened. Opens the codec once per name and releases it.
      */
-    private fun vendorKeys(name: String?): String {
+    internal fun vendorKeys(name: String?): String {
         if (name == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return "?"
         return vendorKeyCache.getOrPut(name) {
             runCatching {
@@ -235,12 +170,14 @@ object VideoDecoders {
     fun pickDecoder(mime: String): DecoderChoice? {
         if (mime.isEmpty()) return null
         val infos = codecInfos() ?: return null
-        val best = bestDecoder(facts(infos, mime, null, false), Build.VERSION.SDK_INT)
-            ?: return null
-        val video = infos.firstOrNull { it.name == best.name }
-            ?.let { runCatching { it.getCapabilitiesForType(mime).videoCapabilities }.getOrNull() }
+        val rows = decoders(infos, mime)
+        val facts = rows.map { (info, caps) -> facts(info, caps, mime, null, false) }
+        val best = bestDecoder(facts, Build.VERSION.SDK_INT) ?: return null
+        val video = rows.firstOrNull { (info, _) -> info.name == best.name }?.second?.videoCapabilities
         return DecoderChoice(best.name, best.lowLatency, video?.let(::pixelRate) ?: 0)
     }
+
+    private val MIMES = listOf("video/avc", "video/hevc", "video/av01")
 
     /** The most pixels a second [video] declares: its largest size at the rate it takes there. */
     private fun pixelRate(video: MediaCodecInfo.VideoCapabilities): Long = runCatching {
@@ -252,29 +189,41 @@ object VideoDecoders {
     private fun codecInfos(): Array<MediaCodecInfo>? =
         runCatching { MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos }.getOrNull()
 
-    /** The decoders of [infos] for [mime]. [need] null leaves size and rate unchecked. */
-    private fun facts(
+    /**
+     * The decoders of [infos] that list [mime], in list order, each with its capabilities for it.
+     * `supportedTypes` is the set `getCapabilitiesForType` answers from, which throws on a miss.
+     */
+    private fun decoders(
         infos: Array<MediaCodecInfo>,
+        mime: String,
+    ): List<Pair<MediaCodecInfo, CodecCapabilities>> =
+        infos.filter { !it.isEncoder && mime in it.supportedTypes }.mapNotNull { info ->
+            runCatching { info.getCapabilitiesForType(mime) }.getOrNull()?.let { info to it }
+        }
+
+    /** [info]'s facts for [mime]. [need] null leaves size and rate unchecked. */
+    private fun facts(
+        info: MediaCodecInfo,
+        caps: CodecCapabilities,
         mime: String,
         need: DecodeNeed?,
         trustPoints: Boolean,
-    ): List<DecoderFacts> = infos.filter { !it.isEncoder }.mapNotNull { info ->
-        val caps = runCatching { info.getCapabilitiesForType(mime) }.getOrNull()
-            ?: return@mapNotNull null
-        DecoderFacts(
-            name = info.name,
-            mime = mime,
-            hardware = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && info.isHardwareAccelerated,
-            profiles = caps.profileLevels.orEmpty().map { it.profile },
-            fits = need == null || fits(caps, need, trustPoints),
-            lowLatency = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-                runCatching { caps.isFeatureSupported(CodecCapabilities.FEATURE_LowLatency) }
-                    .getOrDefault(false),
-            secureRequired = runCatching {
-                caps.isFeatureRequired(CodecCapabilities.FEATURE_SecurePlayback)
-            }.getOrDefault(false),
-        )
-    }
+    ) = DecoderFacts(
+        name = info.name,
+        mime = mime,
+        hardware = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && info.isHardwareAccelerated,
+        profiles = caps.profileLevels.orEmpty().map { it.profile },
+        fits = need == null || fits(caps, need, trustPoints),
+        lowLatency = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            runCatching { caps.isFeatureSupported(CodecCapabilities.FEATURE_LowLatency) }
+                .getOrDefault(false),
+        secureRequired = runCatching {
+            caps.isFeatureRequired(CodecCapabilities.FEATURE_SecurePlayback)
+        }.getOrDefault(false),
+        partialFrame = runCatching {
+            caps.isFeatureSupported(CodecCapabilities.FEATURE_PartialFrame)
+        }.getOrNull(),
+    )
 
     /**
      * Whether [caps] decodes [need]'s size at its rate: the performance points where listed and
@@ -300,12 +249,84 @@ object VideoDecoders {
     private fun pointsTrusted(infos: Array<MediaCodecInfo>): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) return true
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
-        val listed = infos.filter { !it.isEncoder }.firstNotNullOfOrNull { info ->
+        val avc = infos.filter { !it.isEncoder && "video/avc" in it.supportedTypes }
+        val listed = avc.firstNotNullOfOrNull { info ->
             runCatching {
                 info.getCapabilitiesForType("video/avc").videoCapabilities?.supportedPerformancePoints
             }.getOrNull()?.takeIf { it.isNotEmpty() }
         } ?: return false
         return listed.any { it.covers(PerformancePoint(1280, 720, 60)) }
+    }
+}
+
+/**
+ * One walk of the codec list ([VideoDecoders.snapshot]): a connect's codec bits at its need, and
+ * the flags and log line that read the pick of each codec advertised with no mode in hand.
+ * [facts] holds each MIME's decoders in list order, [DecoderFacts.fits] read at the need; it is
+ * empty, and [listed] false, when the list can't be read. [census] is empty without a need.
+ */
+class DecoderSnapshot internal constructor(
+    facts: List<DecoderFacts>,
+    tenBit: Boolean,
+    pyrowave: Boolean,
+    api: Int,
+    vendorApi: Int,
+    private val listed: Boolean,
+    /** Every decoder for H.264, HEVC and AV1 at the need, one line for the log bundle. */
+    val census: String,
+) {
+    /** The codec bits and 10-bit at the need ([codecCaps]), plus PyroWave (8). */
+    val decode: DecodeCaps = codecCaps(facts, tenBit, api).let {
+        if (pyrowave) it.copy(codecBits = it.codecBits or 8) else it
+    }
+
+    /**
+     * Each MIME advertised with no mode in hand, H.264 always, with its pick ([bestDecoder]). A
+     * null pick leaves the platform to resolve its default, which can't be inspected.
+     */
+    internal val picks: List<Pair<String, DecoderFacts?>> = facts.map { it.copy(fits = true) }.let { all ->
+        val bits = codecCaps(all, tenBit = false, api).codecBits
+        val hevc = "video/hevc".takeIf { bits and 2 != 0 }
+        listOfNotNull("video/avc", hevc, "video/av01".takeIf { bits and 4 != 0 })
+            .map { mime -> mime to bestDecoder(all.filter { it.mime == mime }, api) }
+    }
+
+    /**
+     * Whether every pick tolerates multi-slice access units: the `VIDEO_CAP_MULTI_SLICE`
+     * advertisement. Amlogic HEVC decoders wedge the whole device on multi-slice frames
+     * (Chromecast with Google TV, onn 4K), so an Amlogic pick, or one that can't be inspected,
+     * keeps the host on one slice.
+     */
+    val multiSliceTolerant: Boolean = picks.all { (_, pick) ->
+        val name = pick?.name?.lowercase() ?: return@all false
+        !name.startsWith("omx.amlogic") && !name.startsWith("c2.amlogic")
+    }
+
+    /**
+     * Whether this device's display shows full-range BT.709 video as studio range: the
+     * `FEATURE_STUDIO_RANGE` ask, so the host sends studio SDR. See [limitedOnlyBt709Hal].
+     */
+    val showsFullRangeAsStudio: Boolean = picks.any { (_, pick) ->
+        pick != null && limitedOnlyBt709Hal(pick.name, vendorApi)
+    }
+
+    /**
+     * Whether every pick supports partial-frame input (`FEATURE_PartialFrame`): the client may then
+     * opt into slice-progressive delivery. The codec is chosen after connect, so all must qualify.
+     */
+    val partialFrameCapable: Boolean = picks.all { (_, pick) -> pick?.partialFrame == true }
+
+    /**
+     * The connect log's readout (`adb logcat -s pf.caps`): each advertised MIME's pick, whether it
+     * declares `FEATURE_PartialFrame`, and its latency-named vendor parameters
+     * ([VideoDecoders.vendorKeys]), which show whether a `low_latency_key` profile's keys exist.
+     */
+    fun capsReport(): String {
+        if (!listed) return "codec list unavailable"
+        return picks.joinToString("  ") { (mime, pick) ->
+            "${mime.removePrefix("video/")}=${pick?.name ?: "platform-default"}" +
+                " partialFrame=${pick?.partialFrame ?: "?"} vendor=[${VideoDecoders.vendorKeys(pick?.name)}]"
+        }
     }
 }
 

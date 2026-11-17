@@ -145,8 +145,9 @@ impl Drop for RampServer {
 /// clamped to [`RAMP_STEP_MAX_MS`], so the hand-over never waits long. A fit
 /// server then lingers: `open` cleared by `Drop` cancels at once, but
 /// `finish` lets queued requests — and the client's closing pin — through
-/// for [`PIN_FIT_IDLE_GRACE`] after the last result, bounded by
-/// [`PIN_FIT_MAX_GRACE`] from first ready.
+/// for [`PIN_FIT_IDLE_GRACE`] after the last result, served before ready or
+/// after, bounded by [`PIN_FIT_MAX_GRACE`] from first ready. With no result
+/// yet, the quiet counts from ready.
 fn serve(
     session: &mut Session,
     probe_rx: &ProbeReceiver,
@@ -176,7 +177,6 @@ fn serve(
         }
         match probe_rx.recv_timeout(std::time::Duration::from_millis(2)) {
             Ok(req) => {
-                quiet_since = None;
                 let req = ProbeShaped {
                     duration_ms: req.duration_ms.min(RAMP_STEP_MAX_MS),
                     ..req
@@ -189,9 +189,7 @@ fn serve(
                     None => declined(),
                 };
                 let _ = probe_result_tx.send(result);
-                if done.load(Ordering::SeqCst) {
-                    quiet_since = Some(std::time::Instant::now());
-                }
+                quiet_since = Some(std::time::Instant::now());
             }
             // The control task going away ends the loop the same as its flags.
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -512,6 +510,43 @@ mod tests {
             took < std::time::Duration::from_millis(500),
             "took {took:?}"
         );
+        assert!(!open.load(Ordering::SeqCst));
+    }
+
+    /// A fit server whose ramp went quiet before the pipeline was ready hands
+    /// over at once: the closing pin had its grace after the last result.
+    #[test]
+    fn a_ramp_quiet_before_ready_hands_over_at_once() {
+        let (_client, session) = loopback_host();
+        let (req_tx, req_rx) = std::sync::mpsc::channel();
+        let (res_tx, mut res_rx) = tokio::sync::mpsc::unbounded_channel();
+        let open = Arc::new(AtomicBool::new(true));
+        let ramp = RampServer::start(
+            session,
+            req_rx,
+            res_tx,
+            true,
+            Arc::new(AtomicBool::new(false)),
+            open.clone(),
+            true,
+        );
+        req_tx
+            .send(
+                ProbeRequest {
+                    target_kbps: 20_000,
+                    duration_ms: 25,
+                }
+                .into(),
+            )
+            .expect("the server is listening");
+        while res_rx.try_recv().is_err() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        std::thread::sleep(2 * PIN_FIT_IDLE_GRACE);
+        let started = std::time::Instant::now();
+        let (_session, _rx) = ramp.finish().expect("joined");
+        let took = started.elapsed();
+        assert!(took < PIN_FIT_IDLE_GRACE, "took {took:?}");
         assert!(!open.load(Ordering::SeqCst));
     }
 

@@ -541,9 +541,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
         case steamController = 5
         case steamDeck = 6
         /// DualSense Edge: the DualSense plus native back/Fn buttons. GameController exposes the
-        /// Edge as a `GCDualSenseGamepad` with its own product category. The capture does not
-        /// forward its paddles yet (`GamepadWire.paddle1`); the declared identity + rich planes
-        /// match the physical pad.
+        /// Edge as a `GCDualSenseGamepad` with its own product category. The back buttons
+        /// GameController exposes on it reach the wire's grips (`GamepadCapture.grips`); the
+        /// declared identity + rich planes match the physical pad.
         case dualSenseEdge = 7
         /// Nintendo Switch Pro Controller: correct Nintendo glyphs + positional layout on the
         /// host side.

@@ -6,6 +6,7 @@ import android.hardware.display.DisplayManager
 import android.os.Build
 import android.util.Log
 import android.view.Display
+import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -187,7 +188,12 @@ internal fun CompanionOnDisplay(
     // A Presentation cancels itself when its display's metrics change; the next one takes the new ones.
     var generation by remember { mutableIntStateOf(0) }
     DisposableEffect(activity, display.displayId, generation, pictureHz) {
-        val p = Presentation(activity, display)
+        val p = object : Presentation(activity, display) {
+            override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+                if (pictureHz != null) window?.decorView?.unbufferGesture(ev)
+                return super.dispatchTouchEvent(ev)
+            }
+        }
         p.window?.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
         // Its own window, so the app theme the activity's composition sits under is set again here.
         val view = ComposeView(p.context).apply {

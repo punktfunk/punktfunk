@@ -29,8 +29,17 @@ pub const HOST_MAX_BIDI_STREAMS: u32 = 32;
 /// cbindgen:ignore
 pub const HOST_RECEIVE_WINDOW: u32 = 4 << 20;
 
-fn stream_transport() -> Arc<quinn::TransportConfig> {
-    Arc::new(stream_transport_idle(DEFAULT_IDLE_TIMEOUT, None))
+/// The client's transport. It asks the host to acknowledge within 2 ms, not quinn's 25 ms, so a
+/// lost key or button edge on a quiet uplink resends after the RTT plus 2 ms. A gap still draws
+/// an immediate ACK (reordering threshold 1). Only the client asks: asked of the client, it would
+/// cost an uplink ACK per host audio datagram.
+fn client_transport() -> Arc<quinn::TransportConfig> {
+    let mut t = stream_transport_idle(DEFAULT_IDLE_TIMEOUT, None);
+    let mut ack = quinn::AckFrequencyConfig::default();
+    ack.max_ack_delay(Some(std::time::Duration::from_millis(2)))
+        .reordering_threshold(quinn::VarInt::from_u32(1));
+    t.ack_frequency_config(Some(ack));
+    Arc::new(t)
 }
 
 /// Idle clamped to 1 s..1 h so the QUIC VarInt millisecond conversion cannot
@@ -332,7 +341,7 @@ fn client_config(
     let quic_cfg = quinn::crypto::rustls::QuicClientConfig::try_from(rustls_cfg)
         .map_err(|e| anyhow_result::Error::msg(format!("quic client config: {e}")))?;
     let mut client_cfg = quinn::ClientConfig::new(Arc::new(quic_cfg));
-    client_cfg.transport_config(stream_transport());
+    client_cfg.transport_config(client_transport());
     Ok(client_cfg)
 }
 
@@ -500,6 +509,55 @@ mod tests {
             }
         }
         assert_eq!(sent, super::HOST_RECEIVE_WINDOW as usize);
+    }
+
+    /// The client asks the host for prompt ACKs and the host takes the request. The host asks
+    /// nothing back, so the client keeps quinn's own ACK pacing.
+    #[tokio::test]
+    async fn the_client_asks_the_host_for_prompt_acks() {
+        use std::time::Duration;
+        let (_server_ep, _client_ep, host_conn, conn) =
+            crate::quic::test_util::connect_pair().await;
+        let t0 = std::time::Instant::now();
+        while host_conn.stats().frame_rx.ack_frequency == 0 && t0.elapsed() < Duration::from_secs(5)
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(conn.stats().frame_tx.ack_frequency >= 1);
+        assert!(host_conn.stats().frame_rx.ack_frequency >= 1);
+        assert_eq!(host_conn.stats().frame_tx.ack_frequency, 0);
+        assert_eq!(conn.stats().frame_rx.ack_frequency, 0);
+    }
+
+    /// How long one lone datagram waits for its ACK, each way, on a quiet loopback connection.
+    /// The host → client wait keeps quinn's 25 ms delay; client → host is the 2 ms request.
+    #[tokio::test]
+    #[ignore = "measurement: prints wall-clock ACK waits"]
+    async fn a_lone_client_packet_is_acked_within_the_requested_delay() {
+        use std::time::{Duration, Instant};
+        async fn ack_wait(sender: &quinn::Connection) -> Duration {
+            let acks = sender.stats().frame_rx.acks;
+            let t0 = Instant::now();
+            sender.send_datagram(vec![0u8].into()).unwrap();
+            while sender.stats().frame_rx.acks == acks && t0.elapsed() < Duration::from_secs(1) {
+                tokio::task::yield_now().await;
+            }
+            t0.elapsed()
+        }
+        let (_server_ep, _client_ep, host_conn, conn) =
+            crate::quic::test_util::connect_pair().await;
+        // Let MTU discovery and the handshake's tail settle, so each datagram flies alone.
+        for c in [&conn, &host_conn] {
+            ack_wait(c).await;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        for _ in 0..5 {
+            let up = ack_wait(&conn).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let down = ack_wait(&host_conn).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            println!("client → host ACK wait {up:?}, host → client {down:?}");
+        }
     }
 
     /// Loopback MTU is 64 KiB, so only endpoint config can cap the search.

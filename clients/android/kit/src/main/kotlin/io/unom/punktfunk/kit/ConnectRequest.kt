@@ -37,7 +37,7 @@ data class ConnectRequest(
      *  ordinary panel. Ignored while [hdrEnabled] is set, which already implies 10-bit. */
     val tenBitSdr: Boolean,
     /** Every decoder this device would use tolerates multi-slice AUs
-     *  ([VideoDecoders.multiSliceTolerant]) — advertises `VIDEO_CAP_MULTI_SLICE`; false keeps
+     *  ([DecoderSnapshot.multiSliceTolerant]) — advertises `VIDEO_CAP_MULTI_SLICE`; false keeps
      *  the host at single-slice frames. */
     val multiSliceOk: Boolean,
     /** Every decoder this device would use accepts partial-frame input
@@ -99,7 +99,7 @@ data class ConnectRequest(
     /** PyroWave quality in hundredths of a bit per pixel, between `punktfunk_core::pyrowave`'s
      *  `BPP_FLOOR` and `BPP_MAX`; `0` leaves the host's own. */
     val pyrowaveBppX100: Int = 0,
-    /** This display shows full-range video as studio ([VideoDecoders.showsFullRangeAsStudio]):
+    /** This display shows full-range video as studio ([DecoderSnapshot.showsFullRangeAsStudio]):
      *  asks the host for studio-range SDR. An older host ignores it. */
     val studioRange: Boolean = false,
     /** The size the picture is shown at when the mode is larger (render scale above 1x): a host

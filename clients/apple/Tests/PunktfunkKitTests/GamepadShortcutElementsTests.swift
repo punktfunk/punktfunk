@@ -9,8 +9,9 @@ import XCTest
 @MainActor
 final class GamepadShortcutElementsTests: XCTestCase {
     func testEveryButtonAShortcutCanReadHasAnElement() {
+        let grips = GamepadCapture.grips { _ in true }
         for bit in GamepadWire.allButtons {
-            XCTAssertNotNil(GamepadCapture.elements[bit], "wire bit \(bit) has no element to claim")
+            XCTAssertNotNil(GamepadCapture.elements[bit] ?? grips[bit], "wire bit \(bit) has no element to claim")
         }
     }
 

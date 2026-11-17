@@ -969,6 +969,44 @@ fn a_reconnect_waits_for_the_release_not_a_timer() {
     host.join().unwrap().unwrap();
 }
 
+/// The drain ends once nothing more can leave: at once over a closed connection, and when the
+/// client's own reconnect supersedes the session mid-drain. A stopped session whose client is
+/// still there, as a steal's victim, drains in full.
+#[tokio::test]
+async fn a_drain_ends_once_nothing_can_leave() {
+    use crate::vdisplay::admission::{register, supersede};
+    let stop = Arc::new(AtomicBool::new(true));
+    let started = std::time::Instant::now();
+    drain(&stop, || true).await;
+    assert!(started.elapsed() < DRAIN, "a closed connection");
+
+    // No identity and a mode no session asks for: no other test's admission reads it.
+    let row = register(
+        None,
+        (1, 1, 3),
+        stop.clone(),
+        "d".into(),
+        Default::default(),
+        None,
+    );
+    let reconnect = {
+        let stop = stop.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            supersede(&[stop]);
+        })
+    };
+    let started = std::time::Instant::now();
+    drain(&stop, || false).await;
+    assert!(started.elapsed() < DRAIN, "a reconnect supersedes it");
+    reconnect.await.unwrap();
+    drop(row);
+
+    let started = std::time::Instant::now();
+    drain(&stop, || false).await;
+    assert!(started.elapsed() >= DRAIN, "a live client keeps it");
+}
+
 /// A client streams over `punktfunk/2`: the handshake crosses the translated control stream,
 /// the media arrives on the connection's own socket under exporter keys, and every frame is
 /// the host's byte for byte. Each frame's `HostTiming` names it by the

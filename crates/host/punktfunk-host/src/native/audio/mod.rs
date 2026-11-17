@@ -113,6 +113,12 @@ const STOP_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 /// re-anchors. Chasing an old schedule after a stall would send a burst — the exact thing
 /// pacing exists to prevent — so past this point the debt is forgiven, not repaid.
 const PACE_REANCHOR: std::time::Duration = std::time::Duration::from_millis(100);
+/// How long a stretch of capture with no hole in it times the capture clock. Arrival jitter at
+/// its two ends moves one estimate by jitter / window, and the next window takes it back.
+const RATE_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+/// How far a slot may stray from one nominal frame to follow the capture clock. Real clocks sit
+/// within ±100 ppm; past this the rate is wrong, and the hole and bonus rules carry it.
+const RATE_FOLLOW_PPM: u128 = 500;
 
 /// What the wire does in the slot [`Pacer::release`] was asked about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,17 +140,23 @@ struct Release {
     reanchored: bool,
 }
 
-/// The wall-clock send schedule. A capture quantum is not a frame: draining it into
-/// back-to-back datagrams bursts 4–5 frames then silence. One frame leaves per slot; a source
-/// behind the schedule is covered with silence once the hole reaches [`InfillPolicy::after`],
-/// or the schedule falls behind forever; a source ahead (backlog past one chunk plus one
-/// frame) sends a second frame in the same slot, so surplus drains at 2× instead of growing
-/// latency. Time is passed in.
+/// The send schedule. A capture quantum is not a frame: draining it into back-to-back datagrams
+/// bursts 4–5 frames then silence. One frame leaves per slot, and a slot lasts one frame of the
+/// capture clock ([`Pacer::follow_capture`]), so a capture clock off the host's neither holds
+/// surplus nor runs dry. A source behind the schedule is covered with silence once the hole
+/// reaches [`InfillPolicy::after`], or the schedule falls behind forever; a source ahead
+/// (backlog past one chunk plus one frame) sends a second frame in the same slot, so surplus
+/// drains at 2× instead of growing latency. Time is passed in.
 ///
 /// [`InfillPolicy::after`]: crate::audio::capture_policy::InfillPolicy::after
 struct Pacer {
     due: Option<std::time::Instant>,
+    /// One slot: `nominal` until a [`RATE_WINDOW`] has timed the capture clock.
     interval: std::time::Duration,
+    /// One frame at the plane's nominal rate.
+    nominal: std::time::Duration,
+    /// Start of the current stretch of steady capture, and the samples since.
+    window: Option<(std::time::Instant, usize)>,
     /// Interleaved samples in one protocol frame.
     frame_len: usize,
     infill: crate::audio::capture_policy::InfillPolicy,
@@ -169,6 +181,8 @@ impl Pacer {
         Pacer {
             due: None,
             interval,
+            nominal: interval,
+            window: None,
             frame_len,
             infill: crate::audio::capture_policy::InfillPolicy::new(frame_us),
             max_chunk: Default::default(),
@@ -194,9 +208,9 @@ impl Pacer {
         ready_at.saturating_duration_since(now).min(PACE_MAX_SLEEP)
     }
 
-    /// A capture chunk of `len` samples lasting `quantum`. `true` = the wire fell silent across
-    /// the hole it ends: the partial frame and the redundancy predecessor both describe audio
-    /// from before a discontinuity.
+    /// A capture chunk of `len` samples lasting `quantum`, which also times the capture clock.
+    /// `true` = the wire fell silent across the hole it ends: the partial frame and the
+    /// redundancy predecessor both describe audio from before a discontinuity.
     fn on_chunk(
         &mut self,
         now: std::time::Instant,
@@ -204,12 +218,42 @@ impl Pacer {
         quantum: std::time::Duration,
     ) -> bool {
         let broke = self.infill.chunk_arrived();
+        // On time is one chunk after the last, a missed graph cycle two: past one and a half, the
+        // clock window restarts. A late chunk misread as a miss only delays the estimate.
+        if now.duration_since(self.last_chunk_at) > quantum * 3 / 2 {
+            self.window = None;
+        }
         self.last_chunk_at = now;
         self.max_chunk.note(len, now);
         // The graph's real buffer size, so the infill threshold is one chunk plus one frame and
         // never the middle of a legitimately long cycle.
         self.infill.note_quantum(quantum, now);
+        self.follow_capture(now, len);
         broke
+    }
+
+    /// Once [`RATE_WINDOW`] of steady capture has arrived, a slot lasts the time `frame_len` of
+    /// its samples took, within [`RATE_FOLLOW_PPM`] of nominal. A covered hole or a missed cycle
+    /// restarts the window and keeps the slot: the audio lost would read as a slow clock, and
+    /// its lag stays for the hole rule to cover.
+    fn follow_capture(&mut self, now: std::time::Instant, len: usize) {
+        let Some((start, samples)) = self.window else {
+            self.window = Some((now, 0));
+            return;
+        };
+        let samples = samples + len;
+        let span = now.duration_since(start);
+        if span < RATE_WINDOW {
+            self.window = Some((start, samples));
+            return;
+        }
+        let samples = (samples as u128).max(1);
+        let ns = (span.as_nanos() * self.frame_len as u128 + samples / 2) / samples;
+        let nominal = self.nominal.as_nanos();
+        let slack = nominal * RATE_FOLLOW_PPM / 1_000_000;
+        let ns = ns.clamp(nominal - slack, nominal + slack);
+        self.interval = std::time::Duration::from_nanos(ns as u64);
+        self.window = Some((now, 0));
     }
 
     /// Start one wake's releases: at most one bonus frame per wake.
@@ -217,7 +261,8 @@ impl Pacer {
         self.bonus_taken = false;
     }
 
-    /// The slot due at `now`, with `queued` samples waiting. Consumes infill budget on silence.
+    /// The slot due at `now`, with `queued` samples waiting. Silence consumes infill budget and
+    /// restarts the capture-clock window.
     fn release(&mut self, now: std::time::Instant, queued: usize) -> Release {
         let mut late = std::time::Duration::ZERO;
         let mut reanchored = false;
@@ -242,12 +287,15 @@ impl Pacer {
             Slot::Wait
         } else {
             // The hole is the longer of the time since the last chunk (the graph stopped) and
-            // the schedule lag (the graph fed less than the wall clock).
+            // the schedule lag (the graph fed less than the schedule).
             let hole = now.duration_since(self.last_chunk_at).max(late);
             match self.infill.decide(hole) {
-                crate::audio::capture_policy::Infill::Silence => Slot::Silence {
-                    first: self.infill.covered() == self.infill.frame(),
-                },
+                crate::audio::capture_policy::Infill::Silence => {
+                    self.window = None;
+                    Slot::Silence {
+                        first: self.infill.covered() == self.infill.frame(),
+                    }
+                }
                 _ => Slot::Wait,
             }
         };
@@ -756,13 +804,16 @@ fn split_unit(
     true
 }
 
-/// Whether the datagram buffer has room for all of `parts`, waiting up to `wait` for the
-/// connection to drain it: microseconds on a clear wire. The buffer evicts its oldest
-/// datagram once full, which after a back-to-back frame is a part of that frame, so on
-/// `false` the caller drops this frame whole. Spins: the wait is shorter than a sleep the OS
-/// grants.
+/// Sleep between checks of a full datagram buffer. Each check takes quinn's connection lock,
+/// which the driver needs to drain the buffer.
+const ROOM_POLL: std::time::Duration = std::time::Duration::from_micros(100);
+
+/// Whether the datagram buffer (`space`) has room for all of `parts`, checked again every
+/// [`ROOM_POLL`] for up to `wait`. The buffer evicts its oldest datagram once full, which after
+/// a back-to-back frame is a part of that frame, so on `false` the caller drops this frame
+/// whole.
 fn parts_have_room(
-    conn: &super::link::SessionLink,
+    space: impl Fn() -> Option<usize>,
     parts: &[Vec<u8>],
     wait: std::time::Duration,
 ) -> bool {
@@ -771,11 +822,11 @@ fn parts_have_room(
     let record = punktfunk_core::config::DATAGRAM_QUEUE_OVERHEAD;
     let need = (parts.iter().map(|d| d.len() + 1 + record).sum::<usize>()).saturating_sub(record);
     let t0 = std::time::Instant::now();
-    while conn.datagram_space().is_some_and(|free| free < need) {
+    while space().is_some_and(|free| free < need) {
         if t0.elapsed() >= wait {
             return false;
         }
-        std::thread::yield_now();
+        std::thread::sleep(ROOM_POLL);
     }
     true
 }
@@ -794,6 +845,8 @@ struct Egress {
     oversized_drops: u64,
     /// Frames in parts the datagram buffer had no room for, for the session.
     congested_drops: u64,
+    /// The last frame in parts found no room; until one fits, a frame checks once.
+    stalled: bool,
 }
 
 impl Egress {
@@ -806,6 +859,7 @@ impl Egress {
             last_departure: None,
             oversized_drops: 0,
             congested_drops: 0,
+            stalled: false,
         }
     }
 
@@ -845,6 +899,27 @@ impl Egress {
             );
         }
         self.seq = self.seq.wrapping_add(1);
+    }
+
+    /// Whether a frame's `parts` fit the datagram buffer (`space`). The first frame of a stall
+    /// waits up to `interval` for room; while the buffer stays full, each later frame checks
+    /// once. One that does not fit is dropped through [`Self::congested`].
+    fn parts_fit(
+        &mut self,
+        space: impl Fn() -> Option<usize>,
+        parts: &[Vec<u8>],
+        interval: std::time::Duration,
+    ) -> bool {
+        let wait = if self.stalled {
+            std::time::Duration::ZERO
+        } else {
+            interval
+        };
+        self.stalled = !parts_have_room(space, parts, wait);
+        if self.stalled {
+            self.congested();
+        }
+        !self.stalled
     }
 
     /// A frame in parts the datagram buffer had no room for within one frame: the connection
@@ -1036,10 +1111,9 @@ fn run_plane(args: &PlaneArgs, plane: super::handshake::AudioPlane, seq_io: &mut
             // A PCM frame's parts queue together or not at all, within one frame's time.
             if fmt.pcm
                 && datagrams.len() > 1
-                && !parts_have_room(&args.conn, &datagrams, fmt.interval)
+                && !egress.parts_fit(|| args.conn.datagram_space(), &datagrams, fmt.interval)
             {
                 datagrams.clear();
-                egress.congested();
                 continue;
             }
             // Three `DatagramSend` outcomes; only `Unavailable` ends the audio plane. A
@@ -1180,6 +1254,135 @@ mod tests {
             p.on_chunk(t, frame, MS(5)),
             "the next chunk starts a new continuity"
         );
+    }
+
+    /// What a drift replay measured: silence frames over the whole run, the rest over its
+    /// second half.
+    #[derive(Debug, Default, PartialEq, Eq)]
+    struct DriftRow {
+        /// Time a frame waits after its last sample arrived.
+        mean_hold_us: u64,
+        max_hold_us: u64,
+        infills: u32,
+        bonuses: u32,
+        frames: u64,
+    }
+
+    /// The audio thread's wake loop on simulated time: 48 kHz stereo in `chunk`-sample chunks
+    /// from a capture clock `ppm` off the host's, paced into 5 ms frames for `secs`. `miss`: the
+    /// graph misses one cycle about every 30 s, and that chunk's audio is lost. `follow: false`
+    /// keeps every slot nominal, the fixed wall-clock grid.
+    fn drift_replay(chunk: usize, ppm: i64, secs: u64, miss: bool, follow: bool) -> DriftRow {
+        const PER_SEC: u128 = 96_000;
+        let frame = 480;
+        let t0 = Instant::now();
+        let arrival = |k: u64| {
+            let ns = k as u128 * chunk as u128 * 1_000_000_000_000_000
+                / (PER_SEC * (1_000_000 + ppm) as u128);
+            t0 + Duration::from_nanos(ns as u64)
+        };
+        let quantum = Duration::from_nanos((chunk as u128 * 1_000_000_000 / PER_SEC) as u64);
+        let period = 30 * PER_SEC as u64 / chunk as u64;
+        let missed = |k: u64| miss && k > 0 && k % period == 0;
+        let mut p = Pacer::new(5_000, frame, MS(5), t0);
+        // Each queued chunk's arrival and the samples left of it, oldest first.
+        let mut queue = std::collections::VecDeque::<(Instant, usize)>::new();
+        let (mut now, mut next, mut queued) = (t0, 0u64, 0usize);
+        let steady = t0 + Duration::from_secs(secs / 2);
+        let end = t0 + Duration::from_secs(secs);
+        let (mut row, mut held_ns) = (DriftRow::default(), 0u128);
+        while now < end {
+            if missed(next) {
+                next += 1;
+            }
+            let at = arrival(next);
+            let wake = p.wake_budget(now, queued);
+            if at <= now + wake {
+                now = now.max(at);
+                next += 1;
+                let broke = p.on_chunk(now, chunk, quantum);
+                if !follow {
+                    p.window = None;
+                }
+                if broke {
+                    queue.clear();
+                    queued = 0;
+                }
+                queue.push_back((now, chunk));
+                queued += chunk;
+            } else {
+                now += wake;
+            }
+            p.wake();
+            loop {
+                match p.release(now, queued).slot {
+                    Slot::Wait => break,
+                    Slot::Frame => {
+                        let (mut need, mut last) = (frame, now);
+                        while need > 0 {
+                            let (at, left) = queue.front_mut().unwrap();
+                            let take = need.min(*left);
+                            *left -= take;
+                            need -= take;
+                            last = *at;
+                            if *left == 0 {
+                                queue.pop_front();
+                            }
+                        }
+                        queued -= frame;
+                        if now >= steady {
+                            let hold = now - last;
+                            held_ns += hold.as_nanos();
+                            row.max_hold_us = row.max_hold_us.max(hold.as_micros() as u64);
+                            row.frames += 1;
+                            row.bonuses += u32::from(p.bonus_taken);
+                        }
+                    }
+                    Slot::Silence { .. } => {
+                        queue.clear();
+                        queued = 0;
+                        row.infills += 1;
+                    }
+                }
+                p.sent();
+            }
+        }
+        row.mean_hold_us = (held_ns / u128::from(row.frames.max(1)) / 1_000) as u64;
+        row
+    }
+
+    /// A capture clock 50 ppm off the host's either way, at a 5 ms and a 21 ms chunk, over 20
+    /// minutes: no silence, and frames wait no longer than on time plus the half millisecond the
+    /// first window lets build up. With a graph cycle missed every 30 s, an on-time clock paces
+    /// exactly as the fixed grid, so each miss's lag is covered as before; drift adds or saves
+    /// at most a few frames of silence on top, where the fixed grid moves it by twelve.
+    #[test]
+    fn a_drifting_capture_clock_neither_holds_surplus_nor_dips() {
+        for chunk in [480, 2048] {
+            let on_time = drift_replay(chunk, 0, 1200, false, true);
+            assert_eq!(on_time.infills, 0, "{on_time:?}");
+            for ppm in [50, -50] {
+                let row = drift_replay(chunk, ppm, 1200, false, true);
+                assert_eq!(row.infills, 0, "{chunk}/{ppm} ppm: {row:?}");
+                assert!(
+                    row.mean_hold_us <= on_time.mean_hold_us + 1_000,
+                    "{chunk}/{ppm} ppm: {row:?}, on time {on_time:?}"
+                );
+            }
+            let missing = drift_replay(chunk, 0, 1200, true, true);
+            assert_eq!(
+                missing,
+                drift_replay(chunk, 0, 1200, true, false),
+                "{chunk}"
+            );
+            for ppm in [50, -50] {
+                let row = drift_replay(chunk, ppm, 1200, true, true);
+                assert!(
+                    row.infills.abs_diff(missing.infills) <= 3,
+                    "{chunk}/{ppm} ppm with misses: {row:?}, on time {missing:?}"
+                );
+            }
+        }
     }
 
     /// An E-AC-3 5.1 unit leaves a frame late, in parts under one seq and the pts of the frame
@@ -1351,7 +1554,10 @@ mod tests {
                 assert!(wire.datagrams(seq, 0, &silence, max_datagram, &mut out));
                 assert!(out.len() > 1, "{max_datagram} B a datagram");
                 queued += out.len() as u64;
-                assert!(parts_have_room(&link, &out, wait), "the connection drains");
+                assert!(
+                    parts_have_room(|| link.datagram_space(), &out, wait),
+                    "the connection drains"
+                );
                 for d in out.drain(..) {
                     assert!(matches!(
                         link.send_datagram(d),
@@ -1377,6 +1583,35 @@ mod tests {
             queued,
             "a part the buffer evicted never leaves"
         );
+    }
+
+    /// A full datagram buffer is re-checked after a sleep, not in a spin, for one frame. While
+    /// it stays full each later frame checks once; a frame that fits ends the stall.
+    #[test]
+    fn a_full_datagram_buffer_costs_one_check_per_frame_once_stalled() {
+        use std::cell::Cell;
+        let (full, checks) = (Cell::new(true), Cell::new(0u32));
+        let space = || {
+            checks.set(checks.get() + 1);
+            Some(if full.get() { 0 } else { 1 << 20 })
+        };
+        let parts = vec![vec![0u8; 1200]; 3];
+        let wait = MS(50);
+        let mut egress = Egress::new(0, 2_000);
+        let frame = |e: &mut Egress| {
+            checks.set(0);
+            (e.parts_fit(space, &parts, wait), checks.get())
+        };
+        let (fit, n) = frame(&mut egress);
+        // A sleep never ends early: 50 ms of 100 µs steps is at most 500 more checks.
+        assert!(!fit && (2..=502).contains(&n), "{n} checks");
+        assert_eq!(frame(&mut egress), (false, 1), "stalled: one check");
+        full.set(false);
+        assert_eq!(frame(&mut egress), (true, 1));
+        full.set(true);
+        let (fit, n) = frame(&mut egress);
+        assert!(!fit && n >= 2, "a new stall waits again: {n} checks");
+        assert_eq!((egress.congested_drops, egress.seq), (3, 3));
     }
 
     /// The number this clock exists for, pinned exactly.

@@ -71,7 +71,13 @@ pub fn export_sync_file(dmabuf: BorrowedFd<'_>) -> std::io::Result<Option<OwnedF
 /// Wait for a sync_file (from [`export_sync_file`]) to signal. Negative `timeout_ms`
 /// is infinite.
 pub fn wait_sync_file(sync: BorrowedFd<'_>, timeout_ms: i32) -> std::io::Result<WaitOutcome> {
-    poll_readable(sync, timeout_ms)
+    poll_readable(sync, from_ms(timeout_ms))
+}
+
+/// [`wait_sync_file`] for exactly `timeout`. A caller looping to a deadline uses this: a
+/// timeout cut to whole milliseconds polls with zero in the last one and spins.
+pub fn wait_sync_file_for(sync: BorrowedFd<'_>, timeout: Duration) -> std::io::Result<WaitOutcome> {
+    poll_readable(sync, Some(timeout))
 }
 
 /// Wait for producer writes on `dmabuf`. Negative `timeout_ms` is infinite.
@@ -79,8 +85,13 @@ pub fn wait_sync_file(sync: BorrowedFd<'_>, timeout_ms: i32) -> std::io::Result<
 pub fn wait_read_ready(dmabuf: BorrowedFd<'_>, timeout_ms: i32) -> std::io::Result<WaitOutcome> {
     match export_sync_file(dmabuf)? {
         None => Ok(WaitOutcome::NoFence),
-        Some(sync) => poll_readable(sync.as_fd(), timeout_ms),
+        Some(sync) => poll_readable(sync.as_fd(), from_ms(timeout_ms)),
     }
+}
+
+/// A millisecond timeout; negative is infinite (`None`).
+fn from_ms(timeout_ms: i32) -> Option<Duration> {
+    u64::try_from(timeout_ms).ok().map(Duration::from_millis)
 }
 
 /// One `poll` of `fd`: whether `POLLIN` arrived within `timeout` (`None` waits forever).
@@ -102,9 +113,9 @@ fn poll_once(fd: BorrowedFd<'_>, timeout: Option<&Timespec>) -> std::io::Result<
 }
 
 /// Poll `fd` for `POLLIN`. Already readable at the probe is [`WaitOutcome::NoFence`].
-/// Negative `timeout_ms` is infinite. Retry `EINTR` with the remaining budget —
+/// `None` waits forever. Retry `EINTR` with the remaining budget —
 /// skipping the wait would sample a still-in-flight buffer.
-fn poll_readable(fd: BorrowedFd<'_>, timeout_ms: i32) -> std::io::Result<WaitOutcome> {
+fn poll_readable(fd: BorrowedFd<'_>, timeout: Option<Duration>) -> std::io::Result<WaitOutcome> {
     let zero = Timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -118,8 +129,8 @@ fn poll_readable(fd: BorrowedFd<'_>, timeout_ms: i32) -> std::io::Result<WaitOut
     if probed {
         return Ok(WaitOutcome::NoFence);
     }
-    let deadline =
-        (timeout_ms >= 0).then(|| Instant::now() + Duration::from_millis(timeout_ms as u64));
+    // A timeout past `Instant`'s range is forever.
+    let deadline = timeout.and_then(|t| Instant::now().checked_add(t));
     loop {
         let remaining = match deadline {
             None => None, // no timeout
@@ -153,8 +164,11 @@ mod tests {
         use std::io::Write;
 
         let (r, mut w) = std::io::pipe().unwrap();
-        assert_eq!(poll_readable(r.as_fd(), 10).unwrap(), WaitOutcome::TimedOut);
+        assert_eq!(
+            wait_sync_file(r.as_fd(), 10).unwrap(),
+            WaitOutcome::TimedOut
+        );
         w.write_all(b"x").unwrap();
-        assert_eq!(poll_readable(r.as_fd(), 10).unwrap(), WaitOutcome::NoFence);
+        assert_eq!(wait_sync_file(r.as_fd(), 10).unwrap(), WaitOutcome::NoFence);
     }
 }

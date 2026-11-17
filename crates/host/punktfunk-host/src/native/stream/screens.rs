@@ -568,8 +568,11 @@ enum Ended {
 }
 
 /// A further screen from first build to stop: build framed for its view, stream, rebuild on a
-/// lost capture.
+/// lost capture. It raises itself as the first screen's stream thread does: a stream thread
+/// RealtimeKit raised passes no raise to what it spawns.
 fn run_screen(base: ScreenBase, mut run: ScreenRun) {
+    #[cfg(target_os = "linux")]
+    pf_frame::thread_qos::boost_thread_priority(true);
     let _span = tracing::info_span!("screen", index = run.index).entered();
     let intent = screen_intent(&run.ask, base.plan.codec);
     while std::time::Instant::now() < run.not_before {
