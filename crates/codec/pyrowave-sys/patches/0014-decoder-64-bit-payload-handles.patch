@@ -1,0 +1,66 @@
+Keep the payload memory's Vulkan handles 64-bit on 32-bit targets — PUNKTFUNK LOCAL PATCH.
+
+Not upstream; fixes patch 0011. A non-dispatchable handle (VkBuffer, VkImage) is a uint64_t when
+VK_USE_64_BIT_PTR_DEFINES is 0. 0011 carried the payload buffer and the three linear images
+through uintptr_t, which is 32 bits on armeabi-v7a, so a driver that used the upper half got
+another object bound as the payload.
+
+WHAT IT DOES. Casts each handle between its type and uint64_t directly, in
+pyrowave_decoder_set_payload_memory and Decoder::Impl::set_payload_memory. 64-bit targets build
+the same code.
+
+diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
+index bd610d651..7bd2608ee 100644
+--- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
++++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
+@@ -1878,12 +1878,14 @@ pyrowave_decoder_set_payload_memory(pyrowave_decoder decoder, const pyrowave_pay
+ 	Util::set_thread_logging_interface(&null_logger);
+ 	if (!memory)
+ 		return PYROWAVE_ERROR_INVALID_ARGUMENT;
++	// PUNKTFUNK (patch 0014): a non-dispatchable handle is a uint64_t on 32-bit targets, so it
++	// goes to uint64_t directly and never through uintptr_t.
+ 	const uint64_t linear[3] = {
+-		uint64_t(uintptr_t(memory->linear[0])),
+-		uint64_t(uintptr_t(memory->linear[1])),
+-		uint64_t(uintptr_t(memory->linear[2])),
++		(uint64_t)memory->linear[0],
++		(uint64_t)memory->linear[1],
++		(uint64_t)memory->linear[2],
+ 	};
+-	bool ret = decoder->decoder.set_payload_memory(uint64_t(uintptr_t(memory->buffer)), memory->size,
++	bool ret = decoder->decoder.set_payload_memory((uint64_t)memory->buffer, memory->size,
+ 	                                               memory->copy_reserve, memory->host, linear, memory->rows);
+ 	return ret ? PYROWAVE_SUCCESS : PYROWAVE_ERROR_INVALID_ARGUMENT;
+ }
+diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp
+index 4b15cfe34..b4cc1e214 100644
+--- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp
++++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp
+@@ -1044,7 +1044,8 @@ void Decoder::Impl::check_linear_texture_support()
+ }
+
+ // PUNKTFUNK (patch 0011): see Decoder::set_payload_memory. On failure the decoder keeps no
+-// caller handle and rebuilds its own payload on the next decode.
++// caller handle and rebuilds its own payload on the next decode. Patch 0014: each handle
++// goes from uint64_t straight to its type, so a 32-bit target keeps all 64 bits.
+ bool Decoder::Impl::set_payload_memory(uint64_t buffer, uint64_t size, uint64_t copy_reserve, void *host,
+                                        const uint64_t linear[3], uint32_t rows)
+ {
+@@ -1069,7 +1070,7 @@ bool Decoder::Impl::set_payload_memory(uint64_t buffer, uint64_t size, uint64_t
+ 	             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+ 	             VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
+ 	info.domain = BufferDomain::Device;
+-	payload_data = device->wrap_buffer(info, (VkBuffer)(uintptr_t)buffer, false);
++	payload_data = device->wrap_buffer(info, (VkBuffer)buffer, false);
+ 	if (!payload_data)
+ 		return false;
+
+@@ -1092,7 +1093,7 @@ bool Decoder::Impl::set_payload_memory(uint64_t buffer, uint64_t size, uint64_t
+ 			image_info.domain = ImageDomain::LinearHost;
+ 			image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+ 			image_info.layout = ImageLayout::General;
+-			*reqs[i].out = device->wrap_image(image_info, (VkImage)(uintptr_t)linear[i]);
++			*reqs[i].out = device->wrap_image(image_info, (VkImage)linear[i]);
+ 			if (!*reqs[i].out)
+ 				break;
+

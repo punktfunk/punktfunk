@@ -66,6 +66,11 @@ number is never reused.
   0012-decoder-cached-plane-views.patch — the decoder keeps the plane views of
     the four output sets a client rotates through, so the fragment path's
     framebuffers come from Granite's cache instead of being made every frame.
+  0014-decoder-64-bit-payload-handles.patch — set_payload_memory keeps Vulkan
+    handles 64-bit on 32-bit builds instead of casting through uintptr_t.
+  0015-decoder-payload-read-bound.patch — the dequant reads at most 4 KiB past
+    a packet's start; upload_payload pads by that, and push_packet_in_place
+    refuses a packet closer than that to the end of the caller's memory.
 
 Retired (upstream carries the fix):
   0003 devel-encode-16bit-read — pyrowave a62f374 (2026-10-03) sizes the devel

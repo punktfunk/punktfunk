@@ -1878,12 +1878,14 @@ pyrowave_decoder_set_payload_memory(pyrowave_decoder decoder, const pyrowave_pay
 	Util::set_thread_logging_interface(&null_logger);
 	if (!memory)
 		return PYROWAVE_ERROR_INVALID_ARGUMENT;
+	// PUNKTFUNK (patch 0014): a non-dispatchable handle is a uint64_t on 32-bit targets, so it
+	// goes to uint64_t directly and never through uintptr_t.
 	const uint64_t linear[3] = {
-		uint64_t(uintptr_t(memory->linear[0])),
-		uint64_t(uintptr_t(memory->linear[1])),
-		uint64_t(uintptr_t(memory->linear[2])),
+		(uint64_t)memory->linear[0],
+		(uint64_t)memory->linear[1],
+		(uint64_t)memory->linear[2],
 	};
-	bool ret = decoder->decoder.set_payload_memory(uint64_t(uintptr_t(memory->buffer)), memory->size,
+	bool ret = decoder->decoder.set_payload_memory((uint64_t)memory->buffer, memory->size,
 	                                               memory->copy_reserve, memory->host, linear, memory->rows);
 	return ret ? PYROWAVE_SUCCESS : PYROWAVE_ERROR_INVALID_ARGUMENT;
 }
