@@ -1,7 +1,7 @@
 //! Windows backend selection: NVIDIA → NVENC, AMD → AMF, Intel → QSV, and an adapter with only
 //! a hardware MFT → Media Foundation. `auto` uses the selected render adapter so encode matches
-//! capture. The pf-vdisplay driver opens the encoder; the host asks these questions to
-//! negotiate and to plan capture.
+//! capture. The encoder opens out of process, in the pf-vdisplay driver or a capture worker;
+//! the host asks these questions to negotiate and to plan capture.
 
 use super::*;
 use crate::env_knobs::Knobs;
@@ -18,10 +18,10 @@ pub(crate) struct Probes {
     pub(crate) codecs_missed: OnceLock<()>,
 }
 
-/// The pf-vdisplay driver holds the only Windows encoder: it opens the backend on the pooled
-/// device inside WUDFHost and publishes access units into the session's AU section, which
-/// the source's `pf_capture::RemoteEncoder` wraps as the loop's `Encoder`. Reaching here means a
-/// session resolved to a non-IDD-push capture source, which no longer exists.
+/// A Windows encoder runs in another process, the pf-vdisplay driver's WUDFHost (IDD-push) or a
+/// capture worker (WGC), and publishes access units into the session's AU section, which the
+/// source's `pf_capture::RemoteEncoder` wraps as the loop's `Encoder`. Reaching here means a
+/// session took a capture source with no remote encoder.
 pub(crate) fn open(
     _: &Resolved,
     _: &OpenParams,
@@ -156,7 +156,8 @@ impl Resolved {
     }
 
     /// True if the codec advertisement comes from a real GPU probe ([`Self::codecs`]) rather
-    /// than the static superset. AMF always; QSV with `qsv`; NVENC with `nvenc`.
+    /// than the static superset. AMF and Media Foundation always; QSV with `qsv`; NVENC with
+    /// `nvenc`.
     fn is_probed(&self) -> bool {
         match self.backend() {
             WindowsBackend::Amf => true,
@@ -317,8 +318,8 @@ mod tests {
         r
     }
 
-    /// `wire_caps` reads one resolution (sweep R5-08): software is H.264 without PyroWave, a
-    /// probed set is its mask, and a backend this build has no probe for is the superset.
+    /// `wire_caps` reads one resolution: software is H.264 without PyroWave, a probed set is
+    /// its mask, and a backend this build has no probe for is the superset.
     #[test]
     fn wire_caps_reads_one_resolution() {
         assert_eq!(

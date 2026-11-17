@@ -10,8 +10,8 @@
 //! Construction is `const fn zeroed()`, not `mem::zeroed`. Byte views are
 //! `bytemuck` casts: deriving `Pod` rejects padding at compile time.
 //!
-//! `dxva.h` uses 1-byte packing. Five of six structs match natural alignment;
-//! `{UINT, UINT, USHORT}` slice records are **10 bytes packed, 12 naturally**.
+//! `dxva.h` uses 1-byte packing. Four of the six structs match natural alignment;
+//! the two `{UINT, UINT, USHORT}` slice records are **10 bytes packed, 12 naturally**.
 //! Record 0 lands either way; from record 1 every field is two bytes off.
 //! Slice types therefore use `#[repr(C, packed)]` and `align_of == 1`.
 //!
@@ -36,8 +36,9 @@ pub const UNUSED_ENTRY: u8 = 0xFF;
 pub const BITSTREAM_ALIGN: usize = 128;
 
 /// `DXVA_PicEntry_H264` / `DXVA_PicEntry_HEVC` — one byte in both specs:
-/// `Index7Bits : 7` (D3D11VA `ArraySlice` / [`crate::SlotMap`] DPB slot) then
-/// `AssociatedFlag : 1` (bottom field on `CurrPic`, long-term on a ref list).
+/// `Index7Bits : 7` (D3D11VA `ArraySlice`: the [`crate::SlotMap`] DPB slot, or the surface
+/// [`crate::surfaces`] binds it to) then `AssociatedFlag : 1` (bottom field on `CurrPic`,
+/// long-term on a ref list).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Pod, Zeroable)]
 #[repr(C)]
 pub struct PicEntry(pub u8);
@@ -158,7 +159,7 @@ impl PicParamsH264 {
     }
 }
 
-/// Fifteen bits in [`PicParamsH264::wBitFields`]. MSVC fills from LSB:
+/// Sixteen bits in [`PicParamsH264::wBitFields`]. MSVC fills from LSB:
 /// `field_pic_flag` 0, `MbaffFrameFlag` 1, `residual_colour_transform_flag` 2,
 /// `sp_for_switch_flag` 3, `chroma_format_idc` 4–5, `RefPicFlag` 6,
 /// `constrained_intra_pred_flag` 7, `weighted_pred_flag` 8,
@@ -203,8 +204,8 @@ impl H264BitFields {
 
 /// `DXVA_Qmatrix_H264` (`D3D11_VIDEO_DECODER_BUFFER_INVERSE_QUANTIZATION_MATRIX`).
 /// 224 bytes. `[i][j]` is bitstream (zig-zag) order, not raster — matching
-/// `parse_scaling_list`. Only Intra Y / Inter Y 8×8 lists (indices 0 and 3);
-/// 8×8 chroma is 4:4:4-only.
+/// `parse_scaling_list`. Only the Intra Y and Inter Y 8×8 lists; 8×8 chroma is
+/// 4:4:4-only.
 ///
 /// Old ATI/AMD UVD wanted raster (`FF_DXVA2_WORKAROUND_SCALING_LIST_ZIGZAG`);
 /// not implemented — hosts encode flat lists.
@@ -230,7 +231,7 @@ impl QmatrixH264 {
 /// later record is two bytes off.
 ///
 /// Short format only. Long format (`DXVA_Slice_H264_Long`) is refused at
-/// decoder creation; the ladder then uses FFmpeg.
+/// decoder creation; the decoder ladder walks on to its next rung.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C, packed)]
 pub struct SliceH264Short {
@@ -637,8 +638,9 @@ pub fn as_bytes<T: Pod>(value: &T) -> &[u8] {
     bytemuck::bytes_of(value)
 }
 
-/// Slice-control bytes: `n` packed records with no gap. Relies on
-/// [`SliceH264Short`] / [`SliceHevcShort`] being 10-byte packed.
+/// Slice- or tile-control bytes: packed records with no gap. Relies on
+/// [`SliceH264Short`] / [`SliceHevcShort`] being 10-byte and
+/// [`crate::dxva_av1::TileAv1`] 16-byte packed.
 pub fn slice_bytes<T: Pod>(values: &[T]) -> &[u8] {
     bytemuck::cast_slice(values)
 }
@@ -853,7 +855,7 @@ mod tests {
         assert_eq!(bytes[4], 3);
         assert_eq!(&bytes[12..16], &0x0A0B_0C0Du32.to_le_bytes());
         assert_eq!(&bytes[214..216], &0x1234u16.to_le_bytes());
-        // Untouched bytes are real zeros (reserved fields).
+        // Untouched bytes are real zeros (`SliceGroupMap`).
         assert!(bytes[230..1040].iter().all(|&b| b == 0));
     }
 

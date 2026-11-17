@@ -44,7 +44,7 @@ pub fn fd_identity(fd: std::os::fd::BorrowedFd<'_>) -> std::io::Result<(u64, u64
 }
 
 /// Parse a `PUNKTFUNK_*` boolean. Unrecognised spellings return `None` (the
-/// flag's default), not false: `TRUE` as "off" inverted host-wide defaults.
+/// flag's default), not false: a typo cannot turn a default-on flag off.
 fn flag_opt(name: &str) -> Option<bool> {
     let v = std::env::var(name).ok()?;
     match v.trim().to_ascii_lowercase().as_str() {
@@ -208,7 +208,8 @@ pub fn fused_convert_modifiers(fourcc: u32) -> Vec<u64> {
 
 /// GPU RGB→NV12 before NVENC. Default ON: NVENC's internal CSC otherwise
 /// runs on the SM the game saturates. `PUNKTFUNK_NV12=0` restores RGB/BGRx.
-/// LINEAR (gamescope/Vulkan-bridge) captures ignore this.
+/// Tiled imports convert in GL ([`ImportKind::TiledNv12`]), LINEAR ones (gamescope) in the
+/// Vulkan bridge ([`ImportKind::LinearNv12`]).
 pub fn nv12_enabled() -> bool {
     flag_opt("PUNKTFUNK_NV12").unwrap_or(true)
 }
@@ -647,8 +648,8 @@ mod tests {
                 "{full}: white → ({y}, {u}, {v})"
             );
 
-            // Red saturates V (Kr row sums to +0.5); blue saturates U. Full: 255.5 before the
-            // clamp.
+            // Red saturates V (its V coefficient is +0.5); blue saturates U (likewise). Full:
+            // 255.5 before the clamp.
             let (_, _, v) = bt709(255, 0, 0, full);
             assert!(close(v, sat), "{full}: red V → {v}");
             let (_, u, _) = bt709(0, 0, 255, full);

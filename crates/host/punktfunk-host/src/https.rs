@@ -1206,7 +1206,7 @@ fn build_server_config(
     mandatory: bool,
 ) -> Result<Arc<ServerConfig>> {
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    // rustls-pki-types `PemObject` (same path as punktfunk-core/quic.rs) so
+    // rustls-pki-types `PemObject` (same path as punktfunk-core/src/quic/endpoint.rs) so
     // we don't pull the unmaintained `rustls-pemfile`.
     let certs = CertificateDer::pem_slice_iter(cert_pem.as_bytes())
         .collect::<std::result::Result<Vec<_>, _>>()

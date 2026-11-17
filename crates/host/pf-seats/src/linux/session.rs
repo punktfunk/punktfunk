@@ -263,9 +263,9 @@ pub(super) fn render_class() -> &'static str {
 /// The drop-in of a start through the login helper (`super::login`): the unit's main process is
 /// `helper login <account>`, run as root by `!`, which skips only the switch to `User=`. So
 /// systemd opens no PAM session of its own, the runtime directory stays the person's and a stop
-/// runs as today's. In SELinux `context` when there is one; a helper that ends ends the start,
-/// and the journal keeps the seat's own tag. `None` for a path a unit file can't hold verbatim;
-/// `context` is the caller's to check.
+/// runs as it does for the plain unit. In SELinux `context` when there is one; a helper that
+/// ends ends the start, and the journal keeps the seat's own tag. `None` for a path a unit file
+/// can't hold verbatim; `context` is the caller's to check.
 pub(super) fn render_login(helper: &Path, context: Option<&str>) -> Option<String> {
     let path = helper.to_str()?;
     let plain = path.starts_with('/')
@@ -799,7 +799,7 @@ mod tests {
         assert!(!text.contains("/home/jdoe") && !text.contains("SEAT_OWNER"));
     }
 
-    /// The whole seat contract, in the order the doc lists it, with each path under its seat.
+    /// The whole seat contract, with each path under its seat.
     #[test]
     fn the_env_file_carries_the_seat_contract() {
         let text = render_env(

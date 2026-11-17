@@ -249,8 +249,8 @@ pub fn restore_selected(r: &RowRestore, i: u32) {
     }
 }
 
-/// Update a row's caption after construction — the dynamic-caption hook (touch mode,
-/// resolution, codec). Both ChoiceRow shapes carry their subtitle on [`adw::ActionRow`]
+/// Update a row's caption after construction — the dynamic-caption hook (resolution,
+/// codec). Both ChoiceRow shapes carry their subtitle on [`adw::ActionRow`]
 /// ([`adw::ComboRow`] derives from it), so one downcast covers desktop and gamescope mode.
 pub fn set_row_subtitle(row: &adw::PreferencesRow, text: &str) {
     if let Some(r) = row.downcast_ref::<adw::ActionRow>() {
@@ -264,9 +264,8 @@ pub fn set_row_subtitle(row: &adw::PreferencesRow, text: &str) {
 /// wants — so a long caption starves the value label next to it, which then ellipsizes ("2×
 /// (su…"). Capping the caption gives the width back to the control.
 ///
-/// The repo's standing rule was "keep captions to one line (~66 chars)", which works until a
-/// row grows another suffix — the override marker's reset button did exactly that. A cap is
-/// the structural version of the same rule: it holds however many suffixes a row ends up with.
+/// A cap holds however many suffixes a row ends up with, which a rule to keep captions to one
+/// line does not.
 const CAPTION_CHARS: i32 = 46;
 
 /// Cap a row's caption width. The subtitle label isn't exposed by libadwaita, so it is found by

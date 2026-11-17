@@ -19,7 +19,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const DATA_PATH = resolve(process.env.PF_WINGET_DATA ?? `${HERE}/data/data.json`);
 const PORT = Number(process.env.PORT ?? 3240);
 
-// Reload on mtime change rather than caching for the process lifetime. Publishing a release rsyncs
+// Reload on mtime change rather than caching for the process lifetime. Publishing a release copies
 // a new data.json onto the box; without this it would serve the old catalogue until someone
 // remembered to restart the container. Stat-per-request on an ~8 KB local file is free, and it
 // keeps "deploy" and "publish" decoupled the way the flatpak repo already is.
@@ -31,7 +31,7 @@ function catalogue() {
     mtimeMs = statSync(DATA_PATH).mtimeMs;
   } catch (e) {
     // Keep serving the last good catalogue if the file goes missing mid-flight (e.g. a partial
-    // rsync) — a transient publish must not take the source down.
+    // copy) — a transient publish must not take the source down.
     if (cache.data) return cache.data;
     cache.error = `cannot stat ${DATA_PATH}: ${e.message}`;
     return null;
@@ -44,7 +44,7 @@ function catalogue() {
     console.log(`[winget] loaded ${parsed.packages.length} package(s) from ${DATA_PATH}`);
     return parsed;
   } catch (e) {
-    // A half-written file during rsync parses as garbage; prefer stale-but-valid over an outage.
+    // A half-written file during the copy parses as garbage; prefer stale-but-valid over an outage.
     if (cache.data) {
       console.error(`[winget] reload failed, keeping previous catalogue: ${e.message}`);
       return cache.data;
@@ -66,8 +66,8 @@ function toRequest(req) {
 }
 
 const server = createServer(async (req, res) => {
-  // Liveness for compose/monitoring — deliberately outside the winget routes so a broken catalogue
-  // is visible as 503 here rather than as a confusing "no package found" in the client.
+  // Liveness for compose/monitoring — deliberately outside the winget routes, so a missing or
+  // unparseable catalogue answers 503 here without involving a winget route.
   if (req.url === "/healthz") {
     const data = catalogue();
     const ok = !!data;

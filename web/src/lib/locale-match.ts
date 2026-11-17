@@ -1,5 +1,5 @@
 // Which shipped language a browser's preference list asks for. The same walk as the Rust `pick`
-// in l10n/src/lib.rs, whose cases (l10n/vectors.json) the tests replay; `zh` is the one addition.
+// in l10n/src/lib.rs, whose cases (l10n/vectors.json) the tests replay.
 
 /**
  * `l10n/locales.json`'s `fallback`. The console build sees only `l10n/messages`, so the map is

@@ -18,7 +18,7 @@ pub(crate) struct HudSample {
     pub(crate) stats: Option<punktfunk_core::hud::StatsSnapshot>,
 }
 
-/// Spawn mode's Stream screen: the stream runs in the punktfunk-session child's own
+/// The Stream screen: the stream runs in the punktfunk-session child's own
 /// window, so the shell shows a status card in the app's card language — monogram +
 /// host header, the child's live stats window as a chip row + stage lines, the
 /// in-window shortcuts, and a Disconnect that kills the child (its exit event routes
@@ -48,7 +48,7 @@ pub(crate) fn session_page(pal: &Palette, ctx: &Arc<super::AppCtx>, hud: &HudSam
     // Header: monogram + title + the one thing worth knowing (where the video went).
     let header: View = Grid::new()
         .children((
-            // Monogram, as the comment above says: `Target` carries no OS chain to mark with.
+            // No OS mark: `Target` carries no OS chain, so the tile shows the host's initial.
             host_tile(pal, &host, "", true, 44.0)
                 .grid_column(0)
                 .vertical_alignment(VerticalAlignment::Center),

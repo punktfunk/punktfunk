@@ -10,8 +10,7 @@
 
 use std::path::PathBuf;
 
-/// `Silent` is progress-only. Both silent modes never ask; with `/SUPPRESSMSGBOXES`
-/// every dialog takes its default.
+/// Both silent modes take the windowless path and never ask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Silence {
     Interactive,

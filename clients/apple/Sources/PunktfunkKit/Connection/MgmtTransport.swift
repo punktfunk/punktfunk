@@ -115,9 +115,10 @@ extension MgmtTransport {
     /// How long a dial over the stream port waits before HTTPS takes over.
     static let tunnelWaitMs: UInt32 = 3000
 
-    /// `method path` over the host's stream port, which needs no TCP 47990. A `body` goes out
-    /// with `contentType`. One connection per host serves every call. Throws `pinMismatch` for a
-    /// host that is not the pinned one, `connection` when the port carried nothing.
+    /// `method path` over the host's stream port, which needs no TCP management port. A `body`
+    /// goes out with `contentType`. One connection per host serves every call. Throws
+    /// `pinMismatch` for a host that is not the pinned one, `connection` when the port carried
+    /// nothing.
     static func tunnel(
         _ method: String, _ path: String, body: Data?, contentType: String?,
         to target: MgmtTarget
@@ -327,7 +328,7 @@ final class MgmtConnection: @unchecked Sendable {
         set { healthy.withLock { $0 = newValue } }
     }
     private let healthy = OSAllocatedUnfairLock(initialState: true)
-    /// Has this connection completed at least one request? Drives the retry-once rule in
+    /// Has this connection completed at least one request? Drives the retry rule in
     /// `MgmtTransport.request` — only a connection the host may have dropped since is worth retrying.
     var hasServedRequest: Bool { servedRequest }
 
@@ -339,15 +340,15 @@ final class MgmtConnection: @unchecked Sendable {
         let options = NWProtocolTLS.Options()
         let sec = options.securityProtocolOptions
         sec_protocol_options_set_min_tls_protocol_version(sec, .TLSv12)
-        // Our half of the mTLS handshake: the same paired identity the host authorizes the
-        // read-only library routes by (mgmt/auth.rs `cert_may_access`).
+        // Our half of the mTLS handshake: the same paired identity the host authorizes a paired
+        // device by (mgmt/auth.rs `cert_may_access`).
         if let identity, let secIdentity = sec_identity_create(identity) {
             sec_protocol_options_set_local_identity(sec, secIdentity)
         }
         let rejected = RejectionFlag()
         // Replaces system trust evaluation wholesale, which is the point: the host is self-signed
-        // and carries no SAN, so there is nothing for the system policy to succeed at. Pinning the
-        // leaf's SHA-256 is the real check.
+        // and its SANs name only localhost, loopback and its hostname, so the system policy has
+        // nothing to succeed at. Pinning the leaf's SHA-256 is the real check.
         sec_protocol_options_set_verify_block(sec, { _, trust, complete in
             let secTrust = sec_trust_copy_ref(trust).takeRetainedValue()
             guard let chain = SecTrustCopyCertificateChain(secTrust) as? [SecCertificate],

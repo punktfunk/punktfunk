@@ -31,7 +31,7 @@ final class Sc2RingGateTests: XCTestCase {
 
     func testRingOpensOnSelectThenAAndNeitherReachesTheGame() {
         let g = gate()
-        // Select is held back: Hold Select is the guide by default on Apple.
+        // Select is held back: `Shortcuts.defaults(client: .apple)` binds Hold Select to the guide.
         XCTAssertEqual(step(g, Sc2Device.btnView).forwarded.buttons, 0)
         let opened = step(g, Sc2Device.btnView | Sc2Device.btnA, at: 80)
         XCTAssertEqual(opened.events, [.fire(.ring, .once)])

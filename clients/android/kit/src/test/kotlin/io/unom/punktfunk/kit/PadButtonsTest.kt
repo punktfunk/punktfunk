@@ -12,16 +12,13 @@ import org.junit.Test
  * has no key layout for. Only `KeyEvent`'s compile-time-inlined keycode constants are involved, so
  * no Android runtime is needed. Run: `./gradlew :kit:testDebugUnitTest`.
  *
- * The regression it pins is a field report from a Fire TV Stick 4K Max (2026-08-20): a DualSense
- * and an Xbox Elite Series 2, both over Bluetooth, both identified correctly but with buttons
- * landing on the wrong actions — "L1 being L2". Neither pad has a key layout on that box (AOSP
- * ships none for `045e:0b05` at all, and the DualSense's requires `CONFIG_HID_PLAYSTATION`), so
- * both fall back to `Generic.kl`, which names keycodes by scancode POSITION. A pad with no kernel
- * driver numbers its HID buttons 1..n straight through in its own report order, so every keycode
- * after the first divergence belongs to a different button.
+ * A pad with no key layout falls back to `Generic.kl`, which names keycodes by scancode POSITION.
+ * A pad with no kernel driver numbers its HID buttons 1..n straight through in its own report
+ * order, so every keycode after the first divergence belongs to a different button; `correct`
+ * resolves the button from the scancode instead.
  *
- * The table below is the pad's physical button on the left and where `Generic.kl` put it on the
- * right; the assertions read it back the other way.
+ * An assertion expects the physical button; a trailing `delivered as` comment names the keycode
+ * `Generic.kl` gives it.
  */
 class PadButtonsTest {
 
@@ -32,9 +29,8 @@ class PadButtonsTest {
         Gamepad.PadButtons.GENERIC_XBOX.correct(scan, Gamepad.genericKeyCode(scan))
 
     /**
-     * The exact report: a DualSense's L2 sits at scancode `0x136`, which `Generic.kl` calls
-     * BUTTON_L1 — so pulling L2 read as a shoulder press, and L1 (at `0x134`, read as BUTTON_Y)
-     * read as a face button.
+     * A driverless DualSense's L2 sits at scancode `0x136`, which `Generic.kl` calls BUTTON_L1,
+     * and its L1 (`0x134`) arrives as BUTTON_Y. Each is put back on its own button.
      */
     @Test
     fun `a DualSense's shoulders stop being each other's buttons`() {
@@ -54,8 +50,8 @@ class PadButtonsTest {
     }
 
     /**
-     * Create/Options/L3/R3/PS. Select in particular: without this it arrived as BUTTON_THUMBL,
-     * which took the exit, mic and stats chords with it — every one of them is built on Select.
+     * Create/Options/L3/R3/PS. Create is Select, which the exit, mic and stats chords are built
+     * on.
      */
     @Test
     fun `a DualSense's menu buttons and stick clicks are themselves`() {
@@ -81,14 +77,12 @@ class PadButtonsTest {
     }
 
     /**
-     * The regression the touchpad/mute mapping is one hoist away from causing, and the reason it
-     * lives inside GENERIC_SONY rather than anywhere above `padMap(dev)`.
+     * The touchpad/mute rows live inside GENERIC_SONY, not above `padMap(dev)`.
      *
      * `0x13d`/`0x13e` are `BTN_THUMBL`/`BTN_THUMBR` — L3 and R3 — in the standard Linux/AOSP
      * mapping, which is what [Gamepad.genericKeyCode] says they are. They mean touchpad click and
      * mute ONLY inside the straight-through enumeration a driverless Sony pad uses. Read as
-     * touchpad and mute anywhere else, every Xbox pad, Switch Pro, 8BitDo, Steam Deck and
-     * `hid-playstation` DualSense loses both stick clicks — and R3 starts toggling the microphone.
+     * touchpad and mute anywhere else, every other pad would lose both stick clicks.
      */
     @Test
     fun `every other pad keeps L3 and R3 on those scancodes`() {
@@ -151,13 +145,10 @@ class PadButtonsTest {
     }
 
     /**
-     * The guard's NEGATIVE path — the half that decides anything.
-     *
-     * The cases above all deliver the keycode `Generic.kl` would have produced, so the guard is
-     * transparent in every one of them and the assertions would hold with it deleted. These are
-     * the ones that fail without it: a device-specific key layout answering something the table
-     * disagrees with, on a scancode the table has an opinion about. The layout wins — it knows
-     * this controller, and the table is only ever a guess about a pad nothing knew.
+     * The guard's NEGATIVE path. These fail without it: a device-specific key layout answering
+     * something the table disagrees with, on a scancode the table has an opinion about. The
+     * layout wins — it knows this controller, and the table is only ever a guess about a pad
+     * nothing knew.
      */
     @Test
     fun `a device layout outranks the table on a scancode the table would have rewritten`() {
@@ -186,8 +177,8 @@ class PadButtonsTest {
     }
 
     /**
-     * The axis half. A pad that names its triggers something Android knows is read exactly as it
-     * always was — this is the branch that must NOT fire on the pads that already work.
+     * The axis half. A pad that names its triggers something Android knows is read by Android's
+     * own axis names — the fallback must NOT fire on the pads that already work.
      */
     @Test
     fun `a pad that names its triggers is read unchanged`() {
@@ -222,8 +213,8 @@ class PadButtonsTest {
 
     /**
      * A Sony pad reporting straight through lays out X, Y, Z, Rz, Rx, Ry — left stick, right
-     * stick, then the triggers. Only the triggers were being missed; the sticks already read
-     * right and must be left alone.
+     * stick, then the triggers. Only the triggers are added; the sticks already read right and
+     * must be left alone.
      */
     @Test
     fun `an unmapped Sony pad keeps its sticks and gains its triggers`() {
@@ -277,11 +268,10 @@ class PadButtonsTest {
     }
 
     /**
-     * The regression that made this gate necessary (field reports, 2026-08-21): an Xbox Wireless
-     * Controller and a GameSir G8+, both with their buttons at the standard positions and both
-     * corrected anyway, because `hasKeys` says BUTTON_C and BUTTON_Z for any pad that DECLARES six
-     * buttons — `hid-input` allocates the whole descriptor `BTN_A + n` straight through whether the
-     * pad ever presses them or not. Naming the triggers is what tells the two apart.
+     * `hasKeys` says BUTTON_C and BUTTON_Z for any pad that DECLARES six buttons — `hid-input`
+     * allocates the whole descriptor `BTN_A + n` straight through whether the pad ever presses
+     * them or not — so a declaration is not a report order. Naming the triggers is what tells a
+     * standard-layout pad from a straight-through one.
      */
     @Test
     fun `a pad that names its triggers is never corrected, whatever it declares`() {
@@ -296,10 +286,9 @@ class PadButtonsTest {
     }
 
     /**
-     * The four buttons the field reports named, on a pad whose report order is already standard:
-     * X answering Y, Y answering LB, and both shoulders answering a menu button. NATIVE is what
-     * keeps them themselves — the correction tables are right for the pads they are for, and this
-     * is about not reaching one of them.
+     * On a pad whose report order is already standard, NATIVE keeps X, Y and both shoulders
+     * themselves. The correction tables are right for the pads they are for; this is about not
+     * reaching one of them.
      */
     @Test
     fun `an Xbox pad at the standard positions keeps X, Y and its shoulders`() {
@@ -308,7 +297,7 @@ class PadButtonsTest {
         assertEquals(KeyEvent.KEYCODE_BUTTON_Y, native.correct(0x134, KeyEvent.KEYCODE_BUTTON_Y))
         assertEquals(KeyEvent.KEYCODE_BUTTON_L1, native.correct(0x136, KeyEvent.KEYCODE_BUTTON_L1))
         assertEquals(KeyEvent.KEYCODE_BUTTON_R1, native.correct(0x137, KeyEvent.KEYCODE_BUTTON_R1))
-        // What the old heuristic did to each of them, kept here so the difference stays visible.
+        // GENERIC_XBOX on the same events: X as Y, Y as LB, the shoulders as menu keys.
         val wrong = Gamepad.PadButtons.GENERIC_XBOX
         assertEquals(KeyEvent.KEYCODE_BUTTON_Y, wrong.correct(0x133, KeyEvent.KEYCODE_BUTTON_X))
         assertEquals(KeyEvent.KEYCODE_BUTTON_L1, wrong.correct(0x134, KeyEvent.KEYCODE_BUTTON_Y))
@@ -361,7 +350,7 @@ class PadButtonsTest {
         for ((pid, kind) in kinds) assertEquals("057e:%04x".format(pid), kind, Gamepad.prefFor(0x057E, pid))
     }
 
-    /** Past the gate, which straight-through order to read is still the question it always was. */
+    /** Past the gate, the vendor and the declared C/Z buttons pick the report order. */
     @Test
     fun `an unnamed-trigger pad still resolves its report order`() {
         fun order(sony: Boolean, declaresCZ: Boolean) =

@@ -1,12 +1,13 @@
 //! **Media Foundation** hardware encoder (Windows, D3D11 NV12 input). The vendor-agnostic
 //! rung between the native SDKs ([`super::nvenc`]/[`super::amf`]/[`super::qsv`]) and
-//! software: every x64 vendor ships an H.264/HEVC MFT, so a missing `amfrt64.dll` no
-//! longer ends the session — and on Adreno it is the only hardware encode path there is.
+//! software: every x64 vendor ships an H.264/HEVC MFT, so a missing `amfrt64.dll` does
+//! not end the session — and on Adreno it is the only hardware encode path there is.
 //!
 //! Drives an **async hardware MFT** (`MFTEnum2`, filtered to the capture adapter's LUID)
-//! through its event generator, pumped non-blocking (`MF_EVENT_FLAG_NO_WAIT`) from
-//! `submit`/`poll`. No second thread: the driver's encode thread stays the only one
-//! touching the MFT, and a wedged MFT costs a bounded wait, not a join.
+//! through its event generator: `EventSink` re-arms `BeginGetEvent` on MF's worker threads,
+//! counts input credit and runs `ProcessOutput` into a shared queue, while `ProcessInput`
+//! stays on the driver's encode thread. No thread of ours: a wedged MFT costs a bounded wait
+//! (`BUSY_BUDGET`), not a join.
 //!
 //! Input is a same-device NV12 texture ring — `CopySubresourceRegion` then
 //! `MFCreateDXGISurfaceBuffer`. 8-bit 4:2:0 only: no P010, no 4:4:4, and no AV1 (every
@@ -709,8 +710,7 @@ impl MfEncoder {
                     .GetImmediateContext()
                     .context("ID3D11Device immediate context")?;
                 // MFT worker threads touch the device: protection must be on before the
-                // manager reset, or the reset takes a device nobody else may use (QSV's
-                // on-glass lesson, `qsv.rs`).
+                // manager reset, or the reset takes a device nobody else may use.
                 if let Ok(mt) = dctx.cast::<ID3D11Multithread>() {
                     let _ = mt.SetMultithreadProtected(true);
                 }
@@ -1042,10 +1042,9 @@ impl Encoder for MfEncoder {
                 })
         };
         // The flush voided every in-flight frame and the queued events that named them. The
-        // callback stays armed across it — the generator is the MFT's, not the stream's — so
-        // this clear belongs BETWEEN the stop and the restart: re-arming issues fresh
-        // METransformNeedInput on the MFT's thread, and clearing afterwards discarded the
-        // input credit the restart had just granted.
+        // callback stays armed across it (the generator is the MFT's), so clear BETWEEN the stop
+        // and the restart: the restart issues fresh METransformNeedInput on the MFT's thread,
+        // and a clear after it would drop that credit.
         inner.shared.q.lock().extra.need_input = 0;
         inner.shared.q.reset();
         // SAFETY: as above — synchronous no-argument messages on a live MFT.
@@ -1117,7 +1116,7 @@ impl Encoder for MfEncoder {
         // End-of-stream zeroed the MFT's input credit and it issues no more until a fresh
         // start-of-stream, so without this a later submit stalls out its whole budget.
         // Drop the stale count FIRST: the restart issues fresh METransformNeedInput on the
-        // MFT's thread, and zeroing afterwards threw away the credit it had just granted.
+        // MFT's thread, and zeroing after it would drop that credit.
         inner.shared.q.lock().extra.need_input = 0;
         // SAFETY: the MFT is live on this thread; a synchronous no-argument message.
         unsafe {

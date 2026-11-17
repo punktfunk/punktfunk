@@ -5,10 +5,10 @@
 //! counters here separate the two, so a host can report both and a change can be measured
 //! rather than guessed at.
 //!
-//! Process-wide and free-running: decoding happens on whatever thread draws, there is one
-//! shelf being filled at a time, and a host reads deltas between two snapshots rather than
-//! asking for a reset. Relaxed ordering throughout — these are counters for a human, not a
-//! synchronisation edge, and no decision is made on them.
+//! Process-wide and free-running: every poster decode adds to it, on whichever thread ran it
+//! (a screen's art worker, a host's fetch thread), and a host reads deltas between two
+//! snapshots rather than asking for a reset. Relaxed ordering throughout — these are counters
+//! for a human, not a synchronisation edge, and no decision is made on them.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;

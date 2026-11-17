@@ -1,6 +1,6 @@
-//! A title's details (design §2.5): its cover and facts, what this device has played of it, and
-//! what it does — play, favorite, the preset it always streams with, its link. An `AdwDialog`,
-//! so a narrow window gets it as a bottom sheet.
+//! A title's details (design/linux-client-overhaul.md §2.5): its cover and facts, what this
+//! device has played of it, and what it does — play, favorite, the preset it always streams
+//! with, its link. An `AdwDialog`, so a narrow window gets it as a bottom sheet.
 
 use super::{LibraryMsg, Shelf, View};
 use crate::store::Store;
@@ -164,7 +164,8 @@ pub fn show(
 }
 
 /// The preset this title always streams with, beating the host's own binding; "Same as the
-/// host" clears it. The session resolves it on every launch of the title (design D6).
+/// host" clears it. The session resolves it on every launch of the title
+/// (design/linux-client-overhaul.md D6).
 fn preset_row(store: &Rc<Store>, shelf: &Shelf, id: &str) -> adw::ComboRow {
     let presets: Vec<(String, String)> = store
         .presets()

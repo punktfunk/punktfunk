@@ -64,8 +64,8 @@ impl EncoderWatchdog {
     }
 
     /// Spend one reset. `None` once [`MAX_ENCODER_RESETS`] are spent, else the backoff:
-    /// 100 ms doubling to 1.6 s, never under one frame. Instant retries would burn all five
-    /// inside one driver hiccup.
+    /// 100 ms doubling to 1.6 s, never under one frame. Instant retries would burn the whole
+    /// budget inside one driver hiccup.
     pub(crate) fn spend(&mut self, interval: Duration) -> Option<Duration> {
         self.resets += 1;
         (self.resets <= MAX_ENCODER_RESETS)

@@ -168,9 +168,9 @@ fn is_refusal((status, body): &(StatusCode, serde_json::Value)) -> bool {
     *status == StatusCode::FORBIDDEN && body["code"] == "profile_change_not_allowed"
 }
 
-/// A device that names no profile reaches none of the person's routes, as before the lane: it is
-/// not admitted. The plugin lane writes no profile's layer, and keeps what it reached without
-/// `as`. Nothing of the box changes.
+/// A device that names no profile reaches none of the person's routes: it is not admitted. The
+/// plugin lane writes no profile's layer, and keeps what it reached without `as`. Nothing of
+/// the box changes.
 #[tokio::test]
 async fn a_device_without_as_and_a_plugin_change_no_profile() {
     let tmp = ConfigDirOverride::new();
@@ -198,7 +198,7 @@ async fn a_device_without_as_and_a_plugin_change_no_profile() {
         }
     }
     assert_eq!(files(tmp.path()), before, "nothing changed");
-    // Without `as` the plugin lane switches the box's own source and settings, as it did.
+    // Without `as` the plugin lane switches the box's own source and settings.
     let plugin = |method: Method, path: &str, body| {
         with_bearer(call(&method, path, None, &body), "plugin-secret")
     };
@@ -638,15 +638,15 @@ async fn only_a_person_lists_what_its_profile_hides() {
 }
 
 /// The lane's pins. Each route is a profile's data, takes `as`, and is the owner's host's on a
-/// door; none was a route a device could write before the lane, and a device writes nothing
-/// else. A route added to `PERSON` fails here until it has a lane test.
+/// door; none is one of a device's other writes (`BEFORE`), and a device writes nothing else.
+/// A route added to `PERSON` fails here until it has a lane test.
 #[test]
 fn the_person_lane_is_pinned() {
     use crate::mgmt::owner::{device_route, Side};
     use crate::mgmt::scope::{scope_of, Scope};
     use punktfunk_core::mgmt_routes::PERSON;
     use std::collections::BTreeSet;
-    // Every write a paired device reached before the person's routes.
+    // Every write a paired device may make besides the person's routes.
     const BEFORE: &[(&str, &str)] = &[
         ("POST", "/api/v1/actions/{id}"),
         ("POST", "/api/v1/client-logs"),

@@ -3,7 +3,7 @@ import XCTest
 
 @testable import PunktfunkKit
 
-/// `clients/shared/csc-vectors.json`, which pf-client-core's `csc_rows` writes, against the Swift
+/// `clients/shared/csc-vectors.json`, which pf-client-video's `csc_rows` writes, against the Swift
 /// port: a divergence here means the two sides would render the same stream differently.
 final class CscRowsTests: XCTestCase {
     func testRowsMatchTheSharedVectors() throws {

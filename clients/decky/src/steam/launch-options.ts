@@ -11,7 +11,7 @@ const CLIENT_BIN = /^\/[A-Za-z0-9._/+@-]+$/;
 
 const MAX_LEN = 128;
 
-/** A host ref, preset, game or profile id. A leading `-` would read as a flag to the wrapper. */
+/** A host ref, preset, game or profile id. A leading `-` would read as a flag to the CLI. */
 export function isSafeLaunchId(id: string): boolean {
   return id.length <= MAX_LEN && !id.startsWith("-") && ID_TOKEN.test(id);
 }

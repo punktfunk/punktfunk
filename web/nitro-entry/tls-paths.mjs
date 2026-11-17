@@ -13,16 +13,16 @@
 //                                     pairing hashes bind its X.509 signature bytes.
 //
 // Every launcher names the LEGACY pair — scripts/punktfunk-web.service, the NixOS module, the
-// Windows service supervisor, web-run.cmd, the Steam Deck installer — because they were written
-// before the split, and none of them CAN choose: systemd `Environment=` has no "this file, else
-// that one". Serving the legacy pair costs twice:
+// Windows service supervisor, web-run.cmd, the Steam Deck installer — and none of them CAN
+// choose: systemd `Environment=` has no "this file, else that one". Serving the legacy pair
+// costs twice:
 //
 //   * a CN-only, SAN-less cert is rejected outright by every current browser
 //     (ERR_CERT_COMMON_NAME_INVALID / SSL_ERROR_BAD_CERT_DOMAIN), so the console the operator was
 //     told to open does not load;
 //   * the tray's loopback liveness probe pins whatever the mgmt API serves — the NATIVE cert — so
 //     the handshake is refused and a perfectly healthy console is labelled "Open web console (not
-//     responding)" while the host beside it reads "idle" (field report 2026-08-24).
+//     responding)".
 //
 // So prefer the native sibling. It is also the smaller secret to hand a bundled bun: on a default
 // build key.pem is the Moonlight PAIRING SIGNING key, native-key.pem is only a TLS key.
@@ -38,7 +38,7 @@ import { statSync } from "node:fs";
  *
  * Deliberately NOT `node:path`: that resolves per-RUNTIME, so a POSIX build reads
  * `C:\ProgramData\punktfunk\cert.pem` as one long filename — and Windows, where the service
- * supervisor hands us exactly that (windows/service.rs), is the platform CI can never exercise.
+ * supervisor hands us exactly that (windows/service/web.rs), is the platform CI can never exercise.
  * A suffix test gives the same answer everywhere. It also leaves the prefix VERBATIM, where
  * `join(dirname(p), …)` would normalise `/a/b/../cert.pem` to a different directory than the one
  * the operator named — which matters the moment `b` is a symlink.
@@ -55,10 +55,11 @@ export function dirPrefix(p, base) {
 }
 
 /**
- * A readable, NON-EMPTY file. Emptiness matters: `pf_paths::write_secret_file` is
- * create+truncate+write rather than temp+rename, so a console starting mid-write could otherwise
- * adopt a 0-byte cert and leave `Bun.serve` throwing on every restart — and not every launcher
- * retries forever (the Steam Deck unit is `Restart=on-failure` under the default rate limit).
+ * A readable, NON-EMPTY file. Emptiness matters: `pf_paths::write_secret_file` creates the file
+ * and then writes it in place rather than temp+rename, so a console starting mid-write could
+ * otherwise adopt a 0-byte cert and leave `Bun.serve` throwing on every restart — and not every
+ * launcher retries forever (the Steam Deck unit is `Restart=on-failure` under the default rate
+ * limit).
  *
  * @param {string} p
  */

@@ -10,7 +10,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** The Shortcuts screen with an empty blob: the chords every build before bound, as rows. */
+/** The Shortcuts screen with an empty blob: Android's default chords, as rows. */
 class ShortcutsScreenTest {
     private val defaults = Settings().shortcutBindings()
     private val presses = defaults.rows(touchscreen = true).flatMap { it.rows }.map { it.press }

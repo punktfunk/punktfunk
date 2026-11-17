@@ -67,7 +67,7 @@ pub trait FrameSource: Sync {
 /// guarantees a backend that encodes an input texture where it lies: a slot handed to the
 /// encoder sits in `encoding` and no drain pass can take it back until the AU is published.
 pub const MAX_INFLIGHT: usize = 2;
-/// Polls that return nothing while an AU is owed, before the state word says WEDGED.
+/// How long an owed AU may produce nothing before the state word says WEDGED.
 const WEDGE_AFTER: Duration = Duration::from_secs(2);
 /// How often the loop re-enters `poll` for a backend with no completion event
 /// ([`Encoder::ready_event`]). Their poll is bounded-blocking or complete-at-submit, so this is
@@ -178,7 +178,7 @@ impl<'a> Drive<'a> {
     }
 
     /// A cursor-only frame when the pointer moved and a whole period passed with no frame of
-    /// any kind, so the stream never exceeds the refresh — a 1 kHz mouse over a desktop that
+    /// any kind, so the stream never exceeds its frame rate — a 1 kHz mouse over a desktop that
     /// composes at refresh adds nothing, and between caps the mark coalesces to the latest
     /// position. `None` when no move is pending, the period has not elapsed, or the re-encode
     /// was pre-empted by a queued composed frame.
@@ -258,9 +258,9 @@ pub struct Drive<'a> {
     /// The one timed wake ([`Drive::park`]); built on first use, `None` if the OS refused one.
     timer: Option<OwnedHandle>,
     report: Report,
-    /// Rate the backend is encoding at, kbps. Seeded from the open and rewritten by every
-    /// drained bitrate ctl, including a declined one — the host reads it back rather than
-    /// assuming the ask landed.
+    /// Rate the backend is encoding at, kbps. Seeded from the open and stamped into the header
+    /// by every drained bitrate ctl, including a declined one — the host reads it back rather
+    /// than assuming the ask landed.
     applied_kbps: u32,
     state: u32,
     stop: HANDLE,
@@ -319,7 +319,7 @@ impl Drive<'_> {
         }
     }
 
-    /// The `ENCODE_CTL` ops queued since the last frame, in order. An RFI the backend cannot
+    /// The `ENCODE_CTL` ops queued since the last turn, in order. An RFI the backend cannot
     /// honour becomes a keyframe request, the host's own fallback. Either way the recovery
     /// frame rides the next encode, and a still desktop composes none: the stash carries it.
     fn drain_ctl(&mut self) {
@@ -594,7 +594,7 @@ impl Drive<'_> {
         }
     }
 
-    /// The loop's only wait: stop, a filled pool slot, the backend's completion event, and the
+    /// The loop's idle wait: stop, a filled pool slot, the backend's completion event, and the
     /// high-resolution timer for the two things that need a deadline instead of a signal. A
     /// `WaitForMultipleObjects` timeout would quantise to WUDFHost's 15.6 ms tick, which caps
     /// pointer re-encodes near 64 Hz.
@@ -765,15 +765,15 @@ impl Drive<'_> {
     }
 }
 
-/// The loop's own ten-second line: how many access units went out, how old each was when it did,
-/// and how many submits and parks it took. AU age is `published_at − PresentDisplayQPCTime`, so
-/// it carries the compose-to-publish span the design pays for a frame — encode time once the
-/// loop stops fetching one AU on the next frame's submit.
+/// The loop's own ten-second line: how many access units went out (a chunked backend counts each
+/// chunk), how old each was when it did, and how many submits and parks it took. AU age is
+/// `published_at` minus the frame's present stamp, so it carries the compose-to-publish span the
+/// design pays for a frame.
 ///
 /// `aged` is how many of `published` that span could be taken from, and reading it is not
-/// optional: a cursor-only re-encode carries no present stamp, and a head whose stamp names the
-/// vblank the frame is *for* rather than the one it came from puts it in the future, which is not
-/// an age at all. `aged=0` means no measurement, not a zero one.
+/// optional: a recovery re-encode of the stash carries no present stamp, and a head whose stamp
+/// names the vblank the frame is *for* rather than the one it came from puts it in the future,
+/// which is not an age at all. `aged=0` means no measurement, not a zero one.
 ///
 /// `enc_us` needs no present stamp: it is submit to the access unit's last chunk, the span a
 /// bypass pool holds its next acquire for. `over` counts the ones longer than a frame period.

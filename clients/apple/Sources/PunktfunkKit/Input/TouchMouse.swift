@@ -6,7 +6,7 @@
 // (off → compact → normal → detailed, matching Android) · three-finger swipe up/down =
 // summon/dismiss the local soft keyboard for typing on the host (`onKeyboardGesture`):
 //
-//  * trackpad (default): the cursor STAYS PUT on touch-down and moves by the finger's
+//  * trackpad: the cursor STAYS PUT on touch-down and moves by the finger's
 //    relative delta with mild acceleration — swipe to nudge, lift and re-swipe to walk it
 //    across, tap to click where it is. This is what makes the cursor reachable on a small
 //    screen.
@@ -21,10 +21,10 @@ import PunktfunkShared
 
 /// How touchscreen fingers drive the host — persisted under `DefaultsKey.touchMode`, latched
 /// per gesture by `StreamLayerUIView` (a Settings change applies from the NEXT touch, and a
-/// gesture never splits across models). `trackpad` is the default: a cursor is the
-/// universally workable model; passthrough only helps hosts/apps that actually speak touch.
-/// Every platform (the ring's Touch mode slot names it on tvOS, dimmed); the machine below
-/// is iOS-only.
+/// gesture never splits across models). `SettingDefault.touchMode` is the default: a cursor
+/// (`trackpad`) is the universally workable model; passthrough only helps hosts/apps that
+/// actually speak touch. Every platform (the ring's Touch mode slot names it on tvOS, dimmed);
+/// the machine below is iOS and visionOS only.
 public enum TouchInputMode: String, CaseIterable, Sendable {
     case trackpad
     case pointer
@@ -467,9 +467,8 @@ final class TouchMouse {
         scrollClose(PUNKTFUNK_SCROLL_PHASE_CANCEL)
     }
 
-    /// Three+ fingers → the keyboard swipe, never scroll (the documented vocabulary is
-    /// TWO-finger scroll; 3+ only fell into the scroll path as an accident of its old `>= 2`
-    /// bound). The centroid is anchored per finger count — real fingers never land or lift in
+    /// Three+ fingers → the keyboard swipe, never scroll (the vocabulary is TWO-finger
+    /// scroll). The centroid is anchored per finger count — real fingers never land or lift in
     /// the same event, so a count change must re-anchor rather than read as travel — and the
     /// gesture fires at most once, when the vertical travel crosses the threshold: up = show
     /// the local soft keyboard, down = dismiss it.

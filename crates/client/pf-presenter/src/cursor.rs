@@ -5,11 +5,10 @@
 //! mouse model is engaged — under capture the pointer is relative-locked and
 //! games draw their own cursor in-frame.
 //!
-//! Host bitmaps are host-framebuffer pixels (they track host DPI). Scale by
-//! the video aspect-fit factor times the client display's content scale
-//! (`cursor_scale` in the run loop). SDL cursors are fixed-size from their
-//! surface, so shapes are cached RAW and resampled per install — rebuild when
-//! serial or scale changes.
+//! Host bitmaps are host-framebuffer pixels (they track host DPI). Scale by the video
+//! placement factor over the scale the backend applies to a cursor surface itself
+//! (`cursor_scale` in `cursor_tick`). SDL cursors are fixed-size from their surface, so
+//! shapes are cached RAW and resampled per install — rebuild when serial or scale changes.
 
 use punktfunk_core::client::NativeClient;
 use punktfunk_core::quic::{CursorState, HOST_CAP_CURSOR};
@@ -19,8 +18,7 @@ use sdl3::surface::Surface;
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// Cap. Cursors cycle a handful of shapes; 64 stops a runaway host. Reset
-/// re-installs via the serial-miss path on the reliable stream.
+/// Cap. Cursors cycle a handful of shapes; 64 stops a runaway host. A full cache is cleared.
 const SHAPE_CACHE_MAX: usize = 64;
 
 /// Host-framebuffer bytes + hotspot, held raw so a fit-scale change can rebuild
@@ -86,7 +84,7 @@ impl CursorChannel {
         }
         while let Ok(shape) = connector.next_cursor_shape(Duration::ZERO) {
             if self.shapes.len() >= SHAPE_CACHE_MAX {
-                // Runaway host: reset; live shapes re-install via the serial-miss path.
+                // Runaway host: reset the cache; the shape in hand is inserted below.
                 self.shapes.clear();
                 self.installed = None;
             }
@@ -155,8 +153,8 @@ impl CursorChannel {
     }
 }
 
-/// Resample by `fit_scale` into an SDL color cursor. Hotspot scales with the
-/// bitmap. `fit_scale <= 0` (or a degenerate result) is clamped to a ≥1×1 surface.
+/// Resample by `fit_scale` into an SDL color cursor. Hotspot scales with the bitmap.
+/// A non-finite or non-positive `fit_scale` counts as 1; each side keeps at least 1 px.
 fn build_scaled_cursor(shape: &RawShape, fit_scale: f32) -> Result<Cursor, String> {
     let scale = if fit_scale.is_finite() && fit_scale > 0.0 {
         fit_scale

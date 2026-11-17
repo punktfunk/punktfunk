@@ -4,8 +4,8 @@ runtime needed.
 
 Stubs the ``decky`` module the backend imports, then asserts the argv shapes, the exit-code
 mapping and the Steam VDF editor against fixtures, and that Decky's loader can import it at all.
-A fixture patches the module whose function looks the name up (``client._run_cli``, never
-``client._run_cli``), or the check silently runs the real code.
+A fixture patches the name on the module whose code looks it up (``client._run_cli``), or the
+check silently runs the real code.
 
 Needs Python >= 3.10 for `X | None` annotations — macOS ships 3.9, so run it explicitly:
 
@@ -53,8 +53,7 @@ def check(name: str, cond: bool):
 # ---- _cli_argv: the flatpak app id must stay LAST ---------------------------------------
 #
 # `flatpak run --command=X <app-id> ARGS` — everything after the app id is the APP's argv, so
-# an app id that drifts left silently turns our flags into the client's. This is the shape the
-# deleted _session_argv used and the one thing about it that is easy to get wrong.
+# an app id that drifts left silently turns our flags into the client's.
 client._client_argv = lambda: ["/usr/bin/flatpak", "run", "--arch=x86_64", "io.unom.punktfunk"]
 client._flatpak = lambda: "/usr/bin/flatpak"
 check(
@@ -72,8 +71,8 @@ check(
 # A native install: the CLI is the client binary's sibling. Absent => no CLI at all, which the
 # caller must see as "unavailable" rather than as an empty result.
 #
-# The fixture dir is torn down FIRST, not just created: leaving the sibling behind made the
-# "absent" assertion below pass only on the first run of the day and fail on every rerun.
+# The fixture dir is torn down FIRST, not just created: a sibling left by an earlier run would
+# fail the "absent" assertion below.
 import shutil  # noqa: E402
 
 shutil.rmtree("/tmp/pf-test-native", ignore_errors=True)
@@ -87,11 +86,9 @@ check("cli argv: native sibling found", client._cli_argv() == [str(tmp / "punktf
 
 # ---- _flatpak_ref: the branch must be NAMED, always ---------------------------------------
 #
-# The bug this exists to prevent: every client-update query used to name no branch, and the
-# punktfunk remote publishes `stable` AND `canary` — so `flatpak remote-info <origin>
-# io.unom.punktfunk` failed with "Multiple branches available", the check swallowed the failure,
-# and the panel reported the client up to date forever. One branch INSTALLED is not enough to
-# make the query unambiguous; the ambiguity lives on the remote.
+# The remote publishes `stable` AND `canary`, so a query that names no branch, such as
+# `flatpak remote-info <origin> io.unom.punktfunk`, fails with "Multiple branches available".
+# One branch INSTALLED is not enough to make it unambiguous; the ambiguity lives on the remote.
 shutil.rmtree("/tmp/pf-test-home", ignore_errors=True)
 # An arm install (Steam Frame): the resolver must look under the installed arch, not uname's.
 _fp_root = Path("/tmp/pf-test-home/.local/share/flatpak/app/io.unom.punktfunk/aarch64")
@@ -491,9 +488,8 @@ client._run_client = _real_run_client
 
 # ---- _upsert_configset_entry (Steam Input layout binding) --------------------------------
 #
-# Untested until now, and the riskiest thing that survived the cut: it edits a file holding
-# HUNDREDS of other games' controller bindings, in place. Every assertion below is about not
-# touching them.
+# It edits a file holding HUNDREDS of other games' controller bindings, in place. Every
+# assertion below is about not touching them.
 empty = steam_input._upsert_configset_entry("", "punktfunk", "template", "punktfunk.vdf")
 check("vdf: builds the skeleton when the file is new", '"controller_config"' in empty)
 check("vdf: the entry lands", '"punktfunk"' in empty and '"punktfunk.vdf"' in empty)

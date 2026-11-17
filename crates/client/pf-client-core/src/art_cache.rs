@@ -10,8 +10,9 @@
 //! bounded by [`MAX_BYTES`], oldest mtime first; [`load`] touches on a hit, which
 //! makes that order least-recently-*used*.
 //!
-//! [`crate::library::spawn_art_fetch`]'s workers own every call here. The UI thread
-//! never touches disk for a poster.
+//! The art workers ([`crate::library::spawn_art_fetch`]) call [`load`] and [`store`];
+//! [`path_of`] serves a shell whose image loader reads a path, and [`clear`] is the
+//! settings action.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -20,7 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::library::ART_MAX_BYTES;
 
-/// 128 MiB. A 1 000-title library of ~100 KB posters lands well under it.
+/// 128 MiB. A 1 000-title library of ~100 KB posters fits.
 const MAX_BYTES: u64 = 128 * 1024 * 1024;
 
 /// New bytes that earn a directory walk. An eighth of the budget: eight walks to
@@ -36,7 +37,7 @@ static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
 /// Set by the first failed write, which is the only one logged.
 static REFUSED: AtomicBool = AtomicBool::new(false);
 
-/// `$XDG_CACHE_HOME/punktfunk/art` / `%LOCALAPPDATA%\punktfunk\cache\art`.
+/// The `art` folder of the client cache root, which `cache_subdir` resolves per platform.
 fn dir() -> Option<PathBuf> {
     crate::library_cache::cache_subdir("art")
 }

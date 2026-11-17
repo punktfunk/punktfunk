@@ -25,7 +25,7 @@ pub const AUDIO_FORMAT_LOSSLESS_1764: &str = "lossless1764";
 /// `clients/shared/settings-catalog.json`. The label is read when the row is drawn.
 ///
 /// Values are shared verbatim with Apple `AudioFormatChoice` and Android `AUDIO_FORMAT_*`.
-/// A preset round-trips through all four clients (`presets.rs`); a spelling mismatch is
+/// A preset round-trips between the clients (`presets.rs`); a spelling mismatch is
 /// stored as-is and silently falls back to the global default. Change in lockstep with
 /// `clients/apple/Sources/PunktfunkShared/EffectiveSettings.swift` and
 /// `clients/android/app/src/main/kotlin/io/unom/punktfunk/Settings.kt`.

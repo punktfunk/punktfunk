@@ -6,8 +6,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Pure JVM test of the native-record parser (`key␟name␟addr␟port␟fp␟pair`), the Kotlin half of the
- * discovery JNI seam. No Android types. Run: `./gradlew :kit:testDebugUnitTest`.
+ * Pure JVM test of the native-record parser (`key␟name␟addr␟port␟fp␟pair␟mac␟os␟mgmt`), the Kotlin
+ * half of the discovery JNI seam. No Android types. Run: `./gradlew :kit:testDebugUnitTest`.
  */
 class ParseRecordTest {
     private val s = '\u001F' // field separator (must match the Rust side, discovery.rs FIELD_SEP)
@@ -35,7 +35,7 @@ class ParseRecordTest {
 
     @Test
     fun sevenFieldRecordHasNoOs() {
-        // A native lib predating the 8th field: `os` defaults empty, everything else parses.
+        // A record without the 8th field: `os` defaults empty, everything else parses.
         val h = parseHostRecord(rec("k", "n", "10.0.0.5", "9777", "", "optional", "aa:bb:cc:dd:ee:ff"))!!
         assertEquals(listOf("aa:bb:cc:dd:ee:ff"), h.mac)
         assertEquals("", h.os)
@@ -47,14 +47,14 @@ class ParseRecordTest {
             rec("k", "n", "10.0.0.5", "9777", "", "optional", "", "linux/fedora/bazzite"),
         )!!
         assertEquals("linux/fedora/bazzite", h.os)
-        // A record from a native lib predating the 9th field: no mgmt port, so the caller falls
-        // back to 47990. Absent must read as "unknown", never as port 0.
+        // A record without the 9th field has no mgmt port, so the caller falls back to the
+        // default. Absent must read as "unknown", never as port 0.
         assertNull(h.mgmtPort)
     }
 
     @Test
     fun ninthFieldCarriesTheMgmtPort() {
-        // 47991, not the 47990 default — a host that MOVED its mgmt port is the whole reason this
+        // 47991, not the default port — a host that MOVED its mgmt port is the whole reason this
         // field is on the wire, and a test pinned to the default would pass against a hardcode.
         val h = parseHostRecord(
             rec("k", "n", "10.0.0.5", "9777", "", "optional", "", "linux/arch", "47991"),

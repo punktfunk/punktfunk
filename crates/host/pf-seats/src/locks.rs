@@ -419,7 +419,8 @@ mod tests {
         }
     }
 
-    /// A PIN's "for now" lasts while the device plays and ten minutes after it left.
+    /// A PIN's "for now" lasts while the device plays and [`crate::unlock::GRACE_SECS`] after it
+    /// left.
     #[test]
     fn a_device_signed_in_for_now_leaves_after_its_grace() {
         let mut locks = locks();

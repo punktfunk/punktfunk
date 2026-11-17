@@ -83,7 +83,8 @@ impl WsiPlan {
         }
     }
 
-    /// Compositor process: force the distro layer off. Do not add our layer path.
+    /// Compositor process: force the distro layer off, except under `DistroKept`. Do not add our
+    /// layer path.
     pub(super) fn compositor_env(self) -> Vec<(&'static str, String)> {
         match self {
             Self::DistroKept => Vec::new(),
@@ -152,8 +153,8 @@ mod tests {
             );
         }
 
-        // Trailing newline: the drop-in body appends nothing after this block today, but the bind
-        // lines above it rely on the same contract and the order has changed before.
+        // Trailing newline: the drop-in body appends nothing after this block, but the bind
+        // lines above it rely on the same contract.
         assert!(lines.ends_with('\n'));
     }
 

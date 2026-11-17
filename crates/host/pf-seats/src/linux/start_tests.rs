@@ -1,9 +1,10 @@
 //! What each row kind's transitions ask of the machine, against [`fake`]: every program in
-//! order, and the files a cold start leaves under `/run`. A made seat's provision, the owner's
-//! prepare and desk start, and a cold or warm start of a made seat or the owner's row hand
-//! folders to other users and write under `/run`, so those tests need root; a person's warm
-//! start, every stop, every yield and the owner's release run anywhere, and a made seat's delete
-//! wherever `/proc` is.
+//! order, and the files a cold start leaves under `/run`. A made seat's provision, a cold start
+//! of any row, a warm start of a made seat or the owner's row, the owner's desk start and a
+//! supervisor start over the owner's row hand folders to other users or write under `/run`, so
+//! those tests need root; a person's warm start, every yield, the owner's release and an owner's
+//! or person's stop run anywhere. A made seat's stop and delete need `/proc`, and the delete's
+//! tests of its `/run` files and the owner's library drives need root too.
 
 use super::*;
 use std::cell::{Cell, RefCell};

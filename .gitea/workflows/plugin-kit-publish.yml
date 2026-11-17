@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Both installs retried: bun's download-and-extract is single-shot, and a truncated tarball
-      # reads as `Fail extracting tarball` (ci.yml's web job has the measurement). A publish job
+      # reads as `Fail extracting tarball` (see ci.yml's web job). A publish job
       # is the worst place to lose to a dropped packet — the tag is already pushed.
       - name: Build the SDK (file:../sdk dependency source)
         working-directory: sdk
@@ -69,9 +69,7 @@ jobs:
           test -f node_modules/@punktfunk/host/package.json
           test -f node_modules/@punktfunk/host/dist/index.d.ts
 
-      # The kit had no biome config and no lint step, while every plugin repo that consumes it does
-      # — so its source drifted (unused imports, formatting) with nothing to catch it. Now gated
-      # here, on the same config and pinned biome version the plugins use.
+      # Gated on the same config and pinned biome version the plugins use.
       - name: Lint & format
         working-directory: plugin-kit
         run: bun run check
@@ -96,8 +94,8 @@ jobs:
           PKG="$(node -p "require('./package.json').version")"
           test "$TAG" = "$PKG" || { echo "tag $GITHUB_REF_NAME does not match package version $PKG"; exit 1; }
 
-      # A version published by hand (the runner queue was deep) must not turn the tag's lane red:
-      # the registry refuses a second upload of the same version, so skip it instead.
+      # A version published by hand must not turn the tag's lane red: the registry refuses a
+      # second upload of the same version, so skip it instead.
       - name: Skip a version the registry already serves
         id: published
         working-directory: plugin-kit

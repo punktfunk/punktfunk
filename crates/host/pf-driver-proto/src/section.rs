@@ -1,8 +1,9 @@
 //! The one bounds-checked view of a mapped shared-memory section.
 //!
-//! Every owner of a Win32 section (the host's pad and AU sections, the capture worker, the
-//! UMDF drivers) reaches the bytes through [`SectionView`]. The pointer arithmetic, the bounds
-//! and alignment checks, the atomic casts and the memcpys live here, in a crate Miri
+//! The host's pad and AU sections, the capture worker, `pf-umdf-util`'s mapped views and
+//! `pf-vdisplay`'s encode section reach the bytes through [`SectionView`]; the vdisplay cursor
+//! section and the seat audio sections use raw pointers of their own. The pointer arithmetic, the
+//! bounds and alignment checks, the atomic casts and the memcpys live here, in a crate Miri
 //! interprets natively and at the MSVC layout. Mapping, unmapping and handles stay with each
 //! owner.
 

@@ -39,8 +39,8 @@ import { SourceSettingsDialog } from "./SourceSettings";
 /**
  * The Sources tab: one card of sections — Game sources, Emulators, Art & metadata — with the
  * migration banner above it. Game sources: enablement, liveness, counts, actions, and pending
- * folder access in one list, because this is where missing games are visible. N-1 hosts may
- * still report built-in scanners, so migration stays until those hosts age out. A profile's view
+ * folder access in one list, because this is where missing games are visible. A host older than
+ * v0.28.0 may still report built-in scanners, so the migration banner stays. A profile's view
  * switches only its own sources and their stream settings: the rest is the owner's library's.
  */
 export const SourcesSection: FC<{
@@ -156,12 +156,9 @@ export const SourcesSection: FC<{
 	);
 
 	// The bridge-release nudge (design D9): a built-in scanner still doing the work, with its
-	// replacement plugin sitting uninstalled in the catalog. One click per scanner, and NEVER a
-	// silent auto-install — installing code stays an explicit operator act.
-	//
-	// Against a v0.28.0+ host this is always empty (no source reports `builtin` any more) and the
-	// banner never renders. It stays for the N-1 host this console may be driving, where it is still
-	// the migration path.
+	// replacement plugin uninstalled in the catalog. One click per scanner, never a silent
+	// auto-install: installing code is an explicit operator act. A host from v0.28.0 on reports
+	// no `builtin` source, so the banner never renders there.
 	const migratable = sources
 		.filter((s) => s.origin === "builtin" && s.enabled)
 		.map((s) => ({
@@ -276,7 +273,7 @@ export const MigrationBanner: FC<{
 export interface SourcesProfile {
 	name: string;
 	ownerName: string;
-	/** The person's own console: no plugin is theirs to see running, and no source settings. */
+	/** The person's own console: no plugin is theirs to see running, and no plugin form. */
 	person?: boolean;
 }
 

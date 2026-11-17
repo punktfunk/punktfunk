@@ -1,39 +1,13 @@
 # Workspace-wide build flags.
 #
-# THERE ARE DELIBERATELY NONE. This file is kept as a tombstone so the aarch64 AES cfgs are not
-# reintroduced — read this before adding rustflags here.
+# THERE ARE DELIBERATELY NONE. This file stays so the aarch64 AES cfgs are not reintroduced:
+# `--cfg aes_armv8` and `--cfg polyval_armv8` do nothing. `aes` 0.9 runtime-detects the ARMv8
+# backend on aarch64 with `cpufeatures::new!(features_aes, "aes")` (lib.rs), as it does AES-NI
+# on x86_64, and `polyval` 0.7 selects `backend/intrinsics/armv8.rs` by `target_arch` alone.
 #
-# Until 2026-08-13 this file carried:
+# A RUSTFLAGS ENVIRONMENT VARIABLE OVERRIDES CONFIG RUSTFLAGS ENTIRELY — it does not merge and
+# does not append. A flag set here is dropped by every lane that sets its own RUSTFLAGS, and
+# cargo-ndk sets RUSTFLAGS internally for its linker configuration.
 #
-#     [target.'cfg(target_arch = "aarch64")']
-#     rustflags = ["--cfg", "aes_armv8", "--cfg", "polyval_armv8"]
-#
-# because RustCrypto's `aes` 0.8.x enabled the ARMv8-Crypto hardware AES backend on aarch64 ONLY
-# behind `--cfg aes_armv8`, and `polyval` 0.6.x gated its PMULL (carry-less multiply) GHASH path
-# behind `--cfg polyval_armv8`. That was a live footgun, not just boilerplate: a RUSTFLAGS
-# ENVIRONMENT VARIABLE OVERRIDES CONFIG RUSTFLAGS ENTIRELY — it does not merge and does not
-# append — so every aarch64 lane that set its own RUSTFLAGS silently dropped both and fell back to
-# SOFTWARE AES on the per-packet decrypt path. cargo-ndk sets RUSTFLAGS internally for its linker
-# configuration, which means every Android arm64-v8a build was hitting exactly that.
-#
-# `aes` 0.9 removed the cfg: on aarch64 it runtime-detects with `cpufeatures::new!(features_aes,
-# "aes")` (lib.rs), the same way x86_64 AES-NI always did. `polyval` 0.7 likewise selects
-# `backend/intrinsics/armv8.rs` by `target_arch` alone. Neither cfg exists any more — passing them
-# is inert.
-#
-# Measured here before deleting them, `crypto/open_in_place` from benches/pipeline.rs (one 1408-byte
-# MTU shard, AES-128-GCM, single core, Mac15,14 M3 Ultra, all four runs back to back under the same
-# background load):
-#
-#     aes 0.8 + both cfgs      2.19 GiB/s      <- what the cfgs bought
-#     aes 0.8, cfgs stripped     225 MiB/s     <- the footgun: ~10x slower, software AES
-#     aes 0.9 + both cfgs      5.28 GiB/s
-#     aes 0.9, cfgs stripped   5.28 GiB/s      <- identical to 4 s.f.; the cfgs do nothing
-#
-# The ChaCha20-Poly1305 series of the same bench was the control: it moved 0.07% across the cfg
-# toggle at both versions, confirming the toggle reached only the AES path.
-#
-# So 0.9 without the cfgs is not merely as fast as 0.8 with them — it is ~2.4x faster, and ~24x
-# the software fallback. Do not re-add these flags; if a future aarch64 slowdown is suspected,
-# re-run `cargo bench -p punktfunk-core --bench pipeline -- in_place` and compare against the
-# table above rather than reaching for a cfg.
+# If a slowdown on the aarch64 per-packet decrypt path is suspected, run
+# `cargo bench -p punktfunk-core --bench pipeline -- in_place` rather than reaching for a cfg.

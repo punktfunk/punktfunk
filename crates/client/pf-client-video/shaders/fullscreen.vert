@@ -1,6 +1,5 @@
-// The bufferless fullscreen triangle (same trick as the GL presenter's gl_VertexID
-// geometry). Vulkan clip space: y=-1 is the TOP, so uv (0,0) lands on the top-left —
-// which is exactly where the video's row 0 lives. No flip anywhere.
+// The bufferless fullscreen triangle. Vulkan clip space: y=-1 is the TOP, so uv (0,0)
+// lands on the top-left — which is exactly where the video's row 0 lives. No flip anywhere.
 //
 // Regenerate: shaders/build.sh (committed .spv, no build-time toolchain).
 #version 450

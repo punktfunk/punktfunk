@@ -235,7 +235,7 @@ impl StreamState {
 /// Has the SOURCE advanced past the first (possibly stash-delivered) frame of a recovery?
 /// Sequence evidence where the capturer tracks one (`first_seq != 0`): only a NEW source image
 /// advances it — a cursor regeneration or hold re-stamps `pts_ns` over unchanged pixels and must
-/// not count. The pts comparison survives solely as the fallback for an untracked capturer.
+/// not count. The pts comparison is only the fallback for an untracked capturer.
 fn source_advanced(
     first_seq: u64,
     first_pts: u64,
@@ -255,7 +255,7 @@ mod tests {
 
     /// The eviction-recovery liveness gate must demand SOURCE progress, not a changed wall-clock
     /// PTS: a cursor regeneration (and a repeat) stamps a fresh `pts_ns` over unchanged source
-    /// pixels, which is exactly how a dead presentation path used to "prove" recovery.
+    /// pixels, which would let a dead presentation path "prove" recovery.
     #[test]
     fn recovery_needs_a_new_source_frame_not_a_new_pts() {
         use pf_frame::Provenance;
@@ -265,7 +265,7 @@ mod tests {
         assert!(!source_advanced(5, 100, &Provenance::cursor_regen(5), 999));
         assert!(!source_advanced(5, 100, &Provenance::hold(5), 999));
         assert!(!source_advanced(5, 100, &Provenance::source(5, 0), 999));
-        // Untracked capturer (seq 0): the historical pts comparison stands.
+        // Untracked capturer (seq 0): the pts comparison stands.
         assert!(source_advanced(0, 100, &Provenance::UNTRACKED, 999));
         assert!(!source_advanced(0, 100, &Provenance::UNTRACKED, 100));
     }

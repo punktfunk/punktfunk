@@ -1,4 +1,5 @@
-//! Per-pad Windows RAII and the sealed gamepad channel (DualSense / DualShock 4 / XUSB).
+//! Per-pad Windows RAII and the sealed channel every pad driver shares (gamepads, XUSB, the
+//! virtual mouse and touchpad).
 //!
 //! Each pad owns three OS objects: an unnamed DATA section (`XusbShm`/`PadShm`), a named
 //! [`PadBootstrap`] mailbox, and a `SwDeviceCreate` devnode. [`Shm`] and [`SwDevice`] own the
@@ -367,8 +368,8 @@ impl PadChannel {
         Ok((seq, process))
     }
 
-    /// Pump until the section is delivered or `timeout` passes. Closes the DualShock 4 identity
-    /// race: the driver reads `device_type` from DATA when hidclass asks for descriptors.
+    /// Pump until the section is delivered or `timeout` passes. A miss is not final: the service
+    /// pump keeps polling.
     pub(super) fn deliver_eager(&mut self, timeout: Duration) {
         let deadline = Instant::now() + timeout;
         loop {

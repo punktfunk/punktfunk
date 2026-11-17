@@ -1,4 +1,4 @@
-// ScreenOwner.resolve: a row per console-versus-app hand-off fix, then every combination.
+// ScreenOwner.resolve: a row per console-versus-app hand-off rule, then every combination.
 
 import Foundation
 import XCTest
@@ -48,14 +48,14 @@ final class ScreenOwnerTests: XCTestCase {
         XCTAssertTrue(owner(console: false, .streaming).streamTakesInput)
     }
 
-    /// d2e782f9b: the console keeps the screen until a stream; the app's alerts stand down.
+    /// The console keeps the screen until a stream; the app's alerts stand down.
     func testTheConsoleKeepsTheScreenUntilAStream() {
         for phase in [SessionPhase.idle, .connecting] {
             let o = owner(phase, error: true)
             XCTAssertTrue(o.consoleOwnsScreen)
             XCTAssertTrue(o.showsHome)
             XCTAssertTrue(o.showsConsole)
-            XCTAssertFalse(o.showsError) // 9072131cc: the console says it
+            XCTAssertFalse(o.showsError) // the console says it
         }
         let streaming = owner(.streaming, error: true)
         XCTAssertFalse(streaming.consoleOwnsScreen)
@@ -65,7 +65,7 @@ final class ScreenOwnerTests: XCTestCase {
         XCTAssertTrue(streaming.showsError)
     }
 
-    /// 591f3c239: the launch hold keeps the console over the stream, which takes no input.
+    /// The launch hold keeps the console over the stream, which takes no input.
     func testTheLaunchHoldStaysOverTheStream() {
         let o = owner(.streaming, hold: true, error: true)
         XCTAssertTrue(o.consoleOwnsScreen)
@@ -75,7 +75,7 @@ final class ScreenOwnerTests: XCTestCase {
         XCTAssertFalse(o.showsError)
     }
 
-    /// 591f3c239: a trust card is the stream view's, so the hold gives way to it.
+    /// A trust card is the stream view's, so the hold gives way to it.
     func testTheHoldGivesWayToATrustCard() {
         let o = owner(.awaitingTrust(fingerprint: Data([1])), hold: true, error: true)
         XCTAssertFalse(o.consoleOwnsScreen)
@@ -84,7 +84,7 @@ final class ScreenOwnerTests: XCTestCase {
         XCTAssertTrue(o.showsError)
     }
 
-    /// 3e59eb6ef: the alert waits while a fullscreen this app drove leaves.
+    /// The alert waits while a fullscreen this app drove leaves.
     func testTheErrorWaitsForAnAppFullscreenToLeave() {
         XCTAssertFalse(
             owner(console: false, .idle, error: true, fullscreen: true, appDriven: true).showsError)
@@ -94,7 +94,7 @@ final class ScreenOwnerTests: XCTestCase {
         XCTAssertTrue(owner(console: false, .idle, error: true, appDriven: true).showsError)
     }
 
-    /// e30e3a090: under Always nothing leaves, so the error shows.
+    /// Under Always nothing leaves, so the error shows.
     func testAlwaysFullscreenShowsTheError() {
         let o = owner(
             console: false, .idle, error: true, fullscreen: true, appDriven: true, always: true)

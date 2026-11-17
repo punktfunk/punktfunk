@@ -16,9 +16,8 @@ import org.robolectric.annotation.Config
 
 /**
  * Where a measured bitrate lands. The measurement itself is the host's job; the decision this code
- * makes is which layer to write — and the long-standing wrong answer (always the global) is exactly
- * what made measuring the slow box downstairs re-tune the desktop too
- * (design/client-settings-profiles.md §5.3).
+ * makes is which layer to write, so measuring the slow box downstairs does not re-tune the
+ * desktop too (design/client-settings-profiles.md §5.3).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])

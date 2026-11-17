@@ -8,7 +8,7 @@
 //
 // Deliberately a FILE read and not an integration: there is no Omarchy API to call, the host learns
 // nothing, and a box that never opted in simply has no file — which is why every failure here is
-// "no theme", never an error. The console's own palette is the fallback and always was.
+// "no theme", never an error. The console's own palette is the fallback.
 //
 // All four values are carried, not just the accent: an accent alone leaves the console's own violet
 // chrome under a themed button, which is what "the theme is not fully applied" means in practice.

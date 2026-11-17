@@ -22,7 +22,7 @@ struct CardMetrics {
         CardMetrics(tile: 54, monogram: 26, name: 19, meta: 13, status: 11,
                     padding: 16, spacing: 14, radius: 12)
         #elseif os(tvOS)
-        // 10-foot sizes — the 24pt-name tier read like a phone card from the couch.
+        // 10-foot sizes: the name is larger than a phone card's, to read from the couch.
         CardMetrics(tile: 84, monogram: 42, name: 30, meta: 20, status: 17,
                     padding: 24, spacing: 22, radius: 18)
         #else
@@ -59,8 +59,7 @@ func monogramTile(
             ProgressView().tint(filled ? .white : Color.brand)
         } else if let mark = osIconImage(for: osChain) {
             // Template asset — tints from foregroundStyle exactly like the letter it stands in for.
-            // Labelled, because this is where the OS is now announced: it used to ride the status
-            // row below, which no longer carries it.
+            // Labelled, because this is where the card announces the OS: the status row does not.
             mark
                 .resizable()
                 .scaledToFit()
@@ -113,7 +112,7 @@ private struct DefaultHostBadge: View {
 /// Everything a card's preset affordances need: the catalog to offer, what this host is bound
 /// and pinned to, and the acts a menu can perform (design/client-settings-profiles.md §5.2/§5.2a).
 ///
-/// Passed as one value rather than eight closures because every surface that renders a host card
+/// Passed as one value rather than loose closures because every surface that renders a host card
 /// has to offer the SAME set — a menu that quietly lacks "Pin as card" on one screen is how a
 /// feature becomes folklore.
 struct HostPresetMenu {
@@ -460,8 +459,8 @@ struct HostCardView: View {
         #endif
     }
 
-    /// The daily acts (design §2.3). Setup, diagnostics, power and removal live on the host
-    /// page. A pinned card offers only its shortcut's acts.
+    /// The daily acts (design/apple-touch-ui-overhaul.md §2.3). Setup, diagnostics, power and
+    /// removal live on the host page. A pinned card offers only its shortcut's acts.
     @ViewBuilder private var menuItems: some View {
         if let pinned = pinnedPreset {
             if let browse = actions.browseLibrary {
@@ -628,7 +627,7 @@ struct DiscoveredCardView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     HStack(spacing: 6) {
-                        // The advert's OS mark is the tile's glyph now (see monogramTile).
+                        // The advert's OS mark is the tile's glyph (see monogramTile).
                         Image(systemName: discovered.requiresPairing
                             ? "lock.fill" : "antenna.radiowaves.left.and.right")
                             .font(.system(size: m.status))

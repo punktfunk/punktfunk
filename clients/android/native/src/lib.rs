@@ -8,18 +8,15 @@
 //! languages meet.
 //!
 //! Why Rust-heavy: Kotlin cannot `import` the cbindgen C header the way Swift can, so a native
-//! bridge is unavoidable. Writing it in Rust lets the Android client reuse the Linux client's
-//! orchestration verbatim — audio jitter ring, the VK keymap inverse, latency/skew math, the
-//! input capture state machine, trust/pairing logic, **mDNS discovery** ([`discovery`], the same
-//! `mdns-sd` browse the Linux/Windows clients use) — instead of re-porting it into Kotlin. Kotlin
-//! keeps only the Android-framework surface it must (Compose UI, `SurfaceView`, input capture, the
-//! Wi-Fi `MulticastLock` + permission UX, Keystore identity).
+//! bridge is unavoidable. Writing it in Rust lets the Android client reuse the shared client code
+//! instead of re-porting it into Kotlin: the audio jitter policy, the trust store, pairing and
+//! **mDNS discovery** ([`discovery`], the same `mdns-sd` browse the Linux/Windows clients use).
 //!
 //! JNI symbols map to `io.unom.punktfunk.kit.NativeBridge` in the `:kit` Gradle module
-//! (`clients/android`). The surface: mDNS host discovery ([`discovery`]) and the session lifecycle
-//! in [`session`] — connect/pair + the trust surface, the per-plane pumps (video → AMediaCodec,
-//! audio ↔ AAudio, mic uplink), input, and rumble/HID feedback ([`feedback`]), and mid-session
-//! mode renegotiation.
+//! (`clients/android`). The surface includes: mDNS host discovery ([`discovery`]) and the session
+//! lifecycle in [`session`] — connect/pair + the trust surface, the per-plane pumps (video →
+//! AMediaCodec, audio ↔ AAudio, mic uplink), input, and rumble/HID feedback ([`feedback`]), and
+//! mid-session mode renegotiation.
 
 use jni::objects::JObject;
 use jni::EnvUnowned;
@@ -79,9 +76,10 @@ mod feed_rules;
 #[cfg(any(target_os = "android", test))]
 mod feed_step;
 mod feedback;
-// `decode`'s hung-decoder checks, `test`-gated like `audio_format` so their proof runs off-device.
+// `decode`'s AU tail trial, `test`-gated like `audio_format` so its proof runs off-device.
 #[cfg(any(target_os = "android", test))]
 mod hold;
+// `decode`'s hung-decoder checks, `test`-gated like `audio_format` so their proof runs off-device.
 #[cfg(any(target_os = "android", test))]
 mod input_stall;
 // The mic uplink; its open ladder is `test`-gated like `audio_format` so its walk runs off-device.
@@ -125,7 +123,7 @@ mod pyrowave_quality;
 
 /// Every `log` record, teed: to logcat (via [`android_logger::AndroidLogger`]), into
 /// `pf_client_core::logring` and into the log file ([`logs::append`]) — the sources for "Send
-/// logs to host" ([`logs`]). The line mirrors the desktop `ring_layer`'s shape (wallclock,
+/// logs to host" ([`logs`]). The line mirrors the desktop `logring::RingLayer`'s shape (wallclock,
 /// level, target, message) so a bundle reads the same on the host's Logs page whichever client
 /// sent it. All three sinks share the crate's Info ceiling — the bundle gets exactly what
 /// logcat gets, which also keeps per-frame DEBUG chatter out of it by construction.
@@ -203,8 +201,8 @@ pub extern "system" fn JNI_OnLoad(
 
 /// `NativeBridge.nativeConsoleAvailable(): Boolean` — whether this `.so` carries the Skia
 /// console host ([`console`]). Kotlin asks before it calls any `nativeConsole*` symbol, so a
-/// build that ever drops the host on some ABI again degrades to the touch UI rather than an
-/// `UnsatisfiedLinkError`. Today: every Android ABI.
+/// build that drops the host on some ABI degrades to the touch UI rather than an
+/// `UnsatisfiedLinkError`. The `console` module's `cfg` decides it: every Android ABI carries it.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleAvailable(
     _env: EnvUnowned,

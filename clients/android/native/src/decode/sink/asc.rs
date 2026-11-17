@@ -42,8 +42,8 @@ use crate::session::PictureLayers;
 use crate::sys::{now_monotonic_ns, sysprop};
 
 /// Reader pool depth: the presents SurfaceFlinger may hold ([`PRESENTED_CAP`]), the store's
-/// deepest buffer, and the acquire in hand. Images allocate lazily, so a display that holds two
-/// costs what it did at eight.
+/// deepest buffer, and the acquire in hand. Images allocate lazily, so the depth costs memory
+/// only as far as a display holds presents.
 ///
 /// The pool never runs dry: the budget applies nothing while [`PRESENTED_CAP`] presents are
 /// held, and [`Retire::complete`] lets at most one completed present wait behind a missing
@@ -219,13 +219,14 @@ impl AscSink {
     /// ([`super::super::DecodeOptions::force_rate_switch`]).
     ///
     /// `overlay` sets the reader's gralloc ask. `true` adds `COMPOSER_OVERLAY` so HWC scans the
-    /// buffer out directly: the default. It is also the one reader parameter that can make
-    /// `AMediaCodec_start` fail after a clean configure: start gralloc-allocates every codec
-    /// output buffer from this reader's window with our consumer usage OR'd into the decoder's
-    /// producer bits, and an old 32-bit OMX BSP (the Mi TV Stick's Amlogic gralloc) can refuse the
-    /// combined allocation. `false` asks for `GPU_SAMPLED_IMAGE` alone, the SurfaceTexture shape
-    /// every TextureView path exercises; SurfaceFlinger then GPU-composites the layer. Images
-    /// allocate lazily, so `READER_MAX_IMAGES` is no start-time factor.
+    /// buffer out directly (the first bring-up rung asks for it). It is also the one reader
+    /// parameter that can make `AMediaCodec_start` fail after a clean configure: start
+    /// gralloc-allocates every codec output buffer from this reader's window with our consumer
+    /// usage OR'd into the decoder's producer bits, and an old 32-bit OMX BSP (the Mi TV Stick's
+    /// Amlogic gralloc) can refuse the combined allocation. `false` asks for `GPU_SAMPLED_IMAGE`
+    /// alone, the SurfaceTexture shape every TextureView path exercises; SurfaceFlinger then
+    /// GPU-composites the layer. Images allocate lazily, so `READER_MAX_IMAGES` is no start-time
+    /// factor.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn create(
         window: &NativeWindow,
@@ -598,7 +599,8 @@ impl AscSink {
     /// Read every present fence that has signalled, oldest first; a pending one stops the scan
     /// (order is what the intervals measure). One that outlives its patience never signals and
     /// is recorded off its latch instead. Runs on every completion and on every vsync tick, so
-    /// the last frame before a pause is scored off its fence, not off its latch 200 ms later.
+    /// the last frame before a pause is scored off its fence, not off its latch after
+    /// [`FENCE_PATIENCE_NS`].
     fn poll_fences(
         &mut self,
         clock_offset: i64,

@@ -150,7 +150,7 @@ final class LibraryShelfTests: XCTestCase {
         XCTAssertEqual(state.staleness, .offline)
     }
 
-    /// R5-4: the host answering the catalog starts spent posters over; the cache doesn't.
+    /// The host answering the catalog starts spent posters over; the cache doesn't.
     func testEachFetchedCatalogMovesTheArtRoundOn() {
         let cached = CachedLibrary(games: [entry("a", "Alpha")], fetchedAt: Date())
         let waking = reduce(loading, [.cached(cached), .waking])
@@ -203,7 +203,7 @@ final class LibraryShelfTests: XCTestCase {
         XCTAssertFalse(paused.polls)
     }
 
-    /// R5-1: one missed read keeps the badges, the grants and the poll.
+    /// One missed read keeps the badges, the grants and the poll.
     func testAMissedReadKeepsTheLastAnswer() {
         let live = LibraryShelf.State().applying(
             ([running("a")], [HostDownload(appID: "d", state: "downloading")], 3))
@@ -270,7 +270,7 @@ final class LibraryShelfTests: XCTestCase {
         }
     }
 
-    /// R5-7: End Game's confirmation presents once the sheet is gone, as Play's session does.
+    /// End Game's confirmation presents once the sheet is gone, as Play's session does.
     func testEndGameWaitsForTheDetailsSheetToClose() {
         XCTAssertTrue(LibraryShelf.Act.endGame.waitsForDetailsToClose)
     }

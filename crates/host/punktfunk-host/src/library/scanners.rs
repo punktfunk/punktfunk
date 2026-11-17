@@ -70,8 +70,8 @@ const STORE_LABELS: &[(&str, &str)] = &[
 ];
 
 /// Providers whose titles belong to one Windows account. A seat host reading the box's library
-/// leaves them out: they are the owner's. Manifests that mark a per-account source replace this
-/// list (`windows-seat-trust-model.md` L1.1).
+/// leaves them out: they are the owner's. TODO: replace this list with the manifest's own mark,
+/// `PluginManifest::per_account` (`windows-seat-trust-model.md` L1.1).
 const PER_ACCOUNT_PROVIDERS: &[&str] = &["playnite", "windows-games", "amazon", "itch", "hydra"];
 
 /// Whether a host that plays as `reach` leaves `provider`'s titles out of every surface.
@@ -124,7 +124,7 @@ struct ScannerSettings {
     disabled: Vec<String>,
 }
 
-/// Beside library.json (see `custom_path` for the rationale).
+/// In the folder `View::path` picks for the view's layer.
 const FILE: &str = "library-scanners.json";
 
 /// Absent or malformed file → all on (warn, do not fail the library read).

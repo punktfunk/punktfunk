@@ -8,8 +8,8 @@
 //! never silently resamples negotiated audio.
 //!
 //! The realtime callback recycles buffers rather than allocating. The shared
-//! `JitterTuning::AAUDIO` policy handles drift and underruns, while `DisplayTracker` supplies
-//! the video reference for A/V sync. See `design/hi-res-audio.md` and
+//! `JitterTuning::AAUDIO` policy handles drift and underruns, while `stats::publish_e2e`
+//! supplies the video reference for A/V sync. See `design/hi-res-audio.md` and
 //! `design/audio-latency-overhaul.md` for the full policy.
 
 use crate::audio_policy::{
@@ -64,8 +64,8 @@ impl Output {
         }
     }
 
-    /// Ordered teardown before the close in `drop`: the ndk wrapper unwraps
-    /// AAudioStream_close's status, so hand the HAL a stopped stream. A track stops in its drop.
+    /// Ordered teardown before the close in the ndk wrapper's `drop`: stop first, so the HAL
+    /// closes a stopped stream. A track stops in its drop.
     fn stop(&self) {
         if let Output::AAudio(s) = self {
             let _ = s.request_stop();
@@ -95,7 +95,7 @@ impl Output {
     }
 }
 
-/// Decoded-chunk hand-off depth: 64 frames of slack (matches the core's AUDIO_QUEUE).
+/// Decoded-chunk hand-off depth: the same slack as core's `AUDIO_QUEUE`.
 const RING_CHUNKS: usize = 64;
 
 /// How long [`arm`] waits for a freshly started stream's FIRST data callback before writing the
@@ -111,8 +111,8 @@ const REOPEN_SETTLE_MS: u64 = 250;
 /// Packets decoded with AAudio never having taken a single sample before we call it — expressed
 /// as a DURATION, because the two planes do not agree on what a packet is worth: 5 ms on Opus, and
 /// down to the ladder's shortest 1 ms rung on a `0xD3` session that is 24-bit surround or at the
-/// top of the rate ladder. A packet count would have meant ~0.2 s there and a warning that fires
-/// before a slow HAL has finished waking.
+/// top of the rate ladder. A packet count would warn too early on the short-packet plane, before
+/// a slow HAL has finished waking.
 const DEAD_STREAM_WARN_MS: u64 = 1_000;
 
 /// Diagnostics — written by the decode thread + the realtime callback, logged periodically. The
@@ -134,15 +134,15 @@ struct Counters {
     /// Concealment must be visible next to the underruns it prevents — a ring that is quietly
     /// being deepened is a link whose picture keeps moving away from its audio.
     inserts: AtomicU64,
-    /// Data callbacks since the process started, primed or not. Distinct from `pcm_written`
-    /// (which only counts SERVED reads) because that is exactly the distinction the start
-    /// watchdog needs: a device that is pulling but un-primed still ticks this, a stream that
-    /// opened into the void ticks nothing at all. See [`wait_for_first_callback`].
+    /// Data callbacks since this format's plane opened, primed or not. Distinct from
+    /// `pcm_written` (which only counts SERVED reads) because that is exactly the distinction the
+    /// start watchdog in [`arm`] needs: a device that is pulling but un-primed still ticks this,
+    /// a stream that opened into the void ticks nothing at all.
     callbacks: AtomicU64,
 }
 
 /// Whether the A/V sync loop runs this session. `false` leaves `JitterPolicy`'s sync target at
-/// `None`, which reproduces the pre-overhaul ring behaviour exactly — the point of the hatch.
+/// `None`: the ring runs without sync steering.
 ///
 /// Two levers because Android has neither of the other clients' launch surfaces. `PUNKTFUNK_NO_AV_SYNC`
 /// keeps the contract the desktop clients document (and works when the client is driven from a
@@ -347,11 +347,9 @@ enum ArmError {
 /// path with different burst behaviour. Printing both sides is what lets a field log distinguish
 /// that from plain jitter.
 ///
-/// The RATE used to be diagnostic here too — a granted rate other than 48 000 was the tell for
-/// that legacy path. It is now load-bearing instead: [`arm`] refuses any rung whose granted rate
-/// is not the one the session negotiated, because playing a 96 kHz wire through a 48 kHz stream is
-/// not a tuning problem, it is the wrong audio (§9). So this line can only ever print the rate the
-/// session resolved — which is exactly why it still prints it: it is the field-log proof that the
+/// [`arm`] refuses any rung whose granted rate is not the one the session negotiated, because
+/// playing a 96 kHz wire through a 48 kHz stream is the wrong audio (`design/hi-res-audio.md`
+/// §9). So this line can only print the rate the session resolved: it is the log proof that the
 /// device really opened at the rate the `Welcome` claimed.
 fn log_started(live: &LiveStream, proven: bool) {
     let s = match &live.output {
@@ -391,9 +389,9 @@ fn log_started(live: &LiveStream, proven: bool) {
 /// If no rung proves itself, the first one that at least opened and started is reopened and
 /// accepted anyway. The watchdog is a heuristic about a device that never calls back, and a
 /// heuristic must not be able to turn working audio into no audio at all: a stream that is merely
-/// slow to start would otherwise walk the whole ladder and end with the plane disabled, which is
-/// strictly worse than the behaviour this function replaced. Reopened rather than held open across
-/// the remaining attempts, because a started stream can itself be what makes the next rung fail.
+/// slow to start would otherwise walk the whole ladder and end with the plane disabled. Reopened
+/// rather than held open across the remaining attempts, because a started stream can itself be
+/// what makes the next rung fail.
 fn open_any(ladder: &[OpenRung], ctx: &OpenCtx) -> Option<LiveStream> {
     let mut unproven: Option<OpenRung> = None;
     for rung in ladder {
@@ -507,11 +505,10 @@ fn arm(
 ///
 /// **Why a supervisor.** AAudio's contract on a disconnect (an HDMI mode switch, an AVR
 /// re-handshake, a headset unplugged, a route change) is that the stream is DEAD and the only
-/// recovery is close + open a fresh one. This client's error callback logged a warning and did
-/// nothing else, so any route change meant silence for the rest of the session while video carried
-/// on untouched — and on a TV that is not a rare event, because the client itself drives an HDMI
-/// mode switch on the video plane and the platform's own match-content-frame-rate setting drives
-/// more.
+/// recovery is close + open a fresh one. Without that, any route change would mean silence for
+/// the rest of the session while video carried on untouched — and on a TV that is not a rare
+/// event, because the client itself drives an HDMI mode switch on the video plane and the
+/// platform's own match-content-frame-rate setting drives more.
 ///
 /// The whole plane is rebuilt per generation rather than hot-swapping the channels under the decode
 /// loop: reopening costs a few dropped packets once, and a fresh `JitterPolicy` is what you want
@@ -564,7 +561,7 @@ fn supervise_format(
     let counters = Arc::new(Counters::default());
     // The A/V sync hand-off: the realtime callback owns the ring (so it publishes the depth and
     // consumes the target), the decode thread owns the timestamps (so it computes the target).
-    // Two atomics, because the callback must not block on the thread that decodes.
+    // Atomics (`AudioSyncCell`), because the callback must not block on the thread that decodes.
     let sync: Arc<punktfunk_core::audio::AudioSyncCell> = Arc::default();
     // API 29–31 open surround as channel indices with no mask to fix it, so an `AudioTrack`
     // plays it. API 28 still derives the speakers from the count.
@@ -595,9 +592,8 @@ fn supervise_format(
         fmt.channels,
         fmt.frame_us,
     );
-    // An escape hatch for the reopen itself: if reopening ever turns out to fight a device (a HAL
-    // that disconnects in a loop), the field can pin the old give-up-on-disconnect behaviour
-    // without a rebuild rather than living with a restart storm.
+    // An escape hatch for the reopen itself: if reopening fights a device (a HAL that disconnects
+    // in a loop), `debug.punktfunk.audio_reopen=0` pins give-up-on-disconnect without a rebuild.
     let reopen_allowed = !matches!(
         sysprop(c"debug.punktfunk.audio_reopen").as_deref(),
         Some("0") | Some("false")
@@ -614,9 +610,8 @@ fn supervise_format(
             fmt,
             playout,
             // Worst transient the ring can hold before the policy trims it. Through the format's
-            // own conversion rather than a samples-per-millisecond constant: the cap is a hard
-            // ceiling on latency, and one computed 2.3 % shallow on a 44.1-family session would
-            // trim a ring that was inside its budget.
+            // own conversion rather than a samples-per-millisecond constant, which is wrong at
+            // 44 100 Hz: the cap is a hard ceiling on latency.
             hard_cap_max: fmt.ms_samples(playout.tuning.hard_cap_ms),
             game_audio,
             counters: &counters,
@@ -683,10 +678,8 @@ fn supervise_format(
     carry.filter(|pkt| pkt.new_format.is_some())
 }
 
-/// What the decoded-frame counter is called in the log lines. Kept plane-specific rather than
-/// renamed to something neutral so that the `opus=` an existing field report or triage note greps
-/// for still means exactly what it always meant — and a lossless session is visibly a different
-/// line rather than the same one with a surprising rate.
+/// What the decoded-frame counter is called in the log lines: `opus` on the Opus plane, `pcm` on
+/// the lossless one, so a lossless session is visibly a different line.
 fn plane_counter_key(fmt: PlaneFormat) -> &'static str {
     if fmt.is_pcm() {
         "pcm"
@@ -745,10 +738,10 @@ impl Render {
         } = *ctx;
         let channels = usize::from(fmt.channels);
         // Pre-reserve the ring so `extend` never reallocates on the realtime thread. Worst
-        // transient before a trim = the hard cap plus one full channel of the plane's OWN frame,
-        // sized from the resolved format — rate, depth AND channel count — so a surround
-        // session's longer-per-frame chunks never force a one-time realloc on the RT thread
-        // (asserted in `decode_loop`).
+        // transient before a trim = the hard cap plus `RING_CHUNKS` queued chunks of the plane's
+        // OWN frame, sized from the resolved format — rate, depth AND channel count — so a
+        // surround session's longer-per-frame chunks never force a one-time realloc on the RT
+        // thread (asserted in `Plane::on_packet`).
         let ring = VecDeque::with_capacity(hard_cap_max + RING_CHUNKS * fmt.frame_samples());
         // A fresh policy per open: a device that came back may burst differently.
         let policy = playout.jitter();
@@ -1160,13 +1153,13 @@ impl<'a> Plane<'a> {
     }
 
     /// Place the packet against the picture, conceal any seq gap in front of it, decode it into
-    /// the ring, and keep the 1 Hz line. An empty payload decodes nothing.
+    /// the ring, and keep the periodic log line. An empty payload decodes nothing.
     fn on_packet(&mut self, pkt: &AudioPacket) -> Result<(), DecodeExit> {
         // BEFORE it is queued: `buffered_ahead` is everything that must still play first, so
         // the depth read here is exactly what delays it. Published unconditionally — the ring's
         // depth is what makes a "the audio delay is way too high" report triageable at all.
-        // Converted through the format, never by an integer samples-per-millisecond divisor
-        // (44.1 at 44 100 Hz reported a healthy ring 2.3 % DEEP).
+        // Converted through the format, never by an integer samples-per-millisecond divisor,
+        // which is wrong at 44 100 Hz.
         let depth = self.sync.depth();
         self.buffer_ms_out
             .store(self.fmt.samples_ms(depth), Ordering::Relaxed);
@@ -1209,9 +1202,10 @@ impl<'a> Plane<'a> {
         for &s in &self.pcm[..n] {
             self.window_peak = self.window_peak.max(s.abs());
         }
-        // The ring's pre-reservation in `try_open` is one frame of THIS plane per queued chunk; a
-        // larger frame would force a one-time realloc on the RT thread. Catch a host that changed
-        // its frame size — or a `Welcome` whose `audio_frame_us` disagrees with what it sends.
+        // The ring's pre-reservation in `Render::new` is one frame of THIS plane per queued
+        // chunk; a larger frame would force a one-time realloc on the RT thread. Catch a host
+        // that changed its frame size — or a `Welcome` whose `audio_frame_us` disagrees with
+        // what it sends.
         debug_assert!(
             n <= self.fmt.frame_samples(),
             "audio frame {n} f32 exceeds the {} f32 ring reserve ({} µs at {} Hz)",

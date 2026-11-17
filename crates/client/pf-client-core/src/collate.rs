@@ -5,8 +5,7 @@
 //! (`vectors_match_the_shared_file`). Change a rule here, regenerate that file in the
 //! same commit.
 //!
-//! Returns indices into the caller's slice. Art cache, fetch pump and cursor arithmetic
-//! all key off the shared model's order.
+//! Returns indices into the caller's slice; the caller's model is never reordered.
 
 use crate::library::{store_key, store_key_label, GameEntry, DESKTOP_ID, UNKNOWN_STORE};
 

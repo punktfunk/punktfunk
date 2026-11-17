@@ -18,8 +18,8 @@ use std::ffi::{CStr, CString};
 /// Independent per-frame resource sets. Two: Granite's device defaults to
 /// `init_frame_contexts(2)` and `next_frame_context()` waits the context it rotates
 /// into, so frame N may not begin until N-2 completed. A third slot needs a
-/// vendored `init_frame_contexts(3)`, which is not exposed. `max_inflight` (still 1)
-/// is how many are live; this is capacity only.
+/// vendored `init_frame_contexts(3)`, which is not exposed. `max_inflight` is how
+/// many are live; this is capacity only.
 pub(crate) const SLOTS: usize = 2;
 
 /// PCI vendor id of NVIDIA, whose REALTIME queues pay extra on every submit.
@@ -118,7 +118,7 @@ pub(crate) enum Priority {
 /// The CSC shader, `rgb2yuv*.comp`, by chroma, depth and colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Shader {
-    /// `rgb2yuv`: BT.709 limited, 8-bit.
+    /// `rgb2yuv`: BT.709 full range, 8-bit.
     Sdr420,
     /// `rgb2yuv444`.
     Sdr444,
@@ -223,7 +223,7 @@ fn queue_priority_candidates(raw: Option<&str>, vendor_id: u32) -> Vec<Priority>
 
 /// The steps an open runs, in order, or why this GPU cannot encode. The feature check follows
 /// the pick rather than steering it: a pick that skips this GPU can land on one that cannot
-/// import the capturer's buffers and trip the process-wide raw-dmabuf latch. The refusal is
+/// import the capturer's buffers and trip that capture's raw-dmabuf latch. The refusal is
 /// latch-free; the session layer renegotiates.
 pub(crate) fn plan_open(f: &DeviceFacts) -> Result<Vec<OpenStep>> {
     let missing: Vec<&str> = f

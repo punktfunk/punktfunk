@@ -12,7 +12,7 @@ import org.junit.Test
  */
 class GamepadUiTest {
 
-    /** The default mode is what the switch meant when it was a lone Boolean. */
+    /** The default mode waits for a pad. */
     @Test
     fun whenConnectedWaitsForAPad() {
         assertTrue(gamepadUiActive(true, GAMEPAD_UI_WHEN_CONNECTED, true, tv = false, forced = false))

@@ -1,6 +1,6 @@
 //! Video decode: reassembled access units → frames for the presenter.
 //!
-//! Ladder: Vulkan Video, D3D11VA/VAAPI, then openh264 or rav1d. The order per
+//! Ladder: Vulkan Video, D3D11VA/VAAPI, V4L2, then openh264 or rav1d. The order per
 //! platform and GPU vendor is `video_ladder`; [`Decoder::new`] walks it and a rung
 //! that keeps failing demotes along it. [`native_evidence`] records which
 //! pairs have hardware validation; [`native_rung_admitted`] yields an unverified
@@ -36,7 +36,7 @@ pub use crate::video_color::{csc_rows, ColorDesc};
 use crate::video_ladder::{demotions, ladder, Note, Os, Step};
 use crate::video_rung::Rung;
 /// Re-export so SESSION (and its tests) can name the refusal by type.
-/// The module stays private, like every other backend.
+/// The module stays private.
 pub use crate::video_software::NoSoftwareRung;
 use crate::video_software::SoftwareDecoder;
 /// Defined in [`crate::video_types`] so `d3d11va` can name them without this
@@ -81,12 +81,12 @@ pub enum DecodedImage {
     /// CAPTURE buffer. [`DmabufFrame::path`] names which for `stats:`.
     #[cfg(target_os = "linux")]
     NativeDmabuf(DmabufFrame),
-    /// D3D11VA shareable NT-handle texture the presenter imports
-    /// (`VK_KHR_external_memory_win32`) on GPUs without Vulkan Video.
+    /// A D3D11VA picture: a shareable NT-handle texture the Vulkan presenter imports
+    /// (`VK_KHR_external_memory_win32`), or a pool slice the D3D11 presenter samples.
     #[cfg(windows)]
     D3d11(crate::video_d3d11::D3d11Frame),
-    /// Three R8 plane views on the presenter's device, fence-complete, GENERAL.
-    /// Planar CSC samples them as BT.709 limited (the codec's colour contract).
+    /// Three plane views (R8, or R16 at 10-bit) on the presenter's device, fence-complete,
+    /// GENERAL. Planar CSC samples them with the frame's own `color`.
     #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
     PyroWave(crate::video_pyrowave::PyroWavePlanarFrame),
     /// pf-vkdecode image + plane views already on the presenter's device.
@@ -174,8 +174,8 @@ impl ReleaseGuard<NativeReleaseToken> {
     }
 }
 
-/// One natively decoded frame (pf-vkdecode). Raw `u64` handles; this crate
-/// stays ash-free. Valid until the guard drops AND `generation` is current.
+/// One natively decoded frame (pf-vkdecode). Raw `u64` handles, no ash types.
+/// Valid until the guard drops AND `generation` is current.
 /// The backend keeps the decoder alive until every shipped token returns.
 pub struct NativeVkFrame {
     /// Raw `VkImage`; the picture occupies array layer [`Self::layer`].
@@ -263,7 +263,7 @@ impl DecodedImage {
     }
 
     /// Corroboration for `USER_FLAG_RECOVERY_ANCHOR`. Only a rung that planned the
-    /// AU knows its references: native Vulkan, native VAAPI, and native D3D11 answer.
+    /// AU knows its references: native Vulkan, VAAPI, V4L2 and D3D11 answer.
     /// The CPU and PyroWave rungs report
     /// [`punktfunk_core::reanchor::AnchorEvidence::Unavailable`] — silence is not refutation.
     pub fn anchor_evidence(&self) -> punktfunk_core::reanchor::AnchorEvidence {
@@ -476,9 +476,9 @@ impl CpuPlanarFrame {
 }
 
 /// GPU frame: dmabuf fds + plane layout for the Vulkan importer
-/// (`pf-presenter::dmabuf`). Fds belong to `guard`'s mapped DRM frame; valid
-/// until the guard drops. Tiled addressing is defined over the coded extent;
-/// the importer crops sampling to the visible picture.
+/// (`pf-presenter::dmabuf`). Fds belong to `guard`; valid until it drops.
+/// Tiled addressing is defined over the coded extent; the importer crops
+/// sampling to the visible picture.
 #[cfg(target_os = "linux")]
 pub struct DmabufFrame {
     /// Visible picture extent.
@@ -488,8 +488,8 @@ pub struct DmabufFrame {
     /// the presenter crops it to the visible picture.
     pub coded_width: u32,
     pub coded_height: u32,
-    /// Combined DRM fourcc of the whole surface (NV12 for 8-bit VAAPI), from the
-    /// decoder's software format — not the per-plane component formats.
+    /// Combined DRM fourcc of the whole surface (NV12 for 8-bit VAAPI), not the
+    /// per-plane component formats.
     pub fourcc: u32,
     pub modifier: u64,
     pub planes: Vec<DmabufPlane>,
@@ -617,7 +617,7 @@ fn clears_demotion_streak(delivered: bool, concealed: bool) -> bool {
 }
 
 /// `VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR` — raw flag in
-/// [`VulkanDecodeDevice::decode_video_caps`] (this crate stays ash-free).
+/// [`VulkanDecodeDevice::decode_video_caps`] (plain integers, no ash types).
 pub(crate) const VIDEO_CODEC_OP_DECODE_H264: u32 = 0x0000_0001;
 /// `VK_VIDEO_CODEC_OPERATION_DECODE_H265_BIT_KHR`.
 pub(crate) const VIDEO_CODEC_OP_DECODE_H265: u32 = 0x0000_0002;
@@ -957,7 +957,7 @@ impl Decoder {
     }
 
     /// Newest planned decode-order ordinal — the freeze watermark
-    /// ([`NativeVkFrame::decode_order`]). 0 on lanes with no bitstream parser (and no local recovery).
+    /// ([`NativeVkFrame::decode_order`]). 0 on a rung that stamps none.
     pub fn decode_order(&self) -> u64 {
         self.rung.decode_order()
     }
@@ -1014,8 +1014,6 @@ impl Decoder {
         std::mem::take(&mut self.want_keyframe)
     }
 
-    /// Swap the rung in and reset the old one's health. One place so a call
-    /// site cannot forget [`Self::ran`] and loop the ladder.
     /// Run `wake` off the pump's thread as each hardware decode completes, so the pump
     /// can block for the next AU and the pixels at once ([`Rung::set_decode_wake`]).
     pub fn set_decode_wake(&mut self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) {
@@ -1023,6 +1021,8 @@ impl Decoder {
         self.wake = Some(wake);
     }
 
+    /// Swap the rung in and reset the failure streak. One place so a call
+    /// site cannot forget [`Self::ran`] and loop the ladder.
     fn install(&mut self, rung: Box<dyn Rung>) {
         self.ran.extend(rung.id());
         let old = std::mem::replace(&mut self.rung, rung);

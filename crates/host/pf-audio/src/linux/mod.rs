@@ -6,7 +6,7 @@
 //! follower; PipeWire would schedule the group on any running driver on the box.
 //!
 //! `=stream`: the capture stream itself is the `Audio/Sink`. Same routing, but
-//! the group borrows a driver. One-release escape hatch.
+//! the group borrows a driver. Escape hatch.
 //!
 //! `=0`: follow the default sink's monitor. Coupled to hardware-default churn.
 //! Both sink modes advertise the session channel count, so a game can produce
@@ -217,8 +217,8 @@ impl PwAudioCapturer {
 
     /// [`open`](Self::open) with a caller-chosen sink `node.name` so isolation
     /// can pin nested apps (`PULSE_SINK`) to the same node it captures.
-    /// Must keep the `punktfunk-speaker` prefix (claim-staleness and the
-    /// graph-driver diagnostic match on it). Ignored in monitor mode.
+    /// Must keep the `punktfunk-speaker` prefix (the claim's staleness rule
+    /// matches on it). Ignored in monitor mode.
     ///
     /// `tap` taps that sink's monitor without minting it: the sink belongs to
     /// the session this one joined. The tap still claims it, so the owner's
@@ -456,8 +456,8 @@ fn capture_quantum_frames(rate_hz: u32) -> u32 {
 const QUANTUM_CONFIRM: u8 = 3;
 
 /// Confirms a new capture quantum only once it holds for [`QUANTUM_CONFIRM`] callbacks, so
-/// one short buffer can't move the gap threshold. Per open: a host runs for days, and a
-/// process-wide latch reported the first capture then never again.
+/// one short buffer can't move the gap threshold. Per open, not process-wide: a host runs
+/// for days, and every capture reports its own quantum.
 #[derive(Default)]
 struct QuantumTracker {
     /// Frames per callback, `0` until confirmed.
@@ -831,8 +831,7 @@ fn capture_props(
                 "node.linger"                  => "true",
             };
             p.insert(*pw::keys::NODE_NAME, capture);
-            // Spelled out: pipewire-rs exposes `TARGET_OBJECT` only behind
-            // `v0_3_44`. WirePlumber matches this against `node.name`.
+            // WirePlumber matches this against `node.name`.
             p.insert("target.object", name);
             p
         }
@@ -954,8 +953,8 @@ fn pw_thread(
         });
 
         // Core error ends this thread so the chunk channel disconnects and
-        // `next_chunk` returns Err (reopen-with-backoff). Without this, a
-        // restart left `next_chunk` returning quiet-sink empties forever.
+        // `next_chunk` returns Err (reopen-with-backoff). Without it, a daemon
+        // restart leaves `next_chunk` returning quiet-sink empties forever.
         let _core_listener = core
             .add_listener_local()
             .done({
@@ -1202,7 +1201,7 @@ fn pw_thread(
 
 // ---- the platform seam `lib.rs` calls through -----------------------------------------------
 
-/// Open a live capturer for system output. Default: host-owned stream sink claimed as
+/// Open a live capturer for system output. Default: host-owned null sink claimed as
 /// the default, advertising `channels` so apps can produce real surround.
 /// `PUNKTFUNK_STREAM_SINK=0`: default-sink monitor, missing positions filled with
 /// silence. `rate_hz` is a request; the grant is [`AudioCapturer::sample_rate`].

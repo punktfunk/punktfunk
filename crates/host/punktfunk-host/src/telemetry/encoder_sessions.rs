@@ -142,7 +142,8 @@ pub struct Session {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
-    /// This host's own encode: our pid, or the virtual display driver's host on Windows.
+    /// One of this box's own encodes: this process, another Punktfunk host, or the virtual
+    /// display driver's host on Windows (`is_ours`).
     pub ours: bool,
 }
 

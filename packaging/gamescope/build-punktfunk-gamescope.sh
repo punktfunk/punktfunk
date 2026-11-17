@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Build gamescope + punktfunk's `pipewire-hdr` patches and install it as `punktfunk-gamescope`.
 #
-# The ONE build recipe every packaging path calls (Arch PKGBUILD, the Bazzite sysext image, an
-# operator building by hand); the nix derivation expresses the same thing declaratively. It never
+# The ONE build recipe every packaging path calls (Arch PKGBUILD, the CI jobs that feed the .deb,
+# the RPM and the Bazzite sysext, an operator building by hand); the nix derivation expresses the
+# same thing declaratively. It never
 # touches the distro's own `gamescope` — the binary lands under a different name, and the host's
 # resolution order (PUNKTFUNK_GAMESCOPE_BIN > punktfunk-gamescope > gamescope) picks it up.
 #
@@ -23,8 +24,8 @@
 # access unless the checkout already carries them — hence `--recurse-submodules` below.
 set -euo pipefail
 
-# The pinned upstream, 12 commits past 3.17.0. Bump together with the patches and the wraps in
-# subprojects/.
+# The pinned upstream revision (`_gsver` in the PKGBUILD names the release it follows). Bump
+# together with the patches and the wraps in subprojects/.
 GAMESCOPE_REV="865a71c4048b5137f03b0711bbd80c1d24bc6915"
 GAMESCOPE_REPO="https://github.com/ValveSoftware/gamescope.git"
 
@@ -37,14 +38,12 @@ while [ $# -gt 0 ]; do
     --srcdir)    SRCDIR="${2:?}"; shift 2 ;;
     --jobs)      JOBS="${2:?}"; shift 2 ;;
     --no-setcap) SETCAP=0; shift ;;
-    # Extra `force_fallback_for` entries, comma-separated, appended to the mandatory three below.
-    # Exists for ONE package family: the .deb has to install on both Debian 13 and Ubuntu 26.04,
-    # and those two disagree on the libdisplay-info SONAME (0.2.0 -> libdisplay-info2 vs 0.3.0 ->
-    # libdisplay-info3), so a package built against either one is uninstallable on the other.
-    # Vendoring it makes ONE .deb serve both. Opt-in rather than baked in, so the Arch/Fedora/nix
-    # packages — which have no such split and are shipping fine — keep producing exactly the binary
-    # they produce today. Its only caller is the `build-publish-gamescope` job in
-    # .gitea/workflows/deb.yml, which passes `--extra-fallback libdisplay-info`.
+    # Extra `force_fallback_for` entries, comma-separated, appended to the mandatory four below.
+    # Its only caller is the `build-publish-gamescope` job in .gitea/workflows/deb.yml, which
+    # passes `--extra-fallback libdisplay-info`: the .deb has to install on both Debian 13 and
+    # Ubuntu 26.04, which disagree on the libdisplay-info SONAME (0.2.0 -> libdisplay-info2 vs
+    # 0.3.0 -> libdisplay-info3), so a package linked against either one is uninstallable on the
+    # other. Vendoring it makes ONE .deb serve both.
     --extra-fallback) EXTRA_FALLBACK="${2:?}"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -153,30 +152,25 @@ echo "==> configuring"
 # SHIP: gamescope vendors a wlroots submodule, but meson prefers a system one when the build host
 # happens to have `wlroots-devel` — and then links it SHARED. The result starts fine on the build
 # host and dies with `libwlroots-0.19.so: cannot open shared object file` anywhere else, which is
-# every machine that installs our package. Fedora 43 has no wlroots-devel so it fell back and
-# linked static by luck; Fedora 44's `dnf builddep gamescope` pulls one in, and the binary built
-# there would not start on the host. Pinning the fallback makes the outcome the same everywhere.
+# every machine that installs our package. Pinning the fallback makes the outcome the same
+# everywhere.
 # (gamescope's own meson.build hard-errors if libliftoff/vkroots are missing from this list, so
 # all three go together.)
 #
-# **libdisplay-info is in the list for exactly the wlroots reason**, learned the hard way on the
-# SteamOS VM 2026-08-23: it is a vendored submodule too, so a build box that merely HAS
-# libdisplay-info-dev makes meson link it SHARED, and the binary then dies on SteamOS with
-# `libdisplay-info.so.2: cannot open shared object file` — it builds, it installs, it prints its
-# +pfhdr banner in the box, and build-gamescope.sh's on-glass check is the only thing between that
-# and a host promising HDR it cannot deliver. Debian trixie has the -dev package, Fedora and Arch
-# have it too, and any of them can pull it in transitively, so "don't install it" is not a fix
-# that holds. Pinning the fallback makes the outcome the same everywhere, which is the whole
-# point of this list.
+# **libdisplay-info is in the list for exactly the wlroots reason**: it is a vendored submodule
+# too, so a build box that merely HAS libdisplay-info-dev makes meson link it SHARED, and the
+# binary then dies on SteamOS with `libdisplay-info.so.2: cannot open shared object file` — it
+# builds, it installs, and it prints its +pfhdr banner in the box. Debian trixie has the -dev
+# package, Fedora and Arch have it too, and any of them can pull it in transitively, so "don't
+# install it" is not a fix that holds. Pinning the fallback makes the outcome the same
+# everywhere, which is the whole point of this list.
 #
 # The C++ runtime goes STATIC for the same reason wlroots does: this binary is built on a ROLLING
-# distro and has to start on a FROZEN one. Arch's gcc (16.1.1 when this was written) makes the
-# compositor require `GLIBCXX_3.4.35`, and SteamOS 3.8.16 ships libstdc++ 3.4.34 — so the published
-# Arch package died on the very platform the gamescope backend matters most on ("version
-# GLIBCXX_3.4.35 not found"), while every other soname resolved and glibc was never close to the
-# limit (the binary asks for 2.38 at most; SteamOS has 2.41). Safe because
-# gamescope links NO shared C++ library (its `NEEDED` list is all C — glslang/SPIRV are build-time
-# only), so no C++ ABI ever crosses a shared boundary; it costs ~1 MB.
+# distro and has to start on a FROZEN one. A new gcc makes the compositor require a newer
+# `GLIBCXX_3.4.x` than SteamOS's libstdc++ provides (SteamOS 3.8.16 ships 3.4.34; Arch's gcc 16.1.1
+# asked for 3.4.35: "version GLIBCXX_3.4.35 not found"), while glibc stays far from the limit.
+# Safe because gamescope links NO shared C++ library (its `NEEDED` list is all C — glslang/SPIRV
+# are build-time only), so no C++ ABI ever crosses a shared boundary; it costs ~1 MB.
 # Appended to LDFLAGS rather than passed as `-Dcpp_link_args`, because that option would REPLACE
 # the value meson derives from the environment and silently drop makepkg's hardening flags
 # (`-z relro`, `-z now`, `--as-needed`).
@@ -241,8 +235,7 @@ install -Dm755 "$BIN" "$DEST"
 # A game nested under gamescope gets an HDR10 swapchain from this layer and from nothing else —
 # gamescope advertises no runtime colour-management protocol a Mesa/NVIDIA WSI could negotiate
 # through — so a compositor shipped WITHOUT a matching layer simply cannot do HDR for games. Built
-# from this same tree at this same rev, so the two can never drift apart; that is the whole point,
-# and it is what makes the host's old "compare version triples and hope" check unnecessary.
+# from this same tree at this same rev, so the two can never drift apart.
 #
 # It must not collide with the distro's layer and must be switchable independently of it, so the
 # generated manifest is rewritten to carry our layer name, our library path and our own

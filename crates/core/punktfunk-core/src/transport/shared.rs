@@ -746,10 +746,10 @@ const PEER_MAX_ACK_DELAY: Duration = Duration::from_millis(25);
 /// `3 × max(PTO of the new path, PTO of the old one)`, `PTO = rtt + max(4 × rttvar, 1 ms) +
 /// max_ack_delay`. The new path starts at [`HOST_INITIAL_RTT`] with `rttvar` half of it. quinn's
 /// `rttvar` is not exposed, but it stays within `2 × rtt` (each sample moves both toward it),
-/// so `old_rtt`, the old path's RTT, bounds the old PTO at `9 × rtt`. The margin covers timer
-/// granularity. Counted from the first sight of the move, which is no earlier than quinn's own
-/// start, the hold outlasts the timer for the RTT media last read. A client that inflates its
-/// RTT between two reads stretches quinn's timer past it.
+/// so `old_rtt`, the old path's RTT, bounds the old PTO at `9 × rtt + max_ack_delay`. The
+/// margin covers timer granularity. Counted from the first sight of the move, which is no
+/// earlier than quinn's own start, the hold outlasts the timer for the RTT media last read. A
+/// client that inflates its RTT between two reads stretches quinn's timer past it.
 fn validation_hold(old_rtt: Duration) -> Duration {
     let pto = |rtt: Duration, var: Duration| {
         rtt + (4 * var).max(Duration::from_millis(1)) + PEER_MAX_ACK_DELAY

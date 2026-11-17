@@ -1,8 +1,7 @@
-# Hardware/software video encode (plan §7 / §W6): the per-vendor backends (NVENC, VAAPI, AMF, QSV,
-# Vulkan-Video, PyroWave, openh264) behind one `Encoder` trait + `open_video` selector, extracted
-# from the host so it depends on the shared frame vocabulary (pf-frame) rather than living inside
-# the orchestrator. Speaks pf-frame (CapturedFrame/PixelFormat/dxgi identity) and pf-zerocopy
-# (CUDA), never pf-capture — the capture→encode edge is one-way (plan §2.4).
+# Hardware/software video encode: the per-vendor backends (NVENC, VAAPI, AMF, QSV, Vulkan-Video,
+# PyroWave, openh264) behind one `Encoder` trait + `open_video` selector. Speaks pf-frame
+# (CapturedFrame/PixelFormat/dxgi identity) and pf-zerocopy (CUDA), never pf-capture — the
+# capture→encode edge is one-way.
 [package]
 name = "pf-encode"
 version.workspace = true
@@ -26,7 +25,7 @@ anyhow = "1"
 tracing = "0.1"
 
 [dev-dependencies]
-# A test writer for the NVENC backend's unit tests (`with_test_writer().try_init()`).
+# A test writer for the VAAPI and Windows live tests (`with_test_writer().try_init()`).
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Shared test drivers: the PyroWave window walk and decoder, the trait-forwarding guard.
 pf-encode-core = { path = "../pf-encode-core", features = ["test-support"] }
@@ -49,8 +48,8 @@ openh264 = "0.9"
 libc = "0.2"
 # `memfd_create` without a raw-fd adoption.
 rustix = { version = "1", features = ["fs"] }
-# Vulkan bindings for the raw Vulkan-Video encode + PyroWave compute backends (feature-gated below;
-# the dep stays unconditional to mirror the host's Linux target — unused-but-declared is harmless).
+# Vulkan bindings for the raw Vulkan-Video encode + PyroWave compute backends (feature-gated
+# below) and for `vk_util`, which every Linux build compiles.
 ash = { workspace = true }
 # `libnvidia-encode.so.1` is dlopen'd at runtime for the direct-SDK NVENC/CUDA backend.
 libloading = "0.9"

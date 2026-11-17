@@ -43,7 +43,7 @@ fn option_card(
 }
 
 /// The brand lockup — the mark above the "funk" wordmark — with the website's one-shot
-/// intro (pfweb `BrandMark.tsx` / `Wordmark.tsx`) at progress `t` (0 → 1 over 1.3 s):
+/// intro (punktfunk-website `BrandMark.tsx` / `Wordmark.tsx`) at progress `t` (0 → 1 over 1.3 s):
 /// the two circles orbit once on an axis into the screen, scaling in antiphase with a
 /// small diagonal sway that vanishes at rest, the lens highlight fades in over the tail,
 /// and the letters slide in from the right, staggered. Everything lands on the static mark,

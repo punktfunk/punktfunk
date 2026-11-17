@@ -8,8 +8,8 @@
 //! Descriptors are captured from a physical Deck; see
 //! `packaging/linux/steam-deck-gadget/` for the PoC and USB-stack traps.
 //!
-//! SteamOS-host only: needs `dummy_hcd` + `raw_gadget`. Report bytes come from
-//! [`super::steam_proto`]. The Secure-Boot-clean alternative is
+//! On by default on SteamOS only ([`gadget_preferred`]); needs `dummy_hcd` + `raw_gadget`.
+//! Report bytes come from [`super::steam_proto`]. The Secure-Boot-clean alternative is
 //! [`super::steam_usbip`].
 
 use crate::uapi;
@@ -575,8 +575,8 @@ pub fn ensure_modules() {
 }
 
 /// Auto is on for SteamOS (ships the modules and runs Steam Input) and off elsewhere;
-/// `PUNKTFUNK_STEAM_GADGET` on/off forces it. A host that *is* a Deck never reaches
-/// here: `resolve_gamepad` degrades `SteamDeck` → DualSense before the manager is built.
+/// `PUNKTFUNK_STEAM_GADGET` on/off forces it. A host with a Deck controller of its own gets
+/// DualSense instead (`degrade_steam_on_conflict`), unless `PUNKTFUNK_STEAM_FORCE` is set.
 pub fn gadget_preferred() -> bool {
     pf_host_config::row_tri("PUNKTFUNK_STEAM_GADGET")
         .unwrap_or_else(|| pf_host_config::os_release::os_release().is("steamos"))

@@ -77,11 +77,12 @@ pub(crate) struct PreparedCopy {
 
 #[derive(Serialize, ToSchema)]
 pub(crate) struct PreparedStep {
-    /// `first_run`, `firmware`, `firmware_install`, `players` or `config_root`.
+    /// hermir's name for the step, like `first_run`, `firmware`, `firmware_install`,
+    /// `config_root`, or `config` for the session's pads.
     pub kind: String,
     /// The file the step is about.
     pub target: String,
-    /// `applied`, `present`, `skipped` or `failed`.
+    /// `applied`, `present`, `skipped`, `conflict` or `failed`.
     pub outcome: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,

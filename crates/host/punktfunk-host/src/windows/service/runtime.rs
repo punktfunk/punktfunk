@@ -184,9 +184,8 @@ pub(super) fn run_service() -> Result<()> {
     // hiding from the next console session, and a lent one is the desk's while nothing fences.
     pf_inject::desk_fence::clear();
 
-    // Report the truth: `running` carries Win32(0), so a failed `supervise` used to stop as
-    // cleanly as an operator-requested stop, and the SCM log — and any failure action keyed on
-    // a non-zero exit — never saw the difference.
+    // A failed `supervise` stops with a non-zero exit, so the SCM log and any failure action
+    // keyed on one tell it from an operator-requested stop.
     let _ = status_handle.set_service_status(ServiceStatus {
         current_state: ServiceState::Stopped,
         controls_accepted: ServiceControlAccept::empty(),

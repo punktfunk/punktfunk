@@ -34,11 +34,10 @@ pub unsafe extern "C" fn device_d0_entry(
     previous_state: wdk_sys::WDF_POWER_DEVICE_STATE,
 ) -> NTSTATUS {
     dbglog!("[pf-vd] device_d0_entry (previous_state={previous_state})");
-    // A resume from a REAL low-power state (D1/D2/D3 — the initial start reports D3Final): the
-    // cached adapter handle belongs to the pre-power-cycle incarnation, and `init_adapter` would
-    // short-circuit on it forever, leaving every later IOCTL_ADD pointed at a stale adapter. The
-    // MS sample re-inits on every D0 entry; we clear-and-reinit only on genuine resumes so the
-    // common re-entrant D0 (no power cycle) stays the cheap no-op the doc above promises.
+    // A resume from a REAL low-power state (D1/D2/D3; the initial start reports D3Final): the
+    // cached adapter handle is from the pre-power-cycle incarnation, and `init_adapter` would
+    // short-circuit on it forever, leaving later IOCTL_ADDs on a stale adapter. Clear-and-reinit
+    // only on genuine resumes: a re-entrant D0 stays the cheap no-op `init_adapter` makes it.
     if matches!(
         previous_state,
         wdk_sys::_WDF_POWER_DEVICE_STATE::WdfPowerDeviceD1
@@ -179,7 +178,7 @@ fn present_seat_display(stop: HANDLE) {
     }
 }
 
-/// `EvtCleanupCallback` on the WDFDEVICE (E1): the device is being removed (PnP / driver unload) — drop
+/// `EvtCleanupCallback` on the WDFDEVICE: the device is being removed (PnP / driver unload) — drop
 /// every monitor's swap-chain worker so the worker threads don't linger into teardown. IddCx-free (the
 /// framework tears the monitors down with the departing device); see
 /// [`crate::monitor::cleanup_for_device_removal`].
@@ -432,12 +431,11 @@ unsafe fn path_slice<'a, P>(ptr: *const P, count: u32) -> &'a [P] {
     unsafe { core::slice::from_raw_parts(ptr, count as usize) }
 }
 
-/// Commit is a no-op for assign to drive — but the OS stamps each path ACTIVE/CHANGED here, and an
-/// active→inactive flip on OUR head (while a sibling stays active) is the driver-visible form of
-/// Enrico's hypothesis: the OS idles the virtual head like a physical one and the drain loop then
-/// sees only E_PENDING with no unassign. Log every commit's per-path flags so a hole can be lined
-/// up against a path the OS just deactivated. Low frequency (topology changes only). `Flags` is a
-/// plain integer (bindgen `ModuleConsts`): `IDDCX_PATH_FLAGS_CHANGED = 0x1`, `_ACTIVE = 0x2`.
+/// Commit is a no-op for assign to drive — but the OS stamps each path ACTIVE/CHANGED here, so
+/// every commit's per-path flags are logged: an active→inactive flip on OUR head (while a sibling
+/// stays active) shows up as a path the OS just deactivated. Low frequency (topology changes
+/// only). `Flags` is a plain integer (bindgen `ModuleConsts`): `IDDCX_PATH_FLAGS_CHANGED = 0x1`,
+/// `_ACTIVE = 0x2`.
 pub unsafe extern "C" fn adapter_commit_modes(
     _adapter: iddcx::IDDCX_ADAPTER,
     p_in: *const iddcx::IDARG_IN_COMMITMODES,
@@ -609,7 +607,7 @@ pub unsafe extern "C" fn unassign_swap_chain(monitor: iddcx::IDDCX_MONITOR) -> N
 }
 
 /// The pf-driver-proto control plane. Returns `()` and completes the request itself (matches the C
-/// `EVT_IDD_CX_DEVICE_IO_CONTROL` shape). STEP 4: dispatch the proto IOCTLs; for now just complete.
+/// `EVT_IDD_CX_DEVICE_IO_CONTROL` shape); `control::dispatch` routes the proto IOCTLs.
 pub unsafe extern "C" fn device_io_control(
     _device: WDFDEVICE,
     request: WDFREQUEST,
@@ -623,8 +621,8 @@ pub unsafe extern "C" fn device_io_control(
 
 /// `EvtIddCxMonitorGetPhysicalSize` — the remote-driver-only DDI. IddCx obligates a remote-session
 /// adapter to register it the way `CAN_PROCESS_FP16` obligates the `*2` set; the OS only CALLS it
-/// for a remote monitor with no description, and ours always ships an EDID. The size mirrors the
-/// EDID's own 16:9 block, since a zero here is invalid.
+/// for a remote monitor with no description, and ours always ships an EDID. The size is a fixed
+/// 16:9 27-inch panel (597 x 336 mm), since a zero here is invalid.
 pub unsafe extern "C" fn monitor_get_physical_size(
     _monitor: iddcx::IDDCX_MONITOR,
     p_out: *mut iddcx::IDARG_OUT_MONITORGETPHYSICALSIZE,

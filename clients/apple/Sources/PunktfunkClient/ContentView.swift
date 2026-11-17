@@ -89,7 +89,7 @@ struct ContentView: View {
     /// drops it when the pair screen closes).
     @State private var pairThen: (@MainActor (StoredHost) -> Void)?
     /// A fresh `pair=required`/unknown host the user tapped: drives the choice between no-PIN
-    /// delegated approval ("Request Access") and the SPAKE2 PIN ceremony (rule 3b).
+    /// delegated approval ("Request Access") and the SPAKE2 PIN ceremony.
     @State private var approvalChoice: ApprovalRequest?
     /// A delegated-approval connect is in flight (host parks it until the operator approves):
     /// drives the cancelable "Waiting for approval" prompt and the pin-as-paired on success.
@@ -143,20 +143,20 @@ struct ContentView: View {
     // A connected controller (+ the Settings toggle) swaps the whole home screen for the console
     // (ConsoleHomeView) instead of retrofitting HomeView's touch/desktop UI — see `home` below.
     // On tvOS the same screens are focus-engine-driven, so the Siri Remote keeps working;
-    // with no (extended) controller attached tvOS falls back to HomeView as before.
+    // with no (extended) controller attached tvOS falls back to HomeView.
     @ObservedObject private var gamepadManager = GamepadManager.shared
     @AppStorage(DefaultsKey.gamepadUIEnabled) private var gamepadUIEnabled = SettingDefault.gamepadUIEnabled
     /// When the switch above takes over — "connected" (default) or "always". See
     /// `GamepadUIEnvironment`.
     @AppStorage(DefaultsKey.gamepadUIMode) private var gamepadUIMode =
         GamepadUIEnvironment.modeWhenConnected
-    /// Auto-wake on connect (Settings → General). On (default): a dial to an offline saved host
-    /// fires Wake-on-LAN up front and falls into the "Waking…" wait if the dial fails. Off: connects
+    /// Auto-wake on connect (Settings → General). On: a dial to an offline saved host fires
+    /// Wake-on-LAN up front and falls into the "Waking…" wait if the dial fails. Off: connects
     /// go straight through with no wake. The explicit "Wake Host" action is unaffected either way.
     @AutoWake private var autoWakeEnabled
-    /// Where a bare launch opens (Settings → Library). Library (the default) opens the default
-    /// host's shelf; Stream also dials its desktop. Resolved once per process by
-    /// `applyStartScreen`, never on foregrounding — see `startApplied`.
+    /// Where a bare launch opens (`StartIn`, Settings → Library). Hosts opens the host list,
+    /// Library the default host's shelf, Stream also dials its desktop. Resolved once per
+    /// process by `applyStartScreen`, never on foregrounding — see `startApplied`.
     @AppStorage(DefaultsKey.startIn) private var startInRaw = SettingDefault.startIn
     /// Which host that is, when several are paired. Empty until somebody picks one; with exactly
     /// one paired host the default is derived and this stays empty.
@@ -165,9 +165,9 @@ struct ContentView: View {
     /// by `applyStartScreen` and by `handleDeepLink`, so whichever fires first on a cold start
     /// wins and the other stands down.
     @MainActor private static var startApplied = false
-    /// Background keep-alive (Settings → General, iOS-only). Default OFF (today's freeze-on-background
-    /// is the default). When on, backgrounding a live session keeps audio + the connection alive and
-    /// drops video, auto-disconnecting after `backgroundTimeoutMinutes`.
+    /// Background keep-alive (Settings → General; touch and TV, not macOS). Off: backgrounding a
+    /// live session ends it. On: it keeps audio + the connection alive and drops video,
+    /// auto-disconnecting after `backgroundTimeoutMinutes` (`BackgroundPolicy.decide`).
     @AppStorage(DefaultsKey.backgroundKeepAlive) private var backgroundKeepAlive = SettingDefault.backgroundKeepAlive
     @AppStorage(DefaultsKey.backgroundTimeoutMinutes) private var backgroundTimeoutMinutes =
         SettingDefault.backgroundTimeoutMinutes
@@ -383,29 +383,19 @@ struct ContentView: View {
             model.cycleStats()
         }
         #if os(iOS) || os(visionOS) || os(tvOS)
-        // Coming back to the app re-arms the LAN browse. The home's `onAppear`/`onDisappear` do
-        // NOT fire across background/foreground, and a browse the system suspended while we were
-        // away does not resume on its own — so the host grid came back empty and stayed empty
-        // until the app was relaunched. No-op unless the browse is already running (mid-session
-        // the home has deliberately torn it down).
-        //
-        // Mobile only: macOS never suspends the process, and its `scenePhase` flips on every
-        // window focus change — re-arming there would rebuild the browser each time you alt-tab.
-        // A Mac browse that genuinely breaks is caught by `HostDiscovery`'s own sweep instead.
+        // Coming back to the app re-arms the LAN browse: `onAppear` does not fire across
+        // background/foreground, and a browse the system suspended does not resume on its own.
+        // No-op unless a browse is running. Mobile only: macOS never suspends the process and
+        // its `scenePhase` flips on every focus change; `HostDiscovery`'s sweep catches a dead one.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { discovery.refreshIfRunning() }
         }
         #endif
         #if os(iOS) || os(visionOS) || os(tvOS)
-        // Backgrounding driver. Only .background/.active matter; .inactive (a transient peek) is
-        // ignored so neither branch fires for a Control-Center pull.
-        //
-        // Backgrounding MUST end the session one way or the other: the app keeps running while
-        // streaming (the `audio` background mode plus a live audio session), so its QUIC connection
-        // keeps answering the host's keep-alives with the user long gone — the host has no way to
-        // tell that apart from someone watching, and the session survived indefinitely. Either hold
-        // it under the opt-in keep-alive (bounded by that path's own auto-disconnect timer) or end
-        // it here.
+        // Backgrounding driver: .inactive (a transient peek) is ignored. The `audio` background
+        // mode keeps a streaming app running and answering the host's keep-alives, so the session
+        // must end or be held under the opt-in keep-alive (bounded by its own timer): the host
+        // cannot tell that from a viewer. `BackgroundPolicy` decides which.
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background:
@@ -425,8 +415,8 @@ struct ContentView: View {
         #endif
         #if os(iOS)
         // Live Activity lifecycle, driven from the model's published state. iPhone/iPad only —
-        // ActivityKit (and so `liveActivity`) does not exist on tvOS, which is why this stays in its
-        // own os(iOS) block rather than riding the backgrounding driver's.
+        // ActivityKit (and so `liveActivity`) is absent from the tvOS and visionOS SDKs (27.0),
+        // which is why this stays in its own os(iOS) block rather than the backgrounding driver's.
         .onChange(of: model.phase) { _, phase in
             switch phase {
             case .streaming:
@@ -583,7 +573,7 @@ struct ContentView: View {
         }
         #endif
         // On the outer Group so the sheet survives the trust-prompt → home transition
-        // (the "Pair with PIN instead" path disconnects first — the host's accept loop
+        // (the trust card's "Pair with PIN…" disconnects first — the host's accept loop
         // is sequential, a pairing connection would queue behind the live session).
         #if !os(tvOS)
         // The touch UI's pairing sheet. The console pairs on its own screen, so the sheet hides
@@ -596,7 +586,7 @@ struct ContentView: View {
 
     // Presentation flags for the prompt chain, extracted from their `.alert`/`.confirmationDialog`
     // calls so each manual get/set Binding type-checks on its own instead of inflating the body's
-    // budget (inline, they tip SwiftUI's per-expression limit — see the split sections idiom).
+    // budget (inline, they tip SwiftUI's per-expression limit — see the note above `body`).
 
     private var deepLinkNoticePresented: Binding<Bool> {
         Binding(
@@ -800,15 +790,15 @@ struct ContentView: View {
         case .connect:
             break
         case .browse:
-            // The reserved library route, now real: open the host's game library without starting
-            // a session. `launch=`/`preset=` are meaningless on a browse (nothing streams until a
-            // title is picked, and that connect resolves its own preset) — ignored, not refused,
-            // per the unknown-parameter rule.
+            // Open the host's game library without starting a session. `launch=`/`preset=` are
+            // meaningless on a browse (nothing streams until a title is picked, and that connect
+            // resolves its own preset) — ignored, not refused, per the unknown-parameter rule.
             openLibrary(from: link)
             return
         case .wake:
-            // Still reserved: saying so beats silently connecting instead. (Shortcuts users have
-            // the Wake Host intent, which never round-trips through a URL.)
+            // Reserved in the grammar, not acted on here: saying so beats silently connecting
+            // instead. (Shortcuts users have the Wake Host intent, which never round-trips
+            // through a URL.)
             deepLinkNotice = L10n.linkRouteUnsupported(route: "wake")
             return
         }
@@ -937,7 +927,7 @@ struct ContentView: View {
         #endif
     }
 
-    /// The shared console (`design/console-ui-element-layer.md`): home, library, settings,
+    /// The shared console (`pf-console-ui`): home, library, settings,
     /// pairing and the host menu are all drawn by it, so this branch mounts nothing else. A
     /// shelf written while it is up is a navigation inside it, not a presentation over it.
     private var console: some View {
@@ -1047,7 +1037,7 @@ struct ContentView: View {
                 // Blur the live stream during the trust prompt (heavy) and during a resize (lighter
                 // — the deliberate "hold on" while the host rebuilds its pipeline and the decoder
                 // re-inits on the new-mode IDR). Only the resize blur animates; the trust blur snaps
-                // as before (its own overlay handles the transition).
+                // (its own overlay handles the transition).
                 .blur(radius: pendingFingerprint != nil ? 32 : (model.resizing ? 16 : 0))
                 .animation(.easeInOut(duration: 0.22), value: model.resizing)
                 .overlay {
@@ -1055,14 +1045,10 @@ struct ContentView: View {
                         Color.black.opacity(0.45).overFlatPicture()
                     }
                 }
-                // The resize spinner rides over the (blurred) stream; suppressed under the trust
-                // prompt, which owns the screen. It never hit-tests, so window-drag resizes keep
-                // steering and the next click still reaches the stream. Mounted ONLY while a
-                // resize is live: resident structure above the CAMetalLayer is what the stage-4
-                // direct-to-display hunt is eliminating — composited presents reach glass a full
-                // refresh later. The enter/exit fade rides the call-site transition + the
-                // .animation(value: resizing) below (the view's internal `if active` fade can't
-                // run when the whole view unmounts).
+                // The resize spinner rides over the blurred stream, never under the trust prompt,
+                // and never hit-tests, so window-drag resizes keep steering. Mounted ONLY while a
+                // resize is live: a resident view above the CAMetalLayer makes presents composited,
+                // a full refresh later. Its fade rides the call-site transition, not `if active`.
                 .overlay {
                     if pendingFingerprint == nil, model.resizing {
                         ResizeIndicatorView(active: true)
@@ -1162,15 +1148,6 @@ struct ContentView: View {
 
     // MARK: - First-run + dev hooks
 
-    /// PUNKTFUNK_AUTOCONNECT=host[:port] connects immediately (trust-on-first-use,
-    /// auto-confirmed — dev only) at the saved or PUNKTFUNK_MODE=WxHxHz mode, without
-    /// touching the saved host list. PUNKTFUNK_COMPOSITOR=kwin|gamescope|… overrides the
-    /// compositor preference and PUNKTFUNK_REMOTE_GAMEPAD=xbox360|dualsense the virtual
-    /// pad type (same names as the host env knobs). (IPv4/hostname only.)
-    ///
-    /// DEBUG-ONLY, and compiled out of a release build: it streams to whatever host an
-    /// environment variable names with the trust prompt auto-confirmed, which is a dev lever
-    /// (`swift run`, the shot harness), never something a shipped app should answer to.
     /// Open where the Start in setting says, once per process. Library shows the default host's
     /// shelf; Stream also dials its desktop, one attempt, with the shelf underneath to cancel
     /// onto. Never on foregrounding and never after a session ends — a policy that reconnected
@@ -1191,6 +1168,16 @@ struct ContentView: View {
         if case .stream = start { flow.connect(host) }
     }
 
+    /// PUNKTFUNK_AUTOCONNECT=host[:port] connects immediately (trust-on-first-use,
+    /// auto-confirmed — dev only) at the saved or PUNKTFUNK_MODE=WxHxHz mode, without
+    /// touching the saved host list (`demo` saves the demo host). PUNKTFUNK_COMPOSITOR=
+    /// kwin|gamescope|… overrides the compositor preference and PUNKTFUNK_REMOTE_GAMEPAD=
+    /// xbox360|dualsense the virtual pad type (same names as the host env knobs).
+    /// (IPv4/hostname only.)
+    ///
+    /// DEBUG-ONLY, and compiled out of a release build: it streams to whatever host an
+    /// environment variable names with the trust prompt auto-confirmed, which is a dev lever
+    /// (`swift run`, the shot harness), never something a shipped app should answer to.
     private func autoConnectIfAsked() {
         #if DEBUG
         guard let target = ProcessInfo.processInfo.environment["PUNKTFUNK_AUTOCONNECT"],

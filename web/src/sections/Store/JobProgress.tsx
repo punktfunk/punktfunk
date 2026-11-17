@@ -8,9 +8,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { m } from "@/paraglide/messages";
 
-// The host reports a job's progress as a free-form phase string; these are the ones it emits, in
-// order. Anything unrecognised falls through to the raw phase rather than an empty label, so a new
-// host phase degrades to English-but-visible instead of disappearing.
+// The host reports a job's progress as a free-form phase string; these are the ones with a label.
+// Any other phase ("refreshing credentials" is one) falls through to the raw string rather than an
+// empty label, so a new host phase degrades to English-but-visible instead of disappearing.
 const PHASES: Record<string, () => string> = {
 	queued: () => m.store_phase_queued(),
 	verifying: () => m.store_phase_verifying(),
@@ -69,9 +69,9 @@ export const JobProgressSection: FC<{
 		onSettled?.(final);
 	}, [final, jobId, qc, onSettled]);
 
-	// A job the host can no longer tell us about — it restarted, and jobs live in memory. This used
-	// to render `null`, so the card simply vanished while the Install buttons stayed armed and the
-	// query kept polling a dead id once a second forever. Say what happened and offer the way out.
+	// A job the host can no longer tell us about — it restarted, and jobs live in memory. Rendering
+	// `null` would make the card vanish while the Install buttons stay armed. Say what happened and
+	// offer the way out.
 	if (!job.data) {
 		// Mid-run, "no data yet" is just the first poll of the install we only now started, and
 		// rendering nothing would blink the run's progress off the page between every package.

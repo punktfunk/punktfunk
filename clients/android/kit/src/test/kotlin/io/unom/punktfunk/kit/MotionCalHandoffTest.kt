@@ -11,10 +11,9 @@ import org.junit.Test
  * The claim/read hand-off that lets [DsCapture] read a pad's motion calibration off the claiming
  * thread. Two things are pinned here, and both are about the gap before the read comes back.
  *
- * What the gap DOES: the pad streams, scaled by the nominal calibration — the behaviour that
- * shipped before the read existed. What it must NOT do: inherit the previous pad's factory numbers
- * (calibration is per unit), or accept a read that outlived its claim, which an unplug, a stop, or
- * a re-claim can all cause.
+ * What the gap DOES: the pad streams, scaled by the nominal calibration. What it must NOT do:
+ * inherit the previous pad's factory numbers (calibration is per unit), or accept a read that
+ * outlived its claim, which an unplug, a stop, or a re-claim can all cause.
  */
 class MotionCalHandoffTest {
     /**

@@ -1,6 +1,6 @@
 //! Virtual Xbox pads on Windows via the UMDF HID minidriver — Xbox Wireless (device-type 4),
 //! Xbox One S (5) and Xbox Elite Series 2 (6). HID-visible alternative to
-//! [`super::gamepad_windows`]'s XUSB companion: `pf-xusb` registers only
+//! [`super::gamepad`]'s XUSB companion: `pf-xusb` registers only
 //! `GUID_DEVINTERFACE_XUSB`, so hidapi / DirectInput / WGI never see it.
 //!
 //! Transport matches the PS/Deck pads (`SwDeviceCreate` + sealed channel). Stamp
@@ -14,7 +14,7 @@
 //!
 //! No rich plane: no touchpad, lightbar, adaptive triggers, or IMU in the HID
 //! contract. `apply_rich` / `clear_rich` / `neutralize_gyro` are no-ops; motion is
-//! decoded and dropped (`GamepadPref::motion_reaches`).
+//! decoded and dropped (`GamepadPref::has_motion`).
 
 use super::gamepad_raii::SwDeviceProfile;
 use super::pad_shm::ShmPad;
@@ -72,7 +72,7 @@ impl WinXboxIdentity {
     }
 
     /// Xbox Elite Wireless Controller Series 2, `045E:0B22`.
-    /// No paddles: `BTN_PADDLE1..4` still fold for this identity. Once
+    /// No paddles in the report: `BTN_PADDLE1..4` are dropped. Once
     /// `xinputhid` promotes the pad it claims the HID collection exclusively,
     /// so extra descriptor buttons may be invisible to every consumer.
     pub(super) const fn elite() -> WinXboxIdentity {
@@ -187,7 +187,7 @@ impl XboxWinPad {
                 bluetooth: false,
                 description: id.description,
                 // The HID child becomes `HID\VID_045E&PID_…&IG_00`: Steam merges a pad's views by
-                // the VID/PID in its path, and under `punktfunk` it listed one Xbox pad twice.
+                // the VID/PID in its path, and under `punktfunk` it would list one Xbox pad twice.
                 enumerator: id.usb_vid_pid,
                 property: None,
             },
@@ -233,7 +233,7 @@ impl XboxWinPad {
 
 /// Windows-Xbox `PadProto`. Lifecycle lives in [`UhidManager`]. Identity is a
 /// field, not three types: same codec, same output parse, same rumble plane.
-/// `Default` is Xbox Wireless, so `XboxWindowsManager::new()` is unchanged.
+/// `Default` is Xbox Wireless, which `XboxWindowsManager::new()` builds.
 pub struct XboxWinProto {
     identity: &'static WinXboxIdentity,
 }

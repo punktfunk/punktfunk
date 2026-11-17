@@ -90,7 +90,7 @@ class StreamScreenTest {
         compose.waitForIdle()
         compose.runOnUiThread { shown.value = false }
         compose.waitForIdle()
-        // Composing something else afterwards proves the activity survived the teardown.
+        // Composing the screen again afterwards proves the activity survived the teardown.
         compose.runOnUiThread { shown.value = true }
         compose.waitForIdle()
         compose.onNodeWithText(

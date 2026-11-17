@@ -4,7 +4,7 @@
 // push_packet/decode_packet; MetalWaveletShaders.swift hand-ports the vendored GLSL. A vendored
 // PyroWave bump means re-diffing both decode shaders and the two 8-byte header structs.
 //
-// Wire shape (fixed by the host encoder, pf-encode's enc/linux/pyrowave.rs):
+// Wire shape (fixed by the host encoder, pf-encode-core's pyrowave_wire.rs):
 // • One AU is one frame of packets, each one 32x32 coefficient block for one (component, level,
 //   band), sized by its 8-byte BitstreamHeader. A per-frame START_OF_FRAME header carries dims,
 //   the block count and the VUI bits (4:2:0, BT.709/BT.2020, limited/full).
@@ -107,9 +107,9 @@ struct ParsedWaveletFrame {
     var pq: Bool
     var fullRange: Bool
 
-    /// The frame's Y′CbCr→RGB signal for the presenter's planar CSC. PyroWave today is always
-    /// BT.709 limited (the host's fixed contract), but the sequence header signals it, so honor
-    /// what it says.
+    /// The frame's Y′CbCr→RGB signal for the presenter's planar CSC, as the sequence header
+    /// signals it. The host sends full-range codes, BT.709, or BT.2020 under PQ
+    /// (`pyrowave_wire::stamp_color_bits`).
     var cscSignal: CscRows.Signal {
         CscRows.Signal(matrix: bt2020 ? 9 : 1, fullRange: fullRange)
     }
@@ -326,7 +326,8 @@ public final class WaveletAccessUnitPool: AccessUnitMemory {
     private var free = Array((0..<WaveletAccessUnitPool.slots).reversed())
 
     /// Room for an AU at `width`×`height`: 6 bits a pixel at 4:2:0, 9 at 4:4:4 (the host's
-    /// 4.0 bpp ceiling plus window padding), as the Vulkan ring sizes it; 1 MiB at least.
+    /// `pyrowave_bpp` maximum, 4.0, plus window padding), as the Vulkan ring sizes it; 1 MiB at
+    /// least.
     static func capacity(width: Int, height: Int, chroma444: Bool) -> Int {
         let px = max(width, 1) * max(height, 1)
         let bytes = chroma444 ? px * 9 / 8 : px * 3 / 4

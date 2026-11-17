@@ -14,8 +14,8 @@ public enum RenderScale {
     /// supersamples. The UI clamps its slider to this and the connect clamps the raw stored value.
     public static let range: ClosedRange<Double> = 0.5...4.0
 
-    /// The multipliers the picker offers. 1.0 (Native) is the default; the rest are the round stops
-    /// users reason about.
+    /// The multipliers the picker offers. 1.0 is Native; the rest are the round stops users reason
+    /// about.
     public static let presets: [Double] = [0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0]
 
     /// The encoder/host per-axis ceiling for a codec preference string (`DefaultsKey.codec`). H.264

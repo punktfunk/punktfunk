@@ -1,4 +1,5 @@
-//! Per-frame present: `FrameInput` → video image → CSC → placed scale or blit → present.
+//! Per-frame present: `FrameInput` → CSC into the video image → placed scale or blit → present.
+//! The CSC draws straight into the swapchain image instead where `plan` allows.
 //! A D3D11 RGB slot arrives converted: it is the blit source and the `Redraw` picture,
 //! with no video image. A D3D11 planar slot goes through CSC like the native lane.
 //!
@@ -1046,7 +1047,7 @@ impl Presenter {
             };
             // Clear and blit both write the swapchain image; transfer commands carry no
             // implicit order. RDNA fast-clears DCC metadata beside the blit, and where
-            // the clear lands second the tile shows black (the AMD "equaliser" report).
+            // the clear lands second the tile shows black.
             barrier(
                 &self.device,
                 self.cmd_buf,

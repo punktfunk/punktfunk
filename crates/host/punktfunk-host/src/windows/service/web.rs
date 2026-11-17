@@ -331,9 +331,8 @@ pub(super) fn spawn_web(cfg: &WebConfig, data: &Path, job: HANDLE) -> Result<Chi
 
     let mut overrides: Vec<(&str, String)> = vec![
         ("PORT", "47992".into()),
-        // No HOST override: the bind is host.env's PUNKTFUNK_UI_BIND, which `load_host_env` has
-        // already put in this process's environment, and the console defaults to loopback without
-        // it. Overriding here would out-rank the file the operator edits.
+        // No HOST override: the bind is host.env's PUNKTFUNK_UI_BIND, already in this process's
+        // environment (`load_host_env`); without it the console binds every interface.
         // Proxy hop to the host's loopback HTTPS mgmt API. Self-signed cert is accepted
         // per-request, never process-wide.
         ("PUNKTFUNK_MGMT_URL", mgmt_url),

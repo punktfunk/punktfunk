@@ -17,7 +17,7 @@ use std::borrow::Cow;
 /// churn between frames, so an index would act on the wrong row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowId {
-    /// Index into [`SettingsScreen::presets`]. Activate opens the preset's menu.
+    /// Index into [`super::SettingsScreen::presets`]. Activate opens the preset's menu.
     Preset(usize),
     /// Last on the Presets tab: name a new preset, then edit it.
     NewPreset,
@@ -37,15 +37,16 @@ pub enum RowId {
     /// Device-local, under [`device_keys::SCREEN`].
     Screen,
     Bitrate,
-    /// `trust::Settings::pyrowave_bpp`, shown as the rate it needs. In Bitrate's place while
-    /// the codec is PyroWave.
+    /// `trust::Settings::pyrowave_bpp`, shown as the rate it needs. Under PyroWave it sits
+    /// below Bitrate and stands in for its rate.
     PyroWaveQuality,
     Compositor,
     Codec,
     Decoder,
     Hdr,
     Chroma444,
-    /// `VIDEO_CAP_10BIT` without HDR. Desktop-only: Android takes depth from the panel.
+    /// `VIDEO_CAP_10BIT` without HDR. It asks nothing of the panel; [`row_on`] lists where it
+    /// is offered.
     TenBitSdr,
     PresentPriority,
     SmoothBuffer,
@@ -54,7 +55,8 @@ pub enum RowId {
     Audio,
     /// Cross-client `audio_format` key.
     AudioFormat,
-    /// `CLIENT_CAP_KEEP_HOST_AUDIO`. Advertised on every platform, including Android.
+    /// `CLIENT_CAP_KEEP_HOST_AUDIO`. [`row_on`] lists the clients that offer it, Android
+    /// included.
     KeepHostAudio,
     Mic,
     EchoCancel,
@@ -78,9 +80,9 @@ pub enum RowId {
     InvertScroll,
     /// `trust::Settings::inhibit_shortcuts`: the system's own key chords reach the host.
     InhibitShortcuts,
-    /// `trust::Settings::overlay_actions`. Action row: opens [`super::ring_editor::RingEditorScreen`].
+    /// `trust::Settings::overlay_actions`. Action row: opens `RingEditorScreen`.
     QuickActions,
-    /// `trust::Settings::shortcuts`. Action row: opens [`super::shortcuts::ShortcutsScreen`].
+    /// `trust::Settings::shortcuts`. Action row: opens `ShortcutsScreen`.
     ShortcutsPage,
     Stats,
     /// `trust::Settings::advanced_stats`: which vocabulary the overlay speaks. Device-wide.
@@ -102,8 +104,8 @@ pub enum RowId {
     LibraryView,
     /// `trust::Settings::start_in`. The value line names where a launch will land.
     StartIn,
-    // Android-only. Values live in `trust::Settings::extra` under `android.*`
-    // so the typed struct stays shared; [`row_on`] keeps them off desktop.
+    // Where the typed struct has no field, a row's value lives in `trust::Settings::extra`
+    // (see `Extra`); `row_on` names the platforms that offer each.
     /// Slice-progressive decode plus DSCP. Android-only.
     LowLatency,
     /// `trust::Settings::keep_awake`. Off, the stream holds the screen awake only while the
@@ -118,7 +120,7 @@ pub enum RowId {
     Sc2Passthrough,
     /// Raw USB: touchpad, motion, adaptive triggers.
     DsCapture,
-    /// `Settings.gamepadUiEnabled`. Only with [`Ctx::fallback_ui`] — otherwise
+    /// `Settings.gamepadUiEnabled`. Only with `Device::fallback_ui` — otherwise
     /// off strands the user with no UI.
     GamepadUi,
     GamepadUiMode,
@@ -128,7 +130,7 @@ pub enum RowId {
     BackgroundTimeout,
     /// The statistics overlay's corner. Apple draws that overlay itself.
     StatsPosition,
-    /// The host row's order ([`super::home::arrange`]).
+    /// The host row's order ([`home::arrange`]).
     HostSort,
     /// Bands in the host row: none, by preset, or by online status.
     HostGrouping,
@@ -143,9 +145,9 @@ pub enum RowId {
     GamePicture,
     /// Action row: jumps to the Controllers tab.
     Controllers,
-    /// Action row: asks the host to open the platform licences screen.
+    /// Action row: opens `LicensesScreen`, which asks the host for its sections.
     Licenses,
-    /// Action row: the Games tab's sections, in [`super::library::CustomizeScreen`].
+    /// Action row: the Games tab's sections, in `CustomizeScreen`.
     LibrarySections,
     /// This build's version. Nothing to change.
     Version,
@@ -764,20 +766,22 @@ fn safe_area(s: &pf_client_core::trust::Settings, platform: crate::platform::Pla
 /// shells can write: on Linux both write the same client-gtk-settings.json, so a box that set
 /// 144 Hz there opens this screen holding it. A value missing from this table has no index, and
 /// `step_option` answers a missing index with 0 — one nudge on the row would silently snap the
-/// setting to Automatic. Keep in step with clients/linux/src/ui_settings.rs and
-/// clients/windows/src/app/settings.rs.
+/// setting to Automatic. Keep in step with clients/linux/src/settings/tables.rs and
+/// clients/windows/src/app/settings/display.rs.
 pub(super) const REFRESH: [u32; 8] = [0, 30, 60, 90, 120, 144, 165, 240];
 /// Render-scale multipliers; `1.0` = Native.
 use punktfunk_core::render_scale::PRESETS as RENDER_SCALES;
 use punktfunk_core::video_fit::VideoFit;
-/// Left/right rungs in kbps: 5 Mbps apart to 50, 10 to 100, where most links settle;
-/// ceiling 2 Gbps. Off-ladder values go through the typed field rather than a longer ladder.
+/// Left/right rungs in kbps: 1 to 3 Mbps apart to 15, 5 apart to 50, 10 to 100, where most
+/// links settle; ceiling 2 Gbps. Off-ladder values go through the typed field rather than a
+/// longer ladder.
 pub(super) const BITRATES: [u32; 34] = [
     0, 1_000, 2_000, 3_000, 4_000, 5_000, 6_000, 8_000, 10_000, 12_000, 15_000, 20_000, 25_000,
     30_000, 35_000, 40_000, 45_000, 50_000, 60_000, 70_000, 80_000, 90_000, 100_000, 125_000,
     150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 750_000, 1_000_000, 1_500_000, 2_000_000,
 ];
-/// Typed-field ceiling in Mbps — the ladder's top. Host range is 500 kbps–8 Gbps.
+/// Typed-field ceiling in Mbps — the ladder's top. The host's own range is
+/// `MIN_BITRATE_KBPS` to `MAX_BITRATE_KBPS` (`native/bitrate.rs`).
 const CUSTOM_MAX_MBPS: u32 = 2_000;
 /// PyroWave quality's rungs, hundredths of a bit per pixel: `BPP_FLOOR` to `BPP_MAX` by 0.1.
 const PYROWAVE_BPP_X100: [u16; 16] = [
@@ -844,8 +848,8 @@ pub(super) fn codecs(platform: crate::platform::Platform) -> &'static [(&'static
     }
 }
 // Per-OS hardware rungs. Windows has no VAAPI (`Decoder::new` has no branch).
-// Stored values are `native-*`; `migrate_decoder_pref` rewrites a legacy store
-// on read, but until the user re-picks it will not match a preset here.
+// Stored values are `native-*`; `migrate_decoder_pref` maps a legacy pin onto them
+// before a lookup.
 #[cfg(not(windows))]
 const DECODERS: [(&str, Label); 4] = [
     ("auto", m::player_decoder_auto),
@@ -865,7 +869,7 @@ const AUDIO: [(u8, Label); 3] = [
     (6, m::player_audio_channels_6),
     (8, m::player_audio_channels_8),
 ];
-/// Shared `present_priority` key — one preset reads the same on every client.
+/// Shared `video_fit` key — one preset reads the same on every client.
 const VIDEO_FITS: [(&str, Label); 3] = [
     ("fit", m::player_video_fit_fit),
     ("crop", m::player_video_fit_crop),
@@ -876,6 +880,7 @@ const MONITORS: [(&str, Label); 2] = [
     ("this", m::player_screens_this),
     ("all", m::player_screens_all),
 ];
+/// Shared `present_priority` key — one preset reads the same on every client.
 const PRESENT_PRIORITIES: [(&str, Label); 2] = [
     ("latency", m::player_present_priority_latency),
     ("smooth", m::player_present_priority_smooth),
@@ -920,7 +925,7 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
     use crate::platform::Platform;
     // Rows name the platforms that OFFER them. "Everything except the other one's rows" is
     // well defined for two platforms and ambiguous for three: a new host would inherit every
-    // row nobody weighed it against. Unlisted here means universal, as it always did.
+    // row nobody weighed it against. Unlisted here means universal.
     use Platform::{Android, Apple, Desktop, Ps5, Switch, WebOS};
     let on: &[Platform] = match id {
         // Phone sensors: hardware a TV does not have. Apple keeps them for the iPhone and
@@ -1911,8 +1916,8 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
         // The other UI is named, not called "the other UI": the sentence has to tell
         // the reader where "off" lands, and that is a different place per client.
         RowId::GamepadUi => match platform {
-            // `row_on` offers this to Android, webOS and Apple; Desktop, Web, Tizen and PS5 are
-            // here for exhaustiveness, never to be read.
+            // `row_on` offers this to Android, webOS and Apple; Desktop, Web, Tizen, PS5 and
+            // Switch are here for exhaustiveness, never to be read.
             Platform::Desktop
             | Platform::Android
             | Platform::Web
@@ -1942,8 +1947,9 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
     }
 }
 
-/// Mbit/s below 1 Gbit/s, Gbit/s above. Decimal only when rounding would collide
-/// (12.5 Mbit/s, 1.5 Gbit/s). Off-ladder rates are real (typed field, desktop spinner).
+/// Mbit/s below 1 Gbit/s, Gbit/s above. One decimal only when the value is 0.05 or more from
+/// a whole number (12.5 Mbit/s, 1.5 Gbit/s). Off-ladder rates are real (typed field, desktop
+/// spinner).
 pub(super) fn bitrate_label(kbps: u32) -> String {
     let number = |v: f64| {
         if (v - v.round()).abs() < 0.05 {

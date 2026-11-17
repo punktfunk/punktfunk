@@ -4,9 +4,9 @@
 // the generic path cannot stream. h3's `proxyRequest` pumps the upstream body into the node-style
 // response with `res.write`, and under the deployed Bun entry that response is a `node-mock-http`
 // object whose writes are accumulated and only turned into a real Response when the handler
-// returns. Measured: three frames sent one second apart arrive at the browser together, ~3 s late,
-// when the upstream closes. For an SSE stream that is fatal — it never closes, so nothing ever
-// arrives, and every event-driven update in the console would silently never fire.
+// returns. Frames sent one second apart arrive at the browser together, when the upstream
+// closes. For an SSE stream that is fatal — it never closes, so nothing ever arrives, and every
+// event-driven update in the console would silently never fire.
 //
 // Returning a WEB `Response` whose body is the upstream's own `ReadableStream` sidesteps the
 // node-response emulation entirely: h3 hands it back as-is and the Bun entry passes it through.

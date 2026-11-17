@@ -313,9 +313,9 @@ pub(crate) fn settle(mut reads: impl FnMut() -> bool) -> Instant {
 /// Re-assert the negotiated advanced colour on a re-arrived monitor, settled like the open,
 /// and return the depth it settled at: what the encoder must open for.
 ///
-/// A monitor that re-arrives mid-stream (`re_add`: REMOVE then ADD, for a mode outside the
-/// frozen advertised list) comes back with advanced colour OFF whatever the session
-/// negotiated, while its EDID still carries the client's HDR volume.
+/// A monitor that re-arrives mid-stream (REMOVE then ADD, when an in-place resize does not
+/// commit) comes back with advanced colour OFF whatever the session negotiated, while its
+/// EDID still carries the client's HDR volume.
 pub(crate) fn reassert_hdr(
     colour: &dyn DisplayColour,
     ccd: CcdTargetKey,

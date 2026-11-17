@@ -111,12 +111,12 @@ import kotlinx.coroutines.withContext
  * persist immediately; [onBack] returns to the connect screen.
  *
  * **Structure mirrors the desktop/Apple settings revamp** ([SettingsCategory], and the Windows
- * client's `app/settings.rs`), so every client reads the same way: General = session/app behaviour,
+ * client's `app/settings/`), so every client reads the same way: General = session/app behaviour,
  * Display = everything about the picture, Input = touch/keyboard/mouse, Audio, Controllers, About.
  * Each field carries its explanation DIRECTLY under it (the `described()` idiom — see
  * [SettingDropdown]'s `caption` and [ToggleRow]'s `subtitle`) rather than as loose paragraphs
- * floating between controls; the only form-level notes are the "applies from the next session"
- * footers, one per affected category.
+ * floating between controls; the form-level notes are the "applies from the next session"
+ * footers, one per affected category, and the Interface group's console-unavailable footer.
  *
  * **One settings UI, not two.** The scope switcher on top edits either the global defaults
  * ([onChange], the base layer every preset inherits from) or one preset's overrides — the same
@@ -167,12 +167,10 @@ fun SettingsScreen(
      *
      * [update] and [resetField] reach the rows as `::update` / `::resetField` — callable references,
      * and two of those compare EQUAL however different the scope they captured. Compose therefore
-     * sees an unchanged callback and skips [CategoryDetail] on a scope switch that doesn't move any
-     * value on screen — which is the ordinary case, since a preset inherits the globals until it
-     * overrides something. The row then kept calling the reference it was first handed and wrote
-     * into the scope the user had just LEFT: edit a default, switch to a preset, edit the same row
-     * — the globals move again and the preset records nothing; switch back and the next edit lands
-     * on the preset. Reading the live state here is what makes the write follow the chips.
+     * may see an unchanged callback and skip a row on a scope switch that doesn't move any value
+     * on screen — the ordinary case, since a preset inherits the globals until it overrides
+     * something — and that row keeps calling the reference it was first handed. Reading the live
+     * state here is what makes the write follow the chips.
      */
     fun scopePreset(): StreamPreset? = scopeId?.let { id -> presets.firstOrNull { it.id == id } }
 
@@ -254,8 +252,8 @@ fun SettingsScreen(
         QuickActionsScreen(
             blob = s.overlayActions,
             onChange = { update("overlay_actions", s.copy(overlayActions = it)) },
-            // Reset drops the override in preset scope (design §3.3) and clears the global
-            // otherwise; an empty blob is the platform default.
+            // Reset drops the override in preset scope (design/touch-client-overlay.md §3.3) and
+            // clears the global otherwise; an empty blob is the platform default.
             onReset = {
                 if (active != null) {
                     resetField("overlay_actions")
@@ -337,7 +335,7 @@ fun SettingsScreen(
                     onBack = onBack,
                 ) { cat ->
                     // Keyed on the scope: switching chips rebuilds the page rather than recomposing
-                    // it in place. Correctness no longer depends on it (see [scopePreset]), but a
+                    // it in place. Correctness does not depend on it (see [scopePreset]), but a
                     // row's own `remember` is per-scope state too — "Custom…" picked while editing
                     // a preset has no business still being picked over on the defaults.
                     key(active?.id) {
@@ -525,9 +523,9 @@ private val LocalSettingsScope = compositionLocalOf {
 
 /**
  * Wraps rows that are facts about THIS DEVICE or this app rather than about a stream — the console
- * UI toggle, the library browser, auto-wake, the controller diagnostics, rumble mirroring, SC2
- * capture (design §3, tiers G and H). They never belong to a preset, so in preset scope they
- * simply don't render.
+ * UI toggle, the library browser, auto-wake, the controller diagnostics, rumble mirroring,
+ * DualSense capture (design/client-settings-profiles.md §3, tiers G and H). They never belong to a
+ * preset, so in preset scope they simply don't render.
  */
 @Composable
 private fun DeviceScopeOnly(content: @Composable () -> Unit) {
@@ -571,9 +569,9 @@ private fun changedCount(vararg flags: Boolean) = flags.count { it }
 private fun OverrideBadge(field: String?) {
     val scope = LocalSettingsScope.current
     if (!scope.presetScope || field == null || field !in scope.overridden) return
-    // One compact line. A `TextButton` here carried its own 48dp touch target and dwarfed both the
-    // control it annotates and the caption under it; the reset keeps a generous padded hit area
-    // instead, which is the right trade for a secondary action inside a dense settings list.
+    // One compact line, not a `TextButton`: its own 48dp touch target would dwarf both the control
+    // it annotates and the caption under it. The reset keeps a generous padded hit area instead,
+    // the right trade for a secondary action inside a dense settings list.
     Row(
         verticalAlignment = Alignment.CenterVertically,
         // No vertical padding of its own: this row is the FIRST thing in a card whose column
@@ -1585,8 +1583,8 @@ private fun AboutSettings(
  * A group of settings rendered inside an outlined card, with an optional sub-section [header]
  * above it and an optional form-level [footer] beneath it. The header is what turns a long
  * category into the scannable sub-sections the desktop clients have ("Resolution", "Quality",
- * "Host output"); the footer carries the one "applies from the next session" note per category —
- * per-field guidance lives on the fields themselves.
+ * "Host output"); the footer carries a form-level note, such as a category's one "applies from
+ * the next session" — per-field guidance lives on the fields themselves.
  */
 @Composable
 internal fun SettingsGroup(
@@ -1866,8 +1864,8 @@ private fun RenderScaleField(scale: Double, onCommit: (Double) -> Unit) {
 
 /**
  * Names the host the Start in row resolves to, and says when it resolves to nothing — which is
- * what every value does until one host is paired. The pointer is written from a host's own card
- * menu, not from this screen, so the caption is where the two meet.
+ * what every value does until one host is paired. The pointer is written from a host's own page
+ * ([HostDetailScreen]), not from this screen, so the caption is where the two meet.
  */
 @Composable
 private fun startInCaption(s: Settings, context: android.content.Context): String {

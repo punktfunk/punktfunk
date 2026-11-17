@@ -1,11 +1,10 @@
 //! A HID 1.11 report-descriptor decoder, written for ONE job: making a captured descriptor
-//! diffable, by eye, against the hand-annotated blobs in
-//! `packaging/windows/drivers/pf-gamepad/src/lib.rs`.
+//! diffable, by eye, against the hand-annotated blobs in `crates/host/pf-driver-proto/src/`.
 //!
 //! Two outputs matter, and they answer different questions:
 //!
-//! * the **item listing** — one line per HID item, formatted exactly like the annotated `static
-//!   XBOX_RDESC` arrays, so a capture can be pasted straight in and read side by side;
+//! * the **item listing** — one line per HID item, formatted like the annotated `static
+//!   ..._RDESC` arrays there, so a capture can be pasted straight in and read side by side;
 //! * the **layout map** — the running bit offset of every field, per report id and per report
 //!   kind. This is the one that catches the bugs that actually bite: `xbox_proto`'s layout tests
 //!   pin byte offsets, and a descriptor that declares the same usages in a different ORDER lands

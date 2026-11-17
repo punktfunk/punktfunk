@@ -573,8 +573,8 @@ internal object ConsoleJson {
         // `Settings::extra`, which is `#[serde(flatten)]` — TOP-LEVEL keys, never nested.
         SettingsFields.ALL.forEach { it.consoleWrite(j, s) }
         j.put("show_stats", s.statsVerbosity != StatsVerbosity.OFF)
-        // A store written by the nesting build carries the stale wrapper; drop it rather than
-        // round-trip a copy of these keys that nothing reads for the life of the install.
+        // A stale `extra` wrapper (from a store that nested these keys) is dropped: nothing
+        // reads its copy of them.
         j.remove("extra")
         return j
     }

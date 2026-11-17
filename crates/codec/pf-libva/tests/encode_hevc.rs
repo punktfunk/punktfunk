@@ -2,7 +2,7 @@
 //! both accept, a loss recovered through the reference picture set, and a Main 10
 //! stream carrying HDR10 metadata.
 //!
-//! Ignored: needs a VAAPI encode device. `.25` and `.50` both have one.
+//! Ignored: needs a VAAPI encode device.
 
 #![cfg(target_os = "linux")]
 

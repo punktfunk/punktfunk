@@ -2,8 +2,8 @@
 //!
 //! * [`FrameStore`] — newest-wins (`capacity == 0`) or smoothing FIFO held for the due
 //!   time (`capacity 1..=3`). Same contract as the Apple presenter's cadence take.
-//! * [`LatchClock`] — panel latch grid from `VK_KHR_present_wait` on-glass stamps.
-//!   A reported refresh is a mode claim; VRR makes it unusable. Without present-wait
+//! * [`LatchClock`] — panel latch grid from on-glass stamps, never estimated ones.
+//!   A reported refresh is a mode claim; VRR makes it unusable. Without such stamps
 //!   there is no grid: the drain presents at the due time and the panel quantizes.
 //! * [`PresentGate`] — at most one undisplayed FIFO present. MAILBOX cannot queue.
 //! * [`SourcePacer`] — smoothness plays on the source [`CadenceClock`], not arrival.
@@ -608,7 +608,7 @@ impl SourcePacer {
     /// carries roughly half a refresh of slack; presenting at the due time carries none,
     /// so the cushions differ. Re-tuning re-anchors and keeps the measured jitter, so
     /// this keys off the probe's published verdict, not a per-window reading.
-    /// Smoothness with no glass grid (`grid_known` false: no present-wait) runs free — a
+    /// Smoothness with no glass grid (`grid_known` false: no on-glass stamps) runs free — a
     /// grid anchored on submit instants learns the stream's own cadence as the panel.
     /// The latency intent paces where the panel is measured and `vrr_pace` holds: a VRR
     /// panel shows every millisecond of arrival jitter, and a fixed grid shows a frame
@@ -657,9 +657,9 @@ impl SourcePacer {
     }
 }
 
-/// FIFO glass budget: at most one undisplayed present in flight, counted by the
-/// present-wait waiter. MAILBOX/IMMEDIATE cannot queue; without present-wait there
-/// is nothing to count and arrival pacing is unchanged.
+/// FIFO glass budget: at most one undisplayed present in flight, counted by the glass
+/// waiter (`Presenter::presents_outstanding`). MAILBOX/IMMEDIATE cannot queue; without a
+/// waiter there is nothing to count and arrival pacing is unchanged.
 #[derive(Default)]
 pub(crate) struct PresentGate {
     /// Submit stamp of the newest tracked present; 0 = none yet.
@@ -1053,8 +1053,8 @@ mod tests {
         let mut c = LatchClock::new(120); // mode claimed 120
         assert_eq!(c.period_ns(), 8_333_333, "seeded from the claim");
 
-        // PanelGrid widens after 8 agreeing observations, each the min of
-        // GRID_OBSERVE_EVERY spacings — one slow patch must not redefine the panel.
+        // PanelGrid widens after `PANEL_WIDEN_STREAK` agreeing observations, each the median
+        // of GRID_OBSERVE_EVERY spacings — one slow patch must not redefine the panel.
         let mut t = 1_000_000_000u64;
         for _ in 0..(GRID_OBSERVE_EVERY * 8 + GRID_OBSERVE_EVERY) {
             t += REAL;
@@ -1407,8 +1407,8 @@ mod tests {
             !p.free_running(),
             "Unknown is the absence of a measurement, not a measurement of VRR"
         );
-        // No on-glass stamps (no present-wait): nothing to snap to, so the due time
-        // is the target here too, whatever the verdict.
+        // No on-glass stamps: nothing to snap to, so the due time is the target here too,
+        // whatever the verdict.
         p.follow(Cadence::Unknown, false, true);
         assert!(p.free_running(), "without a glass grid the drain runs free");
         p.follow(Cadence::Fixed, false, true);

@@ -61,7 +61,7 @@ final class DemoScene {
         switch UInt32(ev.kind) {
         case PUNKTFUNK_INPUT_KIND_MOUSE_MOVE.rawValue:
             // Accelerated like a desktop pointer: a Siri Remote swipe arrives as 2–6 px steps
-            // at 100 Hz, which 1:1 crawls. About 3× at 6 px, capped at 5×.
+            // at 100 Hz, which 1:1 crawls. About 3× at 6 px, capped at 5.2× from 12 px.
             let gain = 1 + min(hypot(CGFloat(ev.x), CGFloat(ev.y)), 12) * 0.35
             move(dx: CGFloat(ev.x) * gain / pixelScale, dy: CGFloat(ev.y) * gain / pixelScale)
         case PUNKTFUNK_INPUT_KIND_MOUSE_MOVE_ABS.rawValue, PUNKTFUNK_INPUT_KIND_TOUCH_MOVE.rawValue:

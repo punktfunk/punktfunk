@@ -5,7 +5,7 @@
 //!
 //! | file | what | absent ⇒ |
 //! |------|------|----------|
-//! | `mgmt-endpoint` | bound port (`pf_paths::published_mgmt_port`) | 47990, like the tray |
+//! | `mgmt-endpoint` | bound port (`pf_paths::published_mgmt_port_in`) | `mgmt::DEFAULT_PORT` |
 //! | `native-cert.pem` (else `cert.pem`) | the leaf — **the pin** | [`EXIT_UNREACHABLE`] |
 //! | `mgmt-token` | operator bearer | [`EXIT_UNREACHABLE`] |
 //!
@@ -162,8 +162,8 @@ impl Client {
         self.finish(sent, path)
     }
 
-    /// Whole-object replace. `PUT /display/settings` is the only such route;
-    /// `ctl display preset` reads stored policy first or unnamed axes default.
+    /// Whole-object replace. Its one caller, `ctl display preset`, reads stored policy
+    /// first or unnamed axes default.
     pub fn put(&self, path: &str, body: &serde_json::Value) -> Result<serde_json::Value> {
         let sent = self
             .agent

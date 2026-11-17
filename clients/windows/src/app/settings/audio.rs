@@ -5,10 +5,10 @@ use super::{
     setting_combo, setting_toggle, Cx,
 };
 use crate::trust::Settings;
-// The audio-format table lives in the session crate, not here: the same stored values also
-// have to reach the wire, and they are shared verbatim with the Apple and Android clients so one
-// preset round-trips. A second copy of the spellings in this file is exactly the drift the
-// shared table exists to prevent — which is why this row has no `const` beside AUDIO_CHANNELS.
+// The audio-format table lives in `pf_client_core::audio_format` (re-exported by `session`),
+// not here: the same stored values also have to reach the wire, and they are shared verbatim
+// with the Apple and Android clients so one preset round-trips. A second copy of the spellings
+// here is the drift the shared table prevents, so this row has no `const` beside AUDIO_CHANNELS.
 use pf_client_core::audio_format::surround_over_limit;
 use pf_client_core::session::AUDIO_FORMATS;
 use pf_client_core::settings::Label;

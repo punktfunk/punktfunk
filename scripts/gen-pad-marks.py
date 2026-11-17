@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Console pad outlines -> the Apple clients' template vector imagesets.
 
-The outlines live as 24-unit path data in crates/client/pf-console-ui/src/icons.rs (`PAD_*`, Kenney
-Input Prompts 1.5, CC0). The Skia console strokes them and Android reads them over JNI; the
-Apple clients need a vector PDF, stroked at the console's 1.5 weight, in PadMarks.xcassets.
+The outlines live as 24-unit path data in crates/client/pf-console-ui/src/icons.rs (`PAD_*`,
+mostly Kenney Input Prompts 1.5, CC0). The Skia console strokes them and Android reads them over
+JNI; the Apple clients need a vector PDF, stroked at the console's 1.5 weight, in PadMarks.xcassets.
 
 Idempotent. Usage: python3 scripts/gen-pad-marks.py   (needs rsvg-convert)
 """

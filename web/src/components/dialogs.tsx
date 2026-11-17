@@ -23,16 +23,15 @@ import { m } from "@/paraglide/messages";
 /**
  * `window.confirm` / `window.prompt`, replaced by the console's own Dialog.
  *
- * WHY A PROVIDER AND NOT A COMPONENT PER SITE. The native calls this replaces are *expressions* —
- * `if (!confirm(…)) return;` — sixteen of them, threaded through mutation handlers and one router
- * navigation guard. Rewriting each into "hold the pending action in state, render a dialog, run the
- * action from its onConfirm" would have put a piece of dialog machinery in every section file and
- * turned each linear handler inside out. Handing back a PROMISE keeps the call sites the shape they
- * already are:
+ * A PROVIDER AND NOT A COMPONENT PER SITE. The native calls this replaces are *expressions* —
+ * `if (!confirm(…)) return;` — threaded through mutation handlers and a router navigation guard.
+ * "Hold the pending action in state, render a dialog, run the action from its onConfirm" would put
+ * a piece of dialog machinery in every section file and turn each linear handler inside out.
+ * Handing back a PROMISE keeps the call sites the shape they are:
  *
  *     if (!(await confirm({ title: … }))) return;
  *
- * which is also why the navigation guard could come along: TanStack's `shouldBlockFn` accepts
+ * which is also why a navigation guard can use it: TanStack's `shouldBlockFn` accepts
  * `Promise<boolean>`. The one native prompt that necessarily stays is `beforeunload` — a reload or
  * a tab close is the browser's dialog to draw, not ours.
  */

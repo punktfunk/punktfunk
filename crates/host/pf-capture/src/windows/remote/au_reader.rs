@@ -1,4 +1,4 @@
-//! Reader half of the v7 access-unit section (`pf_driver_proto::encode::au`). The driver's
+//! Reader half of the access-unit section (`pf_driver_proto::encode::au`). The driver's
 //! encode thread copies an access unit — or one slice chunk of it — into the heap, fills a
 //! slot, publishes a [`FrameToken`] in `latest`, and signals the ready event; [`AuReader`]
 //! takes the published slots out in `wire_seq` order and hands back the bytes.
@@ -19,7 +19,7 @@ const STATE: usize = offset_of!(AuSlot, state);
 /// distance)`.
 type OrderKey = (u32, u8, u64);
 
-/// One mapped v7 section, alive for the view's lifetime. Header and slot words are only ever
+/// One mapped AU section, alive for the view's lifetime. Header and slot words are only ever
 /// touched through aligned atomics, because the driver writes the same bytes; the heap is read
 /// plainly, on a slot this side holds READING.
 pub(crate) struct AuView<'a> {

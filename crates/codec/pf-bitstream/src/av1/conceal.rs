@@ -49,7 +49,7 @@ impl Av1Concealer {
                 self.planner = before;
                 return Concealment::Unrecoverable;
             }
-            // Outside what the planner follows: the decoder gets the AU untouched, as before.
+            // Outside what the planner follows: the decoder gets the AU untouched.
             Err(_) => return Concealment::Intact,
         };
         if self.awaiting_key {
@@ -136,7 +136,7 @@ fn rewrite_frame(out: &mut [u8], plan: &AuPlan) -> bool {
     true
 }
 
-/// `get_relative_dist` (7.12.3): how far order hint `a` lies after `b`, wrapped to `bits`.
+/// `get_relative_dist` (5.9.3): how far order hint `a` lies after `b`, wrapped to `bits`.
 fn relative_dist(a: u32, b: u32, bits: u32) -> i64 {
     if bits == 0 {
         return 0;

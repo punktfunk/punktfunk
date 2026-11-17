@@ -72,7 +72,8 @@ TS_REGEX = re.compile(r"/(?:[^/\\\[\n]|\\.|\[(?:[^\]\\\n]|\\.)*\])+/[a-z]*")
 SWIFT_OPEN = re.compile(r'(#*)("""|")')
 JSX_RUN = re.compile(r"[^<{}]*")
 COMMENT_MARK = re.compile(r"/\*|\*/")
-# After these a `/` divides; anywhere else in TypeScript it opens a regex.
+# In TypeScript a `/` divides after a number, a string, one of these or an identifier; anywhere
+# else, and after KEYWORDS_BEFORE_VALUE, it opens a regex.
 VALUE_END = {")", "]", "}"}
 KEYWORDS_BEFORE_VALUE = {"return", "typeof", "case", "in", "of", "delete", "void", "throw", "new"}
 ESCAPE = re.compile(r"\\(?:u\{([0-9a-fA-F]{1,6})\}|u([0-9a-fA-F]{4})|(.))", re.S)

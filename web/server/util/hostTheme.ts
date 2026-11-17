@@ -10,7 +10,7 @@
 import { mgmtFetch } from "./forward";
 
 export interface HostTheme {
-	/** `gnome` | `kde` | `portal` | `windows`, or `null` when nothing answered. */
+	/** `portal` | `windows`, or `null` when nothing answered. */
 	source: string | null;
 	mode: "light" | "dark" | null;
 	/** `#rrggbb`, or `null`. */

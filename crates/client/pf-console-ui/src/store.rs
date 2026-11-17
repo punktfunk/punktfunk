@@ -3,7 +3,7 @@
 //! Screens mutate in-memory [`Settings`] and persist through [`SettingsStore`].
 //! Call `load` immediately before every write: a whole-file store otherwise
 //! reverts another writer's save. Desktop is `FileSettingsStore`
-//! (`pf_client_core::trust` JSON). Android is [`SnapshotStore`] — the host
+//! (`pf_client_core::trust` JSON). Android and Apple are [`SnapshotStore`] — the host
 //! pushes a snapshot in and polls `saved_gen` out.
 //!
 //! Presets are `(id, name)` in display order, with their overrides beside them so a
@@ -24,8 +24,8 @@ pub struct PresetEntry {
 }
 
 pub trait SettingsStore: Send + Sync {
-    /// Called at construction and immediately before every mutation. Cache rather
-    /// than hit disk per call.
+    /// Called at construction and immediately before every mutation. A whole-file store
+    /// re-reads here; a snapshot store returns its copy.
     fn load(&self) -> Settings;
     /// Failures are the store's to log. The shell has already applied the change
     /// in memory and shows it as done.
@@ -97,7 +97,8 @@ pub fn file_store() -> &'static dyn SettingsStore {
 }
 
 /// In-memory snapshot the host pushes and polls. `save` replaces it and bumps
-/// `saved_gen`; `set` does not. Android JNI; tests that must not touch a file.
+/// `saved_gen`; `set` does not. The Android (JNI) and Apple (C ABI) hosts; tests that
+/// must not touch a file.
 pub struct SnapshotStore {
     inner: std::sync::Mutex<SnapshotInner>,
 }

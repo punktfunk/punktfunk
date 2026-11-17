@@ -3,8 +3,7 @@
 # Installer manifest for the Windows host: punktfunk-setup-win, the self-contained engine exe
 # (crates/install/punktfunk-setup-win, packed by packaging/windows/pack-host-installer.ps1).
 # It speaks the Inno Setup silent dialect verbatim (design/installer-v2-windows.md D5) and keeps
-# Inno's ARP key + unins000.exe (D6), which is why everything below except InstallerType reads
-# as it did for the Inno Setup years.
+# Inno's ARP key + unins000.exe (D6), which is why the switches and ProductCode below are Inno's.
 #
 # The host is a machine-wide, elevated install: it registers a SYSTEM service, installs the
 # pf-vdisplay + gamepad drivers, and opens firewall ports. There is no per-user scope.
@@ -18,11 +17,12 @@ Scope: machine
 # The exe's manifest asks for requireAdministrator -> it raises its own UAC prompt.
 ElevationRequirement: elevatesSelf
 # Windows 11 22H2 floor: pf-vdisplay is built against IddCx 1.10 with no runtime downgrade, so on
-# anything older the device fails to start with Code 10 (see the MinVersion gate in the .iss).
+# anything older the device fails to start with Code 10 (MIN_HOST_BUILD in
+# crates/install/punktfunk-setup/src/platform/windows/plan.rs is the installer's gate).
 MinimumOSVersion: 10.0.22621.0
 
 InstallModes:
-  # interactive keeps the FULL wizard — every task checkbox and the web-console password page.
+  # interactive keeps the FULL wizard — every task checkbox and the web-console password row.
   # `winget install unom.PunktfunkHost --interactive`.
   - interactive
   - silent
@@ -46,11 +46,8 @@ InstallerSwitches:
   SilentWithProgress: /SILENT /SUPPRESSMSGBOXES /NORESTART /SP-
   # <LOGPATH> is winget's OWN token and the only spelling it substitutes (see the schema this file
   # declares: "…<LOGPATH> token can be included in the switch value so that winget will replace the
-  # token with user provided path"). It was written |LOGPATH| — not a token, so winget passed the
-  # literal string through and the installer rejected it: `|` is not legal in a Windows filename,
-  # giving "Error creating log file: The filename, directory name, or volume label syntax is
-  # incorrect." That aborted the install in EVERY mode, interactive included, for any caller that
-  # asks for a log — UniGetUI does so by default, which is how it was reported.
+  # token with user provided path"). Any other spelling reaches the installer verbatim as the log
+  # path, and `|` is not legal in a Windows filename.
   Log: /LOG="<LOGPATH>"
 
 # The ARP entry stays under Inno's `<AppId>_is1` name forever (HOST_ARP_KEY in

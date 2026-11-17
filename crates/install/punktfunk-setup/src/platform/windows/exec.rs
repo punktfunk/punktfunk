@@ -30,7 +30,7 @@ pub struct Subst {
     pub staging: String,
     /// Same ACLs as staging; password file and generated task XML.
     pub temp: String,
-    /// The per-user roots the client plan names symbolically (M4).
+    /// The per-user roots the client plan names symbolically.
     pub local_app_data: String,
     pub start_menu: String,
     pub desktop: String,
@@ -764,7 +764,7 @@ fn pids_listening_on(netstat: &str, ports: &[u16]) -> Vec<String> {
     pids
 }
 
-/// XML because `schtasks` flags cannot express restart backoff. Boot, LocalService, 999×/1 min,
+/// XML because `schtasks` flags cannot express restart-on-failure. Boot, LocalService, 999×/1 min,
 /// battery-tolerant. No `<LogonType>`: `schtasks /XML` rejects an explicit `ServiceAccount`
 /// ("value malformed or out of range"), and a bare service SID registers as one anyway —
 /// exactly what `Export-ScheduledTask` prints for the cmdlet-registered task.
@@ -884,8 +884,8 @@ mod tests {
         }
     }
 
-    // M4: the client plan names per-user roots symbolically (so its goldens render on every
-    // OS); a real run lands the payload where the user actually lives.
+    // The client plan names per-user roots symbolically (so its goldens render on every OS);
+    // a real run lands the payload where the user actually lives.
     #[test]
     fn a_real_client_run_expands_the_per_user_roots() {
         let (ui, _buf) = Plain::capture();
@@ -1134,7 +1134,7 @@ mod tests {
         let xml = scripting_task_xml(r"C:\app");
         assert!(xml.contains(r"C:\app\scripting\scripting-run.cmd"));
         assert!(xml.contains("<UserId>S-1-5-19</UserId>"));
-        // WP3.5's VM smoke: schtasks exits 1 on an explicit ServiceAccount LogonType.
+        // schtasks exits 1 on an explicit ServiceAccount LogonType.
         assert!(!xml.contains("LogonType"));
         assert!(xml.contains("<Count>999</Count>"));
         assert!(xml.contains("<DisallowStartIfOnBatteries>false"));

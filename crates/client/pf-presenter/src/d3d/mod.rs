@@ -433,7 +433,7 @@ impl Presenter {
     }
 
     /// Let go of the stream's picture: the planes go, the held slice goes back to the
-    /// decoder with the pool's views, and a `Redraw` clears to black.
+    /// decoder, the cached pool views are cleared, and a `Redraw` clears to black.
     pub(crate) fn drop_video(&mut self) {
         self.planes = None;
         self.shown = None;

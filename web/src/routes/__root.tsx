@@ -57,8 +57,8 @@ function RootComponent() {
 		adoptStoredLocale();
 	}, []);
 	// `lang` must track the locale the page is actually rendered in — it is what tells a screen
-	// reader which pronunciation to use, and it was pinned to "en" while the app switched to German
-	// underneath it. `adoptStoredLocale` also sets it on the live document; this keeps SSR honest.
+	// reader which pronunciation to use. `adoptStoredLocale` also sets it on the live document;
+	// this keeps SSR honest.
 	const locale = useLocale();
 	// The login screen and a person's closed page render bare (no sidebar); everything else gets
 	// a shell: the person's in their own console, else the operator's. Read once per page load,
@@ -68,7 +68,8 @@ function RootComponent() {
 			s.location.pathname === "/login" || s.location.pathname === "/closed",
 	});
 	const [person] = useState(currentPersonMode);
-	// Follow the desktop's own theme, and let the operator override it (§7).
+	// Follow the desktop's own theme, and let the operator override it
+	// (design/web-console-overhaul.md §7).
 	//
 	// Two attributes, because two kinds of source exist: `data-accent` re-tints the brand from
 	// one colour, `data-omarchy` additionally repaints every surface out of the theme's own
@@ -93,8 +94,8 @@ function RootComponent() {
 	//
 	// And they are dropped outright when the operator overrides the MODE: Omarchy publishes one
 	// palette, for its own light or dark theme, so painting a dark theme's surfaces under a
-	// forced light mode left the page dark while the semantic colours went light. Following the
-	// desktop is all-or-nothing; the accent still carries over.
+	// forced light mode would leave the page dark while the semantic colours go light. Following
+	// the desktop is all-or-nothing; the accent still carries over.
 	const modeOverridden =
 		appearance.mode !== "system" && appearance.mode !== theme?.mode;
 	// An accent the operator CHOSE outranks the desktop's whole palette, not just its own
@@ -125,11 +126,11 @@ function RootComponent() {
 			<body className="min-h-screen">
 				{density && <DensitySwitch density={density} onFlip={setDensity} />}
 				{/* Motion defaults to `reducedMotion: "never"`, so every card, nav item and button
-				    animated at full strength even for someone whose OS asks for less. "user" honours
+				    animates at full strength even for someone whose OS asks for less. "user" honours
 				    the OS setting. */}
 				<MotionConfig reducedMotion="user">
 					{/* The console's own confirm/prompt, in place of the browser's grey boxes. Mounted
-					    at the root because the navigation guard on the Displays page asks for one
+					    at the root because the navigation guard on a library entry's page asks for one
 					    while LEAVING that page — see components/dialogs.tsx. */}
 					<DialogsProvider>
 						{isBare ? (

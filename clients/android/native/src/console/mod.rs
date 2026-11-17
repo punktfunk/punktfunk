@@ -325,7 +325,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleText
 
 /// `NativeBridge.nativeConsoleSessionPhase(handle, phase, message)` — where the session the
 /// console asked for stands: 0 connecting, 1 streaming, 2 failed(message), 3 ended(message or
-/// empty = clean), 4 reconnecting(message).
+/// empty = clean), 4 reconnecting(message). The remaining codes are in `bridge::phase_code`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSessionPhase(
     mut env: EnvUnowned,
@@ -391,7 +391,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleTake
 
 json_pusher!(
 /// `NativeBridge.nativeConsoleNavigate(handle, entryJson)` — re-root the console (`{"library":
-/// <HostRow>}` opens that host's shelf over Home; `{}` is Home).
+/// <HostRow>}` opens that host's shelf over Home; `{}` is Home; `bridge::EntryJson` has the
+/// `stream` and `pair` entries).
     Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleNavigate,
     EntryJson,
     |h, e| h.shared.send(Cmd::Navigate(e.into_entry()))
@@ -399,9 +400,7 @@ json_pusher!(
 
 json_pusher!(
 /// `NativeBridge.nativeConsoleSetPads(handle, padsJson)` — the connected controllers for the
-/// chip, the settings rows and the controllers screen: `{"label": "DualSense", "pref": 1,
-/// "pads": [{name, key, pref, steam_virtual, battery: {percent, charging} | null, detail,
-/// forwarded, rumble}], "others": [{name, kind, detail}]}`.
+/// chip, the settings rows and the controllers screen, as `bridge::PadsJson` reads them.
     Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSetPads,
     PadsJson,
     |h, p| {
@@ -412,10 +411,11 @@ json_pusher!(
     }
 );
 
-/// `NativeBridge.nativeConsoleNextEvent(handle): String` — block up to ~100 ms for the next
-/// event: `{"action": <OverlayAction>}`, `{"pulse": "move"|"confirm"|"boundary"}`,
-/// `{"editing": bool}`, `{"settings": <Settings>}` (persist it), `{"gles": 2|3}`,
-/// `{"dead": "<why>"}`. Empty string on timeout / no handle. Run from a Kotlin poll thread.
+/// `NativeBridge.nativeConsoleNextEvent(handle): String` — block up to [`EVENT_TIMEOUT`] for the
+/// next event: `{"action": <OverlayAction>}`, `{"pulse": "move"|"confirm"|"boundary"}`,
+/// `{"editing": bool}`, `{"edit_text": <EditField>}`, `{"announce": "…"}`,
+/// `{"settings": <Settings>}` (persist it), `{"gles": 2|3}`, `{"dead": "<why>"}`. Empty string
+/// on timeout / no handle. Run from a Kotlin poll thread.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleNextEvent<'local>(
     mut env: EnvUnowned<'local>,

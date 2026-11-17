@@ -1,21 +1,19 @@
-// A COMPLETE library-scanner plugin, and the template the six first-party ones are cut from.
+// A COMPLETE library-scanner plugin, and the template the first-party ones are cut from.
 //
-// This is the lutris pilot (design M5/WP5.1) — the smallest of the six, and the one that exercises
-// the POSIX local-art path end to end. It lives here as a worked example rather than shipped code:
-// each scanner gets its OWN repo (the house pattern), and this is what you copy into a fresh one.
-// `package.json`'s `files` is dist + README, so nothing here is published.
+// It exercises the POSIX local-art path end to end. It lives here as a worked example rather than
+// shipped code: each scanner gets its OWN repo (the house pattern), and this is what you copy into
+// a fresh one. `package.json`'s `files` is dist + README, so nothing here is published.
 //
 // The point it proves: everything below the `scan` function is store-specific parsing, and
 // everything else — the store claim, the sync engine, launcher entries, `__config`, the console
 // registration, the CLI verbs including the parity gate — comes from `defineLibraryPlugin`. That is
-// what makes six repos cost nothing in duplication.
+// what keeps each scanner repo from duplicating the framework.
 //
-// Ported from crates/host/punktfunk-host/src/library/lutris.rs, with two deliberate changes:
+// Two rules this scanner keeps:
 //   * art is emitted as `file://` URLs instead of inlined `data:` URLs. The host proxies the bytes,
-//     so the reconcile payload stays tiny — inlining covers is what blew the host's 2 MB body limit
-//     at 49 titles during the playnite work, and it is exactly why the POSIX art path exists (G4).
-//   * the `installed = 1` filter and the untrusted-slug guard are carried over verbatim. The slug
-//     comes from Lutris's own database and is interpolated into a path, so the guard is load-bearing.
+//     so the reconcile payload stays small however many covers the library has.
+//   * the `installed = 1` filter and the untrusted-slug guard. The slug comes from Lutris's own
+//     database and is interpolated into a path, so the guard is load-bearing.
 import * as os from "node:os";
 import * as path from "node:path";
 import { Effect, Schema } from "effect";
@@ -65,8 +63,8 @@ const findDatabase = (cfg: { databasePath?: string }): string | undefined =>
  *
  * The slug comes verbatim from Lutris's database and is interpolated into a path, so a separator,
  * parent ref or NUL is refused — otherwise a crafted slug is an arbitrary-file-read primitive, and
- * the resulting path would be handed to the host's art proxy to serve (security-review 2026-07-17).
- * Real Lutris slugs are `[a-z0-9-]`.
+ * the resulting path would be handed to the host's art proxy to serve. Real Lutris slugs are
+ * `[a-z0-9-]`.
  */
 const artFile = (kind: string, slug: string): string | undefined => {
 	if (
@@ -142,8 +140,8 @@ const plugin = defineLibraryPlugin({
 				const header = row.slug ? artFile("banners", row.slug) : undefined;
 				const dir = row.directory?.trim();
 				return {
-					// The host composes `lutris:<external_id>` — byte-identical to what the built-in
-					// scanner produced, which the parity gate checks.
+					// The host composes `lutris:<external_id>`; the parity gate checks it
+					// against the id the built-in scanner reports.
 					external_id: String(row.id),
 					title: row.name,
 					launch: { kind: "lutris_id", value: String(row.id) },
@@ -153,7 +151,7 @@ const plugin = defineLibraryPlugin({
 					},
 					// Lutris stamps no per-game env marker worth relying on, so the install dir is the
 					// whole recipe; a game with none (an emulator entry pointing at a bare ROM) stays
-					// untracked, exactly as it did in-host.
+					// untracked.
 					...(dir ? { detect: { install_dir: dir } } : {}),
 					platform: "PC",
 				};

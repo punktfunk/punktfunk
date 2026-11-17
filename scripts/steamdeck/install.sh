@@ -106,8 +106,7 @@ sudo apt-get install -y -qq --no-install-recommends \
     nodejs >/dev/null
 command -v rustc >/dev/null 2>&1 || command -v ~/.cargo/bin/rustc >/dev/null 2>&1 || \
     curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path >/dev/null
-# bun builds AND runs the web console now (the Nitro `bun` preset + our Bun.serve TLS entry —
-# bun-native output, so the old srvx mis-resolution that forced node no longer applies).
+# bun builds AND runs the web console (the Nitro `bun` preset + our Bun.serve TLS entry).
 command -v bun >/dev/null 2>&1 || command -v ~/.bun/bin/bun >/dev/null 2>&1 || \
     curl -fsSL https://bun.sh/install | bash >/dev/null
 '
@@ -143,7 +142,7 @@ MISSING="$({ ldd "$BIN" 2>/dev/null || true; } | awk '/not found/ {print $1}' | 
      report it with 'cat /etc/os-release': https://punktfunk.unom.io/community#bugs"
 ok "host binary: $BIN"
 # Not fatal if it is missing — an absent worker just means the in-process encoder at default GPU
-# priority, which is what every 0.26.x Deck already runs.
+# priority.
 if [ -x "$WORKER" ]; then
     ok "encode worker: $WORKER"
 else
@@ -201,9 +200,9 @@ PUNKTFUNK_SRC="$SRC" PUNKTFUNK_BOX="$BOX" bash "$SRC/scripts/steamdeck/install-t
 log "Configuration ($CONFIG)"
 mkdir -p "$CONFIG"
 # Owner-only: this directory holds web.env (console password + session secret), the mgmt token and
-# the host key. A plain `mkdir -p` leaves it 0755 at the Deck's default umask, so the secrets below
-# sat in a world-TRAVERSABLE directory (2026-08-05 review L-19). Matches what the host itself does
-# via `pf_paths::create_private_dir`, and is idempotent on an existing dir.
+# the host key. A plain `mkdir -p` leaves it 0755 at the Deck's default umask, a world-TRAVERSABLE
+# directory. Matches what the host itself does via `pf_paths::create_private_dir`, and is
+# idempotent on an existing dir.
 chmod 700 "$CONFIG" 2>/dev/null || true
 if [ ! -f "$CONFIG/host.env" ]; then
     cat > "$CONFIG/host.env" <<'EOF'
@@ -267,7 +266,7 @@ if [ "$WITH_WEB" = 1 ] && [ ! -f "$CONFIG/web.env" ]; then
     WEB_SECRET="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 32 || true)"
     # `umask 077` around the redirect, not `chmod 600` after it: the heredoc CREATES the file at
     # the ambient umask (0022 on a Deck ⇒ world-readable), so the console password and session
-    # secret existed group/world-readable for the window between the redirect and the chmod.
+    # secret would be group/world-readable between the redirect and the chmod.
     # Setting the mask first means the file is never readable at all. The chmod stays as the
     # idempotent belt for a pre-existing file. The console swaps the clear password for a salted
     # hash in this same file on the first sign-in, keeping PUNKTFUNK_UI_SECRET beside it.
@@ -283,11 +282,10 @@ EOF
     ok "wrote web.env (login password — read it before your first sign-in)"
     ok "console bind: $WEB_BIND"
 elif [ "$WITH_WEB" = 1 ] && [ -f "$CONFIG/web.env" ]; then
-    # THE belt the comment above promises. It used to live inside the create-only branch, so it
-    # only ever ran on files that had just been written 0600 anyway — every install that predates
-    # the L-19 fix still has its console password and session secret on disk at the Deck's ambient
-    # umask (0644, world-readable). Tighten it here, and say so out loud: a chmod does not un-leak
-    # a secret that was already readable by every local account, so the password needs rotating.
+    # The chmod belt for an existing web.env: an install from before the umask above may still
+    # have its console password and session secret at the Deck's ambient umask (0644,
+    # world-readable). Tighten it here, and say so out loud: a chmod does not un-leak a secret
+    # that was already readable by every local account, so the password needs rotating.
     if find "$CONFIG/web.env" -maxdepth 0 -perm /0077 2>/dev/null | grep -q .; then
         chmod 600 "$CONFIG/web.env"
         warn "web.env was group/world-readable — an older install wrote it at the default umask."

@@ -9,8 +9,7 @@
 //! * `inapplicable` is a status, not an absent row: the troubleshooting page still answers
 //!   why the check does not apply here.
 //!
-//! Served by `mgmt/diagnostics.rs` on the authenticated admin lane. The unauthenticated
-//! loopback summary is counts only ([`Diagnostics::attention_counts`]).
+//! Served by `mgmt/diagnostics.rs` on the authenticated admin lane.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -86,8 +85,7 @@ pub struct Remedy {
     pub relogin_required: bool,
 }
 
-/// Origin of a verdict. `Event` is for live feeds (push on transition); v1 emits `Startup` and
-/// `Refresh` only.
+/// Origin of a verdict. `Event` is one an event source pushes ([`Diagnostics::set`]).
 #[derive(Serialize, Deserialize, ToSchema, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CheckSource {
@@ -324,8 +322,9 @@ impl Diagnostics {
         }
     }
 
-    /// Unauthenticated loopback summary: counts by severity, never details.
-    #[allow(dead_code)] // tray `LocalSummary`
+    /// `warn`/`fail` checks as `(warning, critical)`: critical severity, else warning.
+    /// Never details.
+    #[allow(dead_code)] // only the tests call it
     pub fn attention_counts(&self) -> (u32, u32) {
         let checks = self.checks.read().unwrap();
         let mut warning = 0;

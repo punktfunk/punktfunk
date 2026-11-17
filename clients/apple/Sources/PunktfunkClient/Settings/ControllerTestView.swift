@@ -7,10 +7,10 @@
 // Every card renders a plain value model (`ShotPad` / `InputSnapshot`) that the live path samples
 // out of the real pad each timeline tick. A GCController cannot be constructed, and the App Store
 // screenshot harness needs this panel with pads the capture machine doesn't have — ShotScenes
-// injects them via `shotPads` (the same seam Android's ControllersScreen grew for its capture).
+// injects them via `shotPads` (the same seam as `padsOverride` on Android's ControllersScreen).
 //
-// tvOS is excluded for now (it has no segmented picker / the panel wants a pointer-style
-// layout); macOS + iOS/iPadOS cover the validation need.
+// tvOS is excluded: the panel is laid out for a pointer. macOS + iOS/iPadOS cover the
+// validation need.
 
 #if DEBUG && !os(tvOS)
 import GameController

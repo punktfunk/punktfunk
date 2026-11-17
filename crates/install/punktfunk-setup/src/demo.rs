@@ -232,7 +232,7 @@ impl CommandRunner for DemoRunner {
     }
 }
 
-/// Command index of the named phase's first command. Title prefix, case-insensitive.
+/// Command index of the named phase's first command. Title substring, case-insensitive.
 pub fn fail_index(plan: &Plan, phase: &str) -> Option<usize> {
     let needle = phase.to_lowercase();
     let mut command = 0usize;

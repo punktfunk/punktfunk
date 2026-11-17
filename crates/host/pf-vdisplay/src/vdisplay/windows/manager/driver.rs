@@ -8,9 +8,9 @@
 
 use super::*;
 
-/// `Session` is the host-chosen live key: monotonic for legacy ownership and
-/// stable by connector under a seats reservation. `Guid` remains unused so the
-/// type still says the key is a per-driver choice, not a `u64` by nature.
+/// `Session` is the host-chosen live key: a per-process counter, one fresh value per ADD.
+/// `Guid` remains unused so the type still says the key is a per-driver choice, not a `u64` by
+/// nature.
 #[derive(Clone, Copy)]
 pub(crate) enum MonitorKey {
     Guid(windows::core::GUID),
@@ -24,10 +24,11 @@ pub(crate) struct AddedMonitor {
     pub luid: LUID,
     pub wudf_pid: u32,
     pub resolved_monitor_id: u32,
-    /// This OS target already carries an irrevocable hardware-cursor declare
-    /// from an earlier session. DWM excludes the pointer from its frames
-    /// forever, so a session without the cursor channel must self-composite
-    /// (GDI poller + blend) or stream a cursor-less desktop.
+    /// An earlier session's hardware-cursor declare is irrevocable and covers the
+    /// whole adapter, not only this target (the driver's `any_declared`). DWM
+    /// leaves the pointer out of its frames, so a session without the cursor
+    /// channel must self-composite (GDI poller + blend) or stream a cursor-less
+    /// desktop.
     pub cursor_excluded: bool,
 }
 
@@ -35,16 +36,16 @@ pub(crate) struct AddedMonitor {
 /// `&'static` singleton reached from the pinger and linger threads.
 pub(crate) trait VdisplayDriver: Send + Sync {
     fn name(&self) -> &'static str;
-    /// `reap_orphans` permits a global `CLEAR_ALL`; only the first legacy
-    /// single-owner open may set it. Reserved seats and handle reopens can
-    /// overlap live monitors. Returns the control device, watchdog seconds, and
-    /// protocol version.
+    /// `reap_orphans` sends `CLEAR_ALL`, which departs every monitor this
+    /// process holds; the manager sets it on its first open only, as a reopen
+    /// would take down live sessions. Returns the control device, watchdog
+    /// seconds, and protocol version.
     fn open(&self, reap_orphans: bool) -> Result<(ControlDevice, u32, u32)>;
     /// Pins the IDD render GPU to `render_luid` when `Some`.
     /// `preferred_monitor_id` `0` = auto. `client_hdr` `None` = the driver's
     /// EDID CTA HDR defaults. Reply LUID is
     /// `IDARG_OUT_MONITORARRIVAL.OsAdapterLuid` — the IddCx DISPLAY adapter,
-    /// not the render GPU (that is only in the shared frame header).
+    /// not the render GPU.
     fn add_monitor(
         &self,
         dev: &ControlDevice,
@@ -64,9 +65,9 @@ pub(crate) trait VdisplayDriver: Send + Sync {
     fn remove_monitor(&self, dev: &ControlDevice, key: &MonitorKey) -> Result<()>;
     /// Issued every `watchdog/3` from the pinger thread.
     fn ping(&self, dev: &ControlDevice) -> Result<()>;
-    /// Move the driver's diagnostic lines into this process's log; issued after each ping, since
-    /// the encoder runs in WUDFHost and reports nowhere else. Defaulted to nothing, so a backend
-    /// with no such channel needs no stub.
+    /// Move the driver's diagnostic lines into this process's log; issued after each successful
+    /// ping, since the encoder runs in WUDFHost and reports nowhere else. Defaulted to
+    /// nothing, so a backend with no such channel needs no stub.
     fn drain_log(&self, dev: &ControlDevice) {
         let _ = dev;
     }
@@ -113,7 +114,7 @@ mod tests {
     use super::*;
 
     /// Default must err: `resize_in_place` treats `Ok(())` as "the driver
-    /// refreshed the advertised modes" and burns the 1.5 s CCD settle before
+    /// refreshed the advertised modes" and waits out the advertise window before
     /// the re-arrival it should have taken immediately.
     #[test]
     fn the_defaulted_update_modes_reports_not_supported() {

@@ -1,6 +1,6 @@
 //! Session controller: connect, then pump video + stats on a worker thread while a
 //! dedicated audio thread pulls and decodes the audio plane. Audio never waits behind
-//! a video decode. Both feed the UI / PipeWire over channels.
+//! a video decode. Both feed the UI / the audio device over channels.
 //!
 //! The UI keeps the `Arc<NativeClient>` from `Connected` and sends input on it
 //! directly — `NativeClient` is `Sync`. Planes stay one-consumer-per-thread: video
@@ -49,8 +49,8 @@ pub struct SessionParams {
     /// [`SessionEvent::CodecFallback`] retry sets it. Codec is fixed at Welcome, so a
     /// fresh Hello is the only lever.
     pub exclude_codecs: u8,
-    /// Advertised `quic::VIDEO_CAP_*` bits. Default is 10-bit + HDR; `0` when the user
-    /// turned HDR off. The host still gates the upgrade behind `PUNKTFUNK_10BIT`.
+    /// Advertised `quic::VIDEO_CAP_*` bits, built by `video::video_caps_for`. The host
+    /// still gates the upgrade behind `PUNKTFUNK_10BIT`.
     pub video_caps: u8,
     /// The Full chroma switch as set. `video_caps` holds 4:4:4 only when HEVC 4:4:4
     /// decodes here; a PyroWave session asks on this alone, as it decodes 4:4:4 on any GPU.
@@ -103,7 +103,8 @@ pub struct SessionParams {
     /// refusal before the first frame ends as [`SessionEvent::HostNotReady`].
     pub auto_wake: bool,
     /// When a not-ready host stops being dialed again. `None` on a first dial; the embedder
-    /// sets it on the re-dial, and a pump that finds it set pauses 2 s before dialing.
+    /// sets it on the re-dial, and a pump that finds it set pauses at least
+    /// [`WAKE_REDIAL_PAUSE`](punktfunk_core::reject::WAKE_REDIAL_PAUSE) before dialing.
     pub settle_until: Option<Instant>,
     /// How long the pump waits before it dials. A redial after [`SessionEvent::Lost`] waits
     /// out `PunktfunkEndReason::redial_delay`; zero on any other dial.
@@ -211,10 +212,11 @@ impl SessionParams {
     /// to that panel and the codec. The view is
     /// [`Settings::stream_view`](crate::trust::Settings::stream_view), kept only while the
     /// mode is still larger. Their HDR and pad are already in `settings`
-    /// ([`ResolvedSpec::new`](crate::orchestrate::ResolvedSpec::new)). `exclude_codecs` stays
-    /// 0. `want_444` is the switch; caps carry 4:4:4 only when `hevc_444_hardware` is set
-    /// too. HDR caps need the setting and [`Probes::hdr_enabled`]. The panel volume follows
-    /// the probe alone. `host_screen` becomes the screen wish; a spelling it can't read is none.
+    /// ([`ResolvedSpec::new`](crate::orchestrate::ResolvedSpec::new)).
+    /// `exclude_codecs` stays 0. `want_444` is the switch; caps carry 4:4:4 only when
+    /// `hevc_444_hardware` is set too. HDR caps need the setting, [`Probes::hdr_enabled`]
+    /// and a hardware 10-bit path, and the panel volume rides only with them. `host_screen`
+    /// becomes the screen wish; a spelling it can't read is none.
     pub fn from_plan(
         settings: &crate::trust::Settings,
         clipboard: bool,
@@ -723,19 +725,16 @@ fn dial(
         rebuilds_decoder: true,
         launch: params.launch.clone(),
         profile: params.profile.clone(),
-        // Host's trust-store label. Without it every no-PIN "request access" knock
-        // showed as the fingerprint placeholder "device abcd1234".
+        // Host's trust-store label. `None` knocks as the placeholder "device abcd1234".
         name: Some(crate::trust::device_name()),
         pin: params.pin,
         identity: Some(params.identity.clone()),
         preset: params.preset_id.as_deref().and_then(|id| {
             punktfunk_core::quic::SessionPreset::new(id, params.preset.as_deref().unwrap_or(""))
         }),
-        // What a network check found this host wants, kept on its record: the ask is per
-        // host, and a host that does not read it streams as it always has.
         // Session stop flag, so cancel reaches a dial that has not landed. Without
-        // it this parks the pump for the whole budget (185 s on a request-access
-        // connect the host holds pending) and cancel cannot be answered until return.
+        // it this parks the pump for the whole budget (`REQUEST_ACCESS_TIMEOUT` on a
+        // request-access connect the host holds pending) and cancel waits for the return.
         cancel: Some(stop.clone()),
         screen_wish: params.screen_wish.clone(),
         screens: params.screens.clone(),
@@ -821,9 +820,9 @@ fn open_decoder_for(
     connector: &NativeClient,
 ) -> anyhow::Result<Decoder> {
     let stream_format = stream_format_of(format);
-    // A negotiated PyroWave session decodes on the presenter's device — reachable
-    // only through the explicit preference above, so failing here is failing an
-    // opted-in experiment.
+    // A negotiated PyroWave session decodes on the presenter's device. Only a preference
+    // picks PyroWave (this client's `preferred_codec`, or the host's Encoder pin when that
+    // is 0), so a failure here is a failed opt-in.
     #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
     let built = if format.codec == punktfunk_core::quic::CODEC_PYROWAVE {
         // Wavelet bitstream has no VUI: the format's colour signalling is the stream's
@@ -1331,11 +1330,11 @@ fn av1_intake(codec: u8) -> Option<crate::video::av1_intake::Av1Intake> {
     (codec == punktfunk_core::quic::CODEC_AV1).then(Default::default)
 }
 
-/// What the pump does after one AU.
 /// How long a codec ask may go unanswered before the session redials without the codec. A
 /// rebuild at the host is a pipeline swap: hundreds of milliseconds.
 const CODEC_ASK_WAIT: Duration = Duration::from_secs(3);
 
+/// What the pump does after one AU.
 enum Pass {
     /// Run the end-of-pass drains, then pull the next frame.
     Drain,
@@ -1534,7 +1533,7 @@ impl Pump {
         // Reassembly completion, stamped by the core session as the AU crossed
         // `poll_frame`. Stamping here at the pull would fold pre-decode queue
         // wait into `host+network` (client backlog looking like network).
-        // 0 = a core predating the stamp; fall back to the pull instant.
+        // 0 = not stamped; fall back to the pull instant.
         let received_ns = if frame.received_ns > 0 {
             frame.received_ns
         } else {
@@ -1760,8 +1759,7 @@ impl Pump {
             End::Local | End::HostEnded => None,
             End::HostError => Some(pf_l10n::client::ended_host_error().to_string()),
             End::Lost => Some(pf_l10n::client::ended_lost().to_string()),
-            // No verdict (older core, or the close raced the read): keep this
-            // arm's historic wording rather than inventing a new one.
+            // No verdict: the close raced the read.
             End::None => Some(pf_l10n::client::ended_closed().to_string()),
         }
     }
@@ -1841,7 +1839,7 @@ fn end_session(
     // About to drop the uplink — stop claiming a mute surface, so an embedder still
     // holding the handle cannot draw a muted mic that no longer exists.
     mic.set_live(false);
-    // Each exits within its own pull timeout once `stop` is set.
+    // Each checks `stop` between pulls.
     if let Some(p) = planes {
         for t in [
             p.audio_thread.take(),
@@ -2008,7 +2006,7 @@ fn codec_fallback_event(
     }
 }
 
-/// Dedicated audio thread: owns decoder, scratch, and PipeWire player, and blocks
+/// Dedicated audio thread: owns decoder, scratch, and the audio player, and blocks
 /// on `next_audio` (the plane's single consumer). Decoded chunks are Vecs recycled
 /// from the player's pool — steady state allocates nothing. A muted stream still
 /// decodes and still queues, in silence: the device never closes, so a toggle costs

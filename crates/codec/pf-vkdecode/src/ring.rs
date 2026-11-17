@@ -24,7 +24,8 @@ use crate::device::Unwind;
 
 /// 2 MiB covers a 4K IDR at streaming rates; a larger AU grows the ring.
 pub const INITIAL_SLOT_SIZE: u64 = 2 * 1024 * 1024;
-/// Enough in-flight uploads; pipeline depth is the output/query rings, not this.
+/// In-flight uploads, and the command buffers `OpRing` allocates. Query slots
+/// follow the picture pool instead.
 pub const RING_SLOTS: u32 = 4;
 
 const fn align_up(x: u64, align: u64) -> u64 {

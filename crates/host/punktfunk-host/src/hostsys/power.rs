@@ -11,8 +11,7 @@
 //!
 //! [`probe`] and [`act`] block on a D-Bus round trip or a Win32 call. Call them
 //! from `spawn_blocking`. The dedicated thread matches
-//! [`crate::sleep_inhibit::acquire`]: zbus's blocking API cannot run on a tokio
-//! worker.
+//! [`crate::sleep_inhibit::acquire`]: a nested `block_on` panics on a tokio worker.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PowerVerb {
@@ -130,8 +129,9 @@ impl Availability {
     }
 }
 
-/// What `verb` can do on this host. A seat host never does any of it: sleeping or restarting
-/// would take every other seat down, so the box's own host is the one executor.
+/// What `verb` can do on this host. A seat host sleeps, reboots and shuts down nothing: that
+/// would take every other seat down, so the box's own host is the one executor. It may restart
+/// its own process.
 pub fn probe(verb: PowerVerb) -> Availability {
     if pf_paths::seat::role().is_seat_host() && verb != PowerVerb::Restart {
         return Availability::refused(
@@ -147,7 +147,7 @@ pub fn supported() -> bool {
     cfg!(any(target_os = "linux", target_os = "windows"))
 }
 
-/// One logind `Manager` call on a dedicated thread (zbus blocking cannot run on a
+/// One logind `Manager` call on a dedicated thread (a nested `block_on` panics on a
 /// tokio worker). The D-Bus error text is the reason the caller surfaces.
 #[cfg(target_os = "linux")]
 fn logind_call<T, A>(method: &'static str, args: A) -> Result<T, String>

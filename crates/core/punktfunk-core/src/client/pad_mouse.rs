@@ -18,7 +18,7 @@ use crate::quic::{GRANT_KEYBOARD, GRANT_POINTER};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 
-/// Stick travel below this fraction does nothing (the 7000/32767 a daily user tuned).
+/// Stick travel at or below this fraction does nothing.
 const DEADZONE: f64 = 0.2;
 /// Full deflection: 1.25 stream heights per second ≈ 1350 px/s at 1080p.
 const POINTER_HEIGHTS_PER_S: f64 = 1.25;

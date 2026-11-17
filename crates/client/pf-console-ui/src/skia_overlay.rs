@@ -180,7 +180,8 @@ impl SkiaOverlay {
 
 impl Drop for SkiaOverlay {
     /// The run loop quiesces the queue before drop. Views + Skia surfaces (which
-    /// free their VkImages) can then go. Field order drops slots before DirectContext.
+    /// free their VkImages) can then go. The loop takes the slots here, so their surfaces
+    /// drop before `gpu` (declared first) drops the DirectContext.
     fn drop(&mut self) {
         if let Some(gpu) = &mut self.gpu {
             for slot in self.slots.iter_mut().flat_map(Option::take) {
@@ -628,7 +629,7 @@ impl Overlay for SkiaOverlay {
             }
         }
 
-        // Ring on top. Needs console fonts, which `--connect` never loads.
+        // Ring on top.
         if ring_key != 0 {
             let dt = ring_dt(&mut self.ring_drawn_at);
             if let Some(fonts) = self.fonts.as_ref() {
@@ -956,7 +957,7 @@ fn corner_pill(
 }
 
 /// Mid-stream resize cover: full-screen scrim + spinner + "Resizing…". The overlay
-/// cannot sample the video to blur it, so an opaque scrim hides the stretched
+/// cannot sample the video to blur it, so a dark scrim covers the stretched
 /// in-between frame instead.
 fn draw_resize_scrim(
     canvas: &Canvas,

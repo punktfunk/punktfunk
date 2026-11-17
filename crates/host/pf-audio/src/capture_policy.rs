@@ -1,5 +1,5 @@
-//! Pure capture-policy decisions extracted from [`wasapi_cap`](super::wasapi_cap) so they compile
-//! and their tests run on every platform, same as [`wiring_plan`](super::wiring_plan).
+//! Pure capture-policy decisions, kept out of the platform backends so they compile and their
+//! tests run on every platform, same as [`wiring_plan`](super::wiring_plan).
 //!
 //! * [`FightDamper`] — how hard to fight another program for the default playback device.
 //! * [`CaptureStats`] / [`SendStats`] — capture and egress vitals for one reporting window.
@@ -168,8 +168,8 @@ impl CaptureStats {
 
     /// `since_last` is `None` on the first callback and after a state transition: the caller
     /// drops its stamp across pause so a legitimate Paused span is not one enormous hole.
-    /// [`Self::observe_pause`] records that span. `quantum` is the negotiated buffer duration,
-    /// not the one we asked for — a 21.3 ms graph is not gapping at 21.3 ms cadence.
+    /// The caller adds that span to `pauses` / `paused_us`. `quantum` is the negotiated buffer
+    /// duration, not the one we asked for — a 21.3 ms graph is not gapping at 21.3 ms cadence.
     pub fn observe_callback(&mut self, since_last: Option<Duration>, quantum: Duration) {
         let Some(delta) = since_last else { return };
         if delta > (quantum * 2).max(GAP_FLOOR) {
@@ -211,7 +211,7 @@ impl CaptureStats {
             .join("/")
     }
 
-    /// Record a span away from `Streaming`. Called on the transition back so the span lands in
+    /// Record a span away from `Streaming`. Call it on the transition back so the span lands in
     /// the same window whose `delivered_pct` it diluted.
     pub fn observe_pause(&mut self, span: Duration) {
         self.pauses += 1;
@@ -374,8 +374,6 @@ pub enum Infill {
     Quiet,
 }
 
-/// Whether, and for how long, the wire covers a capture hole with silence.
-///
 /// How long a capture-chunk size is remembered. A graph delivers its buffer every cycle, so
 /// that size stays; one merged wake after a capture stall ages out instead of raising a
 /// threshold for the rest of the session.
@@ -418,7 +416,7 @@ pub struct InfillPolicy {
     /// written in 5 ms units would cover a fifth as long and spend the budget five times as fast.
     frame: Duration,
     /// Silence already sent for the open hole, in wall-clock time, not frames. A frame count
-    /// made the same 500 ms budget a different amount of real time on every lossless rung.
+    /// would make the same 500 ms budget a different amount of real time on every lossless rung.
     filled: Duration,
     broke: bool,
     /// Largest recent capture chunk; see [`Self::after`]. Zero until the caller reports one.
@@ -733,7 +731,7 @@ mod tests {
     }
 
     /// A graph's buffer arrives every cycle and stays remembered; one merged capture wake after
-    /// a stall ages out, where a session-long max kept the bonus drain off for good.
+    /// a stall ages out instead of holding the max for the rest of the session.
     #[test]
     fn a_one_off_chunk_ages_out_of_the_recent_max() {
         let t0 = Instant::now();

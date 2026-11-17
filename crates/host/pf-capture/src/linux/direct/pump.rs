@@ -16,9 +16,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// How long a capture may go without a `ready` before the stream is called dead. Long
-/// enough that an idle desktop (which legitimately delivers nothing) never trips it; the
-/// stream loop's own liveness check is what notices a genuinely stalled source.
+/// The longest one poll waits. A quit writes no wakeup, so the loop samples it at least
+/// this often; an idle desktop that delivers nothing only polls again.
 const POLL_SLICE: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// The frame loop: arm a capture whenever none is outstanding and a buffer is free, and hand

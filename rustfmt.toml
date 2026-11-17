@@ -1,8 +1,6 @@
-# Pin the STYLE edition independently of the language edition. Migrating the workspace to
-# edition 2024 would otherwise flip rustfmt to the 2024 style edition in the same commit and
-# reformat ~370 files nobody touched — noise that buries the real migration diff and makes a
-# bisect useless. Adopting the 2024 style is fine, but it is its own one-line-plus-reformat
-# commit, not a side effect of this one. (packaging/windows/drivers pins 2024 in its own
-# rustfmt.toml — it was already formatted under that style; config discovery would otherwise
-# walk up to this file.)
+# Pin the STYLE edition independently of the language edition (2024, in Cargo.toml). Without
+# the pin rustfmt follows the language edition and formats under the 2024 style. Adopting the
+# 2024 style is fine, but it is its own one-line-plus-reformat commit, not a side effect of
+# anything else. (packaging/windows/drivers pins 2024 in its own rustfmt.toml — it is already
+# formatted under that style; config discovery would otherwise walk up to this file.)
 style_edition = "2021"

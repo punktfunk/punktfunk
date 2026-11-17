@@ -15,8 +15,9 @@ export type Listener = "console" | "plugin";
 /**
  * Which listener served this request. Absent ⇒ `console`, which is the safe default: it is what
  * `vite dev` looks like (one listener, and its own middleware intercepts `/plugin-ui` before Nitro
- * ever sees it), and treating an unknown lane as the console means the plugin-path refusal below
- * applies rather than the console-path one — deny the escalation, not the ordinary console.
+ * ever sees it), and treating an unknown lane as the console means the plugin-path refusal in
+ * middleware/auth.ts applies rather than the console-path one — deny the escalation, not the
+ * ordinary console.
  */
 export function listenerOf(event: H3Event): Listener {
 	return getRequestHeader(event, LISTENER_HEADER) === "plugin"
@@ -75,13 +76,12 @@ export function consoleOriginPort(): number | null {
  *
  * ⚠ This cannot be read off the request. Nitro's `localFetch` hands the app a SYNTHETIC request with
  * no TLS socket, so `getRequestURL(event).protocol` is `http:` even when the listener is HTTPS. That
- * is harmless for a relative redirect, and was NOT harmless for `frame-ancestors`: the plugin origin
- * named `http://host:47992` as its only permitted ancestor while the console the operator was
- * looking at was `https://host:47992`, and the browser refused to frame the plugin
- * (`ERR_BLOCKED_BY_RESPONSE`) — an empty panel with the explanation only in the devtools console.
- * The scheme-part upgrade in CSP3 (an `http` source also matching an `https` URL) does NOT rescue
- * this: Chromium enforces `frame-ancestors` against the ancestor's origin strictly. Verified on
- * glass, 2026-08-06.
+ * is harmless for a relative redirect, and NOT harmless for `frame-ancestors`: naming
+ * `http://host:47992` as the permitted ancestor of an `https://host:47992` console makes the
+ * browser refuse to frame the plugin (`ERR_BLOCKED_BY_RESPONSE`) — an empty panel with the
+ * explanation only in the devtools console. The scheme-part upgrade in CSP3 (an `http` source
+ * also matching an `https` URL) does NOT rescue this: Chromium enforces `frame-ancestors` against
+ * the ancestor's origin strictly.
  *
  * Stamped by the entry from the same `tls` option both listeners are built with, so the two can
  * never disagree, and never read from the environment we inherited.

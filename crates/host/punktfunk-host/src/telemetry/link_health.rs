@@ -76,7 +76,8 @@ pub struct LinkMinute {
     pub gaps: u32,
     /// Sealed wire throughput over the window.
     pub egress_kbps: u32,
-    /// The link rate the client last reported, which every frame is paced at. `0` = none.
+    /// The link rate the client last reported, which the pacer resolves its `L` from.
+    /// `0` = none.
     pub link_kbps: u32,
     /// The shape the client asked for.
     pub shape: LinkShape,
@@ -166,8 +167,8 @@ pub struct LinkCounters {
     idr: AtomicU32,
     retargets: AtomicU32,
     resend_pkts: AtomicU32,
-    /// Session-cumulative sealed wire bytes, republished by the send thread every ~2 s. The
-    /// control task keeps the previous read and diffs; nothing here resets.
+    /// Session-cumulative sealed wire bytes, republished by the send thread after every turn.
+    /// The control task keeps the previous read and diffs; nothing here resets.
     egress_bytes: AtomicU64,
     /// The minute `GET /status` reports for this session. `None` until the first one closes.
     last: Mutex<Option<LinkMinute>>,
@@ -220,7 +221,7 @@ impl LinkCounters {
         self.retargets.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Session-cumulative sealed bytes, from the send thread's aggregation tick.
+    /// Session-cumulative sealed bytes, from the send thread's housekeeping after every turn.
     pub fn publish_egress_bytes(&self, total: u64) {
         self.egress_bytes.store(total, Ordering::Relaxed);
     }
@@ -299,7 +300,7 @@ impl LinkWindow {
         }
     }
 
-    /// One feedback datagram's levels: the link rate the pacer runs at and the shape.
+    /// One feedback datagram's levels: the client's link report and the shape it asked for.
     pub fn note_link(&mut self, link_kbps: u32, wake: bool) {
         if link_kbps != 0 {
             self.link_kbps = link_kbps;

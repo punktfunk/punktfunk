@@ -4,9 +4,7 @@
 //!
 //! Shared by BOTH couch entry points — `punktfunk-console.exe`, which needs its own
 //! executable because an MSIX `<Application>` cannot pass arguments, and this shell's
-//! `--console` flag — so the spawn flags below are stated once. They were stated in neither
-//! until 2026-08-27, which is why both Start-menu tiles opened a black console window that
-//! then sat behind the couch UI for the whole session.
+//! `--console` flag — so the spawn flags below are stated once.
 
 use pf_client_core::orchestrate::session_binary;
 use std::process::{Command, Stdio};
@@ -27,10 +25,9 @@ pub(crate) fn run_browse() -> ! {
         cmd.arg("--fullscreen");
     }
     cmd.stdin(Stdio::null())
-        // Nothing here parses the stdout contract (no `--json-status`), but `match_window`
-        // reports the settled window size on stdout REGARDLESS — and with no console the
-        // handle it would inherit is invalid, which panics the child mid-stream on the first
-        // report. A sink that goes nowhere is the difference between quiet and a crash.
+        // Nothing here parses the stdout contract (no `--json-status`), but with Match-window
+        // on the session still writes `window` lines to stdout, and this GUI parent has no
+        // console stdout for it to inherit. A null sink gives them somewhere to go.
         .stdout(Stdio::null())
         // Piped through the log tee: a couch launch (Start-menu tile, Steam shortcut) has no
         // console either, so the session's whole receive/decode/present log would otherwise

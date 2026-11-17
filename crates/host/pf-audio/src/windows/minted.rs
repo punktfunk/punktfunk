@@ -39,7 +39,8 @@ const RETRY_COOLDOWN: Duration = Duration::from_secs(60);
 /// Unlatched PnP (re)binds broadcast a device-change every running app services.
 /// A box that cannot mint must not pay that on every retry; a service restart re-arms.
 const MAX_UNLATCHED_ATTEMPTS: u32 = 5;
-/// Wait for an in-flight pass. A cold mint worst-cases around two [`ENDPOINT_WAIT`]s plus stamp settles.
+/// Wait for an in-flight pass. A cold mint waits up to three [`ENDPOINT_WAIT`]s (Speakers
+/// render, Mic render and capture) plus stamp settles.
 const BLOCKING_WAIT: Duration = Duration::from_secs(90);
 /// Adapter half of both endpoints' names, and the devnodes' FriendlyName it is rebuilt from.
 const DEVICE_NAME: &str = "Punktfunk";
@@ -480,7 +481,7 @@ fn ensure_role(
     let devnode = match find_role_devnode(identity, role)? {
         Some(inst) => inst,
         None => {
-            // An unmarked ROOT\MEDIA node does not prove which process made it. Only the legacy
+            // An unmarked ROOT\MEDIA node does not prove which process made it. Only the
             // console path recovers one; a seat always mints its own marker pair.
             let orphan = if identity.seat.is_none() {
                 adopt_console_orphan_devnode(role, &hwid)?
@@ -732,8 +733,8 @@ fn find_role_devnode(identity: &AudioIdentity, role: Role) -> Result<Option<Stri
     Ok(None)
 }
 
-/// Removes every node a seat host minted. A seat's session never listed them, and each seat left
-/// a Speakers and a Microphone in the box's Sound panel and in the console's device ladder.
+/// Removes every node a seat host minted. A seat's session never lists them, and each one shows
+/// in the box's Sound panel and in the console's device ladder.
 fn remove_seat_devnodes() {
     let leftovers: Vec<String> = match da::media_class_devs() {
         Ok(set) => set

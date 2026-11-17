@@ -5,8 +5,8 @@
 //! is "render the Plan" by construction rather than a flag threaded through the call
 //! sites, and `--demo` swaps the seams for fakes so nothing can touch the machine.
 //!
-//! `scripts/install.sh` is the behavioural spec. Traps that must port verbatim each
-//! have a named test here. See `design/installer-v2.md`.
+//! `scripts/install.sh` only downloads this binary and execs it; `design/installer-v2.md` is
+//! the contract. Traps that must port verbatim each have a named test here.
 
 pub mod choices;
 pub mod demo;

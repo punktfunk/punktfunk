@@ -6,8 +6,11 @@
 //! ```
 //!
 //! Prints the compositor's protocols, its linux-dmabuf feedback (per tranche: device, scanout
-//! flag, the YUV formats and their modifiers), then per layout: frames presented, how many the
-//! compositor called zero-copy, and commit-to-glass p50/p95 from `wp_presentation`.
+//! flag, the modifiers of NV12, P010, XR24, AR30 and XB30), then per layout: frames presented,
+//! how many the compositor called zero-copy, and commit-to-glass p50/p95 from `wp_presentation`.
+//! `--format xr24` is an RGB control. `--modifier linear|<hex>` pins the modifier (default
+//! `auto` tries each); `--planes joint|split` puts both planes in one dma-buf or one per plane
+//! (default `both` tries joint first).
 
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {

@@ -1,14 +1,14 @@
 // The host's game library: a poster grid fetched over the management API, from which titles are
-// launched. Reached by TAPPING a paired host's card — this is the primary destination for a host
-// that has a library, with streaming the desktop as the card's menu action.
+// launched. Reached from the Library tab, a host card's Browse Library action, a `browse` link
+// or the Start in setting.
 //
-// Three behaviours here exist to make the round trip (browse → play → quit → browse) hold together,
-// all from a 2026-08-16 field report: the catalog is cached so a sleeping host still shows its
-// titles, opening the screen wakes that host so it is warm by the time one is picked, and the
-// position in the grid survives the stream. Titles already running are marked and sorted first.
+// Three behaviours here make the round trip (browse → play → quit → browse) hold together:
+// the catalog is cached so a sleeping host still shows its titles, opening the screen wakes
+// that host so it is warm by the time one is picked, and the position in the grid survives
+// the stream. Titles already running are marked and sorted first.
 //
-// Gated on the host being PAIRED — see `HomeView.hostCard` for why the pin is load-bearing
-// rather than cosmetic.
+// Gated on the host being PAIRED: the library dials with the pinned identity
+// (`HostOffers.resolve`).
 
 import PunktfunkKit
 import SwiftUI
@@ -23,7 +23,7 @@ import SwiftUI
 /// move between a host's own shelf and one of its pins.
 struct LibraryTarget: Identifiable, Hashable {
     let host: StoredHost
-    /// `.inherit` from the host's own card (its binding decides, as it always has); `.preset` from
+    /// `.inherit` from the host's own card (its binding decides); `.preset` from
     /// a pinned card. `.defaults` never reaches here — nothing opens a library "with the globals".
     var preset: PresetSelection = .inherit
 
@@ -54,8 +54,8 @@ struct LibraryTarget: Identifiable, Hashable {
 }
 
 extension LibraryTarget {
-    /// Every shelf there is: each paired host, then each preset pinned to it. The Library's title
-    /// menu lists these, on the touch UI and the Mac alike.
+    /// Every shelf there is: each paired host, then each preset pinned to it. The Library's host
+    /// filter lists these, on the touch UI and the Mac alike.
     @MainActor static func shelves(of hosts: [StoredHost], presets: PresetStore) -> [LibraryTarget] {
         hosts.filter { $0.pinnedSHA256 != nil }.flatMap { host in
             [LibraryTarget(host: host)]
@@ -158,7 +158,7 @@ struct LibraryView: View {
     @MainActor private static var shown: [String: [GameEntry]] = [:]
     /// Guards the one-shot scroll restore. `onAppear` fires again on every re-layout (and once per
     /// section), and re-scrolling after the player has started browsing would yank the grid out
-    /// from under them — which is a worse bug than the one being fixed.
+    /// from under them.
     @State private var restoredScroll = false
     /// Cover-art loader (the same paired identity + host pinning as the list fetch, reused across
     /// every poster in the grid). Built alongside `games` in `load()`; dropped on disappear.
@@ -523,7 +523,7 @@ struct LibraryView: View {
                 .padding(.vertical, Self.rowLift)
             }
             #if os(tvOS)
-            // A focused card's shadow reaches past the row; clipped, it ended in a hard edge.
+            // A focused card's shadow reaches past the row; clipped, it ends in a hard edge.
             .scrollClipDisabled()
             #endif
         }
@@ -606,7 +606,7 @@ struct LibraryView: View {
     }
 
     /// Opens what this shelf's profile hides. Only where the host lets this device hide its
-    /// titles (`HideForMe.hiddenEntry`); anywhere else the toolbar is as it was.
+    /// titles (`HideForMe.hiddenEntry`); anywhere else the toolbar carries no such button.
     @ViewBuilder private var hiddenButton: some View {
         if let label = HideForMe.hiddenEntry(hidesFor) {
             Button { showHidden = true } label: { Label(label, systemImage: "eye.slash") }
@@ -1001,9 +1001,9 @@ struct LibraryView: View {
     }
 
     /// Sort and group for the plain grid — the console's bar, as a menu. The sort is the shared
-    /// key (Default · A–Z · Platform · Store); the grouping is this grid's own (sections stand in
-    /// for the console's Collections place). Each list sits under its heading (`MenuChoices`): a
-    /// menu lists a picker's options without its title.
+    /// key (`LibrarySortKey`); the grouping is this grid's own (sections stand in for the
+    /// console's Collections place). Each list sits under its heading (`MenuChoices`): a menu
+    /// lists a picker's options without its title.
     private var sortMenu: some View {
         Menu {
             MenuChoices(
@@ -1188,10 +1188,9 @@ struct GameCard: View {
     /// The hardware-keyboard cursor is on this tile — drawn as an accent ring, since the plain
     /// grid has no other way to say "Return launches THIS one".
     var selected = false
-    /// This title is already up on the host, so picking it resumes rather than starts. Worth
-    /// saying on the tile: the host has quietly adopted a running launch instead of starting a
-    /// second copy for a while now, but nothing ever told the player that — so choosing a game
-    /// they were already playing looked identical to starting one, and read as a relaunch.
+    /// This title is already up on the host, so picking it resumes rather than starts: the host
+    /// adopts a running launch instead of starting a second copy. The tile says so, or choosing
+    /// a game already being played would look identical to starting one.
     var isRunning = false
     /// The title's files when they aren't simply installed: downloading, paused, failed, missing.
     var badge: TileBadge? = nil
@@ -1224,7 +1223,7 @@ struct GameCard: View {
         #if os(tvOS)
         // One card, the cover inset on it and the title under it. Focused, it turns white as a
         // system row does, and lifts (`TVCardButtonStyle`). The ink covers the poster too: a
-        // launcher's placeholder mark drew white on the white card.
+        // launcher's placeholder mark would draw white on the white card.
         VStack(alignment: .leading, spacing: 12) {
             poster
             VStack(alignment: .leading, spacing: 4) {

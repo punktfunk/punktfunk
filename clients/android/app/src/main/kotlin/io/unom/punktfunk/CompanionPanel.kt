@@ -68,9 +68,9 @@ import io.unom.punktfunk.kit.SlotId
 /*
  * The companion panel (design/android-dual-screen.md §6): what the lower screen of a dual-screen
  * handheld shows while the picture has the other one. A rail on the physical left flips between
- * pages — the stats, the quick actions, a trackpad, the virtual controller — under a header that
- * says where this stream is. One composable for both shapes: the lower half of a hinge, and a
- * second display's Presentation.
+ * pages — the stats, the quick actions, a keyboard, a trackpad, the virtual controller — under a
+ * header that says where this stream is. One composable for both shapes: the lower half of a
+ * hinge, and a second display's Presentation.
  */
 
 internal enum class CompanionPage(@StringRes val label: Int, val icon: ImageVector) {
@@ -156,7 +156,7 @@ internal object CompanionMemory {
         prefs(context).edit().putString(STATS_VIEW, view.name).apply()
     }
 
-    /** The layout the pair [screen] names last had. A swap kept before layouts existed is the picture below. */
+    /** The layout the pair [screen] names last had. A legacy `swap:` flag reads as SWAPPED. */
     fun layout(context: Context, screen: String): ScreenLayout {
         val p = prefs(context)
         val name = p.getString("layout:$screen", null)

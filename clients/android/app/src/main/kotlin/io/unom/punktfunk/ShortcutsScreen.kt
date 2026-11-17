@@ -84,10 +84,10 @@ internal fun actionLabel(action: Action, cfg: OverlayConfig, ctx: Context): Stri
 private val KEY_NAMES: List<String> = KEY_GROUPS.flatMap { it.second } + (13..24).map { "f$it" }
 
 /**
- * Settings → Input → Shortcuts (design §5): what the controller, keyboard, touchscreen and remote
- * do in a stream, each binding row openable. [settings] is the layer being edited; [onChange]
- * writes the whole blob back through the row's `update`, so a preset that changes one owns them
- * all, and [onReset] drops that, or writes the defaults' empty blob.
+ * Settings → Input → Shortcuts (design/client-shortcuts.md §5): what the controller, keyboard,
+ * touchscreen and remote do in a stream, each binding row openable. [settings] is the layer
+ * being edited; [onChange] writes the whole blob back through the row's `update`, so a preset
+ * that changes one owns them all, and [onReset] drops that, or writes the defaults' empty blob.
  */
 @Composable
 internal fun ShortcutsScreen(
@@ -199,10 +199,10 @@ private fun Header(title: String, onBack: () -> Unit) {
 }
 
 /**
- * One shortcut (design §5): Does (the dial's picker, plus Quick actions itself), Press (Record or
- * Choose), Fires on, Remove. [index] -1 adds one. Save checks the trigger against [all] without
- * this binding: an identical trigger offers Replace, a press inside another chord says which
- * fires first.
+ * One shortcut (design/client-shortcuts.md §5): Does (the dial's picker, plus Quick actions
+ * itself), Press (Record or Choose), Fires on, Remove. [index] -1 adds one. Save checks the
+ * trigger against [all] without this binding: an identical trigger offers Replace, a press inside
+ * another chord says which fires first.
  */
 @Composable
 private fun ShortcutSheet(

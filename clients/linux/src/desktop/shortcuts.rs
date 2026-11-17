@@ -55,16 +55,15 @@ fn sandboxed() -> bool {
     std::path::Path::new("/.flatpak-info").exists()
 }
 
-/// Write `~/.local/share/applications/punktfunk-<slug>.desktop` for this URL and return the
-/// path. Best-effort `update-desktop-database` afterwards: an entry nothing indexes still
-/// works from a file manager, it just won't show up in search straight away.
+/// Write `~/.local/share/applications/punktfunk-<slug>-<tag>.desktop` for this URL and
+/// return the path. Best-effort `update-desktop-database` afterwards: an entry nothing indexes
+/// still works from a file manager, it just won't show up in search straight away.
 fn write_desktop_entry(label: &str, url: &str) -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME isn't set".to_string())?;
     let dir = PathBuf::from(home).join(".local/share/applications");
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    // The URL, not just the label: two hosts can share a name, and the file name was the only
-    // thing telling their shortcuts apart — the second silently replaced the first. The same
-    // host always resolves to the same URL, so re-creating its shortcut still overwrites its own.
+    // The URL, not just the label, names the file: two hosts can share a name. The same host
+    // always resolves to the same URL, so re-creating its shortcut overwrites its own.
     let path = dir.join(format!(
         "punktfunk-{}-{:08x}.desktop",
         file_slug(label),

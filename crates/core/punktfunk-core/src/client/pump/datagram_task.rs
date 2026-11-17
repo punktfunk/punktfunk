@@ -140,8 +140,8 @@ pub(super) async fn run(
                 }
             }
             // Same queue as `0xC9` so seq/pts mean the same; `Welcome::audio_codec` is the
-            // payload format. A session runs one plane for life. No `0xD2` on PCM —
-            // conceal at decode (`pcm::PcmConceal`), do not reconstruct here.
+            // payload format until an `AudioConfig` moves it (`AudioAnchor`). No `0xD2` on
+            // PCM — conceal at decode (`pcm::PcmConceal`), do not reconstruct here.
             Some(&crate::quic::AUDIO_PCM_MAGIC) => {
                 if let Some((seq, pts_ns, pcm)) = crate::quic::decode_audio_pcm_datagram(&d)
                     .filter(|&(seq, ..)| audio_seq.fresh(seq))

@@ -7,8 +7,9 @@ import {
 import { type ReactNode, useMemo } from "react";
 
 /**
- * A throwaway router, so a view with a router `<Link>` renders in a story. Built once: a router
- * rebuilt on every render remounts everything under it and restarts the entrance animation.
+ * A throwaway router, so a view with a router `<Link>` renders in a story. Memoised on `children`:
+ * a router rebuilt on every render remounts everything under it and restarts the entrance
+ * animation.
  */
 export function Routed({ children }: { children: ReactNode }) {
 	const router = useMemo(

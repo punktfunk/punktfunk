@@ -25,7 +25,7 @@ use crate::params_h265::H265ParamsError;
 /// a structurally identical chain from this `Copy` key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct H265ProfileKey {
-    /// The four Vulkan expresses: Main (1), Main 10 (2), Main Still Picture (3), RExt (4).
+    /// `profile_to_std` maps four: Main (1), Main 10 (2), Main Still Picture (3), RExt (4).
     pub std_profile_idc: hh::StdVideoH265ProfileIdc,
     pub chroma_subsampling: vk::VideoChromaSubsamplingFlagsKHR,
     pub luma_bit_depth: vk::VideoComponentBitDepthFlagsKHR,

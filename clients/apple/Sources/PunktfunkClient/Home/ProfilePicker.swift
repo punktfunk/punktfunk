@@ -1,8 +1,8 @@
 // The profile picker: who is playing on this box. A connect asks the paired host for its profiles
 // first (`ProfileFetch`), applies the shared rule (`HostProfiles.pickerDecision`) and shows this
 // only when the rule says so. "Switch profile…" opens it directly and saves the pick without
-// connecting. A sheet on iOS and macOS, a focus grid on tvOS. `SeatWait` is the sheet a connect
-// shows while the picked profile's seat starts.
+// connecting. A sheet on every platform, with larger tiles on tvOS. `SeatWait` is the sheet a
+// connect shows while the picked profile's seat starts.
 
 import PunktfunkKit
 import SwiftUI
@@ -201,7 +201,7 @@ struct ProfilePickerView: View {
                     }
                     .padding(6)
                 HStack(spacing: 4) {
-                    // Opens with its account password, or this device's face or finger.
+                    // Opens with its account password or PIN, or this device's face or finger.
                     if row.unlock != .none {
                         Image(systemName: "lock.fill")
                             .imageScale(.small)

@@ -218,7 +218,7 @@ fn hardware(b: &mut Build, p: &mut PageB) {
         Field::choice(
             &spec::DECODER,
             &row,
-            // A pre-M10 `vulkan`/`vaapi` is migrated for the lookup only.
+            // A stored `vulkan`/`vaapi` maps onto its `native-*` entry for the lookup only.
             |s| {
                 let stored = pf_client_core::video::migrate_decoder_pref(&s.decoder);
                 DECODERS.iter().position(|&d| d == stored).unwrap_or(0) as u32
@@ -259,7 +259,7 @@ fn hardware(b: &mut Build, p: &mut PageB) {
     }
 }
 
-/// Aspect, Resolution, and the typed Width and Height behind Custom: one setting, the D1
+/// Aspect, Resolution, and the typed Width and Height behind Custom: one setting, the
 /// tri-state of Native, Match window and a size. Aspect only picks the sizes listed.
 fn resolution(b: &Build) -> Field {
     let res = b.choice(
@@ -514,10 +514,10 @@ fn bitrate_row(b: &Build) -> (Field, Rc<dyn Fn(bool)>) {
     (field, show)
 }
 
-/// PyroWave quality: a slider from 0.5 to 2 bits per pixel by tenths that never shows them.
-/// Its caption is the rate the quality needs at the picture the host encodes, re-read as any
-/// row moves; a warning row follows while this device's link is short of it. The returned
-/// closure shows both under PyroWave.
+/// PyroWave quality: a slider from `BPP_FLOOR` to `BPP_MAX` bits per pixel by tenths, with no
+/// value shown. Its caption is the rate the quality needs at the picture the host encodes,
+/// re-read as any row moves; a warning row follows while this device's link is short of it.
+/// The returned closure shows both under PyroWave.
 fn pyrowave_quality_row(b: &Build) -> (Field, Rc<dyn Fn(bool)>) {
     use punktfunk_core::pyrowave::{BPP_DEFAULT, BPP_FLOOR, BPP_MAX};
     let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, BPP_FLOOR, BPP_MAX, 0.1);

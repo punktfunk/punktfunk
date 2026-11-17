@@ -1,13 +1,13 @@
-// The generic sync engine — the poll/watch/debounce/coalesce/fingerprint machinery that
-// was ~duplicated between rom-manager and playnite, as one Effect service.
+// The generic sync engine — the poll/watch/debounce/coalesce/fingerprint machinery, as one
+// Effect service.
 //
-// Semantics are a faithful port of the original Engine guard:
+// Semantics:
 //   - single-flight: a sync while one runs records a pending trigger and returns
 //     AlreadyRunning; the running pass re-fires once ("coalesced") when it finishes
 //   - content fingerprint (sha256 of the entries JSON) skips the apply when unchanged —
 //     except for the two reasons a person is waiting on the answer (`ALWAYS_APPLY`)
-//   - interval poll + best-effort fs watchers (recursive where the OS supports it, top-dir
-//     fallback on Linux) with debounce; the poll is the real safety net on SMB/NFS
+//   - interval poll + best-effort fs watchers (recursive where `fs.watch` accepts it, top-dir
+//     fallback where it throws) with debounce; the poll is the real safety net on SMB/NFS
 //   - every transition publishes a SyncStatus (the UI's SSE feed)
 // All loops live in a private scope that `reconfigure` closes and rebuilds, and the whole
 // engine tears down with the Scope it was constructed in.
@@ -65,10 +65,9 @@ export interface SyncSettings {
 	/**
 	 * Floor between two `fs-change` syncs. The debounce collapses a BURST of events into one
 	 * sync, but it extends on every event and so cannot bound how often a busy launcher makes
-	 * us re-walk the library — Steam writes to its dirs the whole time a game runs, and one
-	 * field log carried 102 `fs-change` syncs in 27 minutes. This caps the RATE: at most one
-	 * fs-change sync per interval, and every change that lands inside it coalesces into exactly
-	 * one trailing sync. Default `30 s` (see `DEFAULT_FS_CHANGE_MIN_INTERVAL`).
+	 * us re-walk the library — Steam writes to its dirs the whole time a game runs. This caps
+	 * the RATE: at most one fs-change sync per interval, and every change that lands inside it
+	 * coalesces into exactly one trailing sync. Default `DEFAULT_FS_CHANGE_MIN_INTERVAL`.
 	 */
 	readonly minInterval?: Duration.Duration;
 }
@@ -81,11 +80,10 @@ export interface SyncSettings {
  * outside its allowed roots is stripped and the games kept (deliberately — a cover must not cost
  * a library), and a launcher tile it cannot open is dropped the same way. Once that happens the
  * plugin's fingerprint is a permanent "no changes": the operator fixes the host side, nothing
- * re-publishes, and the only way out is to delete the plugin's cache file. That was real
- * field advice for a portable-Playnite library whose 70 covers were dropped.
+ * re-publishes, and the only way out is to delete the plugin's cache file.
  *
  * So the two triggers with a person behind them always apply. `startup` is the restart every
- * operator reaches for, and `manual` is the console's Sync-now button and the CLI's `sync` —
+ * operator reaches for, and `manual` is the reason for a sync a person asked for —
  * both mean "publish my library NOW", and answering "no changes" to that is the trap. The loop
  * reasons (`poll`, `fs-change`, `config-change`, `coalesced`) keep the short-circuit, which is
  * where it earns its keep: they are what would otherwise PUT the whole library every few minutes.
@@ -111,7 +109,7 @@ export interface SyncEngineOptions<
 	Entries extends ReadonlyArray<unknown>,
 	R,
 > {
-	/** Produce the full desired state. Pure of host effects — `apply` does the write. */
+	/** Produce the full desired state. `apply` does the write. */
 	readonly compute: (
 		reason: SyncReason,
 	) => Effect.Effect<
@@ -296,8 +294,8 @@ export const makeSyncEngine = <
 
 			if (settings.watch && settings.watchDirs.length > 0) {
 				// The acquire below runs inside the forked feed, so `start` would otherwise return
-				// before any `fs.watch` exists and lose every write until the next poll — 15 minutes
-				// on a library plugin's default. Hold `start` until the watchers are live.
+				// before any `fs.watch` exists and lose every write until the next poll. Hold
+				// `start` until the watchers are live.
 				const watching = yield* Deferred.make<void>();
 				const watchStream = Stream.callback<void>((queue) =>
 					Effect.acquireRelease(

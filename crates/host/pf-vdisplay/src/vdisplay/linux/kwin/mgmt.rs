@@ -64,9 +64,9 @@ use management::kde_output_configuration_v2::{
 };
 use management::kde_output_management_v2::KdeOutputManagementV2 as OutputManagement;
 
-/// Bind `min(advertised, MAX)`. Requests we issue are `since ≤ 3`; events we read are
-/// `since ≤ 18` (`priority`). Binding high and calling low stays in range on any KWin
-/// that advertises the globals.
+/// Bind `min(advertised, MAX)`. A request newer than v3 is gated on the bound version:
+/// [`REPLICATION_SOURCE_SINCE`], [`outputs::CUSTOM_MODES_SINCE`], [`STATED_TIMING_SINCE`]
+/// and the device `release` (v21).
 const MGMT_MAX: u32 = 22;
 const DEVICE_MAX: u32 = 24;
 /// `kde_output_device_registry_v2`. KWin ≥ 6.7 advertises this and no per-output
@@ -869,14 +869,13 @@ pub(crate) fn apply_topology(
 }
 
 /// De-mirror the just-created virtual output without touching the rest of the
-/// topology — the `Extend`/`Auto` counterpart of the clear [`apply_topology`]
-/// folds into its own config.
+/// topology — the clear [`apply_topology`] folds into its own config, for an `Extend`
+/// placed by the `kscreen-doctor` fallback, which clears no mirror source
+/// ([`outputs::topology`]).
 ///
-/// Those topologies issue no other output-management calls: rearranging the
-/// user's screens is what they exist to avoid. A stored `replicationSource`
-/// is not an arrangement; it makes our output show a physical panel. Apply
-/// only when ours is actually mirroring; the ordinary session pays one
-/// bounded roundtrip on `sess` ([`watch`]) and no apply.
+/// A stored `replicationSource` is not an arrangement; it makes our output show a
+/// physical panel. Apply only when ours is actually mirroring; the ordinary session
+/// pays one bounded roundtrip on `sess` ([`watch`]) and no apply.
 pub(crate) fn clear_replication_source(
     sess: Option<&mut Session>,
     our_prefix: &str,

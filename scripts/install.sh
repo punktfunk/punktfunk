@@ -114,6 +114,6 @@ fi
 
 chmod +x "$TMP/$NAME" || die "could not make the installer executable"
 
-# The trap cannot fire across exec, so the temporary directory outlives this shell. Hand the
-# installer a copy it owns and let the kernel reap the rest with the tmpdir on reboot.
+# The trap cannot fire across exec, so the temporary directory outlives this shell, and the
+# installer runs from it.
 exec "$TMP/$NAME" "$@"

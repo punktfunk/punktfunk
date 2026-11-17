@@ -6,7 +6,7 @@
  */
 export type RunnerLogLevel = "info" | "warn" | "error";
 
-/** The sink shape used internally, with the level always supplied by the caller's default. */
+/** The sink shape used internally; `defaultLog` reads an omitted level as `info`. */
 export type LogSink = (line: string, level?: RunnerLogLevel) => void;
 
 /** Stamped stdout, with `warn`/`error` going to the matching console method (hence stderr). */

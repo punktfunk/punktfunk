@@ -3,7 +3,7 @@
 //! rows, a page column, and the scrim sheet every overlay sits on.
 //!
 //! The type ramp is WinUI's: page title 28 semibold, group heading 14 semibold, body 14,
-//! caption 12 in the secondary text colour. Spacing sits on a 4 px grid.
+//! caption 12 in the secondary text colour.
 
 use super::lucide;
 use pf_fluent::{Palette, Token};
@@ -232,9 +232,9 @@ pub(crate) fn page_fill(children: Vec<View>) -> View {
 /// The widest a form's column grows.
 const FORM_WIDTH: f64 = 760.0;
 
-/// Like [`page`], at the width of a form: a host's page. The column starts at the gutter, where
-/// every page's content starts, so it takes its width from the page's (`width`): a stack
-/// aligned left sizes to its content, not to its maximum.
+/// Like [`page`], at the width of a form: a host's page. The column starts at the gutter, as
+/// [`page_fill`]'s does, so it takes its width from the page's (`width`): a stack aligned
+/// left sizes to its content, not to its maximum.
 pub(crate) fn page_form(children: Vec<View>, width: f64) -> View {
     let col = vstack(children)
         .spacing(8.0)
@@ -246,7 +246,7 @@ pub(crate) fn page_form(children: Vec<View>, width: f64) -> View {
 
 /// Lay tiles into a `cols`-wide grid of equal-width star columns (rows share the height of
 /// their tallest tile, so a grid row always lines up). Shared by the hosts page's host
-/// tiles and the library page's posters.
+/// tiles and the profile picker's cards.
 pub(crate) fn tile_grid(tiles: Vec<View>, cols: usize, gap: f64) -> View {
     let rows = tiles.len().div_ceil(cols);
     let cells: Vec<View> = tiles
@@ -406,7 +406,7 @@ pub(crate) fn card_button(
 }
 
 /// A full-screen centred "busy" scene: [`notice_page`] under a spinner. Shared by Connecting /
-/// RequestAccess / Waking / SpeedTest.
+/// RequestAccess / Waking / SpeedTest and the library's loading state.
 pub(crate) fn busy_page(pal: &Palette, headline: &str, detail: &str, extra: Vec<View>) -> View {
     let ring = ProgressRing::new()
         .is_indeterminate(true)
@@ -503,7 +503,7 @@ pub(crate) fn host_tile(pal: &Palette, name: &str, os: &str, paired: bool, size:
     }
 }
 
-/// A circle of `size` carrying `text`: a profile's initials on its accent, or on the app accent
+/// A circle of `size` carrying `label`: a profile's initials on its accent, or on the app accent
 /// when `fill` is `None`.
 pub(crate) fn monogram(pal: &Palette, label: &str, size: f64, fill: Option<Color>) -> Border {
     let label = text(label)

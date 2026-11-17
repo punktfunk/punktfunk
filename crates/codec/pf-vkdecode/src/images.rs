@@ -13,7 +13,7 @@
 //! Each picture owns a timeline semaphore (AVVkFrame): the decoder
 //! signals `value+1` on write; the presenter waits, samples, restores
 //! layout, and signals `value+1` in the same submission. `release_frame`
-//! waits that write-back before the picture's next use.
+//! records that write-back; the picture's next decode waits on it.
 
 use ash::vk;
 
@@ -47,9 +47,9 @@ pub struct PoolPlan {
     pub picture_flags: vk::ImageCreateFlags,
 }
 
-/// `required_slots` is the stream's `max_dpb_frames + 1`. Picture count is
-/// that plus [`HOLD_HEADROOM`] so a consumer-held picture is never a decode
-/// target. Layered coincide puts all of them in one array image.
+/// `required_slots` is `VkCodec::required_slots`: DPB depth plus the setup slot.
+/// Picture count is that plus [`HOLD_HEADROOM`] so a consumer-held picture is
+/// never a decode target. Layered coincide puts all of them in one array image.
 pub fn plan_pools(caps: &DecodeCaps, required_slots: u32) -> PoolPlan {
     let picture_count = required_slots + HOLD_HEADROOM;
     let picture_flags = if caps.plane_view_formats.is_some() {

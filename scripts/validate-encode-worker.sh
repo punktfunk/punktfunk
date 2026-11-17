@@ -2,9 +2,9 @@
 # WP3 — the on-glass validation kit for `punktfunk-encode-worker`.
 #
 # Plan: punktfunk-planning/design/gpu-priority-capability-worker-implementation-plan.md §2/WP3.
-# This script is the mechanical half of that table. It runs ON a real box (Deck desktop mode, .21,
-# .25, .41, a nobara VM); it needs a GPU, and for the KDE legs a live KDE session. Nothing here
-# talks to another machine.
+# This script is the mechanical half of that table. It runs ON a real box; it needs a GPU, and for
+# the KDE legs a live KDE session. Nothing here talks to another machine: no ssh, no sudo, no
+# setcap.
 #
 # WHAT IS BEING VALIDATED. `punktfunk-encode-worker` is a separate binary carrying
 # `cap_sys_nice=ep`; it encodes PyroWave at an elevated VK_KHR_global_priority class so the encode
@@ -13,7 +13,7 @@
 # any reader whose effective set is not a superset of the target's PERMITTED set
 # (cap_ptrace_access_check), KWin holds no capabilities — so a capability-carrying host is
 # unidentifiable, `zkde_screencast_unstable_v1` is never advertised, and every KDE desktop session
-# loses streaming. That is the 0.26.0-1 field incident, and V1 below is its regression test.
+# loses streaming. V1 below is the regression test for that.
 #
 # SAFE BY DEFAULT. With no arguments this only READS: /proc, getcap, the installed .desktop. It
 # starts no session, kills nothing, and never calls setcap. Every leg that runs a capture+encode
@@ -31,7 +31,7 @@
 #   Legs:
 #     inspect  (default) pure read-only inspection: the capability matrix as it exists on THIS box,
 #              plus every running host's runtime capability state. No session, no spawn.
-#     v1       the 0.26.0-1 regression test — KDE only.
+#     v1       the capability-on-host regression test — KDE only.
 #     v2       grant: the worker reports REALTIME.
 #     v3a      IPC hop cost: in-process vs an UNCAPPED worker, both at default GPU priority.
 #              R1's pre-registered abandonment gate. Needs no capability and no KDE.
@@ -47,8 +47,8 @@
 # ⚠ USE INSTALLED PATHS ON THE KDE LEGS. KWin caches the grant per EXECUTABLE PATH, matched against
 #   an installed .desktop's `Exec=`. A binary run from a scratch build directory is a different
 #   path, so KWin refuses it and `zkde_screencast_unstable_v1` never appears. That is identification
-#   WORKING, not a bug — do not go debugging KWin. This script resolves the host binary from the
-#   installed .desktop precisely so the legs run against the path KWin knows.
+#   WORKING, not a bug — do not go debugging KWin. This script takes the running host's binary,
+#   else the installed .desktop's `Exec=`, so the legs run against the path KWin knows.
 #
 # ⚠ THE WORKER'S PERF SUMMARY GOES TO INHERITED STDERR. The p50/p99 lines are emitted by the worker
 #   process, whose stderr is the host's. They reach `journalctl`; they do NOT reach the web
@@ -90,9 +90,9 @@ HOST_BIN_NAME='punktfunk-host'
 CAP_SYS_NICE_BIT=23
 
 # --- the log lines this kit asserts on, verbatim -------------------------------------------------
-# Every one of these is a fixed substring of a real `tracing` message (grep -F, never a regex — the
-# messages contain em dashes and parentheses). If a message is reworded, this block is the single
-# place to fix, and a leg that stops matching FAILS rather than silently passing.
+# Every one of these is a fixed substring of a real log message or error context (grep -F, never a
+# regex — the messages contain em dashes and parentheses). If a message is reworded, this block is
+# the single place to fix, and a leg that stops matching FAILS rather than silently passing.
 L_FALLBACK='encoding in-process at default GPU priority'        # the clause EVERY fallback ends with
 L_OFF='pyrowave: PUNKTFUNK_ENCODE_WORKER=off'
 L_NOTFOUND='the encode worker was not found beside the host binary or on PATH'
@@ -334,7 +334,7 @@ resolve_binaries() {
   [ -n "$HOST_BIN" ] && HOST_BIN="$(readlink -f "$HOST_BIN" 2>/dev/null || printf '%s' "$HOST_BIN")"
   find_desktop >/dev/null 2>&1
 
-  # Mirror the host's own resolution order (pyrowave_remote::resolve_worker_path).
+  # Mirror the host's own resolution order (pf-zerocopy's ipc::resolve_worker_path).
   if [ -n "$OPT_WORKER_BIN" ]; then
     WORKER_BIN="$OPT_WORKER_BIN"; WORKER_BIN_FROM='--worker-bin'
   elif [ -n "${PUNKTFUNK_ENCODE_WORKER:-}" ] && \
@@ -354,10 +354,8 @@ resolve_binaries() {
 
 # EVERY log read goes through this. `tracing`'s fmt layer emits SGR escapes around field NAMES, so a
 # real line reads `p99_us\e[0m\e[2m=\e[0m4601` — the message text is plain but `key=value` is not.
-# That is invisible in a hand-written fixture and fatal in the field: it cost the first real V3a run
-# on .25, where both arms encoded 2700 frames perfectly and the kit reported "fewer than 3 usable
-# perf windows" because `p99_us=\([0-9]*\)` could not match. Anything matching a FIELD (priority=,
-# p99_us=, reason=) breaks without this; anything matching prose only got lucky.
+# That is invisible in a hand-written fixture. Anything matching a FIELD (priority=, p99_us=,
+# reason=) breaks without this; anything matching prose only got lucky.
 # The spike is also launched with NO_COLOR=1 so fresh logs are plain — this strips the rest
 # (journalctl, an operator's own capture, a log from an older build).
 strip_ansi() { LC_ALL=C sed -E $'s/\x1b\\[[0-9;]*[a-zA-Z]//g'; }
@@ -407,11 +405,10 @@ assert_worker_arm() {
 
 # Why an arm produced nothing — checked BEFORE any arm-identity assert.
 #
-# "this arm is not the in-process arm" is a LIE when the truth is "capture never came up", and it
-# sends the reader looking at the wrong thing entirely. That cost a real V3b run on .21: a GNOME
-# consent dialog went unanswered, the spike died before opening an encoder, and the kit blamed the
-# arm construction — which was correct all along. Prints a human reason and returns 0 when the arm
-# never got far enough to be judged; returns 1 when the run is judgeable.
+# "this arm is not the in-process arm" is wrong when the truth is "capture never came up" (an
+# unanswered GNOME consent dialog, say), and it sends the reader looking at the wrong thing.
+# Prints a human reason and returns 0 when the arm never got far enough to be judged; returns 1
+# when the run is judgeable.
 spike_failure_reason() {
   local log="$1" line
   if logs_have "$log" 'timed out waiting for the ScreenCast portal'; then
@@ -531,15 +528,13 @@ run_spike() {
   SPIKE_LOG="$log"; SPIKE_PID=''
   # NO_COLOR: keep the captured log plain at the source. `log_cat` strips SGR escapes anyway, but a
   # plain log is also the one a human greps by hand when a leg goes red, and `p99_us\e[0m\e[2m=…`
-  # defeats the obvious grep just as thoroughly as it defeated this kit's parser.
+  # defeats the obvious grep.
   #
-  # PUNKTFUNK_ENCODER=pyrowave is NOT redundant with `--codec pyrowave`, and leaving it out cost a
-  # real V3b run on .21. `--codec` selects the ENCODER; the capture pipeline picks its consumer from
-  # `ZeroCopyPolicy::pyrowave_session`, which on the spike path is fed only by this env (see
-  # punktfunk-host/src/capture.rs — "the global PUNKTFUNK_ENCODER=pyrowave lab lever"). Without it an
-  # NVIDIA host resolves `cuda-import -> nvenc`, imports the dmabuf to CUDA as NV12, and hands the
-  # wavelet encoder a payload it rejects: "unsupported FramePayload (need Dmabuf or Cpu RGB)". AMD
-  # boxes hide this — they have no CUDA arm to pick — so it reproduces only where the A/B lives.
+  # PUNKTFUNK_ENCODER=pyrowave is not redundant with `--codec pyrowave`: the host's usage text
+  # (SPIKE OPTIONS) asks for both "so capture takes the passthrough". Without it an NVIDIA host can
+  # resolve `cuda-import -> nvenc`, import the dmabuf to CUDA as NV12, and hand the wavelet encoder
+  # a payload it rejects: "unsupported FramePayload (need Dmabuf or Cpu RGB)". AMD boxes have no
+  # CUDA arm to pick.
   local -a envs=(PUNKTFUNK_PERF=1 NO_COLOR=1 PUNKTFUNK_ENCODER=pyrowave)
   for kv in "$@"; do envs+=("$kv"); done
   local -a cmd=("$HOST_BIN" spike --codec pyrowave --source "$SPIKE_SOURCE"
@@ -563,8 +558,8 @@ run_spike() {
 }
 
 # Wait out an arm: the spike's own `--seconds` budget plus a grace, then stop it regardless. The
-# grace matters because a frame-starved capture (PW1 saw ~2.5 fps under load) will never reach its
-# frame target — the wall clock, not the frame count, is what bounds a leg.
+# grace matters because a frame-starved capture will never reach its frame target — the wall
+# clock, not the frame count, is what bounds a leg.
 wait_spike() {
   local wall=$(( $1 + 15 )) waited=0
   [ -n "$SPIKE_PID" ] || return 0
@@ -593,9 +588,9 @@ stop_spike() {
 # is VERIFIED uncapped before use; an unverifiable copy is refused, never assumed.
 #
 # ⚠ It is also the only arm immune to R4: the real capped worker is AT_SECURE, so the dynamic loader
-# ignores LD_LIBRARY_PATH/LD_PRELOAD. On a box propped up by a loader shim (the .21 ffmpeg-9
-# workaround) the copy will start and the capped original will not — a v3a PASS beside a v3b
-# spawn failure is that, not a regression.
+# ignores LD_LIBRARY_PATH/LD_PRELOAD. On a box propped up by such a loader shim the copy will start
+# and the capped original will not — a v3a PASS beside a v3b spawn failure is that, not a
+# regression.
 UNCAPPED_COPY=''
 make_uncapped_copy() {
   [ -n "$UNCAPPED_COPY" ] && return 0
@@ -674,7 +669,7 @@ leg_inspect() {
 
   # --- I4 host and worker are DIFFERENT files ------------------------------------------------------
   # The plan's non-negotiable: never a hardlink, never a subcommand. A shared inode shares the file
-  # capability and silently re-creates 0.26.0-1.
+  # capability and silently puts it on the host (see I2).
   if [ -n "$HOST_BIN" ] && [ -n "$WORKER_BIN" ] && [ -e "$HOST_BIN" ] && [ -e "$WORKER_BIN" ]; then
     local hi wi
     hi="$(stat -Lc '%d:%i' "$HOST_BIN" 2>/dev/null)"
@@ -860,7 +855,9 @@ leg_v2() {
   fi
 }
 
-# The shared A/B engine. $1 label, $2 arm-A log, $3 arm-B log, $4 gate µs (empty = report only).
+# The shared A/B engine. $1 tag, $2/$3 arm-A log and name, $4/$5 arm-B log and name, $6 gate µs
+# (empty = report only). Returns 0 within the gate, 2 when the gate fires, 1 when an arm has no
+# data.
 ab_report() {
   local tag="$1" a_log="$2" a_name="$3" b_log="$4" b_name="$5" gate_us="${6:-}"
   local a b a50 a99 an b50 b99 bn
@@ -1079,7 +1076,7 @@ leg_v4() {
       if ! logs_have "$wlog" "$L_DIED"; then
         # THE VEHICLE, NOT THE LADDER. L_DIED/L_RESPAWNED are emitted by `RemotePyroWave::reset`,
         # and the only caller of `Encoder::reset` is the real session's `reset_stalled_encoder`
-        # loop (native/stream.rs). `spike` is a dev tool with no recovery loop at all — it does
+        # loop (encode_recovery.rs). `spike` is a dev tool with no recovery loop at all — it does
         # `encoder.submit(&frame).context("encoder submit")?` and exits — so a worker killed under
         # the spike can never reach reset, and demanding L_DIED here is a FALSE NEGATIVE that
         # reports a shipping blocker for a rung the product implements correctly.
@@ -1208,11 +1205,10 @@ leg_v5() {
     skip V5 "only $n samples — the session did not stay up long enough to say anything"
     return 0
   fi
-  # A LEAK IS A TREND, NOT A SPREAD. The earlier verdict here was `max - min`, which cannot tell a
-  # leak from jitter: the worker's count legitimately moves by one when a dmabuf fd happens to be in
-  # flight at the sampling instant, so `max - min` was permanently 1 and the leg failed forever on a
-  # healthy box. Measured on home-nobara-1 2026-08-10, 33 samples over 480 s: the worker oscillated
-  # 54↔55 and ENDED on 54, exactly where it started — no trend at all.
+  # A LEAK IS A TREND, NOT A SPREAD. A `max - min` verdict cannot tell a leak from jitter: the
+  # worker's count legitimately moves by one when a dmabuf fd happens to be in flight at the
+  # sampling instant, so `max - min` would be permanently 1 and the leg would fail forever on a
+  # healthy box.
   #
   # Median-of-thirds is strictly MORE sensitive to the thing R2 is about: a steady leak moves the
   # trend just as much as it moves the spread, while bounded jitter moves only the spread. The
@@ -1279,14 +1275,13 @@ leg_selftest() {
 
   # A real log is not this clean, and the difference is not cosmetic. `tracing` wraps every field
   # NAME in SGR escapes, so the bytes are `p99_us\e[0m\e[2m=\e[0m6400` and `p99_us=\([0-9]*\)` never
-  # matches. The plain fixtures above passed while the kit was structurally unable to read a real
-  # log: the first V3a run on .25 encoded 2700 frames in BOTH arms and was reported as "fewer than 3
-  # usable perf windows". Same numbers as the plain fixture, same expected answer — the ONLY
-  # difference is the escapes, so a regression here can only mean the stripping broke.
+  # matches. The plain fixtures above alone would pass while the kit could not read a real log.
+  # Same numbers as the plain fixture, same expected answer — the ONLY difference is the escapes,
+  # so a regression here can only mean the stripping broke.
   local alog="$d/perf-ansi.log" E=$'\033'
-  # One field at a time, deliberately: the first draft of this fixture built the whole line in a
-  # single printf and silently emitted 27 placeholders against 23 arguments, so the tail escapes
-  # came out empty and the fixture failed for its own reasons rather than the code's.
+  # One field at a time, deliberately: one printf for the whole line is easy to get out of step
+  # (placeholders against arguments), and the fixture would fail for its own reasons rather than
+  # the code's.
   _ansi_kv()   { printf '%s[3m%s%s[0m%s[2m=%s[0m%s' "$E" "$1" "$E" "$E" "$E" "$2"; }
   _ansi_perf() { # $1 p50_us, $2 p99_us — the exact field shape `tracing` emits
     printf '%s[2m2026-08-09T14:25:07Z%s[0m %s[32m INFO%s[0m %s ' "$E" "$E" "$E" "$E" "$L_PERF"
@@ -1332,9 +1327,9 @@ leg_selftest() {
   _t 'the shared fallback clause is found'      ok logs_have "$il" "$L_FALLBACK"
   _t 'the INERT wordings are distinguishable'   no logs_have "$wl" "$L_INERT_WORKER"
 
-  # v5's leak verdict. The series below are the shapes that actually matter: the real measured
-  # oscillation (which the old max-min verdict called a leak), and a real leak (which a spread-blind
-  # reader would miss). A trend reader has to get BOTH right or it is not worth having.
+  # v5's leak verdict. The series below are the shapes that matter: a bounded oscillation (which a
+  # max-min verdict would call a leak) and a real leak. A trend reader has to get BOTH right or it
+  # is not worth having.
   printf 'v5 fd trend (a leak is a trend, not a spread):\n'
   local jitter='54 54 54 54 55 55 54 54 55 54 54 54 55 54 54 54 54 54'
   local leak='54 54 55 55 56 57 57 58 59 60 61 61 62 63 64 65 66 67'

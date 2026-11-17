@@ -1,10 +1,8 @@
 //! Runs the REAL `punktfunk-session` binary and asserts it speaks the stdout contract.
 //!
-//! 0.22.0 shipped a stub as `punktfunk-session` — a stray copy of the GTK shell replaced
-//! this crate's `main.rs`, and every build gate stayed green because the wrong program
-//! compiled perfectly. Nothing in CI ever *ran* the binary; the failure only existed at
-//! runtime, as a connect that silently bounced back to the host list. This test is the
-//! gate that would have caught it: whatever the binary does, it must SAY so on stdout.
+//! A build gate cannot tell which program sits behind the binary's name: any program can
+//! compile cleanly under it. Only running it shows what it does, and whatever it does, it
+//! must SAY so on stdout.
 #![cfg(any(target_os = "linux", windows))]
 
 use std::io::Read as _;

@@ -1,15 +1,13 @@
 // Where the player was in a host's library, so the round trip back from a stream doesn't lose it.
 //
-// Leaving a stream re-presents `LibraryView` from scratch — new `@State`, new ScrollView — so a
-// library of any size came back at the top every time. For the loop this screen exists to serve
-// (browse → play → quit → browse), that means re-scrolling to the same place on every lap. Field
-// note, 2026-08-16: "when leaving the stream the client should stay at the last scroll position in
-// the library view instead of jumping back".
+// Leaving a stream re-presents `LibraryView` from scratch — new `@State`, new ScrollView — so
+// without a remembered position a library opens at the top. For the loop this screen serves
+// (browse → play → quit → browse), the position has to survive the round trip.
 //
 // The position is remembered as the ID OF THE TITLE the player last opened, not as a pixel offset.
 // An offset is meaningless across the things that legitimately change between visits — a rotation,
 // a window resize, a Split View, a host that gained or lost titles, or the running-first ordering
-// this view now applies. A title id survives all of them, and `scrollTo` turns it back into a
+// this view applies. A title id survives all of them, and `scrollTo` turns it back into a
 // position at whatever the current layout is.
 
 import Foundation

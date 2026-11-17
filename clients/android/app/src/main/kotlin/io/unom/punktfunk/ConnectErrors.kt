@@ -8,9 +8,8 @@ import io.unom.punktfunk.kit.R
  * Cause-specific user-facing messages for failed pair/connect attempts, keyed on the stable
  * machine token from [NativeBridge.nativeTakeLastError]. One vocabulary for both the PIN
  * ceremony and the request-access (delegated approval) path, so a dead network path is never
- * reported as "wrong PIN" and an operator denial is never reported as a timeout — the exact
- * collapse behind more than one support thread. Each function returns a message id for the
- * caller to word.
+ * reported as "wrong PIN" and an operator denial is never reported as a timeout. Each function
+ * returns a message id for the caller to word.
  */
 object ConnectErrors {
     /** Message for a failed SPAKE2 PIN ceremony ([NativeBridge.nativePair] returned `""`). */

@@ -9,7 +9,7 @@
 //! pump. Frames cross to the embedder on a bounded channel. Methods are safe from any
 //! single embedder thread.
 
-// Carve-out: thread ids and QoS pins, each with a `// SAFETY:` proof.
+// Carve-out: thread ids, QoS pins and the OS hostname, each with a `// SAFETY:` proof.
 // Host code never runs this module.
 #![allow(unsafe_code)]
 
@@ -155,9 +155,9 @@ pub struct MicUplinkStats {
     pub dropped_stale: u64,
 }
 
-/// Requests (mode, keyframe, ~1.3 loss reports/s) plus key and text edges. 1024 holds one
-/// Android IME edit: up to 256 Backspace and 256 Delete taps, two edges each. Full means the
-/// control task is wedged — callers treat that as a closed session.
+/// Requests (mode, bitrate, probe, clock re-sync, clipboard) plus key and text edges. 1024
+/// holds one Android IME edit: up to 256 Backspace and 256 Delete taps, two edges each. Full
+/// means the control task is wedged — callers treat that as a closed session.
 const CTRL_QUEUE: usize = 1024;
 
 /// Client-wall unix seconds from a relative remaining; `0` stays `0` (permanent).
@@ -356,7 +356,8 @@ pub struct NativeClient {
     /// (`0xD3`). A 48 kHz/16-bit lossless session and a 48 kHz Opus session agree on every
     /// other resolved value. [`quic::AUDIO_CODEC_AC3`] / [`quic::AUDIO_CODEC_EAC3`] (`0xD4`,
     /// only on a [`ConnectParams::audio_bitstreams`] ask) go to a passthrough sink undecoded.
-    /// Fixed for the session — the output device is open at one format.
+    /// The connect-time value. Under [`ConnectParams::reopens_audio`] the format can change
+    /// mid-stream; [`audio_format`](Self::audio_format) follows it.
     pub audio_codec: u8,
     /// Host-resolved sample rate. `48_000` for Opus and older hosts; a hi-res session may
     /// land lower than asked. Open the output device from THIS, never from the request.
@@ -405,8 +406,8 @@ impl NativeClient {
 /// Pin the calling thread to user-interactive QoS.
 ///
 /// Apple consumers drain planes on `.userInteractive` and block on the channels these
-/// workers feed. Default-QoS producers invert priority. Android uses nice −8; no-op
-/// elsewhere (no QoS scheduler).
+/// workers feed. Default-QoS producers invert priority. Android uses nice −8; elsewhere it
+/// runs the boost the embedder installed with `set_thread_boost`, if any.
 #[cfg(target_vendor = "apple")]
 pub(crate) fn pin_thread_user_interactive() {
     // SAFETY: sets only the current thread's QoS class — always valid to call.
@@ -561,7 +562,7 @@ fn os_hostname() -> Option<String> {
 fn advertised_client_caps(client_caps: u8, audio_rate_hz: u32, audio_bits: u8) -> u8 {
     // Non-zero = caller specified a format, not "differs from default". 48 kHz/16-bit is
     // both the default and the cheapest lossless rung; a "differs" rule would make it
-    // unreachable. [`ConnectParams::new`] leaves 0/0; the wire encodes 48 000/16 as absent.
+    // unreachable. [`ConnectParams::new`] leaves 0/0, which the host reads as 48 000/16.
     let hires = audio_rate_hz != 0 || audio_bits != 0;
     client_caps
         | crate::quic::CLIENT_CAP_AUDIO_RED
@@ -779,7 +780,7 @@ impl NativeClient {
         params.client_caps =
             advertised_client_caps(params.client_caps, params.audio_rate_hz, params.audio_bits);
         let shared_w = shared.clone();
-        let ctrl_tx_pump = ctrl_tx.clone(); // pump sends its report windows
+        let ctrl_tx_pump = ctrl_tx.clone(); // pump sends its bitrate, probe and re-sync asks
         let worker = std::thread::Builder::new()
             .name("punktfunk-client".into())
             .spawn(move || {
@@ -1465,8 +1466,6 @@ impl NativeClient {
         self.wants_decode
     }
 
-    /// Live encoder target (kbps), follows `BitrateChanged`. [`resolved_bitrate_kbps`] is the
-    /// frozen session-start value. `0` = old host that never reported one.
     /// The ABR windows that closed since the last call, oldest first.
     ///
     /// The controller's own record of what it judged and asked for, not a
@@ -1491,6 +1490,9 @@ impl NativeClient {
             .clone()
     }
 
+    /// Live encoder target (kbps), follows `BitrateChanged`.
+    /// [`resolved_bitrate_kbps`](Self::resolved_bitrate_kbps) is the frozen session-start
+    /// value. `0` = old host that never reported one.
     pub fn current_bitrate_kbps(&self) -> u32 {
         self.shared.live_bitrate_kbps.load(Ordering::Relaxed)
     }
@@ -1714,7 +1716,7 @@ impl NativeClient {
             .map_err(|_| PunktfunkError::Closed)
     }
 
-    /// Next audio packet. Drain on a dedicated thread — packets arrive every 5 ms.
+    /// Next audio packet. Drain on a dedicated thread — Opus packets arrive every 5 ms.
     pub fn next_audio(&self, timeout: Duration) -> Result<AudioPacket> {
         let pkt = pull(&self.planes.audio, timeout)?;
         if let Some(format) = pkt.new_format {
@@ -1802,7 +1804,8 @@ impl NativeClient {
         self.planes.rumble_sched.set_quirks(pad, quirks);
     }
 
-    /// DualSense HID-output (lightbar / LEDs / adaptive trigger). DualSense host backend only.
+    /// Pad HID output ([`HidOutput`]): DualSense lightbar / LEDs / adaptive triggers, and the
+    /// raw reports a Steam Controller backend sends back for passthrough.
     pub fn next_hidout(&self, timeout: Duration) -> Result<HidOutput> {
         pull(&self.planes.hidout, timeout)
     }

@@ -18,7 +18,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Frame mode (design/touchpad-passthrough.md §4): the Trackpad gestures with every finger sent
+ * Frame mode ([FrameModeSink]): the Trackpad gestures with every finger sent
  * to the host's touchpad. Read back off a recording wire and a recording surface: what still
  * reaches the wire, what the surface hears, and when a local gesture keeps the fingers.
  */

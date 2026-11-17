@@ -1,4 +1,5 @@
-//! The `PUNKTFUNK_*` variables the presenter reads, read once by [`read`] at `Shell::open`.
+//! The `PUNKTFUNK_*` variables the presenter reads, read once by [`read`] at `Shell::open`
+//! (and by `probe_backend`).
 //!
 //! The shell keeps the [`Knobs`] and hands them to every `Presenter::new`; no other module
 //! of this crate reads one. Each field keeps the parse its use site had: an `env_on` switch
@@ -47,7 +48,7 @@ pub(crate) struct Knobs {
     pub(crate) drm_card: Option<String>,
     /// `PUNKTFUNK_DIRECT_PRESENT=0` keeps every lane on the video image: an A/B on one build.
     pub(crate) direct_present: bool,
-    /// `PUNKTFUNK_TONEMAP_PEAK`: the PQ→SDR peak, default 4.9 ≈ 1000 nits / 203-nit reference.
+    /// `PUNKTFUNK_TONEMAP_PEAK`: the PQ→SDR peak in 203-nit units; unset takes the CSC's default.
     pub(crate) tonemap_peak: Option<f32>,
     /// `PUNKTFUNK_D3D11_NO_MUTEX` set to anything skips the keyed mutex (debugging: torn frames).
     #[cfg(windows)]

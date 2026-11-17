@@ -13,8 +13,9 @@ pub(crate) struct FrameTimeline {
 /// The timeline for a frame that must not be presented before `not_before_ns`: the earliest
 /// stored one whose EXPECTED PRESENT is past that instant, else the last one stepped forward by
 /// whole `period_ns` once the stored set has aged out (timelines refresh once per vsync callback;
-/// a frame can decode anywhere inside that window). `None` for an empty set (the 31/32 fallback:
-/// the caller releases ASAP) and for an aged-out one with no period measured.
+/// a frame can decode anywhere inside that window). `None` for an empty set (below API 33, the
+/// `postFrameCallback64` fallback in `decode/vsync.rs`: the caller releases ASAP) and for an
+/// aged-out one with no period measured.
 ///
 /// The floor is the caller's to compose: SurfaceFlinger's latch lead (`now + margin`) and, under
 /// cadence targeting, the frame's own due time on the source's timeline. Adding the submit lead

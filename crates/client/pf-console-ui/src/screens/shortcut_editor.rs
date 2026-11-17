@@ -2,7 +2,7 @@
 //!
 //! The disc preview is the same keycap the in-stream ring draws. The name is
 //! typed on the keyboard tray (Steam's on a Deck); the key is picked on a
-//! keyboard-shaped tray of every name `key_vk` knows ([`KeyTray`], which the Shortcuts
+//! keyboard-shaped tray of the `KEY_GRID` names ([`KeyTray`], which the Shortcuts
 //! page also draws). A new shortcut takes the first empty ring slot. Writes go through the
 //! ring editor's [`Scope`], so a preset's ring edits the preset.
 //!
@@ -101,7 +101,7 @@ fn rows(d: &Draft, typing: bool, picking: bool) -> Vec<RowSpec> {
     v
 }
 
-/// Pure upsert so tests can drive the blob without the process-wide settings file.
+/// Pure upsert, so tests drive the blob without a store.
 fn apply_draft(cfg: &mut OverlayConfig, d: &Draft) {
     cfg.upsert_shortcut(d.id.as_deref(), &d.label, d.chord.keys());
 }
@@ -166,7 +166,7 @@ impl KeyTray {
         }
     }
 
-    /// Every key `key_vk` knows that is not a modifier.
+    /// The keys of `KEY_GRID`: a keyboard's, modifiers apart.
     pub(super) fn keys() -> KeyTray {
         KeyTray::new(&KEY_GRID, key_legend)
     }
@@ -689,8 +689,7 @@ mod tests {
     use super::*;
     use pf_client_core::overlay_actions::{RingPlatform, SlotId};
 
-    /// Apply the blob directly. The settings store is one process-wide file; a round
-    /// trip through `save` races the settings tests.
+    /// Apply the blob directly, without a store or a screen.
     #[test]
     fn a_new_shortcut_lands_in_the_blob_and_the_first_empty_slot() {
         let blob = r#"{"v":2,"ring":["end_stream",null,null,null,null,null]}"#;

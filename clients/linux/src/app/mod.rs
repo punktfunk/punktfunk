@@ -1,9 +1,9 @@
 //! The application shell as a relm4 component tree: [`AppModel`] owns the window, the
 //! [`Store`], navigation, and the spawned session children's lives. Hosts and Library are
-//! child components, the two destinations of one view stack (design §2.1); dialogs are plain
-//! GTK invoked from `update`. The connect flow is in `connect.rs`, host requests beside a
-//! stream in `host_ops.rs`. Every stream runs in the `punktfunk-session` Vulkan binary —
-//! the shell never touches video.
+//! child components, the two destinations of one view stack
+//! (design/linux-client-overhaul.md §2.1); dialogs are plain GTK invoked from `update`. The
+//! connect flow is in `connect.rs`, host requests beside a stream in `host_ops.rs`. Every
+//! stream runs in the `punktfunk-session` Vulkan binary — the shell never touches video.
 
 mod connect;
 pub mod gate;
@@ -252,10 +252,10 @@ impl SimpleComponent for AppModel {
             None if crate::shots::shot_scene().is_none() => remember_size(&window, &store),
             None => {}
         }
-        // Recolour the shell from the desktop theme (Omarchy only; one stat everywhere else).
-        // Every colour in `data/style.css` resolves through libadwaita's named palette, so
-        // redefining those names is all it takes. After the settings load, because the
-        // "Follow the Omarchy theme" switch decides whether it draws.
+        // Recolour the shell from the desktop theme (Omarchy only; one stat elsewhere).
+        // `data/style.css` takes its colours from libadwaita's named palette (scrims and preset
+        // swatches are fixed literals), so redefining those names is all it takes. After the
+        // settings load: the "Follow the Omarchy theme" switch decides whether it draws.
         crate::desktop::omarchy::install(store.settings().follow_os_theme);
         // Device lists for the settings pickers: probe in the background, ready long
         // before the dialog opens. A missing session binary or absent PipeWire just
@@ -417,8 +417,7 @@ impl SimpleComponent for AppModel {
         }
 
         // CI screenshot mode: dispatch the scripted scene once the window is actually
-        // mapped (AdwDialogs need a live window; relm4 maps it after `init` returns, so
-        // this can't run inline like the pre-relm4 `activate` path did).
+        // mapped. AdwDialogs need a live window, and relm4 maps it after `init` returns.
         if let Some(scene) = crate::shots::shot_scene() {
             let ctx = crate::shots::ShotCtx {
                 window: model.window.clone(),
@@ -734,9 +733,9 @@ thread_local! {
     /// main thread: `connect_open` fires there, and so does the model's `init`.
     static LINK_TX: std::cell::RefCell<Option<relm4::Sender<AppMsg>>> =
         const { std::cell::RefCell::new(None) };
-    /// URLs that arrived before the model existed — the cold-start case, where GApplication
-    /// runs `open` before `activate` builds the window. A dropped URL is the one outcome a
-    /// link must never have, so they wait here instead.
+    /// URLs delivered before the model exists. relm4 builds the model on `startup`, which
+    /// GApplication emits before `open`; a dropped URL is the one outcome a link must never
+    /// have, so an early one waits here instead.
     static PENDING_LINKS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -812,10 +811,9 @@ pub fn run() -> glib::ExitCode {
     if let Some(code) = crate::cli::headless_host_command() {
         return code;
     }
-    // Streams and the console library live in the session binary now — exec it,
-    // forwarding the relevant argv (the Decky wrapper keeps working through the shell
-    // until it's repointed).
-    // `--browse` may be bare now (the console home — hosts, pairing, settings), so the
+    // Streams and the console library live in the session binary — exec it, forwarding the
+    // relevant argv (the Decky wrapper launches this shell with `--browse`).
+    // `--browse` may be bare (the console home — hosts, pairing, settings), so the
     // gate is the flag, not a value after it.
     if crate::cli::arg_value("--connect").is_some()
         || crate::cli::arg_flag("--browse")
@@ -843,7 +841,7 @@ pub fn run() -> glib::ExitCode {
         for f in files {
             deliver_deep_link(f.uri().to_string());
         }
-        // `open` does not raise a window on its own; the model's activate handler does.
+        // `open` does not raise a window on its own; relm4's activate handler does.
         app.activate();
     });
     // One SDL context for the whole process, started while single-threaded.

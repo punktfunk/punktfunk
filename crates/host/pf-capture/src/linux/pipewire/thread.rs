@@ -92,7 +92,7 @@ pub(super) fn pipewire_thread(
     // Lazy driver (PipeWire ≥ 1.2.7 "headless server" scheduling): the producer paints only
     // in a graph cycle this stream starts, so the encode loop owns the tick and no second
     // clock beats against it. Only a producer that emits RequestProcess (Mutter ≥ 49 virtual
-    // monitors) may be driven this way; any other stays the driver as before.
+    // monitors) may be driven this way; any other stays the driver.
     let probe = probe_producer(&core, &mainloop, cfg.node_id);
     let lazy = cfg.opts.lazy && probe.supports_request;
     if quit_seen.get() {
@@ -468,8 +468,8 @@ fn log_resolved_arm(cfg: &StreamConfig, offer: &Offer, ladder: &Ladder) {
     } else if consumer.cpu_is_downgrade() {
         // No dmabuf advertised: this is the CPU path. `raw_dmabuf_latched` already caught a
         // latched downgrade. Warn for every GPU consumer; software wants CPU frames.
-        // `consumer_kind` is per-session so a PyroWave session on an NVIDIA host still warns
-        // (the host-global encoder pref would have called it NVENC and logged nothing).
+        // `consumer_kind` is per-session, so a PyroWave session on an NVIDIA host warns as
+        // PyroWave, not NVENC.
         tracing::warn!(
             consumer = consumer.as_str(),
             "{} encode with the CPU capture path (per-frame de-pad + CSC + upload) — \
@@ -793,11 +793,11 @@ fn on_param_changed(ud: &mut UserData, id: u32, param: Option<&Pod>) {
 }
 
 /// `.process`, over the buffers of the stream that runs it: latest frame only. The newest
-/// buffer passes the birth gate, then a stale-frame skip, then [`consume_frame`]. It is
-/// requeued exactly once, unless a hold took it: then the hold owns the requeue
-/// ([`PoolLedger::done`]), and doing both hands the producer the buffer twice. Dequeue and
-/// requeue stay outside `catch_unwind`, where a panic would strand the buffer and shrink the
-/// fixed pool.
+/// buffer passes the birth gate, a stale-frame skip and the damage gate, then
+/// [`consume_frame`]. It is requeued exactly once, unless a hold took it: then the hold owns
+/// the requeue ([`PoolLedger::done`]), and doing both hands the producer the buffer twice.
+/// Dequeue and requeue stay outside `catch_unwind`, where a panic would strand the buffer and
+/// shrink the fixed pool.
 fn on_process(stream: &dyn StreamBuffers, ud: &mut UserData) {
     let Some((newest, drained)) = drain_to_newest(stream, ud) else {
         return;
@@ -993,10 +993,10 @@ fn drain_to_newest(
 /// (the real mode never applied).
 const GATE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// Sacrificial birth mode (kwin.rs `create`): frame and cursor meta are in the doomed size
-/// until renegotiation, so `false` holds this buffer back. Self-disarms on the expected size,
-/// or after [`GATE_DEADLINE`]: degraded dims beat a first-frame-timeout retry loop if the
-/// promised renegotiation never comes.
+/// Sacrificial birth mode (`create` in pf-vdisplay's `kwin/mod.rs`): frame and cursor meta
+/// are in the doomed size until renegotiation, so `false` holds this buffer back.
+/// Self-disarms on the expected size, or after [`GATE_DEADLINE`]: degraded dims beat a
+/// first-frame-timeout retry loop if the promised renegotiation never comes.
 fn birth_gate(ud: &mut UserData) -> bool {
     let Some((ew, eh)) = ud.expect_dims else {
         return true;

@@ -102,15 +102,16 @@ data class ActiveSession(
     val launchedFromLibrary: Boolean = false,
     /**
      * Which of [hostId]'s shelves that library launch came off: the pinned host+preset card's
-     * preset id (design §5.2a), or null for the host's own tile. Carried purely so the return
-     * trip above lands back on the SAME shelf — a player who launched from a pinned card is still
-     * on that card when the game exits, and coming back to the host's default shelf would silently
-     * change what the next title streams with.
+     * preset id (`client-settings-profiles.md` §5.2a), or null for the host's own tile. Carried
+     * purely so the return trip above lands back on the SAME shelf — a player who launched from a
+     * pinned card is still on that card when the game exits, and coming back to the host's
+     * default shelf would silently change what the next title streams with.
      */
     val libraryPresetId: String? = null,
     /**
      * The launched title whose game is not up yet: the stream screen veils the picture with its
-     * poster until the host reports the game running. Null for a desktop connect or a launcher tile.
+     * poster until the host reports the game running. Null for a desktop connect, a launcher tile
+     * or a launch from the console shelf, which holds its own.
      */
     val launchHold: LaunchHold? = null,
     /** The dial that started this session, for a redial after the connection is lost. */
@@ -119,8 +120,8 @@ data class ActiveSession(
 
 /**
  * A held launch: where to ask after it (the shelf's host, on the management lane) and the tile its
- * cover flies out of. [sourceRect] is in window coordinates and null when the launch came off
- * something with no tile — the console shelf, which the Rust shell draws.
+ * cover flies out of. [sourceRect] is in window coordinates and null when no usable frame was
+ * recorded for the tile (`TileFrames.rect`).
  */
 data class LaunchHold(
     val game: GameEntry,

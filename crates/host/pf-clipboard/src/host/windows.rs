@@ -552,7 +552,7 @@ fn convert_from_win(wire: &str, raw: Vec<u8>) -> Vec<u8> {
         WIRE_TEXT => winfmt::text_from_utf16(&raw),
         WIRE_HTML => winfmt::html_from_cf(&raw),
         WIRE_RTF => winfmt::rtf_from_cf(&raw),
-        _ => raw, // PNG and unknown: identity
+        _ => raw, // PNG/JPEG/GIF and unknown: identity
     }
 }
 
@@ -560,7 +560,7 @@ fn convert_to_win(wire: &str, wire_bytes: &[u8]) -> Vec<u8> {
     match wire {
         WIRE_TEXT => winfmt::text_to_utf16(wire_bytes),
         WIRE_HTML => winfmt::html_to_cf(wire_bytes),
-        _ => wire_bytes.to_vec(), // RTF/PNG and unknown: identity
+        _ => wire_bytes.to_vec(), // RTF/PNG/JPEG/GIF and unknown: identity
     }
 }
 
@@ -697,8 +697,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     }
     // SAFETY: `ptr` is the live Box<WinClip> leaked in pump_thread, owned by this (the only) message
-    // thread and freed only after the pump exits; the WndProc is not re-entered for this window, so
-    // `&*ptr` is a valid shared borrow.
+    // thread and freed only after the pump exits, so `&*ptr` is a valid shared borrow. A nested
+    // call (DestroyWindow sends WM_DESTROY) adds another; each mutable field is a RefCell/Mutex.
     let st = unsafe { &*ptr };
     match msg {
         WM_CLIPBOARDUPDATE => {

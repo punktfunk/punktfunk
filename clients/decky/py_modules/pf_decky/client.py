@@ -357,7 +357,8 @@ def _pair_failure(rc: int, out: str, err: str, fallback: str) -> dict:
 async def discover() -> dict:
     """The LAN's hosts (``punktfunk discover --json``): ``{ok, hosts: [{name, addr, port, fp,
     pair, id, mgmt, os, saved, paired}]}``. 12 s covers a cold flatpak start on top of the CLI's
-    3 s browse. A client with the verb never exits 5 from it, so 5 is ``client-outdated``."""
+    browse (``DISCOVER_DEFAULT_SECS``). A client with the verb never exits 5 from it, so 5 is
+    ``client-outdated``."""
     return await _cli_json(["discover", "--json"], timeout=12.0, outdated_rc=(5,))
 
 
@@ -396,12 +397,12 @@ async def pair(addr: str, port: int, pin: str, name: str) -> dict:
 async def request_access(addr: str, port: int, name: str, fp: str) -> dict:
     """No-PIN pairing (``punktfunk pair <addr:port> --request-access --name LABEL --fp HEX``).
 
-    Waits up to ~185 s for the host's operator, pinned to ``fp``, the fingerprint the host
-    advertised and :func:`trust_host` saved. Without it the CLI takes the newest record at the
-    address, which at a dual-boot box can be the other OS. Never streams. Same result as
-    :func:`pair`, plus ``bad-fingerprint`` for an ``fp`` that is not 64 hex digits. A client too
-    old for the flag asks for a PIN and exits 6, which a current one never does here:
-    ``client-outdated``.
+    Waits for the host's operator (``REQUEST_ACCESS_TIMEOUT`` in ``pf_client_core``), pinned to
+    ``fp``, the fingerprint the host advertised and :func:`trust_host` saved. Without it the CLI
+    takes the newest record at the address, which at a dual-boot box can be the other OS. Never
+    streams. Same result as :func:`pair`, plus ``bad-fingerprint`` for an ``fp`` that is not 64
+    hex digits. A client too old for the flag asks for a PIN and exits 6, which a current one
+    never does here: ``client-outdated``.
     """
     fp = str(fp).strip()
     if fp and not re.fullmatch(r"[0-9a-fA-F]{64}", fp):
@@ -430,10 +431,9 @@ async def trust_host(addr: str, port: int, fp: str, name: str) -> dict:
     """Step 1 of request access: save the host pinned to the fingerprint it ADVERTISED, unpaired
     (``punktfunk hosts add <addr:port> --fp <hex> --name <label>``).
 
-    The launch that follows pins the same fingerprint, so the 185 s wait for an operator cannot be
+    The launch that follows pins the same fingerprint, so the wait for an operator cannot be
     answered by an impostor. Idempotent; a DIFFERENT fingerprint comes back ``refused`` and is
-    never overwritten. The only write this backend makes to the client's store, and the CLI makes
-    it.
+    never overwritten. The CLI makes the write; this backend never opens the client's store.
     """
     args = ["hosts", "add", f"{addr}:{int(port)}", "--fp", fp.strip()]
     if name.strip():
@@ -468,9 +468,10 @@ async def profiles(ref: str) -> dict:
 
 
 async def wake(ref: str) -> dict:
-    """Wake a saved host and wait for it (``punktfunk wake <host-ref> --wait``): a packet every
-    6 s, up to 90 s. ``{ok: True}`` once it answers; ``unresolved`` when no MAC is known,
-    ``unreachable`` when it never came up. A flag-shaped ref is refused, as in :func:`library`."""
+    """Wake a saved host and wait for it (``punktfunk wake <host-ref> --wait``), which resends
+    every ``WAKE_RESEND_SECS`` and gives up after ``WAKE_TIMEOUT_SECS`` (``pf_client_core``).
+    ``{ok: True}`` once it answers; ``unresolved`` when no MAC is known, ``unreachable`` when it
+    never came up. A flag-shaped ref is refused, as in :func:`library`."""
     ref = str(ref).strip()
     if not ref or ref.startswith("-"):
         return {"ok": False, "error": "unresolved"}

@@ -561,8 +561,8 @@ async fn plugin_token_lane_is_scoped_and_loopback_only() {
         StatusCode::NO_CONTENT
     );
 
-    // The runner's only token (Windows LocalService cannot read the admin one). Pin ingest
-    // here; do not rely on `plugin_may_access` continuing not to match `/plugins/logs`.
+    // The runner's only token (Windows LocalService cannot read the admin one), so log ingest
+    // must take it.
     let body = serde_json::json!({"entries": [{
         "ts_ms": 1_700_000_000_000u64,
         "level": "INFO",

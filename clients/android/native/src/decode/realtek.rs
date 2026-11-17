@@ -18,7 +18,7 @@ const LIB: &str = "lib64";
 #[cfg(not(target_pointer_width = "64"))]
 const LIB: &str = "lib";
 
-/// A configure with the key failed in this process: it is not set again.
+/// A configure or start with the key failed in this process: it is not set again.
 static REFUSED: AtomicBool = AtomicBool::new(false);
 
 /// Whether the file at `path` holds `needle`; `None` when it cannot be read.
@@ -44,7 +44,7 @@ pub(super) fn probe() -> (Option<bool>, Option<bool>) {
 }
 
 /// Whether `codec_name` is configured with [`KEY`]: a Realtek decoder under a framework that
-/// reads the key, until a configure with it fails.
+/// reads the key, until a configure or start with it fails.
 pub(super) fn low_delay(codec_name: &str) -> bool {
     is_realtek(codec_name) && probe().0 == Some(true) && !REFUSED.load(Ordering::Relaxed)
 }

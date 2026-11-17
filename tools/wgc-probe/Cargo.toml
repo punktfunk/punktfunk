@@ -1,6 +1,6 @@
 # What Windows Graphics Capture does on this box: the spikes of punktfunk-planning
 # `design/windows-wgc-capture.md` §7 as one command. It opens a monitor the way the capture worker
-# will (a user process a SYSTEM parent started), then reports stage timings, the first frame, the
+# does (a user process a SYSTEM parent started), then reports stage timings, the first frame, the
 # delivered rate, each frame's age and whether the pointer is in the picture.
 [package]
 name = "wgc-probe"

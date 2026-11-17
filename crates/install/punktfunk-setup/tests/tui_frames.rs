@@ -98,7 +98,7 @@ fn the_cursor_lands_on_the_row_it_was_moved_to() {
 
 #[test]
 fn editing_moonlight_compat_adds_the_firewall_step() {
-    // Down×4: Moonlight compat. Enter opens, Up picks yes, Enter accepts.
+    // Down×4: the Third-party clients row. Enter opens, Up picks yes, Enter accepts.
     // Cursor stays on that row; walk back up to the action and install.
     let keys = [
         Key::Down,
@@ -328,7 +328,7 @@ fn verbose_keeps_the_command_transcript() {
     assert!(all.contains("installed"), "{all}");
 }
 
-/// The step a fresh host install ends on. Enter takes the generated password, and the frame
+/// The password step of a fresh host install. Enter takes the generated password, and the frame
 /// it was taken from names the command that prints it.
 fn ask_password(keys: &[Key]) -> (Option<String>, Vec<String>) {
     ask_password_at(Some("192.168.1.10"), keys)

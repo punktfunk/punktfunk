@@ -116,7 +116,7 @@ pub(crate) struct RenameClient {
     ///
     /// Scrubbed with the native-plane sanitizer: control characters and Unicode bidi
     /// overrides stripped (one device could impersonate another in this list), whitespace
-    /// collapsed, capped at 64 characters.
+    /// collapsed, capped at 64 bytes of UTF-8.
     #[schema(example = "Living Room TV")]
     label: Option<String>,
 }
@@ -153,8 +153,8 @@ pub(crate) async fn rename_client(
             "fingerprint must be the 64-char hex SHA-256 of the client certificate DER",
         );
     }
-    // A label for an unknown fingerprint is invisible and sits in the file forever: unpair
-    // cleanup only removes labels whose device was paired.
+    // A label for an unknown fingerprint is invisible and sits in the file until the next
+    // unpair prunes every label whose device is no longer paired.
     let paired = st.app.paired.lock().unwrap_or_else(|e| e.into_inner());
     let Some(der) = paired
         .iter()

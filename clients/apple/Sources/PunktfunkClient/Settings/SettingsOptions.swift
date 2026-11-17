@@ -29,22 +29,19 @@ enum SettingsOptions {
     ]
 
     /// Audio format (`DefaultsKey.audioFormat`) — the `tag` is an `AudioFormatChoice` raw value.
-    /// Standard is the default; every lossless row is a per-session opt-in that spends real
-    /// bandwidth outside the ABR loop, and the host has its own switch which is also off by
-    /// default.
+    /// The default is `SettingDefault.audioFormat`; every lossless row is a per-session opt-in
+    /// that spends real bandwidth outside the ABR loop, and the host has its own switch
+    /// (`PUNKTFUNK_AUDIO_HIRES`).
     ///
     /// Ordered by rate rather than by family, because that is the order a listener reads a rate
     /// ladder in — the two families interleave (44.1, 48, 88.2, 96, 176.4) and grouping them would
     /// put 88.2 above 48.
     ///
-    /// **Offered at every channel count**, unlike before. This picker used to be hidden unless the
-    /// session was stereo, on the grounds that a surround frame does not fit one datagram — but the
-    /// frame ladder is sized per channel count (`pcm::frame_us_for`), so 5.1 and 7.1 simply
-    /// negotiate SHORTER frames: 48 kHz/16-bit 5.1 lands around 2 ms and 48/24 shorter still, which
-    /// is a higher packet rate rather than an impossibility. What genuinely fits no rung at the
-    /// default MTU is surround above 48 kHz, and the honest treatment of that is the caption plus
-    /// the host's own decline — not a hidden row, which silently discards a choice the user made
-    /// and explains nothing.
+    /// **Offered at every channel count.** The frame ladder is sized per channel count
+    /// (`pcm::frame_us_for`), so 5.1 and 7.1 negotiate shorter frames, or frames sent in parts
+    /// (`pcm::parted_frame_us_for`). Only 7.1 at 176.4 kHz fits neither, and the honest treatment
+    /// of that is the caption plus the host's own decline — not a hidden row, which silently
+    /// discards a choice the user made and explains nothing.
     static let audioFormats: [(label: String, tag: String)] = [
         (String(localized: L10n.playerAudioFormatOpus), AudioFormatChoice.opus.rawValue),
         (String(localized: L10n.playerAudioFormatLossless441),
@@ -82,15 +79,15 @@ enum SettingsOptions {
     }
 
     /// System-button routing (the cross-client `system_buttons` key): where the guide
-    /// (Xbox/PS) and share presses land while streaming. Auto = forward on Apple.
+    /// (Xbox/PS) and share presses land while streaming. What Auto does is decided in
+    /// `EffectiveSettings.systemButtonsForward`.
     static let systemButtons: [(label: String, tag: String)] = [
         (String(localized: L10n.playerSystemButtonsAuto), "auto"),
         (String(localized: L10n.playerSystemButtonsForward), "forward"),
         (String(localized: L10n.playerSystemButtonsLocal), "local"),
     ]
 
-    /// The hold-Select guide gesture (the cross-client `guide_gesture` key). Auto = on
-    /// everywhere but macOS.
+    /// The stats overlay's corner (`DefaultsKey.hudPlacement`) — the `tag` is the raw value.
     static let hudPlacements: [(label: String, tag: String)] =
         HUDPlacement.allCases.map { ($0.label, $0.rawValue) }
 
@@ -114,19 +111,18 @@ enum SettingsOptions {
         (String(localized: L10n.playerGamepadUiModeAlways), GamepadUIEnvironment.modeAlways),
     ]
 
-    /// Presentation intent (`DefaultsKey.presentPriority` — the 2026-07 rebuild that replaced
-    /// the visible stage picker with intent; see SessionPresenter's PresentPriority and
-    /// design/apple-presentation-rebuild.md). The stage ladder survives only as the hidden
-    /// PUNKTFUNK_PRESENTER debug env lever.
+    /// Presentation intent (`DefaultsKey.presentPriority`; see SessionPresenter's
+    /// PresentPriority and design/apple-presentation-rebuild.md). The stage ladder is reachable
+    /// only through the hidden PUNKTFUNK_PRESENTER debug env lever.
     static let presentPriorities: [(label: String, tag: String)] = [
         (String(localized: L10n.playerPresentPriorityLatency), "latency"),
         (String(localized: L10n.playerPresentPrioritySmooth), "smooth"),
     ]
 
-    /// Smoothness's jitter-buffer sizes (`DefaultsKey.smoothBuffer`; 0 = Automatic, currently 2
-    /// frames). The ms hints derive from the chosen refresh setting — each buffered frame costs
-    /// about one refresh interval of display latency and absorbs about one interval of arrival
-    /// jitter.
+    /// Smoothness's jitter-buffer sizes (`DefaultsKey.smoothBuffer`; 0 = Automatic, resolved by
+    /// `PresentPriority.resolve`). The ms hints derive from the chosen refresh setting — each
+    /// buffered frame costs about one refresh interval of display latency and absorbs about one
+    /// interval of arrival jitter.
     static func smoothBuffers(refreshHz: Int) -> [(label: String, tag: Int)] {
         let periodMs = 1000.0 / Double(max(24, refreshHz))
         func cost(_ frames: Int) -> String {
@@ -149,7 +145,7 @@ enum SettingsOptions {
     /// AV1 appears only on devices with an AV1 hardware decoder (the same
     /// `AV1.hardwareDecodeSupported` gate SessionModel advertises by) — elsewhere it would be a
     /// dead setting the host could never honor. Ordered by the host's resolve precedence
-    /// (HEVC > AV1 > H.264).
+    /// (`resolve_codec` in punktfunk-core's `quic/caps.rs`).
     ///
     /// [current] is the stored value, kept listed even when this device can't decode it — a
     /// preset made on another device carries one here — and then labelled with the reason.
@@ -165,10 +161,9 @@ enum SettingsOptions {
         } else if current == "av1" {
             options.insert((String(localized: L10n.playerCodecAv1Unsupported), "av1"), at: 2)
         }
-        // PyroWave is the opt-in wired-LAN low-latency codec (100–400 Mbps all-intra wavelet,
-        // 8-bit SDR): selecting it advertises + prefers it for the session. Offered only when
-        // the Metal decode probe passes (same gate SessionModel advertises by) — elsewhere the
-        // host could never emit it.
+        // PyroWave is the opt-in wired-LAN low-latency codec (all-intra wavelet): selecting it
+        // advertises + prefers it for the session. Offered only when the Metal decode probe
+        // passes (same gate SessionModel advertises by) — elsewhere the host could never emit it.
         if MetalWaveletDecoder.supported {
             options.append((String(localized: L10n.playerCodecPyrowave), "pyrowave"))
         } else if current == "pyrowave" {
@@ -180,8 +175,8 @@ enum SettingsOptions {
     // MARK: - Bitrate
 
     /// Discrete bitrate steps for the surfaces with no Slider (tvOS pushed pickers, the gamepad
-    /// settings' left/right cycling), up to the same 3 Gbit/s ceiling the slider has. 5 Mbit/s
-    /// apart to 50, where most links settle.
+    /// settings' left/right cycling), up to the slider's ceiling (`BitrateScale.maxKbps`).
+    /// 5 Mbit/s apart to 50, where most links settle.
     static let bitratePresets: [(label: String, tag: Int)] =
         [(label: String(localized: L10n.playerBitrateKbpsAutomatic), tag: 0)]
         + bitrateSteps.map { (label: PyroWaveQuality.rateLabel(kbps: UInt32($0)), tag: $0) }
@@ -197,7 +192,7 @@ enum SettingsOptions {
         !bitratePresets.contains { $0.tag == kbps }
     }
 
-    /// A typed rate in whole Mbit/s as kbps, capped at the slider's 3 Gbit/s top. nil for empty or
+    /// A typed rate in whole Mbit/s as kbps, capped at the slider's top. nil for empty or
     /// `0`, which leave the stored rate alone — Automatic is a list entry, not a number.
     static func customBitrateKbps(_ text: String) -> Int? {
         // Nine digits always fit an Int: a longer entry is past the cap anyway.

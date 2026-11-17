@@ -159,9 +159,9 @@ pub(super) fn on_seat(path: &str, marker: &str, own: bool) -> String {
     stdout.into_owned()
 }
 
-/// What each lane that existed before the person's own got on a person's own account: hooks,
-/// command titles, the store, folder decisions and emulator writes are refused on every one, a
-/// prep step runs nothing, and the box's command tile is not listed.
+/// What every lane but the person's own gets on a person's own account: hooks, command titles,
+/// the store, folder decisions and emulator writes are refused on every one, a prep step runs
+/// nothing, and the box's command tile is not listed.
 #[tokio::test]
 async fn every_lane_keeps_its_refusals_on_a_person_s_own_account() {
     use serde_json::json;

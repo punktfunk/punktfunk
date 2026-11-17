@@ -2,14 +2,14 @@
 //
 // The packaged runner bundles its OWN copy of effect + the SDK; a plugin package's imports
 // resolve to the plugin's node_modules. An Effect-shaped `main` would therefore hand the
-// runner Effect values built by a different effect instance (Context.Tag identity is not
+// runner Effect values built by a different effect instance (Context.Service identity is not
 // shared across instances). The kit sidesteps this by construction: the plugin exports a
 // plain async `main`, and EVERYTHING Effect happens inside a ManagedRuntime built from the
 // plugin's own effect instance. Only the plain `pf` facade object crosses the boundary.
 //
 // Shutdown: the runner interrupts its supervision tree on SIGINT/SIGTERM, but it cannot
 // cancel an in-flight promise — so the kit installs its own signal hooks, interrupts the
-// plugin fiber (running scoped finalizers: UI deregistration, watcher close, cache flush)
+// plugin fiber (running scoped finalizers: UI deregistration, watcher close, reporter close)
 // and bounds the whole teardown with `shutdownGraceMs` so `main` always resolves.
 import {
 	connect,

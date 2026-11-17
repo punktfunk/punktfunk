@@ -19,8 +19,8 @@ import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Generic USB transport for a client-captured HID controller — the device-agnostic half of what
- * [Sc2UsbLink] pioneered, now shared with the Sony capture ([DsCapture]). Claims the controller
+ * Generic USB transport for a client-captured HID controller — the device-agnostic half shared by
+ * [Sc2UsbLink] and the Sony capture ([DsCapture]). Claims the controller
  * interface(s) — `force = true` detaches the kernel/OS driver, so a captured pad can't
  * double-drive the ordinary InputDevice path — runs a multiplexed [UsbRequest] read loop, and
  * writes the host/capture's reports back to the device (interrupt-OUT when the interface has one,
@@ -30,8 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * to claim, and an optional keep-alive (feature reports re-sent on a firmware-watchdog cadence —
  * the SC2's lizard-mode refresh; a DualSense needs none).
  *
- * **Unplug is signalled, never inferred from silence:** a quiet controller is not a missing one
- * (an SC2 on-glass round tripped exactly this — a 5 s silence heuristic firing on an idle pad).
+ * **Unplug is signalled, never inferred from silence:** a quiet controller is not a missing one.
  * The real signals are [UsbManager.ACTION_USB_DEVICE_DETACHED] for this device, or `requestWait`
  * returning sustained hard errors (every transfer fails instantly once the fd is dead).
  */
@@ -368,11 +367,10 @@ class HidUsbLink(
      * broadcast (main thread) or the reader thread on its way out.
      *
      * This only *signals*; releasing the connection and the interfaces stays the owner's job, via
-     * the [stop] its `onClosed` handler calls. Previously nothing released them on this path: the
-     * detach receiver flipped a flag and fired the callback, so an unplug left the connection open,
-     * the interfaces claimed (the pad could not return to Android's own input stack) and the
-     * receiver still registered — and a re-plug overwrote the field holding it, leaking a receiver
-     * that stayed live for the process's lifetime.
+     * the [stop] its `onClosed` handler calls. Without that call an unplug leaves the connection
+     * open, the interfaces claimed (the pad cannot return to Android's own input stack) and the
+     * detach receiver registered; a re-plug's [start] then overwrites its field, leaking it for
+     * the process's lifetime.
      */
     private fun linkDown() {
         running = false
@@ -491,8 +489,9 @@ class HidUsbLink(
      * ⚠ **Once, at claim time; never per input report.** EP0 is independent of the interrupt
      * endpoints (see [sendReport]), so this is safe alongside the reader thread — but it BLOCKS the
      * calling thread for up to [WRITE_TIMEOUT_MS], and a blocking control transfer in the report
-     * path would wreck capture latency. The one caller reads a Sony pad's fixed motion calibration
-     * when the capture engages ([DsCapture]).
+     * path would wreck capture latency. The callers are [DsCapture]'s read of a Sony pad's fixed
+     * motion calibration and [Sc2UsbLink.exchange]'s read of a 2015 pad's query reply, both at
+     * claim time.
      */
     fun getReport(type: Int, id: Int, len: Int, iface: Int = ANY_IFACE): ByteArray? {
         if (len <= 0) return null

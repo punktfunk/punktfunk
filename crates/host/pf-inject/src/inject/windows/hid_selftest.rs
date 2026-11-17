@@ -3,7 +3,7 @@
 //! Drives each report kind while a hidden window records raw input and low-level hooks record
 //! the injected flag — the two checks anti-cheat runs. A `SendInput` move is the control and
 //! must read as injected. Needs the interactive desktop and the host service stopped (it owns
-//! the device's mailbox). It moves the pointer, clicks at the screen centre and types `a`.
+//! the device's mailbox). It moves the pointer, clicks near the screen centre and types `a`.
 
 use crate::mouse_windows::open_for_spike;
 use anyhow::{bail, Context, Result};

@@ -99,7 +99,8 @@ async fn native_unpair_all_empties_the_trust_store() {
     assert_eq!(body["unpaired"], 0);
 }
 
-/// No native plane → 503, matching every other `/native/*`. Not a 200 that claims an unpair.
+/// No native plane → 503, as every other `/native/*` write answers. Not a 200 that claims an
+/// unpair.
 #[tokio::test]
 async fn native_unpair_all_without_a_native_host_is_unavailable() {
     let app = test_app(test_state(), None);

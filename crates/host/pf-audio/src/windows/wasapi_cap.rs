@@ -250,8 +250,8 @@ fn capture_thread(
         let _ = ready.send(Err(e));
         return Ok(());
     }
-    // Must wake on the engine event every ~10 ms or the loopback buffer wraps. Same MMCSS +
-    // `THREAD_PRIORITY_HIGHEST` boost as the paced sender; a no-op if refused.
+    // Must wake on the engine event every ~10 ms or the loopback buffer wraps. MMCSS +
+    // `THREAD_PRIORITY_HIGHEST`, the capture/encode tier; a no-op if refused.
     pf_frame::thread_qos::boost_thread_priority(true);
     let mut live = LiveCapture::new();
     // Each pass is one plan, open and loop. First open gets [`FIRST_OPEN_ATTEMPTS`] tries
@@ -650,8 +650,8 @@ fn prepare_plan(mode: TargetMode) -> OpenPlan {
             }
         }
     }
-    // Last resort belongs to the plan's pick: a capture that follows the default never lands on
-    // Steam Speakers, because `judge_default` calls them `excluded_from_loopback`.
+    // Last resort belongs to the plan's pick. The watchdog follows a default only when
+    // `judge_default` passes it, which Steam Speakers never do; `keep_default` follows any.
     let last_resort = bind_plan && wired.wiring.loopback_last_resort;
     OpenPlan {
         wired,
@@ -1139,9 +1139,8 @@ enum DefaultKind {
     Unknown,
 }
 
-/// Resolve via [`super::pad_endpoint::open_wasapi_device`], not `DeviceEnumerator::get_device`:
-/// that handed `GetDevice` a freed string through 0.23, and a miss here silently downgrades a
-/// capturable default to `Unknown`. Keep one resolution path — see the helper.
+/// Resolve via [`super::pad_endpoint::open_wasapi_device`], the one resolution path: a miss
+/// here silently downgrades a capturable default to `Unknown`.
 fn judge_default(wiring: &wiring_plan::Wiring, id: &str) -> DefaultKind {
     let Ok(dev) = super::pad_endpoint::open_wasapi_device(id) else {
         return DefaultKind::Unknown;
@@ -1168,7 +1167,7 @@ fn judge_default(wiring: &wiring_plan::Wiring, id: &str) -> DefaultKind {
 mod tests {
     use super::*;
 
-    /// The seat rule may only add plan binding. Every console verdict is what it always was.
+    /// The seat rule may only add plan binding. Off a seat, both are `Assert && !keep_default`.
     #[test]
     fn a_seat_binds_the_plan_and_still_parks_nothing() {
         for keep in [false, true] {

@@ -34,12 +34,13 @@ import {
  *
  * Defaults are Full control · Forever (D1): pairing your OWN new device is the common case, and a
  * default-limited dialog trains reflexive clicking-through. The guest case gets its own
- * affordance instead — "Approve as guest" (Controller only · 4 h) is one click here, two from the
- * pending row, and the expiry cleans up after the evening on its own.
+ * affordance instead — "Approve as guest" (Controller only, expiring after `GUEST_EXPIRES_SECS`)
+ * is one click here, two from the pending row, and the expiry cleans up after the evening on its
+ * own.
  *
  * `device` is the row SNAPSHOT taken when the dialog opened, not the live polled row — the
- * pending list refetches every 10 s, and a fresh object identity mid-edit must not reset the
- * operator's typing.
+ * pending list is polled, and a fresh object identity mid-edit must not reset the operator's
+ * typing.
  */
 export const ApproveDialog: FC<{
 	/** The device being approved, or null when the dialog is closed. */
@@ -186,7 +187,8 @@ export const ApproveDialog: FC<{
 					</form>
 
 					{/* The guest fast path — visually its own thing, deliberately not one of the footer
-					    buttons: one click grants Controller only for 4 hours, no dialog fiddling. */}
+					    buttons: one click grants Controller only for `GUEST_EXPIRES_SECS`, no dialog
+					    fiddling. */}
 					<div className="flex items-center justify-between gap-3 rounded-md border p-3">
 						<p className="text-xs text-muted-foreground">
 							{m.pairing_approve_guest_hint()}

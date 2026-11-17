@@ -137,7 +137,7 @@ fun StreamScreen(
     // courtesy mirror of what the host enforces: seeded from the Welcome's advert here, kept live
     // by the 1 Hz poll below (the host's AccessUpdate messages fold latest-wins into the native
     // state). Full control + permanent — the only state an old host or an old native lib ever
-    // reports — gates nothing and draws nothing: today's look, unchanged.
+    // reports — gates nothing and draws nothing.
     val initialAccess = remember(handle) { NativeBridge.nativeAccessState(handle) }
     // The Compose state the session's peripherals write (see [StreamUi]). Seeded here, before any
     // source reads the host's touchpad: core answers that from the invert flag.
@@ -170,7 +170,6 @@ fun StreamScreen(
     }
     // The start-of-stream banner: what this session's shortcuts ARE, said once.
     val banner = rememberStartBanner(handle)
-    // Touch model is fixed per session (re-keys the gesture handler below if it ever changes).
     // Passthrough needs a host that injects touch; without the bit every contact would vanish, so
     // the session runs the trackpad model instead and `touchHint` below says so, once.
     val touchUnsupported = remember(handle) {
@@ -200,8 +199,8 @@ fun StreamScreen(
         ?: VideoFrame(videoFit, requestedMode.getOrElse(0) { 0 }, requestedMode.getOrElse(1) { 0 })
     val haptics = rememberConsoleHaptics()
     val overlayCfg = remember(initialSettings.overlayActions) { OverlayConfig.parse(initialSettings.overlayActions) }
-    // TV form factor (leanback): the decoder actively switches the HDMI output mode to the stream
-    // refresh; a phone/tablet gets the softer seamless frame-rate hint instead.
+    // TV form factor (leanback): the frame-rate vote may switch a TV's mode non-seamlessly only in
+    // low-latency mode, a phone/tablet's always (`DecodeOptions::force_rate_switch`).
     val isTv = remember { context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) }
     val isChromeOs = remember { context.packageManager.hasSystemFeature("org.chromium.arc") }
     // Focus anchor the soft keyboard is summoned onto AND the pointer-capture grab target (a grab
@@ -271,15 +270,15 @@ fun StreamScreen(
     val density = LocalDensity.current
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
     // The Second screen setting (off: a phone on a TV) keeps the pair from forming at all; a
-    // half-open fold then still takes the pad alone, as before the panel existed.
+    // half-open fold then still takes the pad alone.
     val secondScreen = initialSettings.secondScreen
     val fold = hinge?.let { foldSplit(it, rootSize) }
     val hingeCompanion = secondScreen && fold?.carriesCompanion(rootSize.height) == true
     val companionDisplay = rememberCompanionDisplay().takeIf { secondScreen && !hingeCompanion }
     val companionUp = hingeCompanion || companionDisplay != null
     // Spanning the picture needs the ASurfaceControl presenter's second layer: API 29 up, never
-    // ChromeOS. ponytail: a static gate; an ASC init failure elsewhere leaves the second window
-    // dark, which the pf-present log names.
+    // ChromeOS. A static gate: an ASC init failure elsewhere leaves the second window dark,
+    // which the pf-present log names.
     val spannable = remember { !isChromeOs && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q }
     // Which screen of the pair holds the picture — or both: the layout the player cycled to,
     // kept per second screen. A hinge's two halves are one display, so they share one key. A
@@ -403,10 +402,9 @@ fun StreamScreen(
     val streamedGame by rememberStreamedGame(handle, hostRecord, ring.committed)
     val scope = rememberCoroutineScope()
 
-    // The background keep-alive (Settings › General). Off — the default, and what every build
-    // before it did — means leaving the app ends the session. Never on a TV: the notification the
-    // End action lives on has nowhere to appear there, so a held session would be one nothing
-    // outside the app could stop.
+    // The background keep-alive (Settings › General). Off, the default, means leaving the app
+    // ends the session. Never on a TV: the notification the End action lives on has nowhere to
+    // appear there, so a held session would be one nothing outside the app could stop.
     val keepAliveSpan = keepAliveSpanMs(initialSettings, isTv)
 
     // Ending from a path that fires while the app is already away — minutes after the recomposer
@@ -471,8 +469,8 @@ fun StreamScreen(
     fun askModeFor(l: ScreenLayout) {
         val automatic = initialSettings.width <= 0 || initialSettings.height <= 0 || initialSettings.hz <= 0
         if (companionDisplay == null || modePicked || !automatic) return
-        // ponytail: the picture screen follows the KEPT layout, so a launch that spans over a
-        // kept swap asks at the second screen's width; the next cycle sets it right.
+        // The picture screen follows the KEPT layout, so a launch that spans over a kept swap
+        // asks at the second screen's width; the next cycle sets it right.
         val base = initialSettings.effectiveMode(context, spanned = l == ScreenLayout.SPANNED)
         val (mode, view) = initialSettings.streamAsk(base, null) { base }
         val (w, h, hz) = mode
@@ -579,8 +577,7 @@ fun StreamScreen(
             }
         },
         currentMode = { requestedMode },
-        // The ring picks the host's mode itself: a new size is shown at it, a rate pick keeps
-        // the view.
+        // The ring picks the host's mode itself; every pick keeps the host's view (`keepView`).
         requestMode = { w, h, hz ->
             modePicked = true
             // The ring's own rate is the one this session connected at, fraction and all; every
@@ -789,10 +786,9 @@ fun StreamScreen(
                             }
                         }
                     }
-                    // "Hold to quit" hint while the gamepad exit chord is armed — the exit debounces
-                    // on a ~1 s hold, so without this cue a couch user reads the (deliberately
-                    // no-longer-instant) chord as broken. Purely visual; it sits above the video and
-                    // below the gesture layer.
+                    // "Hold to quit" hint while the gamepad exit chord is armed — the exit fires
+                    // after a ~1 s hold, so without this cue a couch user reads the chord as
+                    // broken. Purely visual; it sits above the video and below the gesture layer.
                     if (ui.exitArming) {
                         OsdScaled { ExitChordHint(Modifier.align(Alignment.TopCenter).padding(top = 16.dp)) }
                     }
@@ -876,11 +872,10 @@ fun StreamScreen(
                     },
                 )
                 if (chrome) {
-                    // No standing mic element here: the in-stream control is deliberately absent until
-                    // the on-screen overlay UI lands and can carry it as one of its controls. Mute
-                    // itself is intact — the Select + Y chord toggles it, and the hint below is what
-                    // confirms the toggle: a toggle that showed nothing at all would be
-                    // indistinguishable from one that never registered.
+                    // No standing mic element here: mute is a slot in the quick-action ring and the
+                    // Select + Y chord, and the hint below is what confirms the toggle: a toggle
+                    // that showed nothing at all would be indistinguishable from one that never
+                    // registered.
                     // The virtual controller: above the gesture layer, so its controls take their
                     // fingers first and every other finger falls through; below the ring, whose scrim
                     // owns every finger while it is up. Composed only while shown (tenet 1) — and with
@@ -1032,10 +1027,8 @@ private fun TouchFallbackHint(modifier: Modifier = Modifier) {
  * when [start] has already run, which is the common case: Android remembers a grant for as long as
  * the device stays attached, so the dialog appears once per plug-in and never mid-stream after that.
  *
- * Shared by the Steam Controller 2 and Sony captures, whose bring-up differed only in the broadcast
- * action, the [requestCode] and the wording of the denial. Two copies of a permission handshake is
- * one copy too many: a fix to either — and the fix that made the grant intent MUTABLE was one —
- * has to be found and made twice.
+ * Shared by the Steam Controller 2 and Sony captures, which differ only in the broadcast action,
+ * the [requestCode] and the wording of the denial.
  */
 internal fun requestUsbCapture(
     context: Context,
@@ -1097,7 +1090,7 @@ private fun MicChordHint(text: String, modifier: Modifier = Modifier) {
  * countdown when the grant expires ("Controller only · 1 h 58 m left"). Same pill family as the
  * other in-stream overlays, sized down a step because it stands for the whole session rather than
  * flashing a moment's confirmation. Only composed when there is something to say: a full-control
- * permanent session — today's normal — shows nothing at all.
+ * permanent session shows nothing at all.
  */
 @Composable
 private fun AccessChip(text: String, modifier: Modifier = Modifier) {
@@ -1134,10 +1127,10 @@ private fun MotionUnreachableHint(modifier: Modifier = Modifier) {
 }
 
 /**
- * The "hold to quit" cue shown while the gamepad exit chord (Select + Start + L1 + R1) is held. The
- * chord no longer quits on a quick press — the router debounces it on a ~1 s hold — so this confirms
- * the press registered and tells the user to keep holding. Purely visual; [GamepadRouter.onExitArmed]
- * toggles its visibility.
+ * The "hold to quit" cue shown while the gamepad exit chord (by default Select + Start + L1 + R1)
+ * is held. The chord does not quit on a quick press — the router fires it after a ~1 s hold — so
+ * this confirms the press registered and tells the user to keep holding. Purely visual;
+ * [GamepadRouter.onExitArmed] toggles its visibility.
  */
 @Composable
 private fun ExitChordHint(modifier: Modifier = Modifier) {

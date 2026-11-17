@@ -12,7 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// the profile's home), the command the display runs for it, then reprieve, claim, prep and
 /// the launch hold. A title refused in the profile's view runs none of its prep. A title whose
 /// files never arrived is dropped and the client told why on `outcome`; the returned
-/// [`Prepared`](crate::session_launch::Prepared) has `declined` taken. `hdr`: the stream's.
+/// [`Prepared`](crate::session_launch::Prepared) has `declined` taken. `hdr`: the session's
+/// display is lit in HDR.
 pub(super) async fn prepare_launch(
     hello: &Hello,
     hdr: bool,

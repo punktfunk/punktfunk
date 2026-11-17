@@ -1,4 +1,4 @@
-//! Shared loss-recovery policy for the native NVENC, AMF, and QSV backends, read off the
+//! Shared loss-recovery policy for the native AMF and QSV backends, read off the
 //! session's [`knobs`](crate::knobs). Defaults stay with each backend (QSV LTR ~1/4 s, AMF
 //! ~1/2 s — tuning, not drift). API clamps stay at the call site (QSV `mfxU16` 8..=240).
 //! Sibling of `rfi.rs`, which owns the slot-recovery policy.

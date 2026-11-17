@@ -217,10 +217,10 @@ fn enable_inc_base_priority() {
     }
 }
 
-/// `gdi32!D3DKMTSetProcessSchedulingPriorityClass(process, prio)` by name (no
-/// stable windows-rs binding). Returns NTSTATUS (0 = success) or `None` if the
-/// export is missing. Caller must hold `SE_INC_BASE_PRIORITY` for HIGH/REALTIME;
-/// the kernel checks the caller whether the target is self or a child.
+/// `gdi32!D3DKMTSetProcessSchedulingPriorityClass(process, prio)` by name: windows-rs binds
+/// it only under `Wdk_Graphics_Direct3D`, a feature this crate leaves off. Returns NTSTATUS
+/// (0 = success) or `None` if the export is missing. Caller must hold `SE_INC_BASE_PRIORITY`
+/// for HIGH/REALTIME; the kernel checks the caller whether the target is self or a child.
 unsafe fn d3dkmt_set_scheduling_priority_class(
     process: windows::Win32::Foundation::HANDLE,
     prio: i32,
@@ -263,8 +263,8 @@ fn elevate_process_gpu_priority() {
 ///
 /// Process class is the cross-process lever; `SetGPUThreadPriority` alone does not
 /// unstarve encode under a GPU-bound game. It covers every GPU context the process owns,
-/// including ones a driver creates internally (NVENC's RGB→YUV pass). Default REALTIME;
-/// see [`configured_gpu_priority_mode`]. The kernel checks this caller's
+/// including ones a driver creates internally (NVENC's RGB→YUV pass). The class comes from
+/// [`configured_gpu_priority_mode`]. The kernel checks this caller's
 /// `SE_INC_BASE_PRIORITY`, so it no-ops under a UAC-filtered token.
 ///
 /// # Safety

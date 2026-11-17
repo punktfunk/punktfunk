@@ -64,19 +64,19 @@ export default defineEventHandler(async (event) => {
 const BODY_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
- * Rebuild a plugin's response before it goes out on the console's own origin.
+ * Rebuild a plugin's response before it goes out on the plugin origin.
  *
- * An ALLOWLIST, not a denylist. A plugin UI is proxied same-origin by design, so any header it
- * returns is asserted for the console itself — and the first version of this dropped four names it
- * had thought of. `Clear-Site-Data: "*"` from a plugin's error page was not one of them: the
- * browser would honour it for this origin and wipe `pf_session`, signing the operator out of the
- * console because a plugin 500'd. Same shape for a plugin-supplied `Content-Security-Policy`,
- * `X-Frame-Options` or `Access-Control-Allow-Origin` — all of which would speak for us.
+ * An ALLOWLIST, not a denylist. Any header a plugin returns goes out as this server's answer, so
+ * a name nobody thought of would speak for the console: `Clear-Site-Data: "*"` from a plugin's
+ * error page is honoured by the browser and can wipe `pf_session` (cookies are not scoped to a
+ * port), signing the operator out because a plugin 500'd. Same shape for a plugin-supplied
+ * `Content-Security-Policy`, `X-Frame-Options` or `Access-Control-Allow-Origin` — all of which
+ * would speak for us.
  *
  * So: name what a plugin page legitimately needs, and drop the rest. Framing headers
  * (content-encoding/length, transfer-encoding) are deliberately absent — `fetch` already decoded
- * the body, so re-emitting the plugin's originals made compressed pages fail to decode; ours are
- * recomputed.
+ * the body, so re-emitting the plugin's originals would make compressed pages fail to decode;
+ * ours are recomputed.
  */
 const PLUGIN_HEADER_ALLOWLIST = new Set([
 	"content-type",

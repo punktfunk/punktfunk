@@ -3,9 +3,9 @@
 # (crates/core/punktfunk-core/src/abr/sim/scenarios.rs). Sourced by rig.sh.
 #
 # Unmeasured in both tiers, and worth knowing before you read a row: a keyframe
-# here is IDR_PCT (10x) of an ordinary frame and the simulator's is 4x. Nobody
-# has measured a real encoder's; under roughly one-frame VBV it may be closer to
-# 1-2x, which would make both tiers over-price every recovery.
+# here is IDR_PCT percent of an ordinary frame and the simulator's is `idr_pct`
+# (abr/sim/host.rs). Nobody has measured a real encoder's; under roughly one-frame
+# VBV it may be closer to 1-2x, which would make both tiers over-price every recovery.
 #
 # RATE_KBIT/DELAY_MS/BUFFER_MS/LOSS_PCT shape the veth pair in both directions.
 # TRACE is "<at_s>:<kbit> …" applied while the run goes on; WANDER_PCT/WANDER_S
@@ -43,12 +43,12 @@ profile() {
   PROBE_BITRATE=""
   PROBE_SECONDS=""
   # A host that answers a keyframe ask on the next frame, with an IDR. The
-  # simulator's C6/C7 scenarios hinge on a slower, partial answer: `host173`
-  # 09-17 09:53 logged keyframe_req=9 idr=2 rfi=8 in one minute.
+  # simulator's C6/C7 scenarios hinge on a slower, partial answer: most asks get an
+  # intra-refresh wave, not an IDR.
   RECOVERY_MS=${PF_RIG_RECOVERY_MS:-0}
   KEYFRAME_ANSWER=${PF_RIG_KEYFRAME_ANSWER:-idr}
-  # A keyframe's size against an ordinary frame, percent. 1000 is what rounds 4-7 ran;
-  # a hardware encoder holds VBV at one frame, so a faithful row is far nearer 100.
+  # A keyframe's size against an ordinary frame, percent. A hardware encoder holds VBV
+  # at one frame, so a faithful row is far nearer 100.
   IDR_PCT=${PF_RIG_IDR_PCT:-1000}
   # Hold the picture after a lost frame until one re-anchors it, as a real
   # decoder must. Off by default: it is a model, not a decoder.
@@ -96,7 +96,7 @@ profile() {
       FILL=78
       DECODER_HOLD=${PF_RIG_DECODER_HOLD:-1}
       ;;
-    # C5, Klos54's tunnel: 12.5 Mbps behind a bloated queue, 0.7 % loss.
+    # C5, the tunnel: 12.5 Mbps behind a bloated queue, 0.7 % loss.
     wan_wg_12)
       RATE_KBIT=12500; DELAY_MS=10; BUFFER_MS=450; LOSS_PCT=0.7
       WANDER_PCT=30; WANDER_S=180
@@ -109,8 +109,8 @@ profile() {
       MODE=1920x1080x30; ACHIEVABLE_KBPS=12000
       CONTENT=motion-then-still:2
       ;;
-    # A link with room and 0.5 % random loss: a bring-up ramp that walls under 10 Mbps
-    # here read one lost packet as the link.
+    # A link with room and 0.5 % random loss: the bring-up ramp must not read one lost
+    # packet as the link.
     ramp_loss)
       RATE_KBIT=245000; DELAY_MS=3; BUFFER_MS=60; LOSS_PCT=0.5
       MODE=1920x1080x60; ACHIEVABLE_KBPS=60000
@@ -121,11 +121,6 @@ profile() {
       WANDER_PCT=20; WANDER_S=20
       MODE=1920x1080x30; ACHIEVABLE_KBPS=18000
       ;;
-    # The no-wall case: a link netem shapes cleanly (245 Mbps — 1 Gbps it
-    # cannot) carrying a mode whose stream cap / 0.7 is far below it, so the
-    # bring-up ramp runs out of things to prove before the link refuses
-    # anything. `lan_1g` is NOT this case: its cap / 0.7 is above what the VM
-    # can shape, and the ramp reads the two hosts' packet paths instead.
     # A wall that drops instead of queueing: 20 Mbit policed, 10 ms, no random loss, no
     # wander. 1080p60's stream cap is ~90 Mbps, so the policer is what the session meets and
     # the ramp has a real wall to find. BUFFER_MS is the policer's single burst, not a queue.
@@ -133,7 +128,7 @@ profile() {
       RATE_KBIT=20000; POLICE_KBIT=20000; DELAY_MS=10; BUFFER_MS=10; LOSS_PCT=0
       MODE=1920x1080x60; ACHIEVABLE_KBPS=19000
       ;;
-    # WP6 (#1279) shared-path rows. The link is the simulator's `shared()` exactly
+    # Shared-path rows. The link is the simulator's `shared()` exactly
     # (sim/scenarios.rs): 18 000 kbit, 10 ms, 450 ms queue, 0.5 % loss, 1080p30, two
     # sessions — so a rig row reads against the `shared_*` baseline rows. ACHIEVABLE_KBPS
     # is an equal share on every one of them, lone rows included, so the summary scores
@@ -182,14 +177,19 @@ profile() {
       MODE=1920x1080x30; ACHIEVABLE_KBPS=9000
       PROBE_BITRATE="8000"
       ;;
+    # The no-wall case: a link netem shapes cleanly (245 Mbps — 1 Gbps it
+    # cannot) carrying a mode whose stream cap / 0.7 is far below it, so the
+    # bring-up ramp runs out of things to prove before the link refuses
+    # anything. `lan_1g` is NOT this case: its cap / 0.7 is above what the VM
+    # can shape, and the ramp reads the two hosts' packet paths instead.
     nowall_720p)
       RATE_KBIT=245000; DELAY_MS=3; BUFFER_MS=60
       MODE=1280x720x60; ACHIEVABLE_KBPS=25000
       ;;
 
     # F: two Automatic sessions over one tunnel, one host. Each probe scores
-    # only itself, so both rows read fairness 1000 — the Jain share needs both
-    # sessions' windows in one run, which nothing merges yet.
+    # only itself, so both rows read fairness 1000 — read-shared.py puts both
+    # sessions' windows on one clock for the Jain share.
     shared_two_auto)
       RATE_KBIT=12500; DELAY_MS=10; BUFFER_MS=450; LOSS_PCT=0.7
       MODE=1920x1080x30; ACHIEVABLE_KBPS=12000

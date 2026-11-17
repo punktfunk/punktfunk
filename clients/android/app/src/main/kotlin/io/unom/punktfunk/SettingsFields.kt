@@ -24,8 +24,6 @@ internal object SettingsFields {
             overlay({ it.height }, { o, v -> o.copy(height = v) }), console = Console(ConsoleSizeKind)),
         field("hz", "refresh_hz", IntKind, { it.hz }, { s, v -> s.copy(hz = v) },
             overlay({ it.hz }, { o, v -> o.copy(hz = v) }), prefsKey = "hz"),
-        // Qualifiers on the safe-area resolution. `android.` keys, so they ride the console
-        // document's `Settings::extra` rather than needing a row in the shared shell.
         field("bitrateKbps", "bitrate_kbps", IntKind, { it.bitrateKbps }, { s, v -> s.copy(bitrateKbps = v) },
             overlay({ it.bitrateKbps }, { o, v -> o.copy(bitrateKbps = v) })),
         // Prefs keep a float; reading back in hundredths, the dial's unit, returns what was saved.
@@ -93,8 +91,8 @@ internal object SettingsFields {
             { s, v -> s.copy(reduceUiResolution = v) }, prefsKey = "reduce_ui_resolution"),
         field("gamepadUiMode", "gamepad_ui_mode", StrKind, { it.gamepadUiMode }, { s, v -> s.copy(gamepadUiMode = v) }),
         field("uiPalette", "ui_palette", StrKind, { it.uiPalette }, { s, v -> s.copy(uiPalette = v) }),
-        // Prefs key bumped to `_v2` to restart every install at the new default (ON); both stale
-        // keys are abandoned unread. The `android.` console key is a top-level `Settings::extra` row.
+        // Prefs key `low_latency_mode_v2`: older keys are never read, so only a value stored under
+        // it overrides the default (ON). The `android.` console key is a top-level `Settings::extra` row.
         field("lowLatencyMode", "low_latency_mode", BoolKind, { it.lowLatencyMode }, { s, v -> s.copy(lowLatencyMode = v) },
             overlay({ it.lowLatencyMode }, { o, v -> o.copy(lowLatencyMode = v) }),
             prefsKey = "low_latency_mode_v2", console = Console(BoolKind, "android.low_latency")),
@@ -300,8 +298,7 @@ internal object SettingsFields {
 
     /**
      * Migration from the pre-tier Boolean `stats_hud_enabled`: an explicit OFF stays off;
-     * everyone else (incl. fresh installs) lands on NORMAL — the old always-full HUD toned down
-     * to the new default, which is the whole point of adding tiers.
+     * everyone else (incl. fresh installs) lands on NORMAL.
      */
     object StatsVerbosityKind : EnumKind<StatsVerbosity>(StatsVerbosity.entries, { it.name }) {
         override fun read(p: SharedPreferences, k: String, def: StatsVerbosity): StatsVerbosity =

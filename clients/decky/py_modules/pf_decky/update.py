@@ -203,8 +203,9 @@ async def _client_update_state() -> dict:
 async def _native_update_state() -> dict:
     """A native client's own answer to ``--check-update --json`` (``pf_client_core::update::
     Status``: ``{kind, channel, current, latest, update_available, apply, applier, command,
-    opt_in_hint?, notes_url, error?}``), or ``{}`` when no client answered. ``applier`` routes
-    the update: ``helper`` runs the root helper, ``none`` leaves ``command`` to the user."""
+    opt_in_hint?, notes_url, error?, not_published?}``), or ``{}`` when no client answered.
+    ``applier`` routes the update: ``helper`` runs the root helper, ``none`` leaves ``command``
+    to the user."""
     rc, out, err = await client._run_client(
         ["--check-update", "--json"], timeout=30.0, env_extra=_C_LOCALE
     )
@@ -226,8 +227,8 @@ async def _native_update_state() -> dict:
 
 async def _update_native_client() -> dict:
     """The native leg of :func:`update_client`: the client's ``--apply-update`` starts the
-    packaged root helper. 900 s sits below the client's own 30-minute cap, so a slow package
-    manager reports a timeout instead of hanging the panel."""
+    packaged root helper. The 900 s bound makes a slow package manager report a timeout instead
+    of hanging the panel."""
     state = await _native_update_state()
     if not state:
         # No client answered. Say so: "update by hand" would be a guess.

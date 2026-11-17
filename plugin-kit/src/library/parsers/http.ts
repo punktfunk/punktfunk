@@ -1,11 +1,12 @@
-// The one outbound-HTTP helper a library plugin should use, carrying the host's `fetch_image`
-// posture verbatim (art.rs): http(s) only, **no redirects**, a size cap, and a short timeout.
+// The one outbound-HTTP helper a library plugin should use, with the posture of the host's art
+// fetch (`fetch_art`, library/art.rs): **no redirects**, a size cap, a short timeout, and only
+// http(s) URLs.
 //
 // The no-redirect rule is the important one and it is not paranoia: a scanner fetches URLs it read
 // out of a launcher's cache — data the plugin did not author. A `3xx` chased automatically is an
 // SSRF pivot from a process running on the operator's box (`http://169.254.169.254/…`, an internal
-// service). The host learned this in the 2026-07-17 security review; a plugin fetching the same
-// class of URL inherits the same rule. A rare legitimately-redirecting CDN just yields no art.
+// service). The host refuses redirects for the same reason, and a plugin fetching the same class
+// of URL follows the same rule. A rare legitimately-redirecting CDN just yields no art.
 
 import { Effect } from "effect";
 import { HostRequestError } from "../../errors.js";
@@ -27,7 +28,7 @@ export interface FetchedBytes {
 
 /**
  * GET an `http(s)` URL under the posture above. Fails with {@link HostRequestError} on any non-2xx,
- * a redirect, an over-cap body, a timeout, or a non-http(s) scheme.
+ * a redirect, an empty or over-cap body, a timeout, or a non-http(s) scheme.
  *
  * Most scanners never need this: they emit CDN URLs and let the CLIENT fetch them, which is both
  * faster and keeps the host out of the loop. Reach for it only when a store's art requires an API
@@ -51,8 +52,8 @@ export const fetchBytes = (
 				throw new Error(`refusing to follow a ${res.status} redirect`);
 			}
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
-			// Trust Content-Length when it is there (cheap rejection), but still bound the read: a
-			// hostile server can lie about it or omit it entirely.
+			// Trust Content-Length when it is there (cheap rejection), but still check the bytes
+			// received: a hostile server can lie about it or omit it entirely.
 			const declared = Number(res.headers.get("content-length"));
 			if (Number.isFinite(declared) && declared > maxBytes) {
 				throw new Error(`body larger than ${maxBytes} bytes`);

@@ -40,7 +40,7 @@ pub(super) struct CursorState {
     hot_x: i32,
     hot_y: i32,
     /// This stream observed a `SPA_META_Cursor` region. Per-stream: a
-    /// process-wide latch made a later session look like "no meta".
+    /// process-wide latch would make a later session look like "no meta".
     seen_meta: bool,
     /// Producer rewrites cursor meta on every buffer, so `id == 0` is an
     /// authoritative hide rather than a stale recycled region. True for

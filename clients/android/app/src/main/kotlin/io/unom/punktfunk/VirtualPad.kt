@@ -180,7 +180,7 @@ private const val TRIGGER_W = 56f
 private const val TRIGGER_H = 84f
 /** A disc takes a finger this far past its edge, so a thumb need not be exact. */
 private const val HIT_SLOP = 1.3f
-// ponytail: fixed dead zones; a setting when a device disagrees with these.
+// Fixed dead zones.
 private const val STICK_DEAD = 6f
 private const val DPAD_DEAD = 14f
 /** A layer narrower than this (a phone upright) stacks the clusters instead of spreading them. */
@@ -702,8 +702,9 @@ private fun BoxScope.RingFace(st: RingTouch, scale: Float) {
  * Drag moves a control; tap selects it for the size slider and the visibility toggle; hidden
  * controls stay visible here, ghosted. The overrides land in the class the screen is in (wide
  * or narrow, [padControls]' own split), so a phone edited in landscape keeps its upright
- * preset untouched. The chrome sits where the trio of small discs is not: they ride the bottom
- * edge on a wide layer and the top edge on a narrow one.
+ * preset untouched. The chrome takes the top edge on a wide layer and the bottom edge on a
+ * narrow one, to clear the trio of small discs; [padControls] places that trio by overlap, not
+ * by this split.
  */
 @Composable
 internal fun PadLayoutEditor(pad: PadConfig, onChange: (PadConfig) -> Unit, onBack: () -> Unit) {

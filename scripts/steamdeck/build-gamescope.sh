@@ -69,21 +69,18 @@ log "Building punktfunk-gamescope (HDR 10-bit capture; ~5 min, best-effort)"
 # only ever cost this feature. glm/stb come in as meson wraps; wlroots/libliftoff/vkroots/
 # libdisplay-info are vendored submodules — none of those need packages.
 #
-# ⚠ The last two names are the WSI LAYER's, and x11-xcb's absence is why this leg failed on every
-# Deck from 2026-08-13 (3ac4548c turned `-Denable_gamescope_wsi_layer=true` on) until it was
-# noticed as "HDR stopped working after an update". It does NOT fail the compositor build — it
-# fails layer/meson.build, and build-punktfunk-gamescope.sh treats a missing layer as a hard
-# error, so the whole build exits non-zero. ci/gamescope-trixie.Dockerfile walked into the
-# identical trap one release later (1b28a7f7, v0.28.1) and now asserts x11-xcb at image build;
-# this list never got the same fix.
+# ⚠ The last two names are the WSI LAYER's. A missing x11-xcb does NOT fail the compositor build —
+# it fails layer/meson.build, and build-punktfunk-gamescope.sh treats a missing layer as a hard
+# error, so the whole build exits non-zero. ci/gamescope-trixie.Dockerfile asserts x11-xcb at
+# image build for the same reason.
 #
 # ⚠ Do NOT "sync this list with the CI image". That one is for a .deb that RUNS on Debian; this
-# one builds in trixie for a binary that must run on SteamOS. Taking libdisplay-info-dev from it
-# (tried on the lab VM, 2026-08-23) built, installed and printed its +pfhdr banner in the box —
-# then died on glass with `libdisplay-info.so.2: cannot open shared object file`, because meson
-# had preferred the system lib over gamescope's vendored submodule and linked it SHARED. The
-# durable fix is the force_fallback_for pin in build-punktfunk-gamescope.sh, next to wlroots;
-# the package has no reason to be here. Only add a name whose soname SteamOS itself ships.
+# one builds in trixie for a binary that must run on SteamOS. A libdisplay-info-dev from it would
+# build, install and print its +pfhdr banner in the box — then die on SteamOS with
+# `libdisplay-info.so.2: cannot open shared object file`, if meson preferred the system lib over
+# gamescope's vendored submodule and linked it SHARED. The force_fallback_for pin in
+# build-punktfunk-gamescope.sh, next to wlroots, prevents that; the package has no reason to be
+# here. Only add a name whose soname SteamOS itself ships.
 # bison and libexpat1-dev only build the bundled xkbcommon and wayland-scanner; neither is linked.
 if ! distrobox enter "$BOX" -- bash -lc '
 set -e
@@ -112,13 +109,11 @@ if ! distrobox enter "$BOX" -- bash -lc "
 set -e
 bash '$PKGDIR/build-punktfunk-gamescope.sh' --prefix \"\$HOME/.local\" --no-setcap
 "; then
-    # A failed build REPLACED NOTHING — the previously installed binary is untouched on disk. If it
+    # A failed build REPLACES NOTHING — the previously installed binary is untouched on disk. If it
     # still passes the on-glass check it is the very binary that was streaming HDR before this run,
-    # so keep it wired and say it is stale. Unwiring here took HDR away from boxes whose compositor
-    # still worked, on an update that changed nothing about it (field report: HDR "lost" going to
-    # 0.31.2, host.env silently missing PUNKTFUNK_GAMESCOPE_BIN afterwards). `unwire` belongs only
-    # where the binary itself fails `verifies` — the else branch at the bottom, which also removes
-    # it. `wire` re-arms a box a previous run of this bug already unwired.
+    # so keep it wired and say it is stale. `unwire` belongs only where the binary itself fails
+    # `verifies` — the else branch at the bottom, which also removes it. `wire` re-adds the
+    # host.env line when it is missing.
     if verifies; then
         warn "punktfunk-gamescope failed to build — keeping the installed $("$GS_BIN" --version 2>&1 | head -1) (stale; re-run update.sh to retry)"
         wire

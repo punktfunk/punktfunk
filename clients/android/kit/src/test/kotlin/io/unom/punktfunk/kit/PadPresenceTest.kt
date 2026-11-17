@@ -20,14 +20,14 @@ class PadPresenceTest {
     }
 
     /** The gaming-phone shoulder triggers and OEM game-mode overlays: a virtual device wearing the
-     * gamepad source class. This is the field report — the console UI that could not be dismissed. */
+     * gamepad source class. */
     @Test
     fun virtualDevicesAreNotControllers() {
         assertFalse(Gamepad.looksLikeController(padSource = true, virtual = true, hasStick = true))
     }
 
     /** A TV remote claims the gamepad source and, through a generic key layout, the A/B keys. With
-     * no stick or HAT it is not a controller: the field report is a Philips TV listing three. */
+     * no stick or HAT it is not a controller. */
     @Test
     fun aRemoteWithGamepadKeysIsNotAController() {
         assertFalse(Gamepad.looksLikeController(padSource = true, virtual = false, hasStick = false))

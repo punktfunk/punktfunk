@@ -63,8 +63,8 @@ final class SettingsScopeTests: XCTestCase {
             .override("game"))
     }
 
-    /// R6-4: a preset deleted in another window left the screen on the globals, and every write
-    /// went to the missing preset and was dropped.
+    /// A preset deleted in another window leaves the screen on the globals; a write routes
+    /// `.gone` and the caller falls back to `.defaults` instead of writing to the missing preset.
     func testAWriteToAGonePresetFollowsTheScreenToDefaults() {
         XCTAssertEqual(
             SettingsScope.route(scope: .preset("deleted"), catalog: catalog(game()), field: bitrate),

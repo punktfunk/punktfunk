@@ -201,7 +201,7 @@ enum Planes {
         out: Vec<(Tex, Rtv, Rtv)>,
     },
     /// 10-bit SDR: the same video-engine BGRA→YUV as [`Self::Nv12`], but a P010 target — the
-    /// VideoProcessor writes BT.709 full range at ten bits (`YCBCR_FULL_G22_LEFT_P709`).
+    /// VideoProcessor writes BT.709 at ten bits, in the session's range.
     P010Sdr {
         conv: VideoConverter,
         out: Vec<Tex>,

@@ -1,6 +1,6 @@
-// Where a decoded frame lands in a view — the twin of `punktfunk_core::video_fit`. Every case in
-// `clients/shared/video-fit-vectors.json` runs against both (`VideoFitTests`); change the rule
-// there first.
+// Where a decoded frame lands in a view — the twin of `punktfunk_core::video_fit` and Android's
+// `VideoFit.kt`. Every case in `clients/shared/video-fit-vectors.json` runs against all three
+// (`VideoFitTests` here); change the rule there first.
 //
 // `dst` is the whole-pixel rect inside the view the picture fills; `src` the part of the frame
 // that stays visible. A scale within `snapPixels` / `snapRelative` of a whole number snaps to it,

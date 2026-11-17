@@ -8,7 +8,7 @@
 //!  * [`retire`]: which ASC presents a completion frees, behind which release fence.
 //!  * [`verdict`]: the down-rated panel rule and the once-a-second verdicts the sinks act on.
 //!
-//! The replay tests beside each module pin today's decisions. Design:
+//! The replay tests beside each module pin its decisions. Design:
 //! `design/android-presenter-overhaul-v3.md` §3.2 (planning repo).
 
 pub(crate) mod budget;
@@ -93,7 +93,7 @@ pub(crate) struct Counters {
     pub(crate) confirmed: u64,
     /// SurfaceView: pumps that parked a frame on a closed budget.
     pub(crate) no_budget: u64,
-    /// SurfaceView: vsync ticks that found the smoothing store empty — supply depth, not an alarm.
+    /// SurfaceView: vsync ticks that found the store empty — supply depth, not an alarm.
     pub(crate) dry: u64,
     /// SurfaceView: of `no_budget`, the pumps the unconfirmed-release rail held back.
     pub(crate) queue_waits: u64,

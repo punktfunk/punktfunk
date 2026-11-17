@@ -1,6 +1,6 @@
 // The Mac's window (design/apple-touch-ui-overhaul.md §4): a source list with Hosts and Library,
 // the chosen destination beside it, and ⌘1 / ⌘2 in the View menu. The touch UI's tabs are this
-// list's rows; the Library row is the Library tab, whose title menu picks the host.
+// list's rows; the Library row is the Library tab, whose host filter picks the host.
 
 import PunktfunkKit
 import SwiftUI

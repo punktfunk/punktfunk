@@ -223,7 +223,7 @@ fn the_host_start_menu_link_is_created_then_removed() {
 
 /// Host and client are two products under two registry keys (D1). On a box where the HOST is
 /// installed and the client is not, deriving the client's choices must read the CLIENT key:
-/// `installed` is the host's, and taking it made the client a false upgrade pinned to
+/// `installed` is the host's, and taking it would make the client a false upgrade pinned to
 /// `C:\Program Files\punktfunk\`. Fresh facts cannot catch this — both keys are empty there.
 #[test]
 fn a_client_install_does_not_inherit_the_hosts_directory() {

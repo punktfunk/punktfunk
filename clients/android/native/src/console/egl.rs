@@ -1,7 +1,7 @@
-//! The dozen EGL entry points the console host needs, hand-declared. `libEGL.so` is already
+//! The thirteen EGL entry points the console host needs, hand-declared. `libEGL.so` is already
 //! a `NEEDED` of this `.so` (skia-bindings links it for Skia's GL backend), so a plain
-//! `#[link]` costs nothing new; a binding crate would be a dependency for twelve functions
-//! whose signatures have not changed since 2008.
+//! `#[link]` costs nothing new; a binding crate would be a dependency for thirteen functions
+//! that EGL 1.1 already defined.
 //!
 //! One display, one context, one window surface at a time: the console draws into the
 //! `SurfaceView` Kotlin hands over, and re-creates only the surface when that view comes and

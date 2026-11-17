@@ -2,14 +2,15 @@
 //! drawn onto whatever `skia_safe::Canvas` a host hands it. Design:
 //! `linux-client-rearchitecture.md`, `android-skia-console-port.md`.
 //!
-//! Two hosts sit on the portable [`Console`] driver:
+//! Hosts sit on the portable [`Console`] driver, among them:
 //! - the Vulkan session's [`SkiaOverlay`] (feature `vulkan-overlay`) — an
 //!   [`Overlay`](pf_presenter::overlay::Overlay) on the presenter's device,
 //!   offscreen RGBA, composited as one premultiplied quad. Skia never
 //!   touches the swapchain; the overlay draws only when it has something
 //!   to show (`skia_overlay.rs`);
 //! - the Android GL host (`clients/android/native`), which owns EGL and
-//!   drives [`Console`] with `default-features = false`.
+//!   drives [`Console`] with `default-features = false`;
+//! - the Apple Metal host (`clients/apple/native`), also `default-features = false`.
 //!
 //! Everything but `skia_overlay.rs` is platform-free: screens draw to
 //! `&Canvas`, settings through [`store::SettingsStore`], keys as
@@ -40,7 +41,7 @@ pub mod art_stats;
 mod blur;
 pub mod brand;
 pub mod bridge;
-// The sort/group policy moved to pf-client-core so the GTK and WinUI dialogs share it rather
+// The sort/group policy lives in pf-client-core so the GTK and WinUI dialogs share it rather
 // than growing a second order. Aliased here because every screen names `crate::collate`.
 pub(crate) use pf_client_core::collate;
 pub mod console;

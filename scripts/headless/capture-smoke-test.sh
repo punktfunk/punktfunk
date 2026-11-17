@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Prove the capture->NVENC chain end to end WITHOUT writing any Rust, using wf-recorder
 # (wlr-screencopy) piped into hevc_nvenc. Run from a shell where headless Sway is up and
-# WAYLAND_DISPLAY + XDG_RUNTIME_DIR are exported (see run-headless-sway.sh output).
+# WAYLAND_DISPLAY + XDG_RUNTIME_DIR are exported (`source /tmp/punktfunk-sway-env.sh`, which
+# prepare-session.sh writes).
 #
 # Usage: scripts/headless/capture-smoke-test.sh [output.mkv] [WxH-unused]
 #   Ctrl-C to stop; then play/inspect the file (e.g. ffprobe out.mkv).

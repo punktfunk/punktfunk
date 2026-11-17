@@ -57,7 +57,7 @@ impl H265Concealer {
         let plan = match self.planner.plan_au(au) {
             Ok(plan) => plan,
             Err(PlanError::AwaitingIdr) => return Concealment::Unrecoverable,
-            // Outside what the planner follows: the decoder gets the AU untouched, as before.
+            // Outside what the planner follows: the decoder gets the AU untouched.
             Err(err) => {
                 debug!(%err, "h265 conceal: AU not planned, passing it through");
                 return Concealment::Intact;

@@ -17,8 +17,8 @@ use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Target `SO_SNDBUF`/`SO_RCVBUF`. Default UDP buffers (~208 KB on Linux) overflow
-/// a multi-MB IDR burst and freeze decode until the next refresh. 32 MB ≈ 200 ms
-/// at 1 Gbps; paced send (`native.rs::paced_submit`) spreads the rest. The OS
+/// a multi-MB IDR burst and freeze decode until the next refresh. 32 MiB ≈ 270 ms
+/// at 1 Gbps; paced send (the host's `paced_submit`) spreads the rest. The OS
 /// clamps to `net.core.{wmem,rmem}_max` / `kern.ipc.maxsockbuf`.
 pub(crate) const TARGET_SOCKBUF: usize = 32 * 1024 * 1024;
 

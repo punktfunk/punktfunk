@@ -5,8 +5,8 @@
 //! a [`NativeClient`], which runs the same `DataPump` and `abr::Driver` the
 //! desktop and TV clients run, and records what the controller decided. A
 //! trajectory assembled here rather than read off the driver would measure the
-//! recorder, and the glue between pump and controller is exactly what tier 1
-//! cannot see.
+//! recorder, and the glue between pump and controller is exactly what the link
+//! simulator (`abr::sim`) cannot see.
 
 use anyhow::{Context, Result};
 use punktfunk_core::abr::metrics;
@@ -23,7 +23,7 @@ pub struct Link {
     /// session actually reached, which reads "time to 90 % of its own best".
     pub achievable_kbps: u32,
     /// The profile's shaped rate, for the bytes-over-capacity metric. `0` =
-    /// unknown, and the metric reports zero rather than a guess.
+    /// unknown, and every byte offered in the first ten seconds counts as over.
     pub capacity_kbps: u32,
 }
 
@@ -135,7 +135,8 @@ fn window_json(w: &WindowRecord, held_ms: u64) -> String {
         opt(w.sample.owd_mean_us),
         opt(w.sample.decode_mean_us),
         opt(w.sample.encode_mean_us),
-        // The lift bar and the drain guard both read the mean, not the slope.
+        // The lift bar and the drain's end compare the mean to a reference; the slope is the
+        // next column.
         opt(w.sample.delay.map(|d| d.mean_us)),
         opt(w.sample.delay.map(|d| d.rise_us)),
         opt(w.sample.delay.map(|d| d.last_us)),

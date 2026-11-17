@@ -117,7 +117,7 @@ static volatile int running = 1;
 static volatile int configured = 0;
 static int do_stream = 1; // argv: "nostream" disables the input streamer
 static int dbg = 1;
-static __u8 last_feature_cmd = 0; // last SET_REPORT command on iface 2
+static __u8 last_feature_cmd = 0; // command byte of the last SET_REPORT, whichever interface
 
 static void log_line(const char *s){ fprintf(stderr, "%s\n", s); }
 

@@ -156,7 +156,7 @@ fn rejects_inconsistent_block_geometry_without_panicking() {
     assert_eq!(rig.stats.snapshot().packets_dropped, 1);
 }
 
-/// Loss window is capture-pts, not frame count: 33 ms late at 120 fps is late, not lost.
+/// Loss window is capture-pts, not frame count: 67 ms late at 120 fps is late, not lost.
 #[test]
 fn incomplete_frames_age_out_by_capture_time_not_frame_count() {
     let mut rig = Rig::with(limits(), FecScheme::Gf8);
@@ -688,8 +688,8 @@ fn rejects_wrong_shard_bytes_and_oversized_frame() {
     assert_eq!(rig.stats.snapshot().packets_dropped, 1);
 }
 
-/// Receiver `max_total_shards` is frozen at session start. `Packetizer::recovery_for` clamps
-/// parity to that ceiling so a mid-session `fec_percent` ramp cannot emit undeliverable blocks.
+/// Receiver `max_total_shards` is frozen at session start. The packetizer clamps parity to its
+/// own session-start ceiling, so a mid-session `fec_percent` ramp cannot emit undeliverable blocks.
 #[test]
 fn adaptive_fec_ramp_keeps_maximal_blocks_within_the_peers_ceiling() {
     let cfg = e2e_config(FecScheme::Gf16, 10);
@@ -884,7 +884,8 @@ fn streamed_lying_final_totals_kill_the_frame_wholesale() {
         h.block_index = bi;
         assert!(rig.push(&packet(h)).is_none());
     }
-    // Final claiming one 16-byte shard is self-valid (expect_blocks=1, K=1) but disowns both sentinels.
+    // Final claiming one 16-byte shard is self-valid (block_count=1, K=1) but disowns both
+    // sentinels.
     let mut lying = base_header();
     lying.block_count = 1;
     lying.frame_bytes = 16;
@@ -1007,7 +1008,8 @@ fn slice_streamed_post_pin_out_of_range_sentinel_dropped() {
     let finals: Vec<Pkt> = select(&pkts, |h| h.block_count != 0);
     assert!(rig.push_all(&finals).is_none());
 
-    // Block 0 claiming base shard 60: 60+20 > 63 overlaps the final block. Drop, do not kill the frame.
+    // Block 0 claiming base shard 60: 60+19 > 63 overlaps the final block. Drop, do not kill
+    // the frame.
     let first = pkts
         .iter()
         .find(|p| {

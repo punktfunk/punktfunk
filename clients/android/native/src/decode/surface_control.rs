@@ -1,9 +1,8 @@
 //! The `ASurfaceControl` compositor layer behind the ASurfaceControl presenter backend.
 //!
-//! This is the Android analogue of what the Apple client gets from `CAMetalDisplayLink` +
-//! `preferredFrameLatency = 1`: a present path that schedules each frame against the panel's own
-//! timeline and hands back the *real* present feedback, instead of the MediaCodec→SurfaceView→
-//! BufferQueue path that predicts the latch and hopes the `OnFrameRendered` callbacks arrive.
+//! The Android analogue of the Apple client's `CAMetalDisplayLink` present: a path that
+//! schedules each frame against the panel's own timeline and hands back the *real* present
+//! feedback, instead of the MediaCodec→SurfaceView→BufferQueue path that predicts the latch.
 //!
 //! A `Layer` owns one `ASurfaceControl` created as a child of a SurfaceView's `ANativeWindow`;
 //! the decoder renders into an `AImageReader` and the presenter composites each acquired
@@ -15,11 +14,10 @@
 //! *previous* buffer's release fence — one per layer, merged — back through the decode loop's
 //! event channel — the real vsync the slot scheduler is phased on.
 //!
-//! Every `ASurface*` entry point is **API 29** — above the crate's minSdk-28 floor — so all are
-//! `dlsym`-resolved from `libandroid.so`, exactly as [`crate::adpf`] and [`super::vsync`] resolve
-//! their own >-floor symbols; a hard import of any of them would make `System.loadLibrary` fail on
-//! every API-28 device even where this backend is never selected. Absent (or a null layer) ⇒
-//! [`Layer::create`] returns `None` and the caller falls back to the SurfaceView presenter.
+//! Every `ASurface*` entry point sits above the crate's minSdk-28 floor (API 29; the frame-rate
+//! setters 30 and 31), so all are `dlsym`-resolved from `libandroid.so`, as [`crate::adpf`] and
+//! [`super::vsync`] do: a hard import would make `System.loadLibrary` fail on API 28 even where
+//! this backend is never selected. A required one absent ⇒ [`Layer::create`] returns `None`.
 
 use ndk::hardware_buffer::HardwareBuffer;
 use ndk::native_window::NativeWindow;
@@ -126,8 +124,8 @@ struct Api {
     txn_set_z_order: TxnSetZOrderFn,
     txn_set_geometry: TxnSetGeometryFn,
     txn_set_present_time: TxnSetDesiredPresentTimeFn,
-    /// `setBufferDataSpace` is present from API 29 in practice but historically under-declared —
-    /// resolved optionally, so an SDR stream (which never touches it) works even where it is absent.
+    /// `setBufferDataSpace` is API 29 like the required ones, but resolved optionally: without
+    /// it a layer stays untagged.
     txn_set_dataspace: Option<TxnSetBufferDataSpaceFn>,
     /// `setFrameRate` is **API 30** — optional, `None` on API 29.
     txn_set_frame_rate: Option<TxnSetFrameRateFn>,
@@ -144,7 +142,7 @@ struct Api {
 
 impl Api {
     /// Resolve the whole `ASurface*` table from `libandroid.so`, or `None` on API < 29 (any required
-    /// symbol absent). The two optional entries (`setBufferDataSpace`, `setFrameRate`) do not gate.
+    /// symbol absent). The optional entries (dataspace, frame rate, HDR metadata) do not gate.
     fn resolve() -> Option<Api> {
         // SAFETY: `dlopen` of the always-mapped `libandroid.so` (only bumps its refcount; never
         // closed — a process-lifetime handle; null is checked). Each `sym` type is the NDK header's
@@ -218,8 +216,8 @@ pub(crate) struct PresentComplete {
     /// The presenter's monotonically increasing submit sequence for this transaction.
     pub seq: u64,
     /// SurfaceFlinger's latch instant for this frame (`CLOCK_MONOTONIC` ns) — the truthful present
-    /// clock: consecutive latches are one true panel period apart, and `latch − release` is the
-    /// real `latch` stat, both of which the predicted path could only guess at.
+    /// clock, which the predicted path could only guess at. The `latch` stat ends here only
+    /// when no present fence signals.
     pub latch_ns: i64,
     /// The release fence for the buffer this transaction REPLACED (the previous frame on the
     /// layers, every layer's fence merged into one), or `None` when the platform reports none.
@@ -326,8 +324,7 @@ impl Layer {
     /// `surface_size` carries the SurfaceView's **on-screen pixel size** — the coordinate space the
     /// child layer is composited into, which is the display footprint of the (aspect-fitted) video
     /// view, NOT the window's buffer size. `ANativeWindow_getWidth/Height` return the buffer
-    /// geometry in a rotated/scaled space (observed 1260×567 for a 2800×1260 full-bleed stream) —
-    /// using it shrank the picture to the top-left corner. It is read fresh on every present
+    /// geometry in a rotated/scaled space, not the layer's. It is read fresh on every present
     /// because that view RESIZES mid-stream under a surface that is never recreated: the stream
     /// screen hides the system bars and switches on cutout drawing a frame or two after
     /// `surfaceCreated`, and each one grows it. An empty `surface_size` (Kotlin hadn't measured the
@@ -435,8 +432,7 @@ impl Layer {
                 (self.api.txn_set_visibility)(txn, sc, VISIBILITY_SHOW);
                 (self.api.txn_set_z_order)(txn, sc, 0);
                 // Fixed-rate video at the source rate (compatibility 1 = FIXED_SOURCE; strategy
-                // 1 = ALWAYS). An LTPO governor may still run it below its own floor (the NP3:
-                // only its Minimum-refresh-rate system setting moves that).
+                // 1 = ALWAYS). An LTPO governor may still run it below its own floor.
                 if frame_rate > 0.0 {
                     match (
                         self.api.txn_set_frame_rate_strategy,

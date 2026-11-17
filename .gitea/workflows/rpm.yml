@@ -1,9 +1,9 @@
 # Build the punktfunk-host RPM and publish it to Gitea's RPM package registry, so Bazzite /
 # Fedora Atomic hosts layer + update it with rpm-ostree. Counterpart to deb.yml (apt). Runs in
-# the Fedora 43 builder image (ci/fedora-rpm.Dockerfile) so the RPM's auto library Requires
-# match the target's sonames.
+# the Fedora builder images (ci/fedora-rpm.Dockerfile, one per matrix leg) so the RPM's auto
+# library Requires match the target's sonames.
 #
-# Registry (public, unom org), group "bazzite":
+# Registry (public, unom org), one group per Fedora leg (`bazzite`, `fedora-44`, `fedora-45`):
 #   repo file  https://git.unom.io/api/packages/unom/rpm/bazzite.repo
 # Box setup (once): see packaging/rpm/README.md
 #
@@ -23,7 +23,7 @@ on:
     branches: [main]
     # Scope canary builds to what this artifact is built FROM — a docs-only or
     # web-only push should not light up the whole fleet. Applies to branch pushes;
-    # tag runs are matched by `tags:` (proven by flatpak/windows-msix releases).
+    # tag runs are matched by `tags:`.
     paths:
       - 'crates/client/**'
       - 'crates/codec/pf-bitstream/**'
@@ -122,8 +122,8 @@ on:
       - 'ci/install-bun.sh'
       - '.gitea/workflows/rpm.yml'
     # Single project version: a `vX.Y.Z` tag is THE release. main publishes to the `*-canary` rpm
-    # groups, tags to the base groups (`bazzite`/`fedora-44`) — separate repos, so the old
-    # version-shadow (a release outranking rolling builds in one group) is structurally gone.
+    # groups, tags to the base groups (`bazzite`/`fedora-44`/`fedora-45`) — separate repos, so a
+    # release never shares a version line with rolling builds.
     tags: ['v*']
   workflow_dispatch:
 
@@ -137,9 +137,9 @@ env:
   AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
   # The C/C++ half of the cache (aws-lc-sys, the vendored libopus, openh264's C++). Safe at
-  # workflow level here: unlike ci.yml/deb.yml this workflow has no cross-compiling job whose
-  # image sets its own CC_x86_64_unknown_linux_gnu. See ci.yml's `rust` job for that trap.
-  # This matters twice per push — the f43 and f44 legs are the two longest jobs in the fleet.
+  # workflow level here: unlike ci.yml/deb.yml this workflow has no cross-compiling job. See
+  # ci.yml's `rust` job for why the CC_*/CXX_* pair is job-scoped there. This matters on every
+  # Fedora leg (the matrix below).
   CMAKE_C_COMPILER_LAUNCHER: sccache
   CMAKE_CXX_COMPILER_LAUNCHER: sccache
   CC_x86_64_unknown_linux_gnu: sccache cc
@@ -191,7 +191,7 @@ jobs:
           # The host's Vulkan encode hand-rolls its structs, pyrowave-sys bindgens its own vendored
           # copy, and both host and client reach Vulkan through ash, which dlopens the loader. (The
           # HDR gamescope leg further down does need them, and pulls them itself via `dnf builddep
-          # gamescope`.) Matches packaging/rpm/punktfunk.spec, which dropped its BuildRequires too.
+          # gamescope`.) Matches packaging/rpm/punktfunk.spec, which has no vulkan BuildRequires.
           dnf -y install gtk4-devel libadwaita-devel SDL3-devel
           # sysext build (packaging/bazzite/build-sysext.sh): squashfs + SELinux labeling.
           # libcap = setcap/getcap: the sysext is the ONLY place the image can acquire
@@ -229,19 +229,19 @@ jobs:
           echo "rpm $PF_VERSION-$PF_RELEASE -> group '$GROUP'"
 
       # ── The web console, built once per (web+sdk content, bun) instead of once per leg ─────────
-      # Two legs run here (f43 + f44) and each built its own identical copy of a bundle that is a
-      # pure function of web/ and sdk/ — see the fuller note in deb.yml, whose key family this
-      # shares, so whichever job builds it first warms the rest of the fleet.
+      # The Fedora legs share one bundle that is a pure function of web/ and sdk/ — see the fuller
+      # note in deb.yml, whose key family this shares, so whichever job builds it first warms the
+      # rest of the fleet.
       #
       # ⚠ The build has to happen HERE, in the workspace, rather than being left to the spec. Two
       # reasons, and both are load-bearing:
       #   * build-rpm.sh packages a `git archive` tarball and web/.output is gitignored, so a
       #     bundle sitting in the workspace is invisible to rpmbuild — it must be handed over by
       #     absolute path (PF_PREBUILT_WEB_OUTPUT -> the spec's pf_prebuilt_web macro).
-      #   * the reverse direction is worse: the spec builds into rpmbuild's %{_topdir}, which
-      #     build-rpm.sh creates with mktemp and removes on EXIT. A console built in there is gone
-      #     before actions/cache's post step runs, so the cache would never populate and every run
-      #     would be a miss that quietly rebuilt — the cache would look present and do nothing.
+      #   * the spec builds into rpmbuild's %{_topdir}, not the workspace, so a console built
+      #     there never lands in web/.output and actions/cache's post step has nothing to save:
+      #     every run would be a miss that quietly rebuilt, and the cache would look present and
+      #     do nothing.
       - name: Web console cache key
         run: echo "bunver=$(bun --version 2>/dev/null || echo none)" >> "$GITHUB_ENV"
       - name: Cache the built web console
@@ -256,7 +256,7 @@ jobs:
         run: |
           cd web
           # Retried: bun's download-and-extract is single-shot, and a truncated tarball reads as
-          # `Fail extracting tarball` (ci.yml's web job has the measurement).
+          # `Fail extracting tarball` (see ci.yml's web job).
           bash ../scripts/ci/retry.sh 3 bun install --frozen-lockfile --ignore-scripts
           bun run build
 
@@ -283,8 +283,8 @@ jobs:
             PF_PREBUILT_WEB_OUTPUT="$GITHUB_WORKSPACE/web/.output" \
             bash packaging/rpm/build-rpm.sh
 
-      # Visibility only — the two RPM legs are the longest jobs in the fleet, so a cache
-      # regression here is the most expensive one to leave undetected.
+      # Visibility only — a cache regression on the long RPM legs is the most expensive one to
+      # leave undetected.
       - name: sccache stats (visibility only)
         if: always()
         run: sccache --show-stats
@@ -297,22 +297,19 @@ jobs:
           RPM_GPG_PASSPHRASE: ${{ secrets.RPM_GPG_PASSPHRASE }}
         run: bash packaging/rpm/sign-rpms.sh
 
-      # Read the file-capability matrix out of the BUILT rpm, before anything is signed or
-      # published. 0.26.0-1 shipped `%caps(cap_sys_nice=ep)` on the host through this very spec —
-      # on Fedora and, via rpm-ostree layering, on Bazzite — and every board was green while every
-      # KDE desktop session died in the field. The lesson recorded then was "verify the PACKAGE,
-      # never the board"; this is that. Host must carry NOTHING; the worker must carry exactly
-      # cap_sys_nice=ep. `--self-test` first, so a guard that has quietly stopped being able to
-      # fail takes the job down instead of waving the release through.
       - name: The DualSense UCM drop-in must still bite
         # scripts/alsa-ucm2/ hooks into alsa-ucm-conf's own dispatcher, so an upstream rename or
-        # reorder can neuter it with no error anywhere — and what comes back is the Spider-Man
-        # EXCEPTION_ACCESS_VIOLATION, not a quieter pad. This is the only leg that runs on a real
+        # reorder can neuter it with no error anywhere. This is the only leg that runs on a real
         # Fedora tree, hence the two packages. Skips itself on any box without them.
         run: |
           dnf -y install alsa-ucm alsa-ucm-utils
           sh scripts/ci/check-dualsense-ucm.sh
 
+      # Read the file-capability matrix out of the BUILT rpm, before it is published: verify the
+      # PACKAGE, never the board. Host must carry NOTHING; the worker must carry exactly
+      # cap_sys_nice=ep (scripts/ci/assert-cap-matrix.sh says why). `--self-test` first, so a
+      # guard that has quietly stopped being able to fail takes the job down instead of waving
+      # the release through.
       - name: Assert the capability matrix (rpm)
         run: |
           bash scripts/ci/assert-cap-matrix.sh --self-test
@@ -366,9 +363,9 @@ jobs:
       - name: Build the HDR gamescope
         if: steps.gamescope.outputs.cache-hit != 'true'
         # Best-effort ON PURPOSE. The sysext is the primary Bazzite delivery path and works without
-        # this binary (the host just stays SDR on the gamescope backend, which is what every
-        # release before this one did) — so a hiccup building someone else's tree must not cost the
-        # whole image. It is loud, though: the warning below, and `--gamescope` silently absent
+        # this binary (the host just stays SDR on the gamescope backend) — so a hiccup building
+        # someone else's tree must not cost the whole image. It is loud, though: the warning
+        # below, and `--gamescope` silently absent
         # downstream is impossible because build-sysext.sh verifies the +pfhdr marker itself.
         run: |
           set -x
@@ -382,9 +379,7 @@ jobs:
           # (so the binary still starts on SteamOS's older libstdc++ — see its comment), and
           # without the static library meson's very FIRST sanity check dies with
           # "cannot find -lstdc++ / have you installed the static version", so nothing builds at
-          # all. That is what happened on the v0.26.0 tag: both Fedora bases warned and skipped,
-          # the job stayed green, and the release shipped with no gamescope RPM while the notes
-          # said it had one. A rename here must be LOUD, hence no `|| true`.
+          # all. A rename here must be LOUD, hence no `|| true`.
           dnf -y install libstdc++-static
           # The rest of the Arch package's makedepends that Fedora's older packaged gamescope does
           # not necessarily pull. Best-effort: unlike the static runtime, meson finds fallbacks or
@@ -401,14 +396,13 @@ jobs:
             # Warn only, even on a tag — the hard gate is the LAST step of this job. Failing here
             # would skip the sysext build, the sysext feed, AND the release attach below, so a
             # missing gamescope would also withhold the punktfunk RPMs and the .raw images that
-            # built perfectly well. deb.yml learned that the expensive way on v0.26.0.
+            # built perfectly well.
             echo "::warning::punktfunk-gamescope failed to build for f${{ matrix.fedver }} — the sysext ships without it (gamescope sessions stay SDR)"
           fi
 
       # The same binary, as an ordinary RPM. The sysext below is the Atomic/Bazzite delivery; this
-      # is the one a traditional Fedora-family box (Nobara, plain Fedora) can actually install —
-      # until it existed those users had no packaged route to the patched build at all, and a stock
-      # gamescope tells every game its display is 60 Hz whatever the client negotiated.
+      # is the one a traditional Fedora-family box (Nobara, plain Fedora) can actually install; a
+      # stock gamescope tells every game its display is 60 Hz whatever the client negotiated.
       #
       # Same best-effort rule as the build above: no binary, no package, and the host stays on its
       # existing SDR/host-composited path. The spec re-checks the +pfhdr marker itself.
@@ -423,14 +417,11 @@ jobs:
             echo "::warning::no usable punktfunk-gamescope for f${{ matrix.fedver }} — skipping its RPM"
           fi
 
-      # A SECOND signing pass, for this package only. The main "Sign RPMs" step ran back at build
-      # time, long before this RPM existed — the gamescope build sits behind its own ~10-minute
-      # cache and deliberately runs after the host RPMs are already published. So every
-      # punktfunk-gamescope RPM went to the registry UNSIGNED, and the repo file we tell users to
-      # install carries gpgcheck=1: `dnf install punktfunk-gamescope` failed with "The package is
-      # not signed" on every Fedora and Nobara box. The package was in the channel the whole time
-      # and could not be installed from it — which is worse than absent, because the release notes
-      # and the docs-site both say it is there.
+      # A SECOND signing pass, for this package only. The main "Sign RPMs" step runs before this
+      # RPM exists — the gamescope build sits behind its own ~10-minute cache and deliberately
+      # runs after the host RPMs are already published — and the repo file we tell users to
+      # install carries gpgcheck=1, so an unsigned punktfunk-gamescope RPM would sit in the
+      # channel and still be uninstallable ("The package is not signed").
       #
       # Same fail-closed rule as the first pass: sign-rpms.sh hard-fails on refs/tags/v* if the org
       # secret is missing, rather than republishing something a user's dnf will reject.
@@ -492,9 +483,8 @@ jobs:
 
       # Read the capability matrix back OUT of the image that is about to be published — the one
       # channel where getting it wrong is unrepairable, because a merged sysext's /usr is read-only
-      # squashfs and the only fix is a new image plus a feed republish. 0.26.0-1's Bazzite breakage
-      # was confirmed exactly this way, after the fact, by mounting the published .raw and running
-      # getcap on it. Doing it here means the .raw never reaches the feed.
+      # squashfs and the only fix is a new image plus a feed republish. Checking it here means a
+      # wrong .raw never reaches the feed.
       #
       # The script proves its own reader first (cap a file, squash it, unsquash it, read it back)
       # so a runner that cannot see file capabilities FAILS the leg instead of blessing the image.
@@ -517,17 +507,16 @@ jobs:
           esac
           KEEP=$KEEP bash packaging/bazzite/publish-sysext-feed.sh "$FEED" \
             "dist-sysext/punktfunk-${PF_VERSION}-${PF_RELEASE}-x86-64.raw"
-          # Re-seal this Fedora major's OTHER channel too. Stable feeds only publish on a tag, so
-          # without this a stable box would sit in front of an unsigned (hence refused) feed until
-          # the next release; canary pushes are frequent, so every live feed gets sealed within a
-          # day of this landing, and a key rotation propagates without rebuilding any image.
+          # Re-seal this Fedora major's OTHER channel too: stable feeds only publish on a tag, and
+          # a key rotation must reach both feeds without rebuilding any image.
           # Best-effort: a channel that has never published yet has no manifest to seal.
           bash packaging/bazzite/publish-sysext-feed.sh --seal "$OTHER" \
             || echo "::warning::could not seal the $OTHER feed (no manifest yet?)"
 
-      # On a real release, also attach the .rpms to the unified Gitea Release. Both Fedora bases
-      # (bazzite=F43, fedora-44) build the SAME filename, so suffix the asset with the base to keep
-      # both on the release; canary builds live in the `*-canary` rpm groups (no release page).
+      # On a real release, also attach the .rpms to the unified Gitea Release. The Fedora bases
+      # (bazzite=F43, fedora-44, fedora-45) build the SAME filename, so suffix the asset with the
+      # base to keep all on the release; canary builds live in the `*-canary` rpm groups (no
+      # release page).
       - name: Attach .rpms to the Gitea release (stable tags only)
         if: startsWith(gitea.ref, 'refs/tags/v')
         env:
@@ -544,13 +533,13 @@ jobs:
             upsert_asset "$RID" "$raw" "$(basename "$raw" .raw).f${{ matrix.fedver }}.raw"
           done
 
-      # A release must not be able to make a claim its own CI silently dropped — v0.26.0's notes
-      # said the patched gamescope was dnf-installable while both Fedora bases had skipped it on a
-      # `::warning::` (missing libstdc++-static, which the -static-libstdc++ link needs).
+      # A release must not be able to make a claim its own CI silently dropped: the notes and
+      # docs-site say the patched gamescope is dnf-installable, but the build step above only
+      # warns when it fails.
       #
-      # ⚠ LAST step on purpose, matching deb.yml: failing at the build step instead would skip the
-      # sysext image, the feed publish AND the attach above, withholding the punktfunk RPMs and
-      # .raw images that built perfectly well. Everything good ships first; the job goes red after.
+      # ⚠ LAST step on purpose: failing at the build step instead would skip the sysext image,
+      # the feed publish AND the attach above, withholding the punktfunk RPMs and .raw images
+      # that built perfectly well. Everything good ships first; the job goes red after.
       - name: A stable tag must ship the gamescope RPM
         if: startsWith(gitea.ref, 'refs/tags/v')
         run: |

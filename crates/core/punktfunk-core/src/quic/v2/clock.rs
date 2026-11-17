@@ -4,7 +4,7 @@
 //! on the wire is mapped onto this clock at the edge, from a fresh paired read of both clocks:
 //! a stamp `age` old becomes `elapsed − age`. A wall-clock step therefore moves no stamp on the
 //! wire. On the wire a stamp is `origin + elapsed` at whole microseconds, so a client reads it as
-//! Unix-scaled time, the same as before, and the media header's `pts_us` is `elapsed` itself.
+//! Unix-scaled time, and the media header's `pts_us` is `elapsed` itself.
 
 use crate::quic::{
     wall_clock_ns, AUDIO_BITSTREAM_MAGIC, AUDIO_MAGIC, AUDIO_PCM_MAGIC, AUDIO_PCM_PARTS_MAGIC,

@@ -127,8 +127,9 @@ pub(crate) struct AHdrMetadataCta8613 {
 }
 
 /// [`HdrMeta`] (ST.2086 G, B, R in 1/50000; mastering luminance in 0.0001 nits) as the NDK's
-/// float structs. A block with a zero field means "unknown" and is `None`, as Codec2 treats it for
-/// the decoder's own Surface: SurfaceFlinger takes a sent MaxCLL as the layer's peak, so a zero
+/// float structs. A zero mastering luminance (max or min) drops the mastering block and a zero
+/// MaxCLL or MaxFALL the light-level block: zero means "unknown", as Codec2 treats it for the
+/// decoder's own Surface. SurfaceFlinger takes a sent MaxCLL as the layer's peak, so a zero
 /// one declares a 0-nit picture.
 pub(crate) fn hdr_metadata(
     m: &HdrMeta,
@@ -256,8 +257,8 @@ mod tests {
         }
     }
 
-    /// R1-3, an open item (design D4): the sinks apply a decoder's report over the negotiated
-    /// tag, and a decoder that reports SDR (Codec2's default for one that reports nothing)
+    /// Open: a sink applies a decoder's report over the negotiated tag when the stream names no
+    /// colour, and a decoder that reports SDR (Codec2's default for one that reports nothing)
     /// yields BT.709 or sRGB. An HDR session can lose its PQ or HLG tag to it. Pinned as is.
     #[test]
     fn r1_3_open_a_reported_sdr_transfer_yields_an_sdr_tag() {

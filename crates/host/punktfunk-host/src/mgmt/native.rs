@@ -14,8 +14,6 @@ fn absolute_expiry(expires_in_secs: u64) -> i64 {
     crate::clock::unix_secs().saturating_add(i64::try_from(expires_in_secs).unwrap_or(i64::MAX))
 }
 
-/// 400 when reserved bits are set. Never silently cleared: a newer console
-/// must learn its bit did not take, not vanish.
 /// `until_disconnect` rides alongside an access choice. On its own it would mean "replace this
 /// device's access with full and permanent, then end it at disconnect" — an escalation nobody
 /// asked for — so say so instead of guessing. Editing one field of a stored record is what
@@ -35,6 +33,8 @@ fn reject_lone_until_disconnect(
     None
 }
 
+/// 400 when reserved bits are set. Never silently cleared: a newer console
+/// must learn its bit did not take, not vanish.
 pub(crate) fn reject_reserved(grants: u32) -> Option<Response> {
     if grants & GRANT_RESERVED != 0 {
         return Some(api_error(
@@ -92,7 +92,7 @@ pub(crate) fn access_level(grants: Option<u32>) -> &'static str {
 /// needs it client-side first); the console displays it.
 #[derive(Serialize, ToSchema)]
 pub(crate) struct NativePairStatus {
-    /// True when this process started with `--native`.
+    /// True when this process runs the native plane, as `serve` always does.
     enabled: bool,
     armed: bool,
     #[schema(example = "1234")]
@@ -281,7 +281,7 @@ pub(crate) fn native_status(st: &MgmtState) -> NativePairStatus {
 /// Native pairing status
 ///
 /// Poll while armed to show the PIN and countdown. `enabled: false` means
-/// GameStream only (no `--native`).
+/// this process runs no native plane.
 #[utoipa::path(
     get,
     path = "/native/pair",

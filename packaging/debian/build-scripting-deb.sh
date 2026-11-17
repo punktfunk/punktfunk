@@ -32,7 +32,7 @@ DOCDIR="$STAGE/usr/share/doc/$PKG"
 # One self-contained JS: `bun build --target=bun` inlines effect + the @punktfunk/host SDK; the
 # runner's dynamic `import()` of the operator's plugin files is left as a runtime import (bun keeps
 # unresolvable dynamic specifiers external). `--ignore-scripts` on install: nothing needs a
-# postinstall, and we skip the `prepare` codegen (it wants ../api/openapi.json — not needed here).
+# postinstall, and `prepare` only regenerates bun.nix (bun2nix), which this build has no use for.
 mkdir -p "$SHAREDIR"
 (
   cd sdk

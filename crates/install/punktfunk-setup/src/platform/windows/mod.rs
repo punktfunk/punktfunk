@@ -1,11 +1,11 @@
 //! Windows host facts: the read-only probe later stages may read.
 //!
 //! Same charter as `facts.rs`: one serde'd struct so `--facts` and `--demo`
-//! round-trip the same fields. Registry reads go through `reg.exe` via
-//! `CommandRunner` — value names and `REG_*` type tokens are locale-invariant,
-//! unlike PowerShell. NLA categories and a bound-port check sit behind
-//! `NetProbe`; the system impl is the only `cfg(windows)` code here. Everything
-//! else compiles and tests on any OS.
+//! round-trip the same fields. Registry reads go through `CommandRunner`: `reg.exe` for
+//! numbers and presence — value names and `REG_*` type tokens are locale-invariant, unlike
+//! PowerShell — and `reg_string` for text, which `SystemRunner` reads from the registry
+//! itself. NLA categories and a bound-port check sit behind `NetProbe`; the system impl is
+//! the only `cfg(windows)` code here. Everything else compiles and tests on any OS.
 //!
 //! Design: `design/installer-v2-windows.md` (facts, coexistence, network step).
 
@@ -40,8 +40,9 @@ pub const COMPETING_SERVICES: [&str; 5] = [
 /// Management API default port. Also Sunshine's web UI port.
 pub const MGMT_PORT: u16 = 47990;
 
-/// The uninstaller's file name: docs-site promises `{app}\unins000.exe` (D6), so the pack
-/// step emits the wizard, payload-less, under it — and running under it means teardown only.
+/// The uninstaller's file name: the winget manifest and the docs-site name `{app}\unins000.exe`
+/// (D6), so the pack step emits the wizard, payload-less, under it — and running under it
+/// means teardown only.
 pub const UNINSTALLER_EXE: &str = "unins000.exe";
 
 /// The real box's paths: `config` is `%ProgramData%`, so `host_env()` is the file the
@@ -222,8 +223,8 @@ impl WinFacts {
     }
 
     /// The bound-port signal counts only on a box without punktfunk: on an upgrade the
-    /// running host owns :47990 itself (WP3.5's VM smoke moved a lone host to :47991), and a
-    /// named competitor is caught by the service probe regardless.
+    /// running host owns :47990 itself, and a named competitor is caught by the service
+    /// probe regardless.
     pub fn needs_coexistence(&self) -> bool {
         let foreign_port = self.mgmt_port_in_use && self.installed.is_none();
         (!self.competing_hosts.is_empty() || foreign_port) && !self.mgmt_bind_set
@@ -595,7 +596,7 @@ mod tests {
         assert!(facts.needs_coexistence());
     }
 
-    // WP3.5's VM smoke: on an upgrade the bound port is our own running host.
+    // On an upgrade the bound port is our own running host.
     #[test]
     fn an_upgrades_own_host_on_the_mgmt_port_is_no_conflict() {
         let (mut run, env, _, tmp) = fresh_box();

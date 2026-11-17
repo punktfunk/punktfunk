@@ -164,8 +164,8 @@ impl<C: VkCodec> SessionState<C> {
         let profile = C::decode_profile(key);
         let mut pool_plan = plan_pools(caps, required_slots);
         // Test-only: `gpu_parity` copies pictures to the host, and
-        // `vkCmdCopyImageToBuffer` needs TRANSFER_SRC — a bit production
-        // pools omit. Opt-in via env so no production path grows it.
+        // `vkCmdCopyImageToBuffer` needs TRANSFER_SRC. The env var adds it
+        // unconditionally; production pools get it only through `copy_out`.
         if std::env::var("PF_VKD_TEST_READBACK").is_ok_and(|v| v == "1") {
             pool_plan.picture_usage |= vk::ImageUsageFlags::TRANSFER_SRC;
         }
@@ -656,9 +656,9 @@ impl<C: VkCodec> VkDecoder<C> {
     }
 
     /// Wait up to `timeout_ns` for [`DecodedVkFrame::semaphore`] to reach
-    /// [`DecodedVkFrame::value`]. Measurement only: a timeout degrades the
-    /// latency stat; the consumer's GPU wait gates sampling. `frame` must be
-    /// unreleased so the semaphore stays alive. Stale-generation declines.
+    /// [`DecodedVkFrame::value`]. The pump waits it to stamp decode completion; a
+    /// timeout is not a failure, the consumer's GPU wait gates sampling. `frame`
+    /// must be unreleased so the semaphore stays alive. Stale-generation declines.
     pub fn wait_decoded(&self, frame: &DecodedVkFrame, timeout_ns: u64) -> bool {
         if frame.generation != self.generation {
             return false;

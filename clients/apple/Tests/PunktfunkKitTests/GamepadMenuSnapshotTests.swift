@@ -1,5 +1,5 @@
 // The Steam Controller 2's half of `GamepadMenuInput.Snapshot` — the only half a test can
-// reach, since XCTest cannot construct a GCController (the GamepadUIEnvironmentTests note).
+// reach, since XCTest cannot construct a GCController (see `GamepadUIEnvironment.isActive`).
 // Pins the launcher's button contract (A confirms, B backs out, Y secondary, X tertiary) and
 // the stick scaling onto the −1…1 the GameController path delivers, so an SC2 navigates the
 // console UI the same way every other pad does.

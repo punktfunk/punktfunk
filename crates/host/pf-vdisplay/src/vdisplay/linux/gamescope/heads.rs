@@ -4,7 +4,7 @@
 //! master does: this module finds that connector from `/proc/<pid>/cmdline` (backend flag and
 //! `--prefer-output`) and `/sys/class/drm` (plug status + EDID), and its mode from the lit
 //! CRTC ([`crate::drm_dpms::lit_mode`]). gamescope has no protocol that reports the output it
-//! lights; [`gamescope_control`] only sets things.
+//! lights; `gamescope_control` only sets things.
 //!
 //! Only the driven head is listed. Mirror capture attaches to gamescope's composited PipeWire
 //! node (`vdisplay::mirror`), so an undriven connector cannot be streamed. The pin id is the

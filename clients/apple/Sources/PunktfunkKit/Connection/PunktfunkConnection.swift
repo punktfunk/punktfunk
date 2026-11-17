@@ -198,8 +198,8 @@ final class AccessUnitLenders {
     func removeAll() { boxes.removeAll() }
 }
 
-/// One Opus audio packet (48 kHz stereo, 5 ms frames) — decode with AVAudioConverter
-/// (`kAudioFormatOpus`) or libopus into an AVAudioEngine source node.
+/// One raw audio packet as it came off the wire. The app reads decoded PCM from `nextAudioPcm`;
+/// this form is for tests (`nextAudio`).
 public struct AudioPacket: Sendable {
     public let data: Data
     public let ptsNs: UInt64
@@ -734,12 +734,12 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public private(set) var resolvedCompositor: Compositor = .auto
 
     /// Host clock minus client clock (nanoseconds) — LIVE: the connect-time skew handshake's
-    /// estimate, kept fresh by the core's mid-stream re-syncs (every 60 s plus immediately on a
-    /// suspected wall-clock step; `punktfunk_connection_clock_offset_now_ns`, ABI v10). Add it to
-    /// a local `CLOCK_REALTIME` instant to express that instant in the host's capture clock — the
-    /// clock each `AccessUnit.ptsNs` is stamped in — so a glass-to-glass latency (present/enqueue
-    /// time minus `ptsNs`) is valid across machines. `0` = no correction (an older host that
-    /// didn't answer, synchronized clocks, or a closed connection).
+    /// estimate, kept fresh by the core's mid-stream re-syncs (every `CLOCK_RESYNC_INTERVAL` and
+    /// immediately on a suspected wall-clock step; `punktfunk_connection_clock_offset_now_ns`).
+    /// Add it to a local `CLOCK_REALTIME` instant to express that instant in the host's capture
+    /// clock — the clock each `AccessUnit.ptsNs` is stamped in — so a glass-to-glass latency
+    /// (present/enqueue time minus `ptsNs`) is valid across machines. `0` = no correction (an
+    /// older host that didn't answer, synchronized clocks, or a closed connection).
     ///
     /// Read it at each use, never park it in a `let` or a closure capture: an NTP step or a VM
     /// clock step moves it, and a stale value silently skews every capture-clock comparison. It
@@ -753,8 +753,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
     }
 
     /// The video encoder bitrate (kbps) the host actually configured — the requested
-    /// `bitrateKbps` clamped to the host's range ([500, 2 000 000] kbps), or its default
-    /// (20 000) when 0 was requested. `0` = an older host that didn't report it.
+    /// `bitrateKbps` clamped into the host's range, or the host's default when 0 was requested
+    /// (the host's `resolve_bitrate_kbps`). `0` = an older host that didn't report it.
     public private(set) var resolvedBitrateKbps: UInt32 = 0
 
     /// What the stream decodes as: the CICP transfer, depth and chroma of the newest AU `nextAU`
@@ -808,7 +808,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
 
     /// The sample rate the host RESOLVED for this session: `48000` on every Opus session and every
     /// host older than the lossless plane, or the rate a hi-res session actually landed on — which
-    /// may be LOWER than `audioRateHz` asked for, because the host runs a five-condition gate
+    /// may be LOWER than `audioRateHz` asked for, because the host runs a gate
     /// (design/hi-res-audio.md §8.4) and any failure resolves the session back to Opus at 48 kHz.
     ///
     /// **Open the output device and size the jitter ring from THIS, never from the request.**
@@ -826,27 +826,25 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// 48 kHz/16-bit reads identically on both.
     public private(set) var resolvedAudioBits: UInt8 = 16
 
-    /// How much audio one datagram carries, in MICROSECONDS — `5000` on the Opus plane and every
-    /// host older than the lossless one; on `0xD3` the host picks the longest rung whose payload
-    /// fits one datagram, which is `4000` at 48 kHz/24-bit stereo and `2000` at 96 kHz/24-bit
-    /// stereo under the default MTU, and shorter again for surround, whose frame carries three
-    /// (5.1) or four (7.1) times the samples for the same duration.
+    /// How much audio one frame carries, in MICROSECONDS: `5000` on the Opus plane and every
+    /// host older than the lossless one. On the lossless plane the host takes the longest
+    /// `FRAME_US_LADDER` rung one datagram holds (`pcm::frame_us_for`): `4000` at 48 kHz/24-bit
+    /// stereo and `2000` at 96 kHz/24-bit stereo at a 1400-byte datagram. A format no datagram
+    /// holds goes in parts to a client that joins them (`pcm::parted_frame_us_for`).
     ///
-    /// Microseconds, not milliseconds, because the ladder has sub-millisecond rungs and a frame
-    /// that goes through integer ms truncates: 2 500 µs at 48 kHz stereo is 240 interleaved
-    /// samples, and 2 ms would make it 192.
+    /// Microseconds because the ladder has fractional-millisecond rungs: 2 500 µs at 48 kHz stereo
+    /// is 240 interleaved samples, and 2 ms would make it 192.
     ///
-    /// ⚠ It is a LABEL, not a duration, on the 44.1 kHz family: a frame carries a whole number of
-    /// samples per channel and no rung divides 44 100 Hz, so a nominal 5 ms frame there is really
-    /// 4 988 662 ns. Size buffers from it (`AudioRing.setFrameUs`, which routes it through the same
-    /// floor-per-channel rule the host filled the frame with); never advance a clock by it.
+    /// ⚠ It is a LABEL, not a duration, when the rung holds no whole number of samples per
+    /// channel (every rung at 44 100 Hz): a nominal 5 ms frame there is really 4 988 662 ns. Size
+    /// buffers from it (`AudioRing.setFrameUs`, which routes it through the same floor-per-channel
+    /// rule the host filled the frame with); never advance a clock by it.
     ///
     /// Needed only because this client ports the de-jitter policy into Swift rather than letting
-    /// core run it. Two of the policy's decisions are denominated in FRAMES, not milliseconds — the
-    /// smooth shed drops exactly one, and the effective-target floor is a device quantum plus one —
-    /// so a ring compiled against 5 ms sheds two and a half frames at a time on a 96 kHz session.
-    /// **Not derivable from `nextAudioPcm`**: concealed frames are prepended into the same buffer,
-    /// so `frameCount` answers "how many samples did I get", not "how long is one frame".
+    /// core run it: the smooth shed drops exactly one frame and the effective-target floor is a
+    /// device quantum plus one, so a ring compiled against 5 ms sheds two and a half frames at a
+    /// time on a 96 kHz session. **Not derivable from `nextAudioPcm`**: concealed frames are
+    /// prepended into the same buffer, so `frameCount` is not the length of one frame.
     public private(set) var resolvedAudioFrameUs: UInt16 = UInt16(PUNKTFUNK_AUDIO_FRAME_MS * 1000)
 
     /// What the audio `nextAudioPcm` hands back is in now: the `resolvedAudio*` values until it
@@ -889,12 +887,12 @@ public final class PunktfunkConnection: @unchecked Sendable {
     }
 
     /// The session's negotiated wire shard payload (`Welcome.shard_payload`, bytes) — the
-    /// parse-window size for `USER_FLAG_CHUNK_ALIGNED` PyroWave AUs (plan §4.4). Other codecs
-    /// never need it.
+    /// parse-window size for `USER_FLAG_CHUNK_ALIGNED` PyroWave AUs
+    /// (design/pyrowave-codec-plan.md §4.4). Other codecs never need it.
     public private(set) var shardPayload: UInt32 = 1408
 
-    /// The host capability bitfield (`Welcome.host_caps`): `PUNKTFUNK_HOST_CAP_GAMEPAD_STATE` /
-    /// `PUNKTFUNK_HOST_CAP_CLIPBOARD`. `0` for an older host that didn't say.
+    /// The host capability bitfield (`Welcome.host_caps`): `PUNKTFUNK_HOST_CAP_*` bits. `0` for
+    /// an older host that didn't say.
     public private(set) var hostCaps: UInt8 = 0
     /// The host's management-API port, from this session's `Welcome` — where its game library is
     /// served. `0` when the host advertised none (an older host, or one with no management API);
@@ -987,7 +985,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// Host power — the `power.*` host actions (`design/host-actions.md`); route-gated on the
     /// mgmt cert lane, never carried by any input event.
     public static let grantPower = UInt32(PUNKTFUNK_GRANT_POWER)
-    /// Pause and remove a title's download (`design/plugin-downloads.md`); route-gated, never input.
+    /// Pause and remove a title's download; route-gated, never input.
     public static let grantManageGames = UInt32(PUNKTFUNK_GRANT_MANAGE_GAMES)
     /// Choosing the screen this device streams and what the host's monitors do meanwhile;
     /// route-gated and read in the Hello, never input.
@@ -1201,7 +1199,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         }
     }
 
-    /// Tell the host who renders the pointer (the §8 mid-stream mouse-model flip):
+    /// Tell the host who renders the pointer (the mid-stream mouse-model flip):
     /// `clientDraws = true` — this client draws it locally (the desktop mouse model; the host
     /// excludes the pointer from the video and forwards shape/state); `false` — the host
     /// composites it into the video (the capture model, full fidelity). Idempotent,
@@ -1230,8 +1228,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// `resolved…` values after. `audioRateHz`/`audioBits` ask for a format: 48 000/16 is the
     /// Opus plane, anything else the bit-exact `0xD3` plane, which takes 2.1–8.5 Mbps for stereo
     /// outside ABR and so is an explicit opt-in. The request is not the answer: open the output
-    /// from `resolvedAudioRateHz`/`resolvedAudioBits`/`resolvedAudioChannels`. A format no
-    /// datagram carries falls back to Opus 48 kHz.
+    /// from `resolvedAudioRateHz`/`resolvedAudioBits`/`resolvedAudioChannels`. A format the host
+    /// declines (`resolve_audio_plane`) falls back to Opus 48 kHz.
     ///
     /// `unlock` opens a profile on a person's own account and goes to a pinned host only
     /// (`invalidPin` without a pin). It is wiped when this returns, so it dials once.
@@ -1254,7 +1252,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         audioBits: UInt8 = 16,
         videoCodecs: UInt8 = 0x02, // PUNKTFUNK_CODEC_HEVC — the codecs this client can decode
         preferredCodec: UInt8 = 0, // 0 = auto; else PUNKTFUNK_CODEC_* soft preference
-        clientCaps: UInt8 = 0, // ABI v11: PUNKTFUNK_CLIENT_CAP_CURSOR = render the host cursor locally
+        clientCaps: UInt8 = 0, // PUNKTFUNK_CLIENT_CAP_*; _CURSOR = render the host cursor locally
         videoFit: UInt8 = 0, // PUNKTFUNK_VIDEO_FIT_*: how this view fills; a host framing for another device reframes to it
         launchID: String? = nil,
         profileID: String? = nil, // the host profile to play as; nil lets the host choose
@@ -1578,7 +1576,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
     }
 
     /// Run the network check over this connection: the ceiling the bring-up ramp proved, a clean
-    /// round at half of it, two shaped legs, both ends' facts, and the findings. Blocking for ten
+    /// round under it, two shaped legs, both ends' facts, and the findings. Blocking for ten
     /// to twenty seconds — call it off the main thread. The connection should have been dialled
     /// with `deliveryFlags: deliveryProbeOnly`. nil when the host declined, a round never
     /// reported, or after close.
@@ -2213,7 +2211,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
     }
 
     /// `AccessUnit.flags` bit: the AU is shard-aligned self-delimiting chunks (PyroWave
-    /// datagram-aligned mode §4.4) — walk it window-by-window at `shardPayload`.
+    /// datagram-aligned mode, design/pyrowave-codec-plan.md §4.4) — walk it window-by-window at
+    /// `shardPayload`.
     public static let userFlagChunkAligned = UInt32(PUNKTFUNK_USER_FLAG_CHUNK_ALIGNED)
     /// `AccessUnit.flags` bit: the AU is an IDR.
     public static let flagSOF = UInt32(PUNKTFUNK_FLAG_SOF)
@@ -2288,9 +2287,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
     }
 
     /// One per-AU host-timing report (0xCF): the host's capture→fully-sent duration for the
-    /// access unit whose `AccessUnit.ptsNs` equals `ptsNs` exactly. The stats consumer derives
-    /// `network = (receivedNs + clockOffsetNs − ptsNs) − hostUs` — the host/network split of the
-    /// HUD's `host+network` stage (design/stats-unification.md Phase 2).
+    /// access unit whose `AccessUnit.ptsNs` equals `ptsNs` exactly. The core's HUD derives
+    /// `network = (receivedNs + clockOffsetNs − ptsNs) − hostUs` when this is pulled — the
+    /// host/network split of the HUD's `host+network` stage (design/stats-unification.md Phase 2).
     public struct HostTiming: Sendable, Equatable {
         /// The AU's capture stamp (host capture clock — matches the AU's `ptsNs`).
         public let ptsNs: UInt64
@@ -2485,8 +2484,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
 
     /// Send one DualSense motion sample to the host's virtual pad (rich-input plane). The
     /// values are raw DualSense sensor units, written verbatim into the virtual pad's input
-    /// report — convert with `GamepadCapture`'s scale constants (gyro: rad/s → 20 LSB per
-    /// deg/s; accel: g → 10000 LSB per g).
+    /// report — convert with `GamepadWire.gyroLSBPerRadS` and `GamepadWire.accelLSBPerG`.
     public func sendMotion(
         pad: UInt8 = 0,
         gyro: (Int16, Int16, Int16), accel: (Int16, Int16, Int16)
@@ -2504,7 +2502,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
     }
 
     /// Send one raw HID input report from a client-captured controller — the as-is Steam
-    /// Controller 2 passthrough's up direction (`[0xCC][0x04]` on the wire; ABI v27,
+    /// Controller 2 passthrough's up direction (`[0xCC][0x04]` on the wire;
     /// `punktfunk_connection_send_hid_report`). `data` is the report id-first, exactly as the
     /// device produced it; the core clamps to `PUNKTFUNK_HID_REPORT_MAX` and copies before
     /// returning, so the pointer may target a caller-owned REUSABLE buffer — this runs at the
@@ -2853,7 +2851,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// `endRejection` (ask after the end, before teardown).
     public var endRejectionMessage: String? {
         return withLiveHandle(or: nil) { h in
-            // The wire caps the sentence at 256 bytes; this is that plus room for the NUL.
+            // The wire caps the sentence at 256 bytes; 512 leaves room for the NUL.
             var buf = [CChar](repeating: 0, count: 512)
             guard punktfunk_connection_end_reject_said(h, &buf, UInt(buf.count)) == statusOK
             else { return nil }

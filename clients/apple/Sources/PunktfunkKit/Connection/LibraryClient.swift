@@ -1,14 +1,16 @@
 // Game library client. Fetches the host's unified game library from the management REST API
-// (`GET /api/v1/library`) — the same payload the web console's /library page renders — and what it
-// currently has running (`GET /api/v1/status`), so a title the player can return to can be marked
-// as such. Offered for a PAIRED host only: the fetch authenticates with the pinned identity.
+// (`GET /api/v1/library/page`, or `GET /api/v1/library` from a host older than the paged route)
+// — the same payload the web console's /library page renders — and what it currently has
+// running (`GET /api/v1/status`), so a title the player can return to can be marked as such.
+// Offered for a PAIRED host only: the fetch authenticates with the pinned identity.
 //
 // The management API serves HTTPS on a port distinct from the punktfunk/1 data plane (default
-// 47990, also advertised in the host's mDNS `mgmt` TXT). A paired client is authorized for the
-// read-only library route by its **mTLS certificate** — no bearer token. The host binds this read
-// surface to the LAN by DEFAULT (the bearer-gated admin surface stays loopback-only), so a paired
-// client browses a host's library with no operator step. GameEntry and Artwork decode the part
-// of `crates/host/punktfunk-host/src/library.rs`'s schema a client shows.
+// `punktfunkDefaultMgmtPort`, also advertised in the host's mDNS `mgmt` TXT). A paired client is
+// authorized for the routes in `mgmt_routes::paired_may_access` by its **mTLS certificate** — no
+// bearer token. The host binds the API to all interfaces by DEFAULT (the bearer-gated admin lane
+// stays loopback-only), so a paired client browses a host's library with no operator step.
+// GameEntry and Artwork decode the part of `crates/host/punktfunk-host/src/library.rs`'s schema
+// a client shows.
 
 import Foundation
 import PunktfunkShared
@@ -73,9 +75,7 @@ public struct GameEntry: Codable, Hashable, Identifiable, Sendable {
     /// under "Unknown" (see `LibraryCollation.bucket`). Also on the detail band as
     /// `STORE · PLATFORM`.
     public var platform: String?
-    /// The rest of the host's `GameMeta`, as far as anything here shows it. The host has sent
-    /// these since the library API existed and no client ever read them; the launch hold is the
-    /// first screen with room to say more than a title, so it decodes what it can use.
+    /// The rest of the host's `GameMeta`, as far as anything here shows it.
     ///
     /// Optional rather than defaulted: a synthesized `Decodable` throws on a missing key for a
     /// non-optional property, and the host omits every one of these when it has nothing.
@@ -219,7 +219,7 @@ public enum InstallAction: String, Sendable {
 public struct TileBadge: Equatable, Sendable {
     /// `download`, `pause` or `alert`.
     public var icon: String
-    /// `42 %`, `26 GB`, `Not installed`, `Queued`.
+    /// `42%`, `26 GB`, `Not installed`, `Queued`.
     public var text: String
 
     public static func forTitle(_ install: TitleInstall?, download: HostDownload?) -> TileBadge? {
@@ -239,7 +239,7 @@ public struct TileBadge: Equatable, Sendable {
 /// What asking the host to change a title's files came to. The Rust client's `InstallOutcome`.
 public enum InstallOutcome: Equatable, Sendable {
     case done
-    /// 403/404/409 with the host's own sentence.
+    /// Any non-2xx answer that carries the host's own sentence.
     case refused(String)
     /// A host without the route.
     case unsupported
@@ -443,8 +443,8 @@ public struct HostDownload: Codable, Hashable, Sendable {
 /// One game the host currently has launched, from `/api/v1/status`.
 ///
 /// A deliberately partial mirror of the host's `ActiveGame`: only the fields a client can act on.
-/// The console's own view of this payload carries more (which session, which plane, the grace
-/// countdown), and none of that is a player's business from the library screen.
+/// The console's own view of this payload carries more (which plane, the grace countdown, the
+/// launching device's name), and none of that is a player's business from the library screen.
 public struct RunningGame: Codable, Hashable, Sendable {
     /// Store-qualified library id (`steam:570`) — the key that lines this up with a `GameEntry`.
     /// Absent for an operator-typed GameStream command, which has no catalog entry behind it.
@@ -522,17 +522,18 @@ public enum GameEndOutcome: Equatable, Sendable {
     }
 }
 
-/// One action a host offers THIS device, from `/api/v1/actions` (`design/host-actions.md` §3.2)
-/// — v1: sleep, restart, shut down.
+/// One action a host offers THIS device, from `/api/v1/actions` (`design/host-actions.md` §3.2).
+/// The host's built-ins are `power.sleep`, `power.reboot`, `power.shutdown`, `host.restart` and
+/// `display.next`.
 ///
 /// Unknown ids are expected and fine: the client renders ``title`` verbatim for anything it has
 /// no local wording for, which is what lets a later host add actions with no client release.
 public struct HostAction: Codable, Hashable, Sendable, Identifiable {
-    /// Stable id: `power.sleep`, `power.reboot`, `power.shutdown` today.
+    /// Stable id; a built-in's is `<group>.<verb>`.
     public var id: String
     /// The host's own display title — the fallback label for an id this client doesn't know.
     public var title: String
-    /// Action group (`power` for the built-ins).
+    /// Action group: `power`, `host` or `display` for the built-ins.
     public var group: String
     /// Confirm before running: the action loses whatever is on that machine (restart, shut down).
     public var danger: Bool
@@ -544,12 +545,12 @@ public struct HostAction: Codable, Hashable, Sendable, Identifiable {
     /// The host message of `unavailableReason`, `apierr_<code>`. Absent when the reason is the
     /// system's own words, and from a host that predates it.
     public var unavailableCode: String?
-    /// Whether THIS device's access covers it (the host's Host-power grant). The client only ever
+    /// Whether THIS device's access covers it (the grant the action needs). The client only ever
     /// keeps the permitted ones.
     public var permitted: Bool
 
-    /// A hand-made action — the quick-actions editor previews the three power slots without a
-    /// host on the line.
+    /// A hand-made action — the quick-actions editor previews its slots without a host on the
+    /// line.
     public init(id: String, title: String, group: String = "power", danger: Bool = false,
                 available: Bool = true, unavailableReason: String? = nil, permitted: Bool = true) {
         self.id = id
@@ -868,10 +869,11 @@ public enum LibraryClient {
 
     /// Invoke one host action by id (`POST /api/v1/actions/{id}`, empty body).
     ///
-    /// Returning normally means the host ACCEPTED it (202) — it now ends every session and acts
-    /// about a second later, so this is the last word the client will get. A refusal throws
-    /// with the host's own sentence ("another device is streaming from this host right now").
-    /// The body stays empty: the id is the whole request.
+    /// Returning normally means the host ACCEPTED it: 202 for a power action, which then ends
+    /// every session and acts about a second later, so that is the last word the client gets;
+    /// 200 for `display.next`, which ends nothing. A refusal throws with the host's own sentence
+    /// ("Another device is streaming from this host, …"). The body stays empty: the id is the
+    /// whole request.
     public static func invokeAction(id: String, on target: MgmtTarget) async throws {
         let response = try await send(
             "/api/v1/actions/\(pathSegment(id))", to: target, method: "POST",
@@ -924,10 +926,10 @@ public enum LibraryClient {
     }
 
     /// One request against `target`: over the stream port when it is known, which needs no TCP
-    /// 47990, then over HTTPS, with failures mapped by ``transportFailure(_:)``. The stream
-    /// port's answer stands, except 401, 403 and 405: a host that predates stamping the client
-    /// certificate on its tunnel refuses the paired lane there, and one before 0.47 carries no
-    /// `PUT` or `PATCH`. That refusal stands only when HTTPS can't be reached either.
+    /// management port, then over HTTPS, with failures mapped by ``transportFailure(_:)``. The
+    /// stream port's answer stands, except 401, 403 and 405: a host that predates stamping the
+    /// client certificate on its tunnel refuses the paired lane there, and one before 0.47
+    /// carries no `PUT` or `PATCH`. That refusal stands only when HTTPS can't be reached either.
     static func send(
         _ path: String, to target: MgmtTarget, method: String = "GET",
         body: (data: Data, contentType: String)? = nil

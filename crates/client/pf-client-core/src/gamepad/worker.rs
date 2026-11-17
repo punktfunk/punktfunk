@@ -48,8 +48,8 @@ fn deck_imu_off(pref: GamepadPref, gyro: [i16; 3], accel: [i16; 3]) -> bool {
     pref == GamepadPref::SteamDeck && gyro == [0; 3] && accel == [0; 3]
 }
 
-/// Open-pad battery re-read. 15 s is coarser than a percent move, finer than the
-/// worker loop; the read is a cached HID report.
+/// Open-pad battery re-read, far slower than the worker loop's tick (see [`run`]). The read
+/// is a cached HID report.
 const BATTERY_POLL: Duration = Duration::from_secs(15);
 
 /// Open-pad power report. `None` is wired-no-battery, error, unknown, and SDL's `-1`
@@ -270,7 +270,6 @@ fn menu_sample(pad: &sdl3::gamepad::Gamepad) -> MenuSample {
 /// Fold every open pad into the one sample [`MenuNav`] steps: buttons and dpad OR'd, stick
 /// from whoever is furthest off centre. Two pads pushing at once read as one hand instead of
 /// cancelling, and one `MenuNav` keeps one repeat clock — per-pad ones race on the same list.
-/// The Skia console already merges this way (`console/mod.rs`); this is the desktop half.
 fn merge_samples(samples: &[MenuSample]) -> MenuSample {
     let mut out = MenuSample::default();
     let mut best = -1i64;
@@ -313,7 +312,6 @@ fn input_pad(event: &sdl3::event::Event) -> Option<u32> {
     }
 }
 
-/// SDL sticks are +y = down; the wire (XInput) is +y = up. Triggers 0..32767 → 0..255.
 /// Every SDL button [`button_bit`] maps.
 const BUTTONS: [sdl3::gamepad::Button; 22] = {
     use sdl3::gamepad::Button::*;
@@ -371,6 +369,7 @@ fn pad_reading(pads: &[(u32, &sdl3::gamepad::Gamepad)]) -> PadReading {
     reading
 }
 
+/// SDL sticks are +y = down; the wire (XInput) is +y = up. Triggers 0..32767 → 0..255.
 fn axis_value(axis: sdl3::gamepad::Axis, v: i16) -> (u32, i32) {
     use sdl3::gamepad::Axis;
     match axis {
@@ -631,8 +630,8 @@ impl Worker {
             return real;
         }
         // Every pad is virtual: Steam Input is wrapping all of them, so none is a shadow of
-        // another and forwarding the lot double-counts nothing. Taking only the newest is
-        // what left a Deck with two controllers seeing just one.
+        // another and forwarding the lot double-counts nothing. Taking only the newest would
+        // leave a Deck with two controllers seeing just one.
         self.order.clone()
     }
 
@@ -1960,8 +1959,8 @@ mod menu_merge_tests {
             buttons: [true, false, false, false, false, false],
             ..MenuSample::default()
         };
-        // Player 2's A must survive the fold: the bug was that only one pad was ever
-        // polled, so a second controller confirmed nothing until a session attached.
+        // Player 2's A must survive the fold: polling only one pad would leave a second
+        // controller confirming nothing until a session attached.
         assert!(merge_samples(&[idle, pressing]).buttons[0]);
         assert!(merge_samples(&[pressing, idle]).buttons[0]);
         assert!(!merge_samples(&[idle, idle]).buttons[0]);

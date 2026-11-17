@@ -1,6 +1,5 @@
-# pf-gamepad - punktfunk virtual gamepads (DualSense / DualShock 4 / DualSense Edge / Steam Deck),
-# ONE UMDF2 HID minidriver serving all four identities. Named for the role, not for one of them —
-# it was `pf-dualsense`, which read as if the other three were somewhere else.
+# pf-gamepad - punktfunk virtual gamepads: ONE UMDF2 HID minidriver serving every pad identity
+# (PlayStation, Steam, Switch, Xbox, 8BitDo, Hori). Named for the role, not for one of them.
 # A member of the in-tree drivers workspace (shares the vendored wdk-sys/wdk-build with the bindgen pin
 # + the crt-static .cargo/config), built from source per release like pf-vdisplay.
 [package]

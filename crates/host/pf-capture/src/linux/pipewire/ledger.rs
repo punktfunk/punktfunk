@@ -264,9 +264,9 @@ impl UserData {
                  covers the frame encoded from the earlier read (PipeWire < 1.6)"
             );
         }
-        // A hold the encoder dropped during this `.process` (the fence wait above is where it
-        // lands) still counts against the pool until the loop services the wake — after this
-        // callback. Requeue it now, so the arrival spends a budget that is current.
+        // A hold the encoder dropped since the loop last drained still counts against the pool
+        // until the loop services the wake — after this callback. Requeue it now, so the
+        // arrival spends a budget that is current.
         // SAFETY: `stream` is the stream whose `.process` is running on this loop thread.
         unsafe { self.ledger.drain(stream) };
         let pool_live = self.pool.live;
@@ -330,8 +330,8 @@ impl UserData {
 ///
 /// `live` comes from `add_buffer`/`remove_buffer` on the loop thread. There is no "pool
 /// complete" event, so the count is published from `.process` (first dequeue ⇒ allocation
-/// finished). Depth is the budget a hold spends; a pool of ≤ [`SHALLOW_POOL`] cannot defer
-/// and the producer may rewrite a buffer mid-encode.
+/// finished). Depth is the budget a hold spends; a pool of ≤ [`SHALLOW_POOL`] cannot defer,
+/// so its frames take the lane's fallback.
 #[derive(Debug, Default, Clone, Copy)]
 pub(super) struct PoolCensus {
     pub(super) live: u32,
@@ -376,7 +376,7 @@ pub(super) const SHALLOW_POOL: u32 = 2;
 
 /// Pool the raw lane asks for: four encoder holds, the host frame, the capture slot, and two
 /// buffers reserved for the producer. A producer capped below this spends only the holds it
-/// serves; [`UserData::release_unconsumed`] frees the slot's for the next arrival.
+/// serves.
 const RAW_LANE_POOL_MIN: i32 = 8;
 
 /// Least pool depth this stream asks for: the producer's minimum, deepened to
@@ -932,8 +932,8 @@ mod tests {
         assert_eq!(p.high_water, 0);
     }
 
-    /// The raw lane deepens the ask to 6 unless the producer caps lower; KWin fails negotiation
-    /// above its cap, so there the ask stays 4.
+    /// The raw lane deepens the ask to `RAW_LANE_POOL_MIN` unless the producer caps lower; KWin
+    /// fails negotiation above its cap, so there the ask stops at `KWIN_POOL_MAX`.
     #[test]
     fn the_raw_lane_pool_ask_stops_at_the_producers_cap() {
         assert_eq!(pool_ask(crate::POOL_MIN, None, false), crate::POOL_MIN);

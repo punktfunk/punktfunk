@@ -296,7 +296,7 @@ impl StreamState {
     /// repairs it, and a re-ask past the anchor's flight forces the IDR.
     pub(super) fn on_recovery_requests(&mut self) {
         let mut want_kf = false;
-        // Staged recovery closed on real source frames (WP14): the client held the last image
+        // Staged recovery closed on real source frames: the client held the last image
         // through the hole, so the next AU is an IDR, owed in-flight records are invalid, and
         // the measured local outage is announced so the straddling window is not scored as
         // congestion.
@@ -1481,10 +1481,9 @@ mod tests {
         ));
     }
 
-    /// The 2026-08-13 field log's exact reading — `period_s=2.0` — must be attributed to the
-    /// client's backlog shedding, not to a host display disturbance. The whole point of routing
-    /// on the shared constant is that this stays true if the cooldown is ever retuned, so the
-    /// test derives its cases from `FLUSH_COOLDOWN` instead of hardcoding two seconds.
+    /// A recovery cadence at the client's flush cooldown is attributed to the client's backlog
+    /// shedding, not to a host display disturbance. The cases derive from `FLUSH_COOLDOWN`, so
+    /// they hold if the cooldown is retuned.
     #[test]
     fn a_recovery_cadence_on_the_clients_cooldown_is_not_blamed_on_the_display() {
         let flush = punktfunk_core::reanchor::FLUSH_COOLDOWN;

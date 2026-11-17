@@ -33,7 +33,7 @@ pub unsafe extern "C" fn punktfunk_connection_host_caps(
     conn_out!(c, caps => c.inner.host_caps())
 }
 
-/// Second host capability byte from `Welcome` — today `PUNKTFUNK_HOST_CAP2_TOUCH`.
+/// Second host capability byte from `Welcome` (`PUNKTFUNK_HOST_CAP2_*`).
 /// `0` toward a host that never sends the byte. Safe any time after connect.
 ///
 /// # Safety

@@ -1,7 +1,7 @@
 //! `punktfunk-setup-pack`: the console-subsystem sibling that assembles the D3 sandwich
 //! (`pack`), the payload-less uninstaller (`pack-uninstaller`, D6) and reads one back
 //! (`inspect`). Console on purpose: PowerShell's `&` neither waits for nor captures a
-//! GUI-subsystem exe (S2). Cross-platform so the step and its tests run anywhere.
+//! GUI-subsystem exe. Cross-platform so the step and its tests run anywhere.
 //!
 //! The runtime set is whatever `windows_reactor_setup::as_self_contained` staged next to the
 //! built wizard: every non-cargo file and every locale dir in the wizard's target dir — which
@@ -329,7 +329,7 @@ mod tests {
         payload::extract(overlay::extract(&data).unwrap(), dst.path()).unwrap();
         assert!(dst.path().join("runtime/microsoft.ui.xaml.dll").is_file());
         assert!(!dst.path().join("app").exists());
-        // The installer is bigger than its uninstaller by exactly the app tree's worth.
+        // The installer carries the app tree, so it is bigger than its uninstaller.
         assert!(std::fs::metadata(&setup).unwrap().len() > data.len() as u64);
     }
 

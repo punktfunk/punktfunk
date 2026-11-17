@@ -1,7 +1,7 @@
-//! Software H.264 encoder (openh264): GPU-less path for the Windows host, and
-//! the fallback when NVENC is unavailable. Low-latency screen-content config:
-//! single-reference, Baseline (no B-frames), bitrate RC, in-band SPS/PPS each
-//! IDR. `submit` encodes immediately and stashes the AU for `poll`.
+//! Software H.264 encoder (openh264): the GPU-less path, Linux only. A `software` pin of
+//! `PUNKTFUNK_ENCODER` or `open_software_h264` opens it; `auto` never does. Low-latency
+//! screen-content config: single-reference, Baseline (no B-frames), bitrate RC, in-band
+//! SPS/PPS each IDR. `submit` encodes immediately and stashes the AU for `poll`.
 //!
 //! RGB→YUV is ours, BT.709 at the session's range (full, or studio where the
 //! client asked). The crate `YUVBuffer` converter is BT.601; decoded-as-709 that
@@ -246,7 +246,7 @@ impl Encoder for OpenH264Encoder {
     }
 }
 
-/// Rare automatic IDRs (recovery is `request_keyframe` / RFI). `gop`
+/// Rare automatic IDRs (recovery is `request_keyframe`; this encoder has no RFI). `gop`
 /// (`PUNKTFUNK_OH264_GOP`) overrides (0 = encoder-auto).
 fn intra_period_frames(fps: u32, gop: Option<u32>) -> u32 {
     gop.unwrap_or_else(|| fps.max(1).saturating_mul(600)) // ~10 min between automatic IDRs

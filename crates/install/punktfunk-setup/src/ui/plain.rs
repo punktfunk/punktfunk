@@ -1,7 +1,7 @@
-//! The no-TTY / `--yes` renderer: the sh installer's `==>` / `ok` / `!!` lines.
+//! The no-TTY / `--yes` renderer: `==>` / `ok` / `!!` lines.
 //!
-//! D5: a box with no terminal sees that output byte-for-byte, so CI containers
-//! and scripts do not notice a renderer swap. Warnings and the die line stay
+//! D5: a box with no terminal sees a transcript the plan goldens pin byte for byte, so CI
+//! containers and scripts do not notice a renderer swap. Warnings and the die line stay
 //! on stderr for the same reason. The TUI renders the same `Plan` through a
 //! different surface; nothing below `ui` knows which one is attached.
 //!

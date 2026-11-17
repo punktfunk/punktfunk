@@ -16,10 +16,10 @@
 // `pf://` parses as an alias so a hand-typed or legacy link still works, but nothing ever *emits*
 // or registers it (design/client-deep-links.md §2).
 //
-// This is a port of `crates/client/pf-client-core/src/deeplink.rs`, and the two are held together by
-// `clients/shared/deeplink-vectors.json` — cases for every refusal code, run verbatim by
-// both test suites. Change one parser and the other's suite fails, which is the point: three
-// parsers that drift are three different security postures.
+// This is a port of `crates/client/pf-client-core/src/deeplink.rs`, and Rust, Kotlin and Swift are
+// held together by `clients/shared/deeplink-vectors.json` — cases for every refusal code, run
+// verbatim by all three test suites. Change one parser and the others' suites fail, which is the
+// point: three parsers that drift are three different security postures.
 
 import Foundation
 
@@ -37,7 +37,7 @@ public enum DeepLinkLimits {
 /// The default native port, as everywhere else in the clients.
 public let punktfunkDefaultPort: UInt16 = 9777
 
-/// What the URL asks for. `wake`/`browse` are reserved in the grammar and parse today; a front-end
+/// What the URL asks for. `wake`/`browse` are reserved in the grammar and parse; a front-end
 /// that hasn't implemented them refuses with a notice rather than silently connecting — the
 /// grammar is the contract, per-platform support is not.
 public enum DeepLinkRoute: String, Equatable, Sendable {
@@ -77,7 +77,7 @@ public enum DeepLinkError: Error, Equatable, Sendable {
     case badFingerprint
     /// `host=` that isn't `addr[:port]` with a parsable port.
     case badHostParam
-    /// `launch=` outside the printable, shell-safe id charset the host and Decky agree on.
+    /// `launch=` outside the charset `isSafeLaunchID` accepts.
     case badLaunchID
 
     /// The stable code shared with the Rust/Kotlin ports and the vector file.
@@ -97,8 +97,8 @@ public enum DeepLinkError: Error, Equatable, Sendable {
         }
     }
 
-    /// A sentence for the notice a refusing front-end shows. Deliberately names the failing
-    /// reference: a shortcut that can't honor what it asked for says so instead of streaming with
+    /// A sentence for the notice a refusing front-end shows, naming the part of the link that
+    /// failed where it can: a shortcut that can't be honored says so instead of streaming with
     /// the wrong settings.
     public var message: String {
         switch self {
@@ -133,7 +133,7 @@ public struct DeepLink: Equatable, Sendable {
     public var preset: String?
     /// The host profile to play as (id, or a unique name): this connect only, never saved.
     public var asProfile: String?
-    /// Display label for the unknown-host confirmation sheet (external emitters).
+    /// Display label for the unknown-host notice (external emitters).
     public var name: String?
 
     public static let scheme = "punktfunk"
@@ -207,8 +207,9 @@ public struct DeepLink: Equatable, Sendable {
     }
 
     /// The self-emitted form for a saved host: id first (address-independent), with the address
-    /// and pin alongside so the link degrades to a confirmation sheet instead of a dead click when
-    /// the record is gone ("Copy link", and any shortcut written from a card).
+    /// and pin alongside so a link whose record is gone still finds the host at that address,
+    /// behind a confirmation, or names it in a notice ("Copy link", and any shortcut written from
+    /// a card).
     public static func forHost(
         _ host: StoredHost, launch: String? = nil, preset: String? = nil
     ) -> DeepLink {
@@ -397,8 +398,8 @@ public struct DeepLink: Equatable, Sendable {
         /// `host=` recovery parameter. A link may not act on a guess, so this one waits for the
         /// user's confirmation; past that it is the `.known` path exactly.
         case confirm(StoredHost)
-        /// No record, but the link says where to dial: the confirmation sheet's input, from which
-        /// the normal pairing flow proceeds under the user's eyes. Never an auto-connect.
+        /// No record, but the link says where to dial. `DeepLinkRouter` turns it into a notice that
+        /// names the target, never a connect.
         case unknown(address: String, port: UInt16, name: String?, fp: String?)
         /// The name matched more than one saved host — refuse with a notice, never guess.
         case ambiguous
@@ -454,10 +455,10 @@ public struct DeepLink: Equatable, Sendable {
         return DeepLinkAddress(head, port)
     }
 
-    /// The launch-id charset the whole product already agrees on: printable, non-space ASCII with
-    /// no shell metacharacters (Decky rides ids through Steam launch options as an env token, so a
-    /// quote or a backtick genuinely breaks something downstream). Validation only — the id is
-    /// opaque and the host matches it verbatim against its own library.
+    /// The launch-id charset the Rust, Kotlin and Swift parsers share: printable, non-space ASCII
+    /// without `"`, `'`, `\`, `$` or a backtick. Decky rides ids through Steam launch options as
+    /// an env token and applies its own, narrower allowlist. Validation only — the id is opaque
+    /// and the host matches it verbatim against its own library.
     static func isSafeLaunchID(_ id: String) -> Bool {
         // `"`, `'`, `\`, `$`, backtick — spelled as bytes because a Swift literal holding all five
         // is its own little escaping puzzle, and this list must read exactly like the Rust one.

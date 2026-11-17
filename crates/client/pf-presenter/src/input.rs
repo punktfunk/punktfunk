@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 impl Act {
     /// Motion/scroll packing for the wire. Lives here, not in `touch.rs`: the
-    /// gesture engine must not take the platform-gated core dependency.
+    /// gesture engine takes no `punktfunk_core` dependency.
     pub fn wire(self) -> Option<(InputKind, u32, i32, i32, u32)> {
         match self {
             Act::MoveRel { dx, dy } => Some((InputKind::MouseMove, 0, dx, dy, 0)),

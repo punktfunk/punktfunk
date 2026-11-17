@@ -26,7 +26,7 @@ pub const PROBE_MARKER: &str = "PunktfunkAudioProbe";
 /// Device Manager name until the INF install overwrites it.
 const PROBE_DESC: &str = "Punktfunk Audio Probe";
 const ENDPOINT_WAIT: Duration = Duration::from_secs(15);
-/// Tone renders at 0.5; autoconvert may attenuate. Above this is signal.
+/// Tone renders at `pad_capture::TONE_AMP`; autoconvert may attenuate. Above this is signal.
 const SIGNAL_FLOOR: f32 = 0.05;
 
 pub fn run(args: &[String]) -> Result<()> {
@@ -77,7 +77,6 @@ pub fn run(args: &[String]) -> Result<()> {
         // ~220 = some link is half the declared rate.
         Some("micpitch") => {
             super::minted::ensure_blocking();
-            // `minted_ids` hides the mic pair (raw stereo→mono reads an octave low).
             let Some(m) = super::minted::provisioned() else {
                 bail!("nothing minted on this box — run `audio-probe mint` first");
             };

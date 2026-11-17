@@ -1,8 +1,8 @@
-# Build the punktfunk-host / punktfunk-client / punktfunk-web / punktfunk-scripting pacman packages from
-# packaging/arch/PKGBUILD and publish them to Gitea's Arch package registry, so Arch boxes
+# Build the punktfunk-host / -client / -icons / -seats / -web / -scripting / -bun pacman packages
+# from packaging/arch/PKGBUILD and publish them to Gitea's Arch package registry, so Arch boxes
 # get new builds via `pacman -Syu`. Counterpart to deb.yml (apt) and rpm.yml (dnf/rpm-ostree).
-# Arch is rolling, so the packages build against whatever the archlinux:base-devel container
-# resolves today — the same sonames an up-to-date Arch box runs.
+# Arch is rolling, so the packages build against the Arch snapshot baked into the arch-ci image
+# (ci/arch-ci.Dockerfile); the install check below tests them against the current repos.
 #
 # Registry (public, unom org) — box setup (once), see packaging/arch/README.md. The registry
 # SIGNS the DB + packages, so the box imports the registry key first (pacman-key --add +
@@ -113,12 +113,11 @@ on:
     # tags to `punktfunk` — separate repos, so neither channel can shadow the other.
     tags: ['v*']
   # REBUILDING A PUBLISHED RELEASE, because on a rolling distro the ground moves under one.
-  # Arch went FFmpeg 8 -> 9 (every libav soname +1) four minutes before v0.25.0 was tagged, and
-  # the release's punktfunk-host — which linked libav* back then — shipped a bound no up-to-date
-  # box could satisfy. pacman prepares the whole transaction at once, so it did not merely block
-  # our package, it blocked those users' entire `pacman -Syu`. The host links no libav* now, but
-  # any shared library can do this again. The repair is a rebuild of the SAME version at a HIGHER
-  # pkgrel; nothing else reaches a box that already has the broken build recorded in its db.
+  # A system-library soname bump can leave a published package with a dependency bound no
+  # up-to-date box can satisfy. pacman prepares the whole transaction at once, so that blocks the
+  # users' entire `pacman -Syu`, not just our package. The repair is a rebuild of the SAME
+  # version at a HIGHER pkgrel; nothing else reaches a box that already has the broken build
+  # recorded in its db.
   # The workflow file at the tag can never carry inputs added after it was tagged, so dispatch
   # this from `main`: it checks the tag's SOURCE out, publishes to the STABLE repo, and
   # replaces the release-page assets. Same lever for any future "the distro moved" rebuild.
@@ -159,9 +158,9 @@ jobs:
   build-publish:
     runs-on: ubuntu-24.04
     container:
-      # Everything the two pacman steps below used to download (~1 GB/run) is baked in,
-      # plus bun, sccache and node (ci/arch-ci.Dockerfile). The steps stay as --needed
-      # no-op guards for the one push where :latest lags an image-content change.
+      # The build deps of the two pacman steps below, plus bun, sccache and node, are baked
+      # in (ci/arch-ci.Dockerfile). The steps stay as --needed no-op guards for the one push
+      # where :latest lags an image-content change.
       image: 192.168.1.58:5010/punktfunk-arch-ci:latest
     timeout-minutes: 90
     env:
@@ -262,7 +261,7 @@ jobs:
         run: |
           cd web
           # Retried: bun's download-and-extract is single-shot, and a truncated tarball reads as
-          # `Fail extracting tarball` (ci.yml's web job has the measurement).
+          # `Fail extracting tarball` (ci.yml's web job has the failure mode).
           bash ../scripts/ci/retry.sh 3 bun install --frozen-lockfile --ignore-scripts
           bun run build
 
@@ -292,7 +291,7 @@ jobs:
             echo "== libcuda stub: $(printf '%s\n' "$CU_SYMS" | wc -l) symbols =="
           fi
           # makepkg refuses to run as root; deps are already installed above (-d skips the
-          # RPM-level check that can't see the script-installed bun anyway).
+          # dependency check that can't see the script-installed bun anyway).
           useradd -m builder
           mkdir -p "$CARGO_HOME"   # actions/cache doesn't create it on a cache miss
           chown -R builder: "$PWD" "$CARGO_HOME"
@@ -322,11 +321,10 @@ jobs:
             AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
             sccache --show-stats || true
 
-      # 0.26.0-1 setcap'd `cap_sys_nice=ep` on the host from this package's .INSTALL scriptlet and
-      # killed desktop streaming on every KDE box — with a green board, because nothing here ever
-      # looked at what the built package would DO. The lesson recorded then was "verify the
-      # PACKAGE, never the board"; this is that, and pacman is the channel where it matters most,
-      # since capabilities live in the scriptlet rather than in package metadata.
+      # Verify the PACKAGE, not the board: a capability on the host (setcap in the .INSTALL
+      # scriptlet) kills desktop streaming on KDE, and nothing else looks at what the built
+      # package would DO. Pacman is the channel where it matters most, since capabilities live in
+      # the scriptlet rather than in package metadata.
       #
       # Host must carry NOTHING, the worker exactly cap_sys_nice=ep. `--self-test` runs first so a
       # guard that has quietly lost the ability to fail takes the job down rather than approving a
@@ -338,7 +336,7 @@ jobs:
           bash scripts/ci/assert-cap-matrix.sh "$GITHUB_WORKSPACE"/dist/punktfunk-host-*.pkg.tar.zst
 
       # Every path packaging/linux/payload.txt names, read out of the built packages
-      # (usr/libexec/punktfunk/ is usr/lib/punktfunk/ here).
+      # (usr/libexec/punktfunk/ reads usr/lib/punktfunk/ here, except in seats).
       - name: Assert the shared payload (Arch packages)
         run: |
           bash scripts/ci/assert-payload-parity.sh --self-test
@@ -380,17 +378,16 @@ jobs:
           fi
           ls -lh dist-gamescope
 
-      # THE GATE THIS PIPELINE WAS MISSING. v0.25.0 shipped a soname bound the world had already
-      # moved past — every affected user got "unable to satisfy dependency … required by
-      # punktfunk-host", and because pacman prepares one transaction, their whole system upgrade
-      # stopped there. So ask the only question that matters before publishing: would a real,
-      # up-to-date Arch box install this?
+      # The gate before publishing: would a real, up-to-date Arch box install this? A soname
+      # bound the world has moved past makes pacman fail with "unable to satisfy dependency …
+      # required by punktfunk-host", and because pacman prepares one transaction, the user's
+      # whole system upgrade stops there.
       #
       # An empty --dbpath is what makes the answer honest. It means "nothing is installed", so
       # pacman must satisfy every dependency FROM THE REPOS exactly as a user's box does. Checking
       # against the builder's own installed set instead would let a stale package satisfy a stale
-      # bound and hide the break completely — the very illusion that shipped v0.25.0. `--print`
-      # resolves and prints; it downloads nothing and installs nothing.
+      # bound and hide the break completely. `--print` resolves and prints; it downloads nothing
+      # and installs nothing.
       - name: Assert every package installs on an up-to-date Arch box
         run: |
           export LC_ALL=C
@@ -408,9 +405,9 @@ jobs:
           # ONE transaction for the whole built set — the shape reality takes (the published repo
           # carries the siblings, so `pacman -S punktfunk-host` resolves punktfunk-icons from it)
           # and the only shape -U --print can verify: file targets resolve against the sync db
-          # PLUS each other, and a split-package dependency exists only as a sibling file here.
-          # Checking one file at a time turned exactly that into a false "cannot be installed"
-          # (punktfunk-icons, run 16446). pacman's own error text names the offending package.
+          # PLUS each other, and a split-package dependency (punktfunk-icons) exists only as a
+          # sibling file here. Checking one file at a time reports a false "cannot be installed".
+          # pacman's own error text names the offending package.
           if out="$(check dist/*.pkg.tar.zst dist-gamescope/*.pkg.tar.zst)"; then
             echo "OK  the built set resolves together ($(echo "$out" | wc -l) targets)"
           else
@@ -429,9 +426,8 @@ jobs:
 
       # The dry-resolve above stops BEFORE pacman's file-conflict phase (`-U --print` only
       # resolves), so two packages shipping the same path sail through it and then refuse to
-      # coexist on a real box — found live when host and client both shipped the brand SVG and
-      # installing the second died with "exists in filesystem". File lists are in the packages
-      # we just built; compare them directly.
+      # coexist on a real box: installing the second dies with "exists in filesystem". File
+      # lists are in the packages we just built; compare them directly.
       - name: Assert no two packages ship the same file
         run: |
           dup=$(for p in dist/*.pkg.tar.zst dist-gamescope/*.pkg.tar.zst; do
@@ -495,11 +491,9 @@ jobs:
           # ⚠⚠ THIS MUST LIVE IN THE WORKFLOW, NOT IN scripts/ci/gitea-release.sh. The sourced
           # script comes from the CHECKED-OUT TREE, which on a release rebuild is the OLD TAG —
           # so it can only ever offer the helpers that existed when that tag was cut. A helper
-          # added for this feature is therefore guaranteed ABSENT in the one code path that
-          # calls it: the first attempt failed with `prune_release_assets: command not found`
-          # after publishing perfectly. Only the workflow file itself is taken from the ref you
-          # dispatch. Same reason a packaging fix made after a tag does NOT reach a rebuild of
-          # that tag — the PKGBUILD is the tag's too.
+          # added for this step would be ABSENT in the one code path that calls it. Only the
+          # workflow file itself is taken from the ref you dispatch. Same reason a packaging fix
+          # made after a tag does NOT reach a rebuild of that tag — the PKGBUILD is the tag's too.
           if [ -n "${RELEASE_TAG:-}" ]; then
             KEEP="$(cd dist && printf '%s ' *.pkg.tar.zst)"
             # An UNMATCHED glob would come through literally and match nothing in the keep set —

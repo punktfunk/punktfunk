@@ -752,8 +752,7 @@ fn nvenc_reconfigure_no_idr() {
 
 /// Check that `nvEncReconfigureEncoder` accepts a changed `splitEncodeMode` with
 /// `resetEncoder=0` and emits no IDR on D3D11. Also checks `query_caps` latches
-/// `NUM_ENCODER_ENGINES` and that an over-ask (3-way split on a 2-engine card)
-/// is why the clamp exists. Reports rather than asserts: both outcomes are findings.
+/// `NUM_ENCODER_ENGINES`. Reports rather than asserts: both outcomes are findings.
 #[test]
 #[ignore = "requires an NVIDIA GPU + driver — run manually on the RTX Windows box"]
 fn nvenc_split_reconfigure_in_place() {

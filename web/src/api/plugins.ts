@@ -25,7 +25,7 @@ export const LIBRARY_CATEGORY = "library";
 export const METADATA_CATEGORY = "metadata";
 
 // A curated lucide set for plugin nav icons. Importing lucide's full dynamic icon map would defeat
-// tree-shaking (U-S4), so a plugin picks a name from here; anything unknown falls back to Puzzle.
+// tree-shaking, so a plugin picks a name from here; anything unknown falls back to Puzzle.
 const ICONS: Record<string, LucideIcon> = {
 	"gamepad-2": Gamepad2,
 	puzzle: Puzzle,
@@ -61,10 +61,9 @@ const BOOST_MS = 60_000;
 /**
  * Until this timestamp, poll the directory fast.
  *
- * A finished install is NOT the moment the plugin appears: the host restarts the scripting runner
- * afterwards, and the plugin only registers its UI once that comes back — several seconds later,
- * and after any one-shot invalidation has already run and found the old list. So the nav sat
- * unchanged until the 30 s idle poll happened to land, which in practice meant "until I reloaded".
+ * A finished install is NOT the moment the plugin appears: the job's last step restarts the
+ * scripting runner, and the plugin only registers its UI once that comes back — after any
+ * one-shot invalidation has already run and found the old list.
  *
  * Module-level rather than component state because the two things that need to trigger it (a store
  * job settling, a `plugins.changed`/`store.changed` event) both live outside the nav.

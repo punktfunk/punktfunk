@@ -19,7 +19,7 @@ const policy = (over: Partial<EffectivePolicy>): EffectivePolicy => ({
 	...over,
 });
 
-/** The five shipped presets, by the fields the host expands them to. */
+/** The shipped presets but `play-together`, by the fields the host expands them to. */
 const PRESETS: Record<string, EffectivePolicy> = {
 	default: base,
 	"gaming-rig": policy({
@@ -65,8 +65,7 @@ describe("describePolicy (en)", () => {
 		);
 	});
 
-	// The tail is the whole point of deleting the old pending note: it was shown always, so it
-	// said nothing. It is true only while a session is holding the old policy.
+	// The tail is true only while a session is holding the old policy.
 	test("the next-connect tail appears only while a session is live", () => {
 		expect(describePolicy(base)).not.toContain(
 			"Applies to the next connection.",

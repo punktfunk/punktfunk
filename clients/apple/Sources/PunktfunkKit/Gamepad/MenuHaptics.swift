@@ -27,7 +27,7 @@ public final class MenuHaptics {
     }
 
     /// A light, crisp detent — one per menu step. Deliberately tiny so a held direction repeating
-    /// at ~5 Hz reads as a smooth ratchet rather than a jackhammer.
+    /// at `GamepadMenuInput.repeatInterval` reads as a smooth ratchet rather than a jackhammer.
     public func move() {
         play(intensity: 0.45, sharpness: 0.75, duration: 0.02)
     }

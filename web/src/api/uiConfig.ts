@@ -1,23 +1,22 @@
 // Where plugin UIs live, from the server that knows.
 //
-// Plugin UIs are served from a DIFFERENT ORIGIN than the console (2026-08-05 review H-3): same
-// scheme and host, its own port. The console has to build iframe and new-tab URLs against that
-// origin, and the port has to come from the server — only it knows whether the listener bound.
+// Plugin UIs are served from a DIFFERENT ORIGIN than the console: same scheme and host, its own
+// port. The console has to build iframe and new-tab URLs against that origin, and the port has to
+// come from the server — only it knows whether the listener bound.
 import { useQuery } from "@tanstack/react-query";
 import type { UiConfig } from "../../server/routes/_auth/ui-config.get";
 
 /**
  * Deployment facts the console cannot infer.
  *
- * Polled, and it did not used to be: the ports genuinely cannot change without a server restart
- * (which reloads the page), so this was cached for the session — but the THEME on the same payload
- * changes whenever the user runs `omarchy-theme-set`, and a console that only asked at startup sat
- * in the old palette until someone reloaded it by hand. Polling and not pushing because the
- * console's SSE stream is a proxy of the HOST's, and the host reads nothing about themes.
+ * Polled: the ports cannot change without a server restart (which reloads the page), but the
+ * THEME on the same payload follows the desktop, e.g. whenever the user runs `omarchy-theme-set`.
+ * Polling and not pushing because the console's SSE stream is a proxy of the HOST's, and the
+ * host's event kinds (`HOST_EVENT_KINDS`) include no theme change.
  *
  * The interval does not run while the tab is in the background (TanStack's default), and the
- * refetch-on-focus this re-enables means switching theme and looking at the console is already
- * enough. One small local file read per tick.
+ * refetch on window focus means switching theme and looking at the console is already enough. A
+ * tick costs the server one small file read and, with no Omarchy theme, one request to the host.
  */
 export const useUiConfig = () =>
 	useQuery({

@@ -18,18 +18,14 @@ crate-type = ["cdylib"]
 # the punktfunk/1 control plane, whose TLS runs on aws-lc-rs (see punktfunk-core/Cargo.toml) —
 # aws-lc-sys cross-compiles for all three ABIs with the NDK clang cargo-ndk already exports.
 punktfunk-core = { path = "../../../crates/core/punktfunk-core", features = ["quic"] }
-# 0.22, NOT 0.21 — and the version is load-bearing beyond currency: `rustls-platform-verifier`
-# (via quinn-proto, for Android cert verification) already depends on jni 0.22, so pinning 0.21
-# here compiled TWO jni copies into the one .so. Matching it collapses them and, with them, the
-# whole windows-rs 0.42 generation jni 0.21 dragged in behind `cfg(windows)` (windows-sys 0.45 —
-# the oldest crate in the tree — plus windows-targets 0.42.2 and its seven per-arch import libs)
-# and jni 0.21's `cesu8`: 11 crates, for a dependency that never even builds on Android.
+# 0.22, to match `rustls-platform-verifier` (via quinn-proto, for Android cert verification),
+# which depends on jni 0.22: any other version here compiles a second jni copy into the one .so.
 #
-# NOTE for whoever next tries to retire thiserror 1.0 or the jni-sys 0.3/0.4 split: jni is no
-# longer why they are here. Both now come solely from `vendor/ndk` 0.9.0 (thiserror 1.0.23,
-# jni-sys 0.3) and the crates.io `ndk-sys` 0.6 (jni-sys 0.3). jni-sys 0.3.1 is itself a facade
-# over 0.4.1, so the "split" cannot close until ndk + ndk-sys move — and ndk is vendored for one
-# visibility patch, so bumping its deps would mean rewriting the vendor rather than a version edit.
+# NOTE for whoever next tries to retire thiserror 1.0 or the jni-sys 0.3/0.4 split: jni does not
+# pull them. They come from `vendor/ndk` 0.9.0 (thiserror 1.0.23, jni-sys 0.3) and the crates.io
+# `ndk-sys` 0.6 (jni-sys 0.3). jni-sys 0.3.1 is itself a facade over 0.4.1, so the "split" cannot
+# close until ndk + ndk-sys move, and ndk is vendored for a small patch set, so bumping its deps
+# means rewriting the vendor rather than a version edit.
 jni = "0.22"
 log = "0.4"
 # LAN host discovery: `pf_client_core::discovery::try_browse`, the browse the Linux and Windows
@@ -49,29 +45,29 @@ pf-l10n = { path = "../../../l10n", features = ["android", "client"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# ARMv7 TV boxes use software AES. Add the faster streaming backend only to that ABI; arm64 keeps
+# ARMv7 TV boxes use software AES, so they ask for ChaCha20-Poly1305
+# (`session::connect::video_caps`). Add its faster native backend only to that ABI; arm64 keeps
 # its hardware-accelerated AES path and the emulator does not pay for an unused backend.
 [target.'cfg(all(target_os = "android", target_arch = "arm"))'.dependencies]
 punktfunk-core = { path = "../../../crates/core/punktfunk-core", features = ["chacha-aws-lc-rs"] }
 
 # Android-only deps. Gated so `cargo build --workspace` on the Linux/macOS dev boxes + CI still
 # compiles this crate (as a host cdylib) — the Android-framework glue (logging, AMediaCodec + AAudio
-# via `ndk`, the Opus codec) is only pulled in for the real `*-linux-android` targets.
+# via `ndk`) is only pulled in for the real `*-linux-android` targets.
 [target.'cfg(target_os = "android")'.dependencies]
 # Default features only, DELIBERATELY: 0.15 added an opt-in `android-api-30` feature that routes
 # level filtering through `__android_log_is_loggable_len` so logcat's system-wide/process-wide
 # level overrides (`setprop log.tag.*`) are honoured. That symbol is API 30 and the feature
 # HARD-LINKS it — on our minSdk-28 floor (Android 9/10) `System.loadLibrary` would fail outright,
-# the same way ndk 0.9.0 hard-linking `AMediaCodec_setOnFrameRenderedCallback` broke every
-# pre-Android-13 device (see the `ndk-sys` note below). Do not enable it while minSdk is 28.
+# as any hard import of an above-floor symbol does (see the `ndk-sys` note below). Do not enable
+# it while minSdk is 28.
 android_logger = "0.15"
 # Feature bridge, no code here: punktfunk-core logs through `tracing`, but this client only
 # installs `android_logger` (a `log` backend). Core transport warnings (e.g. "UDP socket buffer
 # capped well below target") reach logcat only via tracing's "log" feature, which forwards events
-# as `log` records when no tracing subscriber is set (always, here). Today that feature happens to
-# be enabled transitively — quinn's default `log` feature unifies `tracing/log` onto the whole
-# graph — but nothing about this client's logging should hinge on a QUIC crate's default feature
-# set, so declare it explicitly.
+# as `log` records when no tracing subscriber is set (always, here). The same feature is also
+# enabled by punktfunk-core's own `tracing` dep and the workspace's quinn `log` feature, but this
+# client's logging should not hinge on another crate's feature set, so declare it explicitly.
 tracing = { version = "0.1", default-features = false, features = ["std", "log"] }
 # NDK bindings. "media" = AMediaCodec/ANativeWindow (video); "audio" = AAudio (audio playback).
 # Pure-Rust FFI to libmediandk/libnativewindow/libaaudio — no C++/libc++_shared to bundle. Decode +
@@ -86,11 +82,11 @@ ndk = { version = "0.9", features = ["media", "audio", "nativewindow", "api-leve
 # `AMediaCodec_setOnFrameRenderedCallback` — the per-frame render-timestamp callback behind the
 # HUD's `display` stage (see decode::DisplayTracker). The symbol is API 33 ("Available since
 # Android T"), ABOVE the minSdk-28 floor, so it is dlsym-resolved at runtime
-# (decode::install_render_callback), NEVER hard-linked: 0.9.0 hard-linked it and
-# `System.loadLibrary` failed on every pre-Android-13 device. Only ndk-sys's pointer/typedef
-# types are referenced, which creates no import. Reaching it needs the codec's raw pointer, which
-# is why the workspace pins `ndk` to the vendored copy whose only patch makes `MediaCodec::as_ptr`
-# public (vendor/ndk, wired in the root Cargo.toml).
+# (decode::install_render_callback), NEVER hard-linked: a hard import makes `System.loadLibrary`
+# fail on every pre-Android-13 device. Only ndk-sys's pointer/typedef types are referenced, which
+# creates no import. Reaching it needs the codec's raw pointer, which is why the workspace pins
+# `ndk` to the vendored copy whose patch set makes `MediaCodec::as_ptr` public (vendor/ndk, wired
+# in the root Cargo.toml).
 ndk-sys = { version = "0.6", features = ["media"] }
 # setpriority/gettid to raise the decode thread toward URGENT_DISPLAY (see decode::boost_thread_priority).
 libc = "0.2"

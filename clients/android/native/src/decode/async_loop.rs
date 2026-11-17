@@ -326,7 +326,7 @@ pub(super) fn run_async(
                         stepped_down: false,
                     } => {}
                 }
-                // Moonlight saw MediaTek HEVC decoders hang right after an RFI (GE8xxx GPUs).
+                // MediaTek HEVC decoders on GE8xxx GPUs are reported to hang right after an RFI.
                 // The 5 s window is a reading aid for the report, not a verdict.
                 rebuilds += 1;
                 let gap_age_ms = match last_gap_ns.load(Ordering::Relaxed) {
@@ -403,8 +403,8 @@ fn run_codec(
 
     // Skew-corrected latency stats (spec: design/stats-unification.md). Receipt stamps (keyed by the
     // pts we queue) live in a shared map: the feeder writes them at receipt, this loop pairs decoded
-    // output back to them. Behind a `Mutex` since two threads touch it — only ever locked while the
-    // HUD is visible.
+    // output back to them. Behind a `Mutex` since two threads touch it; the feeder writes it only
+    // while the HUD is visible or ABR measures decode.
     let clock_offset = client.clock_offset_shared();
     let video_e2e = client.video_e2e_shared();
     let measure_decode = client.wants_decode_latency();
@@ -560,7 +560,7 @@ fn run_codec(
     }
     let end = teardown(state, ctx, aux, render_cb, feeder, shutdown, stale);
     // The codec and its feeder are gone, so nothing reports: with the freeze left up, core
-    // would ask for a keyframe every half second of a rebuild or a keep-alive drain.
+    // would re-ask for a keyframe every `REANCHOR_FREEZE_MAX` through a rebuild or a drain.
     client.recovery_reset();
     end
 }
@@ -758,9 +758,9 @@ fn teardown(
 }
 
 /// The bring-up ladder for this stream ([`bring_up_rungs`]), with the backend pick
-/// ([`asc_backend_selected`]) and the layer's colour tag it follows. The tag is `None` on
-/// Android 10 and 11 for a studio-range session, which then presents through the SurfaceView
-/// (its decoder tags its own buffers).
+/// ([`asc_backend_selected`]) and the layer's colour tag it follows. Below Android 12 the tag
+/// is `None` for any colour but sRGB and full-range PQ ([`layer_dataspace`]), and that session
+/// presents through the SurfaceView (its decoder tags its own buffers).
 fn ladder_for(client: &NativeClient, opts: &DecodeOptions) -> (Vec<Rung>, bool, Option<i32>) {
     let dataspace = layer_dataspace(&client.video_format().color, crate::sys::sdk_int());
     let selected = asc_backend_selected(opts.chromeos);
@@ -955,7 +955,7 @@ fn bring_up(
     }
     // Every rung refused. Say so loudly and in the shape the next reporter can act on: the
     // session stays up (audio/input/library all still work), so without this line the only
-    // symptom is a black screen and a keyframe request every 2 s that blames the network.
+    // symptom is a black screen.
     log::error!(
         "decode: the {mime} decoder refused EVERY configuration — this session has no video. \
          Audio and input keep working, so the stream will look alive while the screen stays \
@@ -966,9 +966,9 @@ fn bring_up(
     None
 }
 
-/// The ADPF hint session, created on the first presented frame. The pump/audio priority boost is
-/// part of the experimental low-latency stack; the session itself predates it and always runs
-/// (max-performance bias gated inside).
+/// The ADPF hint session, created on the first presented frame. It runs whenever ADPF exists
+/// (API 33+); `low_latency_mode` adds the hot-thread priority boost and the session's
+/// performance bias ([`crate::adpf::HintSession::create`]).
 pub(crate) fn start_hint(
     client: &NativeClient,
     refresh_hz: u32,
@@ -1073,7 +1073,7 @@ struct State {
     discarded: u64,
     /// AUs larger than the codec input buffer, dropped whole (see `feed`).
     oversized_dropped: u64,
-    /// pts → realtime ns at the AU's LAST piece entering the codec — the P3 decode-split ledger
+    /// pts → realtime ns at the AU's LAST piece entering the codec — the decode-split ledger
     /// (`feed` = received→queued, `codec` = queued→decoded). Always on; consumed by `present`.
     queued_stamps: VecDeque<(u64, i128)>,
     /// Core's freeze arm count at the last cadence re-anchor ([`NativeClient::recovery_arms`]).
@@ -1674,7 +1674,7 @@ impl State {
         }
         self.unclean |= self.loss_open;
         // `fed` counts ACCESS UNITS toward the HUD's fed/decoded balance, so the closing piece
-        // (or a whole AU) bumps it. The queued stamp marks the same instant: the P3 decode split
+        // (or a whole AU) bumps it. The queued stamp marks the same instant: the decode split
         // measures `codec` from here, so a slice-progressive head start shows as codec-pure shrink.
         if piece.last {
             self.fed += 1;
@@ -1688,7 +1688,7 @@ impl State {
     }
 
     /// Pair each ready output's decode stage: the ABR decode signal + the HUD histogram consume
-    /// the receipt map; the P3 split's codec-pure half needs only the queued stamp, so it records
+    /// the receipt map; the split's codec-pure half needs only the queued stamp, so it records
     /// even with both off (that keeps the 1 Hz pf.present line HUD-off readable). Every sink's
     /// line drains the split from `ctx.meter`.
     fn note_decode_stage(&mut self, ctx: &Ctx) {

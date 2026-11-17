@@ -103,8 +103,8 @@ pub(crate) enum AnyPlanner {
 }
 
 impl AnyPlanner {
-    /// The gate lifted on intra refresh marks: the planner's damaged-chain marks are
-    /// stale (`CleanLedger::clear`).
+    /// An intra refresh wave closed on an accepted picture. H.264 and H.265 drop that
+    /// picture's mark (`CleanLedger::forgive`); AV1 clears the whole ledger (`CleanLedger::clear`).
     pub(crate) fn forgive_unclean(&mut self) {
         match self {
             AnyPlanner::H264(p) => p.forgive_unclean(),

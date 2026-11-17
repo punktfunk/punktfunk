@@ -52,8 +52,8 @@ const run = <A>(eff: Effect.Effect<A, unknown, Scope.Scope>): Promise<A> =>
 
 describe("SyncEngine", () => {
 	test("first sync applies; unchanged content skips the apply", async () => {
-		// A LOOP reason, deliberately: the fingerprint skip is what keeps a 5-minute poll from
-		// PUTting the whole library forever. `startup`/`manual` opt out of it (below).
+		// A LOOP reason, deliberately: the fingerprint skip is what keeps a poll from PUTting the
+		// whole library forever. `startup`/`manual` opt out of it (below).
 		const { first, second, count } = await run(
 			Effect.gen(function* () {
 				const h = yield* harness();
@@ -155,10 +155,6 @@ describe("SyncEngine", () => {
 	});
 });
 
-// The fs-change RATE cap (`SyncSettings.minInterval`). A debounce collapses a burst but extends
-// on every event, so a launcher that keeps writing (Steam, while a game runs) drove one field log
-// to 102 fs-change syncs in 27 minutes. With the cap, sustained churn costs one sync per interval
-// and still lands one trailing sync for whatever changed inside it.
 describe("SyncEngine loop survives a throwing scan", () => {
 	test("a scan that throws once does not end the poll loop", async () => {
 		const computes = await run(
@@ -195,6 +191,10 @@ describe("SyncEngine loop survives a throwing scan", () => {
 	});
 });
 
+// The fs-change RATE cap (`SyncSettings.minInterval`). A debounce collapses a burst but extends
+// on every event, so a launcher that keeps writing (Steam, while a game runs) would sync on every
+// pause. With the cap, sustained churn costs one sync per interval and still lands one trailing
+// sync for whatever changed inside it.
 describe("SyncEngine fs-change min-interval", () => {
 	test("sustained churn is capped to one fs-change sync per interval, plus one trailing", async () => {
 		const fs = await import("node:fs");
@@ -253,8 +253,8 @@ describe("SyncEngine fs-change min-interval", () => {
 });
 
 // `start` must not return before the watchers exist. The acquire that opens them runs inside a
-// forked fiber, so a write landing in that window is invisible until the next poll — 15 minutes on
-// a library plugin's default, and the game a person just installed looks lost.
+// forked fiber, so a write landing in that window is invisible until the next poll (the interval
+// `defineLibraryPlugin` sets), and the game a person just installed looks lost.
 describe("SyncEngine watch readiness", () => {
 	test("a write immediately after start syncs without waiting for the poll", async () => {
 		const fs = await import("node:fs");

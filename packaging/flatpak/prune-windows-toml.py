@@ -2,9 +2,10 @@
 """Strip microsoft/windows-rs git dependency entries from a Cargo.toml, in place.
 
 The sibling of prune-windows-lock.py, for the OTHER place the un-vendored windows-rs git
-source leaks into the flatpak's offline build: `crates/client/pf-client-core` declares
-`windows = { git = ... }` under `[target.'cfg(windows)'.dependencies]` (the D3D11VA decode
-backend). The dependency is cfg-gated and never COMPILES on Linux, but `cargo --offline`
+source leaks into the flatpak's offline build: the client crates the manifest lists
+(`pf-client-core`, `pf-client-video`, `pf-presenter`) declare `windows = { workspace = true }`
+under `[target.'cfg(windows)'.dependencies]`, and the root `[workspace.dependencies]` pins it to
+the git repo. The dependency is cfg-gated and never COMPILES on Linux, but `cargo --offline`
 still needs every declared dependency's source available just to build the unit graph — and
 windows-rs is deliberately not vendored into cargo-sources.json (flatpak-builder would
 full-clone the multi-GB repo; see prune-windows-lock.py). Removing the entry from the

@@ -2,7 +2,7 @@
 // scope switcher swaps the whole screen between the global defaults and one preset's overrides.
 //
 // It is deliberately not a second editor. A parallel preset editor would drift from this one
-// field by field, and the caption/curation work of the 2026-07 revamp would have to be done twice.
+// field by field, and the caption and curation work would have to be done twice.
 // So the section builders stay the single definition of every row and simply change which LAYER
 // their binding reads and writes.
 //
@@ -15,7 +15,7 @@
 //     its Reset action below are not optional garnish: without them a preset is a one-way door.
 //
 // Tier-G/H rows (this device's endpoints and hardware, properties of a host) simply don't render
-// in preset scope — see §3's curation and `isPresetable` at each call site.
+// in preset scope — see §3's curation and the `!inPresetScope` guard at each call site.
 
 import PunktfunkKit
 import SwiftUI
@@ -306,9 +306,8 @@ extension SettingsView {
     /// Rendered inside `described`'s caption line, so it sits with the row it belongs to; Reset
     /// clears every one of `names`.
     ///
-    /// Reset is a BORDERED control pushed to the far edge, not tinted text next to the label: as a
-    /// plain button it read as a third word of the notice, and the one action that can undo an
-    /// override must not look like prose.
+    /// Reset is a BORDERED control pushed to the far edge, not tinted text next to the label: the
+    /// one action that can undo an override must not look like prose.
     @ViewBuilder
     func overrideMarker(_ names: [String]) -> some View {
         if names.contains(where: isOverridden) {
@@ -375,9 +374,8 @@ extension SettingsView {
         }
         .pickerStyle(.inline)
         Divider()
-        // Three actions, one sheet. A preset is a name and a colour; deciding them in separate
-        // menu items — each raising its own bare alert — is how "make a Work preset" became four
-        // trips through this menu.
+        // New, Edit and Duplicate share one sheet: a preset is a name and a colour, decided
+        // together.
         newPresetMenu
         if let active = activePreset {
             Button {
@@ -491,11 +489,10 @@ extension SettingsView {
                 }
                 .menuStyle(.button)
                 .fixedSize()
-                // Same reason as the host grid's sort menu: a Menu draws its label — and the
-                // icons of everything inside it — in the ACCENT colour, which put a purple wash
-                // over a control whose only meaningful colour is the preset chips. Those are
-                // rendered bitmaps (see MenuIcon), so they keep their colour; the decoration
-                // loses its. macOS only — iOS menus already draw their icons in the label colour.
+                // A Menu draws its label — and the icons of everything inside it — in the ACCENT
+                // colour, which would wash a control whose only meaningful colour is the preset
+                // chips. Those are rendered bitmaps (see MenuIcon), so they keep their colour.
+                // macOS only — iOS menus already draw their icons in the label colour.
                 .tint(.primary)
                 Text(scopeCaption)
                     .font(.geist(12, relativeTo: .caption))
@@ -508,8 +505,8 @@ extension SettingsView {
     #if os(iOS) || os(visionOS)
     /// A standard value row at the head of the settings list: label on the left, current layer on
     /// the right, the system's up/down chevron. Its caption belongs to the section FOOTER, not to
-    /// the row — stacked inside the row it wrapped to four lines and made the first thing on the
-    /// screen a block of text.
+    /// the row — stacked inside the row it would make the first thing on the screen a block of
+    /// text.
     var scopeRow: some View {
         presetPrompts(
             Menu { scopeMenuContent } label: {

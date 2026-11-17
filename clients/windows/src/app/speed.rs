@@ -1,6 +1,7 @@
-//! Per-host network speed test (the GTK/Swift clients' "Test Network Speed…"): connect over the
-//! real data plane, have the host burst probe filler for 2 s up to its 3 Gbps ceiling, and
-//! report goodput · loss · a recommended bitrate (≈70 % of measured), applied in one tap.
+//! Per-host network speed test (the GTK/Swift clients' "Test network speed…"): connect over the
+//! real data plane, measure the ceiling the bring-up ramp proves and a clean round under it,
+//! and report that rate · loss · jitter and a recommended bitrate (`recommended_kbps`), applied
+//! in one tap.
 
 use super::style::*;
 use super::{saved, Screen, Svc};
@@ -155,9 +156,9 @@ fn speed_page(props: &SpeedProps) -> View {
         } => {
             let recommended_mbps = f64::from(*recommended_kbps) / 1000.0;
             // A measured bitrate belongs in the layer the TESTED host actually reads it from
-            // (design/client-settings-profiles.md §5.3) — writing the global here is what made
-            // measuring one host re-tune every other one. Resolved the way a connect resolves
-            // it: the one-off this test was started with, else the host's binding.
+            // (design/client-settings-profiles.md §5.3); the global would re-tune every other
+            // host. Resolved the way a connect resolves it: the one-off this test was started
+            // with, else the host's binding.
             let target = ctx.shared.target.lock().unwrap().clone();
             let bound = KnownHosts::load()
                 .resolve(
@@ -199,9 +200,8 @@ fn speed_page(props: &SpeedProps) -> View {
             };
             // Which button(s): no binding → the global; a binding that already overrides
             // bitrate → that override (it's what this host reads). Bound but INHERITING
-            // bitrate could legitimately mean either layer — offer both rather than
-            // guessing (the GTK client's Ask tier; this shell used to silently CREATE an
-            // override on the preset).
+            // bitrate could mean either layer — offer both rather than guessing (the GTK
+            // client's Ask tier).
             let mut buttons: Vec<View> = Vec::new();
             match &preset {
                 None => buttons.push(

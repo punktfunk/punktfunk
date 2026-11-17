@@ -8,9 +8,9 @@
 //! stays an ordinary `async fn`: a `dyn`-compatible trait would box a future on `closed()`, which
 //! is on the per-session path. Datagrams carry a kind on both.
 //!
-//! Most of this delegates rather than branches: WebTransport *is* QUIC, and `wtransport` hands
-//! out the `quinn::Connection` underneath, so path and lifecycle questions have one answer for
-//! both. Only the two genuinely carrier-shaped questions branch.
+//! Path questions and `close` delegate rather than branch: WebTransport *is* QUIC, and
+//! `wtransport` hands out the `quinn::Connection` underneath ([`SessionLink::quic`]), so they
+//! have one answer for both.
 
 use punktfunk_core::quic::v2::clock::SessionClock;
 use std::net::{IpAddr, SocketAddr};

@@ -6,11 +6,12 @@
 //!    comes first, bounded by the confirms, with the submit margin it adapts from the measured
 //!    latch.
 //!  * [`AscBudget`] (ASurfaceControl): one transaction in flight until the slot clock is phased,
-//!    then two, each reopened by its completion.
+//!    then two, each freed once SurfaceFlinger latches it.
 //!
 //! Both force-open [`STALE_REOPEN_NS`] after a present whose reopen never comes, counted in
 //! `forced`: 0 on a healthy device (Apple's `PresentGate.staleAfter`, same value). On a
-//! down-rated panel ([`super::verdict::downrated`]) neither holds a frame back.
+//! down-rated panel ([`super::verdict::downrated`]) the timeline budget never closes and the
+//! ASC budget lifts its cap of two; [`PRESENTED_CAP`] still holds.
 
 use super::store::{Held, Store};
 use super::{Counters, FALLBACK_PERIOD_NS};
@@ -19,10 +20,11 @@ use super::{Counters, FALLBACK_PERIOD_NS};
 /// this long after the present.
 pub(crate) const STALE_REOPEN_NS: i64 = 100_000_000;
 
-/// Presents SurfaceFlinger may hold at once, completed or not: the ASC reader pool less the
-/// store's deepest buffer and one image for the acquire. A display that shows frames refreshes
-/// late (a Shield TV: two to four) holds that many beyond the two ahead; past the pool the
-/// acquire fails and the decoder stalls, where the store's drop is the cheaper loss.
+/// Presents SurfaceFlinger may hold at once, completed or not. The ASC reader pool adds the
+/// store's deepest buffer and one image for the acquire (`READER_MAX_IMAGES`). A display that
+/// shows frames refreshes late (a Shield TV: two to four) holds that many beyond the two ahead;
+/// past the pool the acquire fails and the decoder stalls, where the store's drop is the cheaper
+/// loss.
 pub(crate) const PRESENTED_CAP: usize = 8;
 
 /// The ceiling of the SurfaceView submit margin ahead of a timeline's EXPECTED PRESENT, which is
@@ -160,7 +162,8 @@ impl TimelineBudget {
             forgive,
         };
         // The FIFO releases on the due time, never one frame per tick: at 60 fps on 120 Hz that
-        // would drain at twice supply and judder 1,3,1,3 (design §4.3, D3).
+        // would drain at twice supply and judder 1,3,1,3 (`design/presenter-cadence-rework.md`
+        // §4.3, D3).
         if !store.head_is_releasable(self.reach_ns(now_ns, grid_period_ns)) {
             if self.vsync_tick && store.is_empty() {
                 c.dry += 1;

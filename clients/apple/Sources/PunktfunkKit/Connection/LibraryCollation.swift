@@ -18,8 +18,9 @@ import Foundation
 import PunktfunkShared
 
 /// How titles are ordered within a group. The raw value is the persisted `punktfunk.librarySort`
-/// string — a FILE FORMAT shared with the desktop's `library_sort` (`host|title|platform|store`);
-/// renaming one silently resets every user's chosen sort on their next launch.
+/// string — a FILE FORMAT shared with the desktop's `library_sort`
+/// (`host|title|platform|store|recent|playtime`); renaming one silently resets every user's
+/// chosen sort on their next launch.
 public enum LibrarySortKey: String, CaseIterable, Hashable, Sendable {
     /// The host's own order, untouched. The default, and byte-identical to the shelf as it has
     /// always been — a user who never opens the sort pills must see no change at all.

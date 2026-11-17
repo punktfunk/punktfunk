@@ -42,8 +42,7 @@ pub fn cta_max_luminance_code(nits: u32) -> u8 {
     code
 }
 
-/// Floor integer square root (Newton). `u64::isqrt` needs Rust 1.84, above this crate's 1.82
-/// MSRV. Converges in ≤ 6 iterations from the power-of-two seed.
+/// Floor integer square root (Newton). Converges in ≤ 6 iterations from the power-of-two seed.
 fn isqrt_u64(x: u64) -> u64 {
     if x == 0 {
         return 0;
@@ -143,7 +142,7 @@ const BASE: [u8; 128] = [
     0x80, 0x18, 0x71, 0x38, 0x2D, 0x40, 0x58, 0x2C,
     0x45, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1E,
     0x00, 0x00, 0x00, 0xFD, 0x08, 0x17, 0xF0, 0x0F, // range-limits: offsets H-max+255, 23-240 Hz, min-H 15 kHz...
-    0xFF, 0xFF, 0x00, 0x0A, 0x20, 0x20, 0x20, 0x20, // ...max-H 510 kHz, max clock 2550 MHz (150 was below the driver's own 1080p120 default)
+    0xFF, 0xFF, 0x00, 0x0A, 0x20, 0x20, 0x20, 0x20, // ...max-H 510 kHz, max clock 2550 MHz
     0x20, 0x20, 0x00, 0x00, 0x00, 0xFC, 0x00, 0x50, // name descriptor "Punktfunk"
     0x75, 0x6E, 0x6B, 0x74, 0x66, 0x75, 0x6E, 0x6B,
     0x0A, 0x20, 0x20, 0x20, 0x00, 0x00, 0x00, 0x00, // empty 4th descriptor...
@@ -203,9 +202,9 @@ pub struct ClientLuminance {
 
 /// EDID screen-size bytes 0x15/0x16 hold the image size in CENTIMETRES, and Windows derives a
 /// display's DPI from resolution over that size. A FIXED size therefore makes the virtual
-/// display's scale ride its mode: the 50 cm this EDID used to declare reads as ~97 DPI at
-/// 1080p but ~260 DPI at 5120 px wide, so the OS quite correctly scales the desktop up and
-/// hands out a cursor to match. Sizing from the mode pins the display near 96 DPI, which
+/// display's scale ride its mode: a fixed 50 cm reads as ~97 DPI at 1080p but ~260 DPI at
+/// 5120 px wide, so the OS quite correctly scales the desktop up and hands out a cursor to
+/// match. Sizing from the mode pins the display near 96 DPI, which
 /// leaves scaling where it belongs — the client's own choice, not an artefact of our EDID.
 ///
 /// One byte each, so `1..=255`: 0 means "undefined" (projectors) and would put the DPI
@@ -320,10 +319,8 @@ mod tests {
 
     #[test]
     fn edid_matches_the_golden_bytes() {
-        // Byte-for-byte capture of what the driver shipped before this code moved here. One byte
-        // out of place and Windows drops HDR, so nothing below may drift silently. Two bytes DO
-        // differ from that capture on purpose: 0x15/0x16 now size the panel from the mode
-        // (2560x1440 -> 67x38 cm), which moves the checksum at 0x7F by the same 24.
+        // One byte out of place and Windows drops HDR, so nothing below may drift silently.
+        // 0x15/0x16 size the panel from the mode (2560x1440 -> 67x38 cm).
         #[rustfmt::skip]
         const GOLDEN: [u8; 256] = [
             0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00,
@@ -463,7 +460,7 @@ mod tests {
 
     #[test]
     fn cta_luminance_codes_hit_the_reference_points() {
-        // Historical built-in EDID block: 0x8A ≈ 993 nits, 0x60 = 400 nits (exact), 0x12 ≈ 0.05 nit.
+        // The built-in EDID block: 0x8A ≈ 993 nits, 0x60 = 400 nits (exact), 0x12 ≈ 0.05 nit.
         assert_eq!(cta_max_millinits(0x60), 400_000); // 50·2^3 exactly
         assert_eq!(cta_max_millinits(0x8A) / 1000, 993);
         assert_eq!(cta_max_luminance_code(400), 0x60);

@@ -34,11 +34,11 @@ use {
 
 /// What one capture open attempt yields: the stream, plus both halves of the PCM hand-off — the
 /// receiver the encode worker drains and the sender that returns emptied buffers for reuse. Note
-/// the pair is the mirror image of [`crate::audio::OpenedPlayback`]'s: here the callback produces
+/// the pair is the mirror image of [`crate::audio::LiveStream`]'s: here the callback produces
 /// and the worker consumes.
 ///
 /// Named rather than written inline for the same reason as that one — `clippy::type_complexity`,
-/// now that the Android target is actually linted (`:kit:cargoNdkClippy`).
+/// which `:kit:cargoNdkClippy` denies on the Android target.
 #[cfg(target_os = "android")]
 type OpenedCapture = ndk::audio::Result<(AudioStream, Receiver<Vec<f32>>, SyncSender<Vec<f32>>)>;
 /// A started stream from [`open_started`]: the capture plus the session id AAudio allocated.
@@ -48,7 +48,7 @@ type StartedCapture = (AudioStream, Receiver<Vec<f32>>, SyncSender<Vec<f32>>, i3
 const CHANNELS: usize = 1;
 const SAMPLE_RATE: i32 = 48_000;
 /// Captured-chunk hand-off depth (each ~ one burst); drops on overflow (best-effort uplink).
-/// Bursts are sized in frames, so the wall-time depth is unchanged by the stereo→mono move.
+/// Bursts are sized in frames, so the wall-time depth does not depend on the channel count.
 #[cfg(target_os = "android")]
 const RING_CHUNKS: usize = 64;
 /// Free-list buffer capacity, in interleaved f32 samples: comfortably above a LowLatency input
@@ -56,7 +56,7 @@ const RING_CHUNKS: usize = 64;
 /// each buffer a one-time grow on the capture thread, after which the steady state is
 /// allocation-free again.
 #[cfg(target_os = "android")]
-const CHUNK_CAP_SAMPLES: usize = 960; // 20 ms mono — the same wall-time as the old stereo value
+const CHUNK_CAP_SAMPLES: usize = 960; // 20 ms mono
 /// Settling time between a disconnect and the reopen: a headset handing over the route.
 #[cfg(target_os = "android")]
 const REOPEN_SETTLE_MS: u64 = 250;
@@ -354,7 +354,7 @@ impl Drop for MicCapture {
 
 /// Own the input stream for the session: open it, run the uplink against it, and open it again
 /// when AAudio disconnects it (a headset plugged or pulled, Bluetooth taking the route). The
-/// stream is dead by AAudio's contract then; without a reopen the mic stayed silent while the
+/// stream is dead by AAudio's contract then; without a reopen the mic would stay silent while the
 /// session still offered its mute. The encoder and `seq` carry over, so the host sees one stream.
 #[cfg(target_os = "android")]
 fn supervise(
@@ -365,8 +365,8 @@ fn supervise(
     ready: SyncSender<Option<i32>>,
 ) {
     // Fold this Opus-encode/uplink thread into the client's hot-thread set so the ADPF session the
-    // decode thread opens keeps mic encode on a fast core too (the playback side's decode_loop
-    // does the same). No-op below API 33.
+    // decode thread opens keeps mic encode on a fast core too (the playback side's
+    // `audio::supervise` does the same). No-op below API 33.
     client.register_hot_thread();
     crate::audio::boost_audio_thread("mic");
     // Self-heal on: the capture callback drops the NEWEST chunk when the channel is full, so a
@@ -562,7 +562,7 @@ mod tests {
         &'static [&'static str],
     );
 
-    /// R5-4: the callback slices mono f32 at 48 kHz, so any other grant is closed unstarted.
+    /// The callback slices mono f32 at 48 kHz, so any other grant is closed unstarted.
     #[test]
     fn a_grant_the_callback_cannot_read_is_the_next_rung() {
         let grants = [

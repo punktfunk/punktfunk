@@ -34,10 +34,10 @@ public final class ClipboardSync: NSObject {
     /// Ceiling on what `resolvePendingOffer` will pull. Text and modest images are worth having on
     /// the chance the user pastes them after the session ends; a 200 MB screenshot is not.
     private static let resolveBudget = 8 << 20
-    /// Hard ceiling on ANY single transfer, either direction. Without it an inbound transfer grew
-    /// a `Data` for whatever the host streamed, bounded only by the fetch deadline, and an
-    /// outbound serve read the whole pasteboard however large it was. The resolve budget above is
-    /// a policy about what is worth KEEPING past a session; this is the memory bound.
+    /// Hard ceiling on ANY single transfer, either direction. Without it an inbound transfer
+    /// would grow a `Data` for whatever the host streamed, bounded only by the fetch deadline, and
+    /// an outbound serve would read the whole pasteboard however large it was. The resolve budget
+    /// above is a policy about what is worth KEEPING past a session; this is the memory bound.
     private static let maxTransferBytes = 64 << 20
     /// And how long that may hold up teardown. Short on purpose — it sits between the user
     /// leaving and the connection closing, and a LAN round-trip for a few KB of text is

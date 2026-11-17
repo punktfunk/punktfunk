@@ -151,8 +151,8 @@ pub(super) fn is_buffer_full(e: &std::io::Error) -> bool {
 
 /// Lossy drop, not a failed send. `WouldBlock` is a full kernel buffer.
 /// Connected-UDP `ConnectionRefused`/`ConnectionReset` are stale ICMP. Winsock's
-/// no-buffer and unreachable/down codes have no stable `ErrorKind`, so they are
-/// matched raw — same contract as `WouldBlock`.
+/// no-buffer and unreachable/down codes are matched raw (WSAENOBUFS and WSAEHOSTDOWN
+/// have no `ErrorKind` of their own) — same contract as `WouldBlock`.
 fn is_transient_io(e: &std::io::Error) -> bool {
     use std::io::ErrorKind::{ConnectionRefused, ConnectionReset, WouldBlock};
     if matches!(e.kind(), WouldBlock | ConnectionRefused | ConnectionReset) {
@@ -306,7 +306,7 @@ mod tests {
         );
     }
 
-    /// Winsock codes with no stable `ErrorKind` (they surface as `Uncategorized`).
+    /// Winsock codes the raw match covers, whatever `ErrorKind` std gives them.
     #[cfg(windows)]
     #[test]
     fn transient_io_covers_raw_tx_queue_and_path_codes() {

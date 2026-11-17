@@ -4,7 +4,8 @@
 // rasterize NavigationStack / Form / Liquid-Glass — they come out black). The app is launched in
 // "shot mode" (PUNKTFUNK_SHOT_SCENE=<name>, see ScreenshotHost) showing one mock-populated scene
 // full-bleed, and the OS screenshots it: `xcrun simctl io booted screenshot` on the iOS/tvOS
-// simulators (native pixels = the exact App Store size), `screencapture` for the mac window.
+// simulators (native pixels = the exact App Store size). On the Mac the app captures its own
+// windows (`MacSelfCapture`).
 // tools/screenshots.sh drives it. DEBUG-only — none of this ships in Release.
 //
 // This catalog records the target App Store sizes; on Apple platforms only the mac size is read

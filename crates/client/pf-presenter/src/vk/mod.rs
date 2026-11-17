@@ -1,5 +1,6 @@
-//! Swapchain presenter: every decode lane writes one device-local [`VIDEO_FORMAT`] image,
-//! then a `vkCmdBlitImage` composite placed by `punktfunk_core::video_fit`.
+//! Swapchain presenter: the decode lanes' CSC pass writes one device-local [`VIDEO_FORMAT`]
+//! image, which a `vkCmdBlitImage` or the filter ladder places by `punktfunk_core::video_fit`.
+//! Where `plan` in `present.rs` allows, the CSC draws straight into the swapchain image.
 //!
 //! CPU frames stage tightly-packed I420 into three R8 images (`CpuPlanes`) and share
 //! the planar CSC pass (`csc.rs`, `csc_rows`) with PyroWave. Linux dmabuf imports NV12
@@ -7,10 +8,10 @@
 //! false and the caller keeps software decode. `NativeVk` and `D3d11` already live on
 //! this device.
 //!
-//! One frame in flight: wait the submit fence before recording. MAILBOX when offered,
-//! FIFO otherwise; `knobs.present_mode` (`fifo|mailbox|immediate`) pins the mode
-//! (`pick_present_mode` — FIFO's present queue must not block an arrival-paced caller).
-//! `FrameInput::Redraw` re-blits the retained image on expose/resize.
+//! One frame in flight: wait the submit fence before recording. `pick_present_mode` resolves
+//! the mode from `PresentPref` (`present_mode_chain`); `knobs.present_mode`
+//! (`fifo|mailbox|immediate|fifo_relaxed`) pins it.
+//! `FrameInput::Redraw` re-presents the retained picture on expose/resize.
 
 use crate::csc::CscPass;
 #[cfg(target_os = "linux")]
@@ -54,8 +55,9 @@ pub use setup::{list_adapters, probe_decode, AdapterDecode, PresentPref};
 /// their tables from [`crate::overlay::SharedDevice::api_version`], not the loader.
 pub const INSTANCE_API_VERSION: u32 = vk::API_VERSION_1_3;
 
-/// The video intermediate every lane's CSC writes, for every stream: PQ in 8 bits bands, and
-/// a 10-bit SDR stream would lose the gradients it pays for. Same 32 bpp as RGBA8.
+/// The video intermediate the CSC writes for every stream (a direct frame skips it): PQ in
+/// 8 bits bands, and a 10-bit SDR stream would lose the gradients it pays for. Same 32 bpp
+/// as RGBA8.
 const VIDEO_FORMAT: vk::Format = vk::Format::A2B10G10R10_UNORM_PACK32;
 
 /// Clamp behind [`Presenter::overlay_api_version`], split out so tests can prove it
@@ -137,7 +139,8 @@ struct HwCtx {
     timelines: Option<sync_timeline::TimelineMaker>,
 }
 
-/// Win32 external-memory + keyed-mutex table; present only when both extensions exist.
+/// Win32 external-memory + keyed-mutex table; present only when the device has both
+/// extensions and the driver imports BGRA8.
 #[cfg(windows)]
 struct HwCtxWin {
     ext_mem_win32: ash::khr::external_memory_win32::Device,
@@ -221,8 +224,8 @@ struct CpuPlanes {
     initialized: bool,
 }
 
-/// Device-local RGBA the size of the decoded stream; every lane's CSC target before the
-/// placed blit.
+/// Device-local [`VIDEO_FORMAT`] image the size of the decoded stream; the CSC target before
+/// the placed blit or filter, which a direct frame skips.
 type VideoImage = gpu::RenderImage;
 
 /// Host-visible upload buffer for the CPU planes. Grows, never shrinks.
@@ -249,7 +252,7 @@ pub struct Presenter {
     /// (Vulkan Video needs it on every device).
     #[cfg(target_os = "linux")]
     hw: Option<HwCtx>,
-    /// D3D11 import. `None` without win32 external-memory / keyed-mutex.
+    /// D3D11 import. `None` without win32 external-memory, keyed-mutex or a BGRA8 import.
     #[cfg(windows)]
     hw_win: Option<HwCtxWin>,
     csc: CscPass,
@@ -410,9 +413,6 @@ impl Presenter {
         self.hw_win.is_some()
     }
 
-    /// Selected presenter-device facts. `video_decode` inside says whether
-    /// Vulkan Video is usable — the rest of the bundle is returned anyway so
-    /// vendor and import gates still work; on Linux this is always `Some`.
     /// The frame of present turn `turn` is in hand: the decode lane waits for its submit.
     pub(crate) fn begin_present_turn(&self, turn: u64) {
         self.queue_lock.begin_present_turn(turn);
@@ -423,6 +423,9 @@ impl Presenter {
         self.queue_lock.end_present_turn(turn);
     }
 
+    /// Selected presenter-device facts. `video_decode` inside says whether
+    /// Vulkan Video is usable — the rest of the bundle is returned anyway so
+    /// vendor and import gates still work; on Linux this is always `Some`.
     pub fn vulkan_decode(&self) -> Option<pf_client_core::video::VulkanDecodeDevice> {
         self.video_export.clone()
     }
@@ -464,8 +467,8 @@ impl Presenter {
         }
     }
 
-    /// True when `VK_KHR_present_wait` or the native lane's presentation feedback drives
-    /// the display stamp. The run loop then defers e2e/display windows to
+    /// True when present-wait, the vblank waiter or the native lane's presentation feedback
+    /// drives the display stamp. The run loop then defers e2e/display windows to
     /// [`Presenter::take_presented_samples`].
     pub(crate) fn present_timing_active(&self) -> bool {
         self.clocks().active()
@@ -1205,8 +1208,8 @@ impl Presenter {
         self.native.as_mut().map_or((0, 0), |l| l.take_zero_copy())
     }
 
-    /// Claim the just-submitted present for on-glass timing. Call right after a
-    /// `present()` that returned `true`, with that frame's capture + decode stamps.
+    /// Claim the just-submitted present for on-glass timing. Call right after a present
+    /// that showed a frame, with that frame's capture + decode stamps.
     /// No-op when timing is inactive.
     pub(crate) fn note_presented(&mut self, pts_ns: u64, decoded_ns: u64) {
         let off_grid = !self.vblank_locked();
@@ -1261,8 +1264,7 @@ impl Presenter {
     /// governs. MAILBOX and IMMEDIATE replace or drop stale images in the driver, and
     /// so does `FIFO_LATEST_READY` — except on Windows, where DXGI keeps up to three
     /// composed presents queued ahead of DWM and LATEST_READY drains none of them. Under
-    /// Wayland the gate on LATEST_READY measured no gain at 60 fps and held a 120 fps
-    /// stream 20 ms: a completion there is not the flip.
+    /// Wayland a LATEST_READY completion is not the flip, so the gate stays off there.
     pub(crate) fn needs_glass_gate(&self) -> bool {
         let fifo = matches!(
             self.present_mode,

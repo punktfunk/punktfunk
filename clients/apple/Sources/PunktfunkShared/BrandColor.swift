@@ -1,6 +1,5 @@
 // The brand color, in the dependency-free foundation so EVERY process can use it — the widget
-// extension links PunktfunkShared alone (never PunktfunkKit's Rust staticlib), and before this
-// moved here the Live Activity / widgets fell back to `.tint` = system blue.
+// extension links PunktfunkShared alone (never PunktfunkKit's Rust staticlib).
 
 import SwiftUI
 

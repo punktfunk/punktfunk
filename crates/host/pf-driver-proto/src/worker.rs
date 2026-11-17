@@ -112,7 +112,7 @@ pub struct OpenSource {
 
 /// [`SourceReply::status`]: the capture is running.
 pub const SOURCE_OK: u32 = 0;
-/// No output carries that name or key.
+/// No output carries that name.
 pub const SOURCE_NOT_FOUND: u32 = 1;
 /// The capture did not open; `error` and `stage` say where.
 pub const SOURCE_OPEN_FAILED: u32 = 2;

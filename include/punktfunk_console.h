@@ -47,8 +47,8 @@
 // `0` fresh, `1` waking, `2` offline.
 #define PUNKTFUNK_CONSOLE_PUSH_LIBRARY_STALE 10
 
-// `[{"app_id", "state", "done_bytes", …}]` — the host's downloads, pushed before the same
-// read's [`PUNKTFUNK_CONSOLE_PUSH_LIBRARY_RUNNING`].
+// `{"downloads": [{"app_id", "state", "done_bytes", …}], "grants": n}` — the host's
+// downloads, pushed before the same read's [`PUNKTFUNK_CONSOLE_PUSH_LIBRARY_RUNNING`].
 #define PUNKTFUNK_CONSOLE_PUSH_LIBRARY_DOWNLOADS 19
 
 // `Settings` changed elsewhere; the shell reads it on its next mutation. Not a save.
@@ -60,10 +60,12 @@
 // `KnownHosts` — the records `punktfunk://` links are built from.
 #define PUNKTFUNK_CONSOLE_PUSH_KNOWN_HOSTS 13
 
-// `{"label", "pref", "pads": [PadInfo]}` — the connected controllers.
+// `{"label", "pref", "pads": [..], "others": [..]}` — the connected controllers and the other
+// input devices; `pf_console_ui::bridge::PadsJson` has the fields.
 #define PUNKTFUNK_CONSOLE_PUSH_PADS 14
 
-// `{}` for Home, `{"library": HostRow}` for a shelf — re-roots on the next frame.
+// `{}` for Home, else one key holding a `HostRow`: `library` (its shelf), `stream` (the shelf
+// plus a connect to its desktop) or `pair` (its Pair screen). Re-roots on the next frame.
 #define PUNKTFUNK_CONSOLE_PUSH_NAVIGATE 15
 
 // `{"id", "title", "message", "choices": [..]}` — a question over the top screen; the

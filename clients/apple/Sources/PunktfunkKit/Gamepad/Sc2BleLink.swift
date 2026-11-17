@@ -7,9 +7,10 @@
 // a settings write. Simulator has no BLE radio.
 //
 // CoreBluetooth negotiates MTU and connection interval itself, unlike Android's `Sc2BleLink.kt`.
-// A Steam Controller 2 falls back to lizard mode after ~3 s without DISABLE_LIZARD, so the link
-// sends it on ready and every 3 s for as long as it is connected, beside whatever Steam forwards.
-// `stop()` writes lizard mode back on before it disconnects. The client never enables the gyro; Steam's write does.
+// A Steam Controller 2 falls back to lizard mode after a few seconds without DISABLE_LIZARD, so
+// the link sends it on ready and every `Sc2Device.lizardRefreshSeconds` while connected, beside
+// whatever Steam forwards. `stop()` writes lizard mode back on before it disconnects. The
+// client never enables the gyro; Steam's write does.
 //
 // A 2015 pad (`isClassic`) notifies segments on `Sc1Device.bleInputCharUUID` and takes and
 // answers features in segments on 100F6C34; core turns its input into wired frames, which
@@ -232,13 +233,10 @@ final class Sc2BleLink: NSObject {
                 guard let write = Sc2Device.outputWrite(frame: frame) else { return }
                 payload = write.payload
                 target = allChars[write.charUUID]
-                // A miss means this firmware does not put report `id` at 100F6C<id+0x35>. There
-                // is no safe way to recover it live — ten output characteristics share one
-                // property mask and nothing distinguishes rumble from a trackpad pulse, so any
-                // guess is as likely to drive the wrong actuator as the right one. Drop the
-                // write and say so ONCE per id: with the connect-time GATT census above, a log
-                // bundle from one affected pad is enough to add its ids to
-                // `Sc2Device.outputCharUUID` — the map is the only reliable fix.
+                // A miss means this firmware does not put report `id` at 100F6C<id+0x35>. No safe
+                // live recovery: ten output characteristics share one property mask, so a guess
+                // may drive the wrong actuator. Drop the write and log ONCE per id; the GATT
+                // census in a log bundle is enough to correct `Sc2Device.outputCharUUID`.
                 if target == nil, unmappedIds.insert(frame[0]).inserted {
                     let id = String(format: "%02x", frame[0])
                     log.warning("SC2: firmware has no characteristic for output id 0x\(id) (expected \(write.charUUID)) — dropping it; that actuator stays silent on this pad")
@@ -416,8 +414,8 @@ final class Sc2BleLink: NSObject {
     /// Framed through `Sc2Device.featurePayload`, the SAME path the host-forwarded feature
     /// writes take (`writeRaw` kind == 1): the characteristic VALUE carries no 0x01 channel
     /// report-id: the firmware parses byte 0 as the settings-command id, so writing
-    /// `disableLizard` whole would arrive as command 0x01 instead of 0x87 and do nothing. Throttled logging (the write repeats
-    /// every 3 s for the whole session).
+    /// `disableLizard` whole would arrive as command 0x01 instead of 0x87 and do nothing.
+    /// Logging is throttled: the write repeats every `Sc2Device.lizardRefreshSeconds`.
     private func sendLizardOff() {
         guard let controller, let reportChar,
               let payload = Sc2Device.featurePayload(frame: Sc2Device.disableLizard)

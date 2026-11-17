@@ -15,9 +15,9 @@
 # the table. `PROVEN_BUCKET_WINDOWS` is in it and expected green: see
 # `KNOWN_GREEN`. `PROBE_AFTERMATH_WINDOWS` is mutated to 0 rather than to
 # another count: its budget binds only for a client that never gets its
-# picture back, and no scenario models one. `SHARD_WIRE_OVERHEAD` is the
-# packet header's size and `NO_SHARE_KBPS` a wire value, not decisions, so
-# neither is in the table.
+# picture back, and no scenario models one. `SHARD_WIRE_OVERHEAD` prices the
+# per-shard wire overhead and `NO_SHARE_KBPS` is a wire value, not decisions,
+# so neither is in the table.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 
@@ -31,7 +31,7 @@ restore() { cp -R "$BACKUP/." "$DIR/"; }
 trap 'restore; rm -rf "$BACKUP"' EXIT INT TERM
 
 # Constants whose mutation the simulator cannot see, with the reason.
-# `proven_cur_kbps` is refreshed from the deciding window before the climb
+# `Proven::cur_kbps` is refreshed from the deciding window before the climb
 # gate reads it, and the utilisation gate guarantees that refreshed value
 # already licenses a step, so the bucket period only changes a step's size
 # in a window that is clean enough to climb and delivering less than the

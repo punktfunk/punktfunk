@@ -5,8 +5,8 @@
 //! Service ops (`enable`/`disable`/`status`) run here — `systemctl --user` or the
 //! `PunktfunkScripting` scheduled task — so they work without the runner package.
 //!
-//! Windows: both halves need elevation (`%ProgramData%\punktfunk` is ACL'd;
-//! the task is admin-owned). Refuse unelevated rather than a bare EACCES from `bun add`.
+//! Windows: `add`, `remove`, `enable` and `disable` need elevation (`%ProgramData%\punktfunk`
+//! is ACL'd; the task is admin-owned). Refuse unelevated rather than a bare EACCES from `bun add`.
 //!
 //! The task runs as `NT AUTHORITY\LocalService`, not SYSTEM. `enable` converges the
 //! principal and grants LocalService read on `plugin-token` plus the TLS-pin cert

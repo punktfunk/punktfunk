@@ -7,8 +7,8 @@ fn canvas() -> skia_safe::Surface {
     skia_safe::surfaces::raster_n32_premul((1280, 800)).expect("raster surface")
 }
 
-/// Rows as `MenuList` spaces them: `ROW_H` rows `ROW_GAP` apart, a `HEADER_H` band
-/// above a sectioned row, `ROW_MAX_W` wide and centred.
+/// Rows laid out the way `MenuList` builds them: a gap apart, a header band above a
+/// sectioned row, `ROW_MAX_W` wide and centred. The gap and band here are this test's own.
 #[test]
 fn a_menu_column_lays_out_the_list_rhythm() {
     let (row_h, gap, header_h, max_w) = (50.0, 6.0, 34.0, 620.0);

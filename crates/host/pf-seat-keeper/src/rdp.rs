@@ -1,7 +1,7 @@
 //! Pinned IronRDP keeper and credential-free trust handshake.
 //!
-//! Both roles connect only to `127.0.0.2`, on the one port [`keeper::rdp_port`] names: the
-//! seat listener's while it is in place, else Remote Desktop's 3389. They advertise CredSSP/NLA
+//! Both roles connect only to `127.0.0.2`, on the port [`keeper::rdp_port`] names, or on
+//! [`keeper::RDP_PORT`] when the seat listener refuses (`connect`). They advertise CredSSP/NLA
 //! without legacy TLS login, and require a HYBRID security selection. `trust` stops
 //! immediately after RDP negotiation and the TLS handshake, before CredSSP, and
 //! reports the observed SHA-256 leaf pin. Runtime TLS verifies that exact pin

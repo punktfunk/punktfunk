@@ -82,9 +82,8 @@ export type GameRole = typeof GameRole.Type;
  * (`assets/launcher-icons` — provenance and licensing in that directory's README).
  *
  * Not a union type on purpose, exactly like {@link LaunchSpec}'s `kind`: a client that has never
- * heard of a token falls back to naming the launcher on an accent face — which is what every
- * launcher tile looked like before icons existed — so a plugin naming a mark a *newer* client
- * ships must not fail to typecheck against an older kit.
+ * heard of a token falls back to naming the launcher on an accent face, so a plugin naming a
+ * mark a *newer* client ships must not fail to typecheck against an older kit.
  */
 export const LAUNCHER_ICONS = [
 	"steam",
@@ -237,9 +236,10 @@ export const ProviderEntry = Schema.Struct({
 	 *
 	 * This is what makes a launcher tile look like its launcher. Launcher entries ship no cover art
 	 * by design — a launcher's own icon is square, clients cover-crop a 2:3 poster, and the crop
-	 * turns a mark into a strip — so before this they were the launcher's name on a flat accent
-	 * face. Naming the mark instead of sending it keeps the glyph vector at any tile size, lets it
-	 * take the tile's ink, and adds nothing to a reconcile payload that is already body-limited.
+	 * turns a mark into a strip — so without a token they show the launcher's name on a flat
+	 * accent face. Naming the mark instead of sending it keeps the glyph vector at any tile size,
+	 * lets it take the tile's ink, and adds nothing to a reconcile payload that is already
+	 * body-limited.
 	 *
 	 * Sending art instead is not an option the host leaves open: its art proxy serves raster
 	 * containers only and refuses SVG outright, because SVG is script-capable XML and the web

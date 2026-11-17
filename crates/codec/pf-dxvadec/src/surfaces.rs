@@ -10,7 +10,7 @@
 //! (until its guard returns) and the presenter's `read` fence value for its last read. A
 //! surface is free when unbound, not pending in this access unit, and not held. Before a
 //! write the decoder waits the surface's `read` value on its GPU context, once per value.
-//! The same ledger with no slots covers a copy ring. Pinned by the tables below.
+//! The same ledger with no slots covers a copy ring. Pinned by the tests below.
 
 use crate::SlotMap;
 use pf_bitstream::h264::PicId;

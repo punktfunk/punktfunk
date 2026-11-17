@@ -5,10 +5,10 @@
 //! packet; it never aborts the session. Geometry is per-frame: the first packet pins
 //! `shard_bytes`, later packets must match.
 //!
-//! Two index spaces (`video`, `probe`) so a speed-test burst cannot move the video
-//! loss window. Incomplete frames age out after [`LOSS_WINDOW_NS`] of capture time
-//! (or [`HARD_LOSS_WINDOW`] indices). Opt-in paths emit chunk-aligned partials and
-//! slice-progressive prefixes.
+//! Separate index spaces (`video`, `probe`, one per further screen) so a speed-test burst
+//! cannot move the video loss window. Incomplete frames age out after [`LOSS_WINDOW_NS`] of
+//! capture time (or [`HARD_LOSS_WINDOW`] indices). Opt-in paths emit chunk-aligned partials
+//! and slice-progressive prefixes.
 //!
 //! In-flight memory is capped at [`IN_FLIGHT_BUF_FACTOR`] × `max_frame_bytes`.
 //! Pinning: `design/shard-payload-reneg.md`. Late-shard netting:
@@ -129,8 +129,9 @@ impl ReassemblerLimits {
 }
 
 /// One index space: in-flight frames, recently-emitted memory, loss-window anchor.
-/// [`Reassembler`] keeps two — video and probe — because they use separate counters
-/// ([`VIDEO_CAP_PROBE_SEQ`]): a probe burst must not move the video loss window.
+/// [`Reassembler`] keeps video and probe apart because they use separate counters
+/// ([`VIDEO_CAP_PROBE_SEQ`]): a probe burst must not move the video loss window. Each
+/// further screen's stream gets one of its own.
 /// [`VIDEO_CAP_PROBE_SEQ`]: crate::quic::VIDEO_CAP_PROBE_SEQ
 #[derive(Default)]
 struct ReassemblyWindow {
@@ -146,8 +147,8 @@ struct ReassemblyWindow {
     positions: LossPositions,
 }
 
-/// Shards that never arrived, by where in their frame they fell: the first twelve data
-/// shards, the middle, and the last twelve with all parity.
+/// Shards that never arrived, by where in their frame they fell: the first `LOSS_EDGE_SHARDS`
+/// data shards, the middle, and the last `LOSS_EDGE_SHARDS` with all parity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LossPositions {
     pub head: u32,
@@ -155,7 +156,7 @@ pub struct LossPositions {
     pub tail: u32,
 }
 
-/// Cap on in-flight `FrameBuf::buf` bytes (both index spaces): factor × `max_frame_bytes`.
+/// Cap on in-flight `FrameBuf::buf` bytes (every index space): factor × `max_frame_bytes`.
 /// Buffers are allocated whole at the first shard; without this, [`HARD_LOSS_WINDOW`]
 /// max-sized frames opened by one header each could commit gigabytes.
 pub(super) const IN_FLIGHT_BUF_FACTOR: usize = 4;
@@ -241,7 +242,7 @@ pub struct Reassembler {
     screens_on: bool,
     /// Pooled recovery-shard buffers. Data shards land in the frame buffer; these do not.
     recovery_pool: Vec<Vec<u8>>,
-    /// In-flight `buf` bytes plus per-block [`block_state_bytes`], both windows.
+    /// In-flight `buf` bytes, per-block [`block_state_bytes`] and held parity, every window.
     in_flight_bytes: usize,
     /// `(pts_ns, first shard arrival − pts_ns)`, ns, one per video frame that opened,
     /// oldest first. Raw: the reader adds the clock offset. A frame parity never
@@ -381,8 +382,9 @@ impl Reassembler {
 
     /// Ingest one already-decrypted packet. The AU when its last block completes, else `None`.
     ///
-    /// Malformed or non-video: drop, never fatal — must not abort `poll_frame`. A
-    /// reconstruct failure drops the block; the stream recovers at the next keyframe.
+    /// Malformed, or a further screen's stream this reassembler does not take: drop, never
+    /// fatal — must not abort `poll_frame`. A reconstruct failure drops the block; the stream
+    /// recovers at the next keyframe.
     pub fn push(
         &mut self,
         pkt: &[u8],
@@ -819,7 +821,7 @@ impl Reassembler {
         })
     }
 
-    /// Drop all in-flight state in both index spaces. After
+    /// Drop all in-flight state in every index space. After
     /// [`Session::flush_backlog`](crate::session::Session::flush_backlog) the remaining
     /// shards are gone and `newest_frame` points into the discarded past. The video
     /// indices in flight or recently terminated stay remembered, with nothing owed: a
@@ -852,10 +854,6 @@ impl Reassembler {
         self.in_flight_bytes
     }
 
-    /// `(missing, recovery)` for an in-flight video frame: shards it still needs past
-    /// what its parity can rebuild, and the parity shards it carries. A block with no
-    /// shard in yet counts all its data as missing. `None` when no shard of the frame
-    /// is in flight, or a streamed frame has not pinned its size.
     /// Video frame `frame_index` is still being reassembled: neither emitted nor abandoned.
     pub fn frame_in_flight(&self, frame_index: u32) -> bool {
         self.video.frames.contains_key(&frame_index)
@@ -889,6 +887,10 @@ impl Reassembler {
         data.into_iter().map(|i| u16::try_from(i).ok()).collect()
     }
 
+    /// `(missing, recovery)` for an in-flight video frame: shards it still needs past
+    /// what its parity can rebuild, and the parity shards it carries. A block with no
+    /// shard in yet counts all its data as missing. `None` when no shard of the frame
+    /// is in flight, or a streamed frame has not pinned its size.
     pub fn missing_beyond_parity(&self, frame_index: u32) -> Option<(u32, u32)> {
         let f = self.video.frames.get(&frame_index)?;
         if f.frame_bytes == 0 {
@@ -1165,8 +1167,9 @@ fn pin_totals(frame: &mut FrameBuf, g: &Geom) -> Pin {
 
 /// Hand `f` up through `sink` (newest-wins) when it is chunk-aligned and its size is known:
 /// received shards at their offsets, holes zeroed and counted in `partial_shards_lost`.
-/// `Some(true)` when it went up with its head block, the one at base 0, whole: a picture with
-/// patches missing, not a lost frame. `None` when it did not go up: its holes are uncounted.
+/// `Some(true)` when its head block, the one at base 0, is whole: a picture with patches
+/// missing, not a lost frame. `None` when it is not chunk-aligned or its size is unknown: its
+/// holes are uncounted.
 fn hand_up_partial(
     idx: u32,
     f: &mut FrameBuf,

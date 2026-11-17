@@ -25,7 +25,7 @@ import org.robolectric.annotation.Config
  * assertion here is about the bookkeeping that decides whether it is asked to.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36]) // Robolectric 4.16 has no SDK 37 image yet; the app targets 37
+@Config(sdk = [36]) // Robolectric has no SDK 37 image yet; the app targets 37
 class HostDiscoverySharingTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 

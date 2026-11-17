@@ -247,8 +247,8 @@ mod tests {
         let inx = crate::repo_file("packaging/windows/drivers/pf-gamepad/pf_gamepad.inx");
         let inf = std::fs::read_to_string(&inx).expect("read pf_gamepad.inx");
         // Match the install section by prefix, not `pfGamepad,` — Xbox installs `pfGamepadXbox`
-        // (xinputhid filter) and PlayStation/Deck must not. An exact match went vacuous at that
-        // split.
+        // (xinputhid filter) and PlayStation/Deck must not. An exact `pfGamepad,` match would
+        // skip the Xbox lines.
         let declared: Vec<String> = inf
             .lines()
             .map(str::trim)

@@ -300,8 +300,7 @@ final class ConsoleJSONTests: XCTestCase {
 
     /// `clients/shared/console-bridge-vectors.json`: the models this client writes match its
     /// samples, each answer under its command sample's `req`, and the menu and phase codes
-    /// match its table. `Phase` stops at reconnecting: this client never reports a profile the
-    /// host refused.
+    /// match its table. `Phase` has no `profile_gone`: this client never reports it.
     func testBridgeShapesMatchTheSharedVectors() throws {
         let doc = try sharedVectors("console-bridge-vectors.json")
         let models = try XCTUnwrap(doc["models"] as? [String: [Any]])

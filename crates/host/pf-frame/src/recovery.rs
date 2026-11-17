@@ -49,8 +49,8 @@ impl Stage {
             // One transport: an access-unit hole with a live source is the encoder's, and
             // the ladder's own escalation carries it to the driver cycle.
             StallClass::Encoder => Stage::EncoderReset,
-            // No host actuator today: the arm is the driver's, behind `CAP_SWAPCHAIN_RESET`.
-            // Until it exists the rung reports `Unsupported` and the ladder escalates.
+            // No actuator behind this rung yet: the owner reports `Unsupported` and the
+            // ladder escalates.
             StallClass::Worker => Stage::SwapChainReset,
             StallClass::Presentation => Stage::PresentationReset,
             StallClass::Driver => Stage::DriverCycle,
@@ -75,8 +75,8 @@ pub enum StageOutcome {
     Unsupported,
 }
 
-/// Budgets. Defaults follow the plan's shape (one execution per stage per episode, a rolling cap,
-/// exponential cooldown); the numbers are the starting values tests pin.
+/// Budgets: one execution per stage per episode, a rolling cap on episodes, and an exponential
+/// cooldown after a failed one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Budget {
     /// A stage has this long — actuator run plus recovery proof — before the ladder escalates.
@@ -173,7 +173,7 @@ struct Episode {
     done: Vec<StageRecord>,
 }
 
-/// One closed episode, for the single summary log the plan asks for.
+/// One closed episode, for the single summary log.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Summary {
     pub class: StallClass,

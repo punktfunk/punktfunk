@@ -91,13 +91,13 @@ object VideoDecoders {
 
     /**
      * Whether EVERY decoder this device would use tolerates multi-slice access units — the
-     * `VIDEO_CAP_MULTI_SLICE` advertisement (decoder truth, per the 0.17.0 field regression:
-     * Amlogic HEVC decoders wedge the whole DEVICE on multi-slice frames — Chromecast with
-     * Google TV, onn 4K — which is why Moonlight requests single-slice for every hardware
-     * decoder). We advertise per-family instead: tolerant unless the pick for ANY advertised
-     * codec is an Amlogic decoder or can't be inspected (a null pick = the platform default —
-     * uninspectable, so conservatively single-slice). Probed once at connect time; the host
-     * defaults to >1 slice only toward clients that set the bit.
+     * `VIDEO_CAP_MULTI_SLICE` advertisement (decoder truth: Amlogic HEVC decoders wedge the
+     * whole DEVICE on multi-slice frames — Chromecast with Google TV, onn 4K — which is why
+     * Moonlight requests single-slice for every hardware decoder). We advertise per-family
+     * instead: tolerant unless the pick for ANY advertised codec is an Amlogic decoder or can't
+     * be inspected (a null pick = the platform default — uninspectable, so conservatively
+     * single-slice). Probed once at connect time; the host defaults to >1 slice only toward
+     * clients that set the bit.
      */
     fun multiSliceTolerant(): Boolean {
         val mimes = advertisedMimes()
@@ -150,8 +150,9 @@ object VideoDecoders {
     /**
      * One-line per-mime probe readout for the connect log (`adb logcat -s pf.caps`): which
      * decoder each advertised mime resolves to, whether it declares `FEATURE_PartialFrame` (the
-     * P2 slice-pipeline gate) and which latency-named vendor parameters it declares — whether a
-     * `low_latency_key` profile's keys exist on this device, otherwise invisible from a report.
+     * [partialFrameCapable] gate) and which latency-named vendor parameters it declares —
+     * whether a `low_latency_key` profile's keys exist on this device, otherwise invisible from
+     * a report.
      */
     fun capsReport(): String {
         val mimes = advertisedMimes()

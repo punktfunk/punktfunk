@@ -1,12 +1,11 @@
 // What a kit error says when something interpolates it — which is the whole diagnosis surface a
-// plugin operator gets, because `sync-engine`'s failure path logs `${e.cause}` and nothing else.
+// plugin operator gets, because `sync-engine`'s failure path logs only the pretty-printed cause.
 import { describe, expect, test } from "bun:test";
 import { HostRequestError, SyncError } from "../src/errors.js";
 
 describe("HostRequestError", () => {
-	// Regression for 2026-08-08: this printed the bare tag, so `plugin:lutris sync (startup)
-	// failed: HostRequestError` was the ENTIRE record of a host that had answered with a precise
-	// 400. Interpolation is the assertion because interpolation is what the sync engine does.
+	// The default string form is the bare tag, which would hide the method, path and the host's own
+	// explanation of a 400. Interpolation is the assertion because a log line renders it that way.
 	test("names the call and carries the host's explanation", () => {
 		const err = new HostRequestError({
 			method: "PUT",
@@ -64,11 +63,9 @@ describe("HostRequestError", () => {
 });
 
 describe("SyncError", () => {
-	// Regression for 2026-08-08 (rom-manager): the host refused every ROM reconcile with a 403 that
-	// named the offending field AND the fix, `HostRequestError` carried that sentence faithfully —
-	// and then this class dropped it, because the default string form is the bare tag. The plugin
-	// rendered `String(e)` into its API error, so the operator's entire diagnosis was the word
-	// "SyncError" (and, after the undecodable 500, "Decode error"). The chain must survive.
+	// The default string form is the bare tag, so a plugin that renders `String(e)` into its API
+	// error would show the operator the word "SyncError" and drop the host's nested explanation.
+	// The chain must survive.
 	test("carries the nested host explanation, not the bare tag", () => {
 		const err = new SyncError({
 			reason: "manual",

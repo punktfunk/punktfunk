@@ -1,10 +1,10 @@
 //! HTTP surface for the plugin **store**: catalogs, install/uninstall, sources, runner
 //! (design `plugin-store.md`). Domain logic is [`crate::store`].
 //!
-//! Auth is admin bearer + loopback, same as other mutations, and **denied to the plugin
-//! token** ([`super::auth::plugin_may_access`]). The deny is an exclusion-list carve-out;
-//! a test there pins it. A plugin that can install plugins can persist a helper outside
-//! its own constraints.
+//! Auth is a loopback bearer, the admin's or a person's on their own seat host, and **denied to
+//! the plugin token**: no store route is on [`super::auth::plugin_may_access`]'s allowlist,
+//! which `mgmt::tests::routes` pins. A plugin that can install plugins can persist a helper
+//! outside its own constraints.
 //!
 //! Handlers hop to `spawn_blocking`: catalog scans, fetches, and package-manager spawns
 //! would stall the runtime.

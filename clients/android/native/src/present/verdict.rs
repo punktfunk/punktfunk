@@ -2,7 +2,7 @@
 //! not work the way the policy assumes. Pure; the sinks feed them and act.
 //!
 //!  * [`downrated`]: the panel runs at least 1.5× the period Kotlin asked for. The budgets stop
-//!    holding frames back.
+//!    holding frames back, short of [`super::budget::PRESENTED_CAP`].
 //!  * [`Verdict::ShowsNothing`]: presents go out for two seconds and none is confirmed, on a sink
 //!    whose confirms are live. The loop ends the run.
 //!  * [`Verdict::Skipping`]: five unbroken seconds at or under the panel rate in which the store

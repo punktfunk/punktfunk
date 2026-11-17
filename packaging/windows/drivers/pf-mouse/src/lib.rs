@@ -111,7 +111,7 @@ fn channel_cfg() -> ChannelConfig {
 
 // The bring-up file log. OPT-IN — debug builds, or the `PFMOUSE_DEBUG_LOG` env var — so a RELEASE
 // driver never writes the file and never traps into the debugger. Path, sink and the gate live
-// in `pf_umdf_util::log`, one copy for all four drivers.
+// in `pf_umdf_util::log`, one copy for every driver.
 pf_umdf_util::file_log!("pfmouse-driver.log", "PFMOUSE_DEBUG_LOG");
 
 #[unsafe(export_name = "DriverEntry")]
@@ -304,11 +304,9 @@ fn on_get_string(request: &Request) -> NTSTATUS {
     let (_, string_id) = string_request_id(&bytes);
     let s: String = match string_id {
         0 | 0x000E => "Punktfunk".into(),
-        // (2) The SERIAL carries the channel proof — the one transport measured to reach a UMDF HID
-        // minidriver from user mode (`HidD_GetSerialNumberString`, zero-access handle, verified on
-        // .173). Safe HERE and only here: nothing reads the virtual mouse's serial, whereas the pads'
-        // serials are what SDL and Steam dedup controllers on. The old value was the inert
-        // "PFMOUSE00"; the proof text is just as inert and does the security work.
+        // The SERIAL carries the channel proof (`HidD_GetSerialNumberString` works on a zero-access
+        // handle). Safe HERE: nothing reads the virtual mouse's serial, whereas the pads' serials
+        // are what SDL and Steam dedup controllers on.
         2 | 0x0010 => ChannelProof::new(CHANNEL.index(), std::process::id()).to_hid_string(),
         _ => "Punktfunk Virtual Mouse".into(),
     };

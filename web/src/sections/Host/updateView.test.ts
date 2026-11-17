@@ -168,7 +168,7 @@ test("an apply in flight hides the outcome notes and the check button", () => {
 });
 
 test("a stale manifest warns in flight too", () => {
-	// pins current behaviour: every other note is hidden while an apply runs, this one is not.
+	// The result, error and empty-channel notes are hidden while an apply runs; this one is not.
 	const s = status({ manifest: { ...manifest, stale: true }, job });
 	expect(view(s).body?.stale).toBe(true);
 	expect(view(status({ manifest })).body?.stale).toBe(false);

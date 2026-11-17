@@ -44,7 +44,7 @@ mod linux {
     use wayland_client::{delegate_noop, Connection, Dispatch, QueueHandle, WEnum};
     use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
-    /// 120 Hz, a trackpad's report rate.
+    /// 8 ms ≈ 120 Hz, a trackpad's report rate.
     const FRAME_MS: u64 = 8;
 
     #[derive(Debug)]

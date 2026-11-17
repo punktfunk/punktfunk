@@ -2,18 +2,19 @@
 //! (indexed by `_IDDFUNCENUM::<Name>TableIndex`, with `IddDriverGlobals` as the implicit first arg) —
 //! the same model wdk-sys uses for WDF. Covers the whole DDI set the pf-vdisplay driver needs.
 //!
-//! Each DDI pins its `(_IDDFUNCENUM index, PFN_* type)` pair in exactly ONE place (the macro invocation)
-//! — a wrong pairing is the only way the table dispatch can be UB, so it must never be expressed twice
-//! (port-plan unsafe_hotspot #1). All wrappers return the raw `NTSTATUS`; the caller classifies it with
-//! [`nt_success`] (or, for the HRESULT-shaped SwapChain DDIs, treats a nonzero as the documented retry
-//! code — handled at the call site in STEP 5).
+//! Each DDI pins its `(_IDDFUNCENUM index, PFN_* type)` pair in exactly ONE place (the macro
+//! invocation) — a wrong pairing is the only way the table dispatch can be UB, so it must never
+//! be expressed twice. All wrappers but the void `IddCxAdapterSetRenderAdapter` return the raw
+//! `NTSTATUS`; the caller classifies it with [`nt_success`]. The HRESULT-shaped SwapChain DDIs
+//! are classified by hand at their call sites in pf-vdisplay's `swap_chain_processor`
+//! (`E_PENDING` means wait).
 //!
 //! The `const _` items at the tail assert that the wdk-sys `iddcx` bindgen still emits and resolves
 //! the whole struct + callback surface, so an allowlist regression fails CI instead of the box.
 #![no_std]
 #![allow(non_snake_case, clippy::missing_safety_doc)]
-// P0 lint (audit §8): require explicit `unsafe {}` blocks inside `unsafe fn`s + a proof on
-// each (this crate is the IddCx DDI dispatch layer — inherently unsafe, so audited, not unsafe-free).
+// The workspace lints (`[lints] workspace = true`) deny `unsafe_op_in_unsafe_fn` and undocumented
+// `unsafe {}` blocks: this IddCx DDI dispatch layer is unsafe-audited, not unsafe-free.
 
 pub use wdk_sys::iddcx;
 
@@ -150,9 +151,9 @@ iddcx_ddi!(
         @ IddCxMonitorDepartureTableIndex as PFN_IDDCXMONITORDEPARTURE
 );
 iddcx_ddi!(
-    /// Declare hardware-cursor support for a monitor (proto v5 cursor channel): the OS stops
+    /// Declare hardware-cursor support for a monitor (the cursor channel): the OS stops
     /// compositing the pointer into the desktop image and signals `hNewCursorDataAvailable`
-    /// on every cursor change instead (drained via [`IddCxMonitorQueryHardwareCursor`]).
+    /// on every cursor change instead (drained via [`IddCxMonitorQueryHardwareCursor3`]).
     IddCxMonitorSetupHardwareCursor(
         monitor: iddcx::IDDCX_MONITOR,
         in_args: *const iddcx::IDARG_IN_SETUP_HWCURSOR,
@@ -170,8 +171,8 @@ iddcx_ddi!(
 iddcx_ddi!(
     /// The v3 hardware-cursor drain — same input, richer output (adds `PositionValid` /
     /// `PositionId` / `SdrWhiteLevel`). The base [`IddCxMonitorQueryHardwareCursor`] slot is
-    /// stubbed to `STATUS_NOT_SUPPORTED` on current IddCx (observed on-glass, WDK 26100), so
-    /// this is the live query DDI.
+    /// stubbed to `STATUS_NOT_SUPPORTED` on current IddCx (WDK 26100), so this is the live query
+    /// DDI.
     IddCxMonitorQueryHardwareCursor3(
         monitor: iddcx::IDDCX_MONITOR,
         in_args: *const iddcx::IDARG_IN_QUERY_HWCURSOR,
@@ -189,7 +190,7 @@ iddcx_ddi!(
     /// Refresh a LIVE monitor's target-mode list (the HDR `*2` variant, IddCx 1.10 — the same API
     /// family as the `*2` mode/buffer DDIs this driver already requires): the OS re-evaluates which
     /// modes the target supports WITHOUT a monitor departure, so the host can then mode-set to a
-    /// freshly-advertised mode in place (the mid-stream resize, latency plan P2).
+    /// freshly-advertised mode in place (the mid-stream resize).
     IddCxMonitorUpdateModes2(
         monitor: iddcx::IDDCX_MONITOR,
         in_args: *const iddcx::IDARG_IN_UPDATEMODES2,

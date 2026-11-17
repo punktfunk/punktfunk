@@ -461,11 +461,9 @@ pub fn unwindow(au: &[u8], chunk: usize) -> anyhow::Result<Vec<u8>> {
 
 /// Per-chunk target (~3–4 chunks at 400 Mb/s 60 fps, ~833 KB).
 ///
-/// The sealer flushes only past one FEC block (200 × 1408 = 281 600 B on
-/// 1500-MTU IPv4); 256 KiB sits just under that. pf-encode is not told the
-/// session's FEC geometry, so this is a fixed byte target. Smaller cuts also
-/// grant a fresh `max(bytes/4, 128 KiB)` microburst per sealed batch — the
-/// overrun the pacer exists to stop.
+/// The sealer flushes only past one FEC block (`FecConfig::max_data_per_block` shards:
+/// 200 × 1408 = 281 600 B on 1500-MTU IPv4); 256 KiB sits just under that. pf-encode is
+/// not told the session's FEC geometry, so this is a fixed byte target.
 const STREAM_CHUNK_TARGET_BYTES: usize = 256 * 1024;
 /// Clamp for `PUNKTFUNK_PYROWAVE_CHUNK_KIB` (see [`stream_chunk_step`]).
 const STREAM_CHUNK_MIN_KIB: usize = 4;
@@ -492,10 +490,10 @@ fn chunk_step(window: usize, target: usize) -> usize {
 /// path (feature unarmed, or dense mode).
 ///
 /// Dense AUs are one atomic pyrowave packet with no window framing, so a cut
-/// is neither shard-aligned nor a parse boundary. Real sessions set
-/// `plan.wire_chunk = Some(session.shard_payload())`.
-/// `PUNKTFUNK_PYROWAVE_CHUNK_KIB` overrides the target (clamped to
-/// [`STREAM_CHUNK_MIN_KIB`]..=[`STREAM_CHUNK_MAX_KIB`]); garbage uses the default.
+/// is neither shard-aligned nor a parse boundary. Real PyroWave sessions set
+/// `plan.wire_chunk = Some(terms.shard_payload)`.
+/// `PUNKTFUNK_PYROWAVE_CHUNK_KIB` overrides the target in 64 KiB steps; a value outside
+/// [`STREAM_CHUNK_MIN_KIB`]..=[`STREAM_CHUNK_MAX_KIB`], or garbage, uses the default.
 /// Reads the knobs in force; [`AuStream`] latches the answer per encoder.
 pub fn stream_chunk_step(wire_chunk: Option<usize>) -> Option<usize> {
     let window = wire_chunk.filter(|&w| w > 0)?;
@@ -504,7 +502,7 @@ pub fn stream_chunk_step(wire_chunk: Option<usize>) -> Option<usize> {
     }
     let target = match crate::knobs::get().pyrowave_chunk_64kib {
         0 => STREAM_CHUNK_TARGET_BYTES,
-        // 64 KiB steps; the floor rounds down to the encoder's own minimum.
+        // 64 KiB steps: the knob rounds a KiB value up to whole steps, so 4 KiB arrives as 64.
         steps => (usize::from(steps) * 64 * 1024)
             .clamp(STREAM_CHUNK_MIN_KIB * 1024, STREAM_CHUNK_MAX_KIB * 1024),
     };
@@ -515,8 +513,8 @@ pub fn stream_chunk_step(wire_chunk: Option<usize>) -> Option<usize> {
 /// [`crate::Encoder::poll_chunk`] / `VIDEO_CAP_STREAMED_AU`. Shared so the
 /// cut cannot drift between backends.
 ///
-/// `encode_frame` is synchronous: `submit` returns only once the whole AU
-/// sits in `pending`. Chunks pipeline seal/send with itself, not encode with
+/// The chunker cuts an AU already encoded whole (`poll_chunk` takes it from
+/// `pending`), so chunks pipeline seal/send with itself, not encode with
 /// send — unlike H.26x sub-frame slices. The reassembler also completes a
 /// streamed AU as one `Frame`; prefix decode is a separate opt-in that
 /// PyroWave's newest-wins channel cannot take.
@@ -558,8 +556,8 @@ impl AuChunker {
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<crate::AuChunk> {
         if self.cursor >= self.au.len() {
-            // `build_au` always emits at least one window, but a chunked poll that
-            // returned nothing would leak the host's open `StreamedAu`.
+            // `build_au` always emits at least one window, but an empty AU still owes
+            // its `last`: the host retires a frame only on `last`.
             if self.emitted {
                 return None;
             }
@@ -1001,8 +999,7 @@ mod tests {
         assert_eq!(chunk_step(0, 4096), 4096); // never divide by zero
     }
 
-    /// One `first && last` piece — `handle_chunk` turns that into begin+finish
-    /// on one message, byte-identical to the whole-AU path.
+    /// One `first && last` piece — `ChunkMsg::into_msg` sends it down the whole-AU path.
     #[test]
     fn single_chunk_au_opens_and_closes_itself() {
         let au = vec![7u8; 512];
@@ -1013,8 +1010,7 @@ mod tests {
         assert_eq!(lasts, vec![true]);
     }
 
-    /// Empty AU still owes one self-closing chunk: returning nothing would leave
-    /// the host's `StreamedAu` open (`begin` on `first`, `finish` on `last`).
+    /// Empty AU still owes one self-closing chunk: the host retires a frame only on `last`.
     #[test]
     fn empty_au_still_emits_one_self_closing_chunk() {
         let mut c = AuChunker::new(frame(Vec::new()), 4096);
@@ -1049,8 +1045,7 @@ mod tests {
         assert!(unwindow(&packed, chunk).is_err(), "non-zero padding");
     }
 
-    /// One floor on both platforms: 64 KiB a frame. A low rate at a low frame rate is honoured,
-    /// not lifted to 1 Mb/s.
+    /// The only floor is 64 KiB a frame: a low rate at a low frame rate is honoured.
     #[test]
     fn frame_budget_floors_at_64_kib_a_frame() {
         assert_eq!(FrameBudget::new(0, 60).bytes, 64 * 1024);

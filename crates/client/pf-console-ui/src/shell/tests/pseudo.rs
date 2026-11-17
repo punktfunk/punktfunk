@@ -81,7 +81,8 @@ const LITERAL: &[Rule] = &[
 /// shrinks, and an entry that no longer draws fails the test.
 const LITERAL_DEBT: &[(&str, &str)] = &[];
 
-/// Messages that overflow under the pseudo-language today, by key. Waits for the wording pass.
+/// Messages that overflow under the pseudo-language, by key. Each entry is a gap to close; an
+/// entry that fits again fails the test.
 const OVERFLOW_DEBT: &[(&str, &str)] = &[];
 
 const UNITS: &[&str] = &[

@@ -529,8 +529,8 @@ mod clock {
 
         /// A driver sample without the engine's stamp takes the compositor's for the same
         /// present. One with neither yet waits a pass, and everything behind it waits too so
-        /// stamps leave in order; after that it goes out on its wake time. The map keeps only
-        /// ids newer than the last sample out.
+        /// stamps leave in order; after that it goes out on its wake time. The map drops ids
+        /// more than 64 older than the last sample out.
         #[cfg(target_os = "linux")]
         fn join_compositor_stamps(&mut self, fresh: Vec<PresentedSample>) -> Vec<PresentedSample> {
             let mut ready = Vec::with_capacity(self.held.len() + fresh.len());

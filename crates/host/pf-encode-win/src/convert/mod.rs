@@ -73,7 +73,8 @@ pub unsafe fn compile_shader(src: &str, entry: PCSTR, target: PCSTR) -> Result<V
     }
 }
 
-/// Fullscreen-triangle vertex shader for the HDR conversion pass (3 verts, no input layout).
+/// Fullscreen-triangle vertex shader every pass in `convert` draws with (3 verts, no input
+/// layout).
 pub const HDR_VS: &str = r"
 struct VOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
 VOut main(uint vid : SV_VertexID) {
@@ -173,7 +174,7 @@ float2 cbcr_code(float3 e) {
 }
 ";
 
-/// `pass` with its `#include_common` replaced by `curve` and the shared CSC. D3DCompile has no
+/// `pass` with its `#include_common` replaced by `curve` followed by `common`. D3DCompile has no
 /// include handler here.
 fn with_curve(pass: &str, curve: &str, common: &str) -> String {
     pass.replace("#include_common", &[curve, common].concat())
@@ -190,7 +191,7 @@ float main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
 /// P010 chroma: half-res interleaved (Cb,Cr) on plane 1 (`R16G16_UNORM`).
 /// Left-cosited (H.273 chroma_loc type 0, the unsignaled default): a [1 2 1] filter
-/// centred on the even luma column, over both rows, in scRGB-linear, then PQ + Cb/Cr.
+/// centred on the even luma column, over both rows, in scRGB-linear, then the curve + Cb/Cr.
 /// Without the side taps the odd column never reaches chroma and 1-px colour aliases;
 /// a 2×2 box is centre-sited and shifts chroma half a luma pixel. The PyroWave pass
 /// uses the same taps. `inv_src` = (1/srcW, 1/srcH).
@@ -214,7 +215,8 @@ float2 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
 /// scRGB FP16 → `R10G10B10A2` (BT.2020 PQ, or sRGB BT.709 for SDR wide colour; full-range
 /// RGB), one full-res pass. NVENC takes packed 10-bit RGB as `NV_ENC_BUFFER_FORMAT_ABGR10` and
-/// CSCs to YUV 4:4:4 itself. Colour math is the curve's `encode_scrgb`.
+/// CSCs to YUV itself, at 4:4:4 when the session negotiated it. Colour math is the curve's
+/// `encode_scrgb`.
 ///
 /// DXGI `R10G10B10A2_UNORM` stores R in the low 10 bits, which NVENC names
 /// `ABGR10` (A2B10G10R10 from the MSB). Same as SDR `B8G8R8A8` vs `ARGB`.
@@ -295,7 +297,7 @@ impl HdrRgb10Converter {
         }
     }
 
-    /// Non-planar RTV of the packed 10-bit output. Once per out-ring slot, never per frame.
+    /// Non-planar RTV of the packed 10-bit output. Once per pool slot, never per frame.
     pub fn rtv(device: &ID3D11Device, dst: &ID3D11Texture2D) -> Result<ID3D11RenderTargetView> {
         // SAFETY: one `?`-checked `CreateRenderTargetView` on the live `device` borrow, with a
         // fully-initialized descriptor local whose address is taken only for the synchronous call,
@@ -328,9 +330,9 @@ impl HdrRgb10Converter {
         w: u32,
         h: u32,
     ) -> Result<()> {
-        // SAFETY: all D3D11 work runs on the caller's live `ctx` borrow (the owning capture
-        // thread's immediate context) over borrowed slices of fully-initialized locals and clones
-        // of the caller's live SRV/RTV. No raw pointers and no mapping on this path.
+        // SAFETY: all D3D11 work runs on the caller's live `ctx` borrow over borrowed slices of
+        // fully-initialized locals and clones of the caller's live SRV/RTV. No raw pointers and no
+        // mapping on this path.
         unsafe {
             ctx.OMSetBlendState(None, None, 0xffff_ffff); // opaque overwrite
             ctx.VSSetShader(&self.vs, None);
@@ -358,9 +360,10 @@ impl HdrRgb10Converter {
     }
 }
 
-/// scRGB FP16 → P010 (BT.2020 PQ, 10-bit full range or studio) in two shader passes
-/// (full-res luma, half-res chroma). NVIDIA's D3D11 VideoProcessor cannot do
-/// RGB→P010 (renders green). One per capture device; rebuilt on device recreate.
+/// scRGB FP16 → P010 (BT.2020 PQ, or BT.709 for SDR wide colour; 10-bit full range or
+/// studio) in two shader passes (full-res luma, half-res chroma). NVIDIA's D3D11
+/// VideoProcessor cannot do RGB→P010 (renders green). One per capture device; rebuilt on
+/// device recreate.
 ///
 /// Plane writes are planar RTVs of one P010 texture: `R16_UNORM` = plane 0
 /// luma, `R16G16_UNORM` = plane 1 chroma. Needs D3D11.3+; a rejected plane
@@ -447,7 +450,7 @@ impl HdrP010Converter {
     }
 
     /// Per-plane RTV of P010 `dst`: `R16_UNORM` = plane 0 luma, `R16G16_UNORM` =
-    /// plane 1 chroma (format selects the plane). Once per out-ring slot, not per
+    /// plane 1 chroma (format selects the plane). Once per pool slot, not per
     /// frame. Fails if the driver rejects planar RTVs (D3D11.3+ required).
     pub fn plane_rtv(
         device: &ID3D11Device,
@@ -481,8 +484,8 @@ impl HdrP010Converter {
 
     /// Convert `src_srv` (FP16 scRGB, WxH) into P010 via caller-built plane RTVs
     /// ([`Self::plane_rtv`]). `w`/`h` are full luma dims (even) and must match
-    /// construction. Views live on the out-ring slot so this path never
-    /// `CreateRenderTargetView`s inside the keyed-mutex hold.
+    /// construction. Views live on the pool slot so this path never
+    /// `CreateRenderTargetView`s per frame.
     pub fn convert(
         &self,
         ctx: &ID3D11DeviceContext,
@@ -492,9 +495,9 @@ impl HdrP010Converter {
         w: u32,
         h: u32,
     ) -> Result<()> {
-        // SAFETY: all D3D11 work runs on the caller's live `ctx` borrow (the owning capture thread's
-        // immediate context) over borrowed slices of fully-initialized locals (the viewports) and
-        // clones of the caller's live SRV/RTVs. No raw pointers and no mapping on this path.
+        // SAFETY: all D3D11 work runs on the caller's live `ctx` borrow over borrowed slices of
+        // fully-initialized locals (the viewports) and clones of the caller's live SRV/RTVs. No raw
+        // pointers and no mapping on this path.
         unsafe {
             ctx.OMSetBlendState(None, None, 0xffff_ffff); // opaque overwrite
             ctx.VSSetShader(&self.vs, None);
@@ -540,8 +543,8 @@ impl HdrP010Converter {
 }
 
 /// PyroWave luma: full-res Y′ into `R8_UNORM`. BT.709 full range from 8-bit sRGB
-/// BGRA, byte-identical to Linux `rgb2yuv.comp` `lumaY`. `Load` (not Sample)
-/// so RTV pixel (x,y) is source texel (x,y).
+/// BGRA, byte-identical to the full-range branch of Linux `rgb2yuv.comp` `lumaY`.
+/// `Load` (not Sample) so RTV pixel (x,y) is source texel (x,y).
 const PYRO_Y_PS: &str = r"
 Texture2D<float4> tx : register(t0);
 float main(float4 pos : SV_POSITION) : SV_TARGET {
@@ -609,7 +612,7 @@ float main(float4 pos : SV_POSITION) : SV_TARGET {
 ";
 
 /// PyroWave 10-bit 4:2:0 chroma from FP16: half-res, left-sited [1 2 1] like the SDR pass,
-/// averaged in scRGB-linear, then the curve + studio Cb/Cr.
+/// averaged in scRGB-linear, then the curve + full-range Cb/Cr.
 const PYRO_HDR_UV_PS: &str = r"
 #include_common
 float2 main(float4 pos : SV_POSITION) : SV_TARGET {
@@ -635,13 +638,13 @@ float2 main(float4 pos : SV_POSITION) : SV_TARGET {
 
 /// BGRA/scRGB → separate Y and interleaved CbCr textures for the PyroWave
 /// wavelet encoder (`design/pyrowave-windows-host-zerocopy.md`,
-/// `design/pyrowave-444-hdr.md`). SDR from BGRA writes BT.709-limited 8-bit planes;
-/// FP16 (HDR, or SDR wide colour as BT.709) writes P010-style 10-bit studio codes into
+/// `design/pyrowave-444-hdr.md`). SDR from BGRA writes BT.709 full-range 8-bit planes;
+/// FP16 (HDR, or SDR wide colour as BT.709) writes P010-style 10-bit full-range codes into
 /// 16-bit planes.
 ///
 /// Two textures, not one planar NV12: NVIDIA's D3D11→Vulkan import of a
 /// planar NV12 is unreliable at arbitrary sizes. Caller owns the textures
-/// and RTVs (shareable, per out-ring slot).
+/// and RTVs (shareable, per pool slot).
 pub struct BgraToYuvPlanes {
     vs: ID3D11VertexShader,
     ps_y: ID3D11PixelShader,
@@ -654,7 +657,7 @@ impl BgraToYuvPlanes {
     /// `hdr` reads FP16 into BT.2020 PQ, `wcg` reads FP16 into BT.709 (SDR wide colour);
     /// neither reads 8-bit BGRA. `hdr` wins if both are set.
     pub fn new(device: &ID3D11Device, hdr: bool, wcg: bool, chroma444: bool) -> Result<Self> {
-        // SAFETY: as `HdrP010Converter::new` — `?`-checked D3D11 shader creation on the live
+        // SAFETY: as `HdrP010Converter::with` — `?`-checked D3D11 shader creation on the live
         // `device` borrow, with `s!()` literals into `compile_shader` and live out-params.
         unsafe {
             let curve = if hdr { CURVE_PQ2020 } else { CURVE_SRGB709 };
@@ -941,7 +944,7 @@ impl VideoConverter {
                 self.vctx
                     .VideoProcessorBlt(&self.vp, &out_view, 0, std::slice::from_ref(&stream));
             // Blt only borrows the input view; `ManuallyDrop` suppressed Drop.
-            // Release once on both paths — skipping this leaked one view per frame.
+            // Release once on both paths — skipping it leaks one view per frame.
             drop(std::mem::ManuallyDrop::into_inner(stream.pInputSurface));
             blt.context("VideoProcessorBlt")
         }

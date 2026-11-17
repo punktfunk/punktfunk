@@ -11,17 +11,16 @@ package io.unom.punktfunk.kit
  * be bounded — a stalled or unplugged device would otherwise grow it without limit — and the
  * question is what to discard when it fills.
  *
- * The old policy was "newest wins": drop from the head until there is room. That is right for
- * rumble, which is *level-styled* — the host re-sends it continuously, so a dropped frame is
- * replaced milliseconds later and nothing is permanently lost. It is wrong for everything else.
- * A lightbar colour, a player-LED mask and an adaptive-trigger effect are **one-shots**: the host
- * sends them on change and never repeats them. Dropping one leaves the pad wrong until the next
- * time that value happens to change, which may be never.
+ * Rumble is *level-styled* — the host re-sends it continuously, so a dropped frame is replaced
+ * milliseconds later and nothing is permanently lost. Everything else is a **one-shot**: a
+ * lightbar colour, a player-LED mask and an adaptive-trigger effect are sent on change and never
+ * repeated. Dropping one leaves the pad wrong until the next time that value happens to change,
+ * which may be never.
  *
  * So eviction is driven by an explicit [key] supplied by the caller, not by inspecting the bytes.
  * That distinction cannot be recovered from the report itself: every DualSense output report
  * carries the *same* report id and differs only in its `valid_flag` bytes, so an id-keyed policy
- * would happily let a rumble supersede a lightbar — the very bug this replaces, relocated.
+ * would let a rumble supersede a lightbar.
  *
  * Two rules:
  *  - A report offered with a coalescing key **replaces** the pending report with that key, in

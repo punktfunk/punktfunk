@@ -169,7 +169,8 @@ pub(crate) fn props_say_ds5(
 #[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SinkNode {
-    /// Registry global id for [`pin_sink_volume`]. `0` = no walk produced this node (fixtures, named-but-unseen split parent).
+    /// Registry global id for `pin_sink_volume` (`pipewire.rs`). `0` = no walk produced this
+    /// node (fixtures, named-but-unseen split parent).
     pub(crate) id: u32,
     /// `node.name` — stream `target.object`.
     pub(crate) name: String,

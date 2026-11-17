@@ -40,8 +40,8 @@ pub struct TritonWinPad {
     hold_until: Option<std::time::Instant>,
 }
 
-/// Longer than two of the driver's 2 ms samples, so a sparse report is served before the next
-/// state report replaces it in the slot.
+/// Longer than two ticks of the driver's `TIMER_PERIOD_MS`, so a sparse report is served before
+/// the next state report replaces it in the slot.
 const SPARSE_HOLD: std::time::Duration = std::time::Duration::from_millis(5);
 
 impl TritonWinPad {

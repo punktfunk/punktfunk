@@ -229,8 +229,8 @@ impl ConsumerKind {
 }
 
 /// Classify the frames' consumer. **Pure.** `pyrowave_session` wins over `backend_is_vaapi`
-/// because it is per-session and the pref is host-global (a PyroWave session also sets
-/// `backend_is_vaapi` via `linux_zero_copy_is_vaapi`'s `Pyrowave` arm).
+/// because it is per-session and `backend_is_vaapi` follows the host-global backend
+/// (`Resolved::zero_copy_is_vaapi`), which an AMD/Intel host sets for a PyroWave session too.
 pub(super) fn consumer_kind(
     pyrowave_session: bool,
     backend_is_vaapi: bool,
@@ -911,12 +911,12 @@ mod tests {
     // Env-var reads race under a shared test process, so these assert against the pure
     // functions the logging sites call.
 
-    /// PyroWave wins even when it also flips `backend_is_vaapi` on (`linux_zero_copy_is_vaapi`
-    /// `Pyrowave` arm). The other order reports the session as somebody else's backend.
+    /// PyroWave wins even when the host's backend sets `backend_is_vaapi` (AMD/Intel). The
+    /// other order reports the session as somebody else's backend.
     #[test]
     fn pyrowave_outranks_the_host_global_backend_pref() {
         assert_eq!(consumer_kind(true, true, true), ConsumerKind::PyroWave);
-        // NVIDIA/auto host (`backend_is_vaapi` false) is still PyroWave — that case logged nothing.
+        // NVIDIA/auto host (`backend_is_vaapi` false) is still PyroWave.
         assert_eq!(consumer_kind(true, false, true), ConsumerKind::PyroWave);
     }
 

@@ -1275,8 +1275,8 @@ mod tests {
         }
     }
 
-    /// What the helper's `grep | awk` filter passed for each input, run under `LC_ALL=C`. The
-    /// input is the owner's `host.env` then `web.env`, each read whole by `cat`.
+    /// What [`port_lines`] keeps of each input: the owner's `host.env` then `web.env`, each read
+    /// whole by `cat`.
     #[test]
     fn door_port_lines_table() {
         let rows: [(&str, &[u8], &str); 24] = [
@@ -1396,9 +1396,9 @@ mod tests {
         assert_eq!(refused.params["owner"], "alice");
     }
 
-    /// A box as the switch's fake sees it. The recording stubs the tables below came from answer
-    /// by the same rules: a side's `test`, `cat` and `ls` read its folder here, `getent` the
-    /// accounts and groups, `systemctl` the active units, and the `fail_at`th call exits 7.
+    /// A box as the switch's fake sees it: a side's `test`, `cat` and `ls` read its folder here,
+    /// `getent` the accounts and groups, `systemctl` the active units, and the `fail_at`th call
+    /// exits 7.
     struct World {
         home: &'static str,
         owner: Vec<(&'static str, &'static str)>,
@@ -1785,8 +1785,7 @@ mod tests {
             .collect()
     }
 
-    /// Each on, call for call as the helper ran it (recorded under stubs that answer as
-    /// [`World`] does).
+    /// The calls of each on, in order, against a [`World`].
     #[test]
     fn the_door_s_on_runs_exactly_these() {
         let rows: [(&str, Make, &[&str], &str); 4] = [
@@ -2014,8 +2013,8 @@ mod tests {
         assert_eq!(flood, b"y\ny\ny\ny\ny\n");
     }
 
-    // The calls `door-helper` made under recording stubs, in-process ones left out, each
-    // hand-over's write split into the write and its move.
+    // The programs each switch runs, in order. Its own file work is not among them, and each
+    // hand-over's write and its move are separate calls.
     const ON_FRESH: &[&str] = &[
         "systemctl is-active --quiet punktfunk-seats.service",
         "getent group punktfunk-door",

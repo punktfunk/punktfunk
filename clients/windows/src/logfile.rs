@@ -1,11 +1,8 @@
 //! Persistent client log file: `%LOCALAPPDATA%\punktfunk\logs\client.log`.
 //!
 //! The shell is a `windows_subsystem` binary and spawns `punktfunk-session` with
-//! `CREATE_NO_WINDOW` — a normal GUI/MSIX launch has NO console, so before this module every
-//! log line (the shell's and, worse, the session's whole receive/decode/present forensic
-//! trail) evaporated exactly when a user hit a problem worth reporting. The 2026-07 PyroWave
-//! latency-sawtooth field report had to be triaged from host logs alone because the client
-//! side had nowhere to land.
+//! `CREATE_NO_WINDOW` — a normal GUI/MSIX launch has NO console, so without a file every log
+//! line (the shell's and the session's whole receive/decode/present trail) would be lost.
 //!
 //! Mirrors the host's convention (`%ProgramData%\punktfunk\logs`, size-capped): a file over
 //! 10 MB is rotated to `.old` at the next client start, one generation kept. Everything is
@@ -36,14 +33,12 @@ fn log_dir() -> Option<PathBuf> {
 /// The log directory as it exists ON DISK — Settings ▸ About's "Open log folder" opens this in
 /// Explorer, and [`path`] names it in the startup line and the failed-spawn banner.
 ///
-/// The shipping client is a full-trust MSIX package, and Windows redirects a packaged app's
+/// A packaged (MSIX) client is full-trust, and Windows redirects a packaged app's
 /// `%LOCALAPPDATA%` writes into its private `…\Packages\<family>\LocalCache\Local\…`. We create
 /// and append through that redirection without ever seeing it, so [`log_dir`] is the right path
 /// to WRITE to yet names a directory that never exists on disk. Explorer runs OUTSIDE the
 /// container: it resolves the literal path, finds nothing, and silently falls back to the user's
-/// Documents folder — which is exactly what "Open log folder" did in every packaged install, and
-/// what the two "check <path>" messages pointed at. An unpackaged dev run creates the literal
-/// directory for real, which is why this only ever showed up in the field.
+/// Documents folder. An unpackaged run creates the literal directory for real.
 ///
 /// Canonicalizing the directory we just created resolves through the redirection on a packaged
 /// run and changes nothing on an unpackaged one, so there is no package identity to detect.
@@ -118,8 +113,8 @@ pub(crate) fn init() {
 }
 
 /// A writer that duplicates onto stderr (dev runs from a terminal keep their interleaved
-/// output) and the log file (GUI runs finally keep anything at all). The tracing subscriber's
-/// `with_writer` factory and the session-stderr forwarder both use it.
+/// output) and the log file (a GUI launch has no console, so the file is what it keeps). The
+/// tracing subscriber's `with_writer` factory and the session-stderr forwarder both use it.
 pub(crate) struct Tee;
 
 /// `with_writer` factory (`fn() -> Tee` satisfies `MakeWriter`).
@@ -160,7 +155,7 @@ mod tests {
         );
     }
 
-    /// The MSIX-redirected form is what the fix is for: same treatment, longer path.
+    /// The MSIX-redirected form: same treatment, longer path.
     #[test]
     fn verbatim_disk_prefix_comes_off_for_the_package_local_cache() {
         let p = PathBuf::from(

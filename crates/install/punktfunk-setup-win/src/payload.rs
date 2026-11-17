@@ -1,6 +1,5 @@
-//! What the D3 sandwich carries: one tar, xz-compressed behind the x86 BCJ filter (S2
-//! measured xz 40 % under zstd on the installed tree; BCJ is this WP's extra on the exes and
-//! DLLs), holding up to three trees plus a manifest:
+//! What the D3 sandwich carries: one tar, xz-compressed behind the x86 BCJ filter (which
+//! makes the exes and DLLs pack smaller), holding up to three trees plus a manifest:
 //!
 //!   runtime/       the self-contained WinAppSDK set the wizard runs from (always)
 //!   app/           what lands in `{app}` (the installer)
@@ -40,8 +39,8 @@ pub fn build(trees: &Trees, manifest: &Manifest) -> Result<Vec<u8>, String> {
     let mut filters = Filters::new();
     filters.x86();
     filters.lzma2(&LzmaOptions::new_preset(9).map_err(|e| e.to_string())?);
-    // One preset-9 dictionary (64 MiB) per block: the 216 MB host tree packs 2.6× faster on
-    // 8 threads for 1.2 % more bytes. Still one xz stream, so `XzDecoder` reads it unchanged.
+    // One preset-9 dictionary (64 MiB) per block, so blocks compress on separate threads for a
+    // little more size. Still one xz stream, so `XzDecoder` reads it unchanged.
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
     let stream = MtStreamBuilder::new()
         .threads(threads)

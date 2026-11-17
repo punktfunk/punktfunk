@@ -8,8 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { omarchyTheme } from "./omarchyTheme";
 
-/** A rendered theme file, with `over` replacing any of its fields. All four are required by
- *  `omarchyTheme`, so a test that names only the field it is about still gets a valid file. */
+/** A rendered theme file, with `over` replacing any of its fields. `omarchyTheme` requires the
+ *  three colours, so a test that names only the field it is about still gets a valid file. */
 function rendered(over: Record<string, unknown> = {}): string {
 	return JSON.stringify({
 		mode: "dark",
@@ -58,9 +58,9 @@ describe("omarchyTheme", () => {
 	});
 
 	test("a partial palette is no theme, not a half-themed console", () => {
-		// The accent alone is what the console used to take, and it left the violet chrome under a
-		// themed button. Every surface is now mixed from the background/foreground pair, so a file
-		// carrying neither has nothing to mix — fall back to the console's own palette entire.
+		// An accent alone leaves the violet chrome under a themed button, and every surface is
+		// mixed from the background/foreground pair, so a file carrying neither has nothing to
+		// mix — fall back to the console's own palette entire.
 		expect(
 			withTheme('{"mode":"dark","accent":"#89b4fa"}', omarchyTheme),
 		).toBeNull();
@@ -98,8 +98,7 @@ describe("omarchyTheme", () => {
 			"#".repeat(200),
 		];
 		// EVERY colour reaches the DOM, not just the accent — background and foreground are inlined
-		// into the same style attribute, so each of the three has to be validated, and a test that
-		// only covered `accent` would have missed the two that were added later.
+		// into the same style attribute, so each of the three has to be validated.
 		for (const field of ["accent", "background", "foreground"]) {
 			for (const value of hostile) {
 				expect(

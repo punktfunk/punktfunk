@@ -30,7 +30,7 @@ final class ChordTests: XCTestCase {
         XCTAssertEqual(chordChip(win.keys), "Win")
     }
 
-    /// R7-3: a chord another client stored reads as Rust's `Chord::parse` reads it.
+    /// A chord another client stored reads as Rust's `Chord::parse` reads it.
     func testAliasesFoldAndTheLastGridKeyWins() {
         let c = Chord.parse(keys: ["escape", "control", "meta", "a"])
         XCTAssertEqual(c, Chord(mods: ["ctrl", "win"], key: "a"))

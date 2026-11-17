@@ -35,8 +35,7 @@ public struct EffectiveSettings: Equatable, Sendable {
     public var hdrEnabled = SettingDefault.hdrEnabled
     public var compositor = SettingDefault.compositor
     public var audioChannels = SettingDefault.audioChannels
-    /// An `AudioFormatChoice` raw value. `"opus"` — the default — is byte-for-byte the session
-    /// every build before the lossless plane ran.
+    /// An `AudioFormatChoice` raw value; `SettingDefault.audioFormat` decides the default.
     public var audioFormat = SettingDefault.audioFormat
     public var micEnabled = SettingDefault.micEnabled
     public var echoCancel = SettingDefault.echoCancel
@@ -48,14 +47,14 @@ public struct EffectiveSettings: Equatable, Sendable {
     public var overlayActions = SettingDefault.overlayActions
     /// Cross-client `shortcuts`: the shortcuts blob, empty = this platform's defaults.
     public var shortcuts = SettingDefault.shortcuts
-    /// Cross-client `inhibit_shortcuts` (default on): system chords reach the host while input is
-    /// captured. See `DefaultsKey.inhibitShortcuts` — on macOS this is the ⌘-chord passthrough.
+    /// Cross-client `inhibit_shortcuts`: system chords reach the host while input is captured.
+    /// See `DefaultsKey.inhibitShortcuts` — on macOS this is the ⌘-chord passthrough.
     public var inhibitShortcuts = SettingDefault.inhibitShortcuts
     public var gamepadType = SettingDefault.gamepadType
     public var gamepadForwarding = SettingDefault.gamepadForwarding
-    /// Steam Controller 2 as-is passthrough (`DefaultsKey.sc2Capture`, default off). Read at
-    /// connect beside `gamepadForwarding`. Deliberately NOT presetable (no overlay field): the
-    /// toggle is about hardware this device captures, not about how a host is streamed.
+    /// Steam Controller 2 as-is passthrough (`DefaultsKey.sc2Capture`). Read at connect beside
+    /// `gamepadForwarding`. Deliberately NOT presetable (no overlay field): the toggle is about
+    /// hardware this device captures, not about how a host is streamed.
     public var sc2Capture = SettingDefault.sc2Capture
     /// Cross-client `system_buttons`: "auto" | "forward" | "local".
     public var systemButtons = SettingDefault.systemButtons
@@ -81,13 +80,11 @@ public struct EffectiveSettings: Equatable, Sendable {
     public var micChannel = SettingDefault.micChannel
     public var pointerCapture = SettingDefault.pointerCapture
     public var spatialAudio = SettingDefault.spatialAudio
-    /// The preset this resolution came from, when one applied — the HUD names it so "which
-    /// preset am I on?" is answerable mid-session, and the one-off/binding distinction never has
-    /// to be guessed from the settings themselves.
+    /// The preset this resolution came from, when one applied. The HUD names it
+    /// (`SessionModel.hudFacts`) and the dial sends it to the host (`preset_id` / `preset_name`).
     public var presetID: String?
     public var presetName: String?
-    /// The preset's `#RRGGBB` chip colour. The HUD tints the name with it, matching the card
-    /// that launched the session.
+    /// The preset's `#RRGGBB` chip colour (`StreamPreset.accent`).
     public var presetAccent: String?
 
     public init() {}
@@ -268,21 +265,21 @@ public struct EffectiveSettings: Equatable, Sendable {
 /// **The ladder is both rate families**, matching `punktfunk_core::audio::pcm::rate_is_supported`:
 /// 44 100 / 48 000 / 88 200 / 96 000 / 176 400 Hz. Jitter-buffer figures multiply before they
 /// divide (`AudioRing.swift`'s conversion helpers, `JitterPolicy::new_at_rate`): a whole number of
-/// samples per millisecond would truncate 44.1 kHz to 44 and put every target 2.3 % low.
+/// samples per millisecond would truncate 44.1 kHz to 44 and put every target 0.23 % low.
 ///
-/// ⚠ **A representable rate is not a promise that it will be granted.** The host runs a
-/// five-condition gate and any failure resolves the session back to Opus 48 kHz; the frame also
-/// has to FIT one QUIC datagram, which the top of the ladder barely does — 176 400/24-bit stereo
-/// is 8.5 Mbps and fits only the shortest rung (1 ms, ~1 069 B), and surround above 48 kHz fits
-/// none. What a session got is `PunktfunkConnection`'s `resolvedAudioRateHz`/`resolvedAudioBits`/
-/// `resolvedAudioChannels`, which the HUD shows.
+/// ⚠ **A representable rate is not a promise that it will be granted.** The host's gate
+/// (`resolve_audio_plane`) resolves any failure back to Opus 48 kHz. The frame also has to fit
+/// one QUIC datagram or travel as `0xD5` parts, and 7.1 above 96 kHz does neither
+/// (`surround_over_limit`). 176 400/24-bit stereo is 8.5 Mbps and fits one 1 400 B datagram
+/// only at the shortest rung (1 ms, ~1 069 B). What a session got is `PunktfunkConnection`'s
+/// `resolvedAudioRateHz`/`resolvedAudioBits`/`resolvedAudioChannels`, which the HUD shows.
 ///
 /// Lossless at the DEFAULT 48 kHz/16-bit is deliberately not offered: it spends ~1.5 Mbps to sound
 /// like the transparent 256 kbps Opus it replaces, and it is the one lossless request whose wire
 /// parameters are indistinguishable from a legacy one (it needs `CLIENT_CAP_AUDIO_HIRES` set by
 /// hand — see the C ABI's note on that constant). 24-bit is where the plane earns its bandwidth.
 public enum AudioFormatChoice: String, CaseIterable, Sendable {
-    /// Opus 48 kHz — the default, and byte-for-byte the session every earlier build ran.
+    /// Opus 48 kHz: the Hello leaves the audio format unspecified (`0`/`0`).
     case opus
     /// Bit-exact PCM at 44.1 kHz / 24-bit. ~2.1 Mbps. The CD family's base rate: what an ordinary
     /// Windows endpoint or a 44.1 kHz interface reports as its OWN engine rate, and the request
@@ -301,18 +298,18 @@ public enum AudioFormatChoice: String, CaseIterable, Sendable {
     /// Bit-exact PCM at 176.4 kHz / 24-bit — 8.5 Mbps, and the one row far more likely to be
     /// declined than granted. Three things have to go right: the host's bandwidth gate gives audio
     /// at most a quarter of the video budget, so the session needs ~34 Mbps of video before it is
-    /// even considered; a stereo frame fits a QUIC datagram only on the ladder's shortest rung
-    /// (1 ms — a thousand datagrams a second — at ~1 069 B, so any connection with a smaller
-    /// datagram declines it) and a surround one fits no rung at all; and this device's output has
-    /// to open the rate. Offered because it is reachable, not because it is likely — the HUD's
-    /// `audio lossless …` line is what says which happened.
+    /// even considered; a stereo frame fits one 1 400 B datagram only on the ladder's shortest
+    /// rung (1 ms — a thousand datagrams a second — at ~1 069 B), else it travels in parts, and a
+    /// 7.1 frame fits neither way; and this device's output has to open the rate. Offered because
+    /// it is reachable, not because it is likely — the HUD's `audio lossless …` line is what says
+    /// which happened.
     case lossless1764
 
     /// The stored raw value, falling back to `.opus` for anything a newer build wrote.
     ///
     /// ⚠ **The raw values are shared VERBATIM with `pf_client_core::session::AUDIO_FORMATS` and the
     /// Android client's `AUDIO_FORMAT_*`, and must never be renamed.** One preset catalog
-    /// round-trips through all four clients, and a spelling that differs by a single character
+    /// round-trips between the clients, and a spelling that differs by a single character
     /// fails in the worst possible way: the key is carried through untouched, so the preset keeps
     /// "working" on the other client and silently inherits its global default instead. The naming
     /// rule is the kHz figure with the decimal point dropped — `lossless48`, `lossless96`, and for
@@ -328,11 +325,10 @@ public enum AudioFormatChoice: String, CaseIterable, Sendable {
     /// format can never disagree.
     ///
     /// ⚠ `.opus` reads `(48_000, 16)` here because that is what an Opus session runs at — **not**
-    /// because that pair is a way to ask for it. Core's hi-res entry point treats an explicit
-    /// 48 000/16 as a real request for the lossless plane's cheapest rung (the unspecified pair is
-    /// `0`/`0`, which is what the legacy entry point sends). `PunktfunkConnection.init` is where
-    /// that distinction is enforced — it compares against this pair and dials the legacy entry
-    /// point instead. Read that comment before changing either side.
+    /// because that pair is a way to ask for it. Core treats an explicit 48 000/16 as a real
+    /// request for the lossless plane's cheapest rung (the unspecified pair is `0`/`0`).
+    /// `PunktfunkConnection.init` is where that distinction is enforced — it sends `0`/`0` for
+    /// this pair. Read that comment before changing either side.
     public var wire: (rateHz: UInt32, bits: UInt8) {
         switch self {
         case .opus: return (48_000, 16)
@@ -413,7 +409,7 @@ extension EffectiveSettings {
 
     /// The size `streamMode(native:)` shows the picture at when render scale makes the mode larger
     /// (`RenderScale.view`). `mode` is what the session asks for after any game override; the
-    /// view goes only while that is still larger on both axes.
+    /// view goes only while that is at least as large on both axes and not the same size.
     public func streamView(
         native: (width: Int, height: Int, hz: Int), mode: (width: UInt32, height: UInt32, hz: UInt32)
     ) -> (width: UInt32, height: UInt32)? {

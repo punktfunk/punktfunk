@@ -4,8 +4,7 @@
 //! (Windows). A non-empty `PUNKTFUNK_CONFIG_DIR` overrides that directory; an
 //! empty value does not. `punktfunk-probe` reads this same directory, so a box
 //! pairs once. On Windows the WinUI shell re-exports this module
-//! (`clients/windows/src/trust.rs`) and is the settings file's only writer; the
-//! session binary reads the same stores.
+//! (`clients/windows/src/trust.rs`); the session binary shares the same stores.
 //!
 //! Pin a host via [`persist_host`]. App settings live in [`crate::settings`] and are
 //! re-exported here, so `trust::Settings` still resolves. Evidence: the migration and
@@ -164,10 +163,10 @@ fn os_config_base() -> Result<PathBuf> {
     }
 }
 
-/// Copy the `client-*` files of `legacy` that `dir` lacks. A Flatpak used to share
-/// the host's `~/.config/punktfunk`, and a native box may set `XDG_CONFIG_HOME`
-/// after pairing; either way the identity and pins carry over. Copies, so the
-/// legacy dir stays usable by an older build. Lock and temp files stay behind.
+/// Copy the `client-*` files of `legacy` that `dir` lacks, so the identity and pins carry
+/// over: older Flatpak builds kept them in the host's `~/.config/punktfunk` (the manifest
+/// grants those files read-only), and a native box may set `XDG_CONFIG_HOME` after pairing.
+/// Copies, so the legacy dir stays usable by an older build. Lock and temp files stay behind.
 #[cfg(any(target_os = "linux", all(test, unix)))]
 fn adopt_legacy(legacy: &Path, dir: &Path) {
     if legacy == dir {
@@ -232,7 +231,7 @@ fn temp_sibling(path: &Path) -> PathBuf {
 /// while every setting evaporates.
 ///
 /// A failed rename writes the target in place (same path the identity files already use)
-/// and reads the bytes back — `Ok(())` alone was the silent-loss failure mode. A failed
+/// and reads the bytes back, because an `Ok(())` alone can hide a lost write. A failed
 /// temp write returns its error and leaves the target alone: an in-place write would
 /// truncate the store and then fail the same way.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -292,7 +291,8 @@ fn write_in_place(path: &Path, bytes: &[u8], rename_err: &std::io::Error) -> std
 /// Last persist failure, if any, so a front-end can say the store is unwritable.
 ///
 /// Every save in this crate is fire-and-forget — a failed write must not take a stream
-/// down — so an unwritable store otherwise looks healthy. One latch instead of ~15 call sites.
+/// down — so an unwritable store otherwise looks healthy. One latch, not an error threaded
+/// through every caller.
 pub mod store_health {
     use std::path::Path;
     use std::sync::Mutex;

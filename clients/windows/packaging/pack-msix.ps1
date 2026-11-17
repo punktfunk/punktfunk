@@ -7,10 +7,8 @@
   + the checked-in Assets + the manifest), runs makeappx, and
   signs with signtool. Idempotent; safe to re-run.
 
-  NO FFmpeg DLLs since M10 (design/client-native-decode.md §6): the client decodes natively
-  (pf-vkdecode / pf-dxvadec / openh264+rav1d) and link-imports no libav* at all, so the
-  wildcard copy and its LGPL notice are gone with it. The HOST installer is unchanged —
-  packaging/windows/pack-host-installer.ps1 still ships them for its amf-qsv encode path.
+  No FFmpeg DLLs and no FFmpeg LGPL notice (design/client-native-decode.md §6): the client
+  decodes natively (pf-vkdecode / pf-dxvadec / openh264+rav1d) and link-imports no libav*.
 
   Signing cert precedence:
     0. Azure Artifact Signing (formerly Trusted Signing) when AZURE_CODESIGNING_ENDPOINT/_ACCOUNT/
@@ -133,8 +131,7 @@ Write-Host "VC++ runtime from $crt : $(($crtDlls | ForEach-Object Name) -join ',
 # project's own MIT/Apache texts plus the generated third-party notices, which is where every
 # vendored/statically-linked dependency's attribution lives (openh264 BSD-2, rav1d BSD-2, …).
 #
-# The FFmpeg LGPL notice + license texts that used to be copied here went with the DLLs at M10:
-# nothing in this package links libav* any more, so shipping an LGPL notice would be claiming a
+# No FFmpeg LGPL notice ships: nothing in this package links libav*, so one would claim a
 # dependency that is not there.
 #
 # For the same reason the notices come from clients/windows/ and NOT from the repo root: the root
@@ -167,7 +164,7 @@ if (-not (Test-Path $font)) { throw "missing Assets\lucide.ttf in the layout —
 
 # manifest with version + publisher + architecture substituted
 $manifest = (Get-Content -Raw $manifestTemplate).Replace('{VERSION}', $Version).Replace('{PUBLISHER}', $Publisher).Replace('{ARCH}', $Arch)
-# The ARM64 session is built without the console (no Skia for the target): no tile for it.
+# The ARM64 session is built --no-default-features, which drops its Skia console: no tile for it.
 if ($Arch -eq 'arm64') {
     $manifest = [regex]::Replace($manifest, '(?s)\s*<!-- console:begin -->.*?<!-- console:end -->', '')
     if ($manifest -match 'PunktfunkConsole') { throw 'the console entry survived the arm64 strip' }

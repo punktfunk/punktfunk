@@ -23,8 +23,8 @@ use windows::Win32::winuser::{
     SendMessageW, COPYDATASTRUCT, HWND_MESSAGE, MSG, WM_COPYDATA, WNDCLASSW,
 };
 
-/// The single-instance mutex. Named per the design; deliberately not `Global\` — one shell per
-/// user session is the rule, and a second desktop user gets their own.
+/// The single-instance mutex, deliberately not `Global\` — one shell per user session is the
+/// rule, and a second desktop user gets their own.
 const MUTEX_NAME: windows::core::PCWSTR = windows::core::w!("io.unom.punktfunk.client");
 
 /// Tags our `WM_COPYDATA` so a stray message from anything else is ignored rather than parsed.
@@ -338,8 +338,8 @@ pub(crate) fn write_shortcut(label: &str, url: &str) -> Result<std::path::PathBu
         .ok()
         .map_err(|e| format!("shortcut description: {e}"))?;
         let persist: IPersistFile = link.cast().map_err(|e| format!("shortcut save: {e}"))?;
-        // `to_string_lossy` rather than the OsStr: HSTRING is UTF-16 and the path came from an
-        // env var plus our own sanitised name, so there is nothing lossy left to lose.
+        // `to_string_lossy` rather than the OsStr: HSTRING is UTF-16 and the path is a `String`
+        // from `desktop_dir` plus our own sanitised name, so there is nothing lossy to lose.
         let file = HSTRING::from(path.to_string_lossy().as_ref());
         persist
             .Save(Some(file.as_ptr()), true)
@@ -354,7 +354,7 @@ pub(crate) fn write_shortcut(label: &str, url: &str) -> Result<std::path::PathBu
 fn desktop_dir() -> Result<std::path::PathBuf, String> {
     use windows::Win32::combaseapi::CoTaskMemFree;
     use windows::Win32::shlobj_core::SHGetKnownFolderPath;
-    // FOLDERID_Desktop: this windows-rs rev ships no knownfolders constants.
+    // FOLDERID_Desktop; windows-rs defines it behind a `knownfolders` feature this crate omits.
     const FOLDERID_DESKTOP: windows::core::GUID =
         windows::core::GUID::from_u128(0xb4bfcc3a_db2c_424c_b029_7fe99a87c641);
     // SAFETY: the GUID is a live constant; on success the returned string is the shell's

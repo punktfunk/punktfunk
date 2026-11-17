@@ -20,7 +20,7 @@ pub const PRESETS: [f64; 9] = [0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0];
 
 /// Per-axis encoder ceiling for a client `codec` string. H.264 is 4096;
 /// everything else (including `"auto"`, which negotiates HEVC/AV1) is 8192 —
-/// same walls as `pf-encode`'s `codec.rs::max_dimension`.
+/// same walls as `pf-encode-core`'s `Codec::max_dimension`.
 pub fn max_dimension(codec: &str) -> u32 {
     if codec == "h264" {
         4096

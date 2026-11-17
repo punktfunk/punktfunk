@@ -1,14 +1,14 @@
 // What this host has been doing — the event stream, rendered.
 //
-// The console could describe the present (a status snapshot) but never the recent past: a client
-// that connected and left while you were on another page left no trace anywhere you could look.
-// The stream was already open for cache invalidation, so this costs one ring buffer.
+// A status snapshot describes the present, not the recent past: a client that connected and left
+// while you were on another page leaves no trace in it. The stream is already open for cache
+// invalidation, so this costs one ring buffer.
 //
 // In-memory and bounded, so it starts empty on a page load and fills as things happen. That is the
 // honest shape for a live tail — pretending to be a durable log would need the host to keep one.
 //
-// Home's *Recent*: the newest handful, and Show all expands the whole ring in place. All 200 at
-// once pushed everything below off the page on a busy host.
+// Home's *Recent*: the newest handful, and Show all expands the whole ring in place. The whole
+// ring at once would push everything below off the page on a busy host.
 
 import { Activity as ActivityIcon, ChevronDown } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -28,16 +28,17 @@ import { m } from "@/paraglide/messages";
 /** How many rows the card shows folded. The rest are a click away, not gone. */
 const CARD_MAX = 6;
 
-/** Tighter than the house 0.1 s: a dozen short rows at 0.1 s took over a second to arrive. */
+/** Tighter than `STAGGER_GAP`: a dozen short rows at that gap take over a second to arrive. */
 const ROW_GAP = 0.035;
 
-/** How many rows still step. Past this they share the last one's delay, or a 200-entry ring on
- *  the full page would take seconds to finish arriving. */
+/** How many rows still step. Past this they share the last one's delay, or a full ring
+ *  (`ACTIVITY_MAX`) would take seconds to finish arriving. */
 const STAGGER_STEPS = 10;
 
 /**
  * How long the rows wait after their card starts arriving. They fade in under the card's own fade,
- * so rows starting with it spent the first half of their cascade on a card nobody could see yet.
+ * so rows starting with it would spend the first half of their cascade on a card nobody can see
+ * yet.
  */
 const CARD_LEAD = 0.18;
 
@@ -60,24 +61,11 @@ const ROW_VARIANTS = {
 
 /**
  * A row leaving. An object, never a variant label: a label on `initial`, `animate` or `exit` makes
- * the row drive its own variants, so it stops inheriting `from → enter` — the rows then mounted at
- * full opacity with no entrance at all.
+ * the row drive its own variants, so it stops inheriting `from → enter` and mounts at full opacity
+ * with no entrance at all.
  */
 const ROW_EXIT = { opacity: 0, y: 6 };
 
-/**
- * The feed itself.
- *
- * `AnimatePresence` is what makes this readable while it is live: without it a row pushed past
- * the cap by a newer event simply vanished mid-glance, and `layout` carries the survivors down
- * rather than snapping them.
- *
- * The rows inherit `from → enter` through the list from the card, so the cascade is timed from the
- * moment the card starts — whatever delayed it: its slot in the page's stagger on a navigation, the
- * replay on a reload. That holds because the card mounts in the same render as its rows
- * (`useActivityReady`). A row mounting into a list already on screen animates by itself, at once,
- * which is what a live arrival should do.
- */
 /** An entry, with how many identical ones followed it in a row. */
 export type ActivityRow = ActivityEntry & { count: number };
 
@@ -96,6 +84,19 @@ export function collapse(entries: ActivityEntry[]): ActivityRow[] {
 	return out;
 }
 
+/**
+ * The feed itself.
+ *
+ * `AnimatePresence` is what makes this readable while it is live: without it a row pushed past
+ * the cap by a newer event would vanish mid-glance, and `layout` carries the survivors down
+ * rather than snapping them.
+ *
+ * The rows inherit `from → enter` through the list from the card, so the cascade is timed from the
+ * moment the card starts — whatever delayed it: its slot in the page's stagger on a navigation, the
+ * replay on a reload. That holds because the card mounts in the same render as its rows
+ * (`useActivityReady`). A row mounting into a list already on screen animates by itself, at once,
+ * which is what a live arrival should do.
+ */
 export const ActivityList: FC<{ entries: ActivityRow[] }> = ({ entries }) => (
 	<motion.ul
 		variants={{ from: {}, enter: {} }}

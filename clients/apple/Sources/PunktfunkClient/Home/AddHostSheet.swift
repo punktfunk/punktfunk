@@ -1,6 +1,6 @@
 // Add a host: name (optional) + address + port + Wake-on-LAN MAC → a card in the grid. A blank
 // MAC is learned from the host's advert; the host page edits a saved host in place. The first
-// actual connection still runs the trust-on-first-use prompt.
+// connection runs the trust flow (`ConnectFlow`).
 
 import PunktfunkKit
 import SwiftUI
@@ -177,8 +177,7 @@ struct AddHostSheet: View {
             #if os(macOS)
             // macOS ONLY: the grouped form's default system text is oversized next to the app's
             // Geist typography, so the panel reads out of place at full size. iOS keeps the app's
-            // body size — a touch target and a field label there are not a Mac panel's, and 12pt
-            // made this the one sheet in the app you had to squint at.
+            // body size: a touch target and a field label there are not a Mac panel's.
             .font(.geist(12, relativeTo: .callout))
             .controlSize(.small)
             #endif

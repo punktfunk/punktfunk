@@ -41,7 +41,7 @@ final class SessionEndRouteTests: XCTestCase {
         XCTAssertEqual(route(.lost, dial: false), .message(.lost))
     }
 
-    /// 314a2575a: a loss at the trust prompt never redials an unpinned host as trusted.
+    /// A loss at the trust prompt never redials an unpinned host as trusted.
     func testALossAtTheTrustPromptRedialsOnlyAPinnedDial() {
         let prompt = SessionPhase.awaitingTrust(fingerprint: live)
         XCTAssertEqual(route(.lost, phase: prompt), .message(.lost))

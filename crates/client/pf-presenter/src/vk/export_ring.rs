@@ -777,7 +777,8 @@ impl ExportRing {
     }
 
     /// Copy the overlay image (Skia's, left in SHADER_READ_ONLY_OPTIMAL on this queue) into
-    /// `slot` and wait for the copy; the image returns to that layout. Results as [`Self::copy`].
+    /// `slot`; the image returns to that layout. The copy is waited unless the slot has
+    /// explicit sync. Results as [`Self::copy`].
     ///
     /// # Safety
     ///

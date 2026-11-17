@@ -3,7 +3,7 @@
 # Why this is separate from android.yml: promotion must not rebuild. A rebuild produces a fresh
 # versionCode (github.run_number) from possibly-newer sources, so it ships something nobody tested;
 # promoting assigns the byte-identical artifact the testers already ran. Bolting this onto
-# android.yml would mean an `if:` on all ten of its build steps.
+# android.yml would mean an `if:` on each of its build steps.
 #
 # What it is for:
 #   * promote a tested build up a track (beta -> production)

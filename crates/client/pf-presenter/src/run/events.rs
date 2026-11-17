@@ -261,7 +261,8 @@ impl Shell {
                     self.overlay_frame.as_ref(),
                 )?;
                 // Match-window: restamp the debounce. The request fires once
-                // ~400 ms pass with no further size events, never per drag-frame.
+                // `resize_decision`'s DEBOUNCE passes with no further size events,
+                // never per drag-frame.
                 if self.opts.match_window {
                     if let Some(st) = stream.as_mut() {
                         st.resize_pending = Some(Instant::now());
@@ -505,17 +506,17 @@ impl Shell {
 
 impl Shell {
     /// Whether window focus, Gaming Mode's overlay or a released capture wants the pads
-    /// masked. The ring is the mask's third owner; [`Shell::pad_owner_tick`] joins them.
+    /// masked. The ring is another owner; [`Shell::pad_owner_tick`] joins them.
     pub(super) fn ui_wants_mask(&self, stream: &Option<StreamState>) -> bool {
         // Who owns the pad: capture, window focus, and Gaming Mode's overlay signal.
-        // Edge-triggered so an open QAM does not re-flush the pads every iteration.
+        // `pad_owner_tick` applies the mask on a change only, so an open QAM does not
+        // re-flush the pads every iteration.
         #[cfg(target_os = "linux")]
         let overlay_now = self.overlay_focus.as_ref().is_some_and(|of| of.is_open());
         #[cfg(not(target_os = "linux"))]
         let overlay_now = false;
-        // Remembered, not applied: the ring is a third owner of this same mask and is only
-        // known further down. Applying here too gave one boolean two latches, and whichever
-        // fell last unmasked the pads while the other still wanted them masked.
+        // Not applied here: the ring is another owner of this mask, known only in
+        // `pad_owner_tick`, which applies the union once.
         let capture = stream
             .as_ref()
             .and_then(|st| st.capture.as_ref())
@@ -811,9 +812,9 @@ fn kind_of(event: &Event, chord: bool) -> Kind {
 /// window-normalized (0..1). Mixing them puts every click off by the display scale.
 /// Only DIRECT touch devices; an indirect trackpad already drives the mouse.
 pub(super) fn overlay_pointer(event: &Event, window: &sdl3::video::Window) -> Option<PointerInput> {
-    // SDL's mouse id on mouse events synthesized from a touch (`SDL_TOUCH_MOUSEID`,
-    // not re-exported by the sdl3 crate). The finger arms already forward the real
-    // touch; the synthesized twin would land every tap twice.
+    // SDL's mouse id on mouse events synthesized from a touch (`SDL_TOUCH_MOUSEID`, all
+    // bits set; the sdl3 events carry `which` as a bare `u32`). The finger arms already
+    // forward the real touch; the synthesized twin would land every tap twice.
     const TOUCH_MOUSEID: u32 = u32::MAX;
     let (pw, ph) = window.size_in_pixels();
     let (lw, lh) = window.size();

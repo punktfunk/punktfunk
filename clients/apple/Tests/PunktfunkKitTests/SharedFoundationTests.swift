@@ -36,10 +36,10 @@ final class SharedFoundationTests: XCTestCase {
         XCTAssertEqual(decoded.osChain, "linux/fedora/bazzite")
     }
 
-    /// Older saved hosts predate `mgmtPort`/`macAddresses` — and now `presetID`/
-    /// `pinnedPresetIDs` too. A missing key must decode to nil, not throw (`init(from:)` reads
-    /// every Optional with `decodeIfPresent`). This is the forward-compat guarantee the widget depends
-    /// on when reading a store written by any prior build.
+    /// Older saved hosts lack `mgmtPort`/`macAddresses` and `presetID`/`pinnedPresetIDs`. A
+    /// missing key must decode to nil, not throw (`init(from:)` reads every Optional with
+    /// `decodeIfPresent`). The widget depends on this when reading a store written by any
+    /// prior build.
     func testStoredHostDecodesLegacyJSONWithoutOptionalKeys() throws {
         let json = """
         {"id":"11111111-2222-3333-4444-555555555555","name":"Old","address":"10.0.0.5","port":9777}
@@ -158,9 +158,9 @@ final class SharedFoundationTests: XCTestCase {
             .appendingPathComponent("shared/deeplink-vectors.json")
     }
 
-    /// Every case in the shared vector file — the same 44 the Rust suite's `shared_vectors` test
-    /// consumes. Refusal CODES are part of the contract, not just the happy path: a parser that
-    /// rejects the right inputs for the wrong reason has already drifted from the other one.
+    /// Every case in the shared vector file — the same ones the Rust suite's `shared_vectors`
+    /// test consumes. Refusal CODES are part of the contract, not just the happy path: a parser
+    /// that rejects the right inputs for the wrong reason has already drifted from the other one.
     func testDeepLinkSharedVectors() throws {
         let url = Self.vectorFileURL
         XCTAssertTrue(
@@ -270,7 +270,7 @@ final class SharedFoundationTests: XCTestCase {
         XCTAssertEqual(
             try resolve("punktfunk://connect/desk?launch=steam:570"), .confirm(desk))
         // A stale id with the recovery parameter: the address finds the record anyway — and, being
-        // an address, behind the confirmation exactly as its own doc always said.
+        // an address, behind the confirmation.
         XCTAssertEqual(
             try resolve(
                 "punktfunk://connect/00000000-0000-4000-8000-000000000000?host=192.168.1.50"),
@@ -321,9 +321,9 @@ final class SharedFoundationTests: XCTestCase {
             StreamPreset(name: "Game", id: "111111111111", accent: "#ff8800"),
             StreamPreset(name: "Work", id: "222222222222"),
         ])
-        // Stored order is the order they were added. Basement has no `addedAt` at all — it was
-        // saved before the field existed, which is why it sits at the FRONT of the store: undated
-        // hosts are always the oldest ones, never scattered through the middle.
+        // Stored order is the order they were added. Basement has no `addedAt` at all: undated
+        // hosts are always the oldest ones, so it sits at the FRONT of the store, never
+        // scattered through the middle.
         let basement = StoredHost(name: "Basement", address: "10.0.0.3")
         var desk = StoredHost(name: "Desk", address: "10.0.0.1",
                               addedAt: Date(timeIntervalSince1970: 100))
@@ -355,11 +355,11 @@ final class SharedFoundationTests: XCTestCase {
         }
     }
 
-    /// The default is the order the grid had before it could sort at all — an update must not
-    /// rearrange anyone's hosts. Each host is followed by its own pinned cards.
+    /// The default keeps the stored order, so an update does not rearrange anyone's hosts.
+    /// Each host is followed by its own pinned cards.
     ///
     /// Undated hosts sort FIRST, because having no date means predating the field means being
-    /// older. In a real store they are a prefix (everything saved before the upgrade), so the
+    /// older. In a real store they are a prefix (everything saved before the field), so the
     /// result is the stored order exactly — which is the point.
     func testHostSortByDateAddedKeepsTheStoredOrder() {
         let group = arranged(.added)[0]
@@ -386,9 +386,9 @@ final class SharedFoundationTests: XCTestCase {
         XCTAssertEqual(names.suffix(2).map { $0 }, ["Basement", "attic"])
     }
 
-    /// ⭐ The regression this was written for: a PINNED card belongs to the preset it connects
-    /// with, not to whatever its host is bound to. Grouping on the binding alone filed every
-    /// pinned card under "No Preset" — including the ones visibly wearing a preset chip.
+    /// A PINNED card belongs to the preset it connects with, not to whatever its host is bound
+    /// to. Grouping on the binding alone would file every pinned card under "No Preset" —
+    /// including the ones visibly wearing a preset chip.
     func testHostGroupingFilesPinnedCardsUnderTheirOwnPreset() {
         let groups = arranged(.name, .preset)
         XCTAssertEqual(
@@ -412,8 +412,8 @@ final class SharedFoundationTests: XCTestCase {
         XCTAssertEqual(labels(groups[0]), ["attic", "Basement", "Couch", "Desk"])
     }
 
-    /// A dangling binding resolves as no preset (§4.4), so it lands in the unbound band rather
-    /// than in one named after a preset that no longer exists.
+    /// A dangling binding resolves as no preset (design/client-settings-profiles.md §4.4), so it
+    /// lands in the unbound band rather than in one named after a preset that no longer exists.
     func testHostGroupingDropsDanglingBindings() {
         var host = StoredHost(name: "Desk", address: "10.0.0.1")
         host.presetID = "deadbeefdead"
@@ -867,9 +867,7 @@ final class SharedFoundationTests: XCTestCase {
     /// stay exactly `48 000`/`16`, which is byte-for-byte a pre-lossless request and is what keeps
     /// the default session on the legacy connect path.
     ///
-    /// The five rates are `punktfunk_core::audio::pcm::rate_is_supported`. 44.1/88.2/176.4 were
-    /// absent until the jitter policy stopped dividing by 1 000 before it multiplied
-    /// (design/hi-res-audio.md §4.1); nothing else ever blocked them.
+    /// The five rates are `punktfunk_core::audio::pcm::rate_is_supported`.
     func testAudioFormatWireMappingCoversBothRateFamilies() {
         XCTAssertEqual(AudioFormatChoice.opus.wire.rateHz, 48_000)
         XCTAssertEqual(AudioFormatChoice.opus.wire.bits, 16)

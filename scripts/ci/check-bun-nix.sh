@@ -6,10 +6,8 @@
 # packaging/nix/README.md). Nothing but the lockfile goes in, so any disagreement between the two
 # committed files is drift, and it is always mechanically fixable.
 #
-# Why this exists: moving the bun packages to bun2nix (1db8f763) removed the *aggregate deps hash*
-# that used to go stale, but not the second, quieter way a derived file rots. `bun.nix` regenerates
-# only from a local `bun install` that runs lifecycle scripts (web's `postinstall`, the SDK's
-# `prepare`). It does NOT regenerate on:
+# Why this exists: `bun.nix` regenerates only from a local `bun install` that runs lifecycle
+# scripts (web's `postinstall`, the SDK's `prepare`). It does NOT regenerate on:
 #
 #   * `bun install --ignore-scripts` — which is what EVERY bun install in CI uses (ci.yml,
 #     web-screenshots.yml, windows-host.yml, sdk-publish.yml), because web's `postinstall` shells
@@ -19,18 +17,15 @@
 #     the pair out of step;
 #   * a lockfile edited or re-resolved by hand.
 #
-# That second case is not hypothetical: it is how `web/bun.nix` shipped on main carrying
-# brace-expansion@5.0.7 (plus two nested entries the override had already collapsed) while
-# `web/bun.lock` said 5.0.8 — the `^5.0.8` override from ec9aa415 landed in the lockfile, the
-# bun2nix branch had generated `bun.nix` off the pre-override lock, and the merge kept both. The
-# Nix build fetches node_modules strictly from `bun.nix`, so the offline `bun install` inside the
-# derivation is then asked for a tarball the store cache does not contain and `punktfunk-web` fails
-# to build — with a "package not found" that names npm, not the lockfile that actually drifted.
+# A stale pair breaks the Nix build: it fetches node_modules strictly from `bun.nix`, so the
+# offline `bun install` inside the derivation is asked for a tarball the store cache does not
+# contain and `punktfunk-web` fails to build — with a "package not found" that names npm, not the
+# lockfile that actually drifted.
 #
 # The gate also enforces the version pin the flake and README only *state*: `bun.nix` has no schema
 # stability across bun2nix releases, so the flake input ref and BOTH npm devDependencies must name
-# the same exact version. Nothing checked that before; a half-moved pin regenerates the file with a
-# generator the flake does not use.
+# the same exact version. A half-moved pin regenerates the file with a generator the flake does
+# not use.
 #
 # It also holds every other bun pin (the oven/bun images, flake.nix's overlay, the Windows portable
 # bun, the winget server) to the release in ci/bun.env, which the Linux builders install.
@@ -67,7 +62,7 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 # --- the pinned bun2nix version -------------------------------------------------------------------
-# flake.nix:  url = "github:nix-community/bun2nix?ref=2.1.2";
+# flake.nix:  url = "github:nix-community/bun2nix?ref=<version>";
 PINNED=$(sed -n 's/.*github:nix-community\/bun2nix?ref=\([^"]*\)".*/\1/p' "$FLAKE" | head -1)
 [ -n "$PINNED" ] || {
     echo "check-bun-nix: could not read the bun2nix input ref out of $FLAKE." >&2
@@ -182,9 +177,9 @@ while read -r dir; do
         fail=1
         continue
     fi
-    # Plain files, not `diff <(…) <(…)`: Gitea's runner executes a step's `run:` under `sh`, and
-    # dash has no process substitution — it would reject the script at parse time and the gate
-    # would never compare anything (exactly how the shader SPIR-V gate in ci.yml was lost).
+    # Plain files, not `diff <(…) <(…)`: ci.yml runs `sh scripts/ci/check-bun-nix.sh`, and
+    # POSIX sh has no process substitution — it would be rejected at parse time and the gate
+    # would never compare anything.
     if cmp -s "$nix" "$out"; then
         echo "check-bun-nix: $dir/bun.nix matches $dir/bun.lock"
     else

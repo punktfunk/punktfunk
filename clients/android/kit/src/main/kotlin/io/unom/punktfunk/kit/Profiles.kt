@@ -252,5 +252,5 @@ fun seatGate(p: ListedProfile): SeatGate {
     }
 }
 
-/** The line while a seat comes up: `Getting Kid's desk ready…`. */
+/** The line while a seat comes up: `Getting Kid's desktop ready…`. */
 fun wakingLine(displayName: String): Say = say(R.string.profile_waking, displayName)

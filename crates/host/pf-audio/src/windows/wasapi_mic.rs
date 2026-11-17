@@ -147,7 +147,7 @@ impl VirtualMic for WasapiVirtualMic {
             q.extend(s.to_le_bytes());
         }
         // Drop-oldest: mic is real-time; stale is worse than a gap. Adaptive
-        // bound is prime + headroom; else the fixed 120 ms.
+        // bound is prime + headroom; else `MAX_QUEUE_BYTES`.
         let cap = if self.ring.target_bytes.load(Ordering::Relaxed) == 0 {
             MAX_QUEUE_BYTES
         } else {
@@ -518,7 +518,7 @@ fn render_thread(
             } else if !always_on {
                 // Unprimed = this period was silence. IDLE_STOP_AFTER at an
                 // unchanged length stops the stream. A burst at the boundary
-                // moves len and resets. The ≥10 s stale tail is cleared: the
+                // moves len and resets. The stale tail is cleared: the
                 // pump would discard it anyway, so wait's "empty" ⇔ "nothing".
                 match idle_mark {
                     Some((len, since)) if len == q.len() => {

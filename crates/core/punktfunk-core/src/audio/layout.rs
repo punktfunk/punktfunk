@@ -34,12 +34,12 @@ pub const WIRE_ORDER_8: [WirePos; 8] = {
 /// [`layout_for`]. Negotiated per session — [`Hello::audio_layout`](crate::quic::Hello::audio_layout)
 /// asks, [`Welcome::audio_layout`](crate::quic::Welcome::audio_layout) answers with what the
 /// host encodes — and `0` on the wire, or no byte at all, is [`Self::Legacy`], so an older
-/// peer on either side keeps today's stream. Coupling changes which slots share a stream,
+/// peer on either side gets the legacy coupling. Coupling changes which slots share a stream,
 /// never the order samples come out in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum AudioLayout {
-    /// (FL,FR)+(FC,LFE) coupled, (RL,RR) too on 7.1, the rest mono. What punktfunk/1 shipped.
+    /// (FL,FR)+(FC,LFE) coupled, (RL,RR) too on 7.1, the rest mono.
     #[default]
     Legacy = 0,
     /// (FL,FR)+(RL,RR) coupled, (SL,SR) too on 7.1, FC and LFE mono — RFC 7845 mapping family
@@ -215,7 +215,7 @@ const AUDIO_BUDGET_FLOOR_KBPS: u32 = 96;
 /// The ladder is preference, not cost: transparent audio beats redundant audio (redundancy only
 /// pays under loss), so `High` alone outranks `Standard` + redundancy at the same cost.
 /// `requested` is a ceiling: the budget may lower the tier, never raise it. `layout` prices
-/// the session's coupling: [`AudioLayout::Uncoupled`] ignores the tier.
+/// the session's coupling: [`AudioLayout::Uncoupled`] surround ignores the tier.
 pub fn plan_audio_budget(
     video_kbps: u32,
     channels: u8,
@@ -580,7 +580,8 @@ mod tests {
     }
 
     /// A tone fed into wire channel N comes back out on channel N for stereo / 5.1 / 7.1.
-    /// Encoder layout == decoder layout == identity mapping. Gated on `quic`.
+    /// Encoder and decoder share each layout, so every coupling round-trips as the identity.
+    /// Gated on `quic`.
     #[cfg(feature = "quic")]
     #[test]
     fn multistream_layout_roundtrips_with_channel_identity() {

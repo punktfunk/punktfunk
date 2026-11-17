@@ -1,13 +1,13 @@
 // The unified "getting you connected" overlay — one look for BOTH phases of reaching a host, so the
 // user gets feedback the instant they pick one and it flows seamlessly into a wake if the host turns
 // out to be asleep. The Apple mirror of the Android client's `ConnectOverlay` and the shared console
-// UI's connect/wake takeover; it replaces the old centered-card `WakeOverlay`.
+// UI's connect/wake takeover.
 //
 //   - Connecting (`connectingHostName` non-nil): the dial is in flight. Shown immediately on activate
-//     so a host that takes a beat to answer no longer looks like nothing happened.
-//   - Waking (`waker.waking` non-nil): the dial failed on a sleeping host, so we're firing
-//     Wake-on-LAN and waiting for it to advertise again, escalating to a retry/cancel prompt on
-//     timeout.
+//     so a host that takes a beat to answer still shows something happened.
+//   - Waking (`waker.waking` non-nil): a failed dial on a sleeping host, or an explicit Wake Host,
+//     is firing Wake-on-LAN and waiting for the host to answer, escalating to a retry/cancel prompt
+//     on timeout.
 //
 // A Liquid Glass modal over a dim scrim, among the app's other floating surfaces (the trust card,
 // the HUD). The console draws its own dial and wake wait, so this is the touch UI's.
@@ -33,8 +33,8 @@ struct ConnectOverlay: View {
         case waking(HostWaker.Waking)
     }
 
-    /// Waking takes precedence — it only ever exists after a dial has already failed, so a stray
-    /// overlap can't strand the "Connecting…" phase over a wake in progress.
+    /// Waking takes precedence, so a stray overlap can't strand the "Connecting…" phase over a
+    /// wake in progress.
     private var phase: Phase? {
         if let w = waker.waking { return .waking(w) }
         if let name = connectingHostName { return .connecting(name: name) }
@@ -124,10 +124,6 @@ struct ConnectOverlay: View {
 /// correct across the Connecting ↔ Waking handoff without the view re-mounting. A zero-size backing
 /// view owning a `GamepadMenuInput` for the overlay's lifetime (the home is gated inactive while the
 /// overlay is up, so nothing else is consuming the pad).
-///
-/// tvOS was left out of this until #453 reported the wake prompt as a dead end there. It is not a
-/// platform that drives these buttons some other way: the console home it sits over runs this same
-/// binding on tvOS, so with the home inactive and no binding here, nothing read the pad at all.
 ///
 /// `GamepadMenuInput` needs an EXTENDED gamepad. A Siri Remote is not one and does not reach these
 /// buttons through here — that path is the tvOS focus engine's, which lands in this overlay

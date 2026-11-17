@@ -74,7 +74,7 @@ pub(crate) struct SessionShared {
     /// The encoder-applied rate, not the request. With [`Self::encoder_ceiling`] and
     /// [`Self::cadence_degraded`], the encoder truth a `SetBitrate` resolves against.
     pub(crate) live_bitrate: Arc<AtomicU32>,
-    /// A ceiling the encoder taught and re-tests (`0` = none). The data plane learns it; the
+    /// A ceiling the encoder taught and re-tests. The data plane learns it; the
     /// control task is the one place it decides an ask.
     pub(crate) encoder_ceiling: Arc<std::sync::Mutex<EncoderCeiling>>,
     /// While set, climbs are refused: more bits are not the fix.

@@ -1,12 +1,13 @@
-//! Stage four: run a `Plan`. Echo, sudo shim, no-confirm rewrites, TTY stdin, per-step results.
+//! Stage four: run a `Plan`. Echo, no-confirm rewrites, TTY stdin, per-step results.
 //!
 //! `--dry-run` walks the same code and returns before the spawn, so what dry-run prints
 //! is what a real run executes. There is no second rendering path to drift.
 //!
-//! Four `StepAction`s resolve here rather than in `plan`, because each needs something
-//! the previous step created: apt madison pins need the rewritten repo, pacman's
-//! availability split needs the `-Sy`, and the unit enable needs the user manager
-//! linger may have just made. See `design/installer-v2.md`.
+//! Some `StepAction`s resolve here rather than in `plan`, because each needs something
+//! an earlier step created: apt madison pins need the rewritten repo, pacman's
+//! availability split needs the `-Sy`, the unit enable needs the user manager linger may
+//! have just made, and the cert trust needs the file the host mints on its first start.
+//! See `design/installer-v2.md`.
 
 use pf_l10n::tools as t;
 
@@ -17,8 +18,8 @@ use crate::seam::{BasePaths, CommandRunner, Stdin};
 use crate::ui::Reporter;
 
 /// A package manager must not stop for its own confirmation: running the installer is the
-/// consent, and the settings screen already listed what it installs. Ported verbatim from the
-/// sh installer's `--yes` rewrite table; `-Syu` is tested before `-S` so it wins.
+/// consent, and the settings screen already listed what it installs. A command takes the first
+/// entry whose prefix it starts with; no two entries match the same command.
 const NONINTERACTIVE: [(&str, &str); 11] = [
     ("flatpak install --user ", "flatpak install --user -y "),
     ("flatpak uninstall --user ", "flatpak uninstall --user -y "),
@@ -482,7 +483,7 @@ mod tests {
         );
     }
 
-    // -Syu is not a prefix of -S; the -Syu rule is first. Reverse them and `-Syu` gets `--noconfirm` twice.
+    // The entries are disjoint prefixes and the first match returns, so `-Syu` gets one flag.
     #[test]
     fn syu_is_rewritten_once_not_twice() {
         let once = noninteractive("sudo pacman -Syu punktfunk-host");

@@ -4,8 +4,8 @@
 //! (display-topology churn, a display poller, virtual-display present timing).
 //! Callers log the mean period so a host-side cycle is named in the log.
 //!
-//! Two feeds: served client-recovery IDRs (`native`) and IDD-push capture
-//! stalls (`capture::windows::idd_push`).
+//! Two feeds: served client-recovery IDRs (`native/stream/recovery.rs`) and IDD-push
+//! capture stalls (`pf-capture`'s `windows/stall_model.rs`).
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -17,7 +17,8 @@ pub struct Metronome {
 }
 
 impl Metronome {
-    /// 1500 ms covers an IDR-cooldown re-issue (~0.7 s) without eating a multi-second cycle.
+    /// 1500 ms covers a re-issue after the IDR cooldown (`IDR_COOLDOWN_FULL`) without eating a
+    /// multi-second cycle.
     const COALESCE: Duration = Duration::from_millis(1500);
     /// Four events (three gaps) reject irregular bursts.
     const STREAK: usize = 4;

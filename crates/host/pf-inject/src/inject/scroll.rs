@@ -259,8 +259,9 @@ pub fn from_legacy(ev: &InputEvent) -> Option<InputEvent> {
     )
 }
 
-/// Wire delta in the source's own unit — v120 for Wheel/Unknown, DIP for the
-/// rest (same number, different meaning; [`ScrollEvent::units`] picks the rate).
+/// Wire delta in the source's own unit — v120 for Wheel/Unknown, else DIP, or compositor axis
+/// units when `axis_units` is set (same number, different meaning; [`ScrollEvent::units`]
+/// picks the rate).
 fn delta_units(se: &ScrollEvent) -> f64 {
     f64::from(se.delta) / SCROLL_SCALE
 }

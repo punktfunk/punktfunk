@@ -175,7 +175,7 @@ struct Session {
     path_kbps: u32,
     grouped: bool,
     /// When each of this session's up-moves may next go out
-    /// (`native/control.rs` `ShareClocks`).
+    /// (`native/control/mod.rs` `ShareClocks`).
     room_at_ms: u64,
     lift_at_ms: u64,
 }
@@ -220,7 +220,7 @@ impl Session {
 /// path this session is on and applies its own.
 ///
 /// The report is the only boundary the host has, so this is where the policy
-/// runs — `session_status::share_for`, driven by `native/control.rs`. Every
+/// runs — `session_status::share_for`, driven by `native/control/mod.rs`. Every
 /// member computes the whole group and applies only its own share, because a
 /// share is only ever sent down the control stream its own task owns.
 fn govern(sessions: &mut [Session], i: usize, now_ms: u64) {

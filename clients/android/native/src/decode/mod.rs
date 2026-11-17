@@ -1,5 +1,5 @@
-//! Android video decode (android-only): pull HEVC access units from the connector into NDK
-//! `AMediaCodec` — hardware decode, zero per-frame JNI.
+//! Android video decode (android-only): pull H.264, HEVC or AV1 access units from the connector
+//! into NDK `AMediaCodec` — hardware decode, zero per-frame JNI.
 //!
 //! The decoded frames reach glass through one of two present sinks ([`sink`]), both driven by the
 //! pure policy in [`crate::present`]. The default is the **ASurfaceControl** sink: the codec
@@ -9,10 +9,11 @@
 //! window — is the fallback for API < 29, ChromeOS, an ASC init failure, or the
 //! `present_backend=surfaceview` sysprop.
 //!
-//! One-in/one-out: the host opens every stream with an IDR carrying VPS/SPS/PPS **in-band**, so the
-//! decoder needs no out-of-band codec-specific data — we configure with mime + the negotiated
-//! WxH (from [`NativeClient::mode`]) and feed each access unit as it arrives. The decode thread owns
-//! the codec + surface for its whole life; [`crate::session`] signals it to stop via the shared flag.
+//! One-in/one-out: the host opens every stream with an IDR carrying its parameter sets (HEVC:
+//! VPS/SPS/PPS) **in-band**, so the decoder needs no out-of-band codec-specific data — we
+//! configure with mime + the negotiated WxH (from [`NativeClient::mode`]) and feed each access
+//! unit as it arrives. The decode thread owns the codec + surface for its whole life;
+//! [`crate::session`] signals it to stop via the shared flag.
 
 mod async_loop;
 mod display;
@@ -42,8 +43,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// Cap on the pts→received-timestamp map below: MediaCodec holds only a handful of frames in
-/// flight, so anything beyond this is stale (codec flushed / HUD toggled) and gets evicted.
+/// Cap on each pts-keyed ledger the loop keeps (receipt stamps, queued stamps, recovery flags):
+/// MediaCodec holds only a handful of frames in flight, so anything beyond this is stale (codec
+/// flushed / HUD toggled) and gets evicted.
 const IN_FLIGHT_CAP: usize = 64;
 
 /// Cap on rendered frames parked in [`DisplayTracker`] awaiting their `OnFrameRendered` render
@@ -61,12 +63,10 @@ pub(crate) const NO_VIDEO_PATIENCE: std::time::Duration = std::time::Duration::f
 /// Re-ask cadence once [`NO_VIDEO_PATIENCE`] has elapsed with still nothing received. Slow, because
 /// this state is either self-healing on the first ask or not ours to heal — and each pass logs.
 ///
-/// ⚠ Taken from core, NOT a local number. `FLUSH_COOLDOWN` (the jump-to-live rate limit) is 2000 ms,
-/// and the host classifies a keyframe-recovery cadence by matching a cooldown's period ±10 % to
-/// decide WHICH client failure it is looking at. The two are opposites — "I have received nothing"
-/// versus "I am drowning in frames I cannot drain" — so while this was also 2000 ms the host
-/// confidently reported the wrong one, and a black-screen field case was diagnosed as a slow decoder
-/// for days (2026-08-20). Keeping the value in core is what stops the two drifting back together.
+/// ⚠ Taken from core, NOT a local number. The host classifies a keyframe-recovery cadence by
+/// matching its period (±10 %) to this value or to `FLUSH_COOLDOWN` (the jump-to-live rate limit)
+/// to decide WHICH client failure it is looking at. The two are opposites — "I have received
+/// nothing" versus "I am drowning in frames I cannot drain" — so the values must stay apart.
 const NO_VIDEO_RETRY: std::time::Duration = punktfunk_core::client::NO_VIDEO_RETRY;
 
 /// The backstops the decode loop runs once a pass: a decoder that owes output ([`NoOutput`])
@@ -88,10 +88,11 @@ impl Backstops {
         }
     }
 
-    /// One pass. `handled` = AUs fed to the codec or withheld from it; `had_output` = the decoder
-    /// produced this pass; `au_parked` = an AU is waiting for an input slot; `losses` = drops this
-    /// pass that are a loss in their own right (a parked-AU overflow). A decoder that owes output
-    /// with no loss this pass reports starved, which the bitrate controller does not judge.
+    /// One pass. `handled` = running total of AUs fed to the codec or withheld from it;
+    /// `had_output` = the decoder produced this pass; `au_parked` = an AU is waiting for an
+    /// input slot; `losses` = drops this pass that are a loss in their own right (a parked-AU
+    /// overflow). A decoder that owes output with no loss this pass reports starved, which the
+    /// bitrate controller does not judge.
     pub(super) fn poll(
         &mut self,
         client: &NativeClient,
@@ -140,7 +141,7 @@ pub(crate) struct DecodeOptions {
     pub ll_feature: bool,
     /// The most pixels a second Kotlin read from the chosen decoder's capabilities; 0 = none.
     pub pixel_rate: u64,
-    /// The user's "Low-latency mode" master toggle. On (default) ⇒ the aggressive vendor keys,
+    /// The user's "Low-latency mode" master toggle. On ⇒ the aggressive vendor keys,
     /// pipeline thread boosts, ADPF max-performance and the forced TV mode switch. Off ⇒ the same
     /// loop and presenter with plain keys and no boosts — the per-device escape hatch.
     pub low_latency_mode: bool,
@@ -154,12 +155,13 @@ pub(crate) struct DecodeOptions {
     /// (newest-wins), 1 = smoothness (a small FIFO). Resolved by
     /// [`crate::present::PresentPriority::resolve`]; anything else = latency.
     pub present_priority: i32,
-    /// The smoothness buffer depth (`smooth_buffer` setting): 0 = automatic (2), else 1..=3.
-    /// Only meaningful with `present_priority` = smooth.
+    /// The smoothness buffer depth (`smooth_buffer` setting): 0 = automatic, else 1..=3, as
+    /// [`crate::present::PresentPriority::resolve`] reads it. Only meaningful with
+    /// `present_priority` = smooth.
     pub smooth_buffer: i32,
     /// SEED for the panel's refresh period — the latch grid the presenter subdivides onto when
     /// the app's choreographer stream is down-rated below the panel (see `vsync.rs`). Kotlin
-    /// resolves it from the display mode TABLE (`MainActivity.streamPanelFps`), not
+    /// resolves it from the display mode TABLE (`Display.streamPanelFps`), not
     /// `display.refreshRate`, which reports a per-uid override rather than the panel. 0 = unknown.
     ///
     /// ⚠ Only a seed: `preferredDisplayModeId` is a REQUEST the system may refuse, so the mode
@@ -211,10 +213,11 @@ impl DecodeOptions {
 /// drains the frame queue. The thread runs until `shutdown` is set or the session closes.
 ///
 /// PyroWave is GPU compute with its own Vulkan present path ([`crate::pyro`]), sharing no
-/// MediaCodec machinery — not the codec object, not the surface handling, not the presenters.
-/// A lane that ends by itself (no decoder starts, or every rebuild comes up barren) leaves the
-/// session without video, and a queue nobody pops makes core flush it and ask the host for a
-/// keyframe every [`FLUSH_COOLDOWN`](punktfunk_core::client::FLUSH_COOLDOWN).
+/// MediaCodec machinery — not the codec object, not the sinks. It reuses the `ASurfaceControl`
+/// layer and the helpers re-exported above. A lane that ends by itself (no decoder starts, or
+/// every rebuild comes up barren) leaves the session without video, and a queue nobody pops
+/// makes core flush it and ask the host for a keyframe every
+/// [`FLUSH_COOLDOWN`](punktfunk_core::client::FLUSH_COOLDOWN).
 pub fn run(
     client: Arc<NativeClient>,
     window: NativeWindow,

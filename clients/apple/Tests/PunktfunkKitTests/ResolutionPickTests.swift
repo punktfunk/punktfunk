@@ -65,8 +65,8 @@ final class ResolutionPickTests: XCTestCase {
         XCTAssertTrue(ResolutionPick.modeFields.contains { OverlayField.isOverridden($0, in: overlay) })
     }
 
-    /// R6-2: the TV's mode row writes a size and a rate, and its marker and Reset covered the size
-    /// alone, so a preset kept a rate pin nothing on the TV showed or cleared.
+    /// The TV's mode row writes a size and a rate, so its marker and Reset cover both: a preset's
+    /// rate pin shows and clears there (`ResolutionPick.modeFields`).
     func testTheStreamModeRowsResetClearsTheRateItWrites() throws {
         let mode = try XCTUnwrap(ResolutionPick.mode(tag: "1920x1080x60"))
         var overlay = SettingsOverlay()

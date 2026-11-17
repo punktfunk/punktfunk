@@ -3,11 +3,11 @@
 //! title starts a stream carrying `--launch id`; the host launches it during the connect.
 //!
 //! The catalog comes from the disk first, then the host, over `pf-client-core::library` (mTLS
-//! against the host's management API, pre-classified errors, the 3-worker art pipeline). Poster
-//! bytes land in the shared `art_cache`, which the `Image` loads them from; a poster the cache
-//! could not keep shows from the fetched bytes. The fetch and the art stream complete on worker
-//! threads into the root's [`LibraryState`]; `Shared::library_gen` stops a superseded fetch from
-//! publishing.
+//! against the host's management API, pre-classified errors, the `ART_WORKERS` art pipeline).
+//! Poster bytes land in the shared `art_cache`, which the `Image` loads them from; a poster the
+//! cache could not keep shows from the fetched bytes. The fetch and the art stream complete on
+//! worker threads into the root's [`LibraryState`]; `Shared::library_gen` stops a superseded
+//! fetch from publishing.
 //!
 //! The rows are one virtualized list, so a library of thousands builds what is on screen.
 

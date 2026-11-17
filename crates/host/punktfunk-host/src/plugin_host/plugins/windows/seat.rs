@@ -139,8 +139,8 @@ pub(super) fn restart_failed() {
     }
 }
 
-/// `scripting-run.cmd` as the seat's account, with the reads it needs. Its two folders are made
-/// here: the runner makes neither.
+/// `scripting-run.cmd` as the seat's account, with the reads it needs. Its folders are made
+/// here: the runner makes none of them.
 fn start() -> Result<SessionTree> {
     runner_command()?;
     let bundle = runner_bundle_dir().context("resolve the runner bundle")?;

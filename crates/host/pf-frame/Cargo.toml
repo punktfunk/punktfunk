@@ -1,8 +1,9 @@
 # The shared media-pipeline vocabulary (plan §W6): the captured-frame types and pixel formats that
 # both capture (producer) and encode (consumer) speak, plus the small pure helpers that ride the
-# same seam — HDR static metadata, the metronomic-stall detector, per-thread scheduling QoS, and
-# (Windows) the DXGI capture identity + D3D11 device creation. A leaf so pf-capture and pf-encode
-# can depend on the vocabulary WITHOUT depending on each other.
+# same seam — HDR static metadata, the capture-stall classifier and its recovery ladder, the
+# metronomic-stall detector, stream pacing, per-thread scheduling QoS, and (Windows) the DXGI
+# capture identity + D3D11 device creation. A leaf so pf-capture and pf-encode can depend on the
+# vocabulary WITHOUT depending on each other.
 [package]
 name = "pf-frame"
 version.workspace = true
@@ -22,9 +23,10 @@ bytemuck = { version = "1.19", features = ["derive"] }
 # `FramePayload::Cuda` owns a zero-copy `DeviceBuffer`; `libc` for the per-thread `setpriority`.
 pf-zerocopy = { path = "../pf-zerocopy" }
 libc = "0.2"
-# The rtkit fallback in `thread_qos` (one blocking system-bus call per boosted thread). Same zbus
-# the host already pulls via ashpd; `tokio` mirrors ashpd's backend choice so this adds the
-# `blocking-api` surface without changing the resolved I/O backend, and no default `async-io`.
+# The rtkit fallback in `thread_qos` (one blocking system-bus call per thread `setpriority`
+# refuses). Same zbus the host already pulls via ashpd; `tokio` mirrors ashpd's backend choice
+# so this adds the `blocking-api` surface without changing the resolved I/O backend, and no
+# default `async-io`.
 zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]

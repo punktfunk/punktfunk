@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Read what a matrix run left in out/ and print the C6 answer per run, then the
 # spread per cell. Separate from matrix.sh so a finished run can be re-read
-# without re-running it — twenty minutes of real time per matrix.
+# without re-running it — a matrix is cells × repeats × seconds of real time.
 #
 #   scripts/abr-rig/read-matrix.sh [out-dir]
 set -euo pipefail

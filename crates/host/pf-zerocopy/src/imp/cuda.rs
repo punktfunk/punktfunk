@@ -6,8 +6,8 @@
 //! makes it current), pitched device memory (`BufferPool` / `DeviceBuffer` / IPC / plane copies),
 //! and GL / external-memory interop (`RegisteredTexture`, `ExternalDmabuf`).
 //!
-//! GL interop, not EGL: `cuGraphicsEGLRegisterImage` is Tegra-only on the desktop driver
-//! ([`super::egl`]). Cursor blend is the SPIR-V pass in [`super::vkslot`].
+//! Tiled imports register GL textures; only [`super::direct`] registers an `EGLImage`
+//! (`cuGraphicsEGLRegisterImage`). Cursor blend is the SPIR-V pass in [`super::vkslot`].
 
 #![allow(non_camel_case_types, non_snake_case)]
 
@@ -48,7 +48,7 @@ pub fn read_plane_to_host(
 }
 
 /// Packed host→pitched-device upload. Synchronous: the direct encoder's CPU-frame path, and
-/// the benchmarks, where uninitialised device memory comes back zeroed and CBR has nothing
+/// the GPU tests, where uninitialised device memory comes back zeroed and CBR has nothing
 /// to code.
 ///
 /// # Safety
@@ -372,7 +372,7 @@ pub fn copy_stream_handle() -> *mut c_void {
     copy_stream() // CUstream is *mut c_void (opaque CUstream_st*)
 }
 
-/// Max cursor-overlay bitmap edge (px) uploaded to the device blend buffer — matches the Vulkan path.
+/// Max cursor-overlay bitmap edge (px); [`super::vkslot`] clamps the cursor bitmap to it.
 pub const CURSOR_MAX: u32 = 256;
 
 /// How a pitched surface holds its planes. Every allocator and copy sizes planes from
@@ -452,7 +452,7 @@ fn alloc_planes(
 }
 
 /// Encoder-owned contiguous pitched CUDA surface. Registered once as
-/// `NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR` (`encode/linux/nvenc_cuda.rs`). Layout matches
+/// `NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR` (pf-encode `enc/linux/nvenc_cuda.rs`). Layout matches
 /// NVENC's single-pointer register: NV12 = Y then UV, YUV444 = Y|U|V stacked, RGB = packed 4-byte.
 /// Never pooled or sent on the wire. Frees on drop (context made current; drop may be off-thread).
 pub struct InputSurface {
@@ -768,9 +768,9 @@ impl DeviceBuffer {
     }
 }
 
-/// Persistent GL-texture→CUDA registration. Desktop NVIDIA CUDA interop is GL textures, not
-/// dmabuf EGLImages: the importer renders the dmabuf into a reusable `GL_RGBA8` texture, registers
-/// once, then each frame maps → copies → unmaps (the map/unmap pair is the GL↔CUDA sync).
+/// Persistent GL-texture→CUDA registration. The tiled importer renders the dmabuf into a
+/// reusable texture (`GL_RGBA8`, or `GL_R8` / `GL_RG8` planes), registers it once, then each
+/// frame maps → copies → unmaps (the map/unmap pair is the GL↔CUDA sync).
 pub struct RegisteredTexture {
     resource: CUgraphicsResource,
 }
@@ -1010,8 +1010,9 @@ impl Drop for RegisteredTexture {
     }
 }
 
-/// Dmabuf fd imported as CUDA external memory and mapped to a device pointer. LINEAR path
-/// (gamescope): bytes are directly addressable, no GL de-tiling. Cached per PipeWire buffer.
+/// An `OPAQUE_FD` memory object imported as CUDA external memory and mapped to a device pointer:
+/// an exported Vulkan allocation, or a dmabuf's own memory object ([`super::rm`]).
+/// Bytes are directly addressable, no GL de-tiling.
 pub struct ExternalDmabuf {
     ext: CUexternalMemory,
     pub ptr: CUdeviceptr,
@@ -1089,7 +1090,9 @@ impl Drop for ExternalDmabuf {
 /// Vulkan timeline semaphore imported as a CUDA external semaphore. CUDA [`signal`]s a value on
 /// this thread's copy stream after the input copy; Vulkan blend waits then advances it; CUDA
 /// [`wait`]s that value before encode. One handle per [`VkSlotBlend`](super::vkslot::VkSlotBlend);
-/// values monotonic for its life.
+/// values monotonic for its life. The encoder imports the fused convert's timeline the same
+/// way; CUDA waits on that one and signals it only to release a wait whose worker is gone
+/// ([`signal_detached`](Self::signal_detached)).
 pub struct ExternalSemaphore {
     sem: CUexternalSemaphore,
 }

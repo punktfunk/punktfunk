@@ -41,9 +41,9 @@ if [ "${1:-}" = "--pull" ]; then
     git -C "$SRC" symbolic-ref -q HEAD >/dev/null \
         || die "$SRC isn't on a branch, so there is nothing to pull. Pick a channel, then re-run:
 $SWITCH"
-    # A build regenerates these committed files (bun2nix). When main carries a stale copy, the
-    # rebuild dirties it and the next pull that touches it aborts. Restoring derived paths is
-    # lossless. Not `reset --hard`: this is the operator's own checkout.
+    # These committed files are bun2nix output. If a build left one modified, a pull that touches
+    # it aborts. Restoring derived paths is lossless. Not `reset --hard`: this is the operator's
+    # own checkout.
     git -C "$SRC" checkout -- web/bun.nix sdk/bun.nix 2>/dev/null || true
     log "git pull"
     git -C "$SRC" pull --ff-only \
@@ -57,7 +57,7 @@ fi
 
 bash "$SRC/scripts/steamdeck/heal-box.sh" "$BOX"
 log "Rebuilding host (release)"
-# nvenc,vulkan-encode matches the packaged builds (deb/arch) — see install.sh.
+# nvenc,vulkan-encode matches the packaged builds (deb/arch/rpm) — see install.sh.
 # punktfunk-encode-worker rides along: host and worker version-check each other over their socket
 # and fall back to the in-process encoder on any mismatch, so an update must never move one
 # without the other. punktfunk-seats is the door's supervisor (door.sh).
@@ -76,8 +76,8 @@ if [ "$WEB" = 1 ]; then
     # REQUIRED — src/api/gen, src/paraglide and src/routeTree.gen.ts are gitignored, and `prebuild`
     # only re-runs orval, so dropping codegen leaves the build without its i18n messages. But
     # `postinstall` (`bun2nix -o bun.nix`) writes a COMMITTED file, and an updater must never dirty
-    # the tree it just pulled into — that is what broke `--pull` above. The SDK install below has
-    # always passed --ignore-scripts, which is why only web/bun.nix ever went dirty.
+    # the tree it just pulled into, or the next `--pull` aborts. The SDK install below passes
+    # --ignore-scripts too.
     distrobox enter "$BOX" -- bash -lc "set -e; export PATH=\$HOME/.bun/bin:\$PATH; cd '$SRC/web' && bun install --frozen-lockfile --ignore-scripts && bun run codegen && bun run build"
     ok "web rebuilt"
 fi
@@ -136,11 +136,9 @@ fi
 
 CONFIG="$HOME/.config/punktfunk"
 
-# Secret hygiene, retrofitted. install.sh §3 does this for fresh installs — but only install.sh
-# ever did, so a Deck that was set up once and only ever *updated* since kept the old modes
-# forever. This directory holds web.env (console login password + session secret), the mgmt token
-# and the host key; a plain `mkdir -p` left it 0755 at the Deck's ambient umask and web.env itself
-# 0644, i.e. readable by every local account (2026-08-05 review L-19). Both chmods are idempotent.
+# Secret hygiene, on update too. install.sh §3 sets these modes on a fresh install; a Deck that is
+# only ever updated would keep older modes. This directory holds web.env (console login password +
+# session secret), the mgmt token and the host key. Both chmods are idempotent.
 [ -d "$CONFIG" ] && chmod 700 "$CONFIG" 2>/dev/null || true
 if [ -f "$CONFIG/web.env" ] && find "$CONFIG/web.env" -maxdepth 0 -perm /0077 2>/dev/null | grep -q .; then
     chmod 600 "$CONFIG/web.env"

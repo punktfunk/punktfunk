@@ -1,11 +1,10 @@
 // The About page — the app's identity card, on the shape every Mac user already knows from an
 // About panel: the icon, the name, the version, and then the ways out (documentation, community,
-// source, licenses). It replaced a bare header over an 885 KB wall of license text, which answered
-// the one question nobody opens About to ask.
+// source, licenses).
 //
-// The license wall itself is still `AcknowledgementsView`; About opens it as a sheet — pushed
-// only on tvOS, where this page really is inside a navigation stack. The iPad settings detail
-// column deliberately isn't one, so a push there had no way back.
+// The license wall is `AcknowledgementsView`; About opens it as a sheet — pushed only on tvOS,
+// where this page really is inside a navigation stack. The iPad settings detail column
+// deliberately isn't one, so a push there would have no way back.
 //
 // Wording note: this page says the SOURCE is open, never that the app is "free software". The
 // term means liberty, but it is read as price — and this app is sold on the App Store, so to the
@@ -25,9 +24,7 @@ struct AboutView: View {
 
     #if !os(tvOS)
     @State private var showAcknowledgements = false
-    /// The in-session controls. They used to announce themselves in a 6-second banner at the start
-    /// of every stream; that banner is gone, so this page is where they live now — including for
-    /// touch users on a Mac, who saw it too.
+    /// The in-session controls reference (`ShortcutsView`), opened from its row.
     @State private var showShortcuts = false
     #endif
 
@@ -64,11 +61,9 @@ struct AboutView: View {
             }
         }
         .formStyle(.grouped)
-        // A SHEET, not a push — on iPad the settings detail column is deliberately not a
+        // Sheets, not pushes: on iPad the settings detail column is deliberately not a
         // NavigationStack (an inner one doubles the title bar), so a NavigationLink from here
-        // pushed into a context with no back button and stranded the licenses on screen.
-        // A sheet for the same reason Acknowledgements is one — see that modifier's note on the
-        // iPad detail column not being a NavigationStack.
+        // would push into a context with no back button.
         .sheet(isPresented: $showShortcuts) {
             NavigationStack {
                 ShortcutsView(micAvailable: ShortcutsCatalog.micPlausible)
@@ -198,7 +193,7 @@ struct AboutView: View {
     // MARK: - tvOS
 
     #if os(tvOS)
-    /// tvOS has no browser and no `openURL`, so the addresses are text to read off the screen
+    /// tvOS has no browser to open a link in, so the addresses are text to read off the screen
     /// rather than links to nowhere. Acknowledgements still pushes — that one is in the app.
     private var tvBody: some View {
         ScrollView {
@@ -342,8 +337,8 @@ struct AppIconView: View {
     }
 }
 
-/// `textSelection(.enabled)` doesn't exist on tvOS, and a version string is the one thing here
-/// worth copying into a bug report.
+/// `textSelection(.enabled)` is unavailable on tvOS (tvOS 27.0 SDK), and a version string is the
+/// one thing here worth copying into a bug report.
 private struct SelectableIfPossible: ViewModifier {
     func body(content: Content) -> some View {
         #if os(tvOS)

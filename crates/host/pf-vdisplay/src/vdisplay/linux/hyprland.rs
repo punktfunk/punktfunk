@@ -1,5 +1,5 @@
 //! Hyprland virtual-output backend via `hyprctl` IPC and the xdg ScreenCast portal
-//! (xdg-desktop-portal-hyprland / xdph). See `design/hyprland-support.md`.
+//! (xdg-desktop-portal-hyprland / xdph).
 //!
 //! Distinct from [`super::wlroots`]: Hyprland names headless outputs explicitly
 //! (`hyprctl output create headless <name>`, [`head_name`]), so there is no before/after
@@ -426,8 +426,8 @@ impl VirtualDisplay for HyprlandDisplay {
         // Portal fd stays off this output so the registry can linger the named
         // head. [`session_cast_for`] hands the fd to the session, not the pool.
         let (fd, node_id, cursor_mode, stop) = start_cast(&name, self.hw_cursor)?;
-        // On today's xdph this is `embedded` regardless of `hw_cursor`; the
-        // session's cursor behaviour follows this, not the request.
+        // With xdph advertising `Hidden|Embedded` only (see `hw_cursor`), this is `embedded`
+        // regardless of `hw_cursor`; the session's cursor behaviour follows this, not the request.
         self.last_cursor_mode = Some(cursor_mode);
         let (remote_fd, direct_cast) = if self.handoff_cast {
             self.pending_cast = Some(PendingCast {
@@ -540,9 +540,10 @@ fn start_cast(name: &str, hw_cursor: bool) -> Result<CastParts> {
 /// One subscription, not polling, so an idle session costs nothing — and one
 /// socket, so the window list rides this reader rather than opening a second.
 ///
-/// The MODE and its colour only. A reload also undoes `topology: exclusive` head
-/// disables, but re-disabling them here races teardown's [`restore_heads`]
-/// (`hyprctl reload` to re-light): the watcher and that restore do not share a lifetime.
+/// The head's own rule only: mode, colour and place. A reload also undoes
+/// `topology: exclusive` head disables, but re-disabling them here races teardown's
+/// [`restore_heads`] (`hyprctl reload` to re-light): the watcher and that restore do not
+/// share a lifetime.
 fn watch_config_reloads(
     name: String,
     mode: Mode,
@@ -1320,8 +1321,8 @@ fn monitor(name: &str, include_disabled: bool) -> Result<Option<serde_json::Valu
 
 /// `hyprctl` invocation with the live instance signature on the child.
 ///
-/// `Command::env` gives it to exactly that child. A process-wide `set_var` was
-/// a `getenv` data race with every other thread of a live host. `sig` is `None`
+/// `Command::env` gives it to exactly that child. A process-wide `set_var` would race
+/// `getenv` on every other thread of a live host. `sig` is `None`
 /// when no instance is findable: leave the child's env alone so an inherited
 /// signature (host started inside the session) still wins.
 fn hyprctl_command(args: &[&str], sig: Option<String>) -> Command {
@@ -1335,9 +1336,9 @@ fn hyprctl_command(args: &[&str], sig: Option<String>) -> Command {
 
 /// Every head Hyprland reports, for [`crate::monitors::list`].
 ///
-/// `hyprctl -j monitors all` so disabled heads are listed too. Geometry is
-/// post-transform in logical pixels, which is the space `crate::monitors`
-/// documents.
+/// `hyprctl -j monitors all` so disabled heads are listed too. `x`/`y` are the logical
+/// layout position and `width`/`height` the current mode in pixels, as
+/// `crate::monitors::PhysicalMonitor` documents.
 pub(crate) fn list_monitors() -> Result<Vec<crate::monitors::PhysicalMonitor>> {
     let parsed = hyprctl_json(&["monitors", "all"])?;
     let mut out: Vec<_> = parsed
@@ -1537,8 +1538,8 @@ fn apply_monitor_rule(name: &str, mode: Mode, colour: Option<HdrRule>) -> Result
 ///
 /// `hyprctl keyword monitor NAME,WxH@Hz,auto,1` is hyprlang (the default,
 /// including ≥0.55 — version does not imply Lua). Fall back to
-/// `hyprctl eval 'hl.monitor{…}'` only when `keyword` is gone. Either way,
-/// confirm the output adopted the mode — some forms print `ok` for a command
+/// `hyprctl eval 'hl.monitor{…}'` when `keyword` is rejected or its mode never takes effect.
+/// Either way, confirm the output adopted the mode — some forms print `ok` for a command
 /// they ignored. A headless output starts at 0×0; if neither form yields a
 /// usable size, the compositor could not back the mode. `colour` appends the
 /// HDR keys to both forms; `at` places the head, `None` lets Hyprland (`auto`).
@@ -1565,8 +1566,8 @@ fn set_monitor_rule(
     );
     let keyword: Vec<&str> = vec!["keyword", "monitor", &spec];
     let eval: Vec<&str> = vec!["eval", &lua];
-    // hyprctl reports rejection in the output text. Dropping it left the
-    // failure below guessing at GBM when the compositor had named the cause.
+    // hyprctl reports rejection in the output text. Keep it, so the failure below
+    // names the compositor's cause instead of guessing at GBM.
     let mut attempts: Vec<String> = Vec::new();
     for a in [&keyword, &eval] {
         // Wrong-era command (`keyword` gone under Lua, or `eval` under
@@ -1971,8 +1972,8 @@ mod tests {
     }
 
     /// `HYPRLAND_INSTANCE_SIGNATURE` reaches `hyprctl` as a per-child override,
-    /// never as a `set_var` on the host — that write was a `getenv` data race
-    /// with every other thread of a live session. A discovered signature is
+    /// never as a `set_var` on the host — that write would race `getenv`
+    /// on every other thread of a live session. A discovered signature is
     /// set on the child; an undiscoverable one leaves the child's env untouched.
     #[test]
     fn the_instance_signature_travels_on_the_child_not_the_process_env() {

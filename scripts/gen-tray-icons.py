@@ -12,7 +12,7 @@ same geometry gen-branding.ps1 uses — with a status dot in the lower-right cor
 
 Outputs (all checked in; re-run only when the brand or the palette changes):
   packaging/windows/branding/punktfunk-tray-<state>.ico   16/20/24/32/48 px PNG-entry icos
-                                                          (Vista+ format, same as punktfunk.ico)
+                                                          (Vista+ format)
   packaging/linux/icons/hicolor/{22x22,48x48}/apps/punktfunk-tray[-<state>].png
                                                           (running is the unsuffixed base name)
 
@@ -128,7 +128,7 @@ def png_bytes(size, rows):
 
 
 def ico_bytes(pngs):
-    """PNG-entry .ico (Vista+; the format punktfunk.ico already uses)."""
+    """PNG-entry .ico (Vista+)."""
     header = struct.pack("<HHH", 0, 1, len(pngs))
     entries = b""
     blobs = b""

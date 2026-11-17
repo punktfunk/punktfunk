@@ -11,8 +11,8 @@
 //! grants nothing it could not already have.
 //!
 //! **Unless the credential is the network itself.** [`POSITION_AUTHENTICATED`] names the routes
-//! `mgmt::auth` admits on loopback with no token at all. The same-origin policy was the only
-//! thing keeping a page off those, so this never stamps them — an exemption, not a setting.
+//! `mgmt::auth` admits from loopback on a token every local account may read. A page on this
+//! machine reaches loopback too, so this never stamps them — an exemption, not a setting.
 //!
 //! No `Access-Control-Allow-Private-Network` either, and not by oversight: that header is what
 //! lets a public page reach a private host, so it may only be added once every route below
@@ -35,9 +35,9 @@ const POSITION_AUTHENTICATED: &[&str] = &["/api/v1/local/summary"];
 /// Should this host stamp cross-origin headers at all?
 ///
 /// Only where there is a browser to serve: the plane is running, or an operator named the pages
-/// that may talk to this host in `PUNKTFUNK_WEBTRANSPORT_ORIGINS`. Every other host answers as
-/// it did before the browser client existed, so a feature nobody turned on cannot widen what
-/// the management API lets a page read.
+/// that may talk to this host in `PUNKTFUNK_WEBTRANSPORT_ORIGINS`. Every other host stamps
+/// nothing, so a feature nobody turned on cannot widen what the management API lets a page
+/// read.
 pub(crate) fn enabled(browser_plane: bool, origins: &[String]) -> bool {
     browser_plane || !origins.is_empty()
 }
@@ -129,8 +129,8 @@ mod tests {
         assert!(allowed("https://anything", &[]));
     }
 
-    /// The gate that keeps a host nobody asked to serve browsers answering as it always did.
-    /// Without it every host stamps `Allow-Origin` on an upgrade, for a plane that is off.
+    /// The gate that keeps a host nobody asked to serve browsers from stamping CORS headers.
+    /// Without it every host stamps `Allow-Origin`, for a plane that is off.
     #[test]
     fn cors_is_off_until_a_host_serves_browsers() {
         assert!(!enabled(false, &[]), "no plane and no list: no headers");
@@ -141,8 +141,8 @@ mod tests {
         );
     }
 
-    /// Every entry must be a route `mgmt::auth` really admits with no credential — the list is
-    /// only correct against that one, so it is checked there too.
+    /// Every entry must be a route `mgmt::auth` admits on a token every local account may read —
+    /// the list is only correct against that one, so it is checked there too.
     #[test]
     fn the_exempt_list_names_the_loopback_lane() {
         assert!(POSITION_AUTHENTICATED.contains(&"/api/v1/local/summary"));

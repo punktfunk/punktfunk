@@ -22,7 +22,7 @@ pub const VIDEO_CAP_10BIT: u8 = 0x01;
 /// [`VIDEO_CAP_10BIT`].
 pub const VIDEO_CAP_HDR: u8 = 0x02;
 /// [`Hello::video_caps`]: client can decode HEVC 4:4:4 and asked for it. The host emits
-/// 4:4:4 only when this bit is set, HEVC won, the operator allows it, and the GPU can
+/// 4:4:4 only when this bit is set, HEVC or PyroWave won, the operator allows it, and the GPU can
 /// encode 4:4:4; otherwise the session stays 4:2:0 and [`Welcome::chroma_format`] is the
 /// real value. Independent of 10-bit / HDR.
 pub const VIDEO_CAP_444: u8 = 0x04;
@@ -62,9 +62,9 @@ pub const HOST_CAP_GAMEPAD_STATE: u8 = 0x01;
 pub const HOST_CAP_CLIPBOARD: u8 = 0x02;
 
 /// [`Welcome::host_caps`]: the inject backend can type committed Unicode
-/// ([`InputKind::TextInput`](crate::input::InputKind::TextInput)). Windows and wlroots
-/// can; KWin / libei / gamescope only press layout keycodes and leave this clear. Absent
-/// the bit, the client keeps VK synthesis.
+/// ([`InputKind::TextInput`](crate::input::InputKind::TextInput)). Windows, wlroots and
+/// KWin with keysyms can; libei / gamescope only press layout keycodes and leave this clear.
+/// Absent the bit, the client keeps VK synthesis.
 pub const HOST_CAP_TEXT_INPUT: u8 = 0x04;
 
 /// [`Hello::client_caps`]: the client draws the host cursor locally from
@@ -87,8 +87,8 @@ pub const CLIENT_CAP_AUDIO_RED: u8 = 0x04;
 pub const CLIENT_CAP_PAD_AUDIO: u8 = 0x08;
 
 /// [`Welcome::host_caps`]: the host can forward the cursor out-of-band (Linux portal
-/// `SPA_META_Cursor`). Not gamescope (capture has no cursor) and not Windows (DWM
-/// composites into the IDD frame). Set only when the client asked via [`CLIENT_CAP_CURSOR`].
+/// `SPA_META_Cursor`, Windows the IddCx hardware-cursor channel). Not gamescope (capture has
+/// no cursor). Set only when the client asked via [`CLIENT_CAP_CURSOR`].
 pub const HOST_CAP_CURSOR: u8 = 0x08;
 
 /// [`Welcome::host_caps`]: the host injects [`PenBatch`](super::pen::PenBatch) `0xCC/0x05`
@@ -99,9 +99,8 @@ pub const HOST_CAP_PEN: u8 = 0x10;
 
 /// [`Welcome::host_caps`]: the wire is the redundant desktop-audio plane
 /// ([`AUDIO_RED_MAGIC`](super::datagram::AUDIO_RED_MAGIC), `0xD2`), not plain `0xC9`. Set
-/// only when the client asked. The host may drop back to `0xC9` mid-session (loss-gated),
-/// so clients decode both tags and treat this bit as "expect redundancy", not "only
-/// redundancy".
+/// only when the client asked. The host decides redundancy once, at the handshake, and keeps
+/// it for the session.
 pub const HOST_CAP_AUDIO_RED: u8 = 0x20;
 /// [`Welcome::host_caps`]: the host can capture pad audio onto
 /// [`PAD_AUDIO_MAGIC`](super::datagram::PAD_AUDIO_MAGIC) `0xD1`. Set only when the client
@@ -111,9 +110,10 @@ pub const HOST_CAP_PAD_AUDIO: u8 = 0x40;
 
 /// [`Hello::client_caps`]: the client can play the lossless audio plane
 /// ([`AUDIO_PCM_MAGIC`](super::datagram::AUDIO_PCM_MAGIC), `0xD3`) at the rate/depth it
-/// asked in Hello, **and** the user turned it on. This plane costs 1.5–4.6 Mbps against
-/// Opus's 256 kbps and sits outside the ABR loop, so both ends must ask. A client that
-/// cannot open that output format must not set this bit.
+/// asked in Hello, **and** the user turned it on. This plane costs megabits a second
+/// ([`bitrate_kbps`](crate::audio::pcm::bitrate_kbps)) where Opus costs kilobits, and sits
+/// outside the ABR loop, so both ends must ask. A client that cannot open that output format
+/// must not set this bit.
 pub const CLIENT_CAP_AUDIO_HIRES: u8 = 0x10;
 
 /// [`Hello::client_caps`]: leave the host's own playback devices alone — tap the current
@@ -128,7 +128,7 @@ pub const CLIENT_CAP_KEEP_HOST_AUDIO: u8 = 0x20;
 /// [`Welcome::audio_rate_hz`](super::handshake::Welcome::audio_rate_hz) /
 /// [`audio_bits`](super::handshake::Welcome::audio_bits) /
 /// [`audio_frame_us`](super::handshake::Welcome::audio_frame_us), never from what it asked.
-/// Unlike `0xD2`, the host does not drop back mid-session (the device is open at a fixed
+/// The host does not drop back mid-session (the device is open at a fixed
 /// format). Last free `host_caps` bit; the next cap needs a second byte (already
 /// [`Welcome::host_caps2`]).
 pub const HOST_CAP_AUDIO_HIRES: u8 = 0x80;
@@ -160,7 +160,7 @@ pub const HOST_CAP2_SCROLL: u8 = 0x08;
 /// [`ProbeRequest`](crate::quic::ProbeRequest)s from the moment the data plane is bound,
 /// before its pipeline exists and without the one-per-10 s spacing, until the first video
 /// frame leaves. That window is what the client's bring-up ramp measures the link in; a
-/// client that does not see the bit bursts beside live video as before.
+/// client that does not see the bit runs the legacy burst beside live video.
 pub const HOST_CAP2_RAMP: u8 = 0x10;
 
 /// [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2), reserved: every feedback window
@@ -201,7 +201,7 @@ pub fn resolve_codec(client_codecs: u8, host_capable: u8, preferred: u8) -> Opti
     }
     // `preferred` is a single-bit field by contract but a raw wire byte. Keep the lowest
     // set bit of the intersection so a multi-bit value cannot escape as a codec id
-    // (`from_wire` would fold unknowns to HEVC, which may not even be shared).
+    // (`pf_encode::codec_from_wire` would fold unknowns to HEVC, which may not be shared).
     if preferred != 0 && shared & preferred != 0 {
         let want = shared & preferred;
         return Some(want & want.wrapping_neg());
@@ -279,8 +279,8 @@ pub const CHROMA_IDC_420: u8 = 1;
 pub const CHROMA_IDC_444: u8 = 3;
 
 /// Per-session CICP (ITU-T H.273) the host resolved, on [`Welcome`]. Configure the
-/// decoder/presenter from these; do not infer from bitstream VUI. An older host omits the
-/// bytes → [`ColorInfo::SDR_BT709_STUDIO`]. ST.2086 + CLL can change mid-stream, so they ride
+/// decoder/presenter from these; do not infer from bitstream VUI. A `ServerHello` without the
+/// bytes reads as [`ColorInfo::SDR_BT709`]. ST.2086 + CLL can change mid-stream, so they ride
 /// [`HDR_META_MAGIC`] rather than this fixed struct.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ColorInfo {
@@ -312,8 +312,7 @@ impl ColorInfo {
         full_range: 1,
     };
 
-    /// Studio-range SDR: the default when a peer omits the colour bytes (every host before full
-    /// range).
+    /// Studio-range SDR: what every host before full range sends, and [`ColorInfo`]'s `Default`.
     pub const SDR_BT709_STUDIO: ColorInfo = ColorInfo {
         primaries: Self::CP_BT709,
         transfer: Self::TRC_BT709,

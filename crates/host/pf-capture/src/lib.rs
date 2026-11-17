@@ -3,7 +3,7 @@
 //!
 //! Roles: a source is a [`Capturer`] plus its roles. The host passes facts, not capture choices.
 //! Model and shell: a model (enum state, `step`, table test) calls no OS; its shell does that.
-//! Knobs: every `PUNKTFUNK_*` read is in `knobs.rs`; zero env reads elsewhere.
+//! Knobs: every `PUNKTFUNK_*` read is in `knobs.rs`; a few arrive resolved from other crates.
 //!
 //! - `capturer.rs`: the contract, its roles and events.
 //! - `open.rs`: the request structs and the `open_*` entry points.

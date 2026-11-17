@@ -22,7 +22,7 @@ use std::rc::Rc;
 use windows_reactor::*;
 
 /// Whether the console (gamepad) UI is available in this build: the session binary ships
-/// its Skia `ui` feature on x64 only (no skia prebuilts for aarch64 yet) — the entry
+/// its Skia `ui` feature on x64 only (the arm64 build is `--no-default-features`) — the entry
 /// points compile everywhere but only show where `--browse` can actually run.
 pub(crate) const CONSOLE_UI_AVAILABLE: bool = cfg!(target_arch = "x86_64");
 

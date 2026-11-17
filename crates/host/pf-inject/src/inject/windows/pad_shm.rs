@@ -1,8 +1,8 @@
 //! One virtual HID pad on the `pf_gamepad` UMDF driver: the sealed `PadShm` channel, its
-//! devnode and the attach watcher. Every identity (DualSense, Edge, DualShock 4, Deck, Triton,
-//! Switch Pro, Xbox) opens through [`ShmPad::open`] and supplies only its device type, neutral
-//! report and PnP identity. The section layout and ring reader are [`crate::pad_shm_ring`];
-//! the channel is `design/gamepad-channel-sealing.md`.
+//! devnode and the attach watcher. Every identity on that driver opens through
+//! [`ShmPad::open`] and supplies only its device type, neutral report and PnP identity. The
+//! section layout and ring reader are [`crate::pad_shm_ring`]; the channel is
+//! `design/gamepad-channel-sealing.md`.
 
 use super::gamepad_raii::{
     create_swdevice, verify_fence, DriverAttach, FenceAt, PadChannel, ProofTransport, SwDevice,
@@ -41,7 +41,7 @@ impl ShmPad {
         let mut channel = PadChannel::create(boot_name.clone(), SHM_SIZE)?;
         // Ring version 2: this host drains the v2.2 long ring.
         stamp(channel.data(), devtype, index, 2, neutral);
-        // `?`: PadSlots retries a failed create; a swallowed one latched a pad with no devnode.
+        // `?`: PadSlots retries a failed create; a swallowed one would latch a pad with no devnode.
         let (sw, instance_id) = create_swdevice(profile)?;
         // Duplicate into the process serving this devnode, not the pid the LocalService-writable
         // mailbox names.
@@ -71,7 +71,7 @@ impl ShmPad {
     }
 
     /// Publish one input report, cut to the input slot. The driver's timer copies the whole
-    /// slot; there is no change-detect on this plane.
+    /// slot each tick; [`pf_driver_proto::gamepad::serve_tick`] decides when a game gets it.
     pub(super) fn publish(&mut self, report: &[u8]) {
         publish_input(self.channel.data(), &mut self.input_gen, report);
     }

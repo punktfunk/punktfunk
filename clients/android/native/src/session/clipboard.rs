@@ -184,7 +184,8 @@ fn is_text(mime: &str) -> bool {
 ///
 /// `data:<xfer_id>:<text>` decodes the bytes lossily. That is safe because the clipboard task
 /// delivers a whole payload in ONE event (`last = true`), so a chunk boundary can never split a
-/// UTF-8 sequence. Any pull error but a timeout means the plane is gone: `closed`.
+/// UTF-8 sequence. Any pull error but `NoFrame`, the poll timeout, means the plane is gone:
+/// `closed`.
 fn clip_poll(pulled: Result<ClipEventCore, PunktfunkError>) -> ClipPoll {
     use ClipPoll::{CancelFetch, Line, Nothing};
     match pulled {

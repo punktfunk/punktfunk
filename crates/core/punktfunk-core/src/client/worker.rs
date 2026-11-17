@@ -16,7 +16,8 @@ use std::sync::{Arc, Mutex};
 
 /// Cells [`NativeClient`] and the worker's tasks share, one `Arc` per dial.
 ///
-/// `clock_offset` and `shutdown` stay `Arc`s: embedders hold those cells on their own.
+/// `clock_offset` stays an `Arc`: the HUD and embedders hold that cell on their own
+/// ([`NativeClient::clock_offset_shared`]).
 pub(crate) struct ClientShared {
     pub(crate) frames: FrameChannel,
     pub(crate) shutdown: Arc<AtomicBool>,

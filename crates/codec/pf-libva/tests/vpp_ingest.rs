@@ -4,7 +4,7 @@
 //! display: a capture buffer with no compositor in the way. And a source twice
 //! the size, scaled on the same pass: what a mirrored 4K head becomes.
 //!
-//! Ignored: needs a VAAPI device. `.25` and `.50` both have one.
+//! Ignored: needs a VAAPI device.
 
 #![cfg(target_os = "linux")]
 
@@ -342,7 +342,7 @@ fn a_cropped_source_keeps_only_its_rectangle() {
 }
 
 /// Ten bits: BT.2020 full range puts red at Y 269 / Cb 369 / Cr 1023. BT.709
-/// coefficients in a stream tagged BT.2020 would show as Y 250 — a picture that
+/// coefficients in a stream tagged BT.2020 would put red's Y lower — a picture that
 /// decodes fine and is the wrong red.
 #[test]
 #[ignore = "needs a VAAPI device"]

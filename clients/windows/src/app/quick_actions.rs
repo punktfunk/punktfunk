@@ -972,8 +972,8 @@ mod tests {
     use super::*;
 
     /// Every disc the ring can hold draws as a mark, not a word, and that mark has a glyph.
-    /// The editor has no fallback to fall back TO now that the words are gone — a slot whose
-    /// mark is missing renders an empty disc.
+    /// `disc_face` falls back to a word only when the slot has no icon name; a name the font
+    /// lacks renders an empty disc.
     #[test]
     fn every_slot_on_the_ring_draws_a_glyph() {
         let cfg = OverlayConfig::platform_default(RingPlatform::Desktop);

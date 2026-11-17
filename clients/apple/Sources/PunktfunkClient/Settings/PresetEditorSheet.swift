@@ -1,11 +1,9 @@
-// Creating, duplicating, renaming, recolouring and deleting a settings preset — one sheet for
-// all five (design/client-settings-profiles.md §5.1).
+// Creating, duplicating, renaming and recolouring a settings preset — one sheet for all four
+// (design/client-settings-profiles.md §5.1). Delete is confirmed by the alert in
+// `SettingsView.presetPrompts` (SettingsView+Scope).
 //
-// It replaced a menu of four separate actions, three of which raised their own bare text alert
-// and the fourth a submenu of colour NAMES with no colour anywhere on it. Making a preset then
-// meant: name it in an alert, find it again in the scope menu, open a submenu, and pick "Amber"
-// on faith. The two things a preset has — a name and a colour — are decided together here, with
-// a live chip showing exactly what the host cards will render.
+// The two things a preset has — a name and a colour — are decided together here, with a live
+// chip showing exactly what the host cards will render.
 
 import PunktfunkKit
 import SwiftUI
@@ -152,8 +150,7 @@ struct PresetEditorSheet: View {
         #endif
     }
 
-    /// The preset exactly as a host card will show it — the answer to "what am I choosing?",
-    /// which a list of colour names never gave.
+    /// The preset exactly as a host card will show it.
     private var preview: some View {
         let shown = name.trimmingCharacters(in: .whitespaces)
         return PresetChip(
