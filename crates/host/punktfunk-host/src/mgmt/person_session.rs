@@ -515,10 +515,38 @@ pub(crate) fn presented(headers: &HeaderMap) -> Option<(&str, &str)> {
     Some((get(SESSION_HEADER)?, get(PROFILE_HEADER)?))
 }
 
+/// The longest a check waits for a turn: as long as the seat proxy's own call may take, so a
+/// busy seat host makes a check slow, never a sign-out.
+const TURN_WAIT: Duration = Duration::from_secs(30);
+/// Checks one profile's seat host answers at once, each on a blocking thread.
+const VERIFY_SLOTS: usize = 4;
+
+/// Each seat profile's turns at [`VERIFY_SLOTS`].
+static TURNS: Mutex<std::collections::BTreeMap<String, Arc<tokio::sync::Semaphore>>> =
+    Mutex::new(std::collections::BTreeMap::new());
+
+/// A turn to ask `profile`'s seat host, held until that blocking call ends. `None` when every
+/// turn stays taken for `wait`.
+async fn turn(profile: &str, wait: Duration) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    let gate = {
+        let mut turns = TURNS.lock().unwrap_or_else(|e| e.into_inner());
+        let gate = turns
+            .entry(profile.to_owned())
+            .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(VERIFY_SLOTS)));
+        Arc::clone(gate)
+    };
+    tokio::time::timeout(wait, gate.acquire_owned())
+        .await
+        .ok()?
+        .ok()
+}
+
 /// `profile`, once its seat host answered that `token` is a live session there for it, asked
 /// through the door's seats or, on a Windows box, the supervisor's. Never the owner, and never a
-/// profile with no seat of its own. Wakes no seat. Refusals are not counted: a count any local
-/// caller can run up would close the profile to its own person.
+/// profile with no seat of its own. Wakes no seat. A check takes one of the profile's turns
+/// ([`VERIFY_SLOTS`]), so a burst of checks holds at most that many blocking threads. Refusals
+/// are not counted: a count any local caller can run up would close the profile to its own
+/// person.
 pub(crate) async fn vouched_by_seat(st: &MgmtState, profile: &str, token: &str) -> Option<String> {
     let seats = st.door.clone().or_else(box_seats)?;
     let profiles = st.app.profiles.get()?;
@@ -540,7 +568,11 @@ pub(crate) async fn vouched_by_seat(st: &MgmtState, profile: &str, token: &str) 
         stream: false,
         start: false,
     };
-    let asked = tokio::task::spawn_blocking(move || seats.call(&Target::Seat(seat), call));
+    let turn = turn(profile, TURN_WAIT).await?;
+    let asked = tokio::task::spawn_blocking(move || {
+        let _turn = turn;
+        seats.call(&Target::Seat(seat), call)
+    });
     let Ok(Answer::Reply(status, _, answer)) = asked.await else {
         return None;
     };
@@ -630,6 +662,25 @@ mod tests {
             host.redeem(&bad(100), 1_000, later).unwrap_err(),
             Refused::Ticket
         );
+    }
+
+    /// A profile's checks take four turns at most. The next waits and is refused while all four
+    /// stay taken; another profile has turns of its own, and a turn handed back is free again.
+    #[tokio::test]
+    async fn a_profile_s_checks_past_its_turns_are_refused() {
+        const P: &str = "c0ffee0c0ffe";
+        let wait = Duration::from_millis(20);
+        let mut held = Vec::new();
+        for _ in 0..VERIFY_SLOTS {
+            held.push(turn(P, wait).await.expect("a free turn"));
+        }
+        assert!(turn(P, wait).await.is_none(), "every turn taken");
+        assert!(
+            turn("d0d0d0d0d0d0", wait).await.is_some(),
+            "another profile"
+        );
+        held.pop();
+        assert!(turn(P, wait).await.is_some(), "a turn handed back");
     }
 
     /// A session lives 12 hours at most, ends when it is revoked, and is no other's.

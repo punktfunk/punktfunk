@@ -11,7 +11,7 @@
 //! tail starts and on each `library.changed` it sends ([`publish_own_titles`]).
 
 use crate::events::{EventKind, HostEvent};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, Read};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -371,15 +371,46 @@ fn frames(mut reader: impl std::io::BufRead) -> impl Iterator<Item = (String, St
     })
 }
 
-/// The one relayed kind that wakes a stopped owner's session: someone is waiting on an answer.
-const WAKES: &str = "pairing.pending";
-
 /// How long a knock waits for the owner's host to come up before its hooks are skipped.
 const WAKE_WAIT: Duration = Duration::from_secs(120);
 
+/// Knocks relayed at once, each on a blocking thread for up to [`WAKE_WAIT`]. Past them, and
+/// while one for the same fingerprint is relayed, a knock's hooks are skipped.
+const KNOCKS: usize = 8;
+
+/// The fingerprints whose knock is being relayed.
+static KNOCKING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// A knock's place among [`KNOCKS`], given back when its relay ends.
+struct Knock {
+    set: &'static Mutex<BTreeSet<String>>,
+    fingerprint: String,
+}
+
+impl Drop for Knock {
+    fn drop(&mut self) {
+        let mut set = self.set.lock().unwrap_or_else(|e| e.into_inner());
+        set.remove(&self.fingerprint);
+    }
+}
+
+/// A place in `set` for `fingerprint`'s knock: none while [`KNOCKS`] hold one, or while one
+/// for that fingerprint does.
+fn knock(set: &'static Mutex<BTreeSet<String>>, fingerprint: &str) -> Option<Knock> {
+    let mut held = set.lock().unwrap_or_else(|e| e.into_inner());
+    if held.len() >= KNOCKS || !held.insert(fingerprint.to_owned()) {
+        return None;
+    }
+    Some(Knock {
+        set,
+        fingerprint: fingerprint.to_owned(),
+    })
+}
+
 /// Hands each of this door's own events to the owner's host, for the owner's hooks. A knock
-/// wakes a stopped owner's session and waits for its host, and for a supervisor that isn't
-/// answering; any other event a stopped or silent host misses.
+/// (`pairing.pending`) wakes a stopped owner's session and waits for its host, and for a
+/// supervisor that isn't answering, when it gets a place ([`knock`]); any other event a stopped
+/// or silent host misses.
 pub(crate) async fn relay_to_owner() {
     let mut rx = crate::events::bus().subscribe_live();
     loop {
@@ -391,8 +422,20 @@ pub(crate) async fn relay_to_owner() {
         if ev.seat.is_some() || !relayed(ev.kind.name(), packaged()) {
             continue;
         }
-        let wakes = ev.kind.name() == WAKES;
+        let place = match &ev.kind {
+            EventKind::PairingPending { device } => match knock(&KNOCKING, &device.fingerprint) {
+                Some(place) => Some(place),
+                None => {
+                    let fingerprint = &device.fingerprint;
+                    tracing::debug!(%fingerprint, "knock not relayed while others wait");
+                    continue;
+                }
+            },
+            _ => None,
+        };
+        let wakes = place.is_some();
         tokio::task::spawn_blocking(move || {
+            let _place = place;
             let deadline = std::time::Instant::now() + WAKE_WAIT;
             let mut asked = false;
             loop {
@@ -553,6 +596,23 @@ mod tests {
         );
         assert!(!publishes(&ev(library, Some("9a3f")), false), "relayed");
         assert!(!publishes(&ev(host, None), false));
+    }
+
+    /// Eight knocks are relayed at once, one per fingerprint; the rest are dropped until a
+    /// relay ends.
+    #[test]
+    fn knocks_past_the_cap_or_a_fingerprint_s_second_are_dropped() {
+        static SET: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+        let mut held: Vec<Knock> = (0..KNOCKS)
+            .map(|n| knock(&SET, &format!("fp{n}")).expect("a place"))
+            .collect();
+        assert!(knock(&SET, "fp-new").is_none(), "past the cap");
+        drop(held.pop());
+        assert!(knock(&SET, "fp0").is_none(), "its fingerprint's is relayed");
+        let freed = knock(&SET, "fp-new");
+        assert!(freed.is_some(), "a place given back");
+        drop((held, freed));
+        assert!(SET.lock().unwrap().is_empty());
     }
 
     #[test]
